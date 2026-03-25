@@ -1,11 +1,11 @@
-const SALVADOR_OFFSET_MINUTES = -180;
+const OPERATIONAL_LOCAL_OFFSET_MINUTES = -180;
 
-function toSalvadorClock(date: Date) {
-    return new Date(date.getTime() + (SALVADOR_OFFSET_MINUTES * 60000));
+function toOperationalLocalClock(date: Date) {
+    return new Date(date.getTime() + (OPERATIONAL_LOCAL_OFFSET_MINUTES * 60000));
 }
 
-function fromSalvadorClockParts(year: number, month: number, day: number, hour: number, minute: number) {
-    return new Date(Date.UTC(year, month - 1, day, hour - (SALVADOR_OFFSET_MINUTES / 60), minute, 0, 0));
+function fromOperationalLocalClockParts(year: number, month: number, day: number, hour: number, minute: number) {
+    return new Date(Date.UTC(year, month - 1, day, hour - (OPERATIONAL_LOCAL_OFFSET_MINUTES / 60), minute, 0, 0));
 }
 
 export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledEndAt?: Date | null) {
@@ -18,7 +18,7 @@ export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: stri
         return null;
     }
 
-    const local = toSalvadorClock(startedAt);
+    const local = toOperationalLocalClock(startedAt);
     const year = local.getUTCFullYear();
     const month = local.getUTCMonth() + 1;
     const day = local.getUTCDate();
@@ -26,11 +26,11 @@ export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: stri
     const minute = local.getUTCMinutes();
 
     if (normalized === "SD") {
-        return fromSalvadorClockParts(year, month, day, 19, 15);
+        return fromOperationalLocalClockParts(year, month, day, 19, 15);
     }
 
     const addDay = hour > 7 || (hour === 7 && minute > 15);
-    const endBase = fromSalvadorClockParts(year, month, day, 7, 15);
+    const endBase = fromOperationalLocalClockParts(year, month, day, 7, 15);
     return addDay ? new Date(endBase.getTime() + 86400000) : endBase;
 }
 
@@ -54,8 +54,8 @@ export function resolveTelegramEventTime(referenceDate: Date, hhmm?: string | nu
         return referenceDate;
     }
 
-    const local = toSalvadorClock(referenceDate);
-    const resolved = fromSalvadorClockParts(
+    const local = toOperationalLocalClock(referenceDate);
+    const resolved = fromOperationalLocalClockParts(
         local.getUTCFullYear(),
         local.getUTCMonth() + 1,
         local.getUTCDate(),

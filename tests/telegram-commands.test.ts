@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseTelegramCommand } from "@/modules/telegram/commands";
 import { buildGroupCorrectionAnnouncement, pickTelegramReply } from "@/modules/telegram/replies";
+import { hasTelegramOperationalJustification } from "@/modules/telegram/service";
 
 test("parseTelegramCommand parses corrigir with target, full name and time", () => {
     const parsed = parseTelegramCommand("/corrigir PM04 Marcela Souza 20:00");
@@ -82,4 +83,36 @@ test("buildGroupCorrectionAnnouncement creates playful group summary", () => {
     assert.match(reply, /Gabriel Carvalho Monteiro/);
     assert.match(reply, /CZ50/);
     assert.match(reply, /07:00/);
+});
+
+test("hasTelegramOperationalJustification rejects bare departure commands after stripping operational tokens", () => {
+    assert.equal(
+        hasTelegramOperationalJustification("/saiu PP20 19:20", ["PP20", "19:20"]),
+        false,
+    );
+});
+
+test("hasTelegramOperationalJustification accepts written operational reason", () => {
+    assert.equal(
+        hasTelegramOperationalJustification(
+            "/saiu PP20 19:20 motivo cobertura estendida por sala vermelha",
+            ["PP20", "19:20"],
+        ),
+        true,
+    );
+});
+
+test("hasTelegramOperationalJustification accepts continuation messages only when there is real free text", () => {
+    assert.equal(
+        hasTelegramOperationalJustification("PP20 Maria Silva 07:20 P", ["PP20", "Maria Silva", "07:20", "P"]),
+        false,
+    );
+
+    assert.equal(
+        hasTelegramOperationalJustification(
+            "PP20 Maria Silva 07:20 P motivo aguardando liberacao da sala vermelha",
+            ["PP20", "Maria Silva", "07:20", "P"],
+        ),
+        true,
+    );
 });

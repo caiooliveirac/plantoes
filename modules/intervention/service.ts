@@ -147,3 +147,42 @@ export async function endInterventionOccupancy(
         return updated;
     });
 }
+
+export async function continueInterventionOccupancy(
+    id: string,
+    input?: { notes?: string | null },
+    updatedByUserId?: string | null,
+) {
+    const db = getDb();
+    return db.transaction(async (tx) => {
+        const existing = await tx.query.interventionOccupancies.findFirst({
+            where: eq(interventionOccupancies.id, id),
+        });
+
+        if (!existing) {
+            throw new Error("Intervention occupancy not found.");
+        }
+
+        if (existing.endedAt) {
+            throw new Error("Only active intervention occupancies can be continued.");
+        }
+
+        const nextNotes = input?.notes?.trim()
+            ? input.notes.trim()
+            : existing.notes;
+
+        const [updated] = await tx
+            .update(interventionOccupancies)
+            .set({
+                shiftLabel: "P",
+                notes: nextNotes ?? null,
+                updatedByUserId: updatedByUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .where(eq(interventionOccupancies.id, id))
+            .returning();
+
+        await syncInterventionBankHours(tx, id);
+        return updated;
+    });
+}

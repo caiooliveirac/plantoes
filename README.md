@@ -24,6 +24,16 @@ O sistema consolida regulação, intervenção, chefia e banco de horas em uma b
 - scripts: importacao e migracao explicitas
 - tests: regras centrais
 
+## Regras operacionais de referencia
+
+- ver [OPERATIONAL_RULES.md](OPERATIONAL_RULES.md) para a matriz oficial de comportamento entre intervencao, regulacao, lembretes de Telegram e banco de horas
+- qualquer ajuste de janela de turno, tolerancia ou continuidade deve atualizar codigo, testes e esse documento de referencia na mesma entrega
+
+## Plano de autenticacao
+
+- ver [AUTH_PLAN.md](AUTH_PLAN.md) para o plano de convite por link, aprovacao manual por admin e separacao de permissao entre `chief` e `admin`
+- o plano tambem fixa a decisao de manter o painel principal em `/`, com login discreto e operacao persistida por rotas server-side sem depender de middleware como guarda principal
+
 ## Principios arquiteturais
 
 - operacao primeiro: a visualizacao do quadro deve responder ao estado real do plantao e nao a heuristicas frouxas

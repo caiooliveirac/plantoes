@@ -11,7 +11,8 @@ import {
     users,
 } from "@/db/schema";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
-import { endInterventionOccupancy, startInterventionOccupancy } from "@/modules/intervention/service";
+import { continueInterventionOccupancy, endInterventionOccupancy, startInterventionOccupancy } from "@/modules/intervention/service";
+import { requiresOvertimeJustification } from "@/modules/operational/board-rules";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord } from "@/modules/operational/corrections";
 import { resolveTelegramEventTime } from "@/modules/operational/rules";
 import { endRegulationOccupancy, startRegulationOccupancy } from "@/modules/regulation/service";
@@ -581,6 +582,26 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             return { ok: true, ignored: true };
         }
 
+        if (
+            command.sector === "INTERVENTION"
+            && requiresOvertimeJustification(active.occupancy.startedAt, eventAt)
+            && !hasTelegramOperationalJustification(message.text, [command.targetCode, command.doctorName, command.time])
+        ) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "departure_justification_required",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: "departure",
+            });
+            await sendMessage(
+                message.chat.id,
+                ":| Depois de 07:15 ou 19:15 eu preciso da justificativa por escrito. Ex.: /saiu PP20 19:20 motivo cobertura estendida por sala vermelha.",
+                message.message_id,
+            );
+            return { ok: true, ignored: true };
+        }
+
         const updated = command.sector === "REGULATION"
             ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null))
             : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null));
@@ -756,21 +777,50 @@ async function applyParsedEntry(params: {
                 throw new Error("No active intervention occupancy found for this doctor/base.");
             }
 
+            if (
+                requiresOvertimeJustification(occupancy.startedAt, eventAt)
+                && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+            ) {
+                throw new Error("Justificativa obrigatoria para registrar saida apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.");
+            }
+
             occupancyId = (await endInterventionOccupancy(occupancy.id, {
                 endedAt: eventAt,
                 actualEndedAt: eventAt,
             })).id;
         } else {
-            occupancyId = (await startInterventionOccupancy({
-                doctorId: resolvedDoctor.id,
-                baseId: base.id,
-                startedAt: eventAt,
-                shiftLabel: parsed.shiftType,
-                roleLabel: parsed.roleFunction,
-                source: "telegram",
-                notes: messageText,
-                createdByUserId: null,
-            })).id;
+            const activeOccupancy = await db.query.interventionOccupancies.findFirst({
+                where: and(
+                    eq(interventionOccupancies.baseId, base.id),
+                    eq(interventionOccupancies.doctorId, resolvedDoctor.id),
+                    isNull(interventionOccupancies.endedAt),
+                ),
+                orderBy: [desc(interventionOccupancies.boardStartedAt), desc(interventionOccupancies.startedAt)],
+            });
+
+            if (parsed.shiftType === "P" && activeOccupancy) {
+                if (
+                    requiresOvertimeJustification(activeOccupancy.startedAt, eventAt)
+                    && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime, parsed.shiftType])
+                ) {
+                    throw new Error("Justificativa obrigatoria para liberar continuidade apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.");
+                }
+
+                occupancyId = (await continueInterventionOccupancy(activeOccupancy.id, {
+                    notes: messageText,
+                }, null)).id;
+            } else {
+                occupancyId = (await startInterventionOccupancy({
+                    doctorId: resolvedDoctor.id,
+                    baseId: base.id,
+                    startedAt: eventAt,
+                    shiftLabel: parsed.shiftType,
+                    roleLabel: parsed.roleFunction,
+                    source: "telegram",
+                    notes: messageText,
+                    createdByUserId: null,
+                })).id;
+            }
         }
     }
 
@@ -805,6 +855,39 @@ function formatTelegramReplyTime(value: Date) {
         hour12: false,
         timeZone: "America/Sao_Paulo",
     });
+}
+
+export function hasTelegramOperationalJustification(text: string, fragments: Array<string | null | undefined>) {
+    const normalized = text
+        .toUpperCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, " ");
+
+    let reduced = normalized.replace(/^\s*\/(?:CORRIGIR|RETIRAR|REMOVER|SAIU|SAINDO|SAIDA)\b/i, " ");
+    for (const fragment of fragments) {
+        if (!fragment) {
+            continue;
+        }
+
+        const escaped = fragment
+            .toUpperCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, " ")
+            .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        reduced = reduced.replace(new RegExp(escaped, "gi"), " ");
+    }
+
+    reduced = reduced
+        .replace(/\b\d{1,2}[:.]\d{2}\b/g, " ")
+        .replace(/\b\d{1,2}H(?:\d{2})?\b/g, " ")
+        .replace(/\b(?:SD|SN|P|CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMINDO|ASSUMI|RENDENDO|RENDI|CONTINUO|CONTINUA|SEGUINDO|SIGO|SAINDO|SAIU|SAI|SAIDA|ENCERRANDO|ENCERREI|FINALIZANDO|FINALIZEI|LIBEREI|MOTIVO)\b/g, " ");
+
+    const meaningfulTokens = reduced
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3);
+
+    return meaningfulTokens.length >= 2 || /MOTIVO/i.test(normalized);
 }
 
 async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: string) {

@@ -11,6 +11,7 @@ Este repositório concentra a evolução da operação de plantão SAMU com foco
 3. Nunca versionar segredos, tokens ou dumps locais.
 4. Evitar refactors amplos junto com correções críticas de operação.
 5. Preferir mudanças pequenas, auditáveis e publicáveis.
+6. Mudou regra de turno, tolerancia, continuidade ou lembrete? Atualizar `OPERATIONAL_RULES.md` na mesma entrega.
 
 ## Fluxo recomendado
 

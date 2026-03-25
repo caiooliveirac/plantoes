@@ -4,6 +4,7 @@ export type OccupancyShiftLabel = OperationalShiftLabel | "P" | null;
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const PRE_SHIFT_TOLERANCE_MINUTES = 60;
 const VERIFICATION_GRACE_MINUTES = 30;
+const OVERTIME_JUSTIFICATION_MINUTES = 15;
 
 interface SaoPauloParts {
     year: number;
@@ -93,8 +94,21 @@ export function isBeforeCurrentOperationalShift(startedAt: string | Date | null,
     return new Date(startedAt).getTime() < toleratedShiftStart.getTime();
 }
 
-export function shouldHighlightInterventionVerification(startedAt: string | Date | null, reference: string | Date) {
-    return isBeforeCurrentOperationalShift(startedAt, reference);
+export function shouldHighlightInterventionVerification(
+    startedAt: string | Date | null,
+    reference: string | Date,
+    shiftLabel: OccupancyShiftLabel = null,
+) {
+    if (!isBeforeCurrentOperationalShift(startedAt, reference)) {
+        return false;
+    }
+
+    const prolongedUntil = resolveProlongedShiftExpiry(startedAt, shiftLabel);
+    if (!prolongedUntil) {
+        return true;
+    }
+
+    return new Date(reference).getTime() >= addMinutes(prolongedUntil, VERIFICATION_GRACE_MINUTES).getTime();
 }
 
 export function resolveFirstVerificationBoundary(startedAt: string | Date | null) {
@@ -111,6 +125,28 @@ export function resolveFirstVerificationBoundary(startedAt: string | Date | null
     }
 
     return addDays(fromSaoPauloClockParts(parts.year, parts.month, parts.day, 7, 0), 1);
+}
+
+export function resolveOvertimeJustificationThreshold(startedAt: string | Date | null) {
+    const boundary = resolveFirstVerificationBoundary(startedAt);
+    if (!boundary) {
+        return null;
+    }
+
+    return addMinutes(boundary, OVERTIME_JUSTIFICATION_MINUTES);
+}
+
+export function requiresOvertimeJustification(startedAt: string | Date | null, reference: string | Date | null) {
+    if (!reference) {
+        return false;
+    }
+
+    const threshold = resolveOvertimeJustificationThreshold(startedAt);
+    if (!threshold) {
+        return false;
+    }
+
+    return new Date(reference).getTime() >= threshold.getTime();
 }
 
 export function resolveProlongedShiftExpiry(startedAt: string | Date | null, shiftLabel: OccupancyShiftLabel) {

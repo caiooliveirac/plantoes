@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    requiresOvertimeJustification,
     resolveContinuationBadgeLabel,
+    resolveOvertimeJustificationThreshold,
     resolveOperationalShiftLabel,
     shouldHighlightInterventionVerification,
     shouldKeepRegulationOccupancyVisible,
@@ -55,6 +57,24 @@ test("flags intervention doctor from previous shift for verification at 19h boun
             new Date("2026-03-26T07:05:00-03:00"),
         ),
         false,
+    );
+
+    assert.equal(
+        shouldHighlightInterventionVerification(
+            new Date("2026-03-25T08:18:00-03:00"),
+            new Date("2026-03-25T19:05:00-03:00"),
+            "P",
+        ),
+        false,
+    );
+
+    assert.equal(
+        shouldHighlightInterventionVerification(
+            new Date("2026-03-25T08:18:00-03:00"),
+            new Date("2026-03-26T07:31:00-03:00"),
+            "P",
+        ),
+        true,
     );
 });
 
@@ -134,7 +154,30 @@ test("shows continuation badge only in the verification grace window", () => {
     }), "Continua as 07:00");
 });
 
-test("infers SD regulation cutoff at 19:15 Salvador time", () => {
+test("requires written justification from 07:15 or 19:15 onward", () => {
+    assert.equal(
+        resolveOvertimeJustificationThreshold(new Date("2026-03-25T07:00:00-03:00"))?.toISOString(),
+        new Date("2026-03-25T19:15:00-03:00").toISOString(),
+    );
+
+    assert.equal(
+        requiresOvertimeJustification(
+            new Date("2026-03-25T07:00:00-03:00"),
+            new Date("2026-03-25T19:14:00-03:00"),
+        ),
+        false,
+    );
+
+    assert.equal(
+        requiresOvertimeJustification(
+            new Date("2026-03-25T07:00:00-03:00"),
+            new Date("2026-03-25T19:15:00-03:00"),
+        ),
+        true,
+    );
+});
+
+test("infers SD regulation cutoff at 19:15 local operational time", () => {
     const result = inferRegulationScheduledEndAt(
         new Date("2026-03-25T07:03:00-03:00"),
         "SD",
@@ -144,7 +187,7 @@ test("infers SD regulation cutoff at 19:15 Salvador time", () => {
     assert.equal(result?.toISOString(), new Date("2026-03-25T19:15:00-03:00").toISOString());
 });
 
-test("infers SN regulation cutoff at 07:15 on next local day", () => {
+test("infers SN regulation cutoff at 07:15 on next local operational day", () => {
     const result = inferRegulationScheduledEndAt(
         new Date("2026-03-25T19:02:00-03:00"),
         "SN",
@@ -154,7 +197,7 @@ test("infers SN regulation cutoff at 07:15 on next local day", () => {
     assert.equal(result?.toISOString(), new Date("2026-03-26T07:15:00-03:00").toISOString());
 });
 
-test("resolves Telegram explicit HH:mm on the same Salvador day", () => {
+test("resolves Telegram explicit HH:mm on the same local operational day", () => {
     const result = resolveTelegramEventTime(
         new Date("2026-03-25T07:40:00-03:00"),
         "07:15",

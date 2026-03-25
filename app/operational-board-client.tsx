@@ -4,6 +4,7 @@ import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTrans
 import { useRouter } from "next/navigation";
 import {
     getSaoPauloParts,
+    requiresOvertimeJustification,
     resolveContinuationBadgeLabel,
     shouldHighlightInterventionVerification,
 } from "@/modules/operational/board-rules";
@@ -56,12 +57,31 @@ interface FormState {
     notes: string;
 }
 
+interface AuthResponse {
+    error?: string;
+}
+
 function formatBoardTime(value: string | null) {
     if (!value) {
         return "--:--";
     }
 
     return new Date(value).toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Sao_Paulo",
+    });
+}
+
+function formatDateTimeDetail(value: string | null) {
+    if (!value) {
+        return "Nao informado";
+    }
+
+    return new Date(value).toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
@@ -106,6 +126,33 @@ function toIsoDateTime(value: string) {
 function trimToNull(value: string) {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+}
+
+function translateAuthError(code?: string) {
+    if (code === "invalid_credentials") {
+        return "Email ou senha invalidos.";
+    }
+    if (code === "inactive_account") {
+        return "Conta inativa. Procure um admin.";
+    }
+    if (code === "no_roles_assigned") {
+        return "Conta sem papel operacional ativo.";
+    }
+    if (code === "pending_chief_approval") {
+        return "Cadastro pendente de aprovacao do admin.";
+    }
+    if (code === "rejected_chief_approval") {
+        return "Cadastro rejeitado. Solicite nova validacao ao admin.";
+    }
+    return "Nao foi possivel autenticar agora.";
+}
+
+function summarizeRoles(roles: UserRole[]) {
+    if (roles.includes("admin")) {
+        return roles.includes("chief") ? "Admin e chief" : "Admin";
+    }
+
+    return "Chief";
 }
 
 function displayDoctorName(card: BoardCard) {
@@ -246,7 +293,18 @@ function compareRegulationCards(left: RegulationCard, right: RegulationCard, shi
 function isInterventionAwaitingNews(card: BoardCard, generatedAt: string) {
     return card.domain === "intervention"
         && card.status === "active"
-        && shouldHighlightInterventionVerification(card.startedAt, generatedAt);
+        && shouldHighlightInterventionVerification(card.startedAt, generatedAt, card.shiftLabel);
+}
+
+function canContinueIntervention(card: BoardCard, generatedAt: string) {
+    return card.domain === "intervention"
+        && card.status === "active"
+        && Boolean(card.occupancyId)
+        && isInterventionAwaitingNews(card, generatedAt);
+}
+
+function requiresReasonForContinuation(card: BoardCard, generatedAt: string) {
+    return card.domain === "intervention" && requiresOvertimeJustification(card.startedAt, generatedAt);
 }
 
 function rowEmphasisClass(card: BoardCard, shiftLabel: string, generatedAt: string) {
@@ -310,6 +368,12 @@ type BoardSnapshot = {
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const { generatedAt, shiftLabel, regulation, intervention, doctors, session } = props;
     const router = useRouter();
+    const [authOpen, setAuthOpen] = useState(false);
+    const [authEmail, setAuthEmail] = useState("");
+    const [authPassword, setAuthPassword] = useState("");
+    const [authError, setAuthError] = useState<string | null>(null);
+    const [authInfo, setAuthInfo] = useState<string | null>(null);
+    const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [selectedCard, setSelectedCard] = useState<BoardCard | null>(null);
     const [actionMode, setActionMode] = useState<ActionMode | null>(null);
@@ -332,6 +396,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     useEffect(() => {
         latestGeneratedAtRef.current = generatedAt;
     }, [generatedAt]);
+
+    useEffect(() => {
+        if (session) {
+            setAuthPassword("");
+            setAuthError(null);
+            setAuthInfo(null);
+        }
+    }, [session]);
 
     const refreshIfBoardChanged = useEffectEvent(async () => {
         if (drawerOpen || isSubmitting || isRefreshing) {
@@ -437,6 +509,69 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setDoctorQuery("");
     }
 
+    async function handleAuthSubmit(event: React.FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+
+        try {
+            setIsAuthSubmitting(true);
+            setAuthError(null);
+            setAuthInfo(null);
+
+            const response = await fetch("/api/auth/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    email: authEmail.trim().toLowerCase(),
+                    password: authPassword,
+                }),
+            });
+
+            const body = await response.json().catch(() => null) as AuthResponse | null;
+            if (!response.ok) {
+                throw new Error(translateAuthError(body?.error));
+            }
+
+            setAuthPassword("");
+            setAuthOpen(false);
+            setAuthInfo("Sessao iniciada. Atualizando controles operacionais.");
+            startRefresh(() => {
+                router.refresh();
+            });
+        } catch (error) {
+            setAuthError(error instanceof Error ? error.message : "Nao foi possivel autenticar agora.");
+        } finally {
+            setIsAuthSubmitting(false);
+        }
+    }
+
+    async function handleLogout() {
+        try {
+            setIsAuthSubmitting(true);
+            setAuthError(null);
+            setAuthInfo(null);
+
+            const response = await fetch("/api/auth/logout", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+            });
+
+            if (!response.ok) {
+                throw new Error("Nao foi possivel encerrar a sessao.");
+            }
+
+            setAuthOpen(false);
+            setAuthPassword("");
+            setAuthInfo("Sessao encerrada. O quadro voltou para modo leitura.");
+            startRefresh(() => {
+                router.refresh();
+            });
+        } catch (error) {
+            setAuthError(error instanceof Error ? error.message : "Nao foi possivel encerrar a sessao.");
+        } finally {
+            setIsAuthSubmitting(false);
+        }
+    }
+
     async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
@@ -483,11 +618,23 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
                 endpoint = selectedCard.domain === "regulation"
                     ? `/api/regulation/occupancies/${selectedCard.occupancyId}/end`
-                    : `/api/intervention/occupancies/${selectedCard.occupancyId}/end`;
+                    : canContinueIntervention(selectedCard, generatedAt)
+                        ? `/api/intervention/occupancies/${selectedCard.occupancyId}/report-departure`
+                        : `/api/intervention/occupancies/${selectedCard.occupancyId}/end`;
                 payload = {
                     endedAt: toIsoDateTime(formState.endedAt),
                     actualEndedAt: toIsoDateTime(formState.endedAt),
+                    notes: trimToNull(formState.notes),
                 };
+
+                if (
+                    selectedCard.domain === "intervention"
+                    && canContinueIntervention(selectedCard, generatedAt)
+                    && requiresOvertimeJustification(selectedCard.startedAt, toIsoDateTime(formState.endedAt))
+                    && !trimToNull(formState.notes)
+                ) {
+                    throw new Error("Justificativa obrigatoria para registrar saida apos 07:15 ou 19:15.");
+                }
             }
 
             if (actionMode === "start") {
@@ -535,9 +682,60 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 throw new Error(responseBody?.error || "Falha ao aplicar a acao operacional.");
             }
 
-            setSuccessMessage(actionMode === "end" ? "Cobertura encerrada e quadro atualizado." : "Acao aplicada. Atualizando o quadro operacional.");
+            setSuccessMessage(
+                actionMode === "end"
+                    ? (selectedCard.domain === "intervention" && canContinueIntervention(selectedCard, generatedAt)
+                        ? "Saida registrada com trilha operacional especifica e quadro atualizado."
+                        : "Cobertura encerrada e quadro atualizado.")
+                    : "Acao aplicada. Atualizando o quadro operacional.",
+            );
             setActionMode(null);
             setSelectedCard(null);
+            startRefresh(() => {
+                router.refresh();
+            });
+        } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : "Falha operacional inesperada.");
+        } finally {
+            setIsSubmitting(false);
+        }
+    }
+
+    async function handleContinueCard(card: BoardCard) {
+        if (!session?.canManage) {
+            setErrorMessage("Entre com perfil chief ou admin para confirmar continuidade.");
+            return;
+        }
+
+        if (card.domain !== "intervention" || !card.occupancyId) {
+            setErrorMessage("A continuidade so pode ser confirmada em ocupacao ativa de intervencao.");
+            return;
+        }
+
+        if (requiresReasonForContinuation(card, generatedAt) && !trimToNull(formState.notes)) {
+            setErrorMessage("Justificativa obrigatoria para liberar continuidade apos 07:15 ou 19:15.");
+            return;
+        }
+
+        try {
+            setIsSubmitting(true);
+            setErrorMessage(null);
+            setSuccessMessage(null);
+
+            const response = await fetch(`/api/intervention/occupancies/${card.occupancyId}/continue`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    notes: trimToNull(formState.notes),
+                }),
+            });
+
+            const responseBody = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(responseBody?.error || "Falha ao registrar continuidade do plantao.");
+            }
+
+            setSuccessMessage("Continuidade confirmada e persistida no quadro.");
             startRefresh(() => {
                 router.refresh();
             });
@@ -630,202 +828,361 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
     return (
         <>
-            <main className="ops-shell">
-                <section className="ops-table-grid plain">
-                    {renderSection(visibleInterventionCards, { domain: "intervention" })}
-                    {renderSection(visibleRegulationCards, { domain: "regulation" })}
-                </section>
-            </main>
+                    <div className={`ops-auth-dock ${authOpen ? "open" : ""}`.trim()}>
+                        <button
+                            type="button"
+                            className={`ops-auth-trigger ${session ? "connected" : ""}`.trim()}
+                            onClick={() => {
+                                setAuthOpen((current) => !current);
+                                setAuthError(null);
+                                setAuthInfo(null);
+                            }}
+                        >
+                            <span className="ops-auth-trigger-kicker">{session ? summarizeRoles(session.roles) : "Acesso"}</span>
+                            <strong>{session ? session.email : "Entrar"}</strong>
+                        </button>
 
-            <div className={`chief-drawer-backdrop ${drawerOpen ? "open" : ""}`} onClick={closeDrawer} />
-            <aside className={`chief-drawer ${drawerOpen ? "open" : ""}`} aria-hidden={!drawerOpen}>
-                <header className="chief-drawer-header">
-                    <div>
-                        <p className="ops-column-kicker">Comando de chefia</p>
-                        <h2>Fila critica e correcao rapida</h2>
-                    </div>
-                    <button type="button" className="chief-close-button" onClick={closeDrawer}>Fechar</button>
-                </header>
+                        <div className={`ops-auth-popover ${authOpen ? "open" : ""}`.trim()}>
+                            {session ? (
+                                <div className="ops-auth-panel">
+                                    <div className="ops-auth-panel-header">
+                                        <div>
+                                            <p className="ops-auth-kicker">Sessao ativa</p>
+                                            <h2>{summarizeRoles(session.roles)}</h2>
+                                        </div>
+                                        <span className={`ops-auth-state ${session.canManage ? "live" : "read"}`.trim()}>
+                                            {session.canManage ? "Operacao habilitada" : "Leitura"}
+                                        </span>
+                                    </div>
 
-                {(successMessage || errorMessage) && (
-                    <div className={`chief-flash ${errorMessage ? "error" : "success"}`}>
-                        {errorMessage || successMessage}
-                    </div>
-                )}
+                                    <div className="ops-auth-summary">
+                                        <strong>{session.email}</strong>
+                                        <span>
+                                            {session.canManage
+                                                ? "Clique no quadro para abrir correcoes, aberturas e encerramentos."
+                                                : "Esta sessao nao habilita operacao."}
+                                        </span>
+                                    </div>
 
-                {!session?.canManage && (
-                    <div className="chief-auth-warning">
-                        Esta mesa esta em leitura. Entre com perfil chief ou admin para habilitar abertura, correcao e encerramento.
-                    </div>
-                )}
-
-                <section className="chief-drawer-section">
-                    <div className="chief-stat-grid">
-                        <article className="chief-stat-card critical">
-                            <span className="ops-summary-label">Pendencias imediatas</span>
-                            <strong>{criticalCards.length}</strong>
-                        </article>
-                        <article className="chief-stat-card watch">
-                            <span className="ops-summary-label">Coberturas sob vigia</span>
-                            <strong>{watchCards.length}</strong>
-                        </article>
-                    </div>
-                </section>
-
-                <section className="chief-drawer-section">
-                    <div className="chief-section-heading">
-                        <h3>Vazios que pedem acao</h3>
-                        <span>{criticalCards.length}</span>
-                    </div>
-                    <div className="chief-queue-list">
-                        {criticalCards.length === 0 && <p className="chief-empty-copy">Nenhum vazio operacional neste instante.</p>}
-                        {criticalCards.map((card) => (
-                            <button key={`critical-${card.domain}-${cardCode(card)}`} type="button" className="chief-queue-item critical" onClick={() => openAction(card, "start")}>
-                                <strong>{cardCode(card)}</strong>
-                                <span>{cardLabel(card)}</span>
-                                <small>Abrir cobertura agora</small>
-                            </button>
-                        ))}
-                    </div>
-                </section>
-
-                <section className="chief-drawer-section">
-                    <div className="chief-section-heading">
-                        <h3>Tempo sob vigilância</h3>
-                        <span>{watchCards.length}</span>
-                    </div>
-                    <div className="chief-queue-list">
-                        {watchCards.length === 0 && <p className="chief-empty-copy">Nenhuma cobertura longa exigindo vigia especial.</p>}
-                        {watchCards.map((card) => (
-                            <button key={`watch-${card.domain}-${cardCode(card)}`} type="button" className="chief-queue-item watch" onClick={() => openAction(card, "correct")} disabled={!canEditActiveCard(card)}>
-                                <strong>{cardCode(card)}</strong>
-                                <span>{displayDoctorName(card)}</span>
-                                <small>{canEditActiveCard(card) ? `${formatMinutesLabel(minutesSince(generatedAt, card.startedAt))} em curso` : "Leitura ao vivo sem ocupacao v2"}</small>
-                            </button>
-                        ))}
-                    </div>
-                </section>
-
-                <section className="chief-drawer-section focus">
-                    {!selectedCard || !actionMode ? (
-                        <div className="chief-focus-empty">
-                            <h3>Selecione um card para acao rapida</h3>
-                            <p>Use os chips do quadro ou as filas deste drawer para abrir cobertura, corrigir medico ou horario e encerrar registro.</p>
-                        </div>
-                    ) : (
-                        <div className="chief-focus-panel">
-                            <div className="chief-focus-header">
-                                <div>
-                                    <p className="ops-column-kicker">Ação ativa</p>
-                                    <h3>{actionTitle(actionMode, selectedCard)}</h3>
+                                    <div className="ops-auth-actions">
+                                        <button type="button" className="ops-auth-secondary" onClick={() => setAuthOpen(false)}>
+                                            Fechar
+                                        </button>
+                                        <button type="button" className="ops-auth-primary" onClick={handleLogout} disabled={isAuthSubmitting || isRefreshing}>
+                                            {isAuthSubmitting || isRefreshing ? "Saindo..." : "Sair"}
+                                        </button>
+                                    </div>
                                 </div>
-                                <span className={`ops-priority-tag ${resolvePriority(selectedCard, generatedAt)}`}>{priorityLabel(resolvePriority(selectedCard, generatedAt))}</span>
+                            ) : (
+                                <form className="ops-auth-panel" onSubmit={handleAuthSubmit}>
+                                    <div className="ops-auth-panel-header">
+                                        <div>
+                                            <p className="ops-auth-kicker">Acesso operacional</p>
+                                            <h2>Chief ou admin</h2>
+                                        </div>
+                                        <span className="ops-auth-state read">Leitura publica em /</span>
+                                    </div>
+
+                                    <p className="ops-auth-copy">
+                                        O quadro continua visivel sem login. A autenticacao aqui apenas libera os controles de operacao.
+                                    </p>
+
+                                    <label className="ops-auth-field">
+                                        <span>Email</span>
+                                        <input
+                                            type="email"
+                                            className="ops-auth-input"
+                                            value={authEmail}
+                                            onChange={(event) => setAuthEmail(event.target.value)}
+                                            autoComplete="username"
+                                            placeholder="voce@dominio.com"
+                                        />
+                                    </label>
+
+                                    <label className="ops-auth-field">
+                                        <span>Senha</span>
+                                        <input
+                                            type="password"
+                                            className="ops-auth-input"
+                                            value={authPassword}
+                                            onChange={(event) => setAuthPassword(event.target.value)}
+                                            autoComplete="current-password"
+                                            placeholder="Sua senha operacional"
+                                        />
+                                    </label>
+
+                                    <div className="ops-auth-actions">
+                                        <button type="button" className="ops-auth-secondary" onClick={() => setAuthOpen(false)}>
+                                            Fechar
+                                        </button>
+                                        <button type="submit" className="ops-auth-primary" disabled={isAuthSubmitting || isRefreshing || !authEmail.trim() || !authPassword}>
+                                            {isAuthSubmitting || isRefreshing ? "Entrando..." : "Entrar"}
+                                        </button>
+                                    </div>
+                                </form>
+                            )}
+                        </div>
+                    </div>
+
+                    {(authError || authInfo) && (
+                        <div className={`ops-auth-toast ${authError ? "error" : "success"}`.trim()}>
+                            {authError || authInfo}
+                        </div>
+                    )}
+
+                    <main className="ops-shell">
+                        <section className="ops-table-grid plain">
+                            {renderSection(visibleInterventionCards, { domain: "intervention" })}
+                            {renderSection(visibleRegulationCards, { domain: "regulation" })}
+                        </section>
+                    </main>
+
+                    <div className={`chief-drawer-backdrop ${drawerOpen ? "open" : ""}`} onClick={closeDrawer} />
+                    <aside className={`chief-drawer ${drawerOpen ? "open" : ""}`} aria-hidden={!drawerOpen}>
+                        <header className="chief-drawer-header">
+                            <div>
+                                <p className="ops-column-kicker">Comando de chefia</p>
+                                <h2>Fila critica e correcao rapida</h2>
                             </div>
+                            <button type="button" className="chief-close-button" onClick={closeDrawer}>Fechar</button>
+                        </header>
 
-                            <div className="chief-context-card">
-                                <strong>{displayDoctorName(selectedCard)}</strong>
-                                <span>{cardLabel(selectedCard)}</span>
-                                <small>{selectedCard.status === "waiting" ? "Sem confirmacao ativa no quadro" : `Marcado desde ${formatBoardTime(selectedCard.startedAt)}`}</small>
+                        {(successMessage || errorMessage) && (
+                            <div className={`chief-flash ${errorMessage ? "error" : "success"}`}>
+                                {errorMessage || successMessage}
                             </div>
+                        )}
 
-                            <form className="chief-action-form" onSubmit={handleSubmit}>
-                                {(actionMode === "correct" || actionMode === "start") && (
-                                    <>
-                                        <label className="chief-field">
-                                            <span>Buscar medico</span>
-                                            <input
-                                                className="chief-input"
-                                                value={doctorQuery}
-                                                onChange={(event) => setDoctorQuery(event.target.value)}
-                                                placeholder="Digite nome ou sobrenome"
-                                            />
-                                        </label>
+                        {!session?.canManage && (
+                            <div className="chief-auth-warning">
+                                Esta mesa esta em leitura. Entre com perfil chief ou admin para habilitar abertura, correcao e encerramento.
+                            </div>
+                        )}
 
-                                        <label className="chief-field">
-                                            <span>Medico</span>
-                                            <select
-                                                className="chief-input"
-                                                value={formState.doctorId}
-                                                onChange={(event) => setFormState((current) => ({ ...current, doctorId: event.target.value }))}
-                                            >
-                                                <option value="">Selecione um medico</option>
-                                                {filteredDoctors.map((doctor) => (
-                                                    <option key={doctor.id} value={doctor.id}>
-                                                        {doctor.displayName ? `${doctor.displayName} - ${doctor.fullName}` : doctor.fullName}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </label>
+                        <section className="chief-drawer-section">
+                            <div className="chief-stat-grid">
+                                <article className="chief-stat-card critical">
+                                    <span className="ops-summary-label">Pendencias imediatas</span>
+                                    <strong>{criticalCards.length}</strong>
+                                </article>
+                                <article className="chief-stat-card watch">
+                                    <span className="ops-summary-label">Coberturas sob vigia</span>
+                                    <strong>{watchCards.length}</strong>
+                                </article>
+                            </div>
+                        </section>
 
-                                        <label className="chief-field">
-                                            <span>{actionMode === "start" ? "Horario de abertura" : "Horario corrigido"}</span>
-                                            <input
-                                                type="datetime-local"
-                                                className="chief-input"
-                                                value={formState.startedAt}
-                                                onChange={(event) => setFormState((current) => ({ ...current, startedAt: event.target.value }))}
-                                            />
-                                        </label>
+                        <section className="chief-drawer-section">
+                            <div className="chief-section-heading">
+                                <h3>Vazios que pedem acao</h3>
+                                <span>{criticalCards.length}</span>
+                            </div>
+                            <div className="chief-queue-list">
+                                {criticalCards.length === 0 && <p className="chief-empty-copy">Nenhum vazio operacional neste instante.</p>}
+                                {criticalCards.map((card) => (
+                                    <button key={`critical-${card.domain}-${cardCode(card)}`} type="button" className="chief-queue-item critical" onClick={() => openAction(card, "start")}>
+                                        <strong>{cardCode(card)}</strong>
+                                        <span>{cardLabel(card)}</span>
+                                        <small>Abrir cobertura agora</small>
+                                    </button>
+                                ))}
+                            </div>
+                        </section>
 
-                                        <label className="chief-field">
-                                            <span>Função</span>
-                                            <input
-                                                className="chief-input"
-                                                value={formState.roleLabel}
-                                                onChange={(event) => setFormState((current) => ({ ...current, roleLabel: event.target.value }))}
-                                                placeholder="Ex.: regulador, intervenção, base operacional"
-                                            />
-                                        </label>
+                        <section className="chief-drawer-section">
+                            <div className="chief-section-heading">
+                                <h3>Tempo sob vigilância</h3>
+                                <span>{watchCards.length}</span>
+                            </div>
+                            <div className="chief-queue-list">
+                                {watchCards.length === 0 && <p className="chief-empty-copy">Nenhuma cobertura longa exigindo vigia especial.</p>}
+                                {watchCards.map((card) => (
+                                    <button key={`watch-${card.domain}-${cardCode(card)}`} type="button" className="chief-queue-item watch" onClick={() => openAction(card, "correct")} disabled={!canEditActiveCard(card)}>
+                                        <strong>{cardCode(card)}</strong>
+                                        <span>{displayDoctorName(card)}</span>
+                                        <small>{canEditActiveCard(card) ? `${formatMinutesLabel(minutesSince(generatedAt, card.startedAt))} em curso` : "Leitura ao vivo sem ocupacao v2"}</small>
+                                    </button>
+                                ))}
+                            </div>
+                        </section>
 
-                                        {selectedCard.domain === "regulation" && (
+                        <section className="chief-drawer-section focus">
+                            {!selectedCard || !actionMode ? (
+                                <div className="chief-focus-empty">
+                                    <h3>Selecione um card para acao rapida</h3>
+                                    <p>Use os chips do quadro ou as filas deste drawer para abrir cobertura, corrigir medico ou horario e encerrar registro.</p>
+                                </div>
+                            ) : (
+                                <div className="chief-focus-panel">
+                                    {canContinueIntervention(selectedCard, generatedAt) && session?.canManage && (
+                                        <div className="chief-verification-strip">
+                                            <div>
+                                                <p className="ops-column-kicker">Pendencia de virada</p>
+                                                <strong>Aguardando noticia</strong>
+                                                <span>
+                                                    Esse medico entrou antes da janela tolerada do turno atual. Confirme se vai continuar ou informe a saida com horario correto.
+                                                </span>
+                                            </div>
+                                            <div className="chief-timing-grid">
+                                                <article className="chief-timing-card">
+                                                    <span>Chegada registrada</span>
+                                                    <strong>{formatDateTimeDetail(selectedCard.startedAt)}</strong>
+                                                </article>
+                                                <article className="chief-timing-card">
+                                                    <span>Saida prevista</span>
+                                                    <strong>{formatDateTimeDetail(selectedCard.scheduledEndAt)}</strong>
+                                                </article>
+                                            </div>
+                                            <p className="chief-bank-hours-copy">
+                                                Banco de horas depende destes horarios. Use <strong>Continuar</strong> apenas se o medico realmente seguir no plantao. Se ele saiu, registre a saida com o horario mais fiel possivel.
+                                            </p>
+                                            <label className="chief-field full-width">
+                                                <span>{requiresReasonForContinuation(selectedCard, generatedAt) ? "Justificativa obrigatoria" : "Justificativa operacional"}</span>
+                                                <textarea
+                                                    className="chief-input chief-textarea compact"
+                                                    value={formState.notes}
+                                                    onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
+                                                    placeholder={requiresReasonForContinuation(selectedCard, generatedAt)
+                                                        ? "Explique por que a continuidade foi liberada apos 07:15 ou 19:15"
+                                                        : "Motivo operacional da continuidade, se necessario"}
+                                                />
+                                            </label>
+                                            <div className="chief-verification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="chief-secondary-button"
+                                                    onClick={() => {
+                                                        setActionMode("end");
+                                                        setFormState((current) => ({ ...current, endedAt: toLocalDateTimeValue() }));
+                                                    }}
+                                                    disabled={isSubmitting || isRefreshing}
+                                                >
+                                                    Informar saida
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="chief-primary-button"
+                                                    onClick={() => void handleContinueCard(selectedCard)}
+                                                    disabled={isSubmitting || isRefreshing}
+                                                >
+                                                    {isSubmitting || isRefreshing ? "Aplicando..." : "Continuar"}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="chief-focus-header">
+                                        <div>
+                                            <p className="ops-column-kicker">Ação ativa</p>
+                                            <h3>{actionTitle(actionMode, selectedCard)}</h3>
+                                        </div>
+                                        <span className={`ops-priority-tag ${resolvePriority(selectedCard, generatedAt)}`}>{priorityLabel(resolvePriority(selectedCard, generatedAt))}</span>
+                                    </div>
+
+                                    <div className="chief-context-card">
+                                        <strong>{displayDoctorName(selectedCard)}</strong>
+                                        <span>{cardLabel(selectedCard)}</span>
+                                        <small>{selectedCard.status === "waiting" ? "Sem confirmacao ativa no quadro" : `Marcado desde ${formatBoardTime(selectedCard.startedAt)}`}</small>
+                                    </div>
+
+                                    <form className="chief-action-form" onSubmit={handleSubmit}>
+                                        {(actionMode === "correct" || actionMode === "start") && (
+                                            <>
+                                                <label className="chief-field">
+                                                    <span>Buscar medico</span>
+                                                    <input
+                                                        className="chief-input"
+                                                        value={doctorQuery}
+                                                        onChange={(event) => setDoctorQuery(event.target.value)}
+                                                        placeholder="Digite nome ou sobrenome"
+                                                    />
+                                                </label>
+
+                                                <label className="chief-field">
+                                                    <span>Medico</span>
+                                                    <select
+                                                        className="chief-input"
+                                                        value={formState.doctorId}
+                                                        onChange={(event) => setFormState((current) => ({ ...current, doctorId: event.target.value }))}
+                                                    >
+                                                        <option value="">Selecione um medico</option>
+                                                        {filteredDoctors.map((doctor) => (
+                                                            <option key={doctor.id} value={doctor.id}>
+                                                                {doctor.displayName ? `${doctor.displayName} - ${doctor.fullName}` : doctor.fullName}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+
+                                                <label className="chief-field">
+                                                    <span>{actionMode === "start" ? "Horario de abertura" : "Horario corrigido"}</span>
+                                                    <input
+                                                        type="datetime-local"
+                                                        className="chief-input"
+                                                        value={formState.startedAt}
+                                                        onChange={(event) => setFormState((current) => ({ ...current, startedAt: event.target.value }))}
+                                                    />
+                                                </label>
+
+                                                <label className="chief-field">
+                                                    <span>Função</span>
+                                                    <input
+                                                        className="chief-input"
+                                                        value={formState.roleLabel}
+                                                        onChange={(event) => setFormState((current) => ({ ...current, roleLabel: event.target.value }))}
+                                                        placeholder="Ex.: regulador, intervenção, base operacional"
+                                                    />
+                                                </label>
+
+                                                {selectedCard.domain === "regulation" && (
+                                                    <label className="chief-field">
+                                                        <span>Ramal</span>
+                                                        <input
+                                                            className="chief-input"
+                                                            value={formState.ramalLabel}
+                                                            onChange={(event) => setFormState((current) => ({ ...current, ramalLabel: event.target.value }))}
+                                                            placeholder="1321"
+                                                        />
+                                                    </label>
+                                                )}
+                                            </>
+                                        )}
+
+                                        {actionMode === "end" && (
                                             <label className="chief-field">
-                                                <span>Ramal</span>
+                                                <span>Horario de encerramento</span>
                                                 <input
+                                                    type="datetime-local"
                                                     className="chief-input"
-                                                    value={formState.ramalLabel}
-                                                    onChange={(event) => setFormState((current) => ({ ...current, ramalLabel: event.target.value }))}
-                                                    placeholder="1321"
+                                                    value={formState.endedAt}
+                                                    onChange={(event) => setFormState((current) => ({ ...current, endedAt: event.target.value }))}
                                                 />
                                             </label>
                                         )}
-                                    </>
-                                )}
 
-                                {actionMode === "end" && (
-                                    <label className="chief-field">
-                                        <span>Horario de encerramento</span>
-                                        <input
-                                            type="datetime-local"
-                                            className="chief-input"
-                                            value={formState.endedAt}
-                                            onChange={(event) => setFormState((current) => ({ ...current, endedAt: event.target.value }))}
-                                        />
-                                    </label>
-                                )}
+                                        <label className="chief-field full-width">
+                                            <span>Notas operacionais</span>
+                                            <textarea
+                                                className="chief-input chief-textarea"
+                                                value={formState.notes}
+                                                onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
+                                                placeholder="Contexto rapido de chefia, motivo da correcao ou observacao operacional"
+                                            />
+                                        </label>
 
-                                <label className="chief-field full-width">
-                                    <span>Notas operacionais</span>
-                                    <textarea
-                                        className="chief-input chief-textarea"
-                                        value={formState.notes}
-                                        onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
-                                        placeholder="Contexto rapido de chefia, motivo da correcao ou observacao operacional"
-                                    />
-                                </label>
-
-                                <div className="chief-form-actions full-width">
-                                    <button type="button" className="chief-secondary-button" onClick={() => setActionMode(null)}>
-                                        Voltar
-                                    </button>
-                                    <button type="submit" className="chief-primary-button" disabled={isSubmitting || isRefreshing || !session?.canManage}>
-                                        {isSubmitting || isRefreshing ? "Aplicando..." : actionMode === "start" ? "Abrir cobertura" : actionMode === "end" ? "Encerrar registro" : "Salvar correcao"}
-                                    </button>
+                                        <div className="chief-form-actions full-width">
+                                            <button type="button" className="chief-secondary-button" onClick={() => setActionMode(null)}>
+                                                Voltar
+                                            </button>
+                                            <button type="submit" className="chief-primary-button" disabled={isSubmitting || isRefreshing || !session?.canManage}>
+                                                {isSubmitting || isRefreshing ? "Aplicando..." : actionMode === "start" ? "Abrir cobertura" : actionMode === "end" ? "Encerrar registro" : "Salvar correcao"}
+                                            </button>
+                                        </div>
+                                    </form>
                                 </div>
-                            </form>
-                        </div>
-                    )}
-                </section>
-            </aside>
-        </>
-    );
+                            )}
+                        </section>
+                    </aside>
+                </>
+                );
 }
