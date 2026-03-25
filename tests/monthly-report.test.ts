@@ -58,9 +58,36 @@ test("resolveMonthlyReportRange normalizes month keys and presets", () => {
     const result = resolveMonthlyReportRange("2026-03", new Date("2026-03-25T12:00:00.000Z"));
 
     assert.equal(result.monthKey, "2026-03");
-    assert.equal(result.start.toISOString(), "2026-03-01T00:00:00.000Z");
-    assert.equal(result.end.toISOString(), "2026-04-01T00:00:00.000Z");
+    assert.equal(result.start.toISOString(), "2026-03-01T10:00:00.000Z");
+    assert.equal(result.end.toISOString(), "2026-04-01T10:00:00.000Z");
     assert.equal(result.presetMonths[0]?.key, "2026-03");
+});
+
+test("resolveMonthlyReportRange includes the last night shift of the month", () => {
+    const result = resolveMonthlyReportRange("2026-03", new Date("2026-04-01T02:30:00.000Z"));
+
+    assert.equal(result.monthKey, "2026-03");
+    assert.equal(result.start.toISOString(), "2026-03-01T10:00:00.000Z");
+    assert.equal(result.end.toISOString(), "2026-04-01T10:00:00.000Z");
+});
+
+test("buildMonthlyReportModel keeps a 31 SN shift inside the closing month", () => {
+    const marchNightShift = makeShift({
+        occupancyId: "sn-31",
+        startedAt: "2026-04-01T01:00:00.000Z",
+        boardStartedAt: "2026-04-01T01:00:00.000Z",
+        endedAt: "2026-04-01T10:30:00.000Z",
+        actualEndedAt: "2026-04-01T10:30:00.000Z",
+        scheduledStartAt: "2026-04-01T01:00:00.000Z",
+        scheduledEndAt: "2026-04-01T10:00:00.000Z",
+        shiftLabel: "SN",
+    });
+
+    const model = buildMonthlyReportModel([marchNightShift], "2026-03", new Date("2026-04-01T02:30:00.000Z"));
+
+    assert.equal(model.monthKey, "2026-03");
+    assert.equal(model.summary.shiftCount, 1);
+    assert.equal(model.groups[0]?.shifts[0]?.shiftLabel, "SN");
 });
 
 test("detectMonthlyReportInconsistencies flags open, manual and missing bank hours issues", () => {

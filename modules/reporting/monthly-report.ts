@@ -2,6 +2,8 @@ export type MonthlyReportDomain = "regulation" | "intervention";
 export type MonthlyReportSource = "manual" | "telegram" | "import" | "admin_correction";
 export type MonthlyReportPaymentStatus = "ready_for_payment" | "needs_review";
 
+const SAO_PAULO_OFFSET_HOURS = -3;
+
 export interface MonthlyReportAuditEntry {
     id: string;
     action: string;
@@ -118,13 +120,19 @@ function startOfUtcMonth(year: number, monthIndex: number) {
     return new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0, 0));
 }
 
+function fromSaoPauloClockParts(year: number, month: number, day: number, hour: number, minute: number) {
+    return new Date(Date.UTC(year, month - 1, day, hour - SAO_PAULO_OFFSET_HOURS, minute, 0, 0));
+}
+
 export function resolveMonthlyReportRange(monthKey?: string | null, reference = new Date()) {
     const fallback = startOfUtcMonth(reference.getUTCFullYear(), reference.getUTCMonth());
     const parsed = monthKey?.match(/^(\d{4})-(\d{2})$/);
-    const monthStart = parsed
+    const monthAnchor = parsed
         ? startOfUtcMonth(Number(parsed[1]), Number(parsed[2]) - 1)
         : fallback;
-    const monthEnd = startOfUtcMonth(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1);
+    const monthStart = fromSaoPauloClockParts(monthAnchor.getUTCFullYear(), monthAnchor.getUTCMonth() + 1, 1, 7, 0);
+    const nextMonthAnchor = startOfUtcMonth(monthAnchor.getUTCFullYear(), monthAnchor.getUTCMonth() + 1);
+    const monthEnd = fromSaoPauloClockParts(nextMonthAnchor.getUTCFullYear(), nextMonthAnchor.getUTCMonth() + 1, 1, 7, 0);
 
     const presetMonths = Array.from({ length: 3 }, (_, index) => {
         const date = startOfUtcMonth(fallback.getUTCFullYear(), fallback.getUTCMonth() - index);
@@ -135,8 +143,8 @@ export function resolveMonthlyReportRange(monthKey?: string | null, reference = 
     });
 
     return {
-        monthKey: toMonthKey(monthStart),
-        monthLabel: formatMonthLabel(monthStart),
+        monthKey: toMonthKey(monthAnchor),
+        monthLabel: formatMonthLabel(monthAnchor),
         start: monthStart,
         end: monthEnd,
         presetMonths,
