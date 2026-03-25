@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { auditLogs } from "@/db/schema";
+import { auditLogs, regulationOccupancies } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { correctRegulationOccupancy } from "@/modules/operational/corrections";
 
@@ -37,6 +38,19 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
 
     const { id } = await context.params;
     try {
+        const existing = await getDb().query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, id),
+        });
+        if (!existing) {
+            return NextResponse.json({ error: "Regulation occupancy not found." }, { status: 404 });
+        }
+
+        const nextStartedAt = parsed.data.startedAt ? new Date(parsed.data.startedAt) : null;
+        const startedAtChanged = Boolean(nextStartedAt && nextStartedAt.getTime() !== existing.startedAt.getTime());
+        if (startedAtChanged && !parsed.data.notes?.trim()) {
+            return NextResponse.json({ error: "Motivo obrigatorio ao corrigir horario de regulacao." }, { status: 400 });
+        }
+
         const updated = await correctRegulationOccupancy(id, {
             ...(parsed.data.doctorId ? { doctorId: parsed.data.doctorId } : {}),
             ...(parsed.data.startedAt ? { startedAt: new Date(parsed.data.startedAt) } : {}),

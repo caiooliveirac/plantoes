@@ -1304,6 +1304,7 @@ body {
 .chief-close-button,
 .chief-primary-button,
 .chief-secondary-button,
+.chief-danger-button,
 .chief-queue-item {
     appearance: none;
     border: 1px solid rgba(255, 255, 255, 0.09);
@@ -1314,7 +1315,8 @@ body {
 
 .chief-close-button,
 .chief-secondary-button,
-.chief-primary-button {
+.chief-primary-button,
+.chief-danger-button {
     min-height: 40px;
     padding: 0 14px;
     border-radius: 999px;
@@ -1326,8 +1328,15 @@ body {
     border-color: rgba(35, 201, 134, 0.3);
 }
 
+.chief-danger-button {
+    background: rgba(255, 93, 108, 0.16);
+    border-color: rgba(255, 93, 108, 0.3);
+    color: #ffd8dd;
+}
+
 .chief-primary-button:disabled,
-.chief-secondary-button:disabled {
+.chief-secondary-button:disabled,
+.chief-danger-button:disabled {
     opacity: 0.48;
     cursor: not-allowed;
 }
@@ -1370,6 +1379,26 @@ body {
     gap: 12px;
     border-color: rgba(255, 184, 77, 0.24);
     background: linear-gradient(180deg, rgba(59, 34, 8, 0.42), rgba(19, 19, 21, 0.9));
+}
+
+.chief-departure-strip {
+    display: grid;
+    gap: 12px;
+    border: 1px solid rgba(255, 93, 108, 0.24);
+    border-radius: 18px;
+    padding: 14px;
+    background: linear-gradient(180deg, rgba(54, 11, 17, 0.46), rgba(19, 19, 21, 0.92));
+}
+
+.chief-departure-strip strong,
+.chief-departure-strip span {
+    display: block;
+}
+
+.chief-departure-strip span {
+    margin-top: 6px;
+    color: var(--muted-strong);
+    line-height: 1.5;
 }
 
 .chief-verification-strip strong,
@@ -1524,6 +1553,78 @@ body {
 
 .chief-field.full-width {
     grid-column: 1 / -1;
+}
+
+.chief-doctor-picker {
+    position: relative;
+}
+
+.chief-doctor-help {
+    color: var(--muted);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.chief-doctor-selection {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(35, 201, 134, 0.2);
+    border-radius: 12px;
+    background: rgba(10, 24, 20, 0.7);
+}
+
+.chief-doctor-selection strong {
+    display: block;
+    font-size: 0.92rem;
+}
+
+.chief-selection-clear {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--muted-strong);
+    border-radius: 999px;
+    min-height: 34px;
+    padding: 0 12px;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.chief-doctor-suggestions {
+    display: grid;
+    gap: 8px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 8px;
+    border-radius: 14px;
+    border: 1px solid rgba(145, 170, 205, 0.16);
+    background: rgba(5, 12, 18, 0.84);
+}
+
+.chief-doctor-option {
+    appearance: none;
+    display: grid;
+    gap: 4px;
+    width: 100%;
+    padding: 10px 12px;
+    text-align: left;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.chief-doctor-option strong {
+    font-size: 0.9rem;
+}
+
+.chief-doctor-option span {
+    color: var(--muted);
+    font-size: 0.8rem;
 }
 
 .chief-field span {

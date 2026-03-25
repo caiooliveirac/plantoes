@@ -161,6 +161,26 @@ function summarizeRoles(roles: UserRole[]) {
     return "Chief";
 }
 
+function doctorOptionLabel(doctor: DoctorOption) {
+    return doctor.displayName ? `${doctor.displayName} - ${doctor.fullName}` : doctor.fullName;
+}
+
+function matchesDoctorQuery(doctor: DoctorOption, query: string) {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+        return false;
+    }
+
+    const haystack = [doctor.fullName, doctor.displayName ?? ""]
+        .join(" ")
+        .toLowerCase();
+
+    return normalizedQuery
+        .split(/\s+/)
+        .filter(Boolean)
+        .every((token) => haystack.includes(token));
+}
+
 function displayDoctorName(card: BoardCard) {
     if (card.domain === "intervention" && card.status === "waiting") {
         return "Aguardando cobertura";
@@ -397,6 +417,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     });
     const [doctorQuery, setDoctorQuery] = useState("");
     const deferredDoctorQuery = useDeferredValue(doctorQuery);
+    const [quickExitAt, setQuickExitAt] = useState(toLocalDateTimeValue());
+    const [quickExitReason, setQuickExitReason] = useState("");
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -482,21 +504,20 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const interventionActiveCount = visibleInterventionCards.length - interventionWaitingCount;
     const criticalCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "critical");
     const watchCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "high");
+    const selectedDoctor = doctors.find((doctor) => doctor.id === formState.doctorId) ?? null;
     const filteredDoctors = doctors
-        .filter((doctor) => {
-            const query = deferredDoctorQuery.trim().toLowerCase();
-            if (!query) {
-                return true;
-            }
-
-            const display = doctor.displayName?.toLowerCase() ?? "";
-            return doctor.fullName.toLowerCase().includes(query) || display.includes(query);
-        })
-        .slice(0, 80);
+        .filter((doctor) => matchesDoctorQuery(doctor, deferredDoctorQuery))
+        .slice(0, 8);
+    const doctorSelectionLocked = Boolean(selectedDoctor && doctorQuery.trim() === doctorOptionLabel(selectedDoctor));
 
     function resetDrawerFeedback() {
         setErrorMessage(null);
         setSuccessMessage(null);
+    }
+
+    function syncSelectedDoctorLabel(doctorId: string | null | undefined) {
+        const doctor = doctors.find((entry) => entry.id === doctorId) ?? null;
+        setDoctorQuery(doctor ? doctorOptionLabel(doctor) : "");
     }
 
     function openDrawer(card?: BoardCard) {
@@ -506,7 +527,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setActionMode(card.status === "waiting" ? "start" : canEditActiveCard(card) ? "correct" : null);
             if (card.status === "waiting" || canEditActiveCard(card)) {
                 setFormState(buildInitialForm(card));
+                syncSelectedDoctorLabel(card.doctorId ?? null);
             }
+            setQuickExitAt(toLocalDateTimeValue());
+            setQuickExitReason("");
         }
         resetDrawerFeedback();
     }
@@ -523,7 +547,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setSelectedCard(card);
         setActionMode(mode);
         setFormState(buildInitialForm(card));
-        setDoctorQuery("");
+        syncSelectedDoctorLabel(card.doctorId ?? null);
+        setQuickExitAt(toLocalDateTimeValue());
+        setQuickExitReason("");
         setDrawerOpen(true);
         resetDrawerFeedback();
     }
@@ -533,6 +559,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setActionMode(null);
         setSelectedCard(null);
         setDoctorQuery("");
+        setQuickExitReason("");
     }
 
     async function handleAuthSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -678,6 +705,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     throw new Error("Nao existe ocupacao ativa para corrigir neste card.");
                 }
 
+                const startedAtChanged = Boolean(
+                    selectedCard.startedAt
+                    && toIsoDateTime(formState.startedAt) !== new Date(selectedCard.startedAt).toISOString(),
+                );
+                if (startedAtChanged && !trimToNull(formState.notes)) {
+                    throw new Error("Digite o motivo antes de corrigir horario.");
+                }
+
                 endpoint = selectedCard.domain === "regulation"
                     ? `/api/regulation/occupancies/${selectedCard.occupancyId}`
                     : `/api/intervention/occupancies/${selectedCard.occupancyId}`;
@@ -686,7 +721,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     doctorId: formState.doctorId || undefined,
                     startedAt: toIsoDateTime(formState.startedAt),
                     boardStartedAt: toIsoDateTime(formState.startedAt),
-                    roleLabel: trimToNull(formState.roleLabel),
                     notes: trimToNull(formState.notes),
                     ...(selectedCard.domain === "regulation" ? { ramalLabel: trimToNull(formState.ramalLabel) } : {}),
                 };
@@ -734,7 +768,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         scheduledStartAt: null,
                         scheduledEndAt: null,
                         shiftLabel,
-                        roleLabel: trimToNull(formState.roleLabel),
+                        roleLabel: selectedCard.defaultRole ? trimToNull(selectedCard.defaultRole) : null,
                         ramalLabel: trimToNull(formState.ramalLabel) ?? selectedCard.postCode,
                         source: "admin_correction",
                         notes: trimToNull(formState.notes),
@@ -746,7 +780,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         scheduledStartAt: null,
                         scheduledEndAt: null,
                         shiftLabel,
-                        roleLabel: trimToNull(formState.roleLabel),
                         source: "admin_correction",
                         notes: trimToNull(formState.notes),
                     };
@@ -770,6 +803,62 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         : "Cobertura encerrada e quadro atualizado.")
                     : "Acao aplicada. Atualizando o quadro operacional.",
             );
+            setActionMode(null);
+            setSelectedCard(null);
+            startRefresh(() => {
+                router.refresh();
+            });
+        } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : "Falha operacional inesperada.");
+        } finally {
+            setIsSubmitting(false);
+        }
+    }
+
+    async function handleQuickDeparture(card: BoardCard) {
+        if (!session?.canManage) {
+            setErrorMessage("Entre com perfil chief ou admin para registrar saida.");
+            return;
+        }
+
+        if (!card.occupancyId) {
+            setErrorMessage("Nao existe ocupacao ativa para registrar saida neste card.");
+            return;
+        }
+
+        if (!trimToNull(quickExitReason)) {
+            setErrorMessage("Digite o motivo antes de registrar a saida.");
+            return;
+        }
+
+        try {
+            setIsSubmitting(true);
+            setErrorMessage(null);
+            setSuccessMessage(null);
+
+            const endpoint = card.domain === "regulation"
+                ? `/api/regulation/occupancies/${card.occupancyId}/end`
+                : canContinueIntervention(card, generatedAt)
+                    ? `/api/intervention/occupancies/${card.occupancyId}/report-departure`
+                    : `/api/intervention/occupancies/${card.occupancyId}/end`;
+
+            const response = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    endedAt: toIsoDateTime(quickExitAt),
+                    actualEndedAt: toIsoDateTime(quickExitAt),
+                    notes: trimToNull(quickExitReason),
+                }),
+            });
+
+            const responseBody = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(responseBody?.error || "Falha ao registrar saida.");
+            }
+
+            setQuickExitReason("");
+            setSuccessMessage("Saida registrada com auditoria operacional e quadro atualizado.");
             setActionMode(null);
             setSelectedCard(null);
             startRefresh(() => {
@@ -1224,33 +1313,107 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 <small>{selectedCard.status === "waiting" ? "Sem confirmacao ativa no quadro" : `Marcado desde ${formatBoardTime(selectedCard.startedAt)}`}</small>
                             </div>
 
+                            {selectedCard.status === "active" && selectedCard.occupancyId && session?.canManage && (
+                                <div className="chief-departure-strip">
+                                    <div>
+                                        <p className="ops-column-kicker">Saida rapida</p>
+                                        <strong>Registrar saída</strong>
+                                        <span>
+                                            Use este atalho para liberar o medico agora, com horario real e motivo auditavel.
+                                        </span>
+                                    </div>
+
+                                    <div className="chief-timing-grid">
+                                        <label className="chief-field">
+                                            <span>Horario da saida</span>
+                                            <input
+                                                type="datetime-local"
+                                                className="chief-input"
+                                                value={quickExitAt}
+                                                onChange={(event) => setQuickExitAt(event.target.value)}
+                                            />
+                                        </label>
+                                        <label className="chief-field">
+                                            <span>Motivo da saida</span>
+                                            <textarea
+                                                className="chief-input chief-textarea compact"
+                                                value={quickExitReason}
+                                                onChange={(event) => setQuickExitReason(event.target.value)}
+                                                placeholder="Ex.: rendido, saiu da base, ajuste de registro, troca confirmada"
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <div className="chief-verification-actions">
+                                        <button
+                                            type="button"
+                                            className="chief-danger-button"
+                                            onClick={() => void handleQuickDeparture(selectedCard)}
+                                            disabled={isSubmitting || isRefreshing || !trimToNull(quickExitReason)}
+                                        >
+                                            {isSubmitting || isRefreshing ? "Registrando..." : "Registrar saída"}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
                             <form className="chief-action-form" onSubmit={handleSubmit}>
                                 {(actionMode === "correct" || actionMode === "start") && (
                                     <>
-                                        <label className="chief-field">
-                                            <span>Buscar medico</span>
+                                        <label className="chief-field full-width chief-doctor-picker">
+                                            <span>Medico</span>
                                             <input
                                                 className="chief-input"
                                                 value={doctorQuery}
-                                                onChange={(event) => setDoctorQuery(event.target.value)}
-                                                placeholder="Digite nome ou sobrenome"
+                                                onChange={(event) => {
+                                                    const nextQuery = event.target.value;
+                                                    setDoctorQuery(nextQuery);
+                                                    setFormState((current) => ({ ...current, doctorId: "" }));
+                                                }}
+                                                placeholder="Digite parte do nome e selecione o medico completo"
+                                                autoComplete="off"
                                             />
-                                        </label>
 
-                                        <label className="chief-field">
-                                            <span>Medico</span>
-                                            <select
-                                                className="chief-input"
-                                                value={formState.doctorId}
-                                                onChange={(event) => setFormState((current) => ({ ...current, doctorId: event.target.value }))}
-                                            >
-                                                <option value="">Selecione um medico</option>
-                                                {filteredDoctors.map((doctor) => (
-                                                    <option key={doctor.id} value={doctor.id}>
-                                                        {doctor.displayName ? `${doctor.displayName} - ${doctor.fullName}` : doctor.fullName}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                            {selectedDoctor && doctorSelectionLocked && (
+                                                <div className="chief-doctor-selection">
+                                                    <strong>{doctorOptionLabel(selectedDoctor)}</strong>
+                                                    <button
+                                                        type="button"
+                                                        className="chief-selection-clear"
+                                                        onClick={() => {
+                                                            setDoctorQuery("");
+                                                            setFormState((current) => ({ ...current, doctorId: "" }));
+                                                        }}
+                                                    >
+                                                        Trocar medico
+                                                    </button>
+                                                </div>
+                                            )}
+
+                                            {!selectedDoctor && (
+                                                <div className="chief-doctor-help">
+                                                    Digite alguns caracteres. O envio so libera depois que voce escolhe um nome completo da lista.
+                                                </div>
+                                            )}
+
+                                            {!selectedDoctor && filteredDoctors.length > 0 && (
+                                                <div className="chief-doctor-suggestions" role="listbox" aria-label="Sugestoes de medicos">
+                                                    {filteredDoctors.map((doctor) => (
+                                                        <button
+                                                            key={doctor.id}
+                                                            type="button"
+                                                            className="chief-doctor-option"
+                                                            onClick={() => {
+                                                                setFormState((current) => ({ ...current, doctorId: doctor.id }));
+                                                                setDoctorQuery(doctorOptionLabel(doctor));
+                                                            }}
+                                                        >
+                                                            <strong>{doctor.displayName ?? doctor.fullName}</strong>
+                                                            {doctor.displayName && <span>{doctor.fullName}</span>}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </label>
 
                                         <label className="chief-field">
@@ -1260,16 +1423,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                 className="chief-input"
                                                 value={formState.startedAt}
                                                 onChange={(event) => setFormState((current) => ({ ...current, startedAt: event.target.value }))}
-                                            />
-                                        </label>
-
-                                        <label className="chief-field">
-                                            <span>Função</span>
-                                            <input
-                                                className="chief-input"
-                                                value={formState.roleLabel}
-                                                onChange={(event) => setFormState((current) => ({ ...current, roleLabel: event.target.value }))}
-                                                placeholder="Ex.: regulador, intervenção, base operacional"
                                             />
                                         </label>
 
@@ -1300,12 +1453,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 )}
 
                                 <label className="chief-field full-width">
-                                    <span>Notas operacionais</span>
+                                    <span>{actionMode === "correct" ? "Motivo da correcao" : "Notas operacionais"}</span>
                                     <textarea
                                         className="chief-input chief-textarea"
                                         value={formState.notes}
                                         onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
-                                        placeholder="Contexto rapido de chefia, motivo da correcao ou observacao operacional"
+                                        placeholder={actionMode === "correct"
+                                            ? "Explique por que voce esta mudando o horario ou o medico deste registro"
+                                            : "Contexto rapido de chefia ou observacao operacional"}
                                     />
                                 </label>
 
