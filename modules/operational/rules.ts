@@ -1,0 +1,75 @@
+const SALVADOR_OFFSET_MINUTES = -180;
+
+function toSalvadorClock(date: Date) {
+    return new Date(date.getTime() + (SALVADOR_OFFSET_MINUTES * 60000));
+}
+
+function fromSalvadorClockParts(year: number, month: number, day: number, hour: number, minute: number) {
+    return new Date(Date.UTC(year, month - 1, day, hour - (SALVADOR_OFFSET_MINUTES / 60), minute, 0, 0));
+}
+
+export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledEndAt?: Date | null) {
+    if (explicitScheduledEndAt) {
+        return explicitScheduledEndAt;
+    }
+
+    const normalized = shiftLabel?.trim().toUpperCase();
+    if (!normalized || (normalized !== "SD" && normalized !== "SN")) {
+        return null;
+    }
+
+    const local = toSalvadorClock(startedAt);
+    const year = local.getUTCFullYear();
+    const month = local.getUTCMonth() + 1;
+    const day = local.getUTCDate();
+    const hour = local.getUTCHours();
+    const minute = local.getUTCMinutes();
+
+    if (normalized === "SD") {
+        return fromSalvadorClockParts(year, month, day, 19, 15);
+    }
+
+    const addDay = hour > 7 || (hour === 7 && minute > 15);
+    const endBase = fromSalvadorClockParts(year, month, day, 7, 15);
+    return addDay ? new Date(endBase.getTime() + 86400000) : endBase;
+}
+
+export function resolveRegulationBoardEndAt(proposedEndAt: Date, scheduledEndAt?: Date | null) {
+    if (!scheduledEndAt) {
+        return proposedEndAt;
+    }
+
+    return proposedEndAt.getTime() <= scheduledEndAt.getTime() ? proposedEndAt : scheduledEndAt;
+}
+
+export function resolveTelegramEventTime(referenceDate: Date, hhmm?: string | null) {
+    if (!hhmm) {
+        return referenceDate;
+    }
+
+    const [hoursRaw, minutesRaw] = hhmm.split(":");
+    const hours = Number(hoursRaw);
+    const minutes = Number(minutesRaw);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
+        return referenceDate;
+    }
+
+    const local = toSalvadorClock(referenceDate);
+    const resolved = fromSalvadorClockParts(
+        local.getUTCFullYear(),
+        local.getUTCMonth() + 1,
+        local.getUTCDate(),
+        hours,
+        minutes,
+    );
+
+    if (resolved.getTime() - referenceDate.getTime() > 12 * 60 * 60000) {
+        return new Date(resolved.getTime() - 86400000);
+    }
+
+    if (referenceDate.getTime() - resolved.getTime() > 18 * 60 * 60000) {
+        return new Date(resolved.getTime() + 86400000);
+    }
+
+    return resolved;
+}

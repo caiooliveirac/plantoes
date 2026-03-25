@@ -1,0 +1,311 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+    resolveContinuationBadgeLabel,
+    resolveOperationalShiftLabel,
+    shouldHighlightInterventionVerification,
+    shouldKeepRegulationOccupancyVisible,
+} from "@/modules/operational/board-rules";
+import { inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { isCasualTelegramMessage, parseMessage, parseMessageMulti } from "@/modules/telegram/parser";
+
+test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
+    assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T07:00:00-03:00")), "SD");
+    assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T18:59:00-03:00")), "SD");
+    assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T19:00:00-03:00")), "SN");
+    assert.equal(resolveOperationalShiftLabel(new Date("2026-03-26T06:59:00-03:00")), "SN");
+});
+
+test("flags intervention doctor from previous shift for verification at 19h boundary", () => {
+    assert.equal(
+        shouldHighlightInterventionVerification(
+            new Date("2026-03-25T08:18:00-03:00"),
+            new Date("2026-03-25T19:05:00-03:00"),
+        ),
+        true,
+    );
+
+    assert.equal(
+        shouldHighlightInterventionVerification(
+            new Date("2026-03-25T19:08:00-03:00"),
+            new Date("2026-03-26T07:05:00-03:00"),
+        ),
+        true,
+    );
+
+    assert.equal(
+        shouldHighlightInterventionVerification(
+            new Date("2026-03-26T07:04:00-03:00"),
+            new Date("2026-03-26T07:05:00-03:00"),
+        ),
+        false,
+    );
+
+    assert.equal(
+        shouldHighlightInterventionVerification(
+            new Date("2026-03-25T18:10:00-03:00"),
+            new Date("2026-03-25T19:05:00-03:00"),
+        ),
+        false,
+    );
+
+    assert.equal(
+        shouldHighlightInterventionVerification(
+            new Date("2026-03-26T06:20:00-03:00"),
+            new Date("2026-03-26T07:05:00-03:00"),
+        ),
+        false,
+    );
+});
+
+test("hides regulation carry-over after boundary unless doctor declared P", () => {
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-25T08:18:00-03:00"),
+            shiftLabel: "SD",
+            reference: new Date("2026-03-25T19:01:00-03:00"),
+        }),
+        false,
+    );
+
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-25T07:00:00-03:00"),
+            shiftLabel: "P",
+            reference: new Date("2026-03-25T19:10:00-03:00"),
+        }),
+        true,
+    );
+
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-25T19:00:00-03:00"),
+            shiftLabel: "P",
+            reference: new Date("2026-03-26T07:20:00-03:00"),
+        }),
+        true,
+    );
+
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-25T19:00:00-03:00"),
+            shiftLabel: "P",
+            reference: new Date("2026-03-26T07:31:00-03:00"),
+        }),
+        false,
+    );
+
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-25T18:15:00-03:00"),
+            shiftLabel: "SN",
+            reference: new Date("2026-03-25T19:01:00-03:00"),
+        }),
+        true,
+    );
+
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-26T06:10:00-03:00"),
+            shiftLabel: "SD",
+            reference: new Date("2026-03-26T07:01:00-03:00"),
+        }),
+        true,
+    );
+});
+
+test("shows continuation badge only in the verification grace window", () => {
+    assert.equal(resolveContinuationBadgeLabel({
+        startedAt: new Date("2026-03-25T07:00:00-03:00"),
+        shiftLabel: "P",
+        reference: new Date("2026-03-25T19:10:00-03:00"),
+    }), "Continua as 19:00");
+
+    assert.equal(resolveContinuationBadgeLabel({
+        startedAt: new Date("2026-03-25T07:00:00-03:00"),
+        shiftLabel: "P",
+        reference: new Date("2026-03-25T19:31:00-03:00"),
+    }), null);
+
+    assert.equal(resolveContinuationBadgeLabel({
+        startedAt: new Date("2026-03-25T19:00:00-03:00"),
+        shiftLabel: "P",
+        reference: new Date("2026-03-26T07:10:00-03:00"),
+    }), "Continua as 07:00");
+});
+
+test("infers SD regulation cutoff at 19:15 Salvador time", () => {
+    const result = inferRegulationScheduledEndAt(
+        new Date("2026-03-25T07:03:00-03:00"),
+        "SD",
+        null,
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-25T19:15:00-03:00").toISOString());
+});
+
+test("infers SN regulation cutoff at 07:15 on next local day", () => {
+    const result = inferRegulationScheduledEndAt(
+        new Date("2026-03-25T19:02:00-03:00"),
+        "SN",
+        null,
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-26T07:15:00-03:00").toISOString());
+});
+
+test("resolves Telegram explicit HH:mm on the same Salvador day", () => {
+    const result = resolveTelegramEventTime(
+        new Date("2026-03-25T07:40:00-03:00"),
+        "07:15",
+    );
+
+    assert.equal(result.toISOString(), new Date("2026-03-25T07:15:00-03:00").toISOString());
+});
+
+test("parses free-text regulation arrival", () => {
+    const parsed = parseMessage("Bom dia, cheguei no ramal 2031 SD");
+
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "2031");
+    assert.equal(parsed.shiftType, "SD");
+    assert.equal(parsed.isDeparture, false);
+});
+
+test("classifies simple greetings as casual conversation", () => {
+    assert.equal(isCasualTelegramMessage("Bom dia, pessoal"), true);
+    assert.equal(isCasualTelegramMessage("Oi, tudo bem por ai?"), true);
+    assert.equal(isCasualTelegramMessage("Bom plantao a todos"), true);
+});
+
+test("does not classify operational messages as casual conversation", () => {
+    assert.equal(isCasualTelegramMessage("Bom dia, cheguei no ramal 2031 SD"), false);
+    assert.equal(isCasualTelegramMessage("Boa noite, saindo da 40 agora"), false);
+    assert.equal(isCasualTelegramMessage("Oi, Marcela PM04 20:00 P"), false);
+});
+
+test("parses intervention departure by numeric base alias", () => {
+    const parsed = parseMessage("Saindo da 20 agora");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "PP20");
+    assert.equal(parsed.isDeparture, true);
+});
+
+test("parses intervention SN handoff with alphanumeric base", () => {
+    const parsed = parseMessage("Uenderson SM01 19:50 SN");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "SM01");
+    assert.equal(parsed.arrivalTime, "19:50");
+    assert.equal(parsed.shiftType, "SN");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, ["Uenderson"]);
+});
+
+test("parses intervention SD handoff with explicit HH:mm", () => {
+    const parsed = parseMessage("Yuri PR03 07:15 SD");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "PR03");
+    assert.equal(parsed.arrivalTime, "07:15");
+    assert.equal(parsed.shiftType, "SD");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, ["Yuri"]);
+});
+
+test("parses intervention P shift with numeric base alias and 07h format", () => {
+    const parsed = parseMessage("Larissa Rocha 60 07h P");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "BR60");
+    assert.equal(parsed.arrivalTime, "07:00");
+    assert.equal(parsed.shiftType, "P");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, ["Larissa Rocha"]);
+});
+
+test("parses intervention continuation message without polluting the doctor name", () => {
+    const parsed = parseMessage("Briang Seguir na PM04 - continua.");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "PM04");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, ["Briang"]);
+});
+
+test("parses intervention arrival with prepositions around the base and time", () => {
+    const parsed = parseMessage("João Paulo Almeida na CZ50 às 19:00h");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "CZ50");
+    assert.equal(parsed.arrivalTime, "19:00");
+    assert.deepEqual(parsed.extractedNames, ["João Paulo Almeida"]);
+});
+
+test("strips greeting words from the extracted doctor name", () => {
+    const parsed = parseMessage("Bom dia, Gabriel na 50");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "CZ50");
+    assert.deepEqual(parsed.extractedNames, ["Gabriel"]);
+});
+
+test("parses multiline intervention arrival carrying name and time across lines", () => {
+    const parsed = parseMessageMulti("Lucas Albuquerque\nChegada a BR 60 sn\n19:09")[0];
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "BR60");
+    assert.equal(parsed.arrivalTime, "19:09");
+    assert.equal(parsed.shiftType, "SN");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, ["Lucas Albuquerque"]);
+});
+
+test("parses intervention arrival by short alias with sender-style wording", () => {
+    const parsed = parseMessage("Bia na 05");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "BR05");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, ["Bia"]);
+});
+
+test("parses intervention departure in free text without leaking filler words into the name", () => {
+    const parsed = parseMessage("Saindo da 40 só agora");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "PM40");
+    assert.equal(parsed.isDeparture, true);
+    assert.deepEqual(parsed.extractedNames, []);
+});
+
+test("parses intervention continuation without treating continuation word as a doctor name", () => {
+    const parsed = parseMessage("Continuo na 30");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "IT30");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, []);
+});
+
+test("parses transfer destination as intervention arrival instead of departure", () => {
+    const parsed = parseMessage("Saída da CRU 19:00, deslocando para CB02");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "CB02");
+    assert.equal(parsed.arrivalTime, "19:00");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, []);
+});
+
+test("parses intervention P shift with bare base alias and explicit time", () => {
+    const parsed = parseMessage("Marcela na 04 20:35 P");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "PM04");
+    assert.equal(parsed.arrivalTime, "20:35");
+    assert.equal(parsed.shiftType, "P");
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, ["Marcela"]);
+});

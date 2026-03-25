@@ -1,0 +1,286 @@
+const RAMAIS_REGULACAO = new Set([
+    "1321", "1322", "1323", "1324", "1325",
+    "1361", "1362", "1363", "1364", "1365", "1366", "1367", "1368",
+    "2031", "2032", "2033", "2034", "2035",
+    "2151", "2152", "2153", "2154",
+    "2377",
+]);
+
+const BASES_INTERVENCAO = new Set([
+    "SM01", "CB02", "PR03", "PM04", "BR05", "CN10",
+    "PP20", "IT30", "PM40", "CZ50", "BR60", "CC70",
+]);
+
+const ABBREVIATION_MAP: Record<string, string> = {
+    "01": "SM01", "1": "SM01",
+    "02": "CB02", "2": "CB02",
+    "03": "PR03", "3": "PR03",
+    "04": "PM04", "4": "PM04",
+    "05": "BR05", "5": "BR05",
+    "10": "CN10",
+    "20": "PP20",
+    "30": "IT30",
+    "40": "PM40",
+    "50": "CZ50",
+    "60": "BR60",
+    "70": "CC70",
+};
+
+const ARRIVAL_SIGNALS = [
+    /\b(?:CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMINDO|ASSUMI|RENDENDO|RENDI)\b/i,
+    /\b(?:TO\s+AQUI|TÔ\s+AQUI|ESTOU\s+AQUI|JA\s+AQUI|JÁ\s+AQUI)\b/i,
+    /\b(?:CONTINUO|CONTINUA|SEGUINDO|SIGO)\b/i,
+    /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i,
+];
+
+const DEPARTURE_SIGNALS = [
+    /\b(?:SAINDO|SAIU|SAI|SAIDA|SAÍDA|ENCERRANDO|ENCERREI|FINALIZANDO|FINALIZEI|LIBEREI)\b/i,
+];
+
+const RE_TIME_PATTERNS = [
+    /\b(\d{1,2})[:\.](\d{2})(?=\b|h\b|h$)/i,
+    /\b(\d{1,2})h(\d{2})?\b/i,
+    /(?:às?|as)\s+(\d{1,2})(?:\s*(?:h|hora|horas))?\b/i,
+];
+
+const NAME_NOISE_TOKENS = new Set([
+    "A", "AO", "AOS", "AS", "ATE", "ATÉ", "BOA", "BOM", "CHEGADA", "CHEGANDO", "CHEGUEI",
+    "CONTINUA", "CONTINUO", "CONTINUANDO", "CORRIJA", "CRU", "DA", "DAS", "DE",
+    "DESLOCANDO", "DIA", "DO", "DOS", "EM", "ERRADO", "ESTA", "ESTÁ", "ESTOU", "HORARIO",
+    "HORÁRIO", "JA", "JÁ", "NA", "NAS", "NO", "NOITE", "NOS", "OLA", "OLA", "OI", "PARA", "PRESENTE",
+    "RENDENDO", "RENDI", "SAI", "SAIU", "SAIDA", "SAÍDA", "SAINDO", "ENCERRANDO", "ENCERREI", "FINALIZANDO", "FINALIZEI", "LIBEREI", "SEGUIR", "SO", "SÓ", "TO",
+    "TARDE", "TÔ", "TUDO", "BEM", "AGORA", "AI", "AÍ",
+]);
+
+const CASUAL_PATTERNS = [
+    /\b(?:OI|OLA|OLAA|OIE|E\s+AI|E\s+AII|SALVE)\b/i,
+    /\bBOM\s+DIA\b/i,
+    /\bBOA\s+TARDE\b/i,
+    /\bBOA\s+NOITE\b/i,
+    /\bBOM\s+PLANTAO\b/i,
+    /\bBOM\s+TRABALHO\b/i,
+    /\bTUDO\s+BEM\b/i,
+    /\bTD\s+BEM\b/i,
+    /\bBELEZA\b/i,
+    /\bSHOW\b/i,
+    /\bVALEU\b/i,
+    /\bOBRIGAD[OA]\b/i,
+    /\bGRATIDAO\b/i,
+    /\bOTIMO\s+PLANTAO\b/i,
+    /\bEXCELENTE\s+PLANTAO\b/i,
+];
+
+const CASUAL_FILLER_TOKENS = new Set([
+    "A", "AE", "AI", "AÍ", "AMIGOS", "AMIGAS", "CHEFIA", "COLEGAS", "E", "EQUIPE",
+    "GALERA", "GENTE", "MEUS", "MINHAS", "PESSOAL", "PRA", "PARA", "QUERIDOS",
+    "QUERIDAS", "TURMA", "TIME", "TODOS", "TODAS", "VOCES", "VOCÊS",
+]);
+
+export interface ParsedMessage {
+    sector: "REGULATION" | "INTERVENTION" | null;
+    baseCode: string | null;
+    arrivalTime: string | null;
+    shiftType: "SD" | "SN" | "P" | null;
+    roleFunction: string | null;
+    confidence: "HIGH" | "MEDIUM" | "LOW";
+    isDeparture: boolean;
+    extractedNames: string[];
+}
+
+export function parseMessageMulti(text: string): ParsedMessage[] {
+    const parts = text
+        .split(/\n|(?<=[.!?;])\s+/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+
+    if (parts.length <= 1) {
+        return [parseMessage(text)];
+    }
+
+    const parsedParts = parts.map((part) => parseMessage(part));
+    const results = parsedParts
+        .map((entry, index) => enrichParsedEntryFromContext(entry, parsedParts, index))
+        .filter((entry) => entry.baseCode);
+    return results.length > 0 ? results : [parseMessage(text)];
+}
+
+export function parseMessage(text: string): ParsedMessage {
+    const normalized = text.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    let sector: ParsedMessage["sector"] = null;
+    let baseCode: string | null = null;
+    let arrivalTime: string | null = null;
+    let shiftType: ParsedMessage["shiftType"] = null;
+    let roleFunction: string | null = null;
+    let confidence: ParsedMessage["confidence"] = "LOW";
+
+    const baseMatch = normalized.match(/\b([A-Z]{2})[\s-]?(\d{2})\b/);
+    if (baseMatch) {
+        const candidate = `${baseMatch[1]}${baseMatch[2]}`;
+        if (BASES_INTERVENCAO.has(candidate)) {
+            sector = "INTERVENTION";
+            baseCode = candidate;
+        }
+    }
+
+    if (!baseCode) {
+        const ramalMatch = normalized.match(/(?:RAMAL|PA|POSICAO|REG)?\s*[:\-]?\s*(\d{4})\b/);
+        if (ramalMatch && RAMAIS_REGULACAO.has(ramalMatch[1])) {
+            sector = "REGULATION";
+            baseCode = ramalMatch[1];
+        }
+    }
+
+    if (!baseCode) {
+        const bareBaseMatch = normalized.match(/(?:^|\s)(?:BASE|NA|NO|DA|DO)?\s*(?<![:\d])0?(01|02|03|04|05|10|20|30|40|50|60|70)\b(?!\s*[:h]\d)/);
+        if (bareBaseMatch) {
+            const resolved = ABBREVIATION_MAP[bareBaseMatch[1]];
+            if (resolved) {
+                sector = "INTERVENTION";
+                baseCode = resolved;
+            }
+        }
+    }
+
+    for (const re of RE_TIME_PATTERNS) {
+        const match = text.match(re);
+        if (!match) {
+            continue;
+        }
+
+        const hours = (match[1] || "0").padStart(2, "0");
+        const minutes = (match[2] || "00").padStart(2, "0");
+        arrivalTime = `${hours}:${minutes}`;
+        break;
+    }
+
+    const shiftMatch = normalized.match(/\b(SD|SN|P|DIURNO|NOTURNO)\b/);
+    if (shiftMatch) {
+        if (shiftMatch[1] === "DIURNO") shiftType = "SD";
+        else if (shiftMatch[1] === "NOTURNO") shiftType = "SN";
+        else shiftType = shiftMatch[1] as ParsedMessage["shiftType"];
+    }
+
+    const extractedNames = extractNames(text);
+    const isTransferToDestination = /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i.test(normalized);
+    const isDeparture = !isTransferToDestination && DEPARTURE_SIGNALS.some((re) => re.test(normalized));
+    const hasArrivalSignal = ARRIVAL_SIGNALS.some((re) => re.test(normalized));
+
+    if (baseCode && (hasArrivalSignal || isDeparture || arrivalTime || shiftType || extractedNames.length > 0)) {
+        confidence = extractedNames.length > 0 || hasArrivalSignal || isDeparture ? "HIGH" : "MEDIUM";
+    } else if (baseCode) {
+        confidence = "MEDIUM";
+    }
+
+    return {
+        sector,
+        baseCode,
+        arrivalTime,
+        shiftType,
+        roleFunction,
+        confidence,
+        isDeparture,
+        extractedNames,
+    };
+}
+
+export function isCasualTelegramMessage(text: string) {
+    const normalized = text.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const trimmed = normalized.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    if (trimmed.startsWith("/")) {
+        return false;
+    }
+
+    const hasCasualSignal = CASUAL_PATTERNS.some((pattern) => pattern.test(trimmed));
+    if (!hasCasualSignal) {
+        return false;
+    }
+
+    const hasOperationalCue = Boolean(
+        trimmed.match(/\b([A-Z]{2})[\s-]?(\d{2})\b/)
+        || trimmed.match(/(?:RAMAL|PA|POSICAO|REG)?\s*[:\-]?\s*(\d{4})\b/)
+        || trimmed.match(/\b(SD|SN|P|DIURNO|NOTURNO)\b/)
+        || ARRIVAL_SIGNALS.some((pattern) => pattern.test(trimmed))
+        || DEPARTURE_SIGNALS.some((pattern) => pattern.test(trimmed))
+        || trimmed.match(/\b(?:BASE|RAMAL|POSICAO|POSICAO|REGULACAO|REGULAÇÃO|CHEGADA|SAIDA|SAIDA|PLANTAO)\s+\d+/)
+    );
+
+    if (hasOperationalCue) {
+        return false;
+    }
+
+    const remainder = trimmed
+        .replace(/[!?.;,/\\()[\]{}:+-]/g, " ")
+        .replace(/\b(?:OI|OLA|OLAA|OIE|E\s+AI|E\s+AII|SALVE|BOM\s+DIA|BOA\s+TARDE|BOA\s+NOITE|BOM\s+PLANTAO|BOM\s+TRABALHO|TUDO\s+BEM|TD\s+BEM|BELEZA|SHOW|VALEU|OBRIGAD[OA]|GRATIDAO|OTIMO\s+PLANTAO|EXCELENTE\s+PLANTAO)\b/gi, " ")
+        .split(/\s+/)
+        .filter(Boolean)
+        .filter((token) => !CASUAL_FILLER_TOKENS.has(token));
+
+    return remainder.length <= 4;
+}
+
+function extractNames(text: string) {
+    const cleaned = text
+        .replace(/\b\d{1,2}[:.h]\d{0,2}\b/gi, " ")
+        .replace(/\b[A-Z]{2}[\s\-]?\d{2}\b/gi, " ")
+        .replace(/\b\d{4}\b/g, " ")
+        .replace(/\b(?:SD|SN|P|DIURNO|NOTURNO)\b/gi, " ")
+        .replace(/[+\-:;!?.,()\[\]{}]/g, " ")
+        .replace(/\bDr[a]?\.?\b/gi, " ")
+        .trim();
+
+    const tokens = cleaned.split(/\s+/).filter(Boolean);
+    const filtered = tokens.filter((token) => {
+        if (token.length <= 1 || !/[A-Za-zÀ-ÿ]/.test(token)) {
+            return false;
+        }
+
+        const normalizedToken = token.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        return !NAME_NOISE_TOKENS.has(normalizedToken);
+    });
+    if (filtered.length === 0) {
+        return [] as string[];
+    }
+
+    return [filtered.join(" ")];
+}
+
+function enrichParsedEntryFromContext(parsed: ParsedMessage, parts: ParsedMessage[], index: number): ParsedMessage {
+    if (!parsed.baseCode) {
+        return parsed;
+    }
+
+    const previous = parts[index - 1];
+    const next = parts[index + 1];
+    const contextualName = parsed.extractedNames[0]
+        ?? pickStandaloneName(previous)
+        ?? pickStandaloneName(next);
+    const contextualTime = parsed.arrivalTime
+        ?? pickStandaloneTime(previous)
+        ?? pickStandaloneTime(next);
+
+    return {
+        ...parsed,
+        arrivalTime: contextualTime,
+        extractedNames: contextualName ? [contextualName] : parsed.extractedNames,
+    };
+}
+
+function pickStandaloneName(parsed?: ParsedMessage) {
+    if (!parsed || parsed.baseCode || parsed.isDeparture || parsed.shiftType || parsed.arrivalTime) {
+        return null;
+    }
+
+    return parsed.extractedNames[0] ?? null;
+}
+
+function pickStandaloneTime(parsed?: ParsedMessage) {
+    if (!parsed || parsed.baseCode || parsed.isDeparture || parsed.shiftType) {
+        return null;
+    }
+
+    return parsed.arrivalTime ?? null;
+}

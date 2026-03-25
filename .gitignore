@@ -1,0 +1,27 @@
+node_modules/
+.next/
+
+.env
+.env.local
+.env.production
+.env.development.local
+.env.test.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+.DS_Store
+
+# Local runtime artifacts
+.pm2/
+*.log
+
+# Accidental scratch files previously generated in the workspace root
+(r.read().decode())
+ole.error(err);
+plit('=',1)[1].strip() for line in text.splitlines() if line.startswith('TELEGRAM_BOT_TOKEN=')][0]
+t
+t postgres = require('postgres');
+udo -u postgres createdb -O plantoes operations_v2
