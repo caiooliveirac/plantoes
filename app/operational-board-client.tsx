@@ -1034,6 +1034,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         ? "Clique no quadro para abrir correcoes, aberturas e encerramentos."
                                         : "Esta sessao nao habilita operacao."}
                                 </span>
+                                {session.roles.includes("admin") && !session.mustChangePassword && (
+                                    <a className="ops-auth-inline-link" href="/admin/reports">
+                                        Abrir auditoria mensal
+                                    </a>
+                                )}
                             </div>
 
                             {session.mustChangePassword && (
