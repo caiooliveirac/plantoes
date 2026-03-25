@@ -102,6 +102,8 @@ async function loadAuditTrailByOccupancy(shifts: RawMonthlyReportShift[]) {
 
 export async function getMonthlyAdminReport(monthKey?: string | null): Promise<MonthlyReportModel> {
     const range = resolveMonthlyReportRange(monthKey);
+    const startIso = range.start.toISOString();
+    const endIso = range.end.toISOString();
     const db = getDb();
     const result = await db.execute(sql`
         with monthly_regulation as (
@@ -138,8 +140,8 @@ export async function getMonthlyAdminReport(monthKey?: string | null): Promise<M
             left join operations_v2.users creator on creator.id = ro.created_by_user_id
             left join operations_v2.users updater on updater.id = ro.updated_by_user_id
             left join operations_v2.bank_hours_entries bhe on bhe.regulation_occupancy_id = ro.id
-            where ro.started_at >= ${range.start}
-              and ro.started_at < ${range.end}
+                        where ro.started_at >= ${startIso}::timestamptz
+                            and ro.started_at < ${endIso}::timestamptz
         ),
         monthly_intervention as (
             select
@@ -175,8 +177,8 @@ export async function getMonthlyAdminReport(monthKey?: string | null): Promise<M
             left join operations_v2.users creator on creator.id = io.created_by_user_id
             left join operations_v2.users updater on updater.id = io.updated_by_user_id
             left join operations_v2.bank_hours_entries bhe on bhe.intervention_occupancy_id = io.id
-            where io.started_at >= ${range.start}
-              and io.started_at < ${range.end}
+                        where io.started_at >= ${startIso}::timestamptz
+                            and io.started_at < ${endIso}::timestamptz
         )
         select * from monthly_regulation
         union all
