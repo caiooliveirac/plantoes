@@ -301,6 +301,7 @@ export async function reviewChiefAccessRequest(input: ReviewChiefAccessRequestIn
                 .set({
                     doctorId: request.doctorId,
                     passwordHash: request.passwordHash,
+                    mustChangePassword: false,
                     isActive: true,
                     updatedAt: new Date(),
                 })
@@ -310,6 +311,7 @@ export async function reviewChiefAccessRequest(input: ReviewChiefAccessRequestIn
                 doctorId: request.doctorId,
                 email: request.requestedEmail,
                 passwordHash: request.passwordHash,
+                mustChangePassword: false,
                 isActive: true,
             }).returning();
 

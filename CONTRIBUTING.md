@@ -12,6 +12,7 @@ Este repositório concentra a evolução da operação de plantão SAMU com foco
 4. Evitar refactors amplos junto com correções críticas de operação.
 5. Preferir mudanças pequenas, auditáveis e publicáveis.
 6. Mudou regra de turno, tolerancia, continuidade ou lembrete? Atualizar `OPERATIONAL_RULES.md` na mesma entrega.
+7. Se a entrega exigir restart ou publicação, seguir `DEPLOY.md` e usar reload com `.env.production` + `pm2 restart ... --update-env`.
 
 ## Fluxo recomendado
 

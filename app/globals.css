@@ -168,6 +168,12 @@ body {
     color: #d8ffeb;
 }
 
+.ops-auth-state.warning {
+    background: rgba(255, 184, 77, 0.12);
+    border-color: rgba(255, 184, 77, 0.26);
+    color: #ffe2b5;
+}
+
 .ops-auth-state.read {
     background: rgba(255, 255, 255, 0.05);
     color: var(--muted-strong);
@@ -192,6 +198,18 @@ body {
 
 .ops-auth-summary strong {
     font-size: 0.95rem;
+}
+
+.ops-auth-password-panel {
+    gap: 12px;
+    padding: 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 184, 77, 0.18);
+    background: rgba(21, 14, 7, 0.44);
+}
+
+.ops-auth-security-note {
+    color: #ffe2b5;
 }
 
 .ops-auth-field {

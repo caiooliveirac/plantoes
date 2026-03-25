@@ -1,8 +1,9 @@
 import { compare, hash } from "bcryptjs";
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
-import { passwordResetTokens, chiefAccessRequests, userRoles, users } from "@/db/schema";
+import { auditLogs, passwordResetTokens, chiefAccessRequests, userRoles, users } from "@/db/schema";
 import { USER_ROLES, type UserRole } from "@/modules/auth/contracts";
+import { getPasswordPolicyError } from "@/modules/auth/password-policy";
 
 export type CredentialsStatus =
     | "success"
@@ -17,6 +18,7 @@ export interface AuthenticatedUser {
     email: string;
     doctorId: string | null;
     roles: UserRole[];
+    mustChangePassword: boolean;
 }
 
 export type CredentialsResult =
@@ -41,6 +43,7 @@ export async function authenticateWithPassword(email: string, password: string):
             email: users.email,
             doctorId: users.doctorId,
             passwordHash: users.passwordHash,
+            mustChangePassword: users.mustChangePassword,
             isActive: users.isActive,
         })
         .from(users)
@@ -74,6 +77,7 @@ export async function authenticateWithPassword(email: string, password: string):
                     email: user.email,
                     doctorId: user.doctorId,
                     roles,
+                    mustChangePassword: user.mustChangePassword,
                 },
             };
         }
@@ -158,6 +162,11 @@ export async function consumePasswordReset(token: string, password: string) {
         throw new Error("Password reset token is invalid or expired.");
     }
 
+    const passwordPolicyError = getPasswordPolicyError(password);
+    if (passwordPolicyError) {
+        throw new Error(passwordPolicyError);
+    }
+
     const passwordHash = await hashPassword(password);
 
     await db.transaction(async (tx) => {
@@ -165,6 +174,7 @@ export async function consumePasswordReset(token: string, password: string) {
             .update(users)
             .set({
                 passwordHash,
+                mustChangePassword: false,
                 updatedAt: new Date(),
             })
             .where(eq(users.id, resetToken.userId));
@@ -173,6 +183,58 @@ export async function consumePasswordReset(token: string, password: string) {
             .update(passwordResetTokens)
             .set({ usedAt: new Date() })
             .where(eq(passwordResetTokens.id, resetToken.id));
+    });
+
+    return { ok: true };
+}
+
+export async function changeOwnPassword(userId: string, currentPassword: string, nextPassword: string) {
+    const db = getDb();
+    const [user] = await db
+        .select({
+            id: users.id,
+            passwordHash: users.passwordHash,
+            mustChangePassword: users.mustChangePassword,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+    if (!user) {
+        throw new Error("User not found.");
+    }
+
+    const passwordMatches = await compare(currentPassword, user.passwordHash);
+    if (!passwordMatches) {
+        throw new Error("Senha atual incorreta.");
+    }
+
+    const passwordPolicyError = getPasswordPolicyError(nextPassword, currentPassword);
+    if (passwordPolicyError) {
+        throw new Error(passwordPolicyError);
+    }
+
+    const passwordHash = await hashPassword(nextPassword);
+
+    await db.transaction(async (tx) => {
+        await tx
+            .update(users)
+            .set({
+                passwordHash,
+                mustChangePassword: false,
+                updatedAt: new Date(),
+            })
+            .where(eq(users.id, userId));
+
+        await tx.insert(auditLogs).values({
+            actorUserId: userId,
+            action: user.mustChangePassword ? "auth.password_changed_first_login" : "auth.password_changed",
+            entityType: "user",
+            entityId: userId,
+            details: {
+                mustChangePasswordCleared: user.mustChangePassword,
+            },
+        });
     });
 
     return { ok: true };

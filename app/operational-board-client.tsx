@@ -26,6 +26,7 @@ interface DoctorOption {
 interface SessionSummary {
     email: string;
     roles: UserRole[];
+    mustChangePassword: boolean;
     canManage: boolean;
 }
 
@@ -59,6 +60,11 @@ interface FormState {
 
 interface AuthResponse {
     error?: string;
+    session?: {
+        user?: {
+            mustChangePassword?: boolean;
+        };
+    };
 }
 
 function formatBoardTime(value: string | null) {
@@ -374,6 +380,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [authError, setAuthError] = useState<string | null>(null);
     const [authInfo, setAuthInfo] = useState<string | null>(null);
     const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+    const [currentPasswordInput, setCurrentPasswordInput] = useState("");
+    const [nextPasswordInput, setNextPasswordInput] = useState("");
+    const [confirmPasswordInput, setConfirmPasswordInput] = useState("");
+    const [isPasswordChanging, setIsPasswordChanging] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [selectedCard, setSelectedCard] = useState<BoardCard | null>(null);
     const [actionMode, setActionMode] = useState<ActionMode | null>(null);
@@ -399,9 +409,25 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
     useEffect(() => {
         if (session) {
-            setAuthPassword("");
+            if (!session.mustChangePassword) {
+                setAuthPassword("");
+            }
             setAuthError(null);
             setAuthInfo(null);
+        }
+    }, [session]);
+
+    useEffect(() => {
+        if (!session) {
+            setCurrentPasswordInput("");
+            setNextPasswordInput("");
+            setConfirmPasswordInput("");
+            return;
+        }
+
+        if (session.mustChangePassword) {
+            setAuthOpen(true);
+            setAuthInfo("Senha temporaria detectada. Troque a senha antes de operar o quadro.");
         }
     }, [session]);
 
@@ -531,9 +557,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 throw new Error(translateAuthError(body?.error));
             }
 
-            setAuthPassword("");
-            setAuthOpen(false);
-            setAuthInfo("Sessao iniciada. Atualizando controles operacionais.");
+            const passwordChangeRequired = Boolean(body?.session?.user?.mustChangePassword);
+            if (!passwordChangeRequired) {
+                setAuthPassword("");
+                setAuthOpen(false);
+            }
+            setAuthInfo(passwordChangeRequired
+                ? "Sessao iniciada com senha temporaria. Troque a senha para liberar a operacao."
+                : "Sessao iniciada. Atualizando controles operacionais.");
             startRefresh(() => {
                 router.refresh();
             });
@@ -561,6 +592,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
             setAuthOpen(false);
             setAuthPassword("");
+            setCurrentPasswordInput("");
+            setNextPasswordInput("");
+            setConfirmPasswordInput("");
             setAuthInfo("Sessao encerrada. O quadro voltou para modo leitura.");
             startRefresh(() => {
                 router.refresh();
@@ -569,6 +603,53 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setAuthError(error instanceof Error ? error.message : "Nao foi possivel encerrar a sessao.");
         } finally {
             setIsAuthSubmitting(false);
+        }
+    }
+
+    async function handleChangePassword(event: React.FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+
+        if (!session) {
+            setAuthError("Sessao expirada. Entre novamente.");
+            return;
+        }
+
+        if (nextPasswordInput !== confirmPasswordInput) {
+            setAuthError("A confirmacao da nova senha nao confere.");
+            return;
+        }
+
+        try {
+            setIsPasswordChanging(true);
+            setAuthError(null);
+            setAuthInfo(null);
+
+            const response = await fetch("/api/auth/change-password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    currentPassword: currentPasswordInput,
+                    nextPassword: nextPasswordInput,
+                }),
+            });
+
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error || "Nao foi possivel trocar a senha agora.");
+            }
+
+            setAuthPassword("");
+            setCurrentPasswordInput("");
+            setNextPasswordInput("");
+            setConfirmPasswordInput("");
+            setAuthInfo("Senha atualizada. Liberando a operacao do quadro.");
+            startRefresh(() => {
+                router.refresh();
+            });
+        } catch (error) {
+            setAuthError(error instanceof Error ? error.message : "Nao foi possivel trocar a senha agora.");
+        } finally {
+            setIsPasswordChanging(false);
         }
     }
 
@@ -850,25 +931,77 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     <p className="ops-auth-kicker">Sessao ativa</p>
                                     <h2>{summarizeRoles(session.roles)}</h2>
                                 </div>
-                                <span className={`ops-auth-state ${session.canManage ? "live" : "read"}`.trim()}>
-                                    {session.canManage ? "Operacao habilitada" : "Leitura"}
+                                <span className={`ops-auth-state ${session.mustChangePassword ? "warning" : session.canManage ? "live" : "read"}`.trim()}>
+                                    {session.mustChangePassword ? "Troca obrigatoria" : session.canManage ? "Operacao habilitada" : "Leitura"}
                                 </span>
                             </div>
 
                             <div className="ops-auth-summary">
                                 <strong>{session.email}</strong>
                                 <span>
-                                    {session.canManage
+                                    {session.mustChangePassword
+                                        ? "Senha temporaria ativa. Troque a senha agora para liberar as rotas operacionais."
+                                        : session.canManage
                                         ? "Clique no quadro para abrir correcoes, aberturas e encerramentos."
                                         : "Esta sessao nao habilita operacao."}
                                 </span>
                             </div>
 
+                            {session.mustChangePassword && (
+                                <form className="ops-auth-panel ops-auth-password-panel" onSubmit={handleChangePassword}>
+                                    <p className="ops-auth-copy ops-auth-security-note">
+                                        Esses acessos bootstrap nascem bloqueados para operacao. A liberacao acontece assim que voce troca a senha temporaria por uma senha forte e individual.
+                                    </p>
+
+                                    <label className="ops-auth-field">
+                                        <span>Senha atual</span>
+                                        <input
+                                            type="password"
+                                            className="ops-auth-input"
+                                            value={currentPasswordInput}
+                                            onChange={(event) => setCurrentPasswordInput(event.target.value)}
+                                            autoComplete="current-password"
+                                            placeholder="Informe a senha temporaria"
+                                        />
+                                    </label>
+
+                                    <label className="ops-auth-field">
+                                        <span>Nova senha</span>
+                                        <input
+                                            type="password"
+                                            className="ops-auth-input"
+                                            value={nextPasswordInput}
+                                            onChange={(event) => setNextPasswordInput(event.target.value)}
+                                            autoComplete="new-password"
+                                            placeholder="Minimo de 10 caracteres com combinacao forte"
+                                        />
+                                    </label>
+
+                                    <label className="ops-auth-field">
+                                        <span>Confirmar nova senha</span>
+                                        <input
+                                            type="password"
+                                            className="ops-auth-input"
+                                            value={confirmPasswordInput}
+                                            onChange={(event) => setConfirmPasswordInput(event.target.value)}
+                                            autoComplete="new-password"
+                                            placeholder="Repita a nova senha"
+                                        />
+                                    </label>
+
+                                    <div className="ops-auth-actions">
+                                        <button type="submit" className="ops-auth-primary" disabled={isPasswordChanging || isRefreshing || !currentPasswordInput || !nextPasswordInput || !confirmPasswordInput}>
+                                            {isPasswordChanging || isRefreshing ? "Atualizando..." : "Trocar senha e liberar"}
+                                        </button>
+                                    </div>
+                                </form>
+                            )}
+
                             <div className="ops-auth-actions">
                                 <button type="button" className="ops-auth-secondary" onClick={() => setAuthOpen(false)}>
                                     Fechar
                                 </button>
-                                <button type="button" className="ops-auth-primary" onClick={handleLogout} disabled={isAuthSubmitting || isRefreshing}>
+                                <button type="button" className="ops-auth-primary" onClick={handleLogout} disabled={isAuthSubmitting || isPasswordChanging || isRefreshing}>
                                     {isAuthSubmitting || isRefreshing ? "Saindo..." : "Sair"}
                                 </button>
                             </div>
@@ -953,9 +1086,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     </div>
                 )}
 
-                {!session?.canManage && (
+                {!session?.canManage && !session?.mustChangePassword && (
                     <div className="chief-auth-warning">
                         Esta mesa esta em leitura. Entre com perfil chief ou admin para habilitar abertura, correcao e encerramento.
+                    </div>
+                )}
+
+                {session?.mustChangePassword && (
+                    <div className="chief-auth-warning">
+                        Esta sessao ainda usa senha temporaria. Troque a senha no controle de acesso para liberar qualquer operacao de chefia.
                     </div>
                 )}
 

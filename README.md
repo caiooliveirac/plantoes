@@ -34,6 +34,12 @@ O sistema consolida regulação, intervenção, chefia e banco de horas em uma b
 - ver [AUTH_PLAN.md](AUTH_PLAN.md) para o plano de convite por link, aprovacao manual por admin e separacao de permissao entre `chief` e `admin`
 - o plano tambem fixa a decisao de manter o painel principal em `/`, com login discreto e operacao persistida por rotas server-side sem depender de middleware como guarda principal
 
+## Deploy de producao
+
+- ver [DEPLOY.md](DEPLOY.md) antes de qualquer push com restart
+- a regra critica e: carregar `.env.production` antes do build e reiniciar os dois processos PM2 com `--update-env`, porque o worker pode perder `DATABASE_URL` se o deploy for feito de forma incompleta
+- preferir sempre `npm run deploy:production`
+
 ## Principios arquiteturais
 
 - operacao primeiro: a visualizacao do quadro deve responder ao estado real do plantao e nao a heuristicas frouxas

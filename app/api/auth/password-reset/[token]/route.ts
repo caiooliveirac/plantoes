@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { hasDatabaseUrl } from "@/db";
 import { consumePasswordReset, getPasswordResetToken } from "@/services/auth.service";
+import { getPasswordPolicyError } from "@/modules/auth/password-policy";
 
 const schema = z.object({
-    password: z.string().min(8),
+    password: z.string().min(10),
 });
 
 export async function GET(_request: NextRequest, context: RouteContext<"/api/auth/password-reset/[token]">) {
@@ -28,7 +29,12 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/aut
 
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-        return NextResponse.json({ error: "A password with at least 8 characters is required." }, { status: 400 });
+        return NextResponse.json({ error: "A password with at least 10 characters is required." }, { status: 400 });
+    }
+
+    const passwordPolicyError = getPasswordPolicyError(parsed.data.password);
+    if (passwordPolicyError) {
+        return NextResponse.json({ error: passwordPolicyError }, { status: 400 });
     }
 
     const { token } = await context.params;

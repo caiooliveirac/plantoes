@@ -351,6 +351,16 @@ Para esta fase, manter o modelo atual e suficiente:
 - assinatura por `AUTH_SECRET`
 - duracao curta, por exemplo 12 horas
 
+## Senha temporaria e primeiro login
+
+Para acessos bootstrap criados manualmente pela operacao:
+
+- a senha inicial deve ser temporaria e aplicada fora do repositorio, por script com variavel de ambiente
+- a conta deve nascer com `must_change_password = true`
+- o usuario consegue autenticar, mas nao consegue operar o quadro ate trocar a senha
+- a troca obrigatoria precisa acontecer na propria home, no fluxo discreto de login, sem depender de area administrativa separada
+- o bloqueio precisa existir tambem no servidor, para impedir bypass por chamada direta de rota
+
 Melhoria recomendada sem expandir demais o escopo:
 
 - adicionar `session_version` no usuario no futuro para invalidacao manual global

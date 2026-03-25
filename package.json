@@ -9,7 +9,9 @@
         "test": "node --test --import tsx tests/**/*.test.ts",
         "db:migrate": "tsx scripts/apply-migrations.ts",
         "db:import-doctors": "tsx scripts/import-doctors.ts",
-        "telegram:worker": "node --import tsx scripts/telegram-reminder-worker.ts"
+        "telegram:worker": "node --import tsx scripts/telegram-reminder-worker.ts",
+        "provision:initial-access": "tsx scripts/provision-initial-access.ts",
+        "deploy:production": "bash scripts/deploy-production.sh"
     },
     "dependencies": {
         "bcryptjs": "^3.0.3",

@@ -23,6 +23,7 @@ export interface AuthenticatedSession {
         email: string;
         doctorId: string | null;
         roles: UserRole[];
+        mustChangePassword: boolean;
     };
     expiresAt: string;
 }
@@ -74,6 +75,7 @@ async function loadUserSession(userId: string, expiresAt: number): Promise<Authe
             id: users.id,
             email: users.email,
             doctorId: users.doctorId,
+            mustChangePassword: users.mustChangePassword,
             isActive: users.isActive,
         })
         .from(users)
@@ -103,6 +105,7 @@ async function loadUserSession(userId: string, expiresAt: number): Promise<Authe
             email: user.email,
             doctorId: user.doctorId,
             roles,
+            mustChangePassword: user.mustChangePassword,
         },
         expiresAt: new Date(expiresAt).toISOString(),
     };
@@ -123,10 +126,14 @@ export async function readAuthenticatedSession(): Promise<AuthenticatedSession |
     return loadUserSession(parsed.sub, parsed.exp);
 }
 
-export async function requireAuthenticatedSession(requiredRoles?: UserRole[]) {
+export async function requireAuthenticatedSession(requiredRoles?: UserRole[], options?: { allowPasswordChange?: boolean }) {
     const session = await readAuthenticatedSession();
     if (!session) {
         throw new AuthError(401, "Authentication required.");
+    }
+
+    if (!options?.allowPasswordChange && session.user.mustChangePassword) {
+        throw new AuthError(403, "Password change required before accessing protected operations.");
     }
 
     if (requiredRoles && !requiredRoles.some((role) => session.user.roles.includes(role))) {

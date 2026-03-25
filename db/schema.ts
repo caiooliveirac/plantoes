@@ -49,6 +49,7 @@ export const users = operationsV2.table(
         doctorId: uuid("doctor_id").references(() => doctors.id),
         email: varchar("email", { length: 255 }).notNull(),
         passwordHash: text("password_hash").notNull(),
+        mustChangePassword: boolean("must_change_password").notNull().default(false),
         isActive: boolean("is_active").notNull().default(true),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
         updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

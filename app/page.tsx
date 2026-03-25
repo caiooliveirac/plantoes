@@ -30,7 +30,10 @@ export default async function HomePage() {
     }
 
     const session = await readAuthenticatedSession();
-    const canManage = Boolean(session?.user.roles.some((role) => role === "admin" || role === "chief"));
+    const canManage = Boolean(
+        session?.user.roles.some((role) => role === "admin" || role === "chief")
+        && !session.user.mustChangePassword,
+    );
     const [board, doctors] = await Promise.all([
         getOperationalBoard(),
         canManage ? listDoctorsForChiefInvite() : Promise.resolve([]),
@@ -46,6 +49,7 @@ export default async function HomePage() {
             session={session ? {
                 email: session.user.email,
                 roles: session.user.roles,
+                mustChangePassword: session.user.mustChangePassword,
                 canManage,
             } : null}
         />
