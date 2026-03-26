@@ -40,6 +40,8 @@ export interface RawMonthlyReportShift {
     ruleCode: string | null;
     bankHoursExplanation: string | null;
     auditTrail: MonthlyReportAuditEntry[];
+    duplicateCount?: number;
+    collapsedOccupancyIds?: string[];
 }
 
 export interface MonthlyReportShift extends RawMonthlyReportShift {
@@ -55,6 +57,7 @@ export interface MonthlyReportShift extends RawMonthlyReportShift {
         hasNegativeBalance: boolean;
         hasOvertimeWithoutNote: boolean;
         hasCorrectionHistory: boolean;
+        hasDuplicateCoverage: boolean;
     };
 }
 
@@ -124,6 +127,122 @@ function fromSaoPauloClockParts(year: number, month: number, day: number, hour: 
     return new Date(Date.UTC(year, month - 1, day, hour - SAO_PAULO_OFFSET_HOURS, minute, 0, 0));
 }
 
+function inferOperationalScheduledStartIso(startedAt: string, shiftLabel?: string | null) {
+    const normalized = shiftLabel?.trim().toUpperCase();
+    if (!normalized || (normalized !== "SD" && normalized !== "SN")) {
+        return null;
+    }
+
+    const local = new Date(new Date(startedAt).getTime() + (SAO_PAULO_OFFSET_HOURS * 60 * 60000));
+    const year = local.getUTCFullYear();
+    const month = local.getUTCMonth() + 1;
+    const day = local.getUTCDate();
+    const hour = local.getUTCHours();
+
+    if (normalized === "SD") {
+        return fromSaoPauloClockParts(year, month, day, 7, 0).toISOString();
+    }
+
+    const base = fromSaoPauloClockParts(year, month, day, 19, 0);
+    return (hour >= 19 ? base : new Date(base.getTime() - 86400000)).toISOString();
+}
+
+function buildMonthlyReportShiftDeduplicationKey(shift: RawMonthlyReportShift) {
+    const slotStart = shift.scheduledStartAt
+        ?? inferOperationalScheduledStartIso(shift.startedAt, shift.shiftLabel);
+
+    if (!slotStart || !shift.shiftLabel) {
+        return shift.occupancyId;
+    }
+
+    return [shift.doctorId, shift.domain, shift.targetCode, shift.shiftLabel, slotStart].join("|");
+}
+
+function hasValidShiftTimeline(shift: RawMonthlyReportShift) {
+    if (!shift.endedAt) {
+        return false;
+    }
+
+    return new Date(shift.endedAt).getTime() > new Date(shift.startedAt).getTime();
+}
+
+function rankMonthlyReportShiftForDeduplication(shift: RawMonthlyReportShift) {
+    let score = 0;
+
+    if (hasValidShiftTimeline(shift)) {
+        score += 70;
+    } else if (!shift.endedAt) {
+        score += 45;
+    }
+
+    if (shift.scheduledStartAt) {
+        score += 20;
+    }
+
+    if (shift.scheduledEndAt) {
+        score += 10;
+    }
+
+    if (shift.actualEndedAt && new Date(shift.actualEndedAt).getTime() > new Date(shift.startedAt).getTime()) {
+        score += 10;
+    }
+
+    if (shift.source === "import") {
+        score += 5;
+    }
+
+    return score;
+}
+
+function collapseDuplicateMonthlyReportShifts(shifts: RawMonthlyReportShift[]) {
+    const grouped = new Map<string, RawMonthlyReportShift[]>();
+
+    for (const shift of shifts) {
+        const key = buildMonthlyReportShiftDeduplicationKey(shift);
+        const current = grouped.get(key) ?? [];
+        current.push(shift);
+        grouped.set(key, current);
+    }
+
+    return Array.from(grouped.values()).map((bucket) => {
+        if (bucket.length === 1) {
+            const single = bucket[0] as RawMonthlyReportShift;
+            return {
+                ...single,
+                scheduledStartAt: single.scheduledStartAt ?? inferOperationalScheduledStartIso(single.startedAt, single.shiftLabel),
+            } satisfies RawMonthlyReportShift;
+        }
+
+        const ranked = [...bucket].sort((left, right) => {
+            const byScore = rankMonthlyReportShiftForDeduplication(right) - rankMonthlyReportShiftForDeduplication(left);
+            if (byScore !== 0) {
+                return byScore;
+            }
+
+            return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+        });
+
+        const canonical = ranked[0] as RawMonthlyReportShift;
+        const firstWithSchedule = ranked.find((shift) => shift.scheduledStartAt || shift.scheduledEndAt);
+        const firstWithValidEnd = ranked.find((shift) => hasValidShiftTimeline(shift));
+        const auditTrail = bucket
+            .flatMap((shift) => shift.auditTrail)
+            .filter((entry, index, collection) => collection.findIndex((candidate) => candidate.id === entry.id) === index);
+
+        return {
+            ...canonical,
+            scheduledStartAt: canonical.scheduledStartAt ?? firstWithSchedule?.scheduledStartAt ?? inferOperationalScheduledStartIso(canonical.startedAt, canonical.shiftLabel),
+            scheduledEndAt: canonical.scheduledEndAt ?? firstWithSchedule?.scheduledEndAt ?? null,
+            endedAt: hasValidShiftTimeline(canonical) ? canonical.endedAt : (firstWithValidEnd?.endedAt ?? canonical.endedAt),
+            actualEndedAt: canonical.actualEndedAt ?? firstWithValidEnd?.actualEndedAt ?? null,
+            notes: canonical.notes ?? ranked.find((shift) => shift.notes?.trim())?.notes ?? null,
+            auditTrail,
+            duplicateCount: bucket.length,
+            collapsedOccupancyIds: bucket.map((shift) => shift.occupancyId),
+        } satisfies RawMonthlyReportShift;
+    });
+}
+
 export function resolveMonthlyReportRange(monthKey?: string | null, reference = new Date()) {
     const fallback = startOfUtcMonth(reference.getUTCFullYear(), reference.getUTCMonth());
     const parsed = monthKey?.match(/^(\d{4})-(\d{2})$/);
@@ -174,6 +293,7 @@ export function detectMonthlyReportInconsistencies(shift: RawMonthlyReportShift)
     const hasNegativeBalance = (shift.balanceMinutes ?? 0) < 0;
     const hasOvertimeWithoutNote = (shift.creditedOvertimeMinutes ?? 0) > 0 && !shift.notes?.trim();
     const hasCorrectionHistory = shift.auditTrail.some((entry) => entry.action.endsWith(".corrected"));
+    const hasDuplicateCoverage = (shift.duplicateCount ?? 1) > 1;
 
     if (hasOpenShift) {
         inconsistencies.push("Plantão sem saída registrada");
@@ -193,6 +313,10 @@ export function detectMonthlyReportInconsistencies(shift: RawMonthlyReportShift)
 
     if (hasCorrectionHistory) {
         inconsistencies.push("Plantão sofreu correção manual durante o mês");
+    }
+
+    if (hasDuplicateCoverage) {
+        inconsistencies.push(`Plantão consolidado a partir de ${shift.duplicateCount} registros redundantes`);
     }
 
     if (hasLateArrival) {
@@ -222,13 +346,14 @@ export function detectMonthlyReportInconsistencies(shift: RawMonthlyReportShift)
             hasNegativeBalance,
             hasOvertimeWithoutNote,
             hasCorrectionHistory,
+            hasDuplicateCoverage,
         },
     };
 }
 
 export function buildMonthlyReportModel(shifts: RawMonthlyReportShift[], monthKey?: string | null, reference = new Date()): MonthlyReportModel {
     const range = resolveMonthlyReportRange(monthKey, reference);
-    const enrichedShifts: MonthlyReportShift[] = shifts
+    const enrichedShifts: MonthlyReportShift[] = collapseDuplicateMonthlyReportShifts(shifts)
         .map((shift) => {
             const derived = detectMonthlyReportInconsistencies(shift);
             return {

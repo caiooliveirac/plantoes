@@ -8,7 +8,7 @@ import {
     shouldHighlightInterventionVerification,
     shouldKeepRegulationOccupancyVisible,
 } from "@/modules/operational/board-rules";
-import { inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { inferOperationalScheduledStartAt, inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, parseMessage, parseMessageMulti } from "@/modules/telegram/parser";
 
 test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
@@ -185,6 +185,26 @@ test("infers SD regulation cutoff at 19:15 local operational time", () => {
     );
 
     assert.equal(result?.toISOString(), new Date("2026-03-25T19:15:00-03:00").toISOString());
+});
+
+test("infers SD regulation start at 07:00 local operational time", () => {
+    const result = inferOperationalScheduledStartAt(
+        new Date("2026-03-25T07:25:00-03:00"),
+        "SD",
+        null,
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+});
+
+test("infers SN regulation start at 19:00 of the previous local day when arrival happens after midnight", () => {
+    const result = inferOperationalScheduledStartAt(
+        new Date("2026-03-26T00:20:00-03:00"),
+        "SN",
+        null,
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-25T19:00:00-03:00").toISOString());
 });
 
 test("infers SN regulation cutoff at 07:15 on next local operational day", () => {

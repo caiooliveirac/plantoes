@@ -8,6 +8,30 @@ function fromOperationalLocalClockParts(year: number, month: number, day: number
     return new Date(Date.UTC(year, month - 1, day, hour - (OPERATIONAL_LOCAL_OFFSET_MINUTES / 60), minute, 0, 0));
 }
 
+export function inferOperationalScheduledStartAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledStartAt?: Date | null) {
+    if (explicitScheduledStartAt) {
+        return explicitScheduledStartAt;
+    }
+
+    const normalized = shiftLabel?.trim().toUpperCase();
+    if (!normalized || (normalized !== "SD" && normalized !== "SN")) {
+        return null;
+    }
+
+    const local = toOperationalLocalClock(startedAt);
+    const year = local.getUTCFullYear();
+    const month = local.getUTCMonth() + 1;
+    const day = local.getUTCDate();
+    const hour = local.getUTCHours();
+
+    if (normalized === "SD") {
+        return fromOperationalLocalClockParts(year, month, day, 7, 0);
+    }
+
+    const startBase = fromOperationalLocalClockParts(year, month, day, 19, 0);
+    return hour >= 19 ? startBase : new Date(startBase.getTime() - 86400000);
+}
+
 export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledEndAt?: Date | null) {
     if (explicitScheduledEndAt) {
         return explicitScheduledEndAt;

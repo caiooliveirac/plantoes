@@ -1,8 +1,8 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, lte } from "drizzle-orm";
 import { getDb } from "@/db";
 import { regulationOccupancies } from "@/db/schema";
 import { syncRegulationBankHours } from "@/modules/bank-hours/service";
-import { inferRegulationScheduledEndAt, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { inferOperationalScheduledStartAt, inferRegulationScheduledEndAt, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 
 export interface StartRegulationOccupancyInput {
     doctorId: string;
@@ -21,17 +21,37 @@ export interface StartRegulationOccupancyInput {
 export async function startRegulationOccupancy(input: StartRegulationOccupancyInput) {
     const db = getDb();
     return db.transaction(async (tx) => {
+        const inferredScheduledStartAt = inferOperationalScheduledStartAt(
+            input.startedAt,
+            input.shiftLabel ?? null,
+            input.scheduledStartAt ?? null,
+        );
         const inferredScheduledEndAt = inferRegulationScheduledEndAt(
             input.startedAt,
             input.shiftLabel ?? null,
             input.scheduledEndAt ?? null,
         );
 
+        const duplicated = await tx.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, input.postId),
+                eq(regulationOccupancies.doctorId, input.doctorId),
+                eq(regulationOccupancies.startedAt, input.startedAt),
+                isNull(regulationOccupancies.endedAt),
+            ),
+        });
+
+        if (duplicated && (duplicated.shiftLabel ?? null) === (input.shiftLabel ?? null)) {
+            return duplicated;
+        }
+
         const existing = await tx.query.regulationOccupancies.findFirst({
             where: and(
                 eq(regulationOccupancies.postId, input.postId),
+                lte(regulationOccupancies.startedAt, input.startedAt),
                 isNull(regulationOccupancies.endedAt),
             ),
+            orderBy: [desc(regulationOccupancies.startedAt)],
         });
 
         if (existing) {
@@ -51,7 +71,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
         const [created] = await tx.insert(regulationOccupancies).values({
             doctorId: input.doctorId,
             postId: input.postId,
-            scheduledStartAt: input.scheduledStartAt ?? null,
+            scheduledStartAt: inferredScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
             boardStartedAt: input.startedAt,

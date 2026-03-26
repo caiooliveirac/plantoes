@@ -142,6 +142,62 @@ test("buildMonthlyReportModel groups by doctor and prioritizes inconsistencies",
     assert.equal(model.groups[0]?.inconsistentShiftCount, 1);
 });
 
+test("buildMonthlyReportModel collapses duplicate raw occupancies for the same payable shift", () => {
+    const model = buildMonthlyReportModel([
+        makeShift({
+            occupancyId: "dup-1",
+            domain: "regulation",
+            targetCode: "1367",
+            targetLabel: "Ramal 1367",
+            startedAt: "2026-03-25T22:00:00.000Z",
+            boardStartedAt: "2026-03-25T22:00:00.000Z",
+            endedAt: "2026-03-25T10:25:54.000Z",
+            actualEndedAt: "2026-03-25T10:25:54.000Z",
+            scheduledStartAt: null,
+            scheduledEndAt: "2026-03-26T10:15:00.000Z",
+            shiftLabel: "SN",
+            notes: "MALCON 1367 SN 19:00",
+            updatedAt: "2026-03-25T10:35:48.096Z",
+        }),
+        makeShift({
+            occupancyId: "dup-2",
+            domain: "regulation",
+            targetCode: "1367",
+            targetLabel: "Ramal 1367",
+            startedAt: "2026-03-25T22:00:00.000Z",
+            boardStartedAt: "2026-03-25T22:00:00.000Z",
+            endedAt: null,
+            actualEndedAt: null,
+            scheduledStartAt: null,
+            scheduledEndAt: "2026-03-26T10:15:00.000Z",
+            shiftLabel: "SN",
+            notes: "MALCON 1367 SN 19:00",
+            updatedAt: "2026-03-25T10:35:49.765Z",
+        }),
+        makeShift({
+            occupancyId: "day-1",
+            domain: "regulation",
+            targetCode: "1367",
+            targetLabel: "Ramal 1367",
+            startedAt: "2026-03-25T10:25:54.000Z",
+            boardStartedAt: "2026-03-25T10:25:54.000Z",
+            endedAt: "2026-03-25T22:00:00.000Z",
+            actualEndedAt: "2026-03-25T22:00:00.000Z",
+            scheduledStartAt: null,
+            scheduledEndAt: "2026-03-25T22:15:00.000Z",
+            shiftLabel: "SD",
+            notes: "MALCON 1367 SD CONTINUANDO",
+            updatedAt: "2026-03-25T10:35:49.766Z",
+        }),
+    ], "2026-03", new Date("2026-03-25T12:00:00.000Z"));
+
+    assert.equal(model.summary.shiftCount, 2);
+    assert.equal(model.groups[0]?.shiftCount, 2);
+    assert.equal(model.groups[0]?.shifts.find((shift) => shift.shiftLabel === "SN")?.duplicateCount, 2);
+    assert.equal(model.groups[0]?.shifts.find((shift) => shift.shiftLabel === "SN")?.flags.hasDuplicateCoverage, true);
+    assert.equal(model.groups[0]?.shifts.find((shift) => shift.shiftLabel === "SD")?.flags.hasMissingSchedule, false);
+});
+
 test("resolveMonthlyReportPaymentStatus separates ready rows from review rows", () => {
     assert.equal(resolveMonthlyReportPaymentStatus([]), "ready_for_payment");
     assert.equal(resolveMonthlyReportPaymentStatus(["Plantão sem saída registrada"]), "needs_review");
