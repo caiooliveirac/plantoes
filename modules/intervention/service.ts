@@ -2,6 +2,8 @@ import { and, asc, desc, eq, isNull, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { interventionOccupancies } from "@/db/schema";
 import { syncInterventionBankHours } from "@/modules/bank-hours/service";
+import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { inferInterventionScheduledEndAt, inferOperationalScheduledStartAt } from "@/modules/operational/rules";
 
 export interface StartInterventionOccupancyInput {
     doctorId: string;
@@ -19,6 +21,17 @@ export interface StartInterventionOccupancyInput {
 export async function startInterventionOccupancy(input: StartInterventionOccupancyInput) {
     const db = getDb();
     return db.transaction(async (tx) => {
+        const normalizedShiftLabel = input.shiftLabel ?? resolveOperationalShiftWindow(input.startedAt).shiftLabel;
+        const inferredScheduledStartAt = inferOperationalScheduledStartAt(
+            input.startedAt,
+            normalizedShiftLabel,
+            input.scheduledStartAt ?? null,
+        );
+        const inferredScheduledEndAt = inferInterventionScheduledEndAt(
+            input.startedAt,
+            normalizedShiftLabel,
+            input.scheduledEndAt ?? null,
+        );
         const existing = await tx.query.interventionOccupancies.findFirst({
             where: and(
                 eq(interventionOccupancies.baseId, input.baseId),
@@ -56,11 +69,11 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
         const [created] = await tx.insert(interventionOccupancies).values({
             doctorId: input.doctorId,
             baseId: input.baseId,
-            scheduledStartAt: input.scheduledStartAt ?? null,
-            scheduledEndAt: input.scheduledEndAt ?? null,
+            scheduledStartAt: inferredScheduledStartAt,
+            scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
             boardStartedAt: shouldTakeBoardImmediately || !existing ? input.startedAt : null,
-            shiftLabel: input.shiftLabel ?? null,
+            shiftLabel: normalizedShiftLabel,
             roleLabel: input.roleLabel ?? null,
             source: input.source,
             notes: input.notes ?? null,
@@ -150,7 +163,7 @@ export async function endInterventionOccupancy(
 
 export async function continueInterventionOccupancy(
     id: string,
-    input?: { notes?: string | null },
+    input?: { notes?: string | null; continuedAt?: Date | null },
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
@@ -170,11 +183,23 @@ export async function continueInterventionOccupancy(
         const nextNotes = input?.notes?.trim()
             ? input.notes.trim()
             : existing.notes;
+        const baseShiftLabel = existing.shiftLabel && existing.shiftLabel !== "P"
+            ? existing.shiftLabel
+            : resolveOperationalShiftWindow(existing.startedAt).shiftLabel;
+        const inferredScheduledStartAt = existing.scheduledStartAt
+            ?? inferOperationalScheduledStartAt(existing.startedAt, baseShiftLabel, null);
+        const continuationAt = input?.continuedAt ?? new Date();
+        const continuationBoundary = resolveOperationalShiftWindow(continuationAt).nextBoundaryAt;
+        const nextScheduledEndAt = existing.scheduledEndAt && existing.scheduledEndAt.getTime() > continuationBoundary.getTime()
+            ? existing.scheduledEndAt
+            : continuationBoundary;
 
         const [updated] = await tx
             .update(interventionOccupancies)
             .set({
                 shiftLabel: "P",
+                scheduledStartAt: inferredScheduledStartAt,
+                scheduledEndAt: nextScheduledEndAt,
                 notes: nextNotes ?? null,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),

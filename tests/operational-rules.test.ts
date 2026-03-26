@@ -8,7 +8,7 @@ import {
     shouldHighlightInterventionVerification,
     shouldKeepRegulationOccupancyVisible,
 } from "@/modules/operational/board-rules";
-import { inferOperationalScheduledStartAt, inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, parseMessage, parseMessageMulti } from "@/modules/telegram/parser";
 
 test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
@@ -152,6 +152,12 @@ test("shows continuation badge only in the verification grace window", () => {
         shiftLabel: "P",
         reference: new Date("2026-03-26T07:10:00-03:00"),
     }), "Continua as 07:00");
+
+    assert.equal(resolveContinuationBadgeLabel({
+        startedAt: new Date("2026-03-25T07:00:00-03:00"),
+        shiftLabel: "P",
+        reference: new Date("2026-03-26T07:10:00-03:00"),
+    }), "Continua as 07:00");
 });
 
 test("requires written justification from 07:15 or 19:15 onward", () => {
@@ -217,6 +223,16 @@ test("infers SN regulation cutoff at 07:15 on next local operational day", () =>
     assert.equal(result?.toISOString(), new Date("2026-03-26T07:15:00-03:00").toISOString());
 });
 
+test("infers intervention SN cutoff at 07:00 on next local operational day", () => {
+    const result = inferInterventionScheduledEndAt(
+        new Date("2026-03-25T19:02:00-03:00"),
+        "SN",
+        null,
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-26T07:00:00-03:00").toISOString());
+});
+
 test("resolves Telegram explicit HH:mm on the same local operational day", () => {
     const result = resolveTelegramEventTime(
         new Date("2026-03-25T07:40:00-03:00"),
@@ -232,6 +248,15 @@ test("parses free-text regulation arrival", () => {
     assert.equal(parsed.sector, "REGULATION");
     assert.equal(parsed.baseCode, "2031");
     assert.equal(parsed.shiftType, "SD");
+    assert.equal(parsed.isDeparture, false);
+});
+
+test("parses continuation wording without explicit P as continuation", () => {
+    const parsed = parseMessage("Taiane Pinto continua BR05 19:00");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "BR05");
+    assert.equal(parsed.isContinuation, true);
     assert.equal(parsed.isDeparture, false);
 });
 

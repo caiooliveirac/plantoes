@@ -103,12 +103,16 @@ export function shouldHighlightInterventionVerification(
         return false;
     }
 
-    const prolongedUntil = resolveProlongedShiftExpiry(startedAt, shiftLabel);
-    if (!prolongedUntil) {
+    if (shiftLabel !== "P") {
         return true;
     }
 
-    return new Date(reference).getTime() >= addMinutes(prolongedUntil, VERIFICATION_GRACE_MINUTES).getTime();
+    const boundary = resolveInterventionVerificationBoundary(startedAt, reference, shiftLabel);
+    if (!boundary) {
+        return true;
+    }
+
+    return new Date(reference).getTime() >= addMinutes(boundary, VERIFICATION_GRACE_MINUTES).getTime();
 }
 
 export function resolveFirstVerificationBoundary(startedAt: string | Date | null) {
@@ -163,6 +167,27 @@ export function resolveProlongedShiftExpiry(startedAt: string | Date | null, shi
     return addDays(sameDaySeven, 1);
 }
 
+function resolveInterventionVerificationBoundary(
+    startedAt: string | Date | null,
+    reference: string | Date,
+    shiftLabel: OccupancyShiftLabel,
+) {
+    if (!startedAt) {
+        return null;
+    }
+
+    if (shiftLabel !== "P") {
+        return resolveFirstVerificationBoundary(startedAt);
+    }
+
+    const currentShiftStart = resolveOperationalShiftWindow(reference).startedAt;
+    if (new Date(startedAt).getTime() < currentShiftStart.getTime()) {
+        return currentShiftStart;
+    }
+
+    return resolveFirstVerificationBoundary(startedAt);
+}
+
 export function shouldKeepRegulationOccupancyVisible(params: {
     startedAt: string | Date | null;
     shiftLabel: OccupancyShiftLabel;
@@ -195,7 +220,7 @@ export function resolveContinuationBadgeLabel(params: {
         return null;
     }
 
-    const boundary = resolveFirstVerificationBoundary(startedAt);
+    const boundary = resolveInterventionVerificationBoundary(startedAt, reference, shiftLabel);
     if (!boundary) {
         return null;
     }

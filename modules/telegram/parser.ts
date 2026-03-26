@@ -33,6 +33,10 @@ const ARRIVAL_SIGNALS = [
     /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i,
 ];
 
+const CONTINUATION_SIGNALS = [
+    /\b(?:CONTINUO|CONTINUA|CONTINUANDO|SEGUINDO|SIGO)\b/i,
+];
+
 const DEPARTURE_SIGNALS = [
     /\b(?:SAINDO|SAIU|SAI|SAIDA|SAÍDA|ENCERRANDO|ENCERREI|FINALIZANDO|FINALIZEI|LIBEREI)\b/i,
 ];
@@ -84,6 +88,7 @@ export interface ParsedMessage {
     roleFunction: string | null;
     confidence: "HIGH" | "MEDIUM" | "LOW";
     isDeparture: boolean;
+    isContinuation: boolean;
     extractedNames: string[];
 }
 
@@ -163,6 +168,7 @@ export function parseMessage(text: string): ParsedMessage {
     const extractedNames = extractNames(text);
     const isTransferToDestination = /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i.test(normalized);
     const isDeparture = !isTransferToDestination && DEPARTURE_SIGNALS.some((re) => re.test(normalized));
+    const isContinuation = CONTINUATION_SIGNALS.some((re) => re.test(normalized));
     const hasArrivalSignal = ARRIVAL_SIGNALS.some((re) => re.test(normalized));
 
     if (baseCode && (hasArrivalSignal || isDeparture || arrivalTime || shiftType || extractedNames.length > 0)) {
@@ -179,6 +185,7 @@ export function parseMessage(text: string): ParsedMessage {
         roleFunction,
         confidence,
         isDeparture,
+        isContinuation,
         extractedNames,
     };
 }

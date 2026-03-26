@@ -32,6 +32,7 @@ interface PendingNameResolutionData {
         shiftType: "SD" | "SN" | "P" | null;
         roleFunction: string | null;
         isDeparture: boolean;
+        isContinuation: boolean;
     };
     candidates: Array<{ id: string; fullName: string; displayName: string | null; normalizedName: string }>;
     originalText: string;
@@ -445,6 +446,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         shiftType: null,
         roleFunction: null,
         isDeparture: command.isDeparture,
+        isContinuation: false,
     };
 
     const active = await findActiveOccupancyByTarget(parsedEntry);
@@ -691,6 +693,7 @@ async function queuePendingNameSelection(
                 shiftType: parsed.shiftType,
                 roleFunction: parsed.roleFunction,
                 isDeparture: parsed.isDeparture,
+                isContinuation: parsed.isContinuation,
             },
             candidates: candidates.slice(0, 3).map((candidate) => ({
                 id: candidate.id,
@@ -808,6 +811,19 @@ async function applyParsedEntry(params: {
 
                 occupancyId = (await continueInterventionOccupancy(activeOccupancy.id, {
                     notes: messageText,
+                    continuedAt: eventAt,
+                }, null)).id;
+            } else if (parsed.isContinuation && activeOccupancy) {
+                if (
+                    requiresOvertimeJustification(activeOccupancy.startedAt, eventAt)
+                    && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime, parsed.shiftType])
+                ) {
+                    throw new Error("Justificativa obrigatoria para liberar continuidade apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.");
+                }
+
+                occupancyId = (await continueInterventionOccupancy(activeOccupancy.id, {
+                    notes: messageText,
+                    continuedAt: eventAt,
                 }, null)).id;
             } else {
                 occupancyId = (await startInterventionOccupancy({

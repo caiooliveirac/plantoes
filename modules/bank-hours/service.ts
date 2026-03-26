@@ -1,6 +1,8 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { BANK_HOURS_RULE_VERSION, calculateBankHours } from "@/modules/bank-hours/calculator";
 import { bankHoursEntries, interventionOccupancies, regulationOccupancies } from "@/db/schema";
+import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { inferInterventionScheduledEndAt, inferOperationalScheduledStartAt } from "@/modules/operational/rules";
 
 type Executor = any;
 
@@ -76,7 +78,22 @@ async function upsertInterventionBankHours(db: Executor, occupancy: typeof inter
         where: eq(bankHoursEntries.interventionOccupancyId, occupancy.id),
     });
 
-    if (!shouldSyncEntry(occupancy)) {
+    const baseShiftLabel = occupancy.shiftLabel && occupancy.shiftLabel !== "P"
+        ? occupancy.shiftLabel
+        : resolveOperationalShiftWindow(occupancy.startedAt).shiftLabel;
+    const inferredScheduledStartAt = occupancy.scheduledStartAt
+        ?? inferOperationalScheduledStartAt(occupancy.startedAt, baseShiftLabel, null);
+    let inferredScheduledEndAt = occupancy.scheduledEndAt
+        ?? inferInterventionScheduledEndAt(occupancy.startedAt, baseShiftLabel, null);
+
+    if (occupancy.shiftLabel === "P" && inferredScheduledEndAt) {
+        const extendedBoundary = resolveOperationalShiftWindow(new Date(inferredScheduledEndAt.getTime() + 60000)).nextBoundaryAt;
+        if (extendedBoundary.getTime() > inferredScheduledEndAt.getTime()) {
+            inferredScheduledEndAt = extendedBoundary;
+        }
+    }
+
+    if (!inferredScheduledStartAt || !inferredScheduledEndAt || !occupancy.actualEndedAt) {
         if (existing) {
             await db.delete(bankHoursEntries).where(eq(bankHoursEntries.id, existing.id));
         }
@@ -84,8 +101,8 @@ async function upsertInterventionBankHours(db: Executor, occupancy: typeof inter
     }
 
     const calculation = calculateBankHours({
-        scheduledStartAt: occupancy.scheduledStartAt as Date,
-        scheduledEndAt: occupancy.scheduledEndAt as Date,
+        scheduledStartAt: inferredScheduledStartAt,
+        scheduledEndAt: inferredScheduledEndAt,
         actualStartAt: occupancy.startedAt,
         actualEndAt: occupancy.actualEndedAt as Date,
     });
@@ -95,8 +112,8 @@ async function upsertInterventionBankHours(db: Executor, occupancy: typeof inter
         sourceType: "intervention" as const,
         regulationOccupancyId: null,
         interventionOccupancyId: occupancy.id,
-        scheduledStartAt: occupancy.scheduledStartAt as Date,
-        scheduledEndAt: occupancy.scheduledEndAt as Date,
+        scheduledStartAt: inferredScheduledStartAt,
+        scheduledEndAt: inferredScheduledEndAt,
         actualStartAt: occupancy.startedAt,
         actualEndAt: occupancy.actualEndedAt as Date,
         arrivalDelayMinutes: calculation.arrivalDelayMinutes,

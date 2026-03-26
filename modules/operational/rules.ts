@@ -32,6 +32,30 @@ export function inferOperationalScheduledStartAt(startedAt: Date, shiftLabel?: s
     return hour >= 19 ? startBase : new Date(startBase.getTime() - 86400000);
 }
 
+export function inferInterventionScheduledEndAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledEndAt?: Date | null) {
+    if (explicitScheduledEndAt) {
+        return explicitScheduledEndAt;
+    }
+
+    const normalized = shiftLabel?.trim().toUpperCase();
+    if (!normalized || (normalized !== "SD" && normalized !== "SN")) {
+        return null;
+    }
+
+    const local = toOperationalLocalClock(startedAt);
+    const year = local.getUTCFullYear();
+    const month = local.getUTCMonth() + 1;
+    const day = local.getUTCDate();
+    const hour = local.getUTCHours();
+
+    if (normalized === "SD") {
+        return fromOperationalLocalClockParts(year, month, day, 19, 0);
+    }
+
+    const endBase = fromOperationalLocalClockParts(year, month, day, 7, 0);
+    return hour >= 19 ? new Date(endBase.getTime() + 86400000) : endBase;
+}
+
 export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledEndAt?: Date | null) {
     if (explicitScheduledEndAt) {
         return explicitScheduledEndAt;
