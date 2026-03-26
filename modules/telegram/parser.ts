@@ -34,7 +34,7 @@ const ARRIVAL_SIGNALS = [
 ];
 
 const CONTINUATION_SIGNALS = [
-    /\b(?:CONTINUO|CONTINUA|CONTINUANDO|SEGUINDO|SIGO)\b/i,
+    /\b(?:CONT\.?|CONTINUO|CONTINUA|CONTINUANDO|SEGUINDO|SIGO)\b/i,
 ];
 
 const DEPARTURE_SIGNALS = [
@@ -49,7 +49,7 @@ const RE_TIME_PATTERNS = [
 
 const NAME_NOISE_TOKENS = new Set([
     "A", "AO", "AOS", "AS", "ATE", "ATÉ", "BOA", "BOM", "CHEGADA", "CHEGANDO", "CHEGUEI",
-    "CONTINUA", "CONTINUO", "CONTINUANDO", "CORRIJA", "CRU", "DA", "DAS", "DE",
+    "CONT", "CONTINUA", "CONTINUO", "CONTINUANDO", "CORRIJA", "CRU", "DA", "DAS", "DE",
     "DESLOCANDO", "DIA", "DO", "DOS", "EM", "ERRADO", "ESTA", "ESTÁ", "ESTOU", "HORARIO",
     "HORÁRIO", "JA", "JÁ", "NA", "NAS", "NO", "NOITE", "NOS", "OLA", "OLA", "OI", "PARA", "PRESENTE",
     "RENDENDO", "RENDI", "SAI", "SAIU", "SAIDA", "SAÍDA", "SAINDO", "ENCERRANDO", "ENCERREI", "FINALIZANDO", "FINALIZEI", "LIBEREI", "SEGUIR", "SO", "SÓ", "TO",
@@ -92,6 +92,64 @@ export interface ParsedMessage {
     extractedNames: string[];
 }
 
+export interface ParsedBatchMessageLine {
+    lineNumber: number;
+    rawLine: string;
+    headingSector: "REGULATION" | "INTERVENTION" | null;
+    parsed: ParsedMessage;
+}
+
+function normalizeTelegramText(value: string) {
+    return value.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function isTelegramBatchHeading(line: string) {
+    const normalized = normalizeTelegramText(line).replace(/[^A-Z]/g, "");
+    if (!normalized) {
+        return null;
+    }
+
+    if (normalized.includes("REGULACAO")) {
+        return "REGULATION" as const;
+    }
+
+    if (normalized.includes("INTERVENCAO")) {
+        return "INTERVENTION" as const;
+    }
+
+    return null;
+}
+
+function isTelegramBatchSeparator(line: string) {
+    const normalized = line.trim();
+    return normalized.length > 0 && /^[\s\-_.~*⸻—–]+$/.test(normalized);
+}
+
+export function parseTelegramBatchLines(text: string): ParsedBatchMessageLine[] {
+    const lines = text.split(/\r?\n/);
+    let headingSector: "REGULATION" | "INTERVENTION" | null = null;
+
+    return lines.flatMap((line, index) => {
+        const trimmed = line.trim();
+        if (!trimmed || isTelegramBatchSeparator(trimmed)) {
+            return [];
+        }
+
+        const nextHeading = isTelegramBatchHeading(trimmed);
+        if (nextHeading) {
+            headingSector = nextHeading;
+            return [];
+        }
+
+        return [{
+            lineNumber: index + 1,
+            rawLine: trimmed,
+            headingSector,
+            parsed: parseMessage(trimmed),
+        }];
+    });
+}
+
 export function parseMessageMulti(text: string): ParsedMessage[] {
     const parts = text
         .split(/\n|(?<=[.!?;])\s+/)
@@ -110,7 +168,7 @@ export function parseMessageMulti(text: string): ParsedMessage[] {
 }
 
 export function parseMessage(text: string): ParsedMessage {
-    const normalized = text.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const normalized = normalizeTelegramText(text);
     let sector: ParsedMessage["sector"] = null;
     let baseCode: string | null = null;
     let arrivalTime: string | null = null;
@@ -191,7 +249,7 @@ export function parseMessage(text: string): ParsedMessage {
 }
 
 export function isCasualTelegramMessage(text: string) {
-    const normalized = text.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const normalized = normalizeTelegramText(text);
     const trimmed = normalized.trim();
     if (!trimmed) {
         return false;
@@ -227,6 +285,11 @@ export function isCasualTelegramMessage(text: string) {
         .filter((token) => !CASUAL_FILLER_TOKENS.has(token));
 
     return remainder.length <= 4;
+}
+
+export function looksLikeDepartureMessage(text: string) {
+    const normalized = normalizeTelegramText(text);
+    return DEPARTURE_SIGNALS.some((pattern) => pattern.test(normalized));
 }
 
 function extractNames(text: string) {

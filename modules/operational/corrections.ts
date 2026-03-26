@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bankHoursEntries, interventionOccupancies, regulationOccupancies } from "@/db/schema";
+import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 
 type OptionalDate = Date | null | undefined;
@@ -111,7 +112,7 @@ export async function correctRegulationOccupancy(
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const updated = await db.transaction(async (tx) => {
         const existing = await tx.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, id) });
         if (!existing) {
             throw new Error("Regulation occupancy not found.");
@@ -144,6 +145,9 @@ export async function correctRegulationOccupancy(
         await syncRegulationBankHours(tx, id);
         return updated;
     });
+
+    publishBoardUpdate(`regulation:correct:${id}`);
+    return updated;
 }
 
 export async function correctInterventionOccupancy(
@@ -152,7 +156,7 @@ export async function correctInterventionOccupancy(
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const updated = await db.transaction(async (tx) => {
         const existing = await tx.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, id) });
         if (!existing) {
             throw new Error("Intervention occupancy not found.");
@@ -185,11 +189,14 @@ export async function correctInterventionOccupancy(
         await syncInterventionBankHours(tx, id);
         return updated;
     });
+
+    publishBoardUpdate(`intervention:correct:${id}`);
+    return updated;
 }
 
 export async function removeRegulationOccupancyRecord(id: string, updatedByUserId?: string | null) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const deleted = await db.transaction(async (tx) => {
         const existing = await tx.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, id) });
         if (!existing) {
             throw new Error("Regulation occupancy not found.");
@@ -205,11 +212,14 @@ export async function removeRegulationOccupancyRecord(id: string, updatedByUserI
             updatedByUserId: updatedByUserId ?? null,
         };
     });
+
+    publishBoardUpdate(`regulation:remove:${id}`);
+    return deleted;
 }
 
 export async function removeInterventionOccupancyRecord(id: string, updatedByUserId?: string | null) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const deleted = await db.transaction(async (tx) => {
         const existing = await tx.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, id) });
         if (!existing) {
             throw new Error("Intervention occupancy not found.");
@@ -226,4 +236,7 @@ export async function removeInterventionOccupancyRecord(id: string, updatedByUse
             updatedByUserId: updatedByUserId ?? null,
         };
     });
+
+    publishBoardUpdate(`intervention:remove:${id}`);
+    return deleted;
 }

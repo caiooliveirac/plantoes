@@ -8,7 +8,14 @@ import {
     resolveContinuationBadgeLabel,
     shouldHighlightInterventionVerification,
 } from "@/modules/operational/board-rules";
-import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
+import type {
+    InterventionBoardRow,
+    PreviousOperationalBoard,
+    PreviousOperationalBucket,
+    PreviousOperationalEntry,
+    PreviousOperationalSection,
+    RegulationBoardRow,
+} from "@/services/board.service";
 
 type UserRole = "admin" | "chief";
 type ActionMode = "correct" | "end" | "start";
@@ -45,6 +52,7 @@ interface OperationalBoardClientProps {
     shiftLabel: string;
     regulation: RegulationBoardRow[];
     intervention: InterventionBoardRow[];
+    previousShift: PreviousOperationalBoard;
     doctors: DoctorOption[];
     session: SessionSummary | null;
 }
@@ -95,6 +103,18 @@ function formatDateTimeDetail(value: string | null) {
     });
 }
 
+function formatOperationalDayLabel(value: string | null) {
+    if (!value) {
+        return "Nao informado";
+    }
+
+    return new Date(value).toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        timeZone: "America/Sao_Paulo",
+    });
+}
+
 function formatSectionTimestamp(value: string) {
     return new Date(value).toLocaleTimeString("pt-BR", {
         hour: "2-digit",
@@ -116,6 +136,22 @@ function formatShiftMeta(value: string) {
     }
 
     return value || "Operacao";
+}
+
+function formatPreviousBucketMeta(value: PreviousOperationalBucket) {
+    if (value === "P_INVERTIDO") {
+        return "P invertido";
+    }
+
+    return formatShiftMeta(value);
+}
+
+function normalizeSearchValue(value: string) {
+    return value
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim();
 }
 
 function toLocalDateTimeValue(value?: string | null) {
@@ -220,6 +256,120 @@ function formatMinutesLabel(minutes: number | null) {
     return remainder === 0 ? `${hours} h` : `${hours} h ${remainder} min`;
 }
 
+function formatSignedMinutesLabel(minutes: number | null) {
+    if (minutes === null) {
+        return "Sem banco";
+    }
+
+    if (minutes === 0) {
+        return "0 min";
+    }
+
+    const absolute = formatMinutesLabel(Math.abs(minutes));
+    return `${minutes > 0 ? "+" : "-"}${absolute}`;
+}
+
+function formatContributionLabel(minutes: number | null) {
+    if (minutes === null) {
+        return "Sem fechamento";
+    }
+
+    if (minutes === 0) {
+        return "0 min";
+    }
+
+    return `${minutes > 0 ? "+" : "-"}${formatMinutesLabel(Math.abs(minutes))}`;
+}
+
+function formatWindowLabel(startAt: string | null, endAt: string | null) {
+    if (!startAt || !endAt) {
+        return "Janela pendente";
+    }
+
+    return `${formatDateTimeDetail(startAt)} ate ${formatDateTimeDetail(endAt)}`;
+}
+
+function formatHistoryStatus(entry: PreviousOperationalEntry) {
+    return entry.status === "open" ? "Responsabilidade em aberto" : "Responsabilidade encerrada";
+}
+
+function historyEntrySupportMeta(entry: PreviousOperationalEntry) {
+    if (entry.domain === "regulation") {
+        return entry.roleLabel ?? entry.ramalLabel ?? "Mesa operacional";
+    }
+
+    return entry.roleLabel ?? "Base operacional";
+}
+
+function historyBalanceClass(value: number | null) {
+    if (value === null || value === 0) {
+        return "neutral";
+    }
+
+    return value > 0 ? "positive" : "negative";
+}
+
+function historyTimingLabels(bucket: PreviousOperationalBucket) {
+    if (bucket === "P") {
+        return {
+            arrival: "Assumiu no SD",
+            departure: "Entregou no SN",
+            emphasis: "Mesmo com atraso ou adiantamento, esta pessoa respondeu pelo plantao atravessando SD e SN.",
+            responsibility: "Responsavel pelo P",
+        };
+    }
+
+    if (bucket === "P_INVERTIDO") {
+        return {
+            arrival: "Assumiu no SN",
+            departure: "Entregou no SD",
+            emphasis: "Mesmo com atraso ou adiantamento, esta pessoa respondeu pelo plantao invertido entre SN e SD.",
+            responsibility: "Responsavel pelo P invertido",
+        };
+    }
+
+    return {
+        arrival: bucket === "SN" ? "Assumiu o SN" : "Assumiu o SD",
+        departure: bucket === "SN" ? "Entregou o SN" : "Entregou o SD",
+        emphasis: bucket === "SN"
+            ? "O chefe consulta aqui quem respondeu pelo SN, independentemente de entrar antes ou depois das 19h."
+            : "O chefe consulta aqui quem respondeu pelo SD, independentemente de entrar antes ou depois do previsto.",
+        responsibility: bucket === "SN" ? "Responsavel pelo SN" : "Responsavel pelo SD",
+    };
+}
+
+function matchesPreviousShiftQuery(entry: PreviousOperationalEntry, query: string) {
+    const normalizedQuery = normalizeSearchValue(query);
+    if (!normalizedQuery) {
+        return true;
+    }
+
+    const haystack = normalizeSearchValue([
+        entry.displayName ?? entry.doctorName,
+        entry.doctorName,
+        entry.targetCode,
+        entry.targetLabel,
+        entry.domain === "regulation" ? "regulacao" : "intervencao",
+        entry.ruleCode ?? "",
+    ].join(" "));
+
+    return normalizedQuery
+        .split(/\s+/)
+        .filter(Boolean)
+        .every((token) => haystack.includes(token));
+}
+
+function compareHistoryEntriesByDoctor(left: PreviousOperationalEntry, right: PreviousOperationalEntry) {
+    const leftDoctor = left.displayName ?? left.doctorName;
+    const rightDoctor = right.displayName ?? right.doctorName;
+    const doctorComparison = leftDoctor.localeCompare(rightDoctor, "pt-BR");
+    if (doctorComparison !== 0) {
+        return doctorComparison;
+    }
+
+    return left.targetCode.localeCompare(right.targetCode, "pt-BR");
+}
+
 function resolvePriority(card: BoardCard, generatedAt: string): PriorityLevel {
     if (card.status === "waiting") {
         return "critical";
@@ -319,7 +469,7 @@ function compareRegulationCards(left: RegulationCard, right: RegulationCard, shi
 function isInterventionAwaitingNews(card: BoardCard, generatedAt: string) {
     return card.domain === "intervention"
         && card.status === "active"
-        && shouldHighlightInterventionVerification(card.startedAt, generatedAt, card.shiftLabel);
+        && shouldHighlightInterventionVerification(card.boardStartedAt ?? card.startedAt, generatedAt, card.shiftLabel);
 }
 
 function canContinueIntervention(card: BoardCard, generatedAt: string) {
@@ -392,11 +542,13 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, doctors, session } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, previousShift, doctors, session } = props;
     const router = useRouter();
     const [authOpen, setAuthOpen] = useState(false);
+    const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
     const [authEmail, setAuthEmail] = useState("");
     const [authPassword, setAuthPassword] = useState("");
+    const [previousShiftQuery, setPreviousShiftQuery] = useState("");
     const [authError, setAuthError] = useState<string | null>(null);
     const [authInfo, setAuthInfo] = useState<string | null>(null);
     const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
@@ -417,6 +569,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     });
     const [doctorQuery, setDoctorQuery] = useState("");
     const deferredDoctorQuery = useDeferredValue(doctorQuery);
+    const deferredPreviousShiftQuery = useDeferredValue(previousShiftQuery);
     const [quickExitAt, setQuickExitAt] = useState(toLocalDateTimeValue());
     const [quickExitReason, setQuickExitReason] = useState("");
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -482,11 +635,66 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     });
 
     useEffect(() => {
+        let fallbackIntervalId: number | null = null;
+        let reconnectTimeoutId: number | null = null;
+
+        const startFallbackPolling = () => {
+            if (fallbackIntervalId !== null) {
+                return;
+            }
+
+            fallbackIntervalId = window.setInterval(() => {
+                void refreshIfBoardChanged();
+            }, 30000);
+        };
+
+        const stopFallbackPolling = () => {
+            if (fallbackIntervalId === null) {
+                return;
+            }
+
+            window.clearInterval(fallbackIntervalId);
+            fallbackIntervalId = null;
+        };
+
+        let eventSource: EventSource | null = null;
+        const connect = () => {
+            eventSource = new EventSource("/api/board/stream");
+
+            eventSource.addEventListener("ready", () => {
+                stopFallbackPolling();
+            });
+
+            eventSource.addEventListener("board-update", () => {
+                void refreshIfBoardChanged();
+            });
+
+            eventSource.onerror = () => {
+                eventSource?.close();
+                eventSource = null;
+                startFallbackPolling();
+
+                if (reconnectTimeoutId !== null) {
+                    window.clearTimeout(reconnectTimeoutId);
+                }
+
+                reconnectTimeoutId = window.setTimeout(() => {
+                    connect();
+                }, 5000);
+            };
+        };
+
+        connect();
         const intervalId = window.setInterval(() => {
             void refreshIfBoardChanged();
-        }, 5000);
+        }, 120000);
 
         return () => {
+            eventSource?.close();
+            stopFallbackPolling();
+            if (reconnectTimeoutId !== null) {
+                window.clearTimeout(reconnectTimeoutId);
+            }
             window.clearInterval(intervalId);
         };
     }, [refreshIfBoardChanged]);
@@ -504,6 +712,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const interventionActiveCount = visibleInterventionCards.length - interventionWaitingCount;
     const criticalCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "critical");
     const watchCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "high");
+    const previousShiftSections = previousShift.sections.map((section) => ({
+        ...section,
+        entries: section.entries
+            .filter((entry) => matchesPreviousShiftQuery(entry, deferredPreviousShiftQuery))
+            .sort(compareHistoryEntriesByDoctor),
+    }));
+    const filteredPreviousShiftTotal = previousShiftSections.reduce((total, section) => total + section.entries.length, 0);
     const selectedDoctor = doctors.find((doctor) => doctor.id === formState.doctorId) ?? null;
     const filteredDoctors = doctors
         .filter((doctor) => matchesDoctorQuery(doctor, deferredDoctorQuery))
@@ -916,14 +1131,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
     }
 
-    function renderTableRow(card: BoardCard) {
+    function renderTableRow(card: BoardCard, options?: { readOnly?: boolean }) {
         const emphasisClass = rowEmphasisClass(card, shiftLabel, generatedAt);
         const accentLabel = rowAccentLabel(card, shiftLabel, generatedAt);
-        const isClickable = Boolean(session?.canManage);
+        const isClickable = !options?.readOnly && Boolean(session?.canManage);
         const isWaitingIntervention = card.domain === "intervention" && card.status === "waiting";
         const isAwaitingNews = isInterventionAwaitingNews(card, generatedAt);
         const continuationLabel = resolveContinuationBadgeLabel({
-            startedAt: card.startedAt,
+            startedAt: card.boardStartedAt ?? card.startedAt,
             shiftLabel: card.shiftLabel,
             reference: generatedAt,
         });
@@ -959,10 +1174,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         );
     }
 
-    function renderSection(cards: BoardCard[], options: { domain: "regulation" | "intervention" }) {
+    function renderSection(cards: BoardCard[], options: { domain: "regulation" | "intervention"; readOnly?: boolean; title?: string; eyebrow?: string; meta?: React.ReactNode }) {
         const isRegulation = options.domain === "regulation";
-        const title = isRegulation ? "Regulação" : "Intervenção";
-        const eyebrow = isRegulation ? "Mesa central" : "Bases em campo";
+        const title = options.title ?? (isRegulation ? "Regulação" : "Intervenção");
+        const eyebrow = options.eyebrow ?? (isRegulation ? "Mesa central" : "Bases em campo");
 
         return (
             <section className={`ops-table-shell ${options.domain}`}>
@@ -972,12 +1187,16 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         <h2>{title}</h2>
                     </div>
                     <div className="ops-section-meta">
-                        <span className="ops-section-shift">{formatShiftMeta(shiftLabel)}</span>
-                        <span className="ops-section-count">{isRegulation ? `${cards.length} ativos` : `${interventionActiveCount} ativos`}</span>
-                        {!isRegulation && interventionWaitingCount > 0 && (
-                            <span className="ops-section-waiting">{interventionWaitingCount} aguardando</span>
+                        {options.meta ?? (
+                            <>
+                                <span className="ops-section-shift">{formatShiftMeta(shiftLabel)}</span>
+                                <span className="ops-section-count">{isRegulation ? `${cards.length} ativos` : `${interventionActiveCount} ativos`}</span>
+                                {!isRegulation && interventionWaitingCount > 0 && (
+                                    <span className="ops-section-waiting">{interventionWaitingCount} aguardando</span>
+                                )}
+                                <span className="ops-section-updated">Atualizado {formatSectionTimestamp(generatedAt)}</span>
+                            </>
                         )}
-                        <span className="ops-section-updated">Atualizado {formatSectionTimestamp(generatedAt)}</span>
                     </div>
                 </header>
                 <div className="ops-table-wrap">
@@ -989,9 +1208,88 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 <th>Chegada</th>
                             </tr>
                         </thead>
-                        <tbody>{cards.map((card) => renderTableRow(card))}</tbody>
+                        <tbody>{cards.map((card) => renderTableRow(card, { readOnly: options.readOnly }))}</tbody>
                     </table>
                 </div>
+            </section>
+        );
+    }
+
+    function renderPreviousShiftEntry(entry: PreviousOperationalEntry, bucket: PreviousOperationalBucket) {
+        const effectiveEndedAt = entry.actualEndedAt ?? entry.endedAt;
+        const timingLabels = historyTimingLabels(bucket);
+
+        return (
+            <article key={`${entry.domain}-${entry.occupancyId}`} className="ops-history-entry-card">
+                <header className="ops-history-entry-header">
+                    <div className="ops-history-entry-title">
+                        <span className={`ops-history-domain ${entry.domain}`}>{entry.domain === "regulation" ? "Regulação" : "Intervenção"}</span>
+                        <strong>{entry.targetCode}</strong>
+                        <span>{entry.targetLabel}</span>
+                    </div>
+                    <span className={`ops-history-balance ${historyBalanceClass(entry.balanceMinutes)}`}>{formatSignedMinutesLabel(entry.balanceMinutes)}</span>
+                </header>
+
+                <div className="ops-history-entry-doctor">
+                    <strong>{entry.displayName || entry.doctorName}</strong>
+                    <span>{timingLabels.responsibility} em {entry.targetCode} • {historyEntrySupportMeta(entry)}</span>
+                </div>
+
+                <p className="ops-history-entry-copy">{timingLabels.emphasis}</p>
+
+                <div className="ops-history-entry-grid">
+                    <div>
+                        <span className="ops-history-entry-label">{timingLabels.arrival}</span>
+                        <strong>{formatDateTimeDetail(entry.startedAt)}</strong>
+                    </div>
+                    <div>
+                        <span className="ops-history-entry-label">{timingLabels.departure}</span>
+                        <strong>{effectiveEndedAt ? formatDateTimeDetail(effectiveEndedAt) : "Em aberto"}</strong>
+                    </div>
+                    <div>
+                        <span className="ops-history-entry-label">Janela banco</span>
+                        <strong>{formatWindowLabel(entry.scheduledStartAt, entry.scheduledEndAt)}</strong>
+                    </div>
+                    <div>
+                        <span className="ops-history-entry-label">Status</span>
+                        <strong>{formatHistoryStatus(entry)}</strong>
+                    </div>
+                </div>
+
+                <div className="ops-history-entry-metrics">
+                    <span>Contribuição deste plantão: {formatContributionLabel(entry.balanceMinutes)}</span>
+                    <span>Atraso de entrada: {formatMinutesLabel(entry.arrivalDelayMinutes)}</span>
+                    <span>Crédito por saída: {formatMinutesLabel(entry.creditedOvertimeMinutes)}</span>
+                    {entry.ruleCode && <span>Regra: {entry.ruleCode}</span>}
+                </div>
+
+                <p className="ops-history-entry-copy ops-history-entry-copy-secondary">
+                    {entry.bankHoursExplanation ?? "Ainda sem fechamento de banco para este registro."}
+                </p>
+            </article>
+        );
+    }
+
+    function renderPreviousShiftSection(section: PreviousOperationalSection) {
+        return (
+            <section key={section.bucket} className="ops-history-section-card">
+                <header className="ops-history-section-heading">
+                    <div>
+                        <p className="ops-section-eyebrow">Grupo operacional</p>
+                        <h3>{formatPreviousBucketMeta(section.bucket)}</h3>
+                    </div>
+                    <span className="ops-history-section-count">{section.entries.length} registros</span>
+                </header>
+
+                <p className="ops-history-section-copy">{section.description}</p>
+
+                {section.entries.length > 0 ? (
+                    <div className="ops-history-entry-list">
+                        {section.entries.map((entry) => renderPreviousShiftEntry(entry, section.bucket))}
+                    </div>
+                ) : (
+                    <div className="ops-history-empty-state">Nenhum registro deste grupo no fechamento anterior.</div>
+                )}
             </section>
         );
     }
@@ -1001,15 +1299,39 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             <div className={`ops-auth-dock ${authOpen ? "open" : ""}`.trim()}>
                 <button
                     type="button"
+                    className="ops-history-trigger"
+                    aria-label="Abrir fechamento do plantão anterior"
+                    title="Plantão anterior"
+                    onClick={() => {
+                        setPreviousShiftOpen((current) => !current);
+                        setAuthOpen(false);
+                    }}
+                >
+                    <span className="ops-history-trigger-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false">
+                            <path d="M12 3.25a8.75 8.75 0 1 0 8.53 10.7.75.75 0 1 0-1.46-.35A7.25 7.25 0 1 1 12 4.75c1.94 0 3.7.76 5 2l-1.87.01a.75.75 0 0 0 0 1.5h3.67a.75.75 0 0 0 .75-.75V3.84a.75.75 0 0 0-1.5 0v1.79A8.7 8.7 0 0 0 12 3.25Zm-.75 4.5a.75.75 0 0 1 1.5 0v3.89l2.37 1.58a.75.75 0 0 1-.84 1.24l-2.7-1.8a.75.75 0 0 1-.33-.62V7.75Z" />
+                        </svg>
+                    </span>
+                </button>
+
+                <button
+                    type="button"
                     className={`ops-auth-trigger ${session ? "connected" : ""}`.trim()}
+                    aria-label={session ? `Sessao ativa: ${summarizeRoles(session.roles)}. Abrir acesso operacional.` : "Abrir acesso operacional"}
+                    title={session ? `${summarizeRoles(session.roles)} • ${session.email}` : "Acesso operacional"}
                     onClick={() => {
                         setAuthOpen((current) => !current);
                         setAuthError(null);
                         setAuthInfo(null);
                     }}
                 >
-                    <span className="ops-auth-trigger-kicker">{session ? summarizeRoles(session.roles) : "Acesso"}</span>
-                    <strong>{session ? session.email : "Entrar"}</strong>
+                    <span className={`ops-auth-trigger-status ${session ? "connected" : "idle"}`.trim()} aria-hidden="true" />
+                    <span className="ops-auth-trigger-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false">
+                            <path d="M12 2.75a5 5 0 0 0-5 5v1.5H6.5A2.75 2.75 0 0 0 3.75 12v6.25A2.75 2.75 0 0 0 6.5 21h11a2.75 2.75 0 0 0 2.75-2.75V12a2.75 2.75 0 0 0-2.75-2.75H17V7.75a5 5 0 0 0-5-5Zm-3.5 6.5v-1.5a3.5 3.5 0 1 1 7 0v1.5h-7Zm3.5 3.25a1.75 1.75 0 0 1 .75 3.33V18a.75.75 0 0 1-1.5 0v-2.17a1.75 1.75 0 0 1 .75-3.33Z" />
+                        </svg>
+                    </span>
+                    <span className="ops-auth-sr">{session ? `${summarizeRoles(session.roles)} ${session.email}` : "Abrir acesso operacional"}</span>
                 </button>
 
                 <div className={`ops-auth-popover ${authOpen ? "open" : ""}`.trim()}>
@@ -1031,8 +1353,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     {session.mustChangePassword
                                         ? "Senha temporaria ativa. Troque a senha agora para liberar as rotas operacionais."
                                         : session.canManage
-                                        ? "Clique no quadro para abrir correcoes, aberturas e encerramentos."
-                                        : "Esta sessao nao habilita operacao."}
+                                            ? "Clique no quadro para abrir correcoes, aberturas e encerramentos."
+                                            : "Esta sessao nao habilita operacao."}
                                 </span>
                                 {session.roles.includes("admin") && !session.mustChangePassword && (
                                     <a className="ops-auth-inline-link" href="/admin/reports">
@@ -1163,6 +1485,57 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     {renderSection(visibleRegulationCards, { domain: "regulation" })}
                 </section>
             </main>
+
+            <div className={`ops-history-backdrop ${previousShiftOpen ? "open" : ""}`} onClick={() => setPreviousShiftOpen(false)} />
+            <aside className={`ops-history-drawer ${previousShiftOpen ? "open" : ""}`} aria-hidden={!previousShiftOpen}>
+                <header className="ops-history-header">
+                    <div>
+                        <p className="ops-column-kicker">Fechamento operacional</p>
+                        <h2>Plantão anterior</h2>
+                    </div>
+                    <button type="button" className="chief-close-button" onClick={() => setPreviousShiftOpen(false)}>Fechar</button>
+                </header>
+
+                <div className="ops-history-summary">
+                    <span className="ops-section-shift">Dia operacional {formatOperationalDayLabel(previousShift.operationalDate)}</span>
+                    <span className="ops-section-count">Titulares e substituicoes classificados em P invertido, P, SD e SN</span>
+                    <span className="ops-section-updated">{filteredPreviousShiftTotal} de {previousShift.totalEntries} registros visiveis</span>
+                </div>
+
+                <section className="ops-history-search-shell">
+                    <div className="ops-history-search-copy">
+                        <p className="ops-section-eyebrow">Consulta rapida</p>
+                        <h3>Busque o medico e leia o plantao como entidade fechada</h3>
+                        <p>
+                            Aqui o eixo principal e responsabilidade operacional. O horario real continua importante para banco, auditoria e pagamento, mas o chefe consulta primeiro quem assumiu e quem entregou cada plantao.
+                        </p>
+                    </div>
+
+                    <label className="ops-history-search-field">
+                        <span className="ops-history-search-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M10.5 4.75a5.75 5.75 0 1 0 0 11.5 5.75 5.75 0 0 0 0-11.5Zm-7.25 5.75a7.25 7.25 0 1 1 12.39 5.12l4 4a.75.75 0 1 1-1.06 1.06l-4-4A7.25 7.25 0 0 1 3.25 10.5Z" />
+                            </svg>
+                        </span>
+                        <input
+                            type="search"
+                            value={previousShiftQuery}
+                            onChange={(event) => setPreviousShiftQuery(event.target.value)}
+                            placeholder="Buscar medico, base, ramal ou regra"
+                            aria-label="Buscar medico no fechamento do plantao anterior"
+                        />
+                        {previousShiftQuery && (
+                            <button type="button" className="ops-history-search-clear" onClick={() => setPreviousShiftQuery("")}>
+                                Limpar
+                            </button>
+                        )}
+                    </label>
+                </section>
+
+                <div className="ops-history-grid">
+                    {previousShiftSections.map((section) => renderPreviousShiftSection(section))}
+                </div>
+            </aside>
 
             <div className={`chief-drawer-backdrop ${drawerOpen ? "open" : ""}`} onClick={closeDrawer} />
             <aside className={`chief-drawer ${drawerOpen ? "open" : ""}`} aria-hidden={!drawerOpen}>

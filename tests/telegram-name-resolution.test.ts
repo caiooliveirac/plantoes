@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates } from "@/modules/telegram/name-resolution";
-import { buildCandidatePromptReply, buildNameUnresolvedReply, pickTelegramReply } from "@/modules/telegram/replies";
+import { buildCandidatePromptReply, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 
 const directory = [
     {
@@ -120,4 +120,72 @@ test("buildNameUnresolvedReply shows suggestions and asks to redigite", () => {
     assert.match(reply, /Mais proximos/);
     assert.match(reply, /Bruno Lima/);
     assert.match(reply, /redigite o nome/i);
+});
+
+test("buildTelegramBatchReviewReply asks for confirmation when all entries are ready", () => {
+    const reply = buildTelegramBatchReviewReply({
+        entries: [
+            {
+                lineNumber: 1,
+                doctorName: "Felipe Figueiredo de Carvalho",
+                targetCode: "2031",
+                timeLabel: "07:00",
+                sector: "REGULATION",
+                mode: "arrival",
+            },
+            {
+                lineNumber: 2,
+                doctorName: "Vinicius Santos Moura de Jesus",
+                targetCode: "CZ50",
+                timeLabel: "continua",
+                sector: "INTERVENTION",
+                mode: "continuation",
+            },
+        ],
+        issues: [],
+    });
+
+    assert.match(reply, /Conferi o lote/);
+    assert.match(reply, /2031 - Felipe Figueiredo de Carvalho - 07:00/);
+    assert.match(reply, /CZ50 - Vinicius Santos Moura de Jesus - continua/);
+    assert.match(reply, /Responda CONFIRMAR/i);
+});
+
+test("buildTelegramBatchReviewReply highlights lines that need correction", () => {
+    const reply = buildTelegramBatchReviewReply({
+        entries: [
+            {
+                lineNumber: 3,
+                doctorName: "Gerardson Macedo e Silva Souza",
+                targetCode: "1367",
+                timeLabel: "07:11",
+                sector: "REGULATION",
+                mode: "arrival",
+            },
+        ],
+        issues: [
+            {
+                lineNumber: 4,
+                rawLine: "ANDRE CODECEIRA SOMBRA 07:05",
+                reason: "faltou base ou ramal",
+            },
+        ],
+    });
+
+    assert.match(reply, /precisam de correcao/i);
+    assert.match(reply, /faltou base ou ramal/);
+    assert.match(reply, /ANDRE CODECEIRA SOMBRA 07:05/);
+    assert.doesNotMatch(reply, /Responda CONFIRMAR/i);
+});
+
+test("buildTelegramBatchApplyReply summarizes partial failures", () => {
+    const reply = buildTelegramBatchApplyReply({
+        appliedCount: 10,
+        failed: [
+            { lineNumber: 8, reason: "Regulation post not found." },
+        ],
+    });
+
+    assert.match(reply, /Lancei 10 registros/);
+    assert.match(reply, /8\. Regulation post not found\./);
 });

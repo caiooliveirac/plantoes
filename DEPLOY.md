@@ -33,7 +33,9 @@ Esse script faz, nesta ordem:
 5. reinicia `plantoes-telegram-worker` com `--update-env`
 6. valida `api/health`
 7. valida `api/board`
-8. roda `pm2 save`
+8. reconfigura o webhook do Telegram para `${AUTH_URL}/api/telegram/webhook`
+9. valida que o webhook ficou registrado no Telegram
+10. roda `pm2 save`
 
 ## Passo a passo manual
 
@@ -48,6 +50,10 @@ npm test
 npm run build
 pm2 restart plantoes --update-env
 pm2 restart plantoes-telegram-worker --update-env
+curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+	-H 'Content-Type: application/json' \
+	-d "{\"url\":\"${AUTH_URL%/}/api/telegram/webhook\",\"secret_token\":\"${TELEGRAM_WEBHOOK_SECRET}\",\"allowed_updates\":[\"message\"]}"
+curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
 pm2 save
 ```
 
@@ -67,6 +73,14 @@ E confirme localmente:
 curl -fsS http://127.0.0.1:3004/api/health
 curl -fsS http://127.0.0.1:3004/api/board
 ```
+
+E confirme no Telegram que o bot aponta para a instancia publica certa:
+
+```bash
+curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
+```
+
+O campo `result.url` precisa ser exatamente `https://plantoes.mnrs.com.br/api/telegram/webhook`.
 
 ## Provisionamento inicial de acesso
 

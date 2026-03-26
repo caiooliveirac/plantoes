@@ -3,7 +3,7 @@ export type OccupancyShiftLabel = OperationalShiftLabel | "P" | null;
 
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const PRE_SHIFT_TOLERANCE_MINUTES = 60;
-const VERIFICATION_GRACE_MINUTES = 30;
+const VERIFICATION_GRACE_MINUTES = 15;
 const OVERTIME_JUSTIFICATION_MINUTES = 15;
 
 interface SaoPauloParts {
@@ -167,6 +167,18 @@ export function resolveProlongedShiftExpiry(startedAt: string | Date | null, shi
     return addDays(sameDaySeven, 1);
 }
 
+export function resolveImplicitOccupancyExpiry(startedAt: string | Date | null, shiftLabel: OccupancyShiftLabel) {
+    if (!startedAt) {
+        return null;
+    }
+
+    if (shiftLabel === "P") {
+        return resolveProlongedShiftExpiry(startedAt, shiftLabel);
+    }
+
+    return resolveFirstVerificationBoundary(startedAt);
+}
+
 function resolveInterventionVerificationBoundary(
     startedAt: string | Date | null,
     reference: string | Date,
@@ -202,12 +214,12 @@ export function shouldKeepRegulationOccupancyVisible(params: {
         return true;
     }
 
-    const prolongedUntil = resolveProlongedShiftExpiry(startedAt, shiftLabel);
-    if (!prolongedUntil) {
+    const expiresAt = resolveImplicitOccupancyExpiry(startedAt, shiftLabel);
+    if (!expiresAt) {
         return false;
     }
 
-    return new Date(reference).getTime() < addMinutes(prolongedUntil, VERIFICATION_GRACE_MINUTES).getTime();
+    return new Date(reference).getTime() < addMinutes(expiresAt, VERIFICATION_GRACE_MINUTES).getTime();
 }
 
 export function resolveContinuationBadgeLabel(params: {

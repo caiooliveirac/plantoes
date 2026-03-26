@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseTelegramCommand } from "@/modules/telegram/commands";
 import { buildGroupCorrectionAnnouncement, pickTelegramReply } from "@/modules/telegram/replies";
-import { hasTelegramOperationalJustification } from "@/modules/telegram/service";
+import { hasTelegramOperationalJustification, isBatchCancelKeyword, isBatchConfirmationKeyword } from "@/modules/telegram/service";
 
 test("parseTelegramCommand parses corrigir with target, full name and time", () => {
     const parsed = parseTelegramCommand("/corrigir PM04 Marcela Souza 20:00");
@@ -78,6 +78,40 @@ test("pickTelegramReply describes continuation without resetting arrival", () =>
     assert.match(reply, /chegada original|nao zerei a chegada|preservada/i);
 });
 
+test("pickTelegramReply teaches how to justify a late departure", () => {
+    const reply = pickTelegramReply("departure_justification_required", 23, {
+        name: "Vagner Barroso",
+        target: "PR03",
+        time: "19:20",
+        example: "Vagner Barroso saindo PR03 19:20 porque estava em ocorrencia",
+    });
+
+    assert.match(reply, /motivo|justificativa|reenvie/i);
+    assert.match(reply, /porque estava em ocorrencia/i);
+    assert.match(reply, /PR03/);
+});
+
+test("pickTelegramReply explains late departure adjustment without changing the panel", () => {
+    const reply = pickTelegramReply("departure_adjusted", 29, {
+        name: "Vagner Barroso",
+        target: "PR03",
+        time: "19:20",
+    });
+
+    assert.match(reply, /painel/i);
+    assert.match(reply, /pagamento|banco de horas/i);
+    assert.match(reply, /19:20/);
+});
+
+test("pickTelegramReply asks for missing context on departure", () => {
+    const reply = pickTelegramReply("departure_missing_context", 31, {
+        example: "Vagner saindo PR03 19:20 porque estava em ocorrencia",
+    });
+
+    assert.match(reply, /base|horario|local|contexto/i);
+    assert.match(reply, /saindo PR03 19:20 porque estava em ocorrencia/i);
+});
+
 test("pickTelegramReply prefixes unresolved replies with emoticon", () => {
     const reply = pickTelegramReply("name_unresolved", 21, {});
 
@@ -126,4 +160,18 @@ test("hasTelegramOperationalJustification accepts continuation messages only whe
         ),
         true,
     );
+});
+
+test("isBatchConfirmationKeyword aceita confirmacao em maiusculas e frases equivalentes", () => {
+    assert.equal(isBatchConfirmationKeyword("CONFIRMAR"), true);
+    assert.equal(isBatchConfirmationKeyword("Confirmar"), true);
+    assert.equal(isBatchConfirmationKeyword("ok pode lançar"), true);
+    assert.equal(isBatchConfirmationKeyword("OK"), false);
+});
+
+test("isBatchCancelKeyword aceita variantes de cancelamento", () => {
+    assert.equal(isBatchCancelKeyword("CANCELAR"), true);
+    assert.equal(isBatchCancelKeyword("Cancela"), true);
+    assert.equal(isBatchCancelKeyword("Descartar lote"), true);
+    assert.equal(isBatchCancelKeyword("Fechar"), false);
 });

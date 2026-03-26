@@ -111,13 +111,15 @@ export function resolveTelegramEventTime(referenceDate: Date, hhmm?: string | nu
         minutes,
     );
 
-    if (resolved.getTime() - referenceDate.getTime() > 12 * 60 * 60000) {
-        return new Date(resolved.getTime() - 86400000);
-    }
+    const candidates = [
+        new Date(resolved.getTime() - 86400000),
+        resolved,
+        new Date(resolved.getTime() + 86400000),
+    ];
 
-    if (referenceDate.getTime() - resolved.getTime() > 18 * 60 * 60000) {
-        return new Date(resolved.getTime() + 86400000);
-    }
-
-    return resolved;
+    return candidates.reduce((closest, candidate) => {
+        const candidateDistance = Math.abs(candidate.getTime() - referenceDate.getTime());
+        const closestDistance = Math.abs(closest.getTime() - referenceDate.getTime());
+        return candidateDistance < closestDistance ? candidate : closest;
+    });
 }

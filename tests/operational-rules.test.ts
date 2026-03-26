@@ -3,13 +3,15 @@ import test from "node:test";
 import {
     requiresOvertimeJustification,
     resolveContinuationBadgeLabel,
+    resolveImplicitOccupancyExpiry,
     resolveOvertimeJustificationThreshold,
     resolveOperationalShiftLabel,
     shouldHighlightInterventionVerification,
     shouldKeepRegulationOccupancyVisible,
 } from "@/modules/operational/board-rules";
+import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
-import { isCasualTelegramMessage, parseMessage, parseMessageMulti } from "@/modules/telegram/parser";
+import { isCasualTelegramMessage, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 
 test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T07:00:00-03:00")), "SD");
@@ -85,6 +87,15 @@ test("hides regulation carry-over after boundary unless doctor declared P", () =
             shiftLabel: "SD",
             reference: new Date("2026-03-25T19:01:00-03:00"),
         }),
+        true,
+    );
+
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-25T08:18:00-03:00"),
+            shiftLabel: "SD",
+            reference: new Date("2026-03-25T19:15:00-03:00"),
+        }),
         false,
     );
 
@@ -101,7 +112,7 @@ test("hides regulation carry-over after boundary unless doctor declared P", () =
         shouldKeepRegulationOccupancyVisible({
             startedAt: new Date("2026-03-25T19:00:00-03:00"),
             shiftLabel: "P",
-            reference: new Date("2026-03-26T07:20:00-03:00"),
+            reference: new Date("2026-03-26T06:59:00-03:00"),
         }),
         true,
     );
@@ -110,7 +121,16 @@ test("hides regulation carry-over after boundary unless doctor declared P", () =
         shouldKeepRegulationOccupancyVisible({
             startedAt: new Date("2026-03-25T19:00:00-03:00"),
             shiftLabel: "P",
-            reference: new Date("2026-03-26T07:31:00-03:00"),
+            reference: new Date("2026-03-26T07:01:00-03:00"),
+        }),
+        true,
+    );
+
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-25T19:00:00-03:00"),
+            shiftLabel: "P",
+            reference: new Date("2026-03-26T07:15:00-03:00"),
         }),
         false,
     );
@@ -131,6 +151,23 @@ test("hides regulation carry-over after boundary unless doctor declared P", () =
             reference: new Date("2026-03-26T07:01:00-03:00"),
         }),
         true,
+    );
+});
+
+test("resolveImplicitOccupancyExpiry uses base boundary for non-P and full span for P", () => {
+    assert.equal(
+        resolveImplicitOccupancyExpiry(new Date("2026-03-25T07:12:00-03:00"), "SD")?.toISOString(),
+        new Date("2026-03-25T19:00:00-03:00").toISOString(),
+    );
+
+    assert.equal(
+        resolveImplicitOccupancyExpiry(new Date("2026-03-25T19:02:00-03:00"), "SN")?.toISOString(),
+        new Date("2026-03-26T07:00:00-03:00").toISOString(),
+    );
+
+    assert.equal(
+        resolveImplicitOccupancyExpiry(new Date("2026-03-25T07:12:00-03:00"), "P")?.toISOString(),
+        new Date("2026-03-26T07:00:00-03:00").toISOString(),
     );
 });
 
@@ -158,6 +195,26 @@ test("shows continuation badge only in the verification grace window", () => {
         shiftLabel: "P",
         reference: new Date("2026-03-26T07:10:00-03:00"),
     }), "Continua as 07:00");
+});
+
+test("resolveContinuationBoardStartedAt avanca o marcador do quadro para o turno corrente", () => {
+    assert.equal(
+        resolveContinuationBoardStartedAt({
+            startedAt: new Date("2026-03-25T19:28:00-03:00"),
+            boardStartedAt: new Date("2026-03-25T19:28:00-03:00"),
+            continuedAt: new Date("2026-03-26T11:54:00-03:00"),
+        }).toISOString(),
+        new Date("2026-03-26T07:00:00-03:00").toISOString(),
+    );
+
+    assert.equal(
+        resolveContinuationBoardStartedAt({
+            startedAt: new Date("2026-03-25T19:28:00-03:00"),
+            boardStartedAt: new Date("2026-03-25T19:28:00-03:00"),
+            continuedAt: new Date("2026-03-25T23:08:00-03:00"),
+        }).toISOString(),
+        new Date("2026-03-25T19:28:00-03:00").toISOString(),
+    );
 });
 
 test("requires written justification from 07:15 or 19:15 onward", () => {
@@ -240,6 +297,24 @@ test("resolves Telegram explicit HH:mm on the same local operational day", () =>
     );
 
     assert.equal(result.toISOString(), new Date("2026-03-25T07:15:00-03:00").toISOString());
+});
+
+test("resolves Telegram explicit early-morning HH:mm to the next local day when sent late at night", () => {
+    const result = resolveTelegramEventTime(
+        new Date("2026-03-25T23:30:00-03:00"),
+        "06:00",
+    );
+
+    assert.equal(result.toISOString(), new Date("2026-03-26T06:00:00-03:00").toISOString());
+});
+
+test("resolves Telegram explicit 07:00 to the next local day after the night-shift boundary", () => {
+    const result = resolveTelegramEventTime(
+        new Date("2026-03-25T19:05:00-03:00"),
+        "07:00",
+    );
+
+    assert.equal(result.toISOString(), new Date("2026-03-26T07:00:00-03:00").toISOString());
 });
 
 test("parses free-text regulation arrival", () => {
@@ -396,4 +471,36 @@ test("parses intervention P shift with bare base alias and explicit time", () =>
     assert.equal(parsed.shiftType, "P");
     assert.equal(parsed.isDeparture, false);
     assert.deepEqual(parsed.extractedNames, ["Marcela"]);
+});
+
+test("parses pasted batch lines ignoring headings and separators", () => {
+    const lines = parseTelegramBatchLines(`REGULACAO
+
+FELIPE CARVALHO 2031 07:00
+MARIA AUGUSTA 1322 07:40
+
+⸻
+
+INTERVENCAO
+VINICIUS JESUS CZ50 CONT.
+CAIO OLIVEIRA IT30 06:54`);
+
+    assert.equal(lines.length, 4);
+    assert.equal(lines[0]?.headingSector, "REGULATION");
+    assert.equal(lines[0]?.parsed.baseCode, "2031");
+    assert.equal(lines[1]?.parsed.baseCode, "1322");
+    assert.equal(lines[2]?.headingSector, "INTERVENTION");
+    assert.equal(lines[2]?.parsed.baseCode, "CZ50");
+    assert.equal(lines[2]?.parsed.isContinuation, true);
+    assert.equal(lines[3]?.parsed.baseCode, "IT30");
+});
+
+test("parses CONT abbreviation as intervention continuation", () => {
+    const parsed = parseMessage("Vinicius Jesus CZ50 CONT.");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "CZ50");
+    assert.equal(parsed.isContinuation, true);
+    assert.equal(parsed.isDeparture, false);
+    assert.deepEqual(parsed.extractedNames, ["Vinicius Jesus"]);
 });

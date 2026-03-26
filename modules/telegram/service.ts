@@ -18,11 +18,11 @@ import { resolveTelegramEventTime } from "@/modules/operational/rules";
 import { endRegulationOccupancy, startRegulationOccupancy } from "@/modules/regulation/service";
 import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, isTelegramChatAllowed, isTelegramPrivateControlUserId } from "@/modules/telegram/config";
 import { parseTelegramCommand } from "@/modules/telegram/commands";
-import { isCasualTelegramMessage, parseMessageMulti, type ParsedMessage } from "@/modules/telegram/parser";
+import { isCasualTelegramMessage, looksLikeDepartureMessage, parseMessageMulti, parseTelegramBatchLines, type ParsedMessage } from "@/modules/telegram/parser";
 import type { TelegramUpdate } from "@/modules/telegram/api";
 import { sendMessage } from "@/modules/telegram/api";
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
-import { buildCandidatePromptReply, buildGroupCorrectionAnnouncement, buildNameUnresolvedReply, pickTelegramReply } from "@/modules/telegram/replies";
+import { buildCandidatePromptReply, buildGroupCorrectionAnnouncement, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 
 interface PendingNameResolutionData {
     parsed: {
@@ -39,7 +39,112 @@ interface PendingNameResolutionData {
     originalEventAt: string;
 }
 
+interface PendingBatchConfirmationEntry {
+    lineNumber: number;
+    rawLine: string;
+    parsed: OperationalParsedEntry;
+    resolvedDoctor: { id: string; fullName: string };
+    eventAt: string;
+}
+
+interface PendingBatchConfirmationData {
+    entries: PendingBatchConfirmationEntry[];
+    originalText: string;
+    originalMessageId: number;
+}
+
+interface TelegramBatchReviewIssue {
+    lineNumber: number;
+    rawLine: string;
+    reason: string;
+}
+
+interface PreparedBatchEntry {
+    lineNumber: number;
+    rawLine: string;
+    parsed: OperationalParsedEntry;
+    resolvedDoctor: { id: string; fullName: string };
+    eventAt: Date;
+}
+
 type OperationalParsedEntry = PendingNameResolutionData["parsed"];
+
+function normalizeBatchKeyword(text: string) {
+    return normalizeDoctorName(text)
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+export function isBatchConfirmationKeyword(text: string) {
+    const normalized = normalizeBatchKeyword(text);
+    return normalized === "CONFIRMAR"
+        || normalized === "CONFIRMAR SIM"
+        || normalized === "CONFIRMO"
+        || normalized === "CONFIRMADO"
+        || normalized === "CONFIRMA"
+        || normalized === "OK CONFIRMAR"
+        || normalized === "OK PODE LANCAR"
+        || normalized === "OK LANCAR"
+        || normalized === "PODE LANCAR"
+        || normalized === "LANCAR TUDO";
+}
+
+export function isBatchCancelKeyword(text: string) {
+    const normalized = normalizeBatchKeyword(text);
+    return normalized === "CANCELAR"
+        || normalized === "CANCELA"
+        || normalized === "DESCARTAR LOTE";
+}
+
+function canManageTelegramBatch(message: TelegramUpdate["message"]) {
+    return message?.chat.type === "private" && isTelegramPrivateControlUserId(message.from?.id);
+}
+
+function isPendingBatchConfirmationData(value: unknown): value is PendingBatchConfirmationData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+    return Array.isArray(candidate.entries) && typeof candidate.originalText === "string";
+}
+
+function buildBatchIssueReason(params: {
+    parsed: ParsedMessage;
+    doctorQuery: string | null;
+    candidates: TelegramDoctorCandidate[];
+}) {
+    if (!params.parsed.baseCode) {
+        return "faltou base ou ramal";
+    }
+
+    if (params.parsed.isDeparture) {
+        return "saida em lote ainda pede ajuste individual";
+    }
+
+    if (!params.doctorQuery) {
+        return "faltou nome do medico";
+    }
+
+    if (params.candidates.length > 0) {
+        const suggestions = params.candidates.slice(0, 2).map((candidate) => candidate.fullName).join(" ou ");
+        return `nome ambiguo, confirme como ${suggestions}`;
+    }
+
+    return "nome do medico nao reconhecido";
+}
+
+async function findPendingBatchConfirmation(chatId: string, senderTelegramId: string) {
+    const db = getDb();
+    return db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "pending_batch_confirmation"),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+    });
+}
 
 function isTelegramContinuationEntry(parsed: OperationalParsedEntry) {
     return !parsed.isDeparture && parsed.sector === "INTERVENTION" && (parsed.isContinuation || parsed.shiftType === "P");
@@ -67,6 +172,90 @@ function resolveTelegramContinuationMode(parsed: OperationalParsedEntry) {
     }
 
     return "wording";
+}
+
+function appendTelegramOperationalNote(existingNotes: string | null | undefined, marker: string, messageText: string) {
+    const nextEntry = `[${marker}] ${messageText}`;
+    return [existingNotes?.trim(), nextEntry].filter(Boolean).join("\n");
+}
+
+function buildTelegramDepartureExample(params: {
+    doctorName?: string | null;
+    target?: string | null;
+    time?: string | null;
+}) {
+    const compactName = params.doctorName?.trim() || "Vagner";
+    const target = params.target?.trim() || "PR03";
+    const time = params.time?.trim() || "19:20";
+    return `${compactName} saindo ${target} ${time} porque estava em ocorrencia`;
+}
+
+async function findRecentClosedInterventionOccupancy(params: {
+    baseId: number;
+    doctorId: string;
+    eventAt: Date;
+}) {
+    const db = getDb();
+    const recent = await db.query.interventionOccupancies.findMany({
+        where: and(
+            eq(interventionOccupancies.baseId, params.baseId),
+            eq(interventionOccupancies.doctorId, params.doctorId),
+        ),
+        orderBy: [desc(interventionOccupancies.endedAt), desc(interventionOccupancies.actualEndedAt), desc(interventionOccupancies.startedAt)],
+        limit: 5,
+    });
+
+    const maxWindowMs = 18 * 60 * 60 * 1000;
+    return recent.find((occupancy) => {
+        if (!occupancy.endedAt) {
+            return false;
+        }
+
+        return Math.abs(params.eventAt.getTime() - occupancy.endedAt.getTime()) <= maxWindowMs;
+    }) ?? null;
+}
+
+async function sendTelegramDepartureFailureReply(params: {
+    chatId: number;
+    replyToMessageId: number;
+    seed: number;
+    parsed: OperationalParsedEntry;
+    doctorName: string;
+    errorMessage: string;
+}) {
+    if (!params.parsed.isDeparture) {
+        return;
+    }
+
+    const example = buildTelegramDepartureExample({
+        doctorName: params.doctorName,
+        target: params.parsed.baseCode,
+        time: params.parsed.arrivalTime,
+    });
+
+    let kind: "departure_justification_required" | "departure_not_found" | "departure_time_conflict" | null = null;
+    if (params.errorMessage.includes("Justificativa obrigatoria")) {
+        kind = "departure_justification_required";
+    } else if (params.errorMessage.includes("No active") || params.errorMessage.includes("not found")) {
+        kind = "departure_not_found";
+    } else if (params.errorMessage.includes("Actual end cannot be before the recorded arrival.")) {
+        kind = "departure_time_conflict";
+    }
+
+    if (!kind) {
+        return;
+    }
+
+    await sendMessage(
+        params.chatId,
+        pickTelegramReply(kind, params.seed, {
+            name: params.doctorName,
+            target: params.parsed.baseCode ?? "plantao",
+            time: params.parsed.arrivalTime ?? "",
+            example,
+        }),
+        params.replyToMessageId,
+    );
 }
 
 function isOperationalParsedEntry(entry: ParsedMessage): entry is ParsedMessage & OperationalParsedEntry {
@@ -117,6 +306,191 @@ async function resolveDoctorWithFallback(rawName: string) {
         doctor: null,
         candidates,
     };
+}
+
+async function prepareTelegramBatchEntries(message: TelegramUpdate["message"]) {
+    const batchLines = parseTelegramBatchLines(message?.text ?? "");
+    const entries: PreparedBatchEntry[] = [];
+    const issues: TelegramBatchReviewIssue[] = [];
+    const referenceDate = new Date((message?.date ?? Math.floor(Date.now() / 1000)) * 1000);
+
+    for (const batchLine of batchLines) {
+        const parsed = batchLine.parsed;
+        const doctorQuery = parsed.extractedNames[0] ?? null;
+
+        if (!parsed.baseCode || parsed.isDeparture || !doctorQuery) {
+            issues.push({
+                lineNumber: batchLine.lineNumber,
+                rawLine: batchLine.rawLine,
+                reason: buildBatchIssueReason({ parsed, doctorQuery, candidates: [] }),
+            });
+            continue;
+        }
+
+        const { doctor, candidates } = await resolveDoctorWithFallback(doctorQuery);
+        if (!doctor) {
+            issues.push({
+                lineNumber: batchLine.lineNumber,
+                rawLine: batchLine.rawLine,
+                reason: buildBatchIssueReason({ parsed, doctorQuery, candidates }),
+            });
+            continue;
+        }
+
+        entries.push({
+            lineNumber: batchLine.lineNumber,
+            rawLine: batchLine.rawLine,
+            parsed: {
+                sector: parsed.sector as OperationalParsedEntry["sector"],
+                baseCode: parsed.baseCode,
+                arrivalTime: parsed.arrivalTime,
+                shiftType: parsed.shiftType,
+                roleFunction: parsed.roleFunction,
+                isDeparture: parsed.isDeparture,
+                isContinuation: parsed.isContinuation,
+            },
+            resolvedDoctor: {
+                id: doctor.id,
+                fullName: doctor.fullName,
+            },
+            eventAt: resolveTelegramEventTime(referenceDate, parsed.arrivalTime),
+        });
+    }
+
+    return { batchLines, entries, issues };
+}
+
+async function queuePendingBatchConfirmation(
+    logId: string,
+    message: TelegramUpdate["message"],
+    entries: PreparedBatchEntry[],
+) {
+    await markTelegramProcessed(logId, {
+        status: "pending_batch_confirmation",
+        parsedAction: "batch_arrival",
+        resolutionData: {
+            entries: entries.map((entry) => ({
+                lineNumber: entry.lineNumber,
+                rawLine: entry.rawLine,
+                parsed: entry.parsed,
+                resolvedDoctor: entry.resolvedDoctor,
+                eventAt: entry.eventAt.toISOString(),
+            })),
+            originalText: message?.text ?? "",
+            originalMessageId: message?.message_id ?? 0,
+        },
+    });
+}
+
+async function tryHandlePendingBatchConfirmation(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id) {
+        return null;
+    }
+
+    if (!canManageTelegramBatch(message)) {
+        return null;
+    }
+
+    const pending = await findPendingBatchConfirmation(String(message.chat.id), String(message.from.id));
+    if (!pending || !isPendingBatchConfirmationData(pending.resolutionData)) {
+        return null;
+    }
+
+    const normalizedText = message.text.trim();
+    if (isBatchCancelKeyword(normalizedText)) {
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: "batch_confirmation_cancelled",
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "batch_cancelled",
+            errorMessage: null,
+        });
+        await sendMessage(message.chat.id, ":| Lote descartado. Quando quiser, pode colar uma nova escala para eu conferir de novo.", message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    if (!isBatchConfirmationKeyword(normalizedText)) {
+        const replacementLines = parseTelegramBatchLines(message.text);
+        if (replacementLines.length > 1) {
+            await markTelegramProcessed(pending.id, {
+                status: "superseded",
+                errorMessage: "batch_confirmation_replaced",
+            });
+            return null;
+        }
+
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedAction: "batch_confirmation_pending",
+            errorMessage: "batch_confirmation_pending",
+        });
+        await sendMessage(message.chat.id, ":| Tenho um lote pronto para confirmar. Responda CONFIRMAR para gravar tudo ou CANCELAR para descartar.", message.message_id);
+        return { ok: true, ignored: true, pending: true };
+    }
+
+    const failed: Array<{ lineNumber: number; reason: string }> = [];
+    const relatedOccupancyIds: string[] = [];
+
+    for (const entry of pending.resolutionData.entries) {
+        try {
+            const result = await applyParsedEntry({
+                parsed: entry.parsed,
+                resolvedDoctor: entry.resolvedDoctor,
+                eventAt: new Date(entry.eventAt),
+                messageText: entry.rawLine,
+            });
+            if (result.occupancyId) {
+                relatedOccupancyIds.push(result.occupancyId);
+            }
+        } catch (error) {
+            failed.push({
+                lineNumber: entry.lineNumber,
+                reason: error instanceof Error ? error.message : "falha inesperada ao gravar",
+            });
+        }
+    }
+
+    await markTelegramProcessed(pending.id, {
+        status: failed.length === 0 ? "accepted" : "error",
+        relatedOccupancyId: relatedOccupancyIds[0] ?? null,
+        errorMessage: failed.length === 0 ? null : "batch_apply_partial_failure",
+        resolutionData: buildResolutionData(pending.resolutionData, {
+            appliedCount: relatedOccupancyIds.length,
+            failed,
+            relatedOccupancyIds,
+        }),
+    });
+    await markTelegramProcessed(logId, {
+        status: failed.length === 0 ? "accepted" : "error",
+        parsedAction: "batch_confirmed",
+        relatedOccupancyId: relatedOccupancyIds[0] ?? null,
+        errorMessage: failed.length === 0 ? null : "batch_apply_partial_failure",
+        resolutionData: {
+            sourceBatchLogId: pending.id,
+            appliedCount: relatedOccupancyIds.length,
+            failed,
+        },
+    });
+
+    await sendMessage(
+        message.chat.id,
+        buildTelegramBatchApplyReply({
+            appliedCount: relatedOccupancyIds.length,
+            failed,
+        }),
+        message.message_id,
+    );
+
+    if (relatedOccupancyIds.length > 0) {
+        await announcePrivateBatchToGroups(message.message_id, {
+            appliedCount: relatedOccupancyIds.length,
+        });
+    }
+
+    return { ok: true, occupancyIds: relatedOccupancyIds, failed };
 }
 
 async function logTelegramMessage(update: TelegramUpdate) {
@@ -250,6 +624,27 @@ async function announcePrivateCorrectionToGroups(seed: number, params: { name: s
     for (const result of results) {
         if (result.status === "rejected") {
             console.error("telegram group correction announcement failed", result.reason);
+        }
+    }
+}
+
+async function announcePrivateBatchToGroups(seed: number, params: { appliedCount: number }) {
+    const groupChatIds = getTelegramAnnouncementChatIds();
+    if (groupChatIds.length === 0) {
+        return;
+    }
+
+    const appUrl = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
+    const text = [
+        ":)",
+        `Atualizei em lote ${params.appliedCount} chegadas pelo bot privado.`,
+        `Confiram quadro e horarios de chegada em ${appUrl}`,
+    ].join("\n");
+
+    const results = await Promise.allSettled(groupChatIds.map((chatId) => sendMessage(chatId, text)));
+    for (const result of results) {
+        if (result.status === "rejected") {
+            console.error("telegram batch announcement failed", result.reason);
         }
     }
 }
@@ -751,6 +1146,7 @@ async function applyParsedEntry(params: {
     const db = getDb();
     const { parsed, resolvedDoctor, eventAt, messageText } = params;
     let occupancyId: string | null = null;
+    let successKind: "standard" | "departure_adjusted" = "standard";
 
     if (parsed.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({
@@ -805,21 +1201,42 @@ async function applyParsedEntry(params: {
                     isNull(interventionOccupancies.endedAt),
                 ),
             });
-            if (!occupancy) {
-                throw new Error("No active intervention occupancy found for this doctor/base.");
-            }
+            if (occupancy) {
+                if (
+                    requiresOvertimeJustification(occupancy.startedAt, eventAt)
+                    && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+                ) {
+                    throw new Error("Justificativa obrigatoria para registrar saida apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.");
+                }
 
-            if (
-                requiresOvertimeJustification(occupancy.startedAt, eventAt)
-                && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
-            ) {
-                throw new Error("Justificativa obrigatoria para registrar saida apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.");
-            }
+                occupancyId = (await endInterventionOccupancy(occupancy.id, {
+                    endedAt: eventAt,
+                    actualEndedAt: eventAt,
+                })).id;
+            } else {
+                const recentClosed = await findRecentClosedInterventionOccupancy({
+                    baseId: base.id,
+                    doctorId: resolvedDoctor.id,
+                    eventAt,
+                });
+                if (!recentClosed) {
+                    throw new Error("No active intervention occupancy found for this doctor/base.");
+                }
 
-            occupancyId = (await endInterventionOccupancy(occupancy.id, {
-                endedAt: eventAt,
-                actualEndedAt: eventAt,
-            })).id;
+                const requiresLateAdjustmentJustification = Boolean(recentClosed.endedAt && eventAt.getTime() !== recentClosed.endedAt.getTime());
+                if (
+                    (requiresLateAdjustmentJustification || requiresOvertimeJustification(recentClosed.startedAt, eventAt))
+                    && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+                ) {
+                    throw new Error("Justificativa obrigatoria para ajustar saida apos a rendicao ou apos 07:15/19:15. Inclua horario e motivo por escrito na mensagem.");
+                }
+
+                occupancyId = (await correctInterventionOccupancy(recentClosed.id, {
+                    actualEndedAt: eventAt,
+                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida ajustada", messageText),
+                }, null)).id;
+                successKind = "departure_adjusted";
+            }
         } else {
             const activeOccupancy = await db.query.interventionOccupancies.findFirst({
                 where: and(
@@ -869,7 +1286,7 @@ async function applyParsedEntry(params: {
         }
     }
 
-    return { occupancyId };
+    return { occupancyId, successKind };
 }
 
 async function sendSuccessReply(
@@ -879,10 +1296,13 @@ async function sendSuccessReply(
     parsed: OperationalParsedEntry,
     doctorName: string,
     eventAt: Date,
+    successKind: "standard" | "departure_adjusted" = "standard",
 ) {
     const time = eventAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const text = pickTelegramReply(
-        parsed.isDeparture ? "departure_recorded" : (isTelegramContinuationEntry(parsed) ? "continuation_recorded" : "arrival_recorded"),
+        parsed.isDeparture
+            ? (successKind === "departure_adjusted" ? "departure_adjusted" : "departure_recorded")
+            : (isTelegramContinuationEntry(parsed) ? "continuation_recorded" : "arrival_recorded"),
         seed,
         {
             name: doctorName,
@@ -999,39 +1419,65 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
         return { ok: true, ignored: true };
     }
 
-    const result = await applyParsedEntry({
-        parsed: pending.resolutionData.parsed,
-        resolvedDoctor: { id: selected.id, fullName: selected.fullName },
-        eventAt: new Date(pending.resolutionData.originalEventAt),
-        messageText: pending.resolutionData.originalText,
-    });
+    try {
+        const result = await applyParsedEntry({
+            parsed: pending.resolutionData.parsed,
+            resolvedDoctor: { id: selected.id, fullName: selected.fullName },
+            eventAt: new Date(pending.resolutionData.originalEventAt),
+            messageText: pending.resolutionData.originalText,
+        });
 
-    await markTelegramProcessed(pending.id, {
-        status: "accepted",
-        parsedDoctorName: selected.fullName,
-        relatedOccupancyId: result.occupancyId,
-        errorMessage: null,
-    });
-    await markTelegramProcessed(logId, {
-        status: "accepted",
-        parsedDomain: pending.resolutionData.parsed.sector,
-        parsedTargetCode: pending.resolutionData.parsed.baseCode,
-        parsedAction: resolveTelegramParsedAction(pending.resolutionData.parsed),
-        parsedDoctorName: selected.fullName,
-        relatedOccupancyId: result.occupancyId,
-        resolutionData: {
-            continuationMode: resolveTelegramContinuationMode(pending.resolutionData.parsed),
-        },
-    });
-    await sendSuccessReply(
-        message.chat.id,
-        message.message_id,
-        message.message_id,
-        pending.resolutionData.parsed,
-        selected.fullName,
-        new Date(pending.resolutionData.originalEventAt),
-    );
-    return { ok: true, occupancyId: result.occupancyId };
+        await markTelegramProcessed(pending.id, {
+            status: "accepted",
+            parsedDoctorName: selected.fullName,
+            relatedOccupancyId: result.occupancyId,
+            errorMessage: null,
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedDomain: pending.resolutionData.parsed.sector,
+            parsedTargetCode: pending.resolutionData.parsed.baseCode,
+            parsedAction: resolveTelegramParsedAction(pending.resolutionData.parsed),
+            parsedDoctorName: selected.fullName,
+            relatedOccupancyId: result.occupancyId,
+            errorMessage: null,
+            resolutionData: {
+                continuationMode: resolveTelegramContinuationMode(pending.resolutionData.parsed),
+            },
+        });
+        await sendSuccessReply(
+            message.chat.id,
+            message.message_id,
+            message.message_id,
+            pending.resolutionData.parsed,
+            selected.fullName,
+            new Date(pending.resolutionData.originalEventAt),
+            result.successKind,
+        );
+        return { ok: true, occupancyId: result.occupancyId };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        await markTelegramProcessed(logId, {
+            status: "error",
+            parsedDomain: pending.resolutionData.parsed.sector,
+            parsedTargetCode: pending.resolutionData.parsed.baseCode,
+            parsedAction: resolveTelegramParsedAction(pending.resolutionData.parsed),
+            parsedDoctorName: selected.fullName,
+            errorMessage,
+            resolutionData: {
+                continuationMode: resolveTelegramContinuationMode(pending.resolutionData.parsed),
+            },
+        });
+        await sendTelegramDepartureFailureReply({
+            chatId: message.chat.id,
+            replyToMessageId: message.message_id,
+            seed: message.message_id,
+            parsed: pending.resolutionData.parsed,
+            doctorName: selected.fullName,
+            errorMessage,
+        });
+        return { ok: true, ignored: true, processingError: true };
+    }
 }
 
 export async function processTelegramUpdate(update: TelegramUpdate) {
@@ -1055,9 +1501,82 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             }
 
             if (message.from?.id) {
+                const pendingBatchResult = await tryHandlePendingBatchConfirmation(update, log.id);
+                if (pendingBatchResult) {
+                    return pendingBatchResult;
+                }
+            }
+
+            if (message.from?.id) {
                 const pendingResult = await tryHandlePendingNameSelection(update, log.id);
                 if (pendingResult) {
                     return pendingResult;
+                }
+            }
+
+            if (message.chat.type === "private") {
+                const { batchLines, entries, issues } = await prepareTelegramBatchEntries(message);
+                if (batchLines.length > 1) {
+                    if (!canManageTelegramBatch(message)) {
+                        await markTelegramProcessed(log.id, {
+                            status: "ignored",
+                            parsedAction: "batch_forbidden",
+                            errorMessage: "batch_forbidden",
+                        });
+                        await sendMessage(
+                            message.chat.id,
+                            ":/ Lancamento em lote no privado fica restrito ao ID autorizado da chefia. Para os demais casos, envie os registros individualmente.",
+                            message.message_id,
+                        );
+                        return { ok: true, ignored: true };
+                    }
+
+                    if (entries.length === 0 || issues.length > 0) {
+                        await markTelegramProcessed(log.id, {
+                            status: "ignored",
+                            parsedAction: "batch_review_failed",
+                            errorMessage: "batch_review_requires_correction",
+                            resolutionData: {
+                                readyCount: entries.length,
+                                issueCount: issues.length,
+                                issues,
+                            },
+                        });
+                        await sendMessage(
+                            message.chat.id,
+                            buildTelegramBatchReviewReply({
+                                entries: entries.map((entry) => ({
+                                    lineNumber: entry.lineNumber,
+                                    doctorName: entry.resolvedDoctor.fullName,
+                                    targetCode: entry.parsed.baseCode,
+                                    timeLabel: entry.parsed.arrivalTime ?? "continua",
+                                    sector: entry.parsed.sector,
+                                    mode: isTelegramContinuationEntry(entry.parsed) ? "continuation" : "arrival",
+                                })),
+                                issues,
+                            }),
+                            message.message_id,
+                        );
+                        return { ok: true, ignored: true, pending: false };
+                    }
+
+                    await queuePendingBatchConfirmation(log.id, message, entries);
+                    await sendMessage(
+                        message.chat.id,
+                        buildTelegramBatchReviewReply({
+                            entries: entries.map((entry) => ({
+                                lineNumber: entry.lineNumber,
+                                doctorName: entry.resolvedDoctor.fullName,
+                                targetCode: entry.parsed.baseCode,
+                                timeLabel: entry.parsed.arrivalTime ?? "continua",
+                                sector: entry.parsed.sector,
+                                mode: isTelegramContinuationEntry(entry.parsed) ? "continuation" : "arrival",
+                            })),
+                            issues: [],
+                        }),
+                        message.message_id,
+                    );
+                    return { ok: true, ignored: true, pending: true };
                 }
             }
 
@@ -1082,6 +1601,15 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     errorMessage: "no_operational_match",
                     resolutionData: { trainingCandidate: true, trainingReason: "no_operational_match" },
                 });
+                if (looksLikeDepartureMessage(message.text)) {
+                    await sendMessage(
+                        message.chat.id,
+                        pickTelegramReply("departure_missing_context", message.message_id, {
+                            example: buildTelegramDepartureExample({}),
+                        }),
+                        message.message_id,
+                    );
+                }
                 return { ok: true, ignored: true };
             }
 
@@ -1115,7 +1643,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), firstParsed.arrivalTime);
 
             try {
-                const { occupancyId } = await applyParsedEntry({
+                const { occupancyId, successKind } = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName },
                     eventAt,
@@ -1129,6 +1657,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     parsedAction: resolveTelegramParsedAction(firstParsed),
                     parsedDoctorName: resolvedDoctor.fullName,
                     relatedOccupancyId: occupancyId,
+                    errorMessage: null,
                     resolutionData: {
                         continuationMode: resolveTelegramContinuationMode(firstParsed),
                     },
@@ -1141,22 +1670,32 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     firstParsed,
                     resolvedDoctor.fullName,
                     eventAt,
+                    successKind,
                 );
 
                 return { ok: true, occupancyId };
             } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
                 await markTelegramProcessed(log.id, {
                     status: "error",
                     parsedDomain: firstParsed.sector,
                     parsedTargetCode: firstParsed.baseCode,
                     parsedAction: resolveTelegramParsedAction(firstParsed),
                     parsedDoctorName: resolvedDoctor.fullName,
-                    errorMessage: error instanceof Error ? error.message : "telegram_processing_failed",
+                    errorMessage,
                     resolutionData: {
                         continuationMode: resolveTelegramContinuationMode(firstParsed),
                     },
                 });
-                throw error;
+                await sendTelegramDepartureFailureReply({
+                    chatId: message.chat.id,
+                    replyToMessageId: message.message_id,
+                    seed: update.update_id,
+                    parsed: firstParsed,
+                    doctorName: resolvedDoctor.fullName,
+                    errorMessage,
+                });
+                return { ok: true, ignored: true, processingError: true };
             }
         } catch (error) {
             await markTelegramProcessed(log.id, {

@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, lte } from "drizzle-orm";
 import { getDb } from "@/db";
 import { regulationOccupancies } from "@/db/schema";
+import { publishBoardUpdate } from "@/lib/board-live";
 import { syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { inferOperationalScheduledStartAt, inferRegulationScheduledEndAt, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 
@@ -20,7 +21,7 @@ export interface StartRegulationOccupancyInput {
 
 export async function startRegulationOccupancy(input: StartRegulationOccupancyInput) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const created = await db.transaction(async (tx) => {
         const inferredScheduledStartAt = inferOperationalScheduledStartAt(
             input.startedAt,
             input.shiftLabel ?? null,
@@ -86,6 +87,9 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
 
         return created;
     });
+
+    publishBoardUpdate(`regulation:start:${input.postId}`);
+    return created;
 }
 
 export async function endRegulationOccupancy(
@@ -94,7 +98,7 @@ export async function endRegulationOccupancy(
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const updated = await db.transaction(async (tx) => {
         const existing = await tx.query.regulationOccupancies.findFirst({
             where: eq(regulationOccupancies.id, id),
         });
@@ -123,4 +127,7 @@ export async function endRegulationOccupancy(
         await syncRegulationBankHours(tx, id);
         return updated;
     });
+
+    publishBoardUpdate(`regulation:end:${id}`);
+    return updated;
 }

@@ -1,7 +1,22 @@
-type ReplyKind = "arrival_recorded" | "continuation_recorded" | "departure_recorded" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
+type ReplyKind = "arrival_recorded" | "continuation_recorded" | "departure_recorded" | "departure_adjusted" | "departure_justification_required" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
 
 interface NamedCandidate {
     fullName: string;
+}
+
+interface TelegramBatchReviewEntry {
+    lineNumber: number;
+    doctorName: string;
+    targetCode: string;
+    timeLabel: string;
+    sector: "REGULATION" | "INTERVENTION";
+    mode: "arrival" | "continuation";
+}
+
+interface TelegramBatchReviewIssue {
+    lineNumber: number;
+    rawLine: string;
+    reason: string;
 }
 
 const REPLIES: Record<ReplyKind, string[]> = {
@@ -55,6 +70,41 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Registro feito. {name} encerrou em {target} as {time}.",
         "Tudo registrado: saida de {name}, {target}, {time}.",
         "Check-out salvo. {name} foi encerrado em {target} as {time}.",
+    ],
+    departure_adjusted: [
+        "Ajustei a saida real de {name} em {target} para {time}. Mantive o painel com quem assumiu e atualizei pagamento e banco de horas.",
+        "Considerei {time} como saida real de {name} em {target}. O painel segue com a rendicao e o horario foi para pagamento e banco de horas.",
+        "Saida tardia de {name} alinhada em {target}: hora real {time}. Nao mexi em quem assumiu no painel e atualizei banco de horas.",
+        "Feito. {name} ficou com saida real as {time} em {target}, sem tirar a rendicao do painel e com reflexo em pagamento.",
+        "Atualizei a saida de {name} em {target} para {time}. Painel preservado, horario real ajustado para pagamento.",
+    ],
+    departure_justification_required: [
+        "Entendi a saida de {name} em {target}, mas preciso do horario real e do motivo por escrito para ajustar. Ex.: {example}",
+        "Para registrar essa saida de {name} em {target}, reenvie com horario e motivo na mesma mensagem. Ex.: {example}",
+        "Nao vou ignorar sua saida em {target}, mas preciso da justificativa por escrito para fechar certo. Ex.: {example}",
+        "Consigo ajustar a saida de {name} em {target}, desde que voce reenvie com horario e motivo. Ex.: {example}",
+        "Falta so a justificativa escrita para eu considerar a saida de {name} em {target}. Pode mandar assim: {example}",
+    ],
+    departure_not_found: [
+        "Entendi a saida de {name} em {target}, mas nao achei ocupacao compativel para fechar por aqui. Se a saida real foi diferente da rendicao, reenvie assim: {example}",
+        "A saida de {name} em {target} foi entendida, mas nao encontrei plantao aberto ou recente para esse medico nesse local. Tente: {example}",
+        "Li sua saida em {target}, so que nao achei o registro operacional correspondente. Se precisar ajustar horario real, mande: {example}",
+        "Nao ignorei a mensagem, mas ainda nao achei o plantao certo de {name} em {target}. Reenvie no formato: {example}",
+        "Entendi a tentativa de saida em {target}, mas preciso de um reenvio mais completo para localizar o registro. Ex.: {example}",
+    ],
+    departure_time_conflict: [
+        "Entendi a saida de {name} em {target}, mas esse horario ficou antes da chegada registrada. Reenvie com o horario certo. Ex.: {example}",
+        "A saida de {name} em {target} veio com horario anterior a chegada salva. Mande de novo no formato: {example}",
+        "Nao consegui usar esse horario de saida em {target} porque ele ficou antes da entrada registrada. Pode reenviar assim: {example}",
+        "Esse horario de saida de {name} em {target} conflita com a chegada registrada. Reenvie com o horario correto. Ex.: {example}",
+        "A cronologia dessa saida em {target} nao fechou. Me mande novamente com o horario certo. Ex.: {example}",
+    ],
+    departure_missing_context: [
+        "Entendi que voce quis registrar uma saida, mas faltou base ou horario. Reenvie assim: {example}",
+        "Para eu lancar a saida, preciso do local e do horario na mesma mensagem. Ex.: {example}",
+        "A intencao de saida ficou clara, mas ainda faltam dados para registrar. Pode mandar assim: {example}",
+        "Consigo registrar essa saida se voce reenviar com nome, base e horario. Ex.: {example}",
+        "Faltou contexto para eu fechar a saida agora. Reenvie no formato: {example}",
     ],
     candidate_prompt: [
         "Falta so fechar o nome do medico. Escolha uma opcao abaixo ou redigite o nome completo.",
@@ -173,6 +223,11 @@ const REPLY_PREFIX: Record<ReplyKind, string> = {
     arrival_recorded: ":)",
     continuation_recorded: ":)",
     departure_recorded: ":)",
+    departure_adjusted: ":)",
+    departure_justification_required: ":|",
+    departure_not_found: ":/",
+    departure_time_conflict: ":|",
+    departure_missing_context: ":|",
     candidate_prompt: ":|",
     name_unresolved: ":/",
     command_forbidden: ":/",
@@ -231,4 +286,42 @@ export function buildGroupCorrectionAnnouncement(seed: string | number, params: 
         .reduce((acc, char) => acc + char.charCodeAt(0), 0);
     const template = GROUP_CORRECTION_ANNOUNCEMENTS[numericSeed % GROUP_CORRECTION_ANNOUNCEMENTS.length];
     return interpolate(template, params);
+}
+
+export function buildTelegramBatchReviewReply(params: {
+    entries: TelegramBatchReviewEntry[];
+    issues: TelegramBatchReviewIssue[];
+}) {
+    const header = params.issues.length === 0
+        ? `:) Conferi o lote. ${params.entries.length} lancamentos ficaram prontos para gravar.`
+        : `:| Conferi o lote. ${params.entries.length} lancamentos ficaram prontos e ${params.issues.length} precisam de correcao antes de autorizar.`;
+
+    const entryLines = params.entries.length === 0
+        ? ""
+        : `\n\nProntos para lancar:\n${params.entries.map((entry) => {
+            const modeLabel = entry.mode === "continuation" ? "continua" : entry.timeLabel;
+            const sectorLabel = entry.sector === "REGULATION" ? "REG" : "INT";
+            return `${entry.lineNumber}. [${sectorLabel}] ${entry.targetCode} - ${entry.doctorName} - ${modeLabel}`;
+        }).join("\n")}`;
+
+    const issueLines = params.issues.length === 0
+        ? ""
+        : `\n\nCorrigir antes de autorizar:\n${params.issues.map((issue) => `${issue.lineNumber}. ${issue.reason} -> ${issue.rawLine}`).join("\n")}`;
+
+    const footer = params.issues.length === 0
+        ? "\n\nResponda CONFIRMAR para lancar tudo de uma vez ou CANCELAR para descartar este lote."
+        : "\n\nReenvie o bloco corrigido. Quando tudo fechar, eu mostro a previa final e espero seu CONFIRMAR.";
+
+    return `${header}${entryLines}${issueLines}${footer}`;
+}
+
+export function buildTelegramBatchApplyReply(params: {
+    appliedCount: number;
+    failed: Array<{ lineNumber: number; reason: string }>;
+}) {
+    if (params.failed.length === 0) {
+        return `:) Lote autorizado e lancado. ${params.appliedCount} registros foram gravados.`;
+    }
+
+    return `:| Lancei ${params.appliedCount} registros do lote, mas ${params.failed.length} falharam na hora de gravar:\n${params.failed.map((item) => `${item.lineNumber}. ${item.reason}`).join("\n")}`;
 }

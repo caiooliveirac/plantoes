@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, isNull, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { interventionOccupancies } from "@/db/schema";
+import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours } from "@/modules/bank-hours/service";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionScheduledEndAt, inferOperationalScheduledStartAt } from "@/modules/operational/rules";
@@ -18,9 +19,21 @@ export interface StartInterventionOccupancyInput {
     createdByUserId?: string | null;
 }
 
+export function resolveContinuationBoardStartedAt(params: {
+    startedAt: Date;
+    boardStartedAt?: Date | null;
+    continuedAt: Date;
+}) {
+    const currentBoardStartedAt = params.boardStartedAt ?? params.startedAt;
+    const continuationShiftStart = resolveOperationalShiftWindow(params.continuedAt).startedAt;
+    return continuationShiftStart.getTime() > currentBoardStartedAt.getTime()
+        ? continuationShiftStart
+        : currentBoardStartedAt;
+}
+
 export async function startInterventionOccupancy(input: StartInterventionOccupancyInput) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const created = await db.transaction(async (tx) => {
         const normalizedShiftLabel = input.shiftLabel ?? resolveOperationalShiftWindow(input.startedAt).shiftLabel;
         const inferredScheduledStartAt = inferOperationalScheduledStartAt(
             input.startedAt,
@@ -104,6 +117,9 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
 
         return created;
     });
+
+    publishBoardUpdate(`intervention:start:${input.baseId}`);
+    return created;
 }
 
 export async function endInterventionOccupancy(
@@ -112,7 +128,7 @@ export async function endInterventionOccupancy(
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const updated = await db.transaction(async (tx) => {
         const existing = await tx.query.interventionOccupancies.findFirst({
             where: eq(interventionOccupancies.id, id),
         });
@@ -159,6 +175,9 @@ export async function endInterventionOccupancy(
         await syncInterventionBankHours(tx, id);
         return updated;
     });
+
+    publishBoardUpdate(`intervention:end:${id}`);
+    return updated;
 }
 
 export async function continueInterventionOccupancy(
@@ -167,7 +186,7 @@ export async function continueInterventionOccupancy(
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
-    return db.transaction(async (tx) => {
+    const updated = await db.transaction(async (tx) => {
         const existing = await tx.query.interventionOccupancies.findFirst({
             where: eq(interventionOccupancies.id, id),
         });
@@ -193,10 +212,16 @@ export async function continueInterventionOccupancy(
         const nextScheduledEndAt = existing.scheduledEndAt && existing.scheduledEndAt.getTime() > continuationBoundary.getTime()
             ? existing.scheduledEndAt
             : continuationBoundary;
+        const nextBoardStartedAt = resolveContinuationBoardStartedAt({
+            startedAt: existing.startedAt,
+            boardStartedAt: existing.boardStartedAt,
+            continuedAt: continuationAt,
+        });
 
         const [updated] = await tx
             .update(interventionOccupancies)
             .set({
+                boardStartedAt: nextBoardStartedAt,
                 shiftLabel: "P",
                 scheduledStartAt: inferredScheduledStartAt,
                 scheduledEndAt: nextScheduledEndAt,
@@ -210,4 +235,7 @@ export async function continueInterventionOccupancy(
         await syncInterventionBankHours(tx, id);
         return updated;
     });
+
+    publishBoardUpdate(`intervention:continue:${id}`);
+    return updated;
 }

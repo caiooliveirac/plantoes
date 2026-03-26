@@ -2,7 +2,7 @@ import { hasDatabaseUrl } from "@/db";
 import { readAuthenticatedSession } from "@/lib/auth/server";
 import { OperationalBoardClient } from "@/app/operational-board-client";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
-import { getOperationalBoard } from "@/services/board.service";
+import { getOperationalBoard, getPreviousOperationalBoard } from "@/services/board.service";
 import { listDoctorsForChiefInvite } from "@/services/chief-access.service";
 
 export const dynamic = "force-dynamic";
@@ -34,8 +34,9 @@ export default async function HomePage() {
         session?.user.roles.some((role) => role === "admin" || role === "chief")
         && !session.user.mustChangePassword,
     );
-    const [board, doctors] = await Promise.all([
+    const [board, previousShift, doctors] = await Promise.all([
         getOperationalBoard(),
+        getPreviousOperationalBoard(),
         canManage ? listDoctorsForChiefInvite() : Promise.resolve([]),
     ]);
 
@@ -45,6 +46,7 @@ export default async function HomePage() {
             shiftLabel={resolveOperationalShiftLabel(new Date())}
             regulation={board.regulation}
             intervention={board.intervention}
+            previousShift={previousShift}
             doctors={doctors}
             session={session ? {
                 email: session.user.email,
