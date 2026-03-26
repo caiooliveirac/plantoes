@@ -67,6 +67,17 @@ test("pickTelegramReply supports casual smalltalk without sounding like an error
     assert.match(reply, /\^\^|:\)/);
 });
 
+test("pickTelegramReply describes continuation without resetting arrival", () => {
+    const reply = pickTelegramReply("continuation_recorded", 17, {
+        name: "Taiane Pinto Menezes",
+        target: "BR05",
+        time: "19:00",
+    });
+
+    assert.match(reply, /continua|continuidade/i);
+    assert.match(reply, /chegada original|nao zerei a chegada|preservada/i);
+});
+
 test("pickTelegramReply prefixes unresolved replies with emoticon", () => {
     const reply = pickTelegramReply("name_unresolved", 21, {});
 

@@ -1,4 +1,4 @@
-type ReplyKind = "arrival_recorded" | "departure_recorded" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
+type ReplyKind = "arrival_recorded" | "continuation_recorded" | "departure_recorded" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
 
 interface NamedCandidate {
     fullName: string;
@@ -26,6 +26,13 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Registro feito. {name} entrou em {target} as {time}.",
         "Tudo registrado: {name}, {target}, {time}.",
         "Check-in salvo. {name} agora aparece em {target} desde {time}.",
+    ],
+    continuation_recorded: [
+        "Continuidade confirmada para {name} em {target}. Mantive a chegada original e registrei a continuidade as {time}.",
+        "Anotei que {name} continua em {target}. A chegada inicial foi preservada e a confirmacao ficou em {time}.",
+        "Tudo certo. {name} segue em {target}; nao zerei a chegada e marquei a continuidade as {time}.",
+        "Continua confirmado: {name} permanece em {target}. A referencia desta confirmacao ficou em {time}.",
+        "Fechado. {name} continua em {target} e a chegada original foi mantida. Confirmacao: {time}.",
     ],
     departure_recorded: [
         "Saida registrada para {name} em {target} as {time}.",
@@ -164,6 +171,7 @@ const REPLIES: Record<ReplyKind, string[]> = {
 
 const REPLY_PREFIX: Record<ReplyKind, string> = {
     arrival_recorded: ":)",
+    continuation_recorded: ":)",
     departure_recorded: ":)",
     candidate_prompt: ":|",
     name_unresolved: ":/",

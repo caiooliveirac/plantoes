@@ -41,6 +41,34 @@ interface PendingNameResolutionData {
 
 type OperationalParsedEntry = PendingNameResolutionData["parsed"];
 
+function isTelegramContinuationEntry(parsed: OperationalParsedEntry) {
+    return !parsed.isDeparture && parsed.sector === "INTERVENTION" && (parsed.isContinuation || parsed.shiftType === "P");
+}
+
+function resolveTelegramParsedAction(parsed: OperationalParsedEntry) {
+    if (parsed.isDeparture) {
+        return "departure";
+    }
+
+    return isTelegramContinuationEntry(parsed) ? "continuation" : "arrival";
+}
+
+function resolveTelegramContinuationMode(parsed: OperationalParsedEntry) {
+    if (!isTelegramContinuationEntry(parsed)) {
+        return "none";
+    }
+
+    if (parsed.shiftType === "P" && parsed.isContinuation) {
+        return "explicit_p_with_wording";
+    }
+
+    if (parsed.shiftType === "P") {
+        return "explicit_p";
+    }
+
+    return "wording";
+}
+
 function isOperationalParsedEntry(entry: ParsedMessage): entry is ParsedMessage & OperationalParsedEntry {
     return Boolean(entry.baseCode && entry.sector);
 }
@@ -684,7 +712,7 @@ async function queuePendingNameSelection(
         status: "pending_name_selection",
         parsedDomain: parsed.sector,
         parsedTargetCode: parsed.baseCode,
-        parsedAction: parsed.isDeparture ? "departure" : "arrival",
+        parsedAction: resolveTelegramParsedAction(parsed),
         resolutionData: {
             parsed: {
                 sector: parsed.sector,
@@ -703,12 +731,13 @@ async function queuePendingNameSelection(
             })),
             originalText: message?.text ?? "",
             originalEventAt: eventAt.toISOString(),
+            continuationMode: resolveTelegramContinuationMode(parsed),
         },
     });
 
     await sendMessage(
         message!.chat.id,
-        `${buildCandidatePromptReply(message!.message_id, candidates)}\n\nVou manter o horario da primeira mensagem.`,
+        `${buildCandidatePromptReply(message!.message_id, candidates)}\n\n${isTelegramContinuationEntry(parsed) ? "Se isso for continuidade, vou manter a chegada original e registrar apenas a confirmacao do continua." : "Vou manter o horario da primeira mensagem."}`,
         message!.message_id,
     );
 }
@@ -853,7 +882,7 @@ async function sendSuccessReply(
 ) {
     const time = eventAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const text = pickTelegramReply(
-        parsed.isDeparture ? "departure_recorded" : "arrival_recorded",
+        parsed.isDeparture ? "departure_recorded" : (isTelegramContinuationEntry(parsed) ? "continuation_recorded" : "arrival_recorded"),
         seed,
         {
             name: doctorName,
@@ -987,9 +1016,12 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
         status: "accepted",
         parsedDomain: pending.resolutionData.parsed.sector,
         parsedTargetCode: pending.resolutionData.parsed.baseCode,
-        parsedAction: pending.resolutionData.parsed.isDeparture ? "departure" : "arrival",
+        parsedAction: resolveTelegramParsedAction(pending.resolutionData.parsed),
         parsedDoctorName: selected.fullName,
         relatedOccupancyId: result.occupancyId,
+        resolutionData: {
+            continuationMode: resolveTelegramContinuationMode(pending.resolutionData.parsed),
+        },
     });
     await sendSuccessReply(
         message.chat.id,
@@ -1072,7 +1104,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     status: "ignored",
                     parsedDomain: firstParsed.sector,
                     parsedTargetCode: firstParsed.baseCode,
-                    parsedAction: firstParsed.isDeparture ? "departure" : "arrival",
+                    parsedAction: resolveTelegramParsedAction(firstParsed),
                     errorMessage: "doctor_not_resolved",
                     resolutionData: { trainingCandidate: true, trainingReason: "doctor_not_resolved", doctorQuery: doctorQuery || senderName },
                 });
@@ -1094,9 +1126,12 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     status: "accepted",
                     parsedDomain: firstParsed.sector,
                     parsedTargetCode: firstParsed.baseCode,
-                    parsedAction: firstParsed.isDeparture ? "departure" : "arrival",
+                    parsedAction: resolveTelegramParsedAction(firstParsed),
                     parsedDoctorName: resolvedDoctor.fullName,
                     relatedOccupancyId: occupancyId,
+                    resolutionData: {
+                        continuationMode: resolveTelegramContinuationMode(firstParsed),
+                    },
                 });
 
                 await sendSuccessReply(
@@ -1114,9 +1149,12 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     status: "error",
                     parsedDomain: firstParsed.sector,
                     parsedTargetCode: firstParsed.baseCode,
-                    parsedAction: firstParsed.isDeparture ? "departure" : "arrival",
+                    parsedAction: resolveTelegramParsedAction(firstParsed),
                     parsedDoctorName: resolvedDoctor.fullName,
                     errorMessage: error instanceof Error ? error.message : "telegram_processing_failed",
+                    resolutionData: {
+                        continuationMode: resolveTelegramContinuationMode(firstParsed),
+                    },
                 });
                 throw error;
             }
