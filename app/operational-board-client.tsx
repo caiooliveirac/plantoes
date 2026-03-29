@@ -1238,6 +1238,28 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         return items.length > 0 ? <div className="ops-inline-flags">{items}</div> : null;
     }
 
+    function handleBoardRowKeyDown(event: React.KeyboardEvent<HTMLDivElement>, card: BoardCard) {
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openDrawer(card);
+        }
+    }
+
+    function renderRegulationStatusSummary(lunchSlot: MealBreakLunchSlot | null, restSlot: MealBreakRestSlot | null) {
+        return (
+            <div className="ops-grid-status-stack" aria-label={`Almoço ${lunchSlot ?? "pendente"} e descanso ${restSlot ?? "pendente"}`}>
+                <div className="ops-grid-status-row">
+                    <span className="ops-grid-status-label">Alm</span>
+                    {renderScheduleChip({ slot: lunchSlot, kind: "lunch", pending: !lunchSlot })}
+                </div>
+                <div className="ops-grid-status-row">
+                    <span className="ops-grid-status-label">Desc</span>
+                    {renderScheduleChip({ slot: restSlot, kind: "rest", pending: !restSlot })}
+                </div>
+            </div>
+        );
+    }
+
     function renderRegulationRow(card: RegulationCard) {
         const emphasisClass = rowEmphasisClass(card, shiftLabel, generatedAt);
         const lunchSlot = resolveMealBreakSlot<MealBreakLunchSlot>(mealBreakSession, card.postCode, "lunchAssignments");
@@ -1245,34 +1267,41 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const clickable = Boolean(session?.canManage);
 
         return (
-            <tr
+            <div
                 key={`${card.domain}-${card.postCode}`}
-                className={`ops-table-row ${emphasisClass} ${clickable ? "clickable" : ""}`.trim()}
+                role="row"
+                className={`ops-grid-row regulation ${emphasisClass} ${clickable ? "clickable" : ""}`.trim()}
                 onClick={clickable ? () => openDrawer(card) : undefined}
+                onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                aria-label={clickable ? `Abrir ${displayDoctorName(card)} no ramal ${card.postCode}` : undefined}
             >
-                <td className="ops-cell time compact">
+                <div role="cell" className="ops-grid-cell column-time">
                     <span className="ops-time-pill"><strong>{formatBoardTime(card.startedAt)}</strong></span>
-                </td>
-                <td className="ops-cell code compact">
+                </div>
+                <div role="cell" className="ops-grid-cell column-code ops-grid-desktop-only">
                     <div className="ops-code-stack rail">
                         <strong>{card.postCode}</strong>
                     </div>
-                </td>
-                <td className="ops-cell doctor wide">
+                </div>
+                <div role="cell" className="ops-grid-cell column-name">
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
                             <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
                         </div>
                         {renderOperationalBadges(card)}
                     </div>
-                </td>
-                <td className="ops-cell slot">
+                </div>
+                <div role="cell" className="ops-grid-cell column-lunch ops-grid-desktop-only">
                     {renderScheduleChip({ slot: lunchSlot, kind: "lunch", pending: !lunchSlot })}
-                </td>
-                <td className="ops-cell slot">
+                </div>
+                <div role="cell" className="ops-grid-cell column-rest ops-grid-desktop-only">
                     {renderScheduleChip({ slot: restSlot, kind: "rest", pending: !restSlot })}
-                </td>
-            </tr>
+                </div>
+                <div role="cell" className="ops-grid-cell column-status ops-grid-tablet-only">
+                    {renderRegulationStatusSummary(lunchSlot, restSlot)}
+                </div>
+            </div>
         );
     }
 
@@ -1294,22 +1323,26 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const isSaoPauloNightShift = getSaoPauloParts(generatedAt).hour >= 19 || getSaoPauloParts(generatedAt).hour < 7;
 
         return (
-            <tr
+            <div
                 key={`${card.domain}-${card.baseCode}`}
-                className={`ops-table-row ${emphasisClass} ${isClickable ? "clickable" : ""}`.trim()}
+                role="row"
+                className={`ops-grid-row intervention ${emphasisClass} ${isClickable ? "clickable" : ""}`.trim()}
                 onClick={isClickable ? () => openDrawer(card) : undefined}
+                onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
+                tabIndex={isClickable ? 0 : undefined}
+                aria-label={isClickable ? `Abrir ${displayDoctorName(card)} na base ${card.baseCode}` : undefined}
             >
-                <td className="ops-cell time compact">
+                <div role="cell" className="ops-grid-cell column-time">
                     <span className={`ops-time-pill ${isWaitingIntervention ? "waiting" : ""} ${isAwaitingNews ? "verification" : ""}`.trim()}>
                         <strong>{isWaitingIntervention ? "Livre" : formatBoardTime(card.startedAt)}</strong>
                     </span>
-                </td>
-                <td className="ops-cell code compact">
+                </div>
+                <div role="cell" className="ops-grid-cell column-code ops-grid-desktop-only">
                     <div className="ops-code-stack rail">
                         <strong>{card.baseCode}</strong>
                     </div>
-                </td>
-                <td className="ops-cell doctor wide">
+                </div>
+                <div role="cell" className="ops-grid-cell column-name">
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
                             <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
@@ -1320,8 +1353,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             {!hasPlannedCoverage && continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
                         </div>
                     </div>
-                </td>
-            </tr>
+                </div>
+            </div>
         );
     }
 
@@ -1636,24 +1669,24 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             </header>
 
                             <div className="ops-panel-table-wrap regulation">
-                                <table className="ops-table ops-table-regulation">
-                                    <thead>
-                                        <tr>
-                                            <th>Chegada</th>
-                                            <th>Ramal</th>
-                                            <th>Nome</th>
-                                            <th>Almoço</th>
-                                            <th>Descanso</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
+                                <div className="ops-grid-table regulation" role="table" aria-label="Quadro operacional da regulação">
+                                    <div className="ops-grid-header" role="rowgroup">
+                                        <div className="ops-grid-row ops-grid-row-header regulation" role="row">
+                                            <div role="columnheader" className="ops-grid-cell column-time">Chegada</div>
+                                            <div role="columnheader" className="ops-grid-cell column-code ops-grid-desktop-only">Ramal</div>
+                                            <div role="columnheader" className="ops-grid-cell column-name">Nome</div>
+                                            <div role="columnheader" className="ops-grid-cell column-lunch ops-grid-desktop-only">Almoço</div>
+                                            <div role="columnheader" className="ops-grid-cell column-rest ops-grid-desktop-only">Descanso</div>
+                                            <div role="columnheader" className="ops-grid-cell column-status ops-grid-tablet-only">Status</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="ops-grid-body" role="rowgroup">
                                         {visibleRegulationCards.length > 0 ? visibleRegulationCards.map((card) => renderRegulationRow(card)) : (
-                                            <tr>
-                                                <td className="ops-empty-row" colSpan={5}>Nenhum ramal ativo na regulação neste turno.</td>
-                                            </tr>
+                                            <div className="ops-empty-row">Nenhum ramal ativo na regulação neste turno.</div>
                                         )}
-                                    </tbody>
-                                </table>
+                                    </div>
+                                </div>
                             </div>
                         </section>
 
@@ -1663,22 +1696,21 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             </header>
 
                             <div className="ops-panel-table-wrap intervention">
-                                <table className="ops-table ops-table-intervention">
-                                    <thead>
-                                        <tr>
-                                            <th>Chegada</th>
-                                            <th>Base</th>
-                                            <th>Nome</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
+                                <div className="ops-grid-table intervention" role="table" aria-label="Quadro operacional da intervenção">
+                                    <div className="ops-grid-header" role="rowgroup">
+                                        <div className="ops-grid-row ops-grid-row-header intervention" role="row">
+                                            <div role="columnheader" className="ops-grid-cell column-time">Chegada</div>
+                                            <div role="columnheader" className="ops-grid-cell column-code ops-grid-desktop-only">Base</div>
+                                            <div role="columnheader" className="ops-grid-cell column-name">Nome</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="ops-grid-body" role="rowgroup">
                                         {visibleInterventionCards.length > 0 ? visibleInterventionCards.map((card) => renderInterventionRow(card)) : (
-                                            <tr>
-                                                <td className="ops-empty-row" colSpan={3}>Nenhuma base ativa ou aguardando neste turno.</td>
-                                            </tr>
+                                            <div className="ops-empty-row">Nenhuma base ativa ou aguardando neste turno.</div>
                                         )}
-                                    </tbody>
-                                </table>
+                                    </div>
+                                </div>
                             </div>
                         </section>
                     </section>
