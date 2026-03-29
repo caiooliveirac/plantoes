@@ -569,12 +569,12 @@ function finalizeLunchSetup(session: MealBreakSession, referenceAt: Date, actorT
         .filter((ramal) => ramal !== session.recipRamal && !session.mrvRamals.includes(ramal as (typeof MRV_RAMALS)[number]))
         .sort((left, right) => compareLunchQueue(session, left, right));
 
-    const nextSession = {
+    const nextSession: MealBreakSession = {
         ...session,
         stage: remainingDoctors.length > 0 ? "awaiting_lunch_choice" : "awaiting_rest_choice",
         lunchQueue: remainingDoctors,
         updatedAt: referenceAt.toISOString(),
-    } satisfies MealBreakSession;
+    };
 
     return withEvent(nextSession, {
         type: "mrv_selected",
@@ -598,14 +598,14 @@ function buildRestPhase(session: MealBreakSession, referenceAt: Date, actorTeleg
         .filter((ramal) => !updatedAssignments[ramal]);
     const restChoiceCapacities = resolveTwoSlotCapacities(pendingRest.length);
 
-    let nextSession = {
+    let nextSession: MealBreakSession = {
         ...session,
         stage: pendingRest.length > 0 ? "awaiting_rest_choice" : "completed",
         restAssignments: updatedAssignments,
         restChoiceCapacities,
         restQueue: pendingRest,
         updatedAt: referenceAt.toISOString(),
-    } satisfies MealBreakSession;
+    };
 
     nextSession = withEvent(nextSession, {
         type: "rest_auto_selected",
