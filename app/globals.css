@@ -276,11 +276,11 @@ body {
 }
 
 .ops-grid-table.regulation {
-    --ops-board-columns: 6rem 4.75rem minmax(0, 1fr) 6.5rem 6.5rem;
+    --ops-board-columns: 4.9rem 3.4rem minmax(0, 1fr) 4.25rem 4.25rem;
 }
 
 .ops-grid-table.intervention {
-    --ops-board-columns: 6rem 4.75rem minmax(0, 1fr);
+    --ops-board-columns: 4.9rem 3.4rem minmax(0, 1fr);
 }
 
 .ops-grid-header {
@@ -307,12 +307,12 @@ body {
 }
 
 .ops-grid-row-header .ops-grid-cell {
-    padding: 8px 12px;
+    padding: 6px 8px;
     color: var(--muted);
     text-align: left;
-    font-size: 0.56rem;
+    font-size: 0.52rem;
     font-weight: 800;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
 }
 
@@ -391,9 +391,9 @@ body {
 .ops-grid-cell {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
-    padding: 9px 12px;
+    padding: 7px 8px;
 }
 
 .ops-grid-cell.column-time {
@@ -408,6 +408,15 @@ body {
     white-space: nowrap;
 }
 
+.ops-grid-cell.column-code {
+    justify-content: flex-start;
+}
+
+.ops-grid-cell.column-lunch,
+.ops-grid-cell.column-rest {
+    justify-content: center;
+}
+
 .ops-grid-cell.column-name,
 .ops-grid-cell.column-status {
     overflow: hidden;
@@ -420,32 +429,50 @@ body {
     justify-content: center;
 }
 
-.ops-grid-desktop-only {
-    display: flex;
-}
-
-.ops-grid-tablet-only {
-    display: none;
-}
-
 .ops-code-stack.rail {
     justify-content: flex-start;
 }
 
+.ops-grid-cell.column-code .ops-code-stack strong {
+    font-size: 0.78rem;
+    letter-spacing: -0.03em;
+}
+
 .ops-doctor-stack.compact {
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
 }
 
 .ops-doctor-line.primary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     min-width: 0;
 }
 
 .ops-doctor-line.primary strong {
     display: block;
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.ops-name-tag-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.ops-name-tag-row .ops-role-badge,
+.ops-name-tag-row .ops-inline-flag {
+    min-height: 16px;
+    padding: 0 5px;
+    font-size: 0.48rem;
+    letter-spacing: 0.08em;
 }
 
 .ops-inline-flags {
@@ -456,45 +483,20 @@ body {
 }
 
 .ops-inline-flags.subtle {
-    min-height: 18px;
-}
-
-.ops-grid-status-stack {
-    display: grid;
+    min-height: 16px;
     gap: 4px;
-    width: 100%;
-}
-
-.ops-grid-status-row {
-    display: grid;
-    grid-template-columns: 2.2rem minmax(0, 1fr);
-    align-items: center;
-    gap: 6px;
-}
-
-.ops-grid-status-row .ops-slot-chip {
-    width: 100%;
-    min-width: 0;
-}
-
-.ops-grid-status-label {
-    color: var(--muted);
-    font-size: 0.54rem;
-    font-weight: 800;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
 }
 
 .ops-inline-flag {
     display: inline-flex;
     align-items: center;
-    min-height: 18px;
-    padding: 0 6px;
+    min-height: 16px;
+    padding: 0 5px;
     border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 0.54rem;
+    font-size: 0.5rem;
     font-weight: 800;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 
@@ -520,14 +522,14 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 64px;
-    min-height: 22px;
-    padding: 0 8px;
+    min-width: 48px;
+    min-height: 18px;
+    padding: 0 6px;
     border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 0.66rem;
+    font-size: 0.56rem;
     font-weight: 800;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
 }
 
@@ -549,6 +551,16 @@ body {
     color: #ffe3ba;
 }
 
+.ops-grid-cell.column-time .ops-time-pill {
+    min-width: 50px;
+    min-height: 24px;
+    padding: 0 7px;
+}
+
+.ops-grid-cell.column-time strong {
+    font-size: 0.8rem;
+}
+
 .ops-empty-row {
     display: grid;
     place-items: center;
@@ -560,19 +572,34 @@ body {
 
 @container ops-panel (max-width: 780px) {
     .ops-grid-table.regulation {
-        --ops-board-columns: 5.25rem minmax(0, 1fr) 9rem;
+        --ops-board-columns: 4.45rem 3rem minmax(0, 1fr) 3.85rem 3.85rem;
     }
 
     .ops-grid-table.intervention {
-        --ops-board-columns: 5.25rem minmax(0, 1fr);
+        --ops-board-columns: 4.45rem 3rem minmax(0, 1fr);
     }
 
-    .ops-grid-desktop-only {
-        display: none;
+    .ops-grid-row-header .ops-grid-cell {
+        padding: 6px 7px;
+        font-size: 0.49rem;
     }
 
-    .ops-grid-tablet-only {
-        display: flex;
+    .ops-grid-cell {
+        padding: 7px;
+    }
+
+    .ops-grid-cell.column-code .ops-code-stack strong {
+        font-size: 0.74rem;
+    }
+
+    .ops-grid-cell.column-time .ops-time-pill {
+        min-width: 46px;
+        min-height: 22px;
+        padding: 0 6px;
+    }
+
+    .ops-grid-cell.column-time strong {
+        font-size: 0.74rem;
     }
 }
 
@@ -580,24 +607,80 @@ body {
 
     .ops-grid-table.regulation,
     .ops-grid-table.intervention {
-        --ops-board-columns: 4.75rem minmax(0, 1fr);
+        --ops-board-columns: 3.9rem 2.7rem minmax(0, 1fr);
     }
 
-    .ops-grid-tablet-only {
-        display: none;
-    }
-
-    .ops-grid-row .ops-inline-flags {
-        display: none;
+    .ops-grid-table.regulation {
+        --ops-board-columns: 3.9rem 2.7rem minmax(0, 1fr) 3.45rem 3.45rem;
     }
 
     .ops-grid-row-header .ops-grid-cell {
-        padding: 7px 10px;
-        font-size: 0.52rem;
+        padding: 5px 6px;
+        font-size: 0.46rem;
+        letter-spacing: 0.1em;
     }
 
     .ops-grid-cell {
-        padding: 8px 10px;
+        gap: 4px;
+        padding: 6px;
+    }
+
+    .ops-name-tag-row {
+        gap: 3px;
+    }
+
+    .ops-name-tag-row .ops-role-badge,
+    .ops-name-tag-row .ops-inline-flag {
+        min-height: 15px;
+        padding: 0 4px;
+        font-size: 0.44rem;
+    }
+
+    .ops-inline-flags.subtle {
+        gap: 3px;
+    }
+
+    .ops-slot-chip {
+        min-width: 42px;
+        min-height: 16px;
+        padding: 0 5px;
+        font-size: 0.5rem;
+    }
+
+    .ops-grid-cell.column-time .ops-time-pill {
+        min-width: 40px;
+        min-height: 20px;
+        padding: 0 5px;
+    }
+
+    .ops-grid-cell.column-time strong,
+    .ops-grid-cell.column-code .ops-code-stack strong,
+    .ops-doctor-line.primary strong {
+        font-size: 0.7rem;
+    }
+}
+
+@container ops-panel (max-width: 420px) {
+    .ops-grid-table.intervention {
+        --ops-board-columns: 3.5rem 2.45rem minmax(0, 1fr);
+    }
+
+    .ops-grid-table.regulation {
+        --ops-board-columns: 3.5rem 2.45rem minmax(0, 1fr) 3.1rem 3.1rem;
+    }
+
+    .ops-grid-row-header .ops-grid-cell {
+        padding: 4px 5px;
+        font-size: 0.43rem;
+    }
+
+    .ops-grid-cell {
+        padding: 5px;
+    }
+
+    .ops-slot-chip {
+        min-width: 38px;
+        font-size: 0.47rem;
     }
 }
 
@@ -4378,12 +4461,12 @@ body {
     }
 
     .ops-grid-row-header .ops-grid-cell {
-        padding: 8px 12px;
-        font-size: 0.55rem;
+        padding: 6px 7px;
+        font-size: 0.49rem;
     }
 
     .ops-grid-cell {
-        padding: 9px 12px;
+        padding: 7px;
     }
 
     .ops-code-stack {
@@ -4418,18 +4501,14 @@ body {
         padding: 2px 6px;
     }
 
-    .ops-grid-status-row {
-        grid-template-columns: 2rem minmax(0, 1fr);
-    }
-
     .ops-time-pill {
-        min-width: 60px;
-        min-height: 30px;
-        padding: 0 8px;
+        min-width: 46px;
+        min-height: 22px;
+        padding: 0 6px;
     }
 
     .ops-grid-cell.column-time strong {
-        font-size: 0.88rem;
+        font-size: 0.74rem;
     }
 
     .ops-auth-dock {
@@ -4571,10 +4650,10 @@ body {
     }
 
     .ops-slot-chip {
-        min-width: 64px;
-        min-height: 28px;
-        padding: 0 8px;
-        font-size: 0.7rem;
+        min-width: 42px;
+        min-height: 16px;
+        padding: 0 5px;
+        font-size: 0.5rem;
     }
 
     .ops-table-shell {
@@ -4583,20 +4662,20 @@ body {
     }
 
     .ops-grid-row-header .ops-grid-cell {
-        padding: 7px 10px;
-        font-size: 0.52rem;
+        padding: 5px 6px;
+        font-size: 0.46rem;
     }
 
     .ops-grid-cell {
-        padding: 8px 10px;
+        padding: 6px;
     }
 
     .ops-code-stack strong {
-        font-size: 0.92rem;
+        font-size: 0.76rem;
     }
 
     .ops-doctor-stack strong {
-        font-size: 0.9rem;
+        font-size: 0.74rem;
     }
 
     .ops-doctor-note {
@@ -4604,12 +4683,12 @@ body {
     }
 
     .ops-time-pill {
-        min-width: 56px;
-        min-height: 28px;
-        padding: 0 7px;
+        min-width: 40px;
+        min-height: 20px;
+        padding: 0 5px;
     }
 
     .ops-grid-cell.column-time strong {
-        font-size: 0.82rem;
+        font-size: 0.7rem;
     }
 }

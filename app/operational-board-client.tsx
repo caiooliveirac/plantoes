@@ -1220,22 +1220,25 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         return <span className={`ops-slot-chip ${params.kind}`.trim()}>{params.slot}</span>;
     }
 
-    function renderOperationalBadges(card: RegulationCard) {
+    function renderCardIdentityTags(card: BoardCard) {
         const items: React.ReactNode[] = [];
         const roleLabel = resolveCardRoleLabel(card);
 
-        if (isRecipRamal(mealBreakSession, card.postCode)) {
-            items.push(<span key="recip" className="ops-inline-flag recip">Receptor</span>);
-        }
-        if (isMrvRamal(mealBreakSession, card.postCode)) {
-            items.push(<span key="mrv" className="ops-inline-flag mrv">Vermelhinho</span>);
-        }
-
         if (roleLabel) {
-            items.push(<span key={`role-${card.postCode}`} className={`ops-role-badge ${getOperationalRoleTone(roleLabel)}`.trim()}>{roleLabel}</span>);
+            items.push(<span key={`role-${cardCode(card)}`} className={`ops-role-badge ${getOperationalRoleTone(roleLabel)}`.trim()}>{roleLabel}</span>);
         }
 
-        return items.length > 0 ? <div className="ops-inline-flags">{items}</div> : null;
+        if (card.domain === "regulation") {
+            if (isMrvRamal(mealBreakSession, card.postCode)) {
+                items.push(<span key={`mrv-${card.postCode}`} className="ops-inline-flag mrv">MRV</span>);
+            }
+
+            if (isRecipRamal(mealBreakSession, card.postCode)) {
+                items.push(<span key={`recip-${card.postCode}`} className="ops-inline-flag recip">RECIP</span>);
+            }
+        }
+
+        return items.length > 0 ? <span className="ops-name-tag-row">{items}</span> : null;
     }
 
     function handleBoardRowKeyDown(event: React.KeyboardEvent<HTMLDivElement>, card: BoardCard) {
@@ -1243,21 +1246,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             event.preventDefault();
             openDrawer(card);
         }
-    }
-
-    function renderRegulationStatusSummary(lunchSlot: MealBreakLunchSlot | null, restSlot: MealBreakRestSlot | null) {
-        return (
-            <div className="ops-grid-status-stack" aria-label={`Almoço ${lunchSlot ?? "pendente"} e descanso ${restSlot ?? "pendente"}`}>
-                <div className="ops-grid-status-row">
-                    <span className="ops-grid-status-label">Alm</span>
-                    {renderScheduleChip({ slot: lunchSlot, kind: "lunch", pending: !lunchSlot })}
-                </div>
-                <div className="ops-grid-status-row">
-                    <span className="ops-grid-status-label">Desc</span>
-                    {renderScheduleChip({ slot: restSlot, kind: "rest", pending: !restSlot })}
-                </div>
-            </div>
-        );
     }
 
     function renderRegulationRow(card: RegulationCard) {
@@ -1279,7 +1267,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <div role="cell" className="ops-grid-cell column-time">
                     <span className="ops-time-pill"><strong>{formatBoardTime(card.startedAt)}</strong></span>
                 </div>
-                <div role="cell" className="ops-grid-cell column-code ops-grid-desktop-only">
+                <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
                         <strong>{card.postCode}</strong>
                     </div>
@@ -1288,18 +1276,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
                             <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
+                            {renderCardIdentityTags(card)}
                         </div>
-                        {renderOperationalBadges(card)}
                     </div>
                 </div>
-                <div role="cell" className="ops-grid-cell column-lunch ops-grid-desktop-only">
+                <div role="cell" className="ops-grid-cell column-lunch">
                     {renderScheduleChip({ slot: lunchSlot, kind: "lunch", pending: !lunchSlot })}
                 </div>
-                <div role="cell" className="ops-grid-cell column-rest ops-grid-desktop-only">
+                <div role="cell" className="ops-grid-cell column-rest">
                     {renderScheduleChip({ slot: restSlot, kind: "rest", pending: !restSlot })}
-                </div>
-                <div role="cell" className="ops-grid-cell column-status ops-grid-tablet-only">
-                    {renderRegulationStatusSummary(lunchSlot, restSlot)}
                 </div>
             </div>
         );
@@ -1321,6 +1306,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             reference: generatedAt,
         });
         const isSaoPauloNightShift = getSaoPauloParts(generatedAt).hour >= 19 || getSaoPauloParts(generatedAt).hour < 7;
+        const showSecondaryFlags = isAwaitingNews || (!hasPlannedCoverage && continuationLabel);
 
         return (
             <div
@@ -1337,7 +1323,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         <strong>{isWaitingIntervention ? "Livre" : formatBoardTime(card.startedAt)}</strong>
                     </span>
                 </div>
-                <div role="cell" className="ops-grid-cell column-code ops-grid-desktop-only">
+                <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
                         <strong>{card.baseCode}</strong>
                     </div>
@@ -1346,12 +1332,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
                             <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
+                            {renderCardIdentityTags(card)}
                         </div>
-                        <div className="ops-inline-flags subtle">
-                            {renderRoleBadge(resolveCardRoleLabel(card))}
-                            {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
-                            {!hasPlannedCoverage && continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
-                        </div>
+                        {showSecondaryFlags ? (
+                            <div className="ops-inline-flags subtle">
+                                {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
+                                {!hasPlannedCoverage && continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
+                            </div>
+                        ) : null}
                     </div>
                 </div>
             </div>
@@ -1673,11 +1661,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     <div className="ops-grid-header" role="rowgroup">
                                         <div className="ops-grid-row ops-grid-row-header regulation" role="row">
                                             <div role="columnheader" className="ops-grid-cell column-time">Chegada</div>
-                                            <div role="columnheader" className="ops-grid-cell column-code ops-grid-desktop-only">Ramal</div>
+                                            <div role="columnheader" className="ops-grid-cell column-code">Ramal</div>
                                             <div role="columnheader" className="ops-grid-cell column-name">Nome</div>
-                                            <div role="columnheader" className="ops-grid-cell column-lunch ops-grid-desktop-only">Almoço</div>
-                                            <div role="columnheader" className="ops-grid-cell column-rest ops-grid-desktop-only">Descanso</div>
-                                            <div role="columnheader" className="ops-grid-cell column-status ops-grid-tablet-only">Status</div>
+                                            <div role="columnheader" className="ops-grid-cell column-lunch">Almoço</div>
+                                            <div role="columnheader" className="ops-grid-cell column-rest">Descanso</div>
                                         </div>
                                     </div>
 
@@ -1700,7 +1687,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     <div className="ops-grid-header" role="rowgroup">
                                         <div className="ops-grid-row ops-grid-row-header intervention" role="row">
                                             <div role="columnheader" className="ops-grid-cell column-time">Chegada</div>
-                                            <div role="columnheader" className="ops-grid-cell column-code ops-grid-desktop-only">Base</div>
+                                            <div role="columnheader" className="ops-grid-cell column-code">Base</div>
                                             <div role="columnheader" className="ops-grid-cell column-name">Nome</div>
                                         </div>
                                     </div>
