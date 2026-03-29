@@ -79,55 +79,6 @@ interface AuthResponse {
     };
 }
 
-type RobotStatusTone = "live" | "attention" | "idle";
-
-function formatBoardDateLabel(value: string) {
-    return new Date(value).toLocaleDateString("pt-BR", {
-        weekday: "long",
-        day: "2-digit",
-        month: "long",
-        timeZone: "America/Sao_Paulo",
-    });
-}
-
-function formatShiftHeadline(value: string) {
-    if (value === "SD") {
-        return "Plantão diurno";
-    }
-    if (value === "SN") {
-        return "Plantão noturno";
-    }
-    if (value === "P") {
-        return "Plantão contínuo";
-    }
-
-    return `Plantão ${value}`;
-}
-
-function resolveRobotStatus(session: MealBreakSession | null) {
-    if (!session) {
-        return {
-            tone: "idle" as RobotStatusTone,
-            label: "Sem fluxo de almoço",
-            copy: "Bot sem sessão aberta para almoço e descanso neste momento.",
-        };
-    }
-
-    if (session.stage === "completed") {
-        return {
-            tone: "live" as RobotStatusTone,
-            label: "Fluxo fechado",
-            copy: "Almoço e descanso já distribuídos para a regulação no turno atual.",
-        };
-    }
-
-    return {
-        tone: "attention" as RobotStatusTone,
-        label: "Fluxo em andamento",
-        copy: "Bot conduzindo almoço e descanso da regulação por ordem operacional.",
-    };
-}
-
 function resolveMealBreakSlot<TSlot extends MealBreakLunchSlot | MealBreakRestSlot>(
     session: MealBreakSession | null,
     ramal: string,
@@ -698,7 +649,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [quickExitReason, setQuickExitReason] = useState("");
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
-    const [headerMessage, setHeaderMessage] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isRefreshing, startRefresh] = useTransition();
     const latestGeneratedAtRef = useRef(generatedAt);
@@ -833,11 +783,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         .filter((card) => (card.status === "active" && Boolean(card.doctorId)) || card.status === "waiting")
         .sort((left, right) => extractTrailingNumber(left.baseCode) - extractTrailingNumber(right.baseCode));
     const allCards: BoardCard[] = [...visibleRegulationCards, ...visibleInterventionCards];
-    const robotStatus = resolveRobotStatus(mealBreakSession);
-    const regulationLunchDefinedCount = visibleRegulationCards.filter((card) => Boolean(resolveMealBreakSlot(mealBreakSession, card.postCode, "lunchAssignments"))).length;
-    const regulationRestDefinedCount = visibleRegulationCards.filter((card) => Boolean(resolveMealBreakSlot(mealBreakSession, card.postCode, "restAssignments"))).length;
-    const regulationLunchPendingCount = Math.max(0, visibleRegulationCards.length - regulationLunchDefinedCount);
-    const regulationRestPendingCount = Math.max(0, visibleRegulationCards.length - regulationRestDefinedCount);
     const interventionWaitingCount = visibleInterventionCards.filter((card) => card.status === "waiting").length;
     const interventionActiveCount = visibleInterventionCards.length - interventionWaitingCount;
     const criticalCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "critical");
@@ -854,18 +799,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         .filter((doctor) => matchesDoctorQuery(doctor, deferredDoctorQuery))
         .slice(0, 8);
     const doctorSelectionLocked = Boolean(selectedDoctor && doctorQuery.trim() === doctorOptionLabel(selectedDoctor));
-
-    useEffect(() => {
-        if (!headerMessage) {
-            return;
-        }
-
-        const timeoutId = window.setTimeout(() => {
-            setHeaderMessage(null);
-        }, 3200);
-
-        return () => window.clearTimeout(timeoutId);
-    }, [headerMessage]);
 
     function resetDrawerFeedback() {
         setErrorMessage(null);
@@ -1696,99 +1629,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
             <main className="ops-shell">
                 <section className="ops-command-center">
-                    <header className="ops-command-header">
-                        <div className="ops-command-copy">
-                            <p className="ops-kicker">Mesa operacional</p>
-                            <h1>Painel de regulação e intervenção</h1>
-                            <p className="ops-subtitle">
-                                Leitura direta do plantão atual, com regulação em foco, intervenção compacta e almoço/descanso visíveis onde fazem diferença operacional.
-                            </p>
-                        </div>
-
-                        <div className="ops-command-meta-card">
-                            <div className="ops-command-meta-row">
-                                <span className="ops-command-label">Turno</span>
-                                <strong>{formatShiftHeadline(shiftLabel)}</strong>
-                            </div>
-                            <div className="ops-command-meta-row">
-                                <span className="ops-command-label">Data operacional</span>
-                                <strong>{formatBoardDateLabel(generatedAt)}</strong>
-                            </div>
-                            <div className="ops-command-meta-row">
-                                <span className="ops-command-label">Robô</span>
-                                <div className="ops-header-status-stack">
-                                    <span className={`ops-inline-status ${robotStatus.tone === "attention" ? "warning" : robotStatus.tone === "idle" ? "neutral" : ""}`.trim()}>{robotStatus.label}</span>
-                                    <small>{robotStatus.copy}</small>
-                                </div>
-                            </div>
-                            <div className="ops-command-actions">
-                                <button
-                                    type="button"
-                                    className="ops-header-button secondary"
-                                    onClick={() => startRefresh(() => router.refresh())}
-                                    disabled={isRefreshing}
-                                >
-                                    {isRefreshing ? "Atualizando..." : "Atualizar"}
-                                </button>
-                                <button
-                                    type="button"
-                                    className="ops-header-button primary"
-                                    onClick={async () => {
-                                        try {
-                                            await navigator.clipboard.writeText("/almoco");
-                                            setHeaderMessage("Comando /almoco copiado. Dispare no bot autorizado para abrir o fluxo.");
-                                        } catch {
-                                            setHeaderMessage("Use /almoco no bot autorizado para organizar almoço e descanso.");
-                                        }
-                                    }}
-                                >
-                                    Organizar almoço/descanso
-                                </button>
-                            </div>
-                        </div>
-                    </header>
-
-                    {(headerMessage || successMessage) && (
-                        <div className="ops-top-feedback">
-                            <span>{headerMessage ?? successMessage}</span>
-                        </div>
-                    )}
-
-                    <section className="ops-metrics-strip">
-                        <article className="ops-metric-tile regulation">
-                            <span className="ops-summary-label">Total em regulação</span>
-                            <strong>{visibleRegulationCards.length}</strong>
-                            <p>{regulationLunchPendingCount} almoço pendente • {regulationRestPendingCount} descanso pendente</p>
-                        </article>
-                        <article className="ops-metric-tile intervention">
-                            <span className="ops-summary-label">Total em intervenção</span>
-                            <strong>{interventionActiveCount}</strong>
-                            <p>{interventionWaitingCount} bases aguardando confirmação</p>
-                        </article>
-                        <article className="ops-metric-tile lunch">
-                            <span className="ops-summary-label">Almoço definido</span>
-                            <strong>{regulationLunchDefinedCount}</strong>
-                            <p>{robotStatus.label}</p>
-                        </article>
-                        <article className="ops-metric-tile rest">
-                            <span className="ops-summary-label">Descanso definido</span>
-                            <strong>{regulationRestDefinedCount}</strong>
-                            <p>Regulação com descanso já visível no quadro</p>
-                        </article>
-                    </section>
-
                     <section className="ops-main-grid">
                         <section className="ops-operational-panel regulation">
                             <header className="ops-panel-header regulation">
-                                <div>
-                                    <p className="ops-section-eyebrow">Regulação</p>
-                                    <h2>Ramais operacionais</h2>
-                                </div>
-                                <div className="ops-section-meta">
-                                    <span className="ops-section-count">{visibleRegulationCards.length} em cobertura</span>
-                                    <span className="ops-section-waiting danger">{regulationLunchPendingCount} almoço pendente</span>
-                                    <span className="ops-section-waiting">{regulationRestPendingCount} descanso pendente</span>
-                                </div>
+                                <h2>Regulação</h2>
                             </header>
 
                             <div className="ops-panel-table-wrap regulation">
@@ -1815,14 +1659,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
                         <section className="ops-operational-panel intervention">
                             <header className="ops-panel-header intervention">
-                                <div>
-                                    <p className="ops-section-eyebrow">Intervenção</p>
-                                    <h2>Bases em campo</h2>
-                                </div>
-                                <div className="ops-section-meta">
-                                    <span className="ops-section-count">{interventionActiveCount} em cobertura</span>
-                                    <span className="ops-section-waiting">{interventionWaitingCount} aguardando</span>
-                                </div>
+                                <h2>Intervenção</h2>
                             </header>
 
                             <div className="ops-panel-table-wrap intervention">
