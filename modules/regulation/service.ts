@@ -1,13 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNull, lte } from "drizzle-orm";
 import { getDb } from "@/db";
 import { regulationOccupancies } from "@/db/schema";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncRegulationBankHours } from "@/modules/bank-hours/service";
-import { inferOperationalScheduledStartAt, inferRegulationScheduledEndAt, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 
 export interface StartRegulationOccupancyInput {
     doctorId: string;
     postId: number;
+    continuityGroupId?: string | null;
     startedAt: Date;
     scheduledStartAt?: Date | null;
     scheduledEndAt?: Date | null;
@@ -19,19 +22,26 @@ export interface StartRegulationOccupancyInput {
     createdByUserId?: string | null;
 }
 
+function resolveRegulationContinuationBoardStartedAt(params: {
+    startedAt: Date;
+    boardStartedAt: Date;
+    continuedAt: Date;
+}) {
+    const continuationShiftStart = resolveOperationalShiftWindow(params.continuedAt).startedAt;
+    return continuationShiftStart.getTime() > params.boardStartedAt.getTime()
+        ? continuationShiftStart
+        : params.boardStartedAt;
+}
+
 export async function startRegulationOccupancy(input: StartRegulationOccupancyInput) {
     const db = getDb();
     const created = await db.transaction(async (tx) => {
-        const inferredScheduledStartAt = inferOperationalScheduledStartAt(
-            input.startedAt,
-            input.shiftLabel ?? null,
-            input.scheduledStartAt ?? null,
-        );
-        const inferredScheduledEndAt = inferRegulationScheduledEndAt(
-            input.startedAt,
-            input.shiftLabel ?? null,
-            input.scheduledEndAt ?? null,
-        );
+        const { scheduledStartAt: inferredScheduledStartAt, scheduledEndAt: inferredScheduledEndAt } = inferRegulationCoverageWindow({
+            startedAt: input.startedAt,
+            shiftLabel: input.shiftLabel ?? null,
+            explicitScheduledStartAt: input.scheduledStartAt ?? null,
+            explicitScheduledEndAt: input.scheduledEndAt ?? null,
+        });
 
         const duplicated = await tx.query.regulationOccupancies.findFirst({
             where: and(
@@ -72,6 +82,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
         const [created] = await tx.insert(regulationOccupancies).values({
             doctorId: input.doctorId,
             postId: input.postId,
+            continuityGroupId: input.continuityGroupId ?? randomUUID(),
             scheduledStartAt: inferredScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
@@ -90,6 +101,67 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
 
     publishBoardUpdate(`regulation:start:${input.postId}`);
     return created;
+}
+
+export async function continueRegulationOccupancy(
+    id: string,
+    input?: { notes?: string | null; continuedAt?: Date | null },
+    updatedByUserId?: string | null,
+) {
+    const db = getDb();
+    const updated = await db.transaction(async (tx) => {
+        const existing = await tx.query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, id),
+        });
+
+        if (!existing) {
+            throw new Error("Regulation occupancy not found.");
+        }
+
+        if (existing.endedAt) {
+            throw new Error("Only active regulation occupancies can be continued.");
+        }
+
+        const nextNotes = input?.notes?.trim()
+            ? input.notes.trim()
+            : existing.notes;
+        const baseShiftLabel = existing.shiftLabel && existing.shiftLabel !== "P"
+            ? existing.shiftLabel
+            : resolveOperationalShiftWindow(existing.startedAt).shiftLabel;
+        const inferredScheduledStartAt = existing.scheduledStartAt
+            ?? inferOperationalScheduledStartAt(existing.startedAt, baseShiftLabel, null);
+        const { scheduledEndAt: nextScheduledEndAt } = inferRegulationCoverageWindow({
+            startedAt: existing.startedAt,
+            shiftLabel: "P",
+            explicitScheduledStartAt: inferredScheduledStartAt,
+            explicitScheduledEndAt: existing.scheduledEndAt,
+        });
+        const continuationAt = input?.continuedAt ?? new Date();
+        const nextBoardStartedAt = resolveRegulationContinuationBoardStartedAt({
+            startedAt: existing.startedAt,
+            boardStartedAt: existing.boardStartedAt,
+            continuedAt: continuationAt,
+        });
+
+        const [updated] = await tx.update(regulationOccupancies)
+            .set({
+                boardStartedAt: nextBoardStartedAt,
+                shiftLabel: "P",
+                scheduledStartAt: inferredScheduledStartAt,
+                scheduledEndAt: nextScheduledEndAt,
+                notes: nextNotes ?? null,
+                updatedByUserId: updatedByUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .where(eq(regulationOccupancies.id, id))
+            .returning();
+
+        await syncRegulationBankHours(tx, id);
+        return updated;
+    });
+
+    publishBoardUpdate(`regulation:continue:${id}`);
+    return updated;
 }
 
 export async function endRegulationOccupancy(

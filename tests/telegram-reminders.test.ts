@@ -1,75 +1,194 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildReminderPlans, type ReminderShiftSnapshot } from "@/modules/telegram/reminders";
+import { buildReminderPlans, type ReminderBoardSnapshot } from "@/modules/telegram/reminders";
 
-function makeShift(overrides: Partial<ReminderShiftSnapshot>): ReminderShiftSnapshot {
+function makeBoard(): ReminderBoardSnapshot {
     return {
-        shiftInstanceId: "shift-1",
-        targetCode: "PM04",
-        targetLabel: "PM04",
-        sector: "INTERVENTION",
-        scheduledStartAt: null,
-        scheduledEndAt: null,
-        arrivalTime: null,
-        departureTime: null,
-        ...overrides,
+        generatedAt: "2026-03-25T21:52:00.000Z",
+        intervention: [
+            {
+                baseId: 1,
+                occupancyId: "int-1",
+                baseCode: "PM04",
+                baseLabel: "PM04",
+                doctorId: "doc-1",
+                doctorName: "Ana Souza",
+                displayName: "Ana",
+                startedAt: "2026-03-25T22:00:00.000Z",
+                boardStartedAt: "2026-03-25T22:00:00.000Z",
+                scheduledEndAt: "2026-03-26T10:00:00.000Z",
+                shiftLabel: "SN",
+                roleLabel: null,
+                status: "active",
+                liveSource: "operations_v2",
+                liveUpdatedAt: null,
+            },
+            {
+                baseId: 2,
+                occupancyId: "int-2",
+                baseCode: "BR05",
+                baseLabel: "BR05",
+                doctorId: "doc-2",
+                doctorName: "Joao Santana",
+                displayName: "Joao",
+                startedAt: "2026-03-25T10:18:00.000Z",
+                boardStartedAt: "2026-03-25T10:18:00.000Z",
+                scheduledEndAt: "2026-03-25T22:00:00.000Z",
+                shiftLabel: "SD",
+                roleLabel: null,
+                status: "active",
+                liveSource: "operations_v2",
+                liveUpdatedAt: null,
+            },
+            {
+                baseId: 3,
+                occupancyId: null,
+                baseCode: "IT30",
+                baseLabel: "IT30",
+                doctorId: null,
+                doctorName: null,
+                displayName: null,
+                startedAt: null,
+                boardStartedAt: null,
+                scheduledEndAt: null,
+                shiftLabel: null,
+                roleLabel: null,
+                status: "waiting",
+                liveSource: "none",
+                liveUpdatedAt: null,
+            },
+        ],
+        regulation: [
+            {
+                postId: 1,
+                occupancyId: "reg-1",
+                postCode: "2031",
+                postLabel: "2031",
+                defaultRole: "MR",
+                doctorId: "doc-3",
+                doctorName: "Bruno Lima",
+                displayName: "Bruno",
+                startedAt: "2026-03-25T22:02:00.000Z",
+                boardStartedAt: "2026-03-25T22:02:00.000Z",
+                scheduledEndAt: "2026-03-26T10:15:00.000Z",
+                shiftLabel: "SN",
+                roleLabel: "MR",
+                ramalLabel: "2031",
+                status: "active",
+                liveSource: "operations_v2",
+                liveUpdatedAt: null,
+            },
+            {
+                postId: 2,
+                occupancyId: null,
+                postCode: "2032",
+                postLabel: "2032",
+                defaultRole: "MR",
+                doctorId: null,
+                doctorName: null,
+                displayName: null,
+                startedAt: null,
+                boardStartedAt: null,
+                scheduledEndAt: null,
+                shiftLabel: null,
+                roleLabel: null,
+                ramalLabel: "2032",
+                status: "waiting",
+                liveSource: "none",
+                liveUpdatedAt: null,
+            },
+        ],
     };
 }
 
-test("buildReminderPlans creates greeting and inactivity nudge before unresolved start and end", () => {
-    const now = new Date("2026-03-25T18:56:00-03:00");
+test("buildReminderPlans sends an instructional call 10 minutes before the shift", () => {
     const plans = buildReminderPlans({
-        now,
-        lastActivityAt: new Date("2026-03-25T18:48:00-03:00"),
-        shifts: [
-            makeShift({
-                shiftInstanceId: "start-1",
-                targetCode: "PM04",
-                scheduledStartAt: new Date("2026-03-25T19:00:00-03:00"),
-            }),
-            makeShift({
-                shiftInstanceId: "end-1",
-                targetCode: "2031",
-                targetLabel: "2031",
-                sector: "REGULATION",
-                scheduledEndAt: new Date("2026-03-25T19:00:00-03:00"),
-                arrivalTime: new Date("2026-03-25T07:00:00-03:00"),
-            }),
-        ],
+        now: new Date("2026-03-25T18:52:00-03:00"),
+        board: makeBoard(),
     });
 
-    assert.equal(plans.some((plan) => plan.stage === "greeting"), true);
-    assert.equal(plans.some((plan) => plan.stage === "nudge"), true);
-    assert.equal(plans.some((plan) => plan.stage === "escalation"), false);
-    assert.match(plans.find((plan) => plan.stage === "nudge")?.text ?? "", /Avisem as chegadas|Avisem as saidas/);
+    const instruction = plans.find((plan) => plan.stage === "instruction");
+    assert.ok(instruction);
+    assert.match(instruction?.text ?? "", /Plantão SN abrindo/);
+    assert.match(instruction?.text ?? "", /PM04 SN 19:00/);
+    assert.match(instruction?.text ?? "", /2031 SN 19:00/);
+    assert.match(instruction?.text ?? "", /continua P 19:00/);
+    assert.match(instruction?.text ?? "", /sem medico confirmado no grupo/i);
 });
 
-test("buildReminderPlans escalates overdue unknown arrivals and departures", () => {
-    const now = new Date("2026-03-25T19:12:00-03:00");
+test("buildReminderPlans publishes a 10-minute coverage snapshot with confirmed and pending targets", () => {
     const plans = buildReminderPlans({
-        now,
-        lastActivityAt: new Date("2026-03-25T19:00:00-03:00"),
-        shifts: [
-            makeShift({
-                shiftInstanceId: "start-1",
-                targetCode: "BR60",
-                scheduledStartAt: new Date("2026-03-25T19:00:00-03:00"),
-            }),
-            makeShift({
-                shiftInstanceId: "end-1",
-                targetCode: "2032",
-                targetLabel: "2032",
-                sector: "REGULATION",
-                scheduledEndAt: new Date("2026-03-25T19:00:00-03:00"),
-                arrivalTime: new Date("2026-03-25T07:00:00-03:00"),
-            }),
-        ],
+        now: new Date("2026-03-25T19:20:00-03:00"),
+        board: makeBoard(),
     });
 
-    const escalation = plans.find((plan) => plan.stage === "escalation");
-    assert.ok(escalation);
-    assert.match(escalation?.text ?? "", /Chegadas ainda sem confirmacao/);
-    assert.match(escalation?.text ?? "", /Saidas ainda sem confirmacao/);
-    assert.match(escalation?.text ?? "", /BR60/);
-    assert.match(escalation?.text ?? "", /2032/);
+    const snapshot = plans.find((plan) => plan.stage === "coverage_snapshot");
+    assert.ok(snapshot);
+    assert.match(snapshot?.text ?? "", /Intervenção 1\/3/);
+    assert.match(snapshot?.text ?? "", /✅ PM04 - Ana Souza/);
+    assert.match(snapshot?.text ?? "", /🔴 BR05 - Sem medico confirmado neste turno/);
+    assert.match(snapshot?.text ?? "", /So entra se avisar continua\/P ou se a chefia atualizar/);
+    assert.match(snapshot?.text ?? "", /🔴 IT30 - Aguardando confirmação da avançada/);
+    assert.match(snapshot?.text ?? "", /🔴 2032 - Aguardando aviso de ramal/);
+    assert.match(snapshot?.text ?? "", /TARM precisa dos ramais ativos/);
+});
+
+test("buildReminderPlans publishes the 08h/20h public checkpoint with full names", () => {
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-25T20:05:00-03:00"),
+        board: makeBoard(),
+    });
+
+    const checkpoint = plans.find((plan) => plan.stage === "coverage_checkpoint");
+    assert.ok(checkpoint);
+    assert.match(checkpoint?.text ?? "", /Fechamento público 20:00/);
+    assert.match(checkpoint?.text ?? "", /🚑 Intervenção confirmada:/);
+    assert.match(checkpoint?.text ?? "", /☎️ Regulação confirmada:/);
+    assert.match(checkpoint?.text ?? "", /PM04 - Ana Souza/);
+    assert.match(checkpoint?.text ?? "", /2031 - Bruno Lima/);
+    assert.match(checkpoint?.text ?? "", /🟠 Pendências ainda abertas/);
+    assert.match(checkpoint?.text ?? "", /🔴 Intervencao sem medico confirmado neste turno \(1\): BR05\./);
+    assert.match(checkpoint?.text ?? "", /🚑 Avancadas sem aviso \(1\): IT30/);
+    assert.match(checkpoint?.text ?? "", /☎️ Ramais sem aviso \(1\): 2032/);
+});
+
+test("buildReminderPlans publishes the 12h\/00h payment checkpoint with arrival times", () => {
+    const board = makeBoard();
+    board.regulation.push({
+        postId: 3,
+        occupancyId: null,
+        postCode: "2033",
+        postLabel: "2033",
+        defaultRole: "MR",
+        doctorId: null,
+        doctorName: null,
+        displayName: null,
+        startedAt: null,
+        boardStartedAt: null,
+        scheduledEndAt: null,
+        shiftLabel: null,
+        roleLabel: null,
+        ramalLabel: "2033",
+        status: "waiting",
+        liveSource: "none",
+        liveUpdatedAt: null,
+    });
+
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-26T00:05:00-03:00"),
+        board,
+    });
+
+    const checkpoint = plans.find((plan) => plan.stage === "payment_checkpoint");
+    assert.ok(checkpoint);
+    assert.match(checkpoint?.text ?? "", /Registro 00:00 para pagamento e banco de horas/);
+    assert.match(checkpoint?.text ?? "", /🚑 Intervencao confirmada:/);
+    assert.match(checkpoint?.text ?? "", /☎️ Regulacao confirmada:/);
+    assert.match(checkpoint?.text ?? "", /🟠 Pendencias que ainda exigem conferencia:/);
+    assert.match(checkpoint?.text ?? "", /PM04 - Ana Souza \| chegada 19:00 \| SN/);
+    assert.match(checkpoint?.text ?? "", /2031 - Bruno Lima \| chegada 19:02 \| SN/);
+    assert.match(checkpoint?.text ?? "", /🔴 Intervencao sem medico confirmado neste turno \(1\): BR05\./);
+    assert.match(checkpoint?.text ?? "", /🚑 Avancadas sem aviso \(1\): IT30/);
+    assert.match(checkpoint?.text ?? "", /☎️ Ramais sem aviso \(2\): 2032, 2033/);
+    assert.doesNotMatch(checkpoint?.text ?? "", /2032 \| Sem aviso de ramal/);
 });

@@ -8,6 +8,7 @@ export interface TelegramDoctorDirectoryEntry {
     fullName: string;
     displayName: string | null;
     normalizedName: string;
+    isActive?: boolean;
 }
 
 export interface TelegramDoctorCandidate {
@@ -15,6 +16,7 @@ export interface TelegramDoctorCandidate {
     fullName: string;
     displayName: string | null;
     normalizedName: string;
+    isActive?: boolean;
     score: number;
 }
 
@@ -135,7 +137,19 @@ export function resolveDoctorCandidates(
             score: scoreDoctorCandidate(query, doctor),
         }))
         .filter((doctor) => doctor.score > 0)
-        .sort((left, right) => right.score - left.score || left.fullName.localeCompare(right.fullName, "pt-BR"))
+        .sort((left, right) => {
+            const scoreDiff = right.score - left.score;
+            if (scoreDiff !== 0) {
+                return scoreDiff;
+            }
+
+            const activeDiff = Number(right.isActive ?? false) - Number(left.isActive ?? false);
+            if (activeDiff !== 0) {
+                return activeDiff;
+            }
+
+            return left.fullName.localeCompare(right.fullName, "pt-BR");
+        })
         .slice(0, limit);
 }
 

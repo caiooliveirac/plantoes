@@ -2,7 +2,7 @@ import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bankHoursEntries, interventionOccupancies, regulationOccupancies } from "@/db/schema";
 import { publishBoardUpdate } from "@/lib/board-live";
-import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
+import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 
 type OptionalDate = Date | null | undefined;
 type Executor = any;
@@ -207,6 +207,8 @@ export async function removeRegulationOccupancyRecord(id: string, updatedByUserI
             .where(eq(regulationOccupancies.id, id))
             .returning();
 
+        await syncBankHoursByContinuityGroup(tx, existing.continuityGroupId);
+
         return {
             ...deleted,
             updatedByUserId: updatedByUserId ?? null,
@@ -231,6 +233,7 @@ export async function removeInterventionOccupancyRecord(id: string, updatedByUse
             .returning();
 
         await reconcileInterventionBoardState(tx, existing.baseId, updatedByUserId);
+        await syncBankHoursByContinuityGroup(tx, existing.continuityGroupId);
         return {
             ...deleted,
             updatedByUserId: updatedByUserId ?? null,

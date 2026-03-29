@@ -83,6 +83,42 @@ test("pickConfidentDoctorCandidate accepts a clearly dominant multi-token match"
     assert.equal(pickConfidentDoctorCandidate("Ana Luiza", candidates)?.id, "20");
 });
 
+test("resolveDoctorCandidates keeps inactive exact-prefix matches available as fallback", () => {
+    const candidates = resolveDoctorCandidates("Yuri", [
+        {
+            id: "30",
+            fullName: "Yuri Mariano",
+            displayName: "Yuri Mariano",
+            normalizedName: "YURI MARIANO",
+            isActive: false,
+        },
+    ], 3);
+
+    assert.equal(candidates[0]?.id, "30");
+    assert.equal(pickConfidentDoctorCandidate("Yuri", candidates)?.id, "30");
+});
+
+test("resolveDoctorCandidates prefers active doctor on score tie", () => {
+    const candidates = resolveDoctorCandidates("Ana Souza", [
+        {
+            id: "40",
+            fullName: "Ana Souza",
+            displayName: "Ana Souza",
+            normalizedName: "ANA SOUZA",
+            isActive: false,
+        },
+        {
+            id: "41",
+            fullName: "Ana Souza",
+            displayName: "Ana Souza",
+            normalizedName: "ANA SOUZA",
+            isActive: true,
+        },
+    ], 2);
+
+    assert.equal(candidates[0]?.id, "41");
+});
+
 test("pickTelegramReply is deterministic for the same seed", () => {
     const first = pickTelegramReply("arrival_recorded", 1234, {
         name: "Ana Souza",
@@ -117,7 +153,7 @@ test("buildNameUnresolvedReply shows suggestions and asks to redigite", () => {
         { fullName: "Bruna Lima" },
     ]);
 
-    assert.match(reply, /Mais proximos/);
+    assert.match(reply, /Mais próximos/);
     assert.match(reply, /Bruno Lima/);
     assert.match(reply, /redigite o nome/i);
 });
@@ -172,7 +208,7 @@ test("buildTelegramBatchReviewReply highlights lines that need correction", () =
         ],
     });
 
-    assert.match(reply, /precisam de correcao/i);
+    assert.match(reply, /precisam de correção/i);
     assert.match(reply, /faltou base ou ramal/);
     assert.match(reply, /ANDRE CODECEIRA SOMBRA 07:05/);
     assert.doesNotMatch(reply, /Responda CONFIRMAR/i);

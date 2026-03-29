@@ -115,6 +115,19 @@ export function shouldHighlightInterventionVerification(
     return new Date(reference).getTime() >= addMinutes(boundary, VERIFICATION_GRACE_MINUTES).getTime();
 }
 
+export function hasPlannedInterventionCoverageForCurrentShift(params: {
+    shiftLabel: OccupancyShiftLabel;
+    scheduledEndAt: string | Date | null;
+    reference: string | Date;
+}) {
+    if (params.shiftLabel !== "P" || !params.scheduledEndAt) {
+        return false;
+    }
+
+    const currentShiftStart = resolveOperationalShiftWindow(params.reference).startedAt;
+    return new Date(params.scheduledEndAt).getTime() > currentShiftStart.getTime();
+}
+
 export function resolveFirstVerificationBoundary(startedAt: string | Date | null) {
     if (!startedAt) {
         return null;

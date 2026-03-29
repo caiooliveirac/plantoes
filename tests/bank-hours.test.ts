@@ -47,19 +47,49 @@ test("does not create extra debit for leaving early", () => {
     assert.equal(result.balanceMinutes, 0);
 });
 
-test("forgives arrival up to exactly 15 minutes and keeps overtime doubled", () => {
+test("ignores arrival and late exit below 15 minutes", () => {
     const result = calculateBankHours({
         scheduledStartAt: iso("2026-03-25T07:00:00-03:00"),
         scheduledEndAt: iso("2026-03-25T19:00:00-03:00"),
-        actualStartAt: iso("2026-03-25T07:15:00-03:00"),
+        actualStartAt: iso("2026-03-25T07:14:00-03:00"),
         actualEndAt: iso("2026-03-25T19:14:00-03:00"),
     });
 
     assert.equal(result.arrivalDelayMinutes, 0);
-    assert.equal(result.overtimeMinutes, 14);
+    assert.equal(result.overtimeMinutes, 0);
     assert.equal(result.overtimeMultiplier, 2);
-    assert.equal(result.creditedOvertimeMinutes, 28);
-    assert.equal(result.balanceMinutes, 28);
+    assert.equal(result.creditedOvertimeMinutes, 0);
+    assert.equal(result.balanceMinutes, 0);
+});
+
+test("starts crediting late departure from exactly 15 minutes", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-03-25T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-03-25T19:00:00-03:00"),
+        actualStartAt: iso("2026-03-25T07:00:00-03:00"),
+        actualEndAt: iso("2026-03-25T19:15:00-03:00"),
+    });
+
+    assert.equal(result.arrivalDelayMinutes, 0);
+    assert.equal(result.overtimeMinutes, 15);
+    assert.equal(result.overtimeMultiplier, 2);
+    assert.equal(result.creditedOvertimeMinutes, 30);
+    assert.equal(result.balanceMinutes, 30);
+});
+
+test("starts charging arrival delay from exactly 15 minutes", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-03-25T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-03-25T19:00:00-03:00"),
+        actualStartAt: iso("2026-03-25T07:15:00-03:00"),
+        actualEndAt: iso("2026-03-25T19:15:00-03:00"),
+    });
+
+    assert.equal(result.arrivalDelayMinutes, 15);
+    assert.equal(result.overtimeMinutes, 15);
+    assert.equal(result.overtimeMultiplier, 1);
+    assert.equal(result.creditedOvertimeMinutes, 15);
+    assert.equal(result.balanceMinutes, 0);
 });
 
 test("breaks forgiveness after 15 minutes and removes doubled overtime", () => {
@@ -91,7 +121,7 @@ test("does not reward early arrival by itself", () => {
     assert.equal(result.balanceMinutes, 0);
 });
 
-test("continued shift bank hours use first arrival and final departure when arrival stayed within tolerance", () => {
+test("continued shift ignores arrival and late exit below 15 minutes", () => {
     const result = calculateBankHours({
         scheduledStartAt: iso("2026-03-25T19:00:00-03:00"),
         scheduledEndAt: iso("2026-03-26T07:00:00-03:00"),
@@ -100,10 +130,25 @@ test("continued shift bank hours use first arrival and final departure when arri
     });
 
     assert.equal(result.arrivalDelayMinutes, 0);
-    assert.equal(result.overtimeMinutes, 14);
+    assert.equal(result.overtimeMinutes, 0);
     assert.equal(result.overtimeMultiplier, 2);
-    assert.equal(result.creditedOvertimeMinutes, 28);
-    assert.equal(result.balanceMinutes, 28);
+    assert.equal(result.creditedOvertimeMinutes, 0);
+    assert.equal(result.balanceMinutes, 0);
+});
+
+test("continued shift starts counting from exactly 15 minutes", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-03-25T19:00:00-03:00"),
+        scheduledEndAt: iso("2026-03-26T07:00:00-03:00"),
+        actualStartAt: iso("2026-03-25T19:15:00-03:00"),
+        actualEndAt: iso("2026-03-26T07:15:00-03:00"),
+    });
+
+    assert.equal(result.arrivalDelayMinutes, 15);
+    assert.equal(result.overtimeMinutes, 15);
+    assert.equal(result.overtimeMultiplier, 1);
+    assert.equal(result.creditedOvertimeMinutes, 15);
+    assert.equal(result.balanceMinutes, 0);
 });
 
 test("continued shift loses the doubled bonus when arrival exceeds tolerance", () => {

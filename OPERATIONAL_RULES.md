@@ -15,7 +15,7 @@ Este documento descreve as regras que hoje governam o quadro operacional, os lem
 Ha tres relogios independentes no sistema:
 
 1. Relogio do quadro: decide quem aparece, quem some e quem entra em destaque de verificacao.
-2. Relogio de lembrete: decide quando o bot cobra chegada ou saida ainda nao confirmada.
+2. Relogio de lembrete: decide quando o bot instrui a virada, publica snapshots de cobertura e cobra confirmacoes ausentes.
 3. Relogio de banco de horas: decide tolerancia financeira e credito de excedente.
 
 Esses relogios nao devem ser confundidos. Uma mesma pessoa pode:
@@ -40,6 +40,9 @@ Esses relogios nao devem ser confundidos. Uma mesma pessoa pode:
 
 - uma linha ativa de intervencao permanece no quadro ate haver saida, correcao manual ou substituicao
 - a tabela de intervencao nao remove automaticamente o medico antigo na virada
+- chegada declarada diretamente como `P` passa a ser tratada como continuidade operacional quando ja existe cobertura ativa do mesmo medico
+- se a continuidade acontece no mesmo alvo, a mesma occupancy segue viva e preserva a chegada original
+- se a continuidade troca base, ramal ou dominio, nasce uma nova occupancy operacional, mas ela herda a mesma cadeia de continuidade para banco de horas
 
 ### Regra de verificacao
 
@@ -49,10 +52,12 @@ Esses relogios nao devem ser confundidos. Uma mesma pessoa pode:
   - na virada para 19:00, tudo que começou antes de 18:00 passa a ser considerado plantao anterior
 - chegadas dentro da hora anterior ao novo turno nao entram em alerta visual
 - se a chefia confirmar `Continuar`, a ocupacao passa a carregar `P` e o alerta some ate a proxima expiracao dessa continuidade
+- se a entrada ja foi declarada como `P`, o quadro nao deve voltar a cobrar "aguardando noticias" na virada imediatamente seguinte, porque a cobertura do proximo turno ja veio declarada na chegada
 - essa confirmacao nao inventa horario de saida nem reescreve chegada; ela apenas sinaliza continuidade operacional persistida
 - a confirmacao de `Continuar` deve ser registrada com auditoria propria, separada de uma correcao generica, para manter rastreabilidade operacional
 - quando a chefia optar por `Informar saida` nesse mesmo contexto, a saida deve passar por fluxo proprio de auditoria operacional, separado do encerramento generico
 - a partir de `07:15` ou `19:15`, `Continuar` e `Informar saida` exigem justificativa por escrito tanto no site quanto no Telegram
+- no Telegram, quando a saida tardia exigir justificativa, o bot abre uma pendencia por remetente e aceita uma resposta simples so com o motivo; se o horario mudou, a pessoa deve reenviar a saida completa
 
 ### Efeito pratico por momento
 
@@ -114,27 +119,47 @@ O encerramento previsto e usado para fechamento e lembretes, nao como unico crit
 
 - `SD` sem horario explicito de fim: encerra em `19:15`
 - `SN` sem horario explicito de fim: encerra em `07:15` do dia local correto
+- `P` na regulacao estende a janela prevista pelo turno atual e pelo seguinte, preservando o horario de chegada do primeiro trecho
 
 Esse relogio de `:15` e diferente da regra de virada do quadro, que ocorre em `07:00` e `19:00`.
 
 ## Lembretes automáticos do Telegram
 
-Os lembretes operam sobre `scheduledStartAt` e `scheduledEndAt`, nao sobre a cor visual do quadro.
+Os lembretes agora operam em cima do quadro operacional consolidado em `operations_v2`, nao mais em cima da agenda legada de `scheduledStartAt` e `scheduledEndAt`.
 
-### Greeting
+### Fonte publica
 
-- enviado quando a entrada prevista vai acontecer nos proximos 10 minutos
-- so considera turnos ainda sem chegada confirmada
+- os avisos publicos usam os chats de anuncio do Telegram; se nao houver anuncio configurado, caem no grupo de lembretes
+- cada mensagem e deduplicada por chat e por janela em `telegram_bot_notices`
 
-### Nudge
+### Instrucao pre-turno
 
-- exige inatividade no chat por pelo menos 5 minutos
-- cobra chegada ou saida quando o evento esta entre 10 minutos antes e 5 minutos depois do horario previsto
+- entre `06:50-06:59` e `18:50-18:59`, o bot publica um molde curto para o turno seguinte
+- o texto reforca que cada mensagem deve trazer nome completo, base ou ramal e `SD`, `SN` ou `P`
+- o molde tambem ensina como escrever `continua` quando o medico permanece no posto
 
-### Escalation
+### Snapshot de cobertura
 
-- exige inatividade no chat por pelo menos 5 minutos
-- cobra confirmacao quando chegada ou saida esta atrasada entre 10 minutos e 2 horas
+- entre `07:00-07:59` e `19:00-19:59`, o bot publica um snapshot a cada 10 minutos
+- intervencao:
+  - `active` sem destaque de verificacao = confirmada
+  - `active` com destaque de verificacao = aguardando noticia da continuidade
+  - `waiting` = avancada ainda sem confirmacao
+- regulacao:
+  - `active` = ramal confirmado
+  - `waiting` = aguardando aviso de ramal
+- o tom fica mais exigente ao longo da primeira hora do turno para pressionar o fechamento da cobertura
+
+### Checkpoint 08/20
+
+- entre `08:00-08:09` e `20:00-20:09`, o bot publica um fechamento publico com nomes completos dos confirmados
+- pendencias seguem listadas no mesmo aviso para a coordenacao cobrar as bases e os ramais faltantes
+
+### Checkpoint 12/00
+
+- entre `12:00-12:09` e `00:00-00:09`, o bot publica o recorte de pagamento e banco de horas
+- cada linha confirmada leva alvo, nome completo, horario de chegada e rotulo do turno (`SD`, `SN` ou `P`)
+- pendencias continuam listadas para conferencia manual posterior
 
 ## Banco de horas
 
@@ -142,7 +167,8 @@ Banco de horas nao deve reutilizar automaticamente a regra visual do board.
 
 ### Regra atual
 
-- atraso na chegada so conta quando ultrapassa 15 minutos do horario previsto
+- atraso na chegada so conta a partir de 15 minutos do horario previsto
+- excedente na saida so conta a partir de 15 minutos do horario previsto
 - se a chegada ficou dentro da tolerancia, eventual excedente na saida e creditado em dobro
 - se a tolerancia foi rompida, o excedente passa a ser simples
 - sair antes nao cria debito extra na regra atual
@@ -155,14 +181,20 @@ Banco de horas nao deve reutilizar automaticamente a regra visual do board.
   - chegada real do primeiro plantao
   - saida real do plantao de continuidade
 - a continuidade nao zera a chegada e nao cria um segundo calculo solto no meio
+- quando a continuidade troca base, ramal ou dominio, as occupancies operacionais podem mudar, mas o banco de horas continua ancorado no primeiro registro da cadeia e fecha apenas na ultima saida real
+- por isso, membros intermediarios da mesma cadeia nao devem gerar um segundo debito de chegada nem uma segunda linha financeira solta
 - para a regra de tolerancia:
-  - chegou ate `07:15` ou `19:15`: atraso perdoado, sem punicao, e eventual excedente segue dobrado
-  - chegou a partir de `07:16` ou `19:16`: atraso entra integralmente no calculo e o excedente deixa de ser dobrado
+  - chegou com menos de `15 min`: atraso perdoado, sem punicao, e eventual excedente segue dobrado
+  - chegou com `15 min` ou mais: atraso entra integralmente no calculo e o excedente deixa de ser dobrado
+  - saiu com menos de `15 min` alem da janela prevista: nao existe credito de excedente
+  - saiu com `15 min` ou mais alem da janela prevista: o excedente passa a entrar integralmente no calculo
 - para a regra de justificativa operacional:
   - `07:15` ou `19:15` em diante: justificativa escrita obrigatoria para liberar continuidade ou registrar a saida nesse contexto sensivel
   - isso nao muda a matematica do banco de horas; muda a exigencia de trilha operacional para o excedente
 - exemplos de referencia:
-  - `07:14 -> 19:14`: gera `28 min` de credito
+  - `07:14 -> 19:14`: gera `0 min` de credito
+  - `07:14 -> 19:15`: gera `30 min` de credito
+  - `07:15 -> 19:15`: gera `0 min` de saldo
   - `07:16 -> 19:16`: gera `0 min` de saldo
   - chegar antes do horario oficial nao gera bonus por si so
   - sair antes do horario final nao gera beneficio

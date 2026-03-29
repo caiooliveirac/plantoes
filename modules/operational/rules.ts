@@ -1,3 +1,5 @@
+import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+
 const OPERATIONAL_LOCAL_OFFSET_MINUTES = -180;
 
 function toOperationalLocalClock(date: Date) {
@@ -54,6 +56,78 @@ export function inferInterventionScheduledEndAt(startedAt: Date, shiftLabel?: st
 
     const endBase = fromOperationalLocalClockParts(year, month, day, 7, 0);
     return hour >= 19 ? new Date(endBase.getTime() + 86400000) : endBase;
+}
+
+export function inferInterventionCoverageWindow(params: {
+    startedAt: Date;
+    shiftLabel?: string | null;
+    explicitScheduledStartAt?: Date | null;
+    explicitScheduledEndAt?: Date | null;
+}) {
+    const normalized = params.shiftLabel?.trim().toUpperCase() ?? null;
+    const baseShiftLabel = normalized === "SD" || normalized === "SN"
+        ? normalized
+        : resolveOperationalShiftWindow(params.startedAt).shiftLabel;
+    const scheduledStartAt = inferOperationalScheduledStartAt(
+        params.startedAt,
+        baseShiftLabel,
+        params.explicitScheduledStartAt ?? null,
+    );
+    let scheduledEndAt = inferInterventionScheduledEndAt(
+        params.startedAt,
+        baseShiftLabel,
+        params.explicitScheduledEndAt ?? null,
+    );
+
+    if (normalized === "P" && scheduledEndAt) {
+        const extendedBoundary = resolveOperationalShiftWindow(new Date(scheduledEndAt.getTime() + 60000)).nextBoundaryAt;
+        if (extendedBoundary.getTime() > scheduledEndAt.getTime()) {
+            scheduledEndAt = extendedBoundary;
+        }
+    }
+
+    return {
+        baseShiftLabel,
+        scheduledStartAt,
+        scheduledEndAt,
+    };
+}
+
+export function inferRegulationCoverageWindow(params: {
+    startedAt: Date;
+    shiftLabel?: string | null;
+    explicitScheduledStartAt?: Date | null;
+    explicitScheduledEndAt?: Date | null;
+}) {
+    const normalized = params.shiftLabel?.trim().toUpperCase() ?? null;
+    const baseShiftLabel = normalized === "SD" || normalized === "SN"
+        ? normalized
+        : resolveOperationalShiftWindow(params.startedAt).shiftLabel;
+    const scheduledStartAt = inferOperationalScheduledStartAt(
+        params.startedAt,
+        baseShiftLabel,
+        params.explicitScheduledStartAt ?? null,
+    );
+    let scheduledEndAt = inferRegulationScheduledEndAt(
+        params.startedAt,
+        baseShiftLabel,
+        params.explicitScheduledEndAt ?? null,
+    );
+
+    if (normalized === "P" && scheduledEndAt) {
+        const extendedReference = new Date(scheduledEndAt.getTime() + 60000);
+        const nextShiftLabel = resolveOperationalShiftWindow(extendedReference).shiftLabel;
+        const extendedScheduledEndAt = inferRegulationScheduledEndAt(extendedReference, nextShiftLabel, null);
+        if (extendedScheduledEndAt && extendedScheduledEndAt.getTime() > scheduledEndAt.getTime()) {
+            scheduledEndAt = extendedScheduledEndAt;
+        }
+    }
+
+    return {
+        baseShiftLabel,
+        scheduledStartAt,
+        scheduledEndAt,
+    };
 }
 
 export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledEndAt?: Date | null) {

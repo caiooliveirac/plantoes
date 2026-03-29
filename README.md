@@ -55,6 +55,9 @@ O sistema consolida regulação, intervenção, chefia e banco de horas em uma b
 - npm run build
 - npm run db:migrate
 - npm run db:import-doctors -- --file ./algum-arquivo.csv --dry-run
+- comando Telegram admin: /medico cadastrar Nome Completo | Nome de exibicao | codigo
+- comando Telegram pagamento: /pagamento conferir [YYYY-MM-DD] [SD|SN]
+- comando Telegram correção de pagamento: /pagamento corrigir alvo | Nome Completo | [YYYY-MM-DD] | [SD|SN] | [motivo]
 - npm run test
 
 ## Estado atual

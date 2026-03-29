@@ -2,8 +2,11 @@
 
 import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { buildOperationalRoleChoices, getOperationalRoleTone, resolveFixedOperationalRole, resolveOperationalRoleLabel } from "@/modules/operational/roles";
+import type { MealBreakSession, MealBreakLunchSlot, MealBreakRestSlot } from "@/modules/telegram/meal-breaks";
 import {
     getSaoPauloParts,
+    hasPlannedInterventionCoverageForCurrentShift,
     requiresOvertimeJustification,
     resolveContinuationBadgeLabel,
     shouldHighlightInterventionVerification,
@@ -52,6 +55,7 @@ interface OperationalBoardClientProps {
     shiftLabel: string;
     regulation: RegulationBoardRow[];
     intervention: InterventionBoardRow[];
+    mealBreakSession: MealBreakSession | null;
     previousShift: PreviousOperationalBoard;
     doctors: DoctorOption[];
     session: SessionSummary | null;
@@ -73,6 +77,75 @@ interface AuthResponse {
             mustChangePassword?: boolean;
         };
     };
+}
+
+type RobotStatusTone = "live" | "attention" | "idle";
+
+function formatBoardDateLabel(value: string) {
+    return new Date(value).toLocaleDateString("pt-BR", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+        timeZone: "America/Sao_Paulo",
+    });
+}
+
+function formatShiftHeadline(value: string) {
+    if (value === "SD") {
+        return "Plantão diurno";
+    }
+    if (value === "SN") {
+        return "Plantão noturno";
+    }
+    if (value === "P") {
+        return "Plantão contínuo";
+    }
+
+    return `Plantão ${value}`;
+}
+
+function resolveRobotStatus(session: MealBreakSession | null) {
+    if (!session) {
+        return {
+            tone: "idle" as RobotStatusTone,
+            label: "Sem fluxo de almoço",
+            copy: "Bot sem sessão aberta para almoço e descanso neste momento.",
+        };
+    }
+
+    if (session.stage === "completed") {
+        return {
+            tone: "live" as RobotStatusTone,
+            label: "Fluxo fechado",
+            copy: "Almoço e descanso já distribuídos para a regulação no turno atual.",
+        };
+    }
+
+    return {
+        tone: "attention" as RobotStatusTone,
+        label: "Fluxo em andamento",
+        copy: "Bot conduzindo almoço e descanso da regulação por ordem operacional.",
+    };
+}
+
+function resolveMealBreakSlot<TSlot extends MealBreakLunchSlot | MealBreakRestSlot>(
+    session: MealBreakSession | null,
+    ramal: string,
+    assignmentType: "lunchAssignments" | "restAssignments",
+) {
+    if (!session) {
+        return null;
+    }
+
+    return session[assignmentType][ramal] as TSlot | undefined ?? null;
+}
+
+function isRecipRamal(session: MealBreakSession | null, ramal: string) {
+    return session?.recipRamal === ramal;
+}
+
+function isMrvRamal(session: MealBreakSession | null, ramal: string) {
+    return Boolean(session?.mrvRamals.includes(ramal as MealBreakSession["mrvRamals"][number]));
 }
 
 function formatBoardTime(value: string | null) {
@@ -295,10 +368,20 @@ function formatHistoryStatus(entry: PreviousOperationalEntry) {
 
 function historyEntrySupportMeta(entry: PreviousOperationalEntry) {
     if (entry.domain === "regulation") {
-        return entry.roleLabel ?? entry.ramalLabel ?? "Mesa operacional";
+        return resolveOperationalRoleLabel({
+            domain: "regulation",
+            code: entry.targetCode,
+            shiftLabel: entry.shiftLabel,
+            roleLabel: entry.roleLabel,
+        }) ?? entry.ramalLabel ?? "Mesa operacional";
     }
 
-    return entry.roleLabel ?? "Base operacional";
+    return resolveOperationalRoleLabel({
+        domain: "intervention",
+        code: entry.targetCode,
+        shiftLabel: entry.shiftLabel,
+        roleLabel: entry.roleLabel,
+    }) ?? "Base operacional";
 }
 
 function historyBalanceClass(value: number | null) {
@@ -417,10 +500,43 @@ function buildInitialForm(card: BoardCard) {
         doctorId: card.doctorId ?? "",
         startedAt: toLocalDateTimeValue(card.startedAt),
         endedAt: toLocalDateTimeValue(),
-        roleLabel: card.roleLabel ?? (card.domain === "regulation" ? card.defaultRole ?? "" : ""),
+        roleLabel: resolveOperationalRoleLabel({
+            domain: card.domain,
+            code: cardCode(card),
+            shiftLabel: card.shiftLabel,
+            roleLabel: card.roleLabel,
+            defaultRole: card.domain === "regulation" ? card.defaultRole : null,
+        }) ?? "",
         ramalLabel: card.domain === "regulation" ? card.ramalLabel ?? card.postCode : "",
         notes: "",
     } satisfies FormState;
+}
+
+function resolveCardRoleLabel(card: BoardCard) {
+    return resolveOperationalRoleLabel({
+        domain: card.domain,
+        code: cardCode(card),
+        shiftLabel: card.shiftLabel,
+        roleLabel: card.roleLabel,
+        defaultRole: card.domain === "regulation" ? card.defaultRole : null,
+    });
+}
+
+function resolveCardFixedRole(card: BoardCard) {
+    return resolveFixedOperationalRole({
+        domain: card.domain,
+        code: cardCode(card),
+        shiftLabel: card.shiftLabel,
+    });
+}
+
+function renderRoleBadge(roleLabel: string | null | undefined) {
+    const normalized = roleLabel?.trim();
+    if (!normalized) {
+        return null;
+    }
+
+    return <span className={`ops-role-badge ${getOperationalRoleTone(normalized)}`.trim()}>{normalized}</span>;
 }
 
 function cardCode(card: BoardCard) {
@@ -467,8 +583,16 @@ function compareRegulationCards(left: RegulationCard, right: RegulationCard, shi
 }
 
 function isInterventionAwaitingNews(card: BoardCard, generatedAt: string) {
+    const hasPlannedCoverage = card.domain === "intervention"
+        && hasPlannedInterventionCoverageForCurrentShift({
+            shiftLabel: card.shiftLabel,
+            scheduledEndAt: card.scheduledEndAt,
+            reference: generatedAt,
+        });
+
     return card.domain === "intervention"
         && card.status === "active"
+        && !hasPlannedCoverage
         && shouldHighlightInterventionVerification(card.boardStartedAt ?? card.startedAt, generatedAt, card.shiftLabel);
 }
 
@@ -542,7 +666,7 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, previousShift, doctors, session } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, previousShift, doctors, session } = props;
     const router = useRouter();
     const [authOpen, setAuthOpen] = useState(false);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
@@ -574,6 +698,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [quickExitReason, setQuickExitReason] = useState("");
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [headerMessage, setHeaderMessage] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isRefreshing, startRefresh] = useTransition();
     const latestGeneratedAtRef = useRef(generatedAt);
@@ -708,6 +833,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         .filter((card) => (card.status === "active" && Boolean(card.doctorId)) || card.status === "waiting")
         .sort((left, right) => extractTrailingNumber(left.baseCode) - extractTrailingNumber(right.baseCode));
     const allCards: BoardCard[] = [...visibleRegulationCards, ...visibleInterventionCards];
+    const robotStatus = resolveRobotStatus(mealBreakSession);
+    const regulationLunchDefinedCount = visibleRegulationCards.filter((card) => Boolean(resolveMealBreakSlot(mealBreakSession, card.postCode, "lunchAssignments"))).length;
+    const regulationRestDefinedCount = visibleRegulationCards.filter((card) => Boolean(resolveMealBreakSlot(mealBreakSession, card.postCode, "restAssignments"))).length;
+    const regulationLunchPendingCount = Math.max(0, visibleRegulationCards.length - regulationLunchDefinedCount);
+    const regulationRestPendingCount = Math.max(0, visibleRegulationCards.length - regulationRestDefinedCount);
     const interventionWaitingCount = visibleInterventionCards.filter((card) => card.status === "waiting").length;
     const interventionActiveCount = visibleInterventionCards.length - interventionWaitingCount;
     const criticalCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "critical");
@@ -724,6 +854,18 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         .filter((doctor) => matchesDoctorQuery(doctor, deferredDoctorQuery))
         .slice(0, 8);
     const doctorSelectionLocked = Boolean(selectedDoctor && doctorQuery.trim() === doctorOptionLabel(selectedDoctor));
+
+    useEffect(() => {
+        if (!headerMessage) {
+            return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            setHeaderMessage(null);
+        }, 3200);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [headerMessage]);
 
     function resetDrawerFeedback() {
         setErrorMessage(null);
@@ -936,6 +1078,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     doctorId: formState.doctorId || undefined,
                     startedAt: toIsoDateTime(formState.startedAt),
                     boardStartedAt: toIsoDateTime(formState.startedAt),
+                    roleLabel: trimToNull(formState.roleLabel),
                     notes: trimToNull(formState.notes),
                     ...(selectedCard.domain === "regulation" ? { ramalLabel: trimToNull(formState.ramalLabel) } : {}),
                 };
@@ -983,7 +1126,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         scheduledStartAt: null,
                         scheduledEndAt: null,
                         shiftLabel,
-                        roleLabel: selectedCard.defaultRole ? trimToNull(selectedCard.defaultRole) : null,
+                        roleLabel: trimToNull(formState.roleLabel),
                         ramalLabel: trimToNull(formState.ramalLabel) ?? selectedCard.postCode,
                         source: "admin_correction",
                         notes: trimToNull(formState.notes),
@@ -995,6 +1138,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         scheduledStartAt: null,
                         scheduledEndAt: null,
                         shiftLabel,
+                        roleLabel: trimToNull(formState.roleLabel),
                         source: "admin_correction",
                         notes: trimToNull(formState.notes),
                     };
@@ -1131,12 +1275,84 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
     }
 
-    function renderTableRow(card: BoardCard, options?: { readOnly?: boolean }) {
+    function renderScheduleChip(params: {
+        slot: string | null;
+        kind: "lunch" | "rest";
+        pending?: boolean;
+    }) {
+        if (!params.slot) {
+            return <span className={`ops-slot-chip pending ${params.kind}`.trim()}>{params.kind === "lunch" ? "Pendente" : "Pendente"}</span>;
+        }
+
+        return <span className={`ops-slot-chip ${params.kind}`.trim()}>{params.slot}</span>;
+    }
+
+    function renderOperationalBadges(card: RegulationCard) {
+        const items: React.ReactNode[] = [];
+        const roleLabel = resolveCardRoleLabel(card);
+
+        if (isRecipRamal(mealBreakSession, card.postCode)) {
+            items.push(<span key="recip" className="ops-inline-flag recip">Receptor</span>);
+        }
+        if (isMrvRamal(mealBreakSession, card.postCode)) {
+            items.push(<span key="mrv" className="ops-inline-flag mrv">Vermelhinho</span>);
+        }
+
+        if (roleLabel) {
+            items.push(<span key={`role-${card.postCode}`} className={`ops-role-badge ${getOperationalRoleTone(roleLabel)}`.trim()}>{roleLabel}</span>);
+        }
+
+        return items.length > 0 ? <div className="ops-inline-flags">{items}</div> : null;
+    }
+
+    function renderRegulationRow(card: RegulationCard) {
         const emphasisClass = rowEmphasisClass(card, shiftLabel, generatedAt);
-        const accentLabel = rowAccentLabel(card, shiftLabel, generatedAt);
-        const isClickable = !options?.readOnly && Boolean(session?.canManage);
-        const isWaitingIntervention = card.domain === "intervention" && card.status === "waiting";
+        const lunchSlot = resolveMealBreakSlot<MealBreakLunchSlot>(mealBreakSession, card.postCode, "lunchAssignments");
+        const restSlot = resolveMealBreakSlot<MealBreakRestSlot>(mealBreakSession, card.postCode, "restAssignments");
+        const clickable = Boolean(session?.canManage);
+
+        return (
+            <tr
+                key={`${card.domain}-${card.postCode}`}
+                className={`ops-table-row ${emphasisClass} ${clickable ? "clickable" : ""}`.trim()}
+                onClick={clickable ? () => openDrawer(card) : undefined}
+            >
+                <td className="ops-cell time compact">
+                    <span className="ops-time-pill"><strong>{formatBoardTime(card.startedAt)}</strong></span>
+                </td>
+                <td className="ops-cell code compact">
+                    <div className="ops-code-stack rail">
+                        <strong>{card.postCode}</strong>
+                    </div>
+                </td>
+                <td className="ops-cell doctor wide">
+                    <div className="ops-doctor-stack compact">
+                        <div className="ops-doctor-line primary">
+                            <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
+                        </div>
+                        {renderOperationalBadges(card)}
+                    </div>
+                </td>
+                <td className="ops-cell slot">
+                    {renderScheduleChip({ slot: lunchSlot, kind: "lunch", pending: !lunchSlot })}
+                </td>
+                <td className="ops-cell slot">
+                    {renderScheduleChip({ slot: restSlot, kind: "rest", pending: !restSlot })}
+                </td>
+            </tr>
+        );
+    }
+
+    function renderInterventionRow(card: InterventionCard) {
+        const emphasisClass = rowEmphasisClass(card, shiftLabel, generatedAt);
+        const isClickable = Boolean(session?.canManage);
+        const isWaitingIntervention = card.status === "waiting";
         const isAwaitingNews = isInterventionAwaitingNews(card, generatedAt);
+        const hasPlannedCoverage = hasPlannedInterventionCoverageForCurrentShift({
+            shiftLabel: card.shiftLabel,
+            scheduledEndAt: card.scheduledEndAt,
+            reference: generatedAt,
+        });
         const continuationLabel = resolveContinuationBadgeLabel({
             startedAt: card.boardStartedAt ?? card.startedAt,
             shiftLabel: card.shiftLabel,
@@ -1146,72 +1362,33 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
         return (
             <tr
-                key={`${card.domain}-${cardCode(card)}`}
+                key={`${card.domain}-${card.baseCode}`}
                 className={`ops-table-row ${emphasisClass} ${isClickable ? "clickable" : ""}`.trim()}
                 onClick={isClickable ? () => openDrawer(card) : undefined}
             >
-                <td className="ops-cell code">
-                    <div className="ops-code-stack">
-                        <strong>{cardCode(card)}</strong>
-                        {accentLabel && <span className={`ops-code-accent ${emphasisClass}`}>{accentLabel}</span>}
-                    </div>
-                </td>
-                <td className="ops-cell doctor">
-                    <div className="ops-doctor-stack">
-                        <div className="ops-doctor-line">
-                            <strong>{displayDoctorName(card)}</strong>
-                            {isAwaitingNews && <span className="ops-doctor-note">Aguardando noticias</span>}
-                            {continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
-                        </div>
-                    </div>
-                </td>
-                <td className="ops-cell time">
+                <td className="ops-cell time compact">
                     <span className={`ops-time-pill ${isWaitingIntervention ? "waiting" : ""} ${isAwaitingNews ? "verification" : ""}`.trim()}>
                         <strong>{isWaitingIntervention ? "Livre" : formatBoardTime(card.startedAt)}</strong>
                     </span>
                 </td>
+                <td className="ops-cell code compact">
+                    <div className="ops-code-stack rail">
+                        <strong>{card.baseCode}</strong>
+                    </div>
+                </td>
+                <td className="ops-cell doctor wide">
+                    <div className="ops-doctor-stack compact">
+                        <div className="ops-doctor-line primary">
+                            <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
+                        </div>
+                        <div className="ops-inline-flags subtle">
+                            {renderRoleBadge(resolveCardRoleLabel(card))}
+                            {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
+                            {!hasPlannedCoverage && continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
+                        </div>
+                    </div>
+                </td>
             </tr>
-        );
-    }
-
-    function renderSection(cards: BoardCard[], options: { domain: "regulation" | "intervention"; readOnly?: boolean; title?: string; eyebrow?: string; meta?: React.ReactNode }) {
-        const isRegulation = options.domain === "regulation";
-        const title = options.title ?? (isRegulation ? "Regulação" : "Intervenção");
-        const eyebrow = options.eyebrow ?? (isRegulation ? "Mesa central" : "Bases em campo");
-
-        return (
-            <section className={`ops-table-shell ${options.domain}`}>
-                <header className="ops-section-header">
-                    <div className="ops-section-title-block">
-                        <p className="ops-section-eyebrow">{eyebrow}</p>
-                        <h2>{title}</h2>
-                    </div>
-                    <div className="ops-section-meta">
-                        {options.meta ?? (
-                            <>
-                                <span className="ops-section-shift">{formatShiftMeta(shiftLabel)}</span>
-                                <span className="ops-section-count">{isRegulation ? `${cards.length} ativos` : `${interventionActiveCount} ativos`}</span>
-                                {!isRegulation && interventionWaitingCount > 0 && (
-                                    <span className="ops-section-waiting">{interventionWaitingCount} aguardando</span>
-                                )}
-                                <span className="ops-section-updated">Atualizado {formatSectionTimestamp(generatedAt)}</span>
-                            </>
-                        )}
-                    </div>
-                </header>
-                <div className="ops-table-wrap">
-                    <table className="ops-table">
-                        <thead>
-                            <tr>
-                                <th>{isRegulation ? "Ramal" : "Base"}</th>
-                                <th>Nome</th>
-                                <th>Chegada</th>
-                            </tr>
-                        </thead>
-                        <tbody>{cards.map((card) => renderTableRow(card, { readOnly: options.readOnly }))}</tbody>
-                    </table>
-                </div>
-            </section>
         );
     }
 
@@ -1297,6 +1474,44 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     return (
         <>
             <div className={`ops-auth-dock ${authOpen ? "open" : ""}`.trim()}>
+                {session?.roles.includes("admin") && !session.mustChangePassword && (
+                    <button
+                        type="button"
+                        className="ops-history-trigger payment-allocation"
+                        aria-label="Abrir visão de alocação de pagamento"
+                        title="Alocação de pagamento"
+                        onClick={() => {
+                            setPreviousShiftOpen(false);
+                            setAuthOpen(false);
+                            router.push("/admin/payment-allocation");
+                        }}
+                    >
+                        <span className="ops-history-trigger-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M4.75 4h10.5A2.75 2.75 0 0 1 18 6.75v1.1h1.25A2.75 2.75 0 0 1 22 10.6v6.65A2.75 2.75 0 0 1 19.25 20h-10.5A2.75 2.75 0 0 1 6 17.25v-1.1H4.75A2.75 2.75 0 0 1 2 13.4V6.75A2.75 2.75 0 0 1 4.75 4Zm0 1.5A1.25 1.25 0 0 0 3.5 6.75v6.65a1.25 1.25 0 0 0 1.25 1.25H6v-4.05a2.75 2.75 0 0 1 2.75-2.75H16.5v-1.1a1.25 1.25 0 0 0-1.25-1.25H4.75Zm4 3.85A1.25 1.25 0 0 0 7.5 10.6v6.65a1.25 1.25 0 0 0 1.25 1.25h10.5a1.25 1.25 0 0 0 1.25-1.25V10.6a1.25 1.25 0 0 0-1.25-1.25H8.75Zm2.35 1.9h5.8a.75.75 0 0 1 0 1.5h-5.8a.75.75 0 0 1 0-1.5Zm0 3.5h3.2a.75.75 0 0 1 0 1.5h-3.2a.75.75 0 0 1 0-1.5Z" />
+                            </svg>
+                        </span>
+                    </button>
+                )}
+
+                <button
+                    type="button"
+                    className="ops-history-trigger bank-hours"
+                    aria-label="Abrir visão de banco de horas"
+                    title="Banco de horas"
+                    onClick={() => {
+                        setPreviousShiftOpen(false);
+                        setAuthOpen(false);
+                        router.push("/admin/bank-hours");
+                    }}
+                >
+                    <span className="ops-history-trigger-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false">
+                            <path d="M12 2.75a9.25 9.25 0 1 0 9.25 9.25A9.26 9.26 0 0 0 12 2.75Zm0 1.5a7.75 7.75 0 0 1 7.74 7.5h-1.9a5.85 5.85 0 0 0-4.34-5.34V4.26c.13 0 .25-.01.38-.01ZM10.88 4.34v2.07a5.86 5.86 0 0 0-4.45 5.34H4.26a7.77 7.77 0 0 1 6.62-7.41Zm-6.62 8.91h2.17a5.86 5.86 0 0 0 4.45 5.34v2.07a7.77 7.77 0 0 1-6.62-7.41Zm8.12 7.4v-2.06a5.85 5.85 0 0 0 4.34-5.34h3.02a7.75 7.75 0 0 1-7.36 7.4Zm-3.38-8.65a3 3 0 1 1 6 0 3 3 0 0 1-6 0Zm3-1.5a1.5 1.5 0 1 0 1.5 1.5 1.5 1.5 0 0 0-1.5-1.5Z" />
+                        </svg>
+                    </span>
+                </button>
+
                 <button
                     type="button"
                     className="ops-history-trigger"
@@ -1480,9 +1695,156 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             )}
 
             <main className="ops-shell">
-                <section className="ops-table-grid plain">
-                    {renderSection(visibleInterventionCards, { domain: "intervention" })}
-                    {renderSection(visibleRegulationCards, { domain: "regulation" })}
+                <section className="ops-command-center">
+                    <header className="ops-command-header">
+                        <div className="ops-command-copy">
+                            <p className="ops-kicker">Mesa operacional</p>
+                            <h1>Painel de regulação e intervenção</h1>
+                            <p className="ops-subtitle">
+                                Leitura direta do plantão atual, com regulação em foco, intervenção compacta e almoço/descanso visíveis onde fazem diferença operacional.
+                            </p>
+                        </div>
+
+                        <div className="ops-command-meta-card">
+                            <div className="ops-command-meta-row">
+                                <span className="ops-command-label">Turno</span>
+                                <strong>{formatShiftHeadline(shiftLabel)}</strong>
+                            </div>
+                            <div className="ops-command-meta-row">
+                                <span className="ops-command-label">Data operacional</span>
+                                <strong>{formatBoardDateLabel(generatedAt)}</strong>
+                            </div>
+                            <div className="ops-command-meta-row">
+                                <span className="ops-command-label">Robô</span>
+                                <div className="ops-header-status-stack">
+                                    <span className={`ops-inline-status ${robotStatus.tone === "attention" ? "warning" : robotStatus.tone === "idle" ? "neutral" : ""}`.trim()}>{robotStatus.label}</span>
+                                    <small>{robotStatus.copy}</small>
+                                </div>
+                            </div>
+                            <div className="ops-command-actions">
+                                <button
+                                    type="button"
+                                    className="ops-header-button secondary"
+                                    onClick={() => startRefresh(() => router.refresh())}
+                                    disabled={isRefreshing}
+                                >
+                                    {isRefreshing ? "Atualizando..." : "Atualizar"}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ops-header-button primary"
+                                    onClick={async () => {
+                                        try {
+                                            await navigator.clipboard.writeText("/almoco");
+                                            setHeaderMessage("Comando /almoco copiado. Dispare no bot autorizado para abrir o fluxo.");
+                                        } catch {
+                                            setHeaderMessage("Use /almoco no bot autorizado para organizar almoço e descanso.");
+                                        }
+                                    }}
+                                >
+                                    Organizar almoço/descanso
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    {(headerMessage || successMessage) && (
+                        <div className="ops-top-feedback">
+                            <span>{headerMessage ?? successMessage}</span>
+                        </div>
+                    )}
+
+                    <section className="ops-metrics-strip">
+                        <article className="ops-metric-tile regulation">
+                            <span className="ops-summary-label">Total em regulação</span>
+                            <strong>{visibleRegulationCards.length}</strong>
+                            <p>{regulationLunchPendingCount} almoço pendente • {regulationRestPendingCount} descanso pendente</p>
+                        </article>
+                        <article className="ops-metric-tile intervention">
+                            <span className="ops-summary-label">Total em intervenção</span>
+                            <strong>{interventionActiveCount}</strong>
+                            <p>{interventionWaitingCount} bases aguardando confirmação</p>
+                        </article>
+                        <article className="ops-metric-tile lunch">
+                            <span className="ops-summary-label">Almoço definido</span>
+                            <strong>{regulationLunchDefinedCount}</strong>
+                            <p>{robotStatus.label}</p>
+                        </article>
+                        <article className="ops-metric-tile rest">
+                            <span className="ops-summary-label">Descanso definido</span>
+                            <strong>{regulationRestDefinedCount}</strong>
+                            <p>Regulação com descanso já visível no quadro</p>
+                        </article>
+                    </section>
+
+                    <section className="ops-main-grid">
+                        <section className="ops-operational-panel regulation">
+                            <header className="ops-panel-header regulation">
+                                <div>
+                                    <p className="ops-section-eyebrow">Regulação</p>
+                                    <h2>Ramais operacionais</h2>
+                                </div>
+                                <div className="ops-section-meta">
+                                    <span className="ops-section-count">{visibleRegulationCards.length} em cobertura</span>
+                                    <span className="ops-section-waiting danger">{regulationLunchPendingCount} almoço pendente</span>
+                                    <span className="ops-section-waiting">{regulationRestPendingCount} descanso pendente</span>
+                                </div>
+                            </header>
+
+                            <div className="ops-panel-table-wrap regulation">
+                                <table className="ops-table ops-table-regulation">
+                                    <thead>
+                                        <tr>
+                                            <th>Chegada</th>
+                                            <th>Ramal</th>
+                                            <th>Nome</th>
+                                            <th>Almoço</th>
+                                            <th>Descanso</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {visibleRegulationCards.length > 0 ? visibleRegulationCards.map((card) => renderRegulationRow(card)) : (
+                                            <tr>
+                                                <td className="ops-empty-row" colSpan={5}>Nenhum ramal ativo na regulação neste turno.</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+
+                        <section className="ops-operational-panel intervention">
+                            <header className="ops-panel-header intervention">
+                                <div>
+                                    <p className="ops-section-eyebrow">Intervenção</p>
+                                    <h2>Bases em campo</h2>
+                                </div>
+                                <div className="ops-section-meta">
+                                    <span className="ops-section-count">{interventionActiveCount} em cobertura</span>
+                                    <span className="ops-section-waiting">{interventionWaitingCount} aguardando</span>
+                                </div>
+                            </header>
+
+                            <div className="ops-panel-table-wrap intervention">
+                                <table className="ops-table ops-table-intervention">
+                                    <thead>
+                                        <tr>
+                                            <th>Chegada</th>
+                                            <th>Base</th>
+                                            <th>Nome</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {visibleInterventionCards.length > 0 ? visibleInterventionCards.map((card) => renderInterventionRow(card)) : (
+                                            <tr>
+                                                <td className="ops-empty-row" colSpan={3}>Nenhuma base ativa ou aguardando neste turno.</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    </section>
                 </section>
             </main>
 
@@ -1687,6 +2049,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
                             <div className="chief-context-card">
                                 <strong>{displayDoctorName(selectedCard)}</strong>
+                                <div className="chief-context-badges">
+                                    {renderRoleBadge(resolveCardRoleLabel(selectedCard))}
+                                </div>
                                 <span>{cardLabel(selectedCard)}</span>
                                 <small>{selectedCard.status === "waiting" ? "Sem confirmacao ativa no quadro" : `Marcado desde ${formatBoardTime(selectedCard.startedAt)}`}</small>
                             </div>
@@ -1802,6 +2167,28 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                 value={formState.startedAt}
                                                 onChange={(event) => setFormState((current) => ({ ...current, startedAt: event.target.value }))}
                                             />
+                                        </label>
+
+                                        <label className="chief-field">
+                                            <span>Função operacional</span>
+                                            <select
+                                                className="chief-input chief-select"
+                                                value={formState.roleLabel}
+                                                onChange={(event) => setFormState((current) => ({ ...current, roleLabel: event.target.value }))}
+                                                disabled={Boolean(resolveCardFixedRole(selectedCard))}
+                                            >
+                                                <option value="">Sem função</option>
+                                                {buildOperationalRoleChoices([
+                                                    resolveCardFixedRole(selectedCard),
+                                                    selectedCard.roleLabel,
+                                                    selectedCard.domain === "regulation" ? selectedCard.defaultRole : null,
+                                                ]).map((role) => (
+                                                    <option key={role} value={role}>{role}</option>
+                                                ))}
+                                            </select>
+                                            {resolveCardFixedRole(selectedCard) && (
+                                                <small className="chief-field-hint">Função travada por regra operacional deste posto neste turno.</small>
+                                            )}
                                         </label>
 
                                         {selectedCard.domain === "regulation" && (

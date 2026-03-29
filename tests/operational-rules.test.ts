@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    hasPlannedInterventionCoverageForCurrentShift,
     requiresOvertimeJustification,
     resolveContinuationBadgeLabel,
     resolveImplicitOccupancyExpiry,
@@ -10,7 +11,7 @@ import {
     shouldKeepRegulationOccupancyVisible,
 } from "@/modules/operational/board-rules";
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
-import { inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 
 test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
@@ -385,6 +386,7 @@ test("parses intervention P shift with numeric base alias and 07h format", () =>
     assert.equal(parsed.arrivalTime, "07:00");
     assert.equal(parsed.shiftType, "P");
     assert.equal(parsed.isDeparture, false);
+    assert.equal(parsed.isContinuation, false);
     assert.deepEqual(parsed.extractedNames, ["Larissa Rocha"]);
 });
 
@@ -470,7 +472,58 @@ test("parses intervention P shift with bare base alias and explicit time", () =>
     assert.equal(parsed.arrivalTime, "20:35");
     assert.equal(parsed.shiftType, "P");
     assert.equal(parsed.isDeparture, false);
+    assert.equal(parsed.isContinuation, false);
     assert.deepEqual(parsed.extractedNames, ["Marcela"]);
+});
+
+test("inferInterventionCoverageWindow extends explicit P through the next shift", () => {
+    const dayShift = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T07:25:00-03:00"),
+        shiftLabel: "P",
+    });
+
+    assert.equal(dayShift.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+    assert.equal(dayShift.scheduledEndAt?.toISOString(), new Date("2026-03-26T07:00:00-03:00").toISOString());
+
+    const nightShift = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T19:12:00-03:00"),
+        shiftLabel: "P",
+    });
+
+    assert.equal(nightShift.scheduledStartAt?.toISOString(), new Date("2026-03-25T19:00:00-03:00").toISOString());
+    assert.equal(nightShift.scheduledEndAt?.toISOString(), new Date("2026-03-26T19:00:00-03:00").toISOString());
+});
+
+test("inferRegulationCoverageWindow extends explicit P through the next shift", () => {
+    const dayShift = inferRegulationCoverageWindow({
+        startedAt: new Date("2026-03-25T07:25:00-03:00"),
+        shiftLabel: "P",
+    });
+
+    assert.equal(dayShift.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+    assert.equal(dayShift.scheduledEndAt?.toISOString(), new Date("2026-03-26T07:15:00-03:00").toISOString());
+
+    const nightShift = inferRegulationCoverageWindow({
+        startedAt: new Date("2026-03-25T19:12:00-03:00"),
+        shiftLabel: "P",
+    });
+
+    assert.equal(nightShift.scheduledStartAt?.toISOString(), new Date("2026-03-25T19:00:00-03:00").toISOString());
+    assert.equal(nightShift.scheduledEndAt?.toISOString(), new Date("2026-03-26T19:15:00-03:00").toISOString());
+});
+
+test("hasPlannedInterventionCoverageForCurrentShift suppresses next-boundary verification for explicit P", () => {
+    assert.equal(hasPlannedInterventionCoverageForCurrentShift({
+        shiftLabel: "P",
+        scheduledEndAt: new Date("2026-03-26T07:00:00-03:00"),
+        reference: new Date("2026-03-25T19:10:00-03:00"),
+    }), true);
+
+    assert.equal(hasPlannedInterventionCoverageForCurrentShift({
+        shiftLabel: "P",
+        scheduledEndAt: new Date("2026-03-25T19:00:00-03:00"),
+        reference: new Date("2026-03-25T19:10:00-03:00"),
+    }), false);
 });
 
 test("parses pasted batch lines ignoring headings and separators", () => {

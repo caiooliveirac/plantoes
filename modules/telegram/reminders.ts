@@ -1,260 +1,385 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { telegramBotNotices, telegramIngestedMessages } from "@/db/schema";
+import { telegramBotNotices } from "@/db/schema";
+import {
+    getSaoPauloParts,
+    hasPlannedInterventionCoverageForCurrentShift,
+    resolveOperationalShiftWindow,
+    shouldHighlightInterventionVerification,
+} from "@/modules/operational/board-rules";
 import { sendMessage } from "@/modules/telegram/api";
-import { getTelegramReminderChatIds } from "@/modules/telegram/config";
+import { getTelegramAnnouncementChatIds, getTelegramReminderChatIds } from "@/modules/telegram/config";
+import {
+    getOperationalBoard,
+    type InterventionBoardRow,
+    type RegulationBoardRow,
+} from "@/services/board.service";
 
-export interface ReminderShiftSnapshot {
-    shiftInstanceId: string;
-    targetCode: string;
-    targetLabel: string;
-    sector: "REGULATION" | "INTERVENTION";
-    scheduledStartAt: Date | null;
-    scheduledEndAt: Date | null;
-    arrivalTime: Date | null;
-    departureTime: Date | null;
+export interface ReminderBoardSnapshot {
+    generatedAt: string;
+    regulation: RegulationBoardRow[];
+    intervention: InterventionBoardRow[];
 }
 
 export interface ReminderPlan {
     noticeKey: string;
-    stage: "greeting" | "nudge" | "escalation";
+    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint";
     text: string;
     payload: Record<string, unknown>;
 }
 
 interface ReminderPlanningParams {
     now: Date;
-    lastActivityAt: Date | null;
-    shifts: ReminderShiftSnapshot[];
+    board: ReminderBoardSnapshot;
 }
 
-const FIVE_MINUTES = 5 * 60 * 1000;
 const TEN_MINUTES = 10 * 60 * 1000;
-const TWO_HOURS = 2 * 60 * 60 * 1000;
-
-function uniqueTargets(shifts: ReminderShiftSnapshot[]) {
-    const map = new Map<string, ReminderShiftSnapshot>();
-    for (const shift of shifts) {
-        map.set(`${shift.sector}:${shift.targetCode}`, shift);
-    }
-
-    return [...map.values()].sort((left, right) => left.targetCode.localeCompare(right.targetCode, "pt-BR"));
-}
-
-function formatTarget(shift: ReminderShiftSnapshot) {
-    return shift.targetLabel && shift.targetLabel !== shift.targetCode
-        ? `${shift.targetCode} - ${shift.targetLabel}`
-        : shift.targetCode;
-}
-
-function formatTargetList(shifts: ReminderShiftSnapshot[]) {
-    return uniqueTargets(shifts)
-        .map((shift) => `- ${formatTarget(shift)}`)
-        .join("\n");
-}
+const ONE_HOUR = 60 * 60 * 1000;
 
 function floorToBucket(date: Date, bucketMs: number) {
     return new Date(Math.floor(date.getTime() / bucketMs) * bucketMs);
 }
 
-function formatHour(date: Date) {
-    return date.toLocaleTimeString("pt-BR", {
+function formatHour(value: string | Date | null) {
+    if (!value) {
+        return "--:--";
+    }
+
+    return new Intl.DateTimeFormat("pt-BR", {
         hour: "2-digit",
         minute: "2-digit",
         hour12: false,
         timeZone: "America/Sao_Paulo",
+    }).format(new Date(value));
+}
+
+function formatCheckpointLabel(hour: number) {
+    return `${String(hour).padStart(2, "0")}:00`;
+}
+
+function formatFullName(primary: string | null, fallback: string | null) {
+    return primary?.trim() || fallback?.trim() || "medico ainda nao identificado";
+}
+
+function renderSection(text: string, fallback: string) {
+    return text.trim() ? text : fallback;
+}
+
+function uniqueChatIds(values: string[]) {
+    return [...new Set(values.filter(Boolean))];
+}
+
+function resolveReminderChatIds() {
+    const announcementChats = getTelegramAnnouncementChatIds();
+    if (announcementChats.length > 0) {
+        return uniqueChatIds(announcementChats);
+    }
+
+    return uniqueChatIds(getTelegramReminderChatIds());
+}
+
+function isInterventionAwaitingNews(row: InterventionBoardRow, reference: Date) {
+    const hasPlannedCoverage = hasPlannedInterventionCoverageForCurrentShift({
+        shiftLabel: row.shiftLabel,
+        scheduledEndAt: row.scheduledEndAt,
+        reference,
     });
+
+    return row.status === "active"
+        && !hasPlannedCoverage
+        && shouldHighlightInterventionVerification(row.boardStartedAt ?? row.startedAt, reference, row.shiftLabel);
+}
+
+function describeInterventionAwaitingNews(row: InterventionBoardRow) {
+    const name = formatFullName(row.doctorName, row.displayName);
+    const lastShiftLabel = row.shiftLabel ?? "turno anterior";
+    const lastStartedAt = row.startedAt ? `${lastShiftLabel} desde ${formatHour(row.startedAt)}` : lastShiftLabel;
+    return `Sem medico confirmado neste turno. Ultimo aviso: ${name} | ${lastStartedAt}. So entra se avisar continua/P ou se a chefia atualizar.`;
+}
+
+function summarizeCoverage(board: ReminderBoardSnapshot, reference: Date) {
+    const confirmedIntervention = board.intervention.filter((row) => row.status === "active" && !isInterventionAwaitingNews(row, reference));
+    const awaitingIntervention = board.intervention.filter((row) => row.status === "active" && isInterventionAwaitingNews(row, reference));
+    const missingIntervention = board.intervention.filter((row) => row.status === "waiting");
+    const confirmedRegulation = board.regulation.filter((row) => row.status === "active");
+    const missingRegulation = board.regulation.filter((row) => row.status === "waiting");
+
+    return {
+        confirmedIntervention,
+        awaitingIntervention,
+        missingIntervention,
+        confirmedRegulation,
+        missingRegulation,
+        unresolvedCount: awaitingIntervention.length + missingIntervention.length + missingRegulation.length,
+    };
+}
+
+function buildInterventionLine(row: InterventionBoardRow, reference: Date, includeArrival = false) {
+    const name = formatFullName(row.doctorName, row.displayName);
+    const arrival = includeArrival && row.startedAt ? ` | chegada ${formatHour(row.startedAt)}` : "";
+
+    if (row.status === "waiting") {
+        return `🔴 ${row.baseCode} - Aguardando confirmação da avançada`;
+    }
+
+    if (isInterventionAwaitingNews(row, reference)) {
+        return `🔴 ${row.baseCode} - ${describeInterventionAwaitingNews(row)}`;
+    }
+
+    return `✅ ${row.baseCode} - ${name}${arrival}`;
+}
+
+function buildRegulationLine(row: RegulationBoardRow, includeArrival = false) {
+    const name = formatFullName(row.doctorName, row.displayName);
+    const arrival = includeArrival && row.startedAt ? ` | chegada ${formatHour(row.startedAt)}` : "";
+
+    if (row.status === "waiting") {
+        return `🔴 ${row.postCode} - Aguardando aviso de ramal`;
+    }
+
+    return `✅ ${row.postCode} - ${name}${arrival}`;
+}
+
+function buildInterventionSection(rows: InterventionBoardRow[], reference: Date, includeArrival = false) {
+    return rows.map((row) => buildInterventionLine(row, reference, includeArrival)).join("\n");
+}
+
+function buildRegulationSection(rows: RegulationBoardRow[], includeArrival = false) {
+    return rows.map((row) => buildRegulationLine(row, includeArrival)).join("\n");
+}
+
+function joinPendingCodes(values: string[]) {
+    return values.join(", ");
+}
+
+function buildGroupedPendingLines(params: {
+    awaitingIntervention: InterventionBoardRow[];
+    missingIntervention: InterventionBoardRow[];
+    missingRegulation: RegulationBoardRow[];
+}) {
+    const lines: string[] = [];
+
+    if (params.awaitingIntervention.length > 0) {
+        lines.push(
+            `🔴 Intervencao sem medico confirmado neste turno (${params.awaitingIntervention.length}): ${joinPendingCodes(params.awaitingIntervention.map((row) => row.baseCode))}. So entra se avisar continua/P ou se a chefia atualizar.`,
+        );
+    }
+
+    if (params.missingIntervention.length > 0) {
+        lines.push(
+            `🚑 Avancadas sem aviso (${params.missingIntervention.length}): ${joinPendingCodes(params.missingIntervention.map((row) => row.baseCode))}`,
+        );
+    }
+
+    if (params.missingRegulation.length > 0) {
+        lines.push(
+            `☎️ Ramais sem aviso (${params.missingRegulation.length}): ${joinPendingCodes(params.missingRegulation.map((row) => row.postCode))}`,
+        );
+    }
+
+    return lines;
+}
+
+function resolveCoverageFooter(params: {
+    now: Date;
+    unresolvedCount: number;
+    missingRegulationCount: number;
+}) {
+    if (params.unresolvedCount === 0) {
+        return "✅ Cobertura fechada até aqui. Obrigado por manterem base, ramal e turno claros para a coordenação.";
+    }
+
+    const elapsedMs = params.now.getTime() - resolveOperationalShiftWindow(params.now).startedAt.getTime();
+    if (elapsedMs < 20 * 60 * 1000) {
+        return params.missingRegulationCount > 0
+            ? "🫶 TARM precisa dos ramais ativos. Quem estiver na regulacao, por favor avise ramal e turno no padrao."
+            : "🫶 Quem continuou precisa avisar continua/P. Sem esse aviso ou ajuste da chefia, a avancada segue sem medico confirmado.";
+    }
+
+    if (elapsedMs < 40 * 60 * 1000) {
+        return params.missingRegulationCount > 0
+            ? "⚠️ Coordenação ainda está sem todos os ramais ativos. TARM precisa dos ramais ativos. Reguladores, por favor avisem o ramal agora para o TARM conseguir trabalhar com segurança."
+            : "⚠️ Coordenação ainda está sem avancadas confirmadas. Quem continuou precisa escrever continua/P agora. Sem isso ou ajuste da chefia, a posicao fica sem medico confirmado.";
+    }
+
+    return params.missingRegulationCount > 0
+        ? "🚨 Sem aviso de base e ramal eu não fecho cobertura nem folha. TARM precisa dos ramais ativos. Regulação, por favor informe agora quem está em cada ramal."
+        : "🚨 Sem aviso de continua/P ou ajuste da chefia eu trato a avancada como sem medico confirmado no grupo, na cobertura e na folha. Intervencao, por favor atualize agora.";
+}
+
+function pickInstructionExamples(nextShiftLabel: "SD" | "SN") {
+    if (nextShiftLabel === "SD") {
+        return {
+            intervention: "Felipe Carvalho PM04 SD 07:00",
+            regulation: "Luana Bordoni 2031 SD 07:00",
+            continuation: "Karla Pinto BR05 continua P 07:00",
+        };
+    }
+
+    return {
+        intervention: "Felipe Carvalho PM04 SN 19:00",
+        regulation: "Luana Bordoni 2031 SN 19:00",
+        continuation: "Karla Pinto BR05 continua P 19:00",
+    };
+}
+
+function buildPreShiftInstructionPlan(now: Date): ReminderPlan | null {
+    const window = resolveOperationalShiftWindow(now);
+    const nextBoundaryAt = window.nextBoundaryAt;
+    const deltaMs = nextBoundaryAt.getTime() - now.getTime();
+    if (deltaMs <= 0 || deltaMs > TEN_MINUTES) {
+        return null;
+    }
+
+    const nextShiftLabel = getSaoPauloParts(nextBoundaryAt).hour === 7 ? "SD" : "SN";
+    const examples = pickInstructionExamples(nextShiftLabel);
+
+    return {
+        noticeKey: `instruction:${nextBoundaryAt.toISOString()}`,
+        stage: "instruction",
+        payload: {
+            boundaryAt: nextBoundaryAt.toISOString(),
+            shiftLabel: nextShiftLabel,
+        },
+        text: [
+            `🧭 Plantão ${nextShiftLabel} abrindo por volta de ${formatHour(nextBoundaryAt)}.`,
+            "",
+            "Para eu preencher certo no sistema, por favor sempre avisem nome completo, base ou ramal e SD, SN ou P.",
+            "",
+            "Exemplos:",
+            `- Intervenção: ${examples.intervention}`,
+            `- Regulação: ${examples.regulation}`,
+            `- Se continuar: ${examples.continuation}`,
+            "",
+            "Se a pessoa segue no posto, escrevam continua. Se assumiu agora, escrevam SD, SN ou P na mesma linha.",
+            "Sem aviso de continua/P ou ajuste da chefia, a posição fica como sem medico confirmado no grupo.",
+        ].join("\n"),
+    };
+}
+
+function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan | null {
+    const shiftWindow = resolveOperationalShiftWindow(params.now);
+    const bucket = floorToBucket(params.now, TEN_MINUTES);
+    if (bucket.getTime() < shiftWindow.startedAt.getTime() || bucket.getTime() >= shiftWindow.startedAt.getTime() + ONE_HOUR) {
+        return null;
+    }
+
+    const coverage = summarizeCoverage(params.board, params.now);
+
+    return {
+        noticeKey: `coverage:${bucket.toISOString()}`,
+        stage: "coverage_snapshot",
+        payload: {
+            bucketAt: bucket.toISOString(),
+            shiftLabel: shiftWindow.shiftLabel,
+            confirmedInterventionCount: coverage.confirmedIntervention.length,
+            confirmedRegulationCount: coverage.confirmedRegulation.length,
+            unresolvedCount: coverage.unresolvedCount,
+        },
+        text: [
+            `🧭 Quadro ${formatHour(bucket)} | Intervenção ${coverage.confirmedIntervention.length}/${params.board.intervention.length} | Regulação ${coverage.confirmedRegulation.length}/${params.board.regulation.length}`,
+            "",
+            "Intervenção:",
+            buildInterventionSection(params.board.intervention, params.now),
+            "",
+            "Regulação:",
+            buildRegulationSection(params.board.regulation),
+            "",
+            resolveCoverageFooter({
+                now: params.now,
+                unresolvedCount: coverage.unresolvedCount,
+                missingRegulationCount: coverage.missingRegulation.length,
+            }),
+        ].join("\n"),
+    };
+}
+
+function buildCoverageCheckpointPlan(params: ReminderPlanningParams): ReminderPlan | null {
+    const parts = getSaoPauloParts(params.now);
+    if (!((parts.hour === 8 || parts.hour === 20) && parts.minute < 10)) {
+        return null;
+    }
+
+    const checkpointLabel = formatCheckpointLabel(parts.hour);
+    const coverage = summarizeCoverage(params.board, params.now);
+    const pendingLines = buildGroupedPendingLines({
+        awaitingIntervention: coverage.awaitingIntervention,
+        missingIntervention: coverage.missingIntervention,
+        missingRegulation: coverage.missingRegulation,
+    });
+
+    return {
+        noticeKey: `checkpoint:${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}T${checkpointLabel}`,
+        stage: "coverage_checkpoint",
+        payload: {
+            checkpointLabel,
+            confirmedInterventionCount: coverage.confirmedIntervention.length,
+            confirmedRegulationCount: coverage.confirmedRegulation.length,
+            pendingCount: pendingLines.length,
+        },
+        text: [
+            `📋 Fechamento público ${checkpointLabel}.`,
+            "",
+            "🚑 Intervenção confirmada:",
+            renderSection(buildInterventionSection(coverage.confirmedIntervention, params.now), "- Nenhuma avançada confirmada neste fechamento"),
+            "",
+            "☎️ Regulação confirmada:",
+            renderSection(buildRegulationSection(coverage.confirmedRegulation), "- Nenhum ramal confirmado neste fechamento"),
+            ...(pendingLines.length > 0
+                ? ["", "🟠 Pendências ainda abertas:", pendingLines.join("\n"), "", "⚠️ Quem ainda não avisou base ou ramal, por favor informe agora para a coordenação fechar a cobertura."]
+                : ["", "✅ Cobertura confirmada para a coordenação neste fechamento."]),
+        ].join("\n"),
+    };
+}
+
+function buildPaymentCheckpointPlan(params: ReminderPlanningParams): ReminderPlan | null {
+    const parts = getSaoPauloParts(params.now);
+    if (!((parts.hour === 0 || parts.hour === 12) && parts.minute < 10)) {
+        return null;
+    }
+
+    const checkpointLabel = formatCheckpointLabel(parts.hour);
+    const shiftLabel = resolveOperationalShiftWindow(params.now).shiftLabel;
+    const coverage = summarizeCoverage(params.board, params.now);
+    const confirmedIntervention = coverage.confirmedIntervention.map((row) => `- ${row.baseCode} - ${formatFullName(row.doctorName, row.displayName)} | chegada ${formatHour(row.startedAt)} | ${row.shiftLabel ?? shiftLabel}`);
+    const confirmedRegulation = coverage.confirmedRegulation.map((row) => `- ${row.postCode} - ${formatFullName(row.doctorName, row.displayName)} | chegada ${formatHour(row.startedAt)} | ${row.shiftLabel ?? shiftLabel}`);
+    const pendingLines = buildGroupedPendingLines({
+        awaitingIntervention: coverage.awaitingIntervention,
+        missingIntervention: coverage.missingIntervention,
+        missingRegulation: coverage.missingRegulation,
+    });
+
+    return {
+        noticeKey: `payment:${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}T${checkpointLabel}`,
+        stage: "payment_checkpoint",
+        payload: {
+            checkpointLabel,
+            confirmedInterventionCount: confirmedIntervention.length,
+            confirmedRegulationCount: confirmedRegulation.length,
+            pendingCount: pendingLines.length,
+        },
+        text: [
+            `🧾 Registro ${checkpointLabel} para pagamento e banco de horas.`,
+            "",
+            "🚑 Intervencao confirmada:",
+            confirmedIntervention.length > 0 ? confirmedIntervention.join("\n") : "- Nenhuma avancada confirmada neste recorte",
+            "",
+            "☎️ Regulacao confirmada:",
+            confirmedRegulation.length > 0 ? confirmedRegulation.join("\n") : "- Nenhum ramal confirmado neste recorte",
+            ...(pendingLines.length > 0
+                ? ["", "🟠 Pendencias que ainda exigem conferencia:", pendingLines.join("\n")]
+                : []),
+        ].join("\n"),
+    };
 }
 
 export function buildReminderPlans(params: ReminderPlanningParams) {
-    const { now, lastActivityAt, shifts } = params;
-    const plans: ReminderPlan[] = [];
-    const inactiveMs = lastActivityAt ? now.getTime() - lastActivityAt.getTime() : Number.POSITIVE_INFINITY;
-    const isInactive = inactiveMs >= FIVE_MINUTES;
-
-    const greetingGroups = new Map<string, ReminderShiftSnapshot[]>();
-    for (const shift of shifts) {
-        if (!shift.scheduledStartAt || shift.arrivalTime) {
-            continue;
-        }
-
-        const delta = shift.scheduledStartAt.getTime() - now.getTime();
-        if (delta < 0 || delta > TEN_MINUTES) {
-            continue;
-        }
-
-        const slotKey = shift.scheduledStartAt.toISOString();
-        const current = greetingGroups.get(slotKey) ?? [];
-        current.push(shift);
-        greetingGroups.set(slotKey, current);
-    }
-
-    for (const [slotKey, group] of greetingGroups) {
-        const slotAt = new Date(slotKey);
-        plans.push({
-            noticeKey: `greeting:${slotAt.toISOString()}`,
-            stage: "greeting",
-            payload: {
-                slotAt: slotAt.toISOString(),
-                targets: uniqueTargets(group).map((shift) => shift.targetCode),
-            },
-            text: [
-                ':)',
-                `Plantao chegando por volta de ${formatHour(slotAt)}.`,
-                "",
-                "Entradas esperadas nesse horario:",
-                formatTargetList(group),
-                "",
-                "Quando forem confirmando chegadas e saidas, podem avisar por aqui.",
-            ].join("\n"),
-        });
-    }
-
-    const recentArrivalPending = shifts.filter((shift) => {
-        if (!shift.scheduledStartAt || shift.arrivalTime) {
-            return false;
-        }
-
-        const delta = shift.scheduledStartAt.getTime() - now.getTime();
-        return delta <= FIVE_MINUTES && delta >= -TEN_MINUTES;
-    });
-    const recentDeparturePending = shifts.filter((shift) => {
-        if (!shift.scheduledEndAt || shift.departureTime) {
-            return false;
-        }
-
-        const delta = shift.scheduledEndAt.getTime() - now.getTime();
-        return delta <= FIVE_MINUTES && delta >= -TEN_MINUTES;
-    });
-
-    const overdueArrivalPending = shifts.filter((shift) => {
-        if (!shift.scheduledStartAt || shift.arrivalTime) {
-            return false;
-        }
-
-        const overdueMs = now.getTime() - shift.scheduledStartAt.getTime();
-        return overdueMs >= TEN_MINUTES && overdueMs <= TWO_HOURS;
-    });
-    const overdueDeparturePending = shifts.filter((shift) => {
-        if (!shift.scheduledEndAt || shift.departureTime) {
-            return false;
-        }
-
-        const overdueMs = now.getTime() - shift.scheduledEndAt.getTime();
-        return overdueMs >= TEN_MINUTES && overdueMs <= TWO_HOURS;
-    });
-
-    if (isInactive && (recentArrivalPending.length > 0 || recentDeparturePending.length > 0)) {
-        const bucket = floorToBucket(now, FIVE_MINUTES);
-        const sections = [
-            ':|',
-            "Estou acompanhando a troca de plantao por aqui.",
-            "",
-        ];
-
-        if (recentArrivalPending.length > 0) {
-            sections.push("Avisem as chegadas, por favor:");
-            sections.push(formatTargetList(recentArrivalPending));
-            sections.push("");
-        }
-
-        if (recentDeparturePending.length > 0) {
-            sections.push("Avisem as saidas, por favor:");
-            sections.push(formatTargetList(recentDeparturePending));
-            sections.push("");
-        }
-
-        sections.push("Pode mandar uma linha por vez. Eu registro daqui.");
-
-        plans.push({
-            noticeKey: `nudge:${bucket.toISOString()}`,
-            stage: "nudge",
-            payload: {
-                bucketAt: bucket.toISOString(),
-                arrivalTargets: uniqueTargets(recentArrivalPending).map((shift) => shift.targetCode),
-                departureTargets: uniqueTargets(recentDeparturePending).map((shift) => shift.targetCode),
-            },
-            text: sections.join("\n"),
-        });
-    }
-
-    if (isInactive && (overdueArrivalPending.length > 0 || overdueDeparturePending.length > 0)) {
-        const bucket = floorToBucket(now, FIVE_MINUTES);
-        const sections = [
-            ':(',
-            "Ainda faltam confirmacoes no plantao.",
-            "",
-        ];
-
-        if (overdueArrivalPending.length > 0) {
-            sections.push("Chegadas ainda sem confirmacao:");
-            sections.push(formatTargetList(overdueArrivalPending));
-            sections.push("");
-        }
-
-        if (overdueDeparturePending.length > 0) {
-            sections.push("Saidas ainda sem confirmacao:");
-            sections.push(formatTargetList(overdueDeparturePending));
-            sections.push("");
-        }
-
-        sections.push("Quando puderem, mandem as atualizacoes por aqui para eu fechar o quadro.");
-
-        plans.push({
-            noticeKey: `escalation:${bucket.toISOString()}`,
-            stage: "escalation",
-            payload: {
-                bucketAt: bucket.toISOString(),
-                arrivalTargets: uniqueTargets(overdueArrivalPending).map((shift) => shift.targetCode),
-                departureTargets: uniqueTargets(overdueDeparturePending).map((shift) => shift.targetCode),
-            },
-            text: sections.join("\n"),
-        });
-    }
-
-    return plans;
-}
-
-async function loadReminderShifts(now: Date) {
-    const db = getDb();
-    const lowerBound = new Date(now.getTime() - TWO_HOURS).toISOString();
-    const upperBound = new Date(now.getTime() + TEN_MINUTES).toISOString();
-    const result = await db.execute(sql`
-        select
-            s.id as shift_instance_id,
-            coalesce(cs.ramal, b.code, 'sem-codigo') as target_code,
-            coalesce(b.name, cs.ramal, s.role_function, 'posto') as target_label,
-            case
-                when cs.ramal is not null then 'REGULATION'
-                when upper(coalesce(b.sector::text, '')) = 'REGULATION' then 'REGULATION'
-                else 'INTERVENTION'
-            end as sector,
-            s.scheduled_start_at,
-            s.scheduled_end_at,
-            cs.arrival_time,
-            cs.departure_time
-        from public.shift_instances s
-        left join public.shift_current_state cs on cs.shift_instance_id = s.id
-        left join public.bases b on b.id = s.base_id
-        where (
-            s.scheduled_start_at between ${lowerBound}::timestamptz and ${upperBound}::timestamptz
-            or s.scheduled_end_at between ${lowerBound}::timestamptz and ${upperBound}::timestamptz
-        )
-        and (b.is_active is null or b.is_active = true)
-        order by s.scheduled_start_at asc nulls last, s.scheduled_end_at asc nulls last
-    `);
-
-    return result as unknown as ReminderShiftSnapshot[];
-}
-
-async function loadLastActivityAt(chatId: string) {
-    const db = getDb();
-    const row = await db.query.telegramIngestedMessages.findFirst({
-        where: eq(telegramIngestedMessages.chatId, chatId),
-        orderBy: [desc(telegramIngestedMessages.createdAt)],
-    });
-
-    return row?.createdAt ?? null;
+    return [
+        buildPreShiftInstructionPlan(params.now),
+        buildCoverageSnapshotPlan(params),
+        buildCoverageCheckpointPlan(params),
+        buildPaymentCheckpointPlan(params),
+    ].filter((plan): plan is ReminderPlan => Boolean(plan));
 }
 
 async function markNoticeSent(plan: ReminderPlan, chatId: string) {
@@ -278,22 +403,21 @@ async function rollbackNotice(chatId: string, plan: ReminderPlan) {
 }
 
 export async function sendTelegramReminderCycle(referenceDate = new Date()) {
-    const chatIds = getTelegramReminderChatIds();
+    const chatIds = resolveReminderChatIds();
     if (chatIds.length === 0 || !process.env.TELEGRAM_BOT_TOKEN?.trim()) {
         return { sent: 0, evaluated: 0 };
     }
 
-    const shifts = await loadReminderShifts(referenceDate);
+    const board = await getOperationalBoard();
+    const plans = buildReminderPlans({
+        now: referenceDate,
+        board,
+    });
+
     let sent = 0;
     let evaluated = 0;
 
     for (const chatId of chatIds) {
-        const lastActivityAt = await loadLastActivityAt(chatId);
-        const plans = buildReminderPlans({
-            now: referenceDate,
-            lastActivityAt,
-            shifts,
-        });
         evaluated += plans.length;
 
         for (const plan of plans) {

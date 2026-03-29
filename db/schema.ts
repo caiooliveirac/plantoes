@@ -156,6 +156,7 @@ export const regulationOccupancies = operationsV2.table(
     {
         id: uuid("id").primaryKey().defaultRandom(),
         doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        continuityGroupId: uuid("continuity_group_id").notNull(),
         postId: integer("post_id").notNull().references(() => regulationPosts.id),
         scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }),
         scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }),
@@ -175,6 +176,7 @@ export const regulationOccupancies = operationsV2.table(
     },
     (table) => [
         index("regulation_occupancies_doctor_idx").on(table.doctorId),
+        index("regulation_occupancies_continuity_idx").on(table.doctorId, table.continuityGroupId, table.startedAt),
         index("regulation_occupancies_post_idx").on(table.postId),
         index("regulation_occupancies_board_idx").on(table.postId, table.boardStartedAt),
         index("regulation_occupancies_active_idx").on(table.endedAt),
@@ -186,6 +188,7 @@ export const interventionOccupancies = operationsV2.table(
     {
         id: uuid("id").primaryKey().defaultRandom(),
         doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        continuityGroupId: uuid("continuity_group_id").notNull(),
         baseId: integer("base_id").notNull().references(() => interventionBases.id),
         scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }),
         scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }),
@@ -204,6 +207,7 @@ export const interventionOccupancies = operationsV2.table(
     },
     (table) => [
         index("intervention_occupancies_doctor_idx").on(table.doctorId),
+        index("intervention_occupancies_continuity_idx").on(table.doctorId, table.continuityGroupId, table.startedAt),
         index("intervention_occupancies_base_idx").on(table.baseId),
         index("intervention_occupancies_board_idx").on(table.baseId, table.boardStartedAt),
         index("intervention_occupancies_active_idx").on(table.endedAt),

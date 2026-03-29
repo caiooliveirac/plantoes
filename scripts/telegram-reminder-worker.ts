@@ -1,4 +1,5 @@
 import { getTelegramReminderPollMs } from "@/modules/telegram/config";
+import { sendTelegramMealBreakCycle } from "@/modules/telegram/meal-breaks";
 import { sendTelegramReminderCycle } from "@/modules/telegram/reminders";
 
 let running = false;
@@ -10,9 +11,15 @@ async function runCycle() {
 
     running = true;
     try {
-        const result = await sendTelegramReminderCycle(new Date());
-        if (result.evaluated > 0 || result.sent > 0) {
-            console.log(`[telegram-reminder-worker] evaluated=${result.evaluated} sent=${result.sent}`);
+        const referenceDate = new Date();
+        const [reminders, mealBreak] = await Promise.all([
+            sendTelegramReminderCycle(referenceDate),
+            sendTelegramMealBreakCycle(referenceDate),
+        ]);
+        const evaluated = reminders.evaluated + mealBreak.evaluated;
+        const sent = reminders.sent + mealBreak.sent;
+        if (evaluated > 0 || sent > 0) {
+            console.log(`[telegram-reminder-worker] evaluated=${evaluated} sent=${sent}`);
         }
     } catch (error) {
         console.error("[telegram-reminder-worker] cycle failed", error);

@@ -30,6 +30,7 @@ function makeShift(overrides: Partial<RawMonthlyReportShift> = {}): RawMonthlyRe
         displayName: "Caio Oliveira",
         targetCode: "PP20",
         targetLabel: "PA Pituba",
+        continuityGroupId: "cg-1",
         startedAt: "2026-03-10T07:00:00.000Z",
         boardStartedAt: "2026-03-10T07:00:00.000Z",
         endedAt: "2026-03-10T19:00:00.000Z",
@@ -50,6 +51,10 @@ function makeShift(overrides: Partial<RawMonthlyReportShift> = {}): RawMonthlyRe
         ruleCode: "default",
         bankHoursExplanation: "ok",
         auditTrail: [],
+        paymentAuditPerformed: false,
+        paymentAllocationSlotKeys: [],
+        continuityCarrierOccupancyId: "occ-1",
+        continuityGroupSize: 1,
         ...overrides,
     };
 }
@@ -118,6 +123,45 @@ test("detectMonthlyReportInconsistencies flags correction history, delay and neg
     assert.equal(result.flags.hasCorrectionHistory, true);
     assert.equal(result.flags.hasOvertimeWithoutNote, true);
     assert.ok(result.inconsistencies.some((item) => item.includes("correção manual")));
+});
+
+test("detectMonthlyReportInconsistencies flags rows excluded from daily payment allocation", () => {
+    const result = detectMonthlyReportInconsistencies(makeShift({
+        paymentAuditPerformed: true,
+        paymentAllocationSlotKeys: [],
+    }));
+
+    assert.equal(result.flags.hasPaymentAllocationMismatch, true);
+    assert.ok(result.inconsistencies.some((item) => item.includes("nenhuma alocacao diaria de pagamento")));
+});
+
+test("detectMonthlyReportInconsistencies flags P rows chosen in multiple payment slots", () => {
+    const result = detectMonthlyReportInconsistencies(makeShift({
+        shiftLabel: "P",
+        paymentAuditPerformed: true,
+        paymentAllocationSlotKeys: ["2026-03-10|SD", "2026-03-10|SN"],
+    }));
+
+    assert.equal(result.flags.spansMultiplePaymentSlots, true);
+    assert.ok(result.inconsistencies.some((item) => item.includes("2 turnos de pagamento")));
+});
+
+test("detectMonthlyReportInconsistencies ignores missing bank hours on continuity shadow rows", () => {
+    const result = detectMonthlyReportInconsistencies(makeShift({
+        occupancyId: "chain-2",
+        continuityGroupId: "chain-1",
+        continuityCarrierOccupancyId: "chain-1",
+        continuityGroupSize: 2,
+        balanceMinutes: null,
+        arrivalDelayMinutes: null,
+        overtimeMinutes: null,
+        creditedOvertimeMinutes: null,
+        ruleCode: null,
+        bankHoursExplanation: null,
+    }));
+
+    assert.equal(result.flags.hasMissingBankHours, false);
+    assert.ok(result.inconsistencies.every((item) => !item.includes("banco de horas")));
 });
 
 test("buildMonthlyReportModel groups by doctor and prioritizes inconsistencies", () => {

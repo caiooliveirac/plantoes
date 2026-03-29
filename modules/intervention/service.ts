@@ -1,14 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, isNull, isNotNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { interventionOccupancies } from "@/db/schema";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours } from "@/modules/bank-hours/service";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { inferInterventionScheduledEndAt, inferOperationalScheduledStartAt } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt } from "@/modules/operational/rules";
 
 export interface StartInterventionOccupancyInput {
     doctorId: string;
     baseId: number;
+    continuityGroupId?: string | null;
     startedAt: Date;
     scheduledStartAt?: Date | null;
     scheduledEndAt?: Date | null;
@@ -35,16 +37,12 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
     const db = getDb();
     const created = await db.transaction(async (tx) => {
         const normalizedShiftLabel = input.shiftLabel ?? resolveOperationalShiftWindow(input.startedAt).shiftLabel;
-        const inferredScheduledStartAt = inferOperationalScheduledStartAt(
-            input.startedAt,
-            normalizedShiftLabel,
-            input.scheduledStartAt ?? null,
-        );
-        const inferredScheduledEndAt = inferInterventionScheduledEndAt(
-            input.startedAt,
-            normalizedShiftLabel,
-            input.scheduledEndAt ?? null,
-        );
+        const { scheduledStartAt: inferredScheduledStartAt, scheduledEndAt: inferredScheduledEndAt } = inferInterventionCoverageWindow({
+            startedAt: input.startedAt,
+            shiftLabel: normalizedShiftLabel,
+            explicitScheduledStartAt: input.scheduledStartAt ?? null,
+            explicitScheduledEndAt: input.scheduledEndAt ?? null,
+        });
         const existing = await tx.query.interventionOccupancies.findFirst({
             where: and(
                 eq(interventionOccupancies.baseId, input.baseId),
@@ -82,6 +80,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
         const [created] = await tx.insert(interventionOccupancies).values({
             doctorId: input.doctorId,
             baseId: input.baseId,
+            continuityGroupId: input.continuityGroupId ?? randomUUID(),
             scheduledStartAt: inferredScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,

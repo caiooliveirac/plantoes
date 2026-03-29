@@ -20,6 +20,7 @@ export interface RawMonthlyReportShift {
     displayName: string | null;
     targetCode: string;
     targetLabel: string;
+    continuityGroupId: string;
     startedAt: string;
     boardStartedAt: string | null;
     endedAt: string | null;
@@ -42,6 +43,10 @@ export interface RawMonthlyReportShift {
     auditTrail: MonthlyReportAuditEntry[];
     duplicateCount?: number;
     collapsedOccupancyIds?: string[];
+    paymentAuditPerformed?: boolean;
+    paymentAllocationSlotKeys?: string[];
+    continuityCarrierOccupancyId?: string | null;
+    continuityGroupSize?: number;
 }
 
 export interface MonthlyReportShift extends RawMonthlyReportShift {
@@ -58,6 +63,8 @@ export interface MonthlyReportShift extends RawMonthlyReportShift {
         hasOvertimeWithoutNote: boolean;
         hasCorrectionHistory: boolean;
         hasDuplicateCoverage: boolean;
+        hasPaymentAllocationMismatch: boolean;
+        spansMultiplePaymentSlots: boolean;
     };
 }
 
@@ -287,13 +294,21 @@ export function detectMonthlyReportInconsistencies(shift: RawMonthlyReportShift)
     const inconsistencies: string[] = [];
     const hasOpenShift = !shift.endedAt;
     const hasMissingSchedule = !shift.scheduledStartAt || !shift.scheduledEndAt;
-    const hasMissingBankHours = Boolean(shift.endedAt) && shift.balanceMinutes === null;
+    const isContinuityShadow = (shift.continuityGroupSize ?? 1) > 1
+        && Boolean(shift.continuityCarrierOccupancyId)
+        && shift.continuityCarrierOccupancyId !== shift.occupancyId;
+    const hasMissingBankHours = Boolean(shift.endedAt) && shift.balanceMinutes === null && !isContinuityShadow;
     const hasManualSource = shift.source === "manual" || shift.source === "admin_correction";
     const hasLateArrival = (shift.arrivalDelayMinutes ?? 0) > 15;
     const hasNegativeBalance = (shift.balanceMinutes ?? 0) < 0;
     const hasOvertimeWithoutNote = (shift.creditedOvertimeMinutes ?? 0) > 0 && !shift.notes?.trim();
     const hasCorrectionHistory = shift.auditTrail.some((entry) => entry.action.endsWith(".corrected"));
     const hasDuplicateCoverage = (shift.duplicateCount ?? 1) > 1;
+    const paymentAllocationSlotCount = shift.paymentAuditPerformed
+        ? (shift.paymentAllocationSlotKeys?.length ?? 0)
+        : 0;
+    const hasPaymentAllocationMismatch = shift.paymentAuditPerformed === true && paymentAllocationSlotCount === 0;
+    const spansMultiplePaymentSlots = shift.paymentAuditPerformed === true && paymentAllocationSlotCount > 1;
 
     if (hasOpenShift) {
         inconsistencies.push("Plantão sem saída registrada");
@@ -317,6 +332,14 @@ export function detectMonthlyReportInconsistencies(shift: RawMonthlyReportShift)
 
     if (hasDuplicateCoverage) {
         inconsistencies.push(`Plantão consolidado a partir de ${shift.duplicateCount} registros redundantes`);
+    }
+
+    if (hasPaymentAllocationMismatch) {
+        inconsistencies.push("Registro operacional nao foi escolhido em nenhuma alocacao diaria de pagamento");
+    }
+
+    if (spansMultiplePaymentSlots) {
+        inconsistencies.push(`Registro cobre ${paymentAllocationSlotCount} turnos de pagamento; fechar nota pela linha bruta pode distorcer o pagamento`);
     }
 
     if (hasLateArrival) {
@@ -347,6 +370,8 @@ export function detectMonthlyReportInconsistencies(shift: RawMonthlyReportShift)
             hasOvertimeWithoutNote,
             hasCorrectionHistory,
             hasDuplicateCoverage,
+            hasPaymentAllocationMismatch,
+            spansMultiplePaymentSlots,
         },
     };
 }

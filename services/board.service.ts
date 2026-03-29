@@ -10,6 +10,7 @@ import {
   inferOperationalScheduledStartAt,
   inferRegulationScheduledEndAt,
 } from "@/modules/operational/rules";
+import { calculateBankHours } from "@/modules/bank-hours/calculator";
 
 export interface RegulationBoardRow {
   postId: number;
@@ -95,7 +96,17 @@ export interface PreviousOperationalBoard {
   sections: PreviousOperationalSection[];
 }
 
-interface PreviousOperationalRawRow {
+export type PaymentAllocationStatus = "ready_for_payment" | "needs_review";
+
+export interface PaymentAllocationTargetDefinition {
+  domain: "regulation" | "intervention";
+  targetCode: string;
+  targetLabel: string;
+  sortOrder: number;
+  defaultRole: string | null;
+}
+
+export interface PaymentAllocationRawRow {
   occupancyId: string;
   domain: "regulation" | "intervention";
   targetCode: string;
@@ -122,6 +133,61 @@ interface PreviousOperationalRawRow {
   notes: string | null;
 }
 
+type PreviousOperationalRawRow = PaymentAllocationRawRow;
+
+export interface PaymentAllocationRow {
+  domain: "regulation" | "intervention";
+  targetCode: string;
+  targetLabel: string;
+  sortOrder: number;
+  defaultRole: string | null;
+  occupancyId: string | null;
+  doctorId: string | null;
+  doctorName: string | null;
+  displayName: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  actualEndedAt: string | null;
+  scheduledStartAt: string | null;
+  scheduledEndAt: string | null;
+  shiftLabel: "SD" | "SN" | "P" | null;
+  roleLabel: string | null;
+  ramalLabel: string | null;
+  source: string | null;
+  candidateCount: number;
+  paymentStatus: PaymentAllocationStatus;
+  issues: string[];
+  arrivalDelayMinutes: number | null;
+  overtimeMinutes: number | null;
+  creditedOvertimeMinutes: number | null;
+  balanceMinutes: number | null;
+  ruleCode: string | null;
+  bankHoursExplanation: string | null;
+  sourceShiftLabel?: "SD" | "SN" | "P" | null;
+  sourceStartedAt?: string | null;
+  sourceBoardStartedAt?: string | null;
+  sourceEndedAt?: string | null;
+  sourceActualEndedAt?: string | null;
+  continuesBeyondShift?: boolean;
+}
+
+export interface PaymentAllocationBoard {
+  generatedAt: string;
+  operationalDate: string;
+  shiftLabel: "SD" | "SN";
+  startedAt: string;
+  endedAt: string;
+  summary: {
+    totalTargets: number;
+    assignedCount: number;
+    readyForPaymentCount: number;
+    needsReviewCount: number;
+    unassignedCount: number;
+  };
+  regulation: PaymentAllocationRow[];
+  intervention: PaymentAllocationRow[];
+}
+
 type LogicalShiftSlot = "SD" | "SN";
 
 interface LogicalShiftCandidate extends PreviousOperationalRawRow {
@@ -135,11 +201,16 @@ interface LogicalShiftCandidate extends PreviousOperationalRawRow {
   isLikelyNoise: boolean;
 }
 
+interface PaymentAllocationTargetChoice {
+  target: PaymentAllocationTargetDefinition;
+  candidates: LogicalShiftCandidate[];
+  chosenCandidate: LogicalShiftCandidate | null;
+  displacedByDoctorConflict: boolean;
+}
+
 const OPERATIONAL_LOCAL_OFFSET_MINUTES = -180;
 const MAX_SCHEDULE_DRIFT_MINUTES = 180;
 const MIN_TITULAR_DURATION_MINUTES = 45;
-const ARRIVAL_GRACE_MINUTES = 15;
-const DEPARTURE_GRACE_MINUTES = 15;
 const MAX_IMPLICIT_HANDOFF_EXTENSION_MINUTES = 180;
 
 interface SyntheticBankHoursSummary {
@@ -246,12 +317,11 @@ function hasDepartureEvidence(notes: string | null | undefined) {
 }
 
 function resolveLogicalAnchorAt(row: PreviousOperationalRawRow) {
-  if (row.boardStartedAt && new Date(row.boardStartedAt).getTime() > new Date(row.startedAt).getTime() && row.shiftLabel === "P") {
-    return new Date(row.boardStartedAt);
-  }
-
   if (row.scheduledStartAt) {
-    return new Date(row.scheduledStartAt);
+    const scheduledStartAt = new Date(row.scheduledStartAt);
+    if (row.shiftLabel !== "P" && scheduledStartAt.getTime() <= new Date(row.startedAt).getTime()) {
+      return scheduledStartAt;
+    }
   }
 
   return new Date(row.startedAt);
@@ -673,33 +743,20 @@ function calculateSyntheticBankHours(params: {
     };
   }
 
-  const rawArrivalDelay = Math.max(0, diffIsoMinutes(params.scheduledStartAt, params.actualStartAt));
-  const rawOvertime = Math.max(0, diffIsoMinutes(params.scheduledEndAt, params.actualEndAt));
-  const arrivalDelayMinutes = rawArrivalDelay <= ARRIVAL_GRACE_MINUTES ? 0 : rawArrivalDelay;
-  const overtimeMinutes = rawOvertime <= DEPARTURE_GRACE_MINUTES ? 0 : rawOvertime;
-  const creditedOvertimeMinutes = overtimeMinutes === 0
-    ? 0
-    : (arrivalDelayMinutes === 0 ? overtimeMinutes * 2 : overtimeMinutes);
-  const balanceMinutes = creditedOvertimeMinutes - arrivalDelayMinutes;
-  const ruleCode = arrivalDelayMinutes === 0
-    ? (overtimeMinutes > 0 ? "ON_TIME_DOUBLE_OVERTIME" : "ON_TIME_NO_OVERTIME")
-    : (overtimeMinutes > 0 ? "LATE_SIMPLE_OVERTIME" : "LATE_NO_OVERTIME");
-
-  const bankHoursExplanation = arrivalDelayMinutes === 0
-    ? (overtimeMinutes > 0
-      ? `Chegou dentro da tolerancia de ${ARRIVAL_GRACE_MINUTES} min e a saida passou ${DEPARTURE_GRACE_MINUTES} min, com credito em dobro.`
-      : `Chegou dentro da tolerancia e a saida ficou ate ${DEPARTURE_GRACE_MINUTES} min da janela prevista, sem impacto no banco.`)
-    : (overtimeMinutes > 0
-      ? `Chegou com ${arrivalDelayMinutes} min de atraso e a saida tardia compensou ${creditedOvertimeMinutes} min de credito simples.`
-      : `Chegou com ${arrivalDelayMinutes} min de atraso e a saida ficou dentro da tolerancia, sem credito compensatorio.`);
+  const calculation = calculateBankHours({
+    scheduledStartAt: params.scheduledStartAt,
+    scheduledEndAt: params.scheduledEndAt,
+    actualStartAt: params.actualStartAt,
+    actualEndAt: params.actualEndAt,
+  });
 
   return {
-    arrivalDelayMinutes,
-    overtimeMinutes,
-    creditedOvertimeMinutes,
-    balanceMinutes,
-    ruleCode,
-    bankHoursExplanation,
+    arrivalDelayMinutes: calculation.arrivalDelayMinutes,
+    overtimeMinutes: calculation.overtimeMinutes,
+    creditedOvertimeMinutes: calculation.creditedOvertimeMinutes,
+    balanceMinutes: calculation.balanceMinutes,
+    ruleCode: calculation.ruleCode,
+    bankHoursExplanation: calculation.explanation,
   };
 }
 
@@ -1285,4 +1342,729 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
     totalEntries: sortedEntries.length,
     sections,
   };
+}
+
+function resolvePaymentAllocationTarget(row: Record<string, unknown>): PaymentAllocationTargetDefinition {
+  return {
+    domain: String(row.domain) === "regulation" ? "regulation" : "intervention",
+    targetCode: String(row.targetCode),
+    targetLabel: String(row.targetLabel),
+    sortOrder: Number(row.sortOrder ?? 0),
+    defaultRole: (row.defaultRole ?? null) as string | null,
+  };
+}
+
+function resolvePaymentAllocationStatus(issues: string[]): PaymentAllocationStatus {
+  return issues.length > 0 ? "needs_review" : "ready_for_payment";
+}
+
+function comparePaymentAllocationRows(left: PaymentAllocationRow, right: PaymentAllocationRow) {
+  if (left.sortOrder !== right.sortOrder) {
+    return left.sortOrder - right.sortOrder;
+  }
+
+  const leftCode = Number(left.targetCode);
+  const rightCode = Number(right.targetCode);
+  if (Number.isFinite(leftCode) && Number.isFinite(rightCode) && leftCode !== rightCode) {
+    return leftCode - rightCode;
+  }
+
+  return left.targetCode.localeCompare(right.targetCode, "pt-BR");
+}
+
+function buildPaymentAllocationScheduledWindow(candidate: LogicalShiftCandidate) {
+  const defaultWindow = resolveDefaultScheduledWindow(candidate.domain, candidate.logicalSlotStart, candidate.logicalSlot);
+  return {
+    scheduledStartAt: resolveScheduledBoundary(candidate.scheduledStartAt, defaultWindow.scheduledStartAt),
+    scheduledEndAt: resolveScheduledBoundary(candidate.scheduledEndAt, defaultWindow.scheduledEndAt),
+  };
+}
+
+function resolvePlannedCoverageEndAt(candidate: LogicalShiftCandidate) {
+  if (candidate.scheduledEndAt) {
+    return candidate.scheduledEndAt;
+  }
+
+  if (candidate.shiftLabel === "P") {
+    return resolveStandaloneScheduledWindow(candidate, resolveStandaloneBucket(candidate)).scheduledEndAt;
+  }
+
+  return resolveImplicitOccupancyExpiry(candidate.logicalSlotStart, candidate.logicalSlot)?.toISOString() ?? null;
+}
+
+function resolveCandidateCoverageEndAt(candidate: LogicalShiftCandidate) {
+  if (candidate.shiftLabel === "P") {
+    const plannedCoverageEndAt = resolvePlannedCoverageEndAt(candidate);
+    if (!candidate.effectiveEndedAt) {
+      return plannedCoverageEndAt;
+    }
+
+    if (!plannedCoverageEndAt) {
+      return candidate.effectiveEndedAt;
+    }
+
+    return new Date(candidate.effectiveEndedAt).getTime() <= new Date(plannedCoverageEndAt).getTime()
+      ? candidate.effectiveEndedAt
+      : plannedCoverageEndAt;
+  }
+
+  if (candidate.effectiveEndedAt) {
+    return candidate.effectiveEndedAt;
+  }
+
+  return resolvePlannedCoverageEndAt(candidate);
+}
+
+function doesCandidateCoverPaymentSlot(candidate: LogicalShiftCandidate, slotStartIso: string) {
+  if (candidate.logicalSlotStart === slotStartIso) {
+    return true;
+  }
+
+  if (candidate.shiftLabel !== "P") {
+    return false;
+  }
+
+  const slotStart = new Date(slotStartIso).getTime();
+  if (new Date(candidate.logicalSlotStart).getTime() > slotStart) {
+    return false;
+  }
+
+  const coverageEndAt = resolveCandidateCoverageEndAt(candidate);
+  return Boolean(coverageEndAt && new Date(coverageEndAt).getTime() > slotStart);
+}
+
+function buildPaymentAllocationSlotWindow(params: {
+  candidate: LogicalShiftCandidate;
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+}) {
+  const defaultWindow = resolveDefaultScheduledWindow(params.candidate.domain, params.slotStartIso, params.shiftLabel);
+  if (params.candidate.logicalSlotStart !== params.slotStartIso) {
+    return defaultWindow;
+  }
+
+  return {
+    scheduledStartAt: resolveScheduledBoundary(params.candidate.scheduledStartAt, defaultWindow.scheduledStartAt),
+    scheduledEndAt: resolveScheduledBoundary(params.candidate.scheduledEndAt, defaultWindow.scheduledEndAt),
+  };
+}
+
+function buildPaymentAllocationActualWindow(params: {
+  candidate: LogicalShiftCandidate;
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+}) {
+  const slotStart = new Date(params.slotStartIso);
+  const slotEnd = resolveSlotEnd(slotStart, params.shiftLabel);
+  const actualStartAt = new Date(params.candidate.startedAt).getTime() < slotStart.getTime()
+    ? params.slotStartIso
+    : params.candidate.startedAt;
+
+  if (!params.candidate.effectiveEndedAt) {
+    return {
+      actualStartAt,
+      actualEndAt: null,
+    };
+  }
+
+  const actualEndTime = Math.min(new Date(params.candidate.effectiveEndedAt).getTime(), slotEnd.getTime());
+  return {
+    actualStartAt,
+    actualEndAt: actualEndTime <= new Date(actualStartAt).getTime()
+      ? null
+      : new Date(actualEndTime).toISOString(),
+  };
+}
+
+function resolvePaymentSlotCoverageMinutes(params: {
+  candidate: LogicalShiftCandidate;
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+}) {
+  const slotStartAt = new Date(params.slotStartIso);
+  const slotEndAt = resolveSlotEnd(slotStartAt, params.shiftLabel);
+  const coverageStartAt = Math.max(new Date(params.candidate.startedAt).getTime(), slotStartAt.getTime());
+  const coverageEndAt = resolveCandidateCoverageEndAt(params.candidate);
+  const coverageEndTime = coverageEndAt
+    ? Math.min(new Date(coverageEndAt).getTime(), slotEndAt.getTime())
+    : slotEndAt.getTime();
+
+  if (coverageEndTime <= coverageStartAt) {
+    return 0;
+  }
+
+  return Math.round((coverageEndTime - coverageStartAt) / 60000);
+}
+
+function rankPaymentAllocationCandidate(params: {
+  candidate: LogicalShiftCandidate;
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+}) {
+  const coverageMinutes = resolvePaymentSlotCoverageMinutes(params);
+  let score = rankLogicalShiftCandidate(params.candidate);
+
+  score += coverageMinutes / 10;
+
+  if (params.candidate.logicalSlotStart === params.slotStartIso) {
+    score += 35;
+  }
+
+  if (params.candidate.shiftLabel === params.shiftLabel) {
+    score += 18;
+  }
+
+  if (params.candidate.source === "import") {
+    score -= 25;
+  }
+
+  if (params.candidate.source === "manual" || params.candidate.source === "admin_correction") {
+    score -= 30;
+  }
+
+  if (params.candidate.shiftLabel === "P" && params.candidate.logicalSlotStart !== params.slotStartIso) {
+    score -= 20;
+  }
+
+  if (coverageMinutes >= MIN_TITULAR_DURATION_MINUTES) {
+    score += 10;
+  }
+
+  return score;
+}
+
+function sortPaymentAllocationCandidates(params: {
+  candidates: LogicalShiftCandidate[];
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+}) {
+  return [...params.candidates].sort((left, right) => {
+    const scoreDiff = rankPaymentAllocationCandidate({
+      candidate: right,
+      slotStartIso: params.slotStartIso,
+      shiftLabel: params.shiftLabel,
+    }) - rankPaymentAllocationCandidate({
+      candidate: left,
+      slotStartIso: params.slotStartIso,
+      shiftLabel: params.shiftLabel,
+    });
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+
+    const coverageDiff = resolvePaymentSlotCoverageMinutes({
+      candidate: right,
+      slotStartIso: params.slotStartIso,
+      shiftLabel: params.shiftLabel,
+    }) - resolvePaymentSlotCoverageMinutes({
+      candidate: left,
+      slotStartIso: params.slotStartIso,
+      shiftLabel: params.shiftLabel,
+    });
+    if (coverageDiff !== 0) {
+      return coverageDiff;
+    }
+
+    const leftEndedAt = left.effectiveEndedAt ? new Date(left.effectiveEndedAt).getTime() : 0;
+    const rightEndedAt = right.effectiveEndedAt ? new Date(right.effectiveEndedAt).getTime() : 0;
+    if (rightEndedAt !== leftEndedAt) {
+      return rightEndedAt - leftEndedAt;
+    }
+
+    return new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime();
+  });
+}
+
+function filterTargetPaymentCandidates(params: {
+  candidates: LogicalShiftCandidate[];
+  slotStartIso: string;
+}) {
+  const sameSlotStarters = params.candidates.filter((candidate) => {
+    if (candidate.logicalSlotStart !== params.slotStartIso) {
+      return false;
+    }
+
+    const offsetMinutes = diffIsoMinutes(params.slotStartIso, candidate.startedAt);
+    return offsetMinutes >= 0 && offsetMinutes <= MAX_IMPLICIT_HANDOFF_EXTENSION_MINUTES;
+  });
+
+  if (sameSlotStarters.length === 0) {
+    return params.candidates;
+  }
+
+  const earliestSameSlotStartAt = Math.min(...sameSlotStarters.map((candidate) => new Date(candidate.startedAt).getTime()));
+  const filtered = params.candidates.filter((candidate) => {
+    if (candidate.logicalSlotStart === params.slotStartIso) {
+      return true;
+    }
+
+    const coverageEndAt = resolveCandidateCoverageEndAt(candidate);
+    if (!coverageEndAt) {
+      return true;
+    }
+
+    return new Date(coverageEndAt).getTime() > earliestSameSlotStartAt;
+  });
+
+  return filtered.length > 0 ? filtered : params.candidates;
+}
+
+function detectPaymentAllocationIssues(params: {
+  candidate: LogicalShiftCandidate;
+  candidateCount: number;
+  syntheticBankHours: SyntheticBankHoursSummary;
+}) {
+  const issues: string[] = [];
+
+  if (params.candidateCount > 1) {
+    issues.push("Mais de um medico candidato no mesmo alvo/turno");
+  }
+
+  if (!params.candidate.effectiveEndedAt) {
+    issues.push("Plantao sem saida consolidada");
+  }
+
+  if (params.candidate.source === "manual" || params.candidate.source === "admin_correction") {
+    issues.push("Lancamento manual ou corrigido manualmente");
+  }
+
+  if (params.candidate.duplicateConflict) {
+    issues.push("Existem registros redundantes para o mesmo alvo");
+  }
+
+  return issues;
+}
+
+function buildEmptyPaymentAllocationRow(params: {
+  target: PaymentAllocationTargetDefinition;
+  shiftLabel: "SD" | "SN";
+  issues?: string[];
+  candidateCount?: number;
+}) {
+  const issues = params.issues ?? ["Sem ocupacao identificada para o turno"];
+  return {
+    domain: params.target.domain,
+    targetCode: params.target.targetCode,
+    targetLabel: params.target.targetLabel,
+    sortOrder: params.target.sortOrder,
+    defaultRole: params.target.defaultRole,
+    occupancyId: null,
+    doctorId: null,
+    doctorName: null,
+    displayName: null,
+    startedAt: null,
+    endedAt: null,
+    actualEndedAt: null,
+    scheduledStartAt: null,
+    scheduledEndAt: null,
+    shiftLabel: params.shiftLabel,
+    roleLabel: params.target.defaultRole,
+    ramalLabel: params.target.domain === "regulation" ? params.target.targetCode : null,
+    source: null,
+    candidateCount: params.candidateCount ?? 0,
+    paymentStatus: resolvePaymentAllocationStatus(issues),
+    issues,
+    arrivalDelayMinutes: null,
+    overtimeMinutes: null,
+    creditedOvertimeMinutes: null,
+    balanceMinutes: null,
+    ruleCode: null,
+    bankHoursExplanation: null,
+    sourceShiftLabel: null,
+    sourceStartedAt: null,
+    sourceBoardStartedAt: null,
+    sourceEndedAt: null,
+    sourceActualEndedAt: null,
+    continuesBeyondShift: false,
+  } satisfies PaymentAllocationRow;
+}
+
+function buildChosenPaymentAllocationRow(params: {
+  target: PaymentAllocationTargetDefinition;
+  candidates: LogicalShiftCandidate[];
+  chosenCandidate: LogicalShiftCandidate;
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+}) {
+  const chosen = params.chosenCandidate;
+  const scheduledWindow = buildPaymentAllocationSlotWindow({
+    candidate: chosen,
+    slotStartIso: params.slotStartIso,
+    shiftLabel: params.shiftLabel,
+  });
+  const actualWindow = buildPaymentAllocationActualWindow({
+    candidate: chosen,
+    slotStartIso: params.slotStartIso,
+    shiftLabel: params.shiftLabel,
+  });
+  const slotEndAt = resolveSlotEnd(new Date(params.slotStartIso), params.shiftLabel);
+  const sourceCoverageEndAt = resolveCandidateCoverageEndAt(chosen);
+  const continuesBeyondShift = chosen.shiftLabel === "P"
+    && Boolean(sourceCoverageEndAt && new Date(sourceCoverageEndAt).getTime() > slotEndAt.getTime());
+  const syntheticBankHours = calculateSyntheticBankHours({
+    scheduledStartAt: scheduledWindow.scheduledStartAt,
+    scheduledEndAt: scheduledWindow.scheduledEndAt,
+    actualStartAt: actualWindow.actualStartAt,
+    actualEndAt: actualWindow.actualEndAt,
+  });
+  const issues = detectPaymentAllocationIssues({
+    candidate: chosen,
+    candidateCount: params.candidates.length,
+    syntheticBankHours,
+  });
+
+  return {
+    domain: params.target.domain,
+    targetCode: params.target.targetCode,
+    targetLabel: params.target.targetLabel,
+    sortOrder: params.target.sortOrder,
+    defaultRole: params.target.defaultRole,
+    occupancyId: chosen.occupancyId,
+    doctorId: chosen.doctorId,
+    doctorName: chosen.doctorName,
+    displayName: chosen.displayName,
+    startedAt: actualWindow.actualStartAt,
+    endedAt: actualWindow.actualEndAt,
+    actualEndedAt: actualWindow.actualEndAt,
+    scheduledStartAt: scheduledWindow.scheduledStartAt,
+    scheduledEndAt: scheduledWindow.scheduledEndAt,
+    shiftLabel: params.shiftLabel,
+    roleLabel: chosen.roleLabel ?? params.target.defaultRole,
+    ramalLabel: chosen.ramalLabel ?? (params.target.domain === "regulation" ? params.target.targetCode : null),
+    source: chosen.source,
+    candidateCount: params.candidates.length,
+    paymentStatus: resolvePaymentAllocationStatus(issues),
+    issues,
+    arrivalDelayMinutes: syntheticBankHours.arrivalDelayMinutes,
+    overtimeMinutes: syntheticBankHours.overtimeMinutes,
+    creditedOvertimeMinutes: syntheticBankHours.creditedOvertimeMinutes,
+    balanceMinutes: syntheticBankHours.balanceMinutes,
+    ruleCode: syntheticBankHours.ruleCode,
+    bankHoursExplanation: syntheticBankHours.bankHoursExplanation,
+    sourceShiftLabel: chosen.shiftLabel,
+    sourceStartedAt: chosen.startedAt,
+    sourceBoardStartedAt: chosen.boardStartedAt,
+    sourceEndedAt: chosen.endedAt,
+    sourceActualEndedAt: chosen.actualEndedAt,
+    continuesBeyondShift,
+  } satisfies PaymentAllocationRow;
+}
+
+function resolvePaymentAllocationTargetChoices(params: {
+  targets: PaymentAllocationTargetDefinition[];
+  candidatesByTarget: Map<string, LogicalShiftCandidate[]>;
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+}) {
+  const choices: PaymentAllocationTargetChoice[] = params.targets.map((target) => {
+    const key = [target.domain, target.targetCode].join("|");
+    const candidates = sortPaymentAllocationCandidates({
+      candidates: filterTargetPaymentCandidates({
+        candidates: params.candidatesByTarget.get(key) ?? [],
+        slotStartIso: params.slotStartIso,
+      }),
+      slotStartIso: params.slotStartIso,
+      shiftLabel: params.shiftLabel,
+    });
+
+    return {
+      target,
+      candidates,
+      chosenCandidate: null,
+      displacedByDoctorConflict: false,
+    };
+  });
+
+  const usedDoctorIds = new Set<string>();
+  const prioritizedChoices = [...choices].sort((left, right) => {
+    const leftCandidate = left.candidates[0] ?? null;
+    const rightCandidate = right.candidates[0] ?? null;
+    if (!leftCandidate || !rightCandidate) {
+      if (!leftCandidate && !rightCandidate) {
+        return left.target.sortOrder - right.target.sortOrder;
+      }
+
+      return leftCandidate ? -1 : 1;
+    }
+
+    const scoreDiff = rankPaymentAllocationCandidate({
+      candidate: rightCandidate,
+      slotStartIso: params.slotStartIso,
+      shiftLabel: params.shiftLabel,
+    }) - rankPaymentAllocationCandidate({
+      candidate: leftCandidate,
+      slotStartIso: params.slotStartIso,
+      shiftLabel: params.shiftLabel,
+    });
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+
+    return left.target.sortOrder - right.target.sortOrder;
+  });
+
+  for (const choice of prioritizedChoices) {
+    const chosenCandidate = choice.candidates.find((candidate) => !usedDoctorIds.has(candidate.doctorId)) ?? null;
+    choice.chosenCandidate = chosenCandidate;
+    choice.displacedByDoctorConflict = !chosenCandidate && choice.candidates.length > 0;
+
+    if (chosenCandidate) {
+      usedDoctorIds.add(chosenCandidate.doctorId);
+    }
+  }
+
+  return choices;
+}
+
+export function buildPaymentAllocationBoardModel(params: {
+  targets: PaymentAllocationTargetDefinition[];
+  rawRows: PaymentAllocationRawRow[];
+  operationalDate: string;
+  shiftLabel: "SD" | "SN";
+  startedAt: string;
+  endedAt: string;
+  generatedAt?: string;
+}) {
+  const successorStartMap = resolveSuccessorStartMap(params.rawRows);
+  const logicalCandidates = collapseLogicalShiftCandidates(params.rawRows
+    .map(mapLogicalShiftCandidate)
+    .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null))
+    .filter((candidate) => doesCandidateCoverPaymentSlot(candidate, params.startedAt))
+  ).filter((candidate) => isEligibleTitularityCandidate(candidate))
+    .filter((candidate) => !isMicroCoverage(candidate))
+    .filter((candidate, _, all) => !shouldIgnoreDuplicateRestart(candidate, all));
+
+  const candidatesByTarget = new Map<string, LogicalShiftCandidate[]>();
+  for (const candidate of logicalCandidates) {
+    const key = [candidate.domain, candidate.targetCode].join("|");
+    const current = candidatesByTarget.get(key) ?? [];
+    current.push(candidate);
+    candidatesByTarget.set(key, current);
+  }
+
+  const targetChoices = resolvePaymentAllocationTargetChoices({
+    targets: params.targets,
+    candidatesByTarget,
+    slotStartIso: params.startedAt,
+    shiftLabel: params.shiftLabel,
+  });
+
+  const rows = targetChoices
+    .map((choice) => {
+      return choice.chosenCandidate
+        ? buildChosenPaymentAllocationRow({
+          target: choice.target,
+          candidates: choice.candidates,
+          chosenCandidate: choice.chosenCandidate,
+          slotStartIso: params.startedAt,
+          shiftLabel: params.shiftLabel,
+        })
+        : buildEmptyPaymentAllocationRow({
+          target: choice.target,
+          shiftLabel: params.shiftLabel,
+          candidateCount: choice.candidates.length,
+          issues: choice.displacedByDoctorConflict
+            ? ["Todos os candidatos deste alvo conflitam com alocacoes mais confiaveis do mesmo turno"]
+            : undefined,
+        });
+    })
+    .sort(comparePaymentAllocationRows);
+
+  const regulation = rows.filter((row) => row.domain === "regulation");
+  const intervention = rows.filter((row) => row.domain === "intervention");
+  const assignedCount = rows.filter((row) => Boolean(row.occupancyId)).length;
+  const needsReviewCount = rows.filter((row) => row.paymentStatus === "needs_review").length;
+  const readyForPaymentCount = rows.filter((row) => row.paymentStatus === "ready_for_payment").length;
+  const unassignedCount = rows.filter((row) => !row.occupancyId).length;
+
+  return {
+    generatedAt: params.generatedAt ?? new Date().toISOString(),
+    operationalDate: params.operationalDate,
+    shiftLabel: params.shiftLabel,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+    summary: {
+      totalTargets: rows.length,
+      assignedCount,
+      readyForPaymentCount,
+      needsReviewCount,
+      unassignedCount,
+    },
+    regulation,
+    intervention,
+  } satisfies PaymentAllocationBoard;
+}
+
+function parsePaymentAllocationOperationalDate(value: string | Date) {
+  if (value instanceof Date) {
+    return getOperationalLocalDateParts(value);
+  }
+
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new Error("Operational date must use YYYY-MM-DD.");
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function resolvePaymentAllocationRequest(params: {
+  operationalDate?: string | Date | null;
+  shiftLabel?: "SD" | "SN" | null;
+  reference?: Date;
+}) {
+  const reference = params.reference ?? new Date();
+
+  if (params.operationalDate && !params.shiftLabel) {
+    throw new Error("Shift label is required when querying a specific operational date.");
+  }
+
+  if (!params.operationalDate) {
+    const currentShift = resolveOperationalShiftWindow(reference);
+    const parts = getOperationalLocalDateParts(currentShift.startedAt);
+    const startedAt = currentShift.shiftLabel === "SD"
+      ? fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 7, 0)
+      : fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 19, 0);
+    const shiftLabel = params.shiftLabel ?? currentShift.shiftLabel;
+
+    if (shiftLabel !== currentShift.shiftLabel) {
+      throw new Error("Specific shift label without operational date is ambiguous. Provide YYYY-MM-DD as well.");
+    }
+
+    return {
+      operationalDate: fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 12, 0).toISOString(),
+      shiftLabel,
+      startedAt: startedAt.toISOString(),
+      endedAt: resolveSlotEnd(startedAt, shiftLabel).toISOString(),
+    };
+  }
+
+  const shiftLabel = params.shiftLabel as "SD" | "SN";
+  const parts = parsePaymentAllocationOperationalDate(params.operationalDate as string | Date);
+  const startedAt = shiftLabel === "SD"
+    ? fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 7, 0)
+    : fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 19, 0);
+
+  return {
+    operationalDate: fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 12, 0).toISOString(),
+    shiftLabel,
+    startedAt: startedAt.toISOString(),
+    endedAt: resolveSlotEnd(startedAt, shiftLabel).toISOString(),
+  };
+}
+
+export async function getPaymentAllocationBoard(params: {
+  operationalDate?: string | Date | null;
+  shiftLabel?: "SD" | "SN" | null;
+  reference?: Date;
+} = {}): Promise<PaymentAllocationBoard> {
+  const db = getDb();
+  const request = resolvePaymentAllocationRequest(params);
+  const queryStart = new Date(new Date(request.startedAt).getTime() - 86400000).toISOString();
+  const queryEnd = new Date(new Date(request.endedAt).getTime() + 86400000).toISOString();
+
+  const targetResult = await db.execute(sql`
+    select
+      'regulation' as domain,
+      rp.code as "targetCode",
+      rp.label as "targetLabel",
+      rp.sort_order as "sortOrder",
+      rp.default_role as "defaultRole"
+    from operations_v2.regulation_posts rp
+    where rp.is_active = true
+    union all
+    select
+      'intervention' as domain,
+      ib.code as "targetCode",
+      ib.label as "targetLabel",
+      ib.sort_order as "sortOrder",
+      null::text as "defaultRole"
+    from operations_v2.intervention_bases ib
+    where ib.is_active = true
+  `);
+
+  const rawResult = await db.execute(sql`
+    with allocation_regulation as (
+      select
+        ro.id as "occupancyId",
+        'regulation' as domain,
+        rp.code as "targetCode",
+        rp.label as "targetLabel",
+        d.id as "doctorId",
+        d.full_name as "doctorName",
+        d.display_name as "displayName",
+        ro.started_at as "startedAt",
+        ro.board_started_at as "boardStartedAt",
+        coalesce(ro.actual_ended_at, ro.ended_at) as "endedAt",
+        ro.actual_ended_at as "actualEndedAt",
+        ro.scheduled_start_at as "scheduledStartAt",
+        ro.scheduled_end_at as "scheduledEndAt",
+        ro.shift_label as "shiftLabel",
+        ro.role_label as "roleLabel",
+        coalesce(ro.ramal_label, rp.code) as "ramalLabel",
+        bhe.arrival_delay_minutes as "arrivalDelayMinutes",
+        bhe.overtime_minutes as "overtimeMinutes",
+        bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
+        bhe.balance_minutes as "balanceMinutes",
+        bhe.rule_code as "ruleCode",
+        bhe.explanation as "bankHoursExplanation",
+        ro.source as source,
+        ro.notes as notes
+      from operations_v2.regulation_occupancies ro
+      inner join operations_v2.regulation_posts rp on rp.id = ro.post_id
+      inner join operations_v2.doctors d on d.id = ro.doctor_id
+      left join operations_v2.bank_hours_entries bhe on bhe.regulation_occupancy_id = ro.id
+      where ro.started_at >= ${queryStart}::timestamptz
+        and ro.started_at < ${queryEnd}::timestamptz
+    ),
+    allocation_intervention as (
+      select
+        io.id as "occupancyId",
+        'intervention' as domain,
+        ib.code as "targetCode",
+        ib.label as "targetLabel",
+        d.id as "doctorId",
+        d.full_name as "doctorName",
+        d.display_name as "displayName",
+        io.started_at as "startedAt",
+        io.board_started_at as "boardStartedAt",
+        coalesce(io.actual_ended_at, io.ended_at) as "endedAt",
+        io.actual_ended_at as "actualEndedAt",
+        io.scheduled_start_at as "scheduledStartAt",
+        io.scheduled_end_at as "scheduledEndAt",
+        io.shift_label as "shiftLabel",
+        io.role_label as "roleLabel",
+        null::text as "ramalLabel",
+        bhe.arrival_delay_minutes as "arrivalDelayMinutes",
+        bhe.overtime_minutes as "overtimeMinutes",
+        bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
+        bhe.balance_minutes as "balanceMinutes",
+        bhe.rule_code as "ruleCode",
+        bhe.explanation as "bankHoursExplanation",
+        io.source as source,
+        io.notes as notes
+      from operations_v2.intervention_occupancies io
+      inner join operations_v2.intervention_bases ib on ib.id = io.base_id
+      inner join operations_v2.doctors d on d.id = io.doctor_id
+      left join operations_v2.bank_hours_entries bhe on bhe.intervention_occupancy_id = io.id
+      where io.started_at >= ${queryStart}::timestamptz
+        and io.started_at < ${queryEnd}::timestamptz
+    )
+    select * from allocation_regulation
+    union all
+    select * from allocation_intervention
+  `);
+
+  return buildPaymentAllocationBoardModel({
+    targets: (targetResult as unknown as Record<string, unknown>[]).map(resolvePaymentAllocationTarget),
+    rawRows: (rawResult as unknown as Record<string, unknown>[]).map(mapPreviousOperationalRow),
+    operationalDate: request.operationalDate,
+    shiftLabel: request.shiftLabel,
+    startedAt: request.startedAt,
+    endedAt: request.endedAt,
+  });
 }

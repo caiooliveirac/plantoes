@@ -46,8 +46,12 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/in
 
         const nextStartedAt = parsed.data.startedAt ? new Date(parsed.data.startedAt) : null;
         const startedAtChanged = Boolean(nextStartedAt && nextStartedAt.getTime() !== existing.startedAt.getTime());
+        const doctorChanged = Boolean(parsed.data.doctorId && parsed.data.doctorId !== existing.doctorId);
         if (startedAtChanged && !parsed.data.notes?.trim()) {
             return NextResponse.json({ error: "Motivo obrigatorio ao corrigir horario de intervencao." }, { status: 400 });
+        }
+        if (doctorChanged && !parsed.data.notes?.trim()) {
+            return NextResponse.json({ error: "Motivo obrigatorio ao trocar o medico da intervencao." }, { status: 400 });
         }
 
         const updated = await correctInterventionOccupancy(id, {
@@ -72,7 +76,13 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/in
             action: "intervention_occupancy.corrected",
             entityType: "intervention_occupancy",
             entityId: updated.id,
-            details: parsed.data,
+            details: {
+                ...parsed.data,
+                previousDoctorId: existing.doctorId,
+                nextDoctorId: updated.doctorId,
+                previousStartedAt: existing.startedAt.toISOString(),
+                nextStartedAt: updated.startedAt.toISOString(),
+            },
         });
 
         return NextResponse.json({ occupancy: updated });
