@@ -3514,12 +3514,13 @@ async function sendSuccessReply(
     replyTimeAt?: Date,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
+    const replyKind = resolveTelegramSuccessReplyKind({
+        parsed,
+        successKind,
+        forceContinuation,
+    });
     const text = pickTelegramReply(
-        resolveTelegramSuccessReplyKind({
-            parsed,
-            successKind,
-            forceContinuation,
-        }),
+        replyKind,
         seed,
         {
             name: doctorName,
@@ -3527,7 +3528,10 @@ async function sendSuccessReply(
             time,
         },
     );
-    await sendMessage(chatId, `${text}${approximateMatchHint}`, replyToMessageId);
+    const arrivalHint = replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded"
+        ? "\n\n💡 Se trocar de ramal ou base, mande nova chegada no mesmo formato."
+        : "";
+    await sendMessage(chatId, `${text}${approximateMatchHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
