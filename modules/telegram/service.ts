@@ -2566,6 +2566,47 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
     }
 
+    const normalizedText = message.text.trim().toLowerCase();
+    if (normalizedText === "/ajuda" || normalizedText === "/help") {
+        const helpText = [
+            "📋 *Guia rápido do bot*",
+            "",
+            "▸ *CHEGADA* — avise no grupo:",
+            `  _${buildTelegramArrivalExample({})}_`,
+            `  _Vagner USB-01 07:00 P_  (se for plantão P)`,
+            "",
+            "▸ *SAÍDA* — avise no grupo:",
+            `  _${buildTelegramDepartureExample({})}_`,
+            "",
+            "▸ *CONTINUAÇÃO* — se emenda o próximo turno:",
+            "  _Vagner continuo USB-01_",
+            "",
+            "▸ *TROCA de ramal/base* — mande nova chegada:",
+            "  _Vagner USB-03 08:30_",
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "📌 *Comandos disponíveis:*",
+            "",
+            "  /almoco — inicia divisão de almoço",
+            "  /jantar — inicia divisão de jantar",
+            "  /prioridade — mostra ordem de escolha",
+            "  /plantao — relatório do turno atual",
+            "  /resumo — resumo operacional",
+            "  /banco — consulta banco de horas",
+            "  /saidas — relatório de saídas",
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "💡 Em caso de dúvida, mande /ajuda novamente.",
+        ].join("\n");
+
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "help_command",
+        });
+        await sendMessage(message.chat.id, helpText, message.message_id);
+        return { ok: true, help: true };
+    }
+
     const command = parseTelegramCommand(message.text);
     if (!command) {
         if (message.text.trim().startsWith("/")) {
