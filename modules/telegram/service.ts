@@ -2607,6 +2607,102 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         return { ok: true, help: true };
     }
 
+    if (normalizedText === "/status" || normalizedText === "/meuturno") {
+        const senderTelegramId = message.from?.id ? String(message.from.id) : null;
+        if (!senderTelegramId) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                parsedAction: "status_command",
+                errorMessage: "no_sender_id",
+            });
+            await sendMessage(message.chat.id, "❓ Não consegui identificar quem mandou essa mensagem.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const db = getDb();
+        const recentEntry = await db.query.telegramIngestedMessages.findFirst({
+            where: and(
+                eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+                eq(telegramIngestedMessages.status, "accepted"),
+                gte(telegramIngestedMessages.createdAt, new Date(Date.now() - 36 * 60 * 60 * 1000)),
+            ),
+            orderBy: [desc(telegramIngestedMessages.createdAt)],
+        });
+
+        if (!recentEntry || !recentEntry.relatedOccupancyId) {
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "status_command",
+                resolutionData: { found: false },
+            });
+            await sendMessage(
+                message.chat.id,
+                "📋 Não encontrei nenhum lançamento seu nas últimas horas.\n\nSe você já está no plantão, avise sua chegada no grupo.",
+                message.message_id,
+            );
+            return { ok: true, status: true };
+        }
+
+        const board = await getOperationalBoard();
+        const allRows = [
+            ...board.regulation.map((r) => ({ ...r, domain: "REG" as const })),
+            ...board.intervention.map((r) => ({ ...r, domain: "INT" as const })),
+        ];
+        const myRow = allRows.find((r) =>
+            r.occupancyId === recentEntry.relatedOccupancyId,
+        );
+
+        if (myRow && myRow.doctorName) {
+            const startTime = myRow.startedAt
+                ? new Date(myRow.startedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" })
+                : "—";
+            const targetCode = "baseCode" in myRow ? myRow.baseCode : "postCode" in myRow ? myRow.postCode : "—";
+            const shiftInfo = myRow.shiftLabel ? ` (${myRow.shiftLabel})` : "";
+
+            const statusLines = [
+                `📋 *Sua situação no quadro:*`,
+                ``,
+                `▸ Nome: ${myRow.doctorName}`,
+                `▸ Posto: ${targetCode}${shiftInfo}`,
+                `▸ Chegada: ${startTime}`,
+                `▸ Status: ativo no quadro`,
+            ];
+
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "status_command",
+                resolutionData: {
+                    found: true,
+                    occupancyId: recentEntry.relatedOccupancyId,
+                    targetCode,
+                    doctorName: myRow.doctorName,
+                },
+            });
+            await sendMessage(message.chat.id, statusLines.join("\n"), message.message_id);
+        } else {
+            const statusLines = [
+                `📋 *Seu último lançamento:*`,
+                ``,
+                `▸ ${recentEntry.parsedDoctorName ?? "—"} em ${recentEntry.parsedTargetCode ?? "—"}`,
+                `▸ Esse registro não está mais ativo no quadro atual.`,
+                ``,
+                `Se você está no plantão agora, avise sua chegada normalmente.`,
+            ];
+
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "status_command",
+                resolutionData: {
+                    found: true,
+                    occupancyId: recentEntry.relatedOccupancyId,
+                    active: false,
+                },
+            });
+            await sendMessage(message.chat.id, statusLines.join("\n"), message.message_id);
+        }
+        return { ok: true, status: true };
+    }
+
     const command = parseTelegramCommand(message.text);
     if (!command) {
         if (message.text.trim().startsWith("/")) {
