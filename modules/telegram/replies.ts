@@ -1,4 +1,4 @@
-type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "continuation_recorded" | "departure_recorded" | "departure_adjusted" | "departure_justification_required" | "departure_justification_recorded" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
+type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "continuation_recorded" | "departure_recorded" | "departure_adjusted" | "departure_justification_required" | "departure_justification_recorded" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
 
 interface NamedCandidate {
     fullName: string;
@@ -109,6 +109,13 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "A intenção de saída ficou clara, mas ainda faltam dados para registrar. Pode mandar assim: {example}",
         "Consigo registrar essa saída se você reenviar com nome, base e horário. Ex.: {example}",
         "Faltou contexto para eu fechar a saída agora. Reenvie no formato: {example}",
+    ],
+    no_operational_match: [
+        "Recebi sua mensagem, mas não consegui identificar uma ação operacional nela.\n\n📌 Para CHEGADA, mande no formato:\n{arrivalExample}\n\n📌 Para SAÍDA, mande no formato:\n{departureExample}\n\nSe precisar de ajuda, mande /ajuda.",
+        "Li sua mensagem, mas não encontrei dados de plantão para registrar.\n\n📌 Para registrar CHEGADA, use este formato:\n{arrivalExample}\n\n📌 Para registrar SAÍDA, use este formato:\n{departureExample}\n\nQualquer dúvida, mande /ajuda.",
+        "Não consegui entender essa mensagem como registro operacional.\n\n📌 CHEGADA — envie assim:\n{arrivalExample}\n\n📌 SAÍDA — envie assim:\n{departureExample}\n\nSe algo ficou diferente do esperado, tente reenviar no formato acima.",
+        "Sua mensagem chegou, mas não identifiquei base, ramal ou horário nela.\n\n📌 Para CHEGADA, o formato é:\n{arrivalExample}\n\n📌 Para SAÍDA, o formato é:\n{departureExample}\n\nSe ficou na dúvida, mande /ajuda para ver os formatos aceitos.",
+        "Entendi que você mandou uma mensagem, mas não consegui extrair dados operacionais.\n\n📌 CHEGADA — exemplo:\n{arrivalExample}\n\n📌 SAÍDA — exemplo:\n{departureExample}\n\nSe precisar, reenvie com nome, base/ramal e horário.",
     ],
     candidate_prompt: [
         "Falta só fechar o nome do médico. Escolha uma opção abaixo ou redigite o nome completo.",
@@ -234,6 +241,7 @@ const REPLY_PREFIX: Record<ReplyKind, string> = {
     departure_not_found: "⛔",
     departure_time_conflict: "⚠️",
     departure_missing_context: "⚠️",
+    no_operational_match: "❓",
     candidate_prompt: "⚠️",
     name_unresolved: "⚠️",
     command_forbidden: "⛔",

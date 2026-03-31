@@ -386,6 +386,17 @@ function appendTelegramOperationalNote(existingNotes: string | null | undefined,
     return [existingNotes?.trim(), nextEntry].filter(Boolean).join("\n");
 }
 
+function buildTelegramArrivalExample(params: {
+    doctorName?: string | null;
+    target?: string | null;
+    time?: string | null;
+}) {
+    const compactName = params.doctorName?.trim() || "Vagner";
+    const target = params.target?.trim() || "USB-01";
+    const time = params.time?.trim() || "07:00";
+    return `${compactName} ${target} ${time}`;
+}
+
 function buildTelegramDepartureExample(params: {
     doctorName?: string | null;
     target?: string | null;
@@ -3991,6 +4002,15 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         message.chat.id,
                         pickTelegramReply("departure_missing_context", message.message_id, {
                             example: buildTelegramDepartureExample({}),
+                        }),
+                        message.message_id,
+                    );
+                } else {
+                    await sendMessage(
+                        message.chat.id,
+                        pickTelegramReply("no_operational_match", message.message_id, {
+                            arrivalExample: buildTelegramArrivalExample({}),
+                            departureExample: buildTelegramDepartureExample({}),
                         }),
                         message.message_id,
                     );
