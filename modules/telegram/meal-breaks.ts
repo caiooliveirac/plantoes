@@ -999,7 +999,7 @@ function buildNightWorkQueuePrompt(session: MealBreakSession) {
 
     const doctor = findDoctor(session, currentRamal);
     return [
-        `Proximo da fila do trabalho: ${resolveDoctorName(doctor ?? { name: currentRamal })}, ramal ${currentRamal}.`,
+        `👉 Vez de *${resolveDoctorName(doctor ?? { name: currentRamal })}* (ramal ${currentRamal}) escolher trabalho.`,
         `Horarios disponiveis: ${buildAvailableNightWorkText(session)}.`,
         "Responda: RAMAL HORARIO.",
     ].join("\n");
@@ -1014,7 +1014,7 @@ function buildNightDinnerQueuePrompt(session: MealBreakSession) {
     const doctor = findDoctor(session, currentRamal);
     const duration = session.dinnerDurationAssignments[currentRamal] === "one_hour" ? "1h de jantar" : "30 min de jantar";
     return [
-        `Proximo jantar: ${resolveDoctorName(doctor ?? { name: currentRamal })}, ramal ${currentRamal}.`,
+        `👉 Vez de *${resolveDoctorName(doctor ?? { name: currentRamal })}* (ramal ${currentRamal}) escolher jantar.`,
         `Direito atual: ${duration}.`,
         `Horarios disponiveis: ${buildAvailableDinnerText(session)}.`,
         "Responda: RAMAL HORARIO.",
@@ -1041,7 +1041,7 @@ function buildLunchQueuePrompt(session: MealBreakSession) {
 
     const doctor = findDoctor(session, currentRamal);
     return [
-        `Proximo da fila: ${resolveDoctorName(doctor ?? { name: currentRamal })}, ramal ${currentRamal}.`,
+        `👉 Vez de *${resolveDoctorName(doctor ?? { name: currentRamal })}* (ramal ${currentRamal}) escolher almoço.`,
         `Horarios disponiveis: ${buildAvailableLunchText(session)}.`,
         "Responda: RAMAL HORARIO.",
     ].join("\n");
@@ -1055,7 +1055,7 @@ function buildRestQueuePrompt(session: MealBreakSession) {
 
     const doctor = findDoctor(session, currentRamal);
     return [
-        `Proximo da fila: ${resolveDoctorName(doctor ?? { name: currentRamal })}, ramal ${currentRamal}.`,
+        `👉 Vez de *${resolveDoctorName(doctor ?? { name: currentRamal })}* (ramal ${currentRamal}) escolher descanso.`,
         `Horarios disponiveis: ${buildAvailableRestText(session)}.`,
         "Responda: RAMAL HORARIO.",
     ].join("\n");
