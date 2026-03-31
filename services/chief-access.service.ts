@@ -3,7 +3,11 @@ import { hash } from "bcryptjs";
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, chiefAccessRequests, chiefInvites, doctors, userRoles, users } from "@/db/schema";
+import { getPasswordPolicyError } from "@/modules/auth/password-policy";
+import { hashPassword } from "@/services/auth.service";
 import {
+    validateChiefBootstrapAccessInput,
+    type BootstrapChiefAccessInput,
     validateChiefAccessRequestInput,
     validateChiefAccessReviewInput,
     validateChiefInviteInput,
@@ -229,6 +233,7 @@ export async function listChiefAssignments() {
           u.id,
           u.email,
           u.is_active,
+                    u.must_change_password,
           d.id as doctor_id,
           d.full_name,
           d.display_name
@@ -245,10 +250,104 @@ export async function listChiefAssignments() {
         id: string;
         email: string;
         is_active: boolean;
+        must_change_password: boolean;
         doctor_id: string | null;
         full_name: string | null;
         display_name: string | null;
     }>;
+}
+
+export async function provisionChiefBootstrapAccess(input: BootstrapChiefAccessInput, actorUserId: string) {
+    const db = getDb();
+    const parsed = validateChiefBootstrapAccessInput(input);
+    const requestedEmail = normalizeEmail(parsed.email);
+    const passwordPolicyError = getPasswordPolicyError(parsed.temporaryPassword);
+
+    if (passwordPolicyError) {
+        throw new Error(passwordPolicyError);
+    }
+
+    const doctor = await db.query.doctors.findFirst({
+        where: eq(doctors.id, parsed.doctorId),
+    });
+
+    if (!doctor || !doctor.isActive) {
+        throw new Error("Medico nao encontrado no diretorio oficial.");
+    }
+
+    const passwordHash = await hashPassword(parsed.temporaryPassword);
+
+    return db.transaction(async (tx) => {
+        const existingUser = await tx.query.users.findFirst({
+            where: eq(users.email, requestedEmail),
+        });
+
+        if (existingUser?.doctorId && existingUser.doctorId !== doctor.id) {
+            throw new Error("Este email ja esta vinculado a outro medico. Use outro login para a chefia.");
+        }
+
+        if (existingUser) {
+            const existingRoles = await tx
+                .select({ role: userRoles.role })
+                .from(userRoles)
+                .where(eq(userRoles.userId, existingUser.id));
+
+            if (existingRoles.some((row) => row.role === "admin")) {
+                throw new Error("Este email ja pertence a uma conta admin. Use outro login para a chefia.");
+            }
+        }
+
+        const [user] = existingUser
+            ? await tx
+                .update(users)
+                .set({
+                    doctorId: doctor.id,
+                    passwordHash,
+                    mustChangePassword: true,
+                    isActive: true,
+                    updatedAt: new Date(),
+                })
+                .where(eq(users.id, existingUser.id))
+                .returning()
+            : await tx
+                .insert(users)
+                .values({
+                    doctorId: doctor.id,
+                    email: requestedEmail,
+                    passwordHash,
+                    mustChangePassword: true,
+                    isActive: true,
+                })
+                .returning();
+
+        await tx.insert(userRoles).values({
+            userId: user.id,
+            role: "chief",
+        }).onConflictDoNothing();
+
+        await tx.insert(auditLogs).values({
+            actorUserId,
+            action: existingUser ? "chief_access.bootstrap_rotated" : "chief_access.bootstrap_created",
+            entityType: "user",
+            entityId: user.id,
+            details: {
+                email: requestedEmail,
+                doctorId: doctor.id,
+                mustChangePassword: true,
+            },
+        });
+
+        return {
+            id: user.id,
+            email: user.email,
+            isActive: user.isActive,
+            mustChangePassword: user.mustChangePassword,
+            doctorId: doctor.id,
+            fullName: doctor.fullName,
+            displayName: doctor.displayName,
+            wasExistingUser: Boolean(existingUser),
+        };
+    });
 }
 
 export async function reviewChiefAccessRequest(input: ReviewChiefAccessRequestInput, reviewerUserId: string) {

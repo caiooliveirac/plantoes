@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { auditLogs, users } from "@/db/schema";
+import { auditLogs, bankHoursBalanceOverrides, users } from "@/db/schema";
 import {
     buildBankHoursHistoryModel,
     type BankHoursHistoryModel,
@@ -43,8 +43,47 @@ function mapRow(row: Record<string, unknown>): RawBankHoursHistoryShift {
         balanceMinutes: row.balanceMinutes === null ? null : Number(row.balanceMinutes),
         ruleCode: (row.ruleCode ?? null) as string | null,
         bankHoursExplanation: (row.bankHoursExplanation ?? null) as string | null,
+        manualBalanceMinutes: null,
+        manualBalanceNotes: null,
+        manualBalanceUpdatedAt: null,
+        manualBalanceActorEmail: null,
         auditTrail: [],
     };
+}
+
+async function loadManualBalanceOverrides(continuityGroupIds: string[]) {
+    const normalizedIds = [...new Set(continuityGroupIds.filter(Boolean))];
+    if (normalizedIds.length === 0) {
+        return new Map<string, {
+            balanceMinutes: number;
+            notes: string;
+            updatedAt: string;
+            actorEmail: string | null;
+        }>();
+    }
+
+    const db = getDb();
+    const rows = await db
+        .select({
+            continuityGroupId: bankHoursBalanceOverrides.continuityGroupId,
+            balanceMinutes: bankHoursBalanceOverrides.balanceMinutes,
+            notes: bankHoursBalanceOverrides.notes,
+            updatedAt: bankHoursBalanceOverrides.updatedAt,
+            actorEmail: users.email,
+        })
+        .from(bankHoursBalanceOverrides)
+        .leftJoin(users, eq(users.id, bankHoursBalanceOverrides.updatedByUserId))
+        .where(inArray(bankHoursBalanceOverrides.continuityGroupId, normalizedIds));
+
+    return new Map(rows.map((row) => [
+        row.continuityGroupId,
+        {
+            balanceMinutes: row.balanceMinutes,
+            notes: row.notes,
+            updatedAt: row.updatedAt.toISOString(),
+            actorEmail: row.actorEmail,
+        },
+    ]));
 }
 
 async function loadAuditTrailByOccupancy(shifts: RawBankHoursHistoryShift[]) {
@@ -198,8 +237,13 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
     const auditTrailByOccupancy = await loadAuditTrailByOccupancy(rows);
+    const manualOverridesByGroup = await loadManualBalanceOverrides(rows.map((row) => row.continuityGroupId));
     const enrichedRows = rows.map((row) => ({
         ...row,
+        manualBalanceMinutes: manualOverridesByGroup.get(row.continuityGroupId)?.balanceMinutes ?? null,
+        manualBalanceNotes: manualOverridesByGroup.get(row.continuityGroupId)?.notes ?? null,
+        manualBalanceUpdatedAt: manualOverridesByGroup.get(row.continuityGroupId)?.updatedAt ?? null,
+        manualBalanceActorEmail: manualOverridesByGroup.get(row.continuityGroupId)?.actorEmail ?? null,
         auditTrail: auditTrailByOccupancy.get(`${row.domain === "regulation" ? "regulation_occupancy" : "intervention_occupancy"}:${row.occupancyId}`) ?? [],
     }));
 

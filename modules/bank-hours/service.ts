@@ -1,9 +1,68 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { BANK_HOURS_RULE_VERSION, calculateBankHours } from "@/modules/bank-hours/calculator";
 import { buildContinuityBankHoursSpan } from "@/modules/bank-hours/continuity";
-import { bankHoursEntries, interventionOccupancies, regulationOccupancies } from "@/db/schema";
+import { getDb } from "@/db";
+import { bankHoursBalanceOverrides, bankHoursEntries, interventionOccupancies, regulationOccupancies } from "@/db/schema";
 
 type Executor = any;
+
+export interface BankHoursBalanceOverrideSummary {
+    continuityGroupId: string;
+    doctorId: string;
+    balanceMinutes: number;
+    notes: string;
+    createdByUserId: string | null;
+    updatedByUserId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
+export const MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE = "MANUAL_BANK_OVERRIDE";
+
+function formatSignedMinutes(value: number) {
+    const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+    return `${sign}${Math.abs(value)} min`;
+}
+
+export function buildBankHoursBalanceOverrideExplanation(params: {
+    balanceMinutes: number;
+    notes: string;
+    automaticBalanceMinutes: number | null;
+}) {
+    const automaticPart = params.automaticBalanceMinutes === null
+        ? ""
+        : ` Saldo automatico original: ${formatSignedMinutes(params.automaticBalanceMinutes)}.`;
+
+    return `Saldo ajustado manualmente para ${formatSignedMinutes(params.balanceMinutes)}.${automaticPart} Motivo: ${params.notes.trim()}`;
+}
+
+export async function listBankHoursBalanceOverridesByContinuityGroupIds(
+    db: Executor,
+    continuityGroupIds: string[],
+): Promise<Map<string, BankHoursBalanceOverrideSummary>> {
+    const normalizedIds = [...new Set(continuityGroupIds.filter(Boolean))];
+    if (normalizedIds.length === 0) {
+        return new Map<string, BankHoursBalanceOverrideSummary>();
+    }
+
+    const rows = await db.query.bankHoursBalanceOverrides.findMany({
+        where: inArray(bankHoursBalanceOverrides.continuityGroupId, normalizedIds),
+    });
+
+    return new Map(rows.map((row: typeof bankHoursBalanceOverrides.$inferSelect) => [
+        row.continuityGroupId,
+        {
+            continuityGroupId: row.continuityGroupId,
+            doctorId: row.doctorId,
+            balanceMinutes: row.balanceMinutes,
+            notes: row.notes,
+            createdByUserId: row.createdByUserId,
+            updatedByUserId: row.updatedByUserId,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+        } satisfies BankHoursBalanceOverrideSummary,
+    ]));
+}
 
 async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: string) {
     const [regulation, intervention] = await Promise.all([
@@ -82,6 +141,16 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
         actualStartAt: span.actualStartAt,
         actualEndAt: span.actualEndAt,
     });
+    const override = (await listBankHoursBalanceOverridesByContinuityGroupIds(db, [continuityGroupId])).get(continuityGroupId) ?? null;
+    const balanceMinutes = override?.balanceMinutes ?? calculation.balanceMinutes;
+    const ruleCode = override ? MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE : calculation.ruleCode;
+    const explanation = override
+        ? buildBankHoursBalanceOverrideExplanation({
+            balanceMinutes: override.balanceMinutes,
+            notes: override.notes,
+            automaticBalanceMinutes: calculation.balanceMinutes,
+        })
+        : calculation.explanation;
 
     const [created] = await db.insert(bankHoursEntries)
         .values({
@@ -97,10 +166,10 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
             overtimeMinutes: calculation.overtimeMinutes,
             overtimeMultiplier: calculation.overtimeMultiplier,
             creditedOvertimeMinutes: calculation.creditedOvertimeMinutes,
-            balanceMinutes: calculation.balanceMinutes,
-            ruleCode: calculation.ruleCode,
+            balanceMinutes,
+            ruleCode,
             calculationVersion: BANK_HOURS_RULE_VERSION,
-            explanation: calculation.explanation,
+            explanation,
             updatedAt: new Date(),
         })
         .returning();
@@ -142,5 +211,92 @@ export async function findActiveInterventionBoardOccupancy(db: Executor, baseId:
             operators.asc(fields.boardStartedAt),
             operators.asc(fields.startedAt),
         ],
+    });
+}
+
+async function resolveOccupancyOverrideTarget(db: Executor, params: {
+    domain: "regulation" | "intervention";
+    occupancyId: string;
+}) {
+    if (params.domain === "regulation") {
+        const occupancy = await db.query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, params.occupancyId),
+        });
+        if (!occupancy) {
+            throw new Error("Regulation occupancy not found.");
+        }
+
+        return {
+            continuityGroupId: occupancy.continuityGroupId,
+            doctorId: occupancy.doctorId,
+        };
+    }
+
+    const occupancy = await db.query.interventionOccupancies.findFirst({
+        where: eq(interventionOccupancies.id, params.occupancyId),
+    });
+    if (!occupancy) {
+        throw new Error("Intervention occupancy not found.");
+    }
+
+    return {
+        continuityGroupId: occupancy.continuityGroupId,
+        doctorId: occupancy.doctorId,
+    };
+}
+
+export async function applyBankHoursBalanceOverride(params: {
+    domain: "regulation" | "intervention";
+    occupancyId: string;
+    balanceMinutes: number;
+    notes: string;
+    actorUserId?: string | null;
+}) {
+    const db = getDb();
+    return db.transaction(async (tx) => {
+        const target = await resolveOccupancyOverrideTarget(tx, {
+            domain: params.domain,
+            occupancyId: params.occupancyId,
+        });
+        const occupancies = await listContinuityGroupOccupancies(tx, target.continuityGroupId);
+        if (occupancies.length === 0) {
+            throw new Error("Nao encontrei o grupo de continuidade desse plantao.");
+        }
+
+        const span = buildContinuityBankHoursSpan(occupancies);
+        if (!span.isClosed || !span.actualEndAt || !span.scheduledStartAt || !span.scheduledEndAt) {
+            throw new Error("Esse plantao ainda nao tem fechamento suficiente para ajuste manual do banco.");
+        }
+
+        const [saved] = await tx.insert(bankHoursBalanceOverrides)
+            .values({
+                continuityGroupId: target.continuityGroupId,
+                doctorId: target.doctorId,
+                balanceMinutes: params.balanceMinutes,
+                notes: params.notes.trim(),
+                createdByUserId: params.actorUserId ?? null,
+                updatedByUserId: params.actorUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .onConflictDoUpdate({
+                target: bankHoursBalanceOverrides.continuityGroupId,
+                set: {
+                    doctorId: target.doctorId,
+                    balanceMinutes: params.balanceMinutes,
+                    notes: params.notes.trim(),
+                    updatedByUserId: params.actorUserId ?? null,
+                    updatedAt: new Date(),
+                },
+            })
+            .returning();
+
+        const bankEntry = await syncBankHoursByContinuityGroup(tx, target.continuityGroupId);
+
+        return {
+            override: saved,
+            bankEntry,
+            continuityGroupId: target.continuityGroupId,
+            doctorId: target.doctorId,
+        };
     });
 }

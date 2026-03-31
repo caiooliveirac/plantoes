@@ -113,15 +113,27 @@ function rowSearchIndex(row: PaymentAllocationRow) {
     ].join(" "));
 }
 
-function statusTone(status: PaymentAllocationRow["paymentStatus"], hasOccupancy: boolean) {
-    if (!hasOccupancy) {
+function isDisabledRow(row: PaymentAllocationRow) {
+    return Boolean(row.disabledEntireShift);
+}
+
+function statusTone(row: PaymentAllocationRow) {
+    if (isDisabledRow(row)) {
+        return "disabled" as const;
+    }
+
+    if (!row.occupancyId) {
         return "empty" as const;
     }
 
-    return status === "ready_for_payment" ? "ready" as const : "review" as const;
+    return row.paymentStatus === "ready_for_payment" ? "ready" as const : "review" as const;
 }
 
 function statusLabel(row: PaymentAllocationRow) {
+    if (isDisabledRow(row)) {
+        return "Desativada";
+    }
+
     if (!row.occupancyId) {
         return "Vazio";
     }
@@ -130,6 +142,10 @@ function statusLabel(row: PaymentAllocationRow) {
 }
 
 function primaryDoctorLabel(row: PaymentAllocationRow) {
+    if (isDisabledRow(row)) {
+        return "Base desativada para o turno";
+    }
+
     if (!row.occupancyId) {
         return "Sem ocupação consolidada";
     }
@@ -138,6 +154,14 @@ function primaryDoctorLabel(row: PaymentAllocationRow) {
 }
 
 function summarizeIssues(row: PaymentAllocationRow) {
+    if (isDisabledRow(row)) {
+        const parts = [row.disabledAt ? `desativada às ${formatTime(row.disabledAt)}` : "desativada para todo o turno"];
+        if (row.disabledReason?.trim()) {
+            parts.push(row.disabledReason.trim());
+        }
+        return parts.join(" • ");
+    }
+
     if (row.issues.length === 0) {
         return "Sem pendência operacional para pagamento.";
     }
@@ -146,11 +170,62 @@ function summarizeIssues(row: PaymentAllocationRow) {
 }
 
 function candidateSummary(row: PaymentAllocationRow) {
+    if (isDisabledRow(row)) {
+        return "fora da alocação";
+    }
+
     if (!row.occupancyId) {
         return row.candidateCount > 0 ? `${row.candidateCount} candidato${row.candidateCount === 1 ? "" : "s"} bloqueado${row.candidateCount === 1 ? "" : "s"}` : "sem titular";
     }
 
     return row.candidateCount > 1 ? `${row.candidateCount} candidatos` : "1 titular";
+}
+
+function usesSourceCoverage(row: PaymentAllocationRow) {
+    if (!(row.sourceActualEndedAt ?? row.sourceEndedAt)) {
+        return false;
+    }
+
+    return (row.sourceStartedAt ?? null) !== (row.startedAt ?? null)
+        || (row.sourceActualEndedAt ?? row.sourceEndedAt ?? null) !== (row.actualEndedAt ?? row.endedAt ?? null)
+        || (row.sourceBalanceMinutes ?? null) !== (row.balanceMinutes ?? null)
+        || (row.sourceRuleCode ?? null) !== (row.ruleCode ?? null);
+}
+
+function resolveDisplayedStartAt(row: PaymentAllocationRow) {
+    return usesSourceCoverage(row) ? row.sourceStartedAt ?? row.startedAt : row.startedAt;
+}
+
+function resolveDisplayedExitAt(row: PaymentAllocationRow) {
+    return row.sourceActualEndedAt ?? row.sourceEndedAt ?? row.actualEndedAt ?? row.endedAt;
+}
+
+function resolveDisplayedScheduledStartAt(row: PaymentAllocationRow) {
+    return usesSourceCoverage(row) ? row.sourceScheduledStartAt ?? row.scheduledStartAt : row.scheduledStartAt;
+}
+
+function resolveDisplayedScheduledEndAt(row: PaymentAllocationRow) {
+    return usesSourceCoverage(row) ? row.sourceScheduledEndAt ?? row.scheduledEndAt : row.scheduledEndAt;
+}
+
+function resolveDisplayedArrivalDelayMinutes(row: PaymentAllocationRow) {
+    return usesSourceCoverage(row) ? row.sourceArrivalDelayMinutes ?? row.arrivalDelayMinutes : row.arrivalDelayMinutes;
+}
+
+function resolveDisplayedCreditedOvertimeMinutes(row: PaymentAllocationRow) {
+    return usesSourceCoverage(row) ? row.sourceCreditedOvertimeMinutes ?? row.creditedOvertimeMinutes : row.creditedOvertimeMinutes;
+}
+
+function resolveDisplayedBalanceMinutes(row: PaymentAllocationRow) {
+    return usesSourceCoverage(row) ? row.sourceBalanceMinutes ?? row.balanceMinutes : row.balanceMinutes;
+}
+
+function resolveDisplayedRuleCode(row: PaymentAllocationRow) {
+    return usesSourceCoverage(row) ? row.sourceRuleCode ?? row.ruleCode : row.ruleCode;
+}
+
+function resolveDisplayedBankHoursExplanation(row: PaymentAllocationRow) {
+    return usesSourceCoverage(row) ? row.sourceBankHoursExplanation ?? row.bankHoursExplanation : row.bankHoursExplanation;
 }
 
 export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
@@ -166,11 +241,14 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
     const [shiftInput, setShiftInput] = useState<"SD" | "SN">(initialBoard.shiftLabel);
     const [selectedDoctorId, setSelectedDoctorId] = useState<string>("");
     const [correctionNote, setCorrectionNote] = useState("");
+    const [removalNote, setRemovalNote] = useState("");
     const [loadError, setLoadError] = useState<string | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
     const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
     const [isRefreshing, startRefreshTransition] = useTransition();
     const [isSaving, startSaveTransition] = useTransition();
+    const [isDeleting, startDeleteTransition] = useTransition();
 
     const combinedRows = useMemo(
         () => [...board.regulation, ...board.intervention],
@@ -205,7 +283,9 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
     useEffect(() => {
         setSelectedDoctorId(selectedRow?.doctorId ?? "");
         setCorrectionNote("");
+        setRemovalNote("");
         setSaveError(null);
+        setDeleteError(null);
     }, [selectedRow?.doctorId, selectedRow?.occupancyId]);
 
     const loadBoard = useEffectEvent(async (params?: { date?: string | null; shift?: "SD" | "SN" | null }) => {
@@ -257,6 +337,8 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
         }
 
         setSaveError(null);
+        setDeleteError(null);
+        setDeleteError(null);
         setFeedbackMessage(null);
 
         const endpoint = selectedRow.domain === "regulation"
@@ -281,11 +363,47 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
         setFeedbackMessage(`Alocação de ${selectedRow.targetCode} atualizada e reavaliada para pagamento.`);
     });
 
+    const submitRemoval = useEffectEvent(async () => {
+        if (!selectedRow?.occupancyId) {
+            return;
+        }
+
+        const normalizedNote = removalNote.trim();
+        if (normalizedNote.length < 8) {
+            throw new Error("Explique o motivo com pelo menos 8 caracteres antes de apagar o plantão.");
+        }
+
+        setSaveError(null);
+        setDeleteError(null);
+        setFeedbackMessage(null);
+
+        const endpoint = selectedRow.domain === "regulation"
+            ? `/api/regulation/occupancies/${selectedRow.occupancyId}`
+            : `/api/intervention/occupancies/${selectedRow.occupancyId}`;
+        const response = await fetch(endpoint, {
+            method: "DELETE",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                notes: `[payment-allocation:delete] ${normalizedNote}`,
+            }),
+        });
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        if (!response.ok) {
+            throw new Error(body?.error || "Não foi possível apagar o plantão.");
+        }
+
+        await loadBoard({ date: dateInput, shift: shiftInput });
+        setFeedbackMessage(`Plantão de ${selectedRow.targetCode} apagado com auditoria e quadro recalculado.`);
+    });
+
     const canSubmitCorrection = Boolean(
         selectedRow?.occupancyId
         && selectedDoctorId
         && selectedDoctorId !== selectedRow.doctorId,
     );
+    const canSubmitRemoval = Boolean(selectedRow?.occupancyId && removalNote.trim().length >= 8);
 
     return (
         <main className="payment-shell">
@@ -299,6 +417,7 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                 </div>
 
                 <div className="payment-hero-actions">
+                    <a className="reports-primary-link" href="/admin/payment-attestation">Abrir atesto diário</a>
                     <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
                     <a className="reports-secondary-link" href="/admin/bank-hours">Abrir banco de horas</a>
                     <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
@@ -325,6 +444,11 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                     <span className="reports-summary-label">Sem ocupação</span>
                     <strong>{board.summary.unassignedCount}</strong>
                     <span>alvos que não fecharam com titular identificado</span>
+                </article>
+                <article className="payment-summary-card">
+                    <span className="reports-summary-label">Desativadas</span>
+                    <strong>{board.summary.disabledCount ?? 0}</strong>
+                    <span>bases retiradas da operação no turno</span>
                 </article>
             </section>
 
@@ -390,7 +514,7 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                                 <span>Ajuste a busca ou carregue outra data operacional.</span>
                             </article>
                         ) : filteredRows.map((row) => {
-                            const tone = statusTone(row.paymentStatus, Boolean(row.occupancyId));
+                            const tone = statusTone(row);
                             return (
                                 <button
                                     key={rowKey(row)}
@@ -412,7 +536,7 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                                     <p className="payment-target-summary">{summarizeIssues(row)}</p>
 
                                     <div className="payment-target-meta">
-                                        <span>{sourceLabel(row.source)}</span>
+                                        <span>{isDisabledRow(row) ? "Estado operacional" : sourceLabel(row.source)}</span>
                                         <span>{row.occupancyId ? formatTime(row.startedAt) : "sem início"}</span>
                                         <span>{candidateSummary(row)}</span>
                                     </div>
@@ -431,7 +555,7 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                                     <h2>{selectedRow.targetCode} · {selectedRow.targetLabel}</h2>
                                     <p>{domainLabel(selectedRow.domain)} · {formatDateLabel(board.operationalDate)} · {board.shiftLabel}</p>
                                 </div>
-                                <span className={`payment-status-pill large ${statusTone(selectedRow.paymentStatus, Boolean(selectedRow.occupancyId))}`.trim()}>
+                                <span className={`payment-status-pill large ${statusTone(selectedRow)}`.trim()}>
                                     {statusLabel(selectedRow)}
                                 </span>
                             </header>
@@ -440,28 +564,30 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                                 <span className="payment-eyebrow">Titular que fecha no banco</span>
                                 <strong>{primaryDoctorLabel(selectedRow)}</strong>
                                 <p>
-                                    {selectedRow.occupancyId
-                                        ? `Fonte ${sourceLabel(selectedRow.source)} · início ${formatDateTime(selectedRow.startedAt)} · saída considerada ${formatDateTime(selectedRow.endedAt)}.`
-                                        : "Sem ocupação consolidada para este alvo neste turno. Primeiro é preciso acertar a operação antes de fechar o pagamento."}
+                                    {isDisabledRow(selectedRow)
+                                        ? `Esta base ficou fora da alocação do turno. ${selectedRow.disabledAt ? `Desativada às ${formatDateTime(selectedRow.disabledAt)}.` : "Desativada sem horário detalhado."}`
+                                        : selectedRow.occupancyId
+                                            ? `Fonte ${sourceLabel(selectedRow.source)} · início ${formatDateTime(resolveDisplayedStartAt(selectedRow))} · saída considerada ${formatDateTime(resolveDisplayedExitAt(selectedRow))}.`
+                                            : "Sem ocupação consolidada para este alvo neste turno. Primeiro é preciso acertar a operação antes de fechar o pagamento."}
                                 </p>
                             </section>
 
                             <section className="payment-kpi-grid">
                                 <article className="payment-kpi-card">
                                     <span className="payment-eyebrow">Janela prevista</span>
-                                    <strong>{formatTime(selectedRow.scheduledStartAt)} → {formatTime(selectedRow.scheduledEndAt)}</strong>
+                                    <strong>{formatTime(resolveDisplayedScheduledStartAt(selectedRow))} → {formatTime(resolveDisplayedScheduledEndAt(selectedRow))}</strong>
                                 </article>
                                 <article className="payment-kpi-card">
                                     <span className="payment-eyebrow">Atraso</span>
-                                    <strong>{formatMinutes(selectedRow.arrivalDelayMinutes)}</strong>
+                                    <strong>{formatMinutes(resolveDisplayedArrivalDelayMinutes(selectedRow))}</strong>
                                 </article>
                                 <article className="payment-kpi-card">
                                     <span className="payment-eyebrow">Crédito</span>
-                                    <strong>{formatMinutes(selectedRow.creditedOvertimeMinutes)}</strong>
+                                    <strong>{formatMinutes(resolveDisplayedCreditedOvertimeMinutes(selectedRow))}</strong>
                                 </article>
                                 <article className="payment-kpi-card">
                                     <span className="payment-eyebrow">Saldo</span>
-                                    <strong>{formatMinutes(selectedRow.balanceMinutes)}</strong>
+                                    <strong>{formatMinutes(resolveDisplayedBalanceMinutes(selectedRow))}</strong>
                                 </article>
                             </section>
 
@@ -472,13 +598,14 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                                         <li>Role no alvo: {selectedRow.roleLabel ?? selectedRow.defaultRole ?? "sem função declarada"}</li>
                                         <li>Ramal/base exibido: {selectedRow.ramalLabel ?? selectedRow.targetCode}</li>
                                         <li>Shift salvo: {selectedRow.shiftLabel ?? board.shiftLabel}</li>
-                                        <li>Regra do banco: {selectedRow.ruleCode ?? "não calculada"}</li>
+                                        <li>Regra do banco: {resolveDisplayedRuleCode(selectedRow) ?? "não calculada"}</li>
+                                        {selectedRow.disabledDuringShift && <li>Estado da base: desativada{selectedRow.disabledAt ? ` às ${formatTime(selectedRow.disabledAt)}` : " no turno"}</li>}
                                     </ul>
                                 </article>
 
                                 <article className="payment-detail-card">
                                     <span className="payment-eyebrow">Por que ficou assim</span>
-                                    <p>{selectedRow.bankHoursExplanation ?? "Ainda não existe explicação de banco de horas para esta linha."}</p>
+                                    <p>{resolveDisplayedBankHoursExplanation(selectedRow) ?? "Ainda não existe explicação de banco de horas para esta linha."}</p>
                                 </article>
                             </section>
 
@@ -554,6 +681,58 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                                     </>
                                 ) : (
                                     <p>Sem occupancy identificada. Este alvo ainda não pode ser corrigido por aqui porque o problema está antes da etapa de pagamento.</p>
+                                )}
+                            </section>
+
+                            <section className={`payment-detail-card correction ${selectedRow.occupancyId ? "enabled" : "disabled"}`.trim()}>
+                                <div className="payment-correction-header">
+                                    <div>
+                                        <span className="payment-eyebrow">Exclusão auditada</span>
+                                        <strong>Apagar plantão fechado só para admin</strong>
+                                    </div>
+                                    <span className="reports-badge danger">destrutivo</span>
+                                </div>
+
+                                {selectedRow.occupancyId ? (
+                                    <>
+                                        <p>
+                                            Use quando a linha de saída ou resumo foi gravada por engano e precisa sumir do banco. A ação remove a occupancy inteira, refaz a leitura do alvo e preserva a justificativa no log de auditoria.
+                                        </p>
+
+                                        <label className="payment-field">
+                                            <span>Motivo obrigatório</span>
+                                            <textarea
+                                                value={removalNote}
+                                                onChange={(event) => setRemovalNote(event.target.value)}
+                                                rows={4}
+                                                placeholder="Ex.: saída lançada em duplicidade; médico já tinha sido corrigido no turno"
+                                                disabled={isDeleting || isRefreshing}
+                                            />
+                                        </label>
+
+                                        {deleteError && (
+                                            <div className="payment-inline-note danger">{deleteError}</div>
+                                        )}
+
+                                        <div className="payment-actions">
+                                            <button
+                                                type="button"
+                                                className="payment-button danger"
+                                                disabled={!canSubmitRemoval || isDeleting || isRefreshing}
+                                                onClick={() => {
+                                                    startDeleteTransition(() => {
+                                                        void submitRemoval().catch((error) => {
+                                                            setDeleteError(error instanceof Error ? error.message : "Falha ao apagar plantão.");
+                                                        });
+                                                    });
+                                                }}
+                                            >
+                                                {isDeleting ? "Apagando..." : "Apagar occupancy do banco"}
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <p>Sem occupancy identificada para exclusão. Quando o alvo está vazio, o ajuste precisa acontecer na origem operacional e não na etapa de pagamento.</p>
                                 )}
                             </section>
                         </>

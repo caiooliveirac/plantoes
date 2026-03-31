@@ -160,6 +160,9 @@ export function MonthlyReportClient({ report }: Props) {
                 </div>
 
                 <div className="reports-hero-actions">
+                    <a className="reports-primary-link" href="/admin/payment-attestation">
+                        Abrir atesto diário
+                    </a>
                     <a className="reports-primary-link" href={`/api/admin/reports/export?month=${report.monthKey}`}>
                         Exportar XLSX
                     </a>

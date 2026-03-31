@@ -22,6 +22,7 @@ export const chiefRequestStatusEnum = operationsV2.enum("chief_request_status", 
 export const occupancySourceEnum = operationsV2.enum("occupancy_source", ["manual", "telegram", "import", "admin_correction"]);
 export const shiftEventDomainEnum = operationsV2.enum("shift_event_domain", ["regulation", "intervention", "chief", "doctors", "bank_hours", "auth"]);
 export const bankHoursSourceEnum = operationsV2.enum("bank_hours_source", ["regulation", "intervention", "manual_adjustment"]);
+export const paymentAttestationSlotStatusEnum = operationsV2.enum("payment_attestation_slot_status", ["draft", "approved"]);
 
 export const doctors = operationsV2.table(
     "doctors",
@@ -151,6 +152,25 @@ export const interventionBases = operationsV2.table(
     (table) => [uniqueIndex("intervention_bases_code_idx").on(table.code)],
 );
 
+export const interventionBaseDeactivations = operationsV2.table(
+    "intervention_base_deactivations",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        baseId: integer("base_id").notNull().references(() => interventionBases.id, { onDelete: "cascade" }),
+        deactivatedAt: timestamp("deactivated_at", { withTimezone: true }).notNull(),
+        reactivatedAt: timestamp("reactivated_at", { withTimezone: true }),
+        notes: text("notes"),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index("intervention_base_deactivations_base_idx").on(table.baseId, table.deactivatedAt),
+        index("intervention_base_deactivations_active_idx").on(table.baseId, table.reactivatedAt),
+    ],
+);
+
 export const regulationOccupancies = operationsV2.table(
     "regulation_occupancies",
     {
@@ -257,6 +277,97 @@ export const bankHoursEntries = operationsV2.table(
         index("bank_hours_entries_doctor_idx").on(table.doctorId, table.scheduledStartAt),
         uniqueIndex("bank_hours_entries_regulation_idx").on(table.regulationOccupancyId),
         uniqueIndex("bank_hours_entries_intervention_idx").on(table.interventionOccupancyId),
+    ],
+);
+
+export const bankHoursBalanceOverrides = operationsV2.table(
+    "bank_hours_balance_overrides",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        continuityGroupId: uuid("continuity_group_id").notNull(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        balanceMinutes: integer("balance_minutes").notNull(),
+        notes: text("notes").notNull(),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("bank_hours_balance_overrides_group_idx").on(table.continuityGroupId),
+        index("bank_hours_balance_overrides_doctor_idx").on(table.doctorId, table.updatedAt),
+    ],
+);
+
+export const paymentAttestationSlots = operationsV2.table(
+    "payment_attestation_slots",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        operationalDate: timestamp("operational_date", { withTimezone: true }).notNull(),
+        shiftLabel: varchar("shift_label", { length: 8 }).notNull(),
+        startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+        endedAt: timestamp("ended_at", { withTimezone: true }).notNull(),
+        snapshotGeneratedAt: timestamp("snapshot_generated_at", { withTimezone: true }).notNull(),
+        status: paymentAttestationSlotStatusEnum("status").notNull().default("draft"),
+        totalTargets: integer("total_targets").notNull().default(0),
+        readyCount: integer("ready_count").notNull().default(0),
+        needsReviewCount: integer("needs_review_count").notNull().default(0),
+        unassignedCount: integer("unassigned_count").notNull().default(0),
+        disabledCount: integer("disabled_count").notNull().default(0),
+        lastRefreshedByUserId: uuid("last_refreshed_by_user_id").references(() => users.id),
+        approvedByUserId: uuid("approved_by_user_id").references(() => users.id),
+        approvedAt: timestamp("approved_at", { withTimezone: true }),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("payment_attestation_slots_operational_shift_idx").on(table.operationalDate, table.shiftLabel),
+        index("payment_attestation_slots_status_idx").on(table.status, table.operationalDate, table.startedAt),
+    ],
+);
+
+export const paymentAttestationSlotEntries = operationsV2.table(
+    "payment_attestation_slot_entries",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        slotId: uuid("slot_id").notNull().references(() => paymentAttestationSlots.id, { onDelete: "cascade" }),
+        domain: varchar("domain", { length: 32 }).notNull(),
+        targetCode: varchar("target_code", { length: 32 }).notNull(),
+        targetLabel: varchar("target_label", { length: 255 }).notNull(),
+        sortOrder: integer("sort_order").notNull().default(0),
+        defaultRole: varchar("default_role", { length: 100 }),
+        disabledAt: timestamp("disabled_at", { withTimezone: true }),
+        disabledReason: text("disabled_reason"),
+        disabledDuringShift: boolean("disabled_during_shift").notNull().default(false),
+        disabledEntireShift: boolean("disabled_entire_shift").notNull().default(false),
+        occupancyId: uuid("occupancy_id"),
+        doctorId: uuid("doctor_id").references(() => doctors.id),
+        doctorName: varchar("doctor_name", { length: 255 }),
+        displayName: varchar("display_name", { length: 255 }),
+        startedAt: timestamp("started_at", { withTimezone: true }),
+        endedAt: timestamp("ended_at", { withTimezone: true }),
+        actualEndedAt: timestamp("actual_ended_at", { withTimezone: true }),
+        scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }),
+        scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }),
+        shiftLabel: varchar("shift_label", { length: 100 }),
+        roleLabel: varchar("role_label", { length: 100 }),
+        ramalLabel: varchar("ramal_label", { length: 50 }),
+        source: occupancySourceEnum("source"),
+        candidateCount: integer("candidate_count").notNull().default(0),
+        paymentStatus: varchar("payment_status", { length: 32 }).notNull(),
+        issues: jsonb("issues").notNull().default([]),
+        arrivalDelayMinutes: integer("arrival_delay_minutes"),
+        overtimeMinutes: integer("overtime_minutes"),
+        creditedOvertimeMinutes: integer("credited_overtime_minutes"),
+        balanceMinutes: integer("balance_minutes"),
+        ruleCode: varchar("rule_code", { length: 100 }),
+        bankHoursExplanation: text("bank_hours_explanation"),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("payment_attestation_slot_entries_target_idx").on(table.slotId, table.domain, table.targetCode),
+        index("payment_attestation_slot_entries_slot_idx").on(table.slotId, table.sortOrder),
+        index("payment_attestation_slot_entries_doctor_idx").on(table.doctorId, table.createdAt),
     ],
 );
 

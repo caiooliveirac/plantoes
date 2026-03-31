@@ -1,4 +1,10 @@
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import {
+    sortTelegramInterventionCodes,
+    sortTelegramInterventionTargetRows,
+    sortTelegramRegulationCodes,
+    sortTelegramRegulationTargetRows,
+} from "@/modules/telegram/presentation-order";
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
 
 const OPERATIONAL_LOCAL_OFFSET_MINUTES = -180;
@@ -72,32 +78,70 @@ function resolveExitAt(row: PaymentAllocationRow) {
     return row.sourceActualEndedAt ?? row.sourceEndedAt ?? row.actualEndedAt ?? row.endedAt;
 }
 
+function resolveArrivalAt(row: PaymentAllocationRow) {
+    return row.sourceStartedAt ?? row.startedAt;
+}
+
+function hasExplicitSourceExit(row: PaymentAllocationRow) {
+    return Boolean(row.sourceActualEndedAt ?? row.sourceEndedAt);
+}
+
+function shouldUseSourceCoverage(row: PaymentAllocationRow) {
+    if (!hasExplicitSourceExit(row)) {
+        return false;
+    }
+
+    return (row.sourceStartedAt ?? null) !== (row.startedAt ?? null)
+        || (row.sourceActualEndedAt ?? row.sourceEndedAt ?? null) !== (row.actualEndedAt ?? row.endedAt ?? null)
+        || (row.sourceBalanceMinutes ?? null) !== (row.balanceMinutes ?? null)
+        || (row.sourceRuleCode ?? null) !== (row.ruleCode ?? null);
+}
+
+function resolveReportedBankHours(row: PaymentAllocationRow) {
+    if (!shouldUseSourceCoverage(row)) {
+        return {
+            arrivalDelayMinutes: row.arrivalDelayMinutes,
+            overtimeMinutes: row.overtimeMinutes,
+            creditedOvertimeMinutes: row.creditedOvertimeMinutes,
+            balanceMinutes: row.balanceMinutes,
+        };
+    }
+
+    return {
+        arrivalDelayMinutes: row.sourceArrivalDelayMinutes ?? row.arrivalDelayMinutes,
+        overtimeMinutes: row.sourceOvertimeMinutes ?? row.overtimeMinutes,
+        creditedOvertimeMinutes: row.sourceCreditedOvertimeMinutes ?? row.creditedOvertimeMinutes,
+        balanceMinutes: row.sourceBalanceMinutes ?? row.balanceMinutes,
+    };
+}
+
 function resolveBankHoursLabel(row: PaymentAllocationRow) {
-    if (row.continuesBeyondShift) {
+    if (row.continuesBeyondShift && !hasExplicitSourceExit(row)) {
         return "CONTINUA";
     }
 
-    if (row.balanceMinutes === null) {
+    const metrics = resolveReportedBankHours(row);
+    if (metrics.balanceMinutes === null) {
         return "BH pendente";
     }
 
     const detailParts: string[] = [];
-    if ((row.arrivalDelayMinutes ?? 0) > 0) {
-        detailParts.push(`atraso ${formatDuration(row.arrivalDelayMinutes ?? 0)}`);
+    if ((metrics.arrivalDelayMinutes ?? 0) > 0) {
+        detailParts.push(`atraso ${formatDuration(metrics.arrivalDelayMinutes ?? 0)}`);
     }
 
-    if ((row.overtimeMinutes ?? 0) > 0) {
-        const multiplier = (row.creditedOvertimeMinutes ?? 0) > 0 && (row.overtimeMinutes ?? 0) > 0
-            ? Math.round((row.creditedOvertimeMinutes ?? 0) / (row.overtimeMinutes ?? 1))
+    if ((metrics.overtimeMinutes ?? 0) > 0) {
+        const multiplier = (metrics.creditedOvertimeMinutes ?? 0) > 0 && (metrics.overtimeMinutes ?? 0) > 0
+            ? Math.round((metrics.creditedOvertimeMinutes ?? 0) / (metrics.overtimeMinutes ?? 1))
             : 1;
-        detailParts.push(`extra ${formatDuration(row.overtimeMinutes ?? 0)} x${multiplier}`);
+        detailParts.push(`extra ${formatDuration(metrics.overtimeMinutes ?? 0)} x${multiplier}`);
     }
 
     if (detailParts.length === 0) {
         detailParts.push("sem impacto");
     }
 
-    return `BH ${formatDuration(row.balanceMinutes, true)} (${detailParts.join(", ")})`;
+    return `BH ${formatDuration(metrics.balanceMinutes, true)} (${detailParts.join(", ")})`;
 }
 
 function buildDepartureReportLine(row: PaymentAllocationRow) {
@@ -115,8 +159,19 @@ function buildDepartureReportLine(row: PaymentAllocationRow) {
     const reviewSuffix = visibleIssues.length > 0
         ? ` | revisar: ${summarizeIssues(visibleIssues)}`
         : "";
+    const disabledSuffix = row.disabledDuringShift && row.disabledAt
+        ? ` | base desativada ${formatHour(row.disabledAt)}`
+        : row.disabledDuringShift
+            ? " | base desativada no turno"
+            : "";
 
-    return `${prefix} ${row.targetCode} | ${formatHour(row.startedAt)} | ${name} | ${formatHour(resolveExitAt(row))} | ${resolveBankHoursLabel(row)}${reviewSuffix}`;
+    return `${prefix} ${row.targetCode} | ${formatHour(resolveArrivalAt(row))} | ${name} | ${formatHour(resolveExitAt(row))} | ${resolveBankHoursLabel(row)}${reviewSuffix}${disabledSuffix}`;
+}
+
+function buildDisabledDepartureLine(row: PaymentAllocationRow) {
+    const disabledAt = row.disabledAt ? formatHour(row.disabledAt) : "--:--";
+    const reason = row.disabledReason?.trim() ? ` | ${row.disabledReason.trim()}` : "";
+    return `⚫ ${row.targetCode} | ${disabledAt} | base desativada para o turno${reason}`;
 }
 
 export function resolveTelegramDepartureReportRequest(params: {
@@ -148,18 +203,20 @@ export function resolveTelegramDepartureReportRequest(params: {
 }
 
 export function buildTelegramDepartureReport(board: PaymentAllocationBoard) {
-    const regulationAssigned = board.regulation.filter((row) => row.occupancyId);
-    const interventionAssigned = board.intervention.filter((row) => row.occupancyId);
+    const regulationAssigned = sortTelegramRegulationTargetRows(board.regulation.filter((row) => row.occupancyId));
+    const interventionAssigned = sortTelegramInterventionTargetRows(board.intervention.filter((row) => row.occupancyId));
     const assignedNeedsReviewCount = [...regulationAssigned, ...interventionAssigned]
         .filter((row) => row.paymentStatus === "needs_review" && !row.continuesBeyondShift).length;
-    const emptyTargets = [...board.regulation, ...board.intervention]
-        .filter((row) => !row.occupancyId)
-        .map((row) => row.targetCode);
+    const emptyTargets = [
+        ...sortTelegramRegulationCodes(board.regulation.filter((row) => !row.occupancyId && !row.disabledEntireShift).map((row) => row.targetCode)),
+        ...sortTelegramInterventionCodes(board.intervention.filter((row) => !row.occupancyId && !row.disabledEntireShift).map((row) => row.targetCode)),
+    ];
+    const disabledTargets = sortTelegramInterventionTargetRows(board.intervention.filter((row) => row.disabledEntireShift));
 
     const header = [
         `📤 Saídas ${formatDateLabel(board.operationalDate)} ${board.shiftLabel}.`,
-        "Formato: alvo | chegada | nome | saída | banco.",
-        `Alocados ${board.summary.assignedCount}/${board.summary.totalTargets} | revisar ${assignedNeedsReviewCount} | vazios ${board.summary.unassignedCount}`,
+        "Formato: alvo | chegada real | nome | saída | banco.",
+        `Alocados ${board.summary.assignedCount}/${board.summary.totalTargets} | revisar ${assignedNeedsReviewCount} | vazios ${board.summary.unassignedCount} | desativadas ${board.summary.disabledCount ?? 0}`,
     ];
 
     const regulationBlock = regulationAssigned.length > 0
@@ -171,6 +228,9 @@ export function buildTelegramDepartureReport(board: PaymentAllocationBoard) {
     const emptyBlock = emptyTargets.length > 0
         ? ["", `Vazios: ${emptyTargets.join(", ")}`]
         : [];
+    const disabledBlock = disabledTargets.length > 0
+        ? ["", "Desativadas:", disabledTargets.map(buildDisabledDepartureLine).join("\n")]
+        : [];
 
-    return [...header, ...regulationBlock, ...interventionBlock, ...emptyBlock].join("\n");
+    return [...header, ...regulationBlock, ...interventionBlock, ...emptyBlock, ...disabledBlock].join("\n");
 }

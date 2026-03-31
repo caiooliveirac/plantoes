@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNull, lte } from "drizzle-orm";
 import { getDb } from "@/db";
-import { regulationOccupancies } from "@/db/schema";
+import { regulationOccupancies, regulationPosts } from "@/db/schema";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 
 export interface StartRegulationOccupancyInput {
     doctorId: string;
@@ -79,6 +80,14 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             await syncRegulationBankHours(tx, existing.id);
         }
 
+        const targetPostCode = (await tx.query.regulationPosts.findFirst({
+            where: eq(regulationPosts.id, input.postId),
+            columns: { code: true },
+        }))?.code;
+        if (!targetPostCode) {
+            throw new Error("Ramal de destino indisponivel para esta abertura.");
+        }
+
         const [created] = await tx.insert(regulationOccupancies).values({
             doctorId: input.doctorId,
             postId: input.postId,
@@ -89,7 +98,10 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             boardStartedAt: input.startedAt,
             shiftLabel: input.shiftLabel ?? null,
             roleLabel: input.roleLabel ?? null,
-            ramalLabel: input.ramalLabel ?? null,
+            ramalLabel: normalizeRegulationRamalLabel({
+                actualPostCode: targetPostCode,
+                requestedRamalLabel: input.ramalLabel ?? null,
+            }),
             source: input.source,
             notes: input.notes ?? null,
             createdByUserId: input.createdByUserId ?? null,
@@ -101,6 +113,50 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
 
     publishBoardUpdate(`regulation:start:${input.postId}`);
     return created;
+}
+
+export async function expireStaleRegulationOccupancies(referenceAt = new Date()) {
+    const db = getDb();
+    const expiredIds: string[] = [];
+
+    await db.transaction(async (tx) => {
+        const staleOpen = await tx.query.regulationOccupancies.findMany({
+            where: isNull(regulationOccupancies.endedAt),
+            orderBy: [desc(regulationOccupancies.startedAt)],
+        });
+
+        for (const occupancy of staleOpen) {
+            if (!occupancy.scheduledEndAt) {
+                continue;
+            }
+
+            if (occupancy.shiftLabel === "P") {
+                continue;
+            }
+
+            if (occupancy.scheduledEndAt.getTime() > referenceAt.getTime()) {
+                continue;
+            }
+
+            const actualEndedAt = occupancy.actualEndedAt ?? occupancy.scheduledEndAt;
+            await tx.update(regulationOccupancies)
+                .set({
+                    endedAt: occupancy.scheduledEndAt,
+                    actualEndedAt,
+                    updatedAt: new Date(),
+                })
+                .where(eq(regulationOccupancies.id, occupancy.id));
+
+            await syncRegulationBankHours(tx, occupancy.id);
+            expiredIds.push(occupancy.id);
+        }
+    });
+
+    if (expiredIds.length > 0) {
+        publishBoardUpdate(`regulation:expire:${expiredIds.join(",")}`);
+    }
+
+    return expiredIds;
 }
 
 export async function continueRegulationOccupancy(

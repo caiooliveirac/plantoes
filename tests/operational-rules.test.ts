@@ -11,14 +11,59 @@ import {
     shouldKeepRegulationOccupancyVisible,
 } from "@/modules/operational/board-rules";
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
+import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
-import { isCasualTelegramMessage, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
+import { isCasualTelegramMessage, looksLikeDepartureMessage, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 
 test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T07:00:00-03:00")), "SD");
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T18:59:00-03:00")), "SD");
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T19:00:00-03:00")), "SN");
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-26T06:59:00-03:00")), "SN");
+});
+
+test("keeps fixed MRV role on continuation for 2032 and 2151", () => {
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2151",
+        shiftLabel: "P",
+        roleLabel: null,
+        defaultRole: null,
+    }), "MRV");
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2032",
+        shiftLabel: "P",
+        roleLabel: null,
+        defaultRole: null,
+    }), "MRV");
+});
+
+test("allows blank role on non-fixed regulation ramal and keeps explicit overrides", () => {
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "1363",
+        shiftLabel: "SD",
+        roleLabel: null,
+        defaultRole: "MR",
+    }), null);
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "1363",
+        shiftLabel: "SD",
+        roleLabel: "RMT",
+        defaultRole: "MR",
+    }), "RMT");
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "1363",
+        shiftLabel: "SD",
+        roleLabel: "IES",
+        defaultRole: "MR",
+    }), "IES");
 });
 
 test("flags intervention doctor from previous shift for verification at 19h boundary", () => {
@@ -170,6 +215,12 @@ test("resolveImplicitOccupancyExpiry uses base boundary for non-P and full span 
         resolveImplicitOccupancyExpiry(new Date("2026-03-25T07:12:00-03:00"), "P")?.toISOString(),
         new Date("2026-03-26T07:00:00-03:00").toISOString(),
     );
+
+    // P que chega antes das 07:00 ainda cobre SD+SN do mesmo dia operacional
+    assert.equal(
+        resolveImplicitOccupancyExpiry(new Date("2026-03-30T06:39:00-03:00"), "P")?.toISOString(),
+        new Date("2026-03-31T07:00:00-03:00").toISOString(),
+    );
 });
 
 test("shows continuation badge only in the verification grace window", () => {
@@ -271,6 +322,16 @@ test("infers SN regulation start at 19:00 of the previous local day when arrival
     assert.equal(result?.toISOString(), new Date("2026-03-25T19:00:00-03:00").toISOString());
 });
 
+test("infers SN regulation start at 19:00 of the same local day when arrival happens a few minutes before the shift", () => {
+    const result = inferOperationalScheduledStartAt(
+        new Date("2026-03-28T18:57:00-03:00"),
+        "SN",
+        null,
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-28T19:00:00-03:00").toISOString());
+});
+
 test("infers SN regulation cutoff at 07:15 on next local operational day", () => {
     const result = inferRegulationScheduledEndAt(
         new Date("2026-03-25T19:02:00-03:00"),
@@ -289,6 +350,16 @@ test("infers intervention SN cutoff at 07:00 on next local operational day", () 
     );
 
     assert.equal(result?.toISOString(), new Date("2026-03-26T07:00:00-03:00").toISOString());
+});
+
+test("infers intervention SN cutoff on the next local day even when arrival happened a few minutes before 19:00", () => {
+    const result = inferInterventionScheduledEndAt(
+        new Date("2026-03-28T18:58:00-03:00"),
+        "SN",
+        null,
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-29T07:00:00-03:00").toISOString());
 });
 
 test("resolves Telegram explicit HH:mm on the same local operational day", () => {
@@ -325,6 +396,15 @@ test("parses free-text regulation arrival", () => {
     assert.equal(parsed.baseCode, "2031");
     assert.equal(parsed.shiftType, "SD");
     assert.equal(parsed.isDeparture, false);
+});
+
+test("parses explicit operational role in Telegram arrival", () => {
+    const parsed = parseMessage("Leo Marins 1321 07:00 SD IES");
+
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1321");
+    assert.equal(parsed.shiftType, "SD");
+    assert.equal(parsed.roleFunction, "IES");
 });
 
 test("parses continuation wording without explicit P as continuation", () => {
@@ -416,6 +496,14 @@ test("strips greeting words from the extracted doctor name", () => {
     assert.deepEqual(parsed.extractedNames, ["Gabriel"]);
 });
 
+test("ignores Telegram mentions when extracting doctor names", () => {
+    const parsed = parseMessage("@chefe2031");
+
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "2031");
+    assert.deepEqual(parsed.extractedNames, []);
+});
+
 test("parses multiline intervention arrival carrying name and time across lines", () => {
     const parsed = parseMessageMulti("Lucas Albuquerque\nChegada a BR 60 sn\n19:09")[0];
 
@@ -443,6 +531,28 @@ test("parses intervention departure in free text without leaking filler words in
     assert.equal(parsed.baseCode, "PM40");
     assert.equal(parsed.isDeparture, true);
     assert.deepEqual(parsed.extractedNames, []);
+});
+
+test("parses departure intent from liberated wording on a single line", () => {
+    const parsed = parseMessage("Sara Carneiro liberada da PM40 07:05");
+
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "PM40");
+    assert.equal(parsed.arrivalTime, "07:05");
+    assert.equal(parsed.isDeparture, true);
+    assert.deepEqual(parsed.extractedNames, ["Sara Carneiro"]);
+    assert.equal(looksLikeDepartureMessage("Sara Carneiro liberada da PM40 07:05"), true);
+});
+
+test("parses multiline departure even when name, action, base and time arrive out of order", () => {
+    const parsed = parseMessageMulti("Leonardo Carteado\n2031\nsaindo do P\n07:15")[0];
+
+    assert.equal(parsed?.sector, "REGULATION");
+    assert.equal(parsed?.baseCode, "2031");
+    assert.equal(parsed?.arrivalTime, "07:15");
+    assert.equal(parsed?.isDeparture, true);
+    assert.deepEqual(parsed?.extractedNames, ["Leonardo Carteado"]);
+    assert.equal(parsed?.confidence, "HIGH");
 });
 
 test("parses intervention continuation without treating continuation word as a doctor name", () => {
@@ -476,7 +586,7 @@ test("parses intervention P shift with bare base alias and explicit time", () =>
     assert.deepEqual(parsed.extractedNames, ["Marcela"]);
 });
 
-test("inferInterventionCoverageWindow extends explicit P through the next shift", () => {
+test("inferInterventionCoverageWindow extends P through the next shift when there is no explicit end", () => {
     const dayShift = inferInterventionCoverageWindow({
         startedAt: new Date("2026-03-25T07:25:00-03:00"),
         shiftLabel: "P",
@@ -494,7 +604,17 @@ test("inferInterventionCoverageWindow extends explicit P through the next shift"
     assert.equal(nightShift.scheduledEndAt?.toISOString(), new Date("2026-03-26T19:00:00-03:00").toISOString());
 });
 
-test("inferRegulationCoverageWindow extends explicit P through the next shift", () => {
+test("inferInterventionCoverageWindow keeps an explicit P end without extending twice", () => {
+    const carried = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T07:25:00-03:00"),
+        shiftLabel: "P",
+        explicitScheduledEndAt: new Date("2026-03-26T07:00:00-03:00"),
+    });
+
+    assert.equal(carried.scheduledEndAt?.toISOString(), new Date("2026-03-26T07:00:00-03:00").toISOString());
+});
+
+test("inferRegulationCoverageWindow extends P through the next shift when there is no explicit end", () => {
     const dayShift = inferRegulationCoverageWindow({
         startedAt: new Date("2026-03-25T07:25:00-03:00"),
         shiftLabel: "P",
@@ -510,6 +630,16 @@ test("inferRegulationCoverageWindow extends explicit P through the next shift", 
 
     assert.equal(nightShift.scheduledStartAt?.toISOString(), new Date("2026-03-25T19:00:00-03:00").toISOString());
     assert.equal(nightShift.scheduledEndAt?.toISOString(), new Date("2026-03-26T19:15:00-03:00").toISOString());
+});
+
+test("inferRegulationCoverageWindow keeps an explicit P end without extending twice", () => {
+    const carried = inferRegulationCoverageWindow({
+        startedAt: new Date("2026-03-25T07:25:00-03:00"),
+        shiftLabel: "P",
+        explicitScheduledEndAt: new Date("2026-03-26T07:15:00-03:00"),
+    });
+
+    assert.equal(carried.scheduledEndAt?.toISOString(), new Date("2026-03-26T07:15:00-03:00").toISOString());
 });
 
 test("hasPlannedInterventionCoverageForCurrentShift suppresses next-boundary verification for explicit P", () => {

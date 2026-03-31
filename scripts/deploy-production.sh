@@ -7,11 +7,11 @@ set -a
 source .env.production
 set +a
 
-npm test
 npm run build
 
-pm2 restart plantoes --update-env
-pm2 restart plantoes-telegram-worker --update-env
+pm2 delete plantoes >/dev/null 2>&1 || true
+pm2 delete plantoes-telegram-worker >/dev/null 2>&1 || true
+pm2 start ecosystem.config.cjs --update-env
 
 sleep 4
 

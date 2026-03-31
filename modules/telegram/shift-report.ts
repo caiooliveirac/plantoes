@@ -1,4 +1,10 @@
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import {
+    compareTelegramInterventionCodes,
+    compareTelegramRegulationCodes,
+    sortTelegramInterventionCodes,
+    sortTelegramRegulationCodes,
+} from "@/modules/telegram/presentation-order";
 import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
 
 export interface TelegramShiftReportBoard {
@@ -6,7 +12,7 @@ export interface TelegramShiftReportBoard {
     regulation: RegulationBoardRow[];
 }
 
-type ShiftReportStatus = "confirmed" | "carryover_pending" | "waiting";
+type ShiftReportStatus = "confirmed" | "carryover_pending" | "waiting" | "disabled";
 
 interface ShiftReportInterventionRow {
     row: InterventionBoardRow;
@@ -47,6 +53,10 @@ function formatHour(value: string | Date | null) {
 }
 
 function resolveInterventionShiftStatus(row: InterventionBoardRow, currentShiftLabel: "SD" | "SN"): ShiftReportStatus {
+    if (row.status === "disabled") {
+        return "disabled";
+    }
+
     if (row.status === "waiting") {
         return "waiting";
     }
@@ -101,6 +111,12 @@ function buildInterventionCarryoverLine(item: ShiftReportInterventionRow, curren
     return `🟡 ${item.row.baseCode} - ${name} | ${item.row.shiftLabel ?? "turno anterior"} desde ${formatHour(item.row.startedAt)} | ainda no quadro, mas não confirmado para ${currentShiftLabel}`;
 }
 
+function buildInterventionDisabledLine(item: ShiftReportInterventionRow) {
+    const disabledAt = item.row.disabledAt ? ` às ${formatHour(item.row.disabledAt)}` : "";
+    const reason = item.row.disabledReason?.trim() ? ` | ${item.row.disabledReason.trim()}` : "";
+    return `⚫ ${item.row.baseCode} - desativada${disabledAt}${reason}`;
+}
+
 function buildRegulationConfirmedLine(item: ShiftReportRegulationRow, currentShiftLabel: "SD" | "SN") {
     const name = item.row.doctorName ?? item.row.displayName ?? "médico não identificado";
     if (item.row.shiftLabel === "P") {
@@ -128,18 +144,30 @@ export function buildTelegramShiftReport(params: {
     reference: Date;
 }) {
     const model = buildShiftReportModel(params.board, params.reference);
-    const confirmedIntervention = model.intervention.filter((item) => item.status === "confirmed");
-    const carryoverIntervention = model.intervention.filter((item) => item.status === "carryover_pending");
-    const waitingIntervention = model.intervention.filter((item) => item.status === "waiting").map((item) => item.row.baseCode);
-    const confirmedRegulation = model.regulation.filter((item) => item.status === "confirmed");
-    const carryoverRegulation = model.regulation.filter((item) => item.status === "carryover_pending");
-    const waitingRegulation = model.regulation.filter((item) => item.status === "waiting").map((item) => item.row.postCode);
+    const confirmedIntervention = model.intervention
+        .filter((item) => item.status === "confirmed")
+        .sort((left, right) => compareTelegramInterventionCodes(left.row.baseCode, right.row.baseCode));
+    const carryoverIntervention = model.intervention
+        .filter((item) => item.status === "carryover_pending")
+        .sort((left, right) => compareTelegramInterventionCodes(left.row.baseCode, right.row.baseCode));
+    const disabledIntervention = model.intervention
+        .filter((item) => item.status === "disabled")
+        .sort((left, right) => compareTelegramInterventionCodes(left.row.baseCode, right.row.baseCode));
+    const waitingIntervention = sortTelegramInterventionCodes(model.intervention.filter((item) => item.status === "waiting").map((item) => item.row.baseCode));
+    const confirmedRegulation = model.regulation
+        .filter((item) => item.status === "confirmed")
+        .sort((left, right) => compareTelegramRegulationCodes(left.row.postCode, right.row.postCode));
+    const carryoverRegulation = model.regulation
+        .filter((item) => item.status === "carryover_pending")
+        .sort((left, right) => compareTelegramRegulationCodes(left.row.postCode, right.row.postCode));
+    const waitingRegulation = sortTelegramRegulationCodes(model.regulation.filter((item) => item.status === "waiting").map((item) => item.row.postCode));
+    const interventionOperationalTotal = model.intervention.length - disabledIntervention.length;
 
     return [
         `📋 Relato do plantão ${model.shiftLabel} em ${formatDateTime(model.generatedAt)}.`,
         "Leitura por regra de negócio: quem ainda aparece no quadro vindo do turno anterior fica como pendência, não como entrada confirmada deste turno.",
         "",
-        `Intervenção confirmada ${confirmedIntervention.length}/${model.intervention.length}:`,
+        `Intervenção confirmada ${confirmedIntervention.length}/${interventionOperationalTotal}:`,
         confirmedIntervention.length > 0
             ? confirmedIntervention.map((item) => buildInterventionConfirmedLine(item, model.shiftLabel)).join("\n")
             : "- nenhuma avançada confirmada para este turno",
@@ -155,6 +183,13 @@ export function buildTelegramShiftReport(params: {
                 "",
                 `Intervenção sem aviso para ${model.shiftLabel}:`,
                 `🔴 ${listWaitingCodes(waitingIntervention)}`,
+            ]
+            : []),
+        ...(disabledIntervention.length > 0
+            ? [
+                "",
+                "Intervenção desativada no turno:",
+                disabledIntervention.map((item) => buildInterventionDisabledLine(item)).join("\n"),
             ]
             : []),
         "",

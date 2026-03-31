@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { auditLogs, regulationOccupancies } from "@/db/schema";
+import { auditLogs, regulationOccupancies, regulationPosts } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { correctRegulationOccupancy } from "@/modules/operational/corrections";
+import { correctRegulationOccupancy, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 
 const schema = z.object({
+    postId: z.number().int().positive().optional(),
     doctorId: z.string().uuid().optional(),
     startedAt: z.string().datetime().optional(),
     boardStartedAt: z.string().datetime().optional(),
@@ -16,6 +17,10 @@ const schema = z.object({
     roleLabel: z.union([z.string().trim().max(100), z.null()]).optional(),
     ramalLabel: z.union([z.string().trim().max(50), z.null()]).optional(),
     notes: z.union([z.string().trim().max(2000), z.null()]).optional(),
+});
+
+const deleteSchema = z.object({
+    notes: z.string().trim().min(8).max(2000),
 });
 
 export async function PATCH(request: NextRequest, context: RouteContext<"/api/regulation/occupancies/[id]">) {
@@ -45,17 +50,94 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
             return NextResponse.json({ error: "Regulation occupancy not found." }, { status: 404 });
         }
 
+        const currentPost = await getDb().query.regulationPosts.findFirst({
+            where: eq(regulationPosts.id, existing.postId),
+            columns: {
+                id: true,
+                code: true,
+            },
+        });
+        if (!currentPost) {
+            return NextResponse.json({ error: "Current regulation post not found." }, { status: 404 });
+        }
+
+        let requestedPostId = parsed.data.postId ?? null;
+        const requestedRamalLabel = parsed.data.ramalLabel?.trim() ?? null;
+        if (!requestedPostId && requestedRamalLabel && requestedRamalLabel !== currentPost.code) {
+            const requestedPost = await getDb().query.regulationPosts.findFirst({
+                where: eq(regulationPosts.code, requestedRamalLabel),
+                columns: {
+                    id: true,
+                    code: true,
+                    isActive: true,
+                },
+            });
+
+            if (!requestedPost || !requestedPost.isActive) {
+                return NextResponse.json({ error: "Ramal de destino indisponivel para este remanejamento." }, { status: 400 });
+            }
+
+            requestedPostId = requestedPost.id;
+        }
+
         const nextStartedAt = parsed.data.startedAt ? new Date(parsed.data.startedAt) : null;
         const startedAtChanged = Boolean(nextStartedAt && nextStartedAt.getTime() !== existing.startedAt.getTime());
+        const postChanged = Boolean(requestedPostId && requestedPostId !== existing.postId);
         const doctorChanged = Boolean(parsed.data.doctorId && parsed.data.doctorId !== existing.doctorId);
         if (startedAtChanged && !parsed.data.notes?.trim()) {
             return NextResponse.json({ error: "Motivo obrigatorio ao corrigir horario de regulacao." }, { status: 400 });
+        }
+        if (postChanged && !parsed.data.notes?.trim()) {
+            return NextResponse.json({ error: "Motivo obrigatorio ao trocar o ramal da regulacao." }, { status: 400 });
         }
         if (doctorChanged && !parsed.data.notes?.trim()) {
             return NextResponse.json({ error: "Motivo obrigatorio ao trocar o medico da regulacao." }, { status: 400 });
         }
 
+        if (postChanged) {
+            const transfer = await transferOperationalOccupancy(id, {
+                sourceDomain: "regulation",
+                destination: {
+                    domain: "regulation",
+                    targetId: requestedPostId as number,
+                },
+                roleLabel: Object.prototype.hasOwnProperty.call(parsed.data, "roleLabel")
+                    ? parsed.data.roleLabel ?? null
+                    : existing.roleLabel,
+                notes: parsed.data.notes ?? null,
+                conflictResolution: null,
+            }, session.user.id);
+
+            await getDb().insert(auditLogs).values({
+                actorUserId: session.user.id,
+                action: "operational_occupancy.transferred",
+                entityType: "operational_transfer",
+                entityId: transfer.movedOccupancyId,
+                details: {
+                    sourceDomain: "regulation",
+                    sourceOccupancyId: id,
+                    legacyRequestedRamalLabel: requestedRamalLabel,
+                    destination: {
+                        domain: "regulation",
+                        targetId: requestedPostId,
+                    },
+                    roleLabel: Object.prototype.hasOwnProperty.call(parsed.data, "roleLabel")
+                        ? parsed.data.roleLabel ?? null
+                        : existing.roleLabel,
+                    notes: parsed.data.notes ?? null,
+                    movedOccupancyId: transfer.movedOccupancyId,
+                    movedDomain: transfer.movedDomain,
+                    displaced: transfer.displaced,
+                    sourceContinuityGroupId: transfer.sourceContinuityGroupId,
+                    compatibilityMode: "legacy_ramalLabel_patch",
+                },
+            });
+
+            return NextResponse.json({ transfer });
+        }
+
         const updated = await correctRegulationOccupancy(id, {
+            ...(requestedPostId ? { postId: requestedPostId } : {}),
             ...(parsed.data.doctorId ? { doctorId: parsed.data.doctorId } : {}),
             ...(parsed.data.startedAt ? { startedAt: new Date(parsed.data.startedAt) } : {}),
             ...(parsed.data.boardStartedAt ? { boardStartedAt: new Date(parsed.data.boardStartedAt) } : {}),
@@ -78,6 +160,8 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
             entityId: updated.id,
             details: {
                 ...parsed.data,
+                previousPostId: existing.postId,
+                nextPostId: updated.postId,
                 previousDoctorId: existing.doctorId,
                 nextDoctorId: updated.doctorId,
                 previousStartedAt: existing.startedAt.toISOString(),
@@ -89,6 +173,60 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
     } catch (error) {
         return NextResponse.json(
             { error: error instanceof Error ? error.message : "Unable to correct regulation occupancy." },
+            { status: 400 },
+        );
+    }
+}
+
+export async function DELETE(request: NextRequest, context: RouteContext<"/api/regulation/occupancies/[id]">) {
+    if (!hasDatabaseUrl()) {
+        return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
+    }
+
+    let session;
+    try {
+        session = await requireAuthenticatedSession(["admin"]);
+    } catch (error) {
+        const status = error instanceof AuthError ? error.status : 500;
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });
+    }
+
+    const parsed = deleteSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+        return NextResponse.json({ error: "Motivo obrigatorio para apagar ocupacao de regulacao." }, { status: 400 });
+    }
+
+    const { id } = await context.params;
+    try {
+        const existing = await getDb().query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, id),
+        });
+        if (!existing) {
+            return NextResponse.json({ error: "Regulation occupancy not found." }, { status: 404 });
+        }
+
+        const deleted = await removeRegulationOccupancyRecord(id, session.user.id);
+
+        await getDb().insert(auditLogs).values({
+            actorUserId: session.user.id,
+            action: "regulation_occupancy.deleted",
+            entityType: "regulation_occupancy",
+            entityId: id,
+            details: {
+                notes: parsed.data.notes,
+                doctorId: existing.doctorId,
+                startedAt: existing.startedAt.toISOString(),
+                endedAt: existing.endedAt?.toISOString() ?? null,
+                actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
+                shiftLabel: existing.shiftLabel,
+                continuityGroupId: existing.continuityGroupId,
+            },
+        });
+
+        return NextResponse.json({ occupancy: deleted });
+    } catch (error) {
+        return NextResponse.json(
+            { error: error instanceof Error ? error.message : "Unable to delete regulation occupancy." },
             { status: 400 },
         );
     }

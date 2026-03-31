@@ -1,6 +1,6 @@
 import { parseMessage } from "@/modules/telegram/parser";
 
-export type TelegramCommandName = "corrigir" | "retirar" | "remover";
+export type TelegramCommandName = "corrigir" | "retirar" | "remover" | "ramal" | "ativar" | "desativar";
 
 const DEPARTURE_COMMAND_ALIASES = new Set(["saiu", "saindo", "saida", "saída"]);
 
@@ -10,12 +10,18 @@ export interface ParsedTelegramCommand {
     targetCode: string;
     doctorName: string | null;
     time: string | null;
+    shiftLabel: "SD" | "SN" | "P" | null;
+    roleLabel: string | null;
     rawBody: string;
     isDeparture: boolean;
 }
 
+export function isTelegramAdminOnlyCommand(name: TelegramCommandName) {
+    return name === "remover" || name === "ativar" || name === "desativar";
+}
+
 export function parseTelegramCommand(text: string): ParsedTelegramCommand | null {
-    const match = text.trim().match(/^\/(corrigir|retirar|remover|saiu|saindo|saida|saída)\b\s*([\s\S]*)$/i);
+    const match = text.trim().match(/^\/(corrigir|retirar|remover|ramal|ativar|desativar|saiu|saindo|saida|saída)\b\s*([\s\S]*)$/i);
     if (!match) {
         return null;
     }
@@ -35,6 +41,8 @@ export function parseTelegramCommand(text: string): ParsedTelegramCommand | null
         targetCode: parsed.baseCode,
         doctorName: parsed.extractedNames[0] ?? null,
         time: parsed.arrivalTime,
+        shiftLabel: parsed.shiftType,
+        roleLabel: parsed.roleFunction,
         rawBody,
         isDeparture: parsed.isDeparture || DEPARTURE_COMMAND_ALIASES.has(rawCommandName),
     };

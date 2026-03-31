@@ -10,6 +10,23 @@ function fromOperationalLocalClockParts(year: number, month: number, day: number
     return new Date(Date.UTC(year, month - 1, day, hour - (OPERATIONAL_LOCAL_OFFSET_MINUTES / 60), minute, 0, 0));
 }
 
+function addOperationalLocalDays(date: Date, days: number) {
+    return new Date(date.getTime() + (days * 86400000));
+}
+
+function resolveClosestScheduledStart(startedAt: Date, hour: number, minute: number) {
+    const local = toOperationalLocalClock(startedAt);
+    const year = local.getUTCFullYear();
+    const month = local.getUTCMonth() + 1;
+    const day = local.getUTCDate();
+    const currentDay = fromOperationalLocalClockParts(year, month, day, hour, minute);
+    const previousDay = addOperationalLocalDays(currentDay, -1);
+
+    return Math.abs(currentDay.getTime() - startedAt.getTime()) <= Math.abs(previousDay.getTime() - startedAt.getTime())
+        ? currentDay
+        : previousDay;
+}
+
 export function inferOperationalScheduledStartAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledStartAt?: Date | null) {
     if (explicitScheduledStartAt) {
         return explicitScheduledStartAt;
@@ -20,18 +37,11 @@ export function inferOperationalScheduledStartAt(startedAt: Date, shiftLabel?: s
         return null;
     }
 
-    const local = toOperationalLocalClock(startedAt);
-    const year = local.getUTCFullYear();
-    const month = local.getUTCMonth() + 1;
-    const day = local.getUTCDate();
-    const hour = local.getUTCHours();
-
     if (normalized === "SD") {
-        return fromOperationalLocalClockParts(year, month, day, 7, 0);
+        return resolveClosestScheduledStart(startedAt, 7, 0);
     }
 
-    const startBase = fromOperationalLocalClockParts(year, month, day, 19, 0);
-    return hour >= 19 ? startBase : new Date(startBase.getTime() - 86400000);
+    return resolveClosestScheduledStart(startedAt, 19, 0);
 }
 
 export function inferInterventionScheduledEndAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledEndAt?: Date | null) {
@@ -44,18 +54,30 @@ export function inferInterventionScheduledEndAt(startedAt: Date, shiftLabel?: st
         return null;
     }
 
-    const local = toOperationalLocalClock(startedAt);
-    const year = local.getUTCFullYear();
-    const month = local.getUTCMonth() + 1;
-    const day = local.getUTCDate();
-    const hour = local.getUTCHours();
-
     if (normalized === "SD") {
-        return fromOperationalLocalClockParts(year, month, day, 19, 0);
+        const scheduledStartAt = inferOperationalScheduledStartAt(startedAt, normalized, null);
+        return scheduledStartAt ? fromOperationalLocalClockParts(
+            toOperationalLocalClock(scheduledStartAt).getUTCFullYear(),
+            toOperationalLocalClock(scheduledStartAt).getUTCMonth() + 1,
+            toOperationalLocalClock(scheduledStartAt).getUTCDate(),
+            19,
+            0,
+        ) : null;
     }
 
-    const endBase = fromOperationalLocalClockParts(year, month, day, 7, 0);
-    return hour >= 19 ? new Date(endBase.getTime() + 86400000) : endBase;
+    const scheduledStartAt = inferOperationalScheduledStartAt(startedAt, normalized, null);
+    if (!scheduledStartAt) {
+        return null;
+    }
+
+    const nextDay = addOperationalLocalDays(toOperationalLocalClock(scheduledStartAt), 1);
+    return fromOperationalLocalClockParts(
+        nextDay.getUTCFullYear(),
+        nextDay.getUTCMonth() + 1,
+        nextDay.getUTCDate(),
+        7,
+        0,
+    );
 }
 
 export function inferInterventionCoverageWindow(params: {
@@ -79,7 +101,7 @@ export function inferInterventionCoverageWindow(params: {
         params.explicitScheduledEndAt ?? null,
     );
 
-    if (normalized === "P" && scheduledEndAt) {
+    if (normalized === "P" && scheduledEndAt && !params.explicitScheduledEndAt) {
         const extendedBoundary = resolveOperationalShiftWindow(new Date(scheduledEndAt.getTime() + 60000)).nextBoundaryAt;
         if (extendedBoundary.getTime() > scheduledEndAt.getTime()) {
             scheduledEndAt = extendedBoundary;
@@ -114,7 +136,7 @@ export function inferRegulationCoverageWindow(params: {
         params.explicitScheduledEndAt ?? null,
     );
 
-    if (normalized === "P" && scheduledEndAt) {
+    if (normalized === "P" && scheduledEndAt && !params.explicitScheduledEndAt) {
         const extendedReference = new Date(scheduledEndAt.getTime() + 60000);
         const nextShiftLabel = resolveOperationalShiftWindow(extendedReference).shiftLabel;
         const extendedScheduledEndAt = inferRegulationScheduledEndAt(extendedReference, nextShiftLabel, null);
@@ -140,20 +162,30 @@ export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: stri
         return null;
     }
 
-    const local = toOperationalLocalClock(startedAt);
-    const year = local.getUTCFullYear();
-    const month = local.getUTCMonth() + 1;
-    const day = local.getUTCDate();
-    const hour = local.getUTCHours();
-    const minute = local.getUTCMinutes();
-
     if (normalized === "SD") {
-        return fromOperationalLocalClockParts(year, month, day, 19, 15);
+        const scheduledStartAt = inferOperationalScheduledStartAt(startedAt, normalized, null);
+        return scheduledStartAt ? fromOperationalLocalClockParts(
+            toOperationalLocalClock(scheduledStartAt).getUTCFullYear(),
+            toOperationalLocalClock(scheduledStartAt).getUTCMonth() + 1,
+            toOperationalLocalClock(scheduledStartAt).getUTCDate(),
+            19,
+            15,
+        ) : null;
     }
 
-    const addDay = hour > 7 || (hour === 7 && minute > 15);
-    const endBase = fromOperationalLocalClockParts(year, month, day, 7, 15);
-    return addDay ? new Date(endBase.getTime() + 86400000) : endBase;
+    const scheduledStartAt = inferOperationalScheduledStartAt(startedAt, normalized, null);
+    if (!scheduledStartAt) {
+        return null;
+    }
+
+    const nextDay = addOperationalLocalDays(toOperationalLocalClock(scheduledStartAt), 1);
+    return fromOperationalLocalClockParts(
+        nextDay.getUTCFullYear(),
+        nextDay.getUTCMonth() + 1,
+        nextDay.getUTCDate(),
+        7,
+        15,
+    );
 }
 
 export function resolveRegulationBoardEndAt(proposedEndAt: Date, scheduledEndAt?: Date | null) {

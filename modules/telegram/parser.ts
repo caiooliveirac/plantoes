@@ -1,3 +1,5 @@
+import { STANDARD_OPERATIONAL_ROLE_CODES } from "@/modules/operational/roles";
+
 const RAMAIS_REGULACAO = new Set([
     "1321", "1322", "1323", "1324", "1325",
     "1361", "1362", "1363", "1364", "1365", "1366", "1367", "1368",
@@ -38,7 +40,9 @@ const CONTINUATION_SIGNALS = [
 ];
 
 const DEPARTURE_SIGNALS = [
-    /\b(?:SAINDO|SAIU|SAI|SAIDA|SAÍDA|ENCERRANDO|ENCERREI|FINALIZANDO|FINALIZEI|LIBEREI)\b/i,
+    /\b(?:SAINDO|SAIU|SAI|SAIDA|SAÍDA|ENCERRANDO|ENCERREI|ENCERRADO|FINALIZANDO|FINALIZEI|LIBEREI|LIBERADO|LIBERADA|DESCENDO|DESCI|BAIXANDO|BAIXEI|TERMINEI|TERMINOU)\b/i,
+    /\b(?:FIM|FINAL)\s+DE\s+PLANTAO\b/i,
+    /\b(?:INDO|FUI|VOU)\s+EMBORA\b/i,
 ];
 
 const RE_TIME_PATTERNS = [
@@ -53,7 +57,9 @@ const NAME_NOISE_TOKENS = new Set([
     "DESLOCANDO", "DIA", "DO", "DOS", "EM", "ERRADO", "ESTA", "ESTÁ", "ESTOU", "HORARIO",
     "HORÁRIO", "JA", "JÁ", "NA", "NAS", "NO", "NOITE", "NOS", "OLA", "OLA", "OI", "PARA", "PRESENTE",
     "RENDENDO", "RENDI", "SAI", "SAIU", "SAIDA", "SAÍDA", "SAINDO", "ENCERRANDO", "ENCERREI", "FINALIZANDO", "FINALIZEI", "LIBEREI", "SEGUIR", "SO", "SÓ", "TO",
+    "LIBERADO", "LIBERADA", "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU",
     "TARDE", "TÔ", "TUDO", "BEM", "AGORA", "AI", "AÍ",
+    ...STANDARD_OPERATIONAL_ROLE_CODES,
 ]);
 
 const CASUAL_PATTERNS = [
@@ -223,6 +229,11 @@ export function parseMessage(text: string): ParsedMessage {
         else shiftType = shiftMatch[1] as ParsedMessage["shiftType"];
     }
 
+    const roleMatch = normalized.match(new RegExp(`\\b(${STANDARD_OPERATIONAL_ROLE_CODES.join("|")})\\b`));
+    if (roleMatch?.[1]) {
+        roleFunction = roleMatch[1];
+    }
+
     const extractedNames = extractNames(text);
     const isTransferToDestination = /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i.test(normalized);
     const isDeparture = !isTransferToDestination && DEPARTURE_SIGNALS.some((re) => re.test(normalized));
@@ -294,6 +305,7 @@ export function looksLikeDepartureMessage(text: string) {
 
 function extractNames(text: string) {
     const cleaned = text
+        .replace(/@\w+/g, " ")
         .replace(/\b\d{1,2}[:.h]\d{0,2}\b/gi, " ")
         .replace(/\b[A-Z]{2}[\s\-]?\d{2}\b/gi, " ")
         .replace(/\b\d{4}\b/g, " ")
@@ -318,23 +330,53 @@ function extractNames(text: string) {
     return [filtered.join(" ")];
 }
 
+function pickNearestStandaloneContext(parts: ParsedMessage[], index: number, predicate: (parsed: ParsedMessage) => boolean) {
+    for (let distance = 1; distance < parts.length; distance += 1) {
+        const previous = parts[index - distance];
+        if (previous && !previous.baseCode && predicate(previous)) {
+            return previous;
+        }
+
+        const next = parts[index + distance];
+        if (next && !next.baseCode && predicate(next)) {
+            return next;
+        }
+    }
+
+    return null;
+}
+
 function enrichParsedEntryFromContext(parsed: ParsedMessage, parts: ParsedMessage[], index: number): ParsedMessage {
     if (!parsed.baseCode) {
         return parsed;
     }
 
-    const previous = parts[index - 1];
-    const next = parts[index + 1];
     const contextualName = parsed.extractedNames[0]
-        ?? pickStandaloneName(previous)
-        ?? pickStandaloneName(next);
+        ?? pickStandaloneName(pickNearestStandaloneContext(parts, index, (entry) => Boolean(entry.extractedNames[0])) ?? undefined);
     const contextualTime = parsed.arrivalTime
-        ?? pickStandaloneTime(previous)
-        ?? pickStandaloneTime(next);
+        ?? pickStandaloneTime(pickNearestStandaloneContext(parts, index, (entry) => Boolean(entry.arrivalTime)) ?? undefined);
+    const contextualShift = parsed.shiftType
+        ?? (pickNearestStandaloneContext(parts, index, (entry) => Boolean(entry.shiftType))?.shiftType ?? null);
+    const contextualRole = parsed.roleFunction
+        ?? (pickNearestStandaloneContext(parts, index, (entry) => Boolean(entry.roleFunction))?.roleFunction ?? null);
+    const contextualDeparture = parsed.isDeparture
+        || Boolean(pickNearestStandaloneContext(parts, index, (entry) => entry.isDeparture));
+    const contextualContinuation = parsed.isContinuation
+        || Boolean(pickNearestStandaloneContext(parts, index, (entry) => entry.isContinuation));
+    const enrichedConfidence = parsed.confidence === "HIGH"
+        ? "HIGH"
+        : (contextualName || contextualTime || contextualShift || contextualDeparture || contextualContinuation)
+            ? "HIGH"
+            : parsed.confidence;
 
     return {
         ...parsed,
         arrivalTime: contextualTime,
+        shiftType: contextualShift,
+        roleFunction: contextualRole,
+        confidence: enrichedConfidence,
+        isDeparture: contextualDeparture,
+        isContinuation: contextualContinuation,
         extractedNames: contextualName ? [contextualName] : parsed.extractedNames,
     };
 }

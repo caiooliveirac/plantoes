@@ -1,5 +1,6 @@
 import { buildContinuityGroups } from "@/modules/bank-hours/continuity";
 import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { buildBankHoursBalanceOverrideExplanation, MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE } from "@/modules/bank-hours/service";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import {
     inferInterventionCoverageWindow,
@@ -41,6 +42,10 @@ export interface RawBankHoursHistoryShift {
     balanceMinutes: number | null;
     ruleCode: string | null;
     bankHoursExplanation: string | null;
+    manualBalanceMinutes: number | null;
+    manualBalanceNotes: string | null;
+    manualBalanceUpdatedAt: string | null;
+    manualBalanceActorEmail: string | null;
     auditTrail: MonthlyReportAuditEntry[];
 }
 
@@ -51,7 +56,7 @@ interface ResolvedBankHoursMetrics {
     balanceMinutes: number;
     ruleCode: string;
     explanation: string;
-    source: "persisted" | "reconstructed";
+    source: "persisted" | "reconstructed" | "manual_override";
 }
 
 export interface BankHoursProof {
@@ -159,6 +164,18 @@ function formatLocalTime(value: string | null) {
     }).format(new Date(value));
 }
 
+function formatLocalDateTime(value: string | null) {
+    if (!value) {
+        return "--";
+    }
+
+    return new Intl.DateTimeFormat("pt-BR", {
+        dateStyle: "short",
+        timeStyle: "short",
+        timeZone: SAO_PAULO_TIME_ZONE,
+    }).format(new Date(value));
+}
+
 function sameInstant(left: string | null, right: string | null) {
     if (!left || !right) {
         return false;
@@ -229,6 +246,31 @@ function resolveBankHoursMetrics(
     scheduledStartAt: string | null,
     scheduledEndAt: string | null,
 ): ResolvedBankHoursMetrics | null {
+    if (shift.manualBalanceMinutes !== null) {
+        const automaticMetrics = scheduledStartAt && scheduledEndAt && countedStartAt && countedEndAt
+            ? calculateBankHours({
+                scheduledStartAt,
+                scheduledEndAt,
+                actualStartAt: countedStartAt,
+                actualEndAt: countedEndAt,
+            })
+            : null;
+
+        return {
+            arrivalDelayMinutes: automaticMetrics?.arrivalDelayMinutes ?? shift.arrivalDelayMinutes ?? 0,
+            overtimeMinutes: automaticMetrics?.overtimeMinutes ?? shift.overtimeMinutes ?? 0,
+            creditedOvertimeMinutes: automaticMetrics?.creditedOvertimeMinutes ?? shift.creditedOvertimeMinutes ?? 0,
+            balanceMinutes: shift.manualBalanceMinutes,
+            ruleCode: MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE,
+            explanation: buildBankHoursBalanceOverrideExplanation({
+                balanceMinutes: shift.manualBalanceMinutes,
+                notes: shift.manualBalanceNotes ?? shift.bankHoursExplanation ?? "Ajuste manual sem motivo detalhado.",
+                automaticBalanceMinutes: automaticMetrics?.balanceMinutes ?? shift.balanceMinutes ?? null,
+            }),
+            source: "manual_override",
+        };
+    }
+
     if (shift.hasPersistedBankEntry) {
         return {
             arrivalDelayMinutes: shift.arrivalDelayMinutes ?? 0,
@@ -312,6 +354,10 @@ export function buildBankHoursProof(shift: RawBankHoursHistoryShift): BankHoursP
         items.push("Nao havia linha persistida de banco de horas para este plantão. A leitura abaixo foi reconstruida a partir da janela operacional do plantão e do encerramento registrado no quadro.");
     }
 
+    if (metrics.source === "manual_override") {
+        items.push(`O saldo final deste plantão foi ajustado manualmente para ${metrics.balanceMinutes} min${shift.manualBalanceActorEmail ? ` por ${shift.manualBalanceActorEmail}` : ""}${shift.manualBalanceUpdatedAt ? ` em ${formatLocalDateTime(shift.manualBalanceUpdatedAt)}` : ""}.`);
+    }
+
     if (metrics.arrivalDelayMinutes === 0) {
         items.push(`A entrada considerada foi ${formatLocalTime(countedStartAt)} para uma janela prevista em ${formatLocalTime(scheduledStartAt)}. Ficou dentro da tolerância, então não houve débito de chegada.`);
     } else {
@@ -349,6 +395,14 @@ export function buildBankHoursProof(shift: RawBankHoursHistoryShift): BankHoursP
             summary: "Cálculo encerrado na rendição, não na saída física.",
             items,
             mode: "handoff",
+        };
+    }
+
+    if (metrics.source === "manual_override") {
+        return {
+            summary: "Saldo ajustado manualmente pela administração.",
+            items,
+            mode: "neutral",
         };
     }
 
@@ -402,7 +456,7 @@ export function buildBankHoursHistoryModel(shifts: RawBankHoursHistoryShift[]): 
             const countedEndAt = resolveCountedEndAt(shift);
             const { scheduledStartAt, scheduledEndAt } = resolveScheduledWindow(shift);
             const metrics = resolveBankHoursMetrics(shift, countedStartAt, countedEndAt, scheduledStartAt, scheduledEndAt);
-            const hasCorrectionHistory = shift.auditTrail.some((entry) => entry.action.endsWith(".corrected"));
+            const hasCorrectionHistory = shift.auditTrail.some((entry) => entry.action.endsWith(".corrected")) || shift.manualBalanceMinutes !== null;
             const resolvedShift = {
                 ...shift,
                 bankScheduledStartAt: scheduledStartAt,

@@ -14,6 +14,12 @@ import {
     type InterventionBoardRow,
     type RegulationBoardRow,
 } from "@/services/board.service";
+import {
+    sortTelegramInterventionCodes,
+    sortTelegramInterventionRows,
+    sortTelegramRegulationCodes,
+    sortTelegramRegulationRows,
+} from "@/modules/telegram/presentation-order";
 
 export interface ReminderBoardSnapshot {
     generatedAt: string;
@@ -98,16 +104,18 @@ function describeInterventionAwaitingNews(row: InterventionBoardRow) {
 }
 
 function summarizeCoverage(board: ReminderBoardSnapshot, reference: Date) {
-    const confirmedIntervention = board.intervention.filter((row) => row.status === "active" && !isInterventionAwaitingNews(row, reference));
-    const awaitingIntervention = board.intervention.filter((row) => row.status === "active" && isInterventionAwaitingNews(row, reference));
-    const missingIntervention = board.intervention.filter((row) => row.status === "waiting");
-    const confirmedRegulation = board.regulation.filter((row) => row.status === "active");
-    const missingRegulation = board.regulation.filter((row) => row.status === "waiting");
+    const confirmedIntervention = sortTelegramInterventionRows(board.intervention.filter((row) => row.status === "active" && !isInterventionAwaitingNews(row, reference)));
+    const awaitingIntervention = sortTelegramInterventionRows(board.intervention.filter((row) => row.status === "active" && isInterventionAwaitingNews(row, reference)));
+    const missingIntervention = sortTelegramInterventionRows(board.intervention.filter((row) => row.status === "waiting"));
+    const disabledIntervention = sortTelegramInterventionRows(board.intervention.filter((row) => row.status === "disabled"));
+    const confirmedRegulation = sortTelegramRegulationRows(board.regulation.filter((row) => row.status === "active"));
+    const missingRegulation = sortTelegramRegulationRows(board.regulation.filter((row) => row.status === "waiting"));
 
     return {
         confirmedIntervention,
         awaitingIntervention,
         missingIntervention,
+        disabledIntervention,
         confirmedRegulation,
         missingRegulation,
         unresolvedCount: awaitingIntervention.length + missingIntervention.length + missingRegulation.length,
@@ -117,6 +125,12 @@ function summarizeCoverage(board: ReminderBoardSnapshot, reference: Date) {
 function buildInterventionLine(row: InterventionBoardRow, reference: Date, includeArrival = false) {
     const name = formatFullName(row.doctorName, row.displayName);
     const arrival = includeArrival && row.startedAt ? ` | chegada ${formatHour(row.startedAt)}` : "";
+
+    if (row.status === "disabled") {
+        const disabledAt = row.disabledAt ? ` às ${formatHour(row.disabledAt)}` : "";
+        const reason = row.disabledReason?.trim() ? ` | ${row.disabledReason.trim()}` : "";
+        return `⚫ ${row.baseCode} - Base desativada${disabledAt}${reason}`;
+    }
 
     if (row.status === "waiting") {
         return `🔴 ${row.baseCode} - Aguardando confirmação da avançada`;
@@ -141,11 +155,11 @@ function buildRegulationLine(row: RegulationBoardRow, includeArrival = false) {
 }
 
 function buildInterventionSection(rows: InterventionBoardRow[], reference: Date, includeArrival = false) {
-    return rows.map((row) => buildInterventionLine(row, reference, includeArrival)).join("\n");
+    return sortTelegramInterventionRows(rows).map((row) => buildInterventionLine(row, reference, includeArrival)).join("\n");
 }
 
 function buildRegulationSection(rows: RegulationBoardRow[], includeArrival = false) {
-    return rows.map((row) => buildRegulationLine(row, includeArrival)).join("\n");
+    return sortTelegramRegulationRows(rows).map((row) => buildRegulationLine(row, includeArrival)).join("\n");
 }
 
 function joinPendingCodes(values: string[]) {
@@ -155,25 +169,32 @@ function joinPendingCodes(values: string[]) {
 function buildGroupedPendingLines(params: {
     awaitingIntervention: InterventionBoardRow[];
     missingIntervention: InterventionBoardRow[];
+    disabledIntervention: InterventionBoardRow[];
     missingRegulation: RegulationBoardRow[];
 }) {
     const lines: string[] = [];
 
     if (params.awaitingIntervention.length > 0) {
         lines.push(
-            `🔴 Intervencao sem medico confirmado neste turno (${params.awaitingIntervention.length}): ${joinPendingCodes(params.awaitingIntervention.map((row) => row.baseCode))}. So entra se avisar continua/P ou se a chefia atualizar.`,
+            `🔴 Intervencao sem medico confirmado neste turno (${params.awaitingIntervention.length}): ${joinPendingCodes(sortTelegramInterventionCodes(params.awaitingIntervention.map((row) => row.baseCode)))}. So entra se avisar continua/P ou se a chefia atualizar.`,
         );
     }
 
     if (params.missingIntervention.length > 0) {
         lines.push(
-            `🚑 Avancadas sem aviso (${params.missingIntervention.length}): ${joinPendingCodes(params.missingIntervention.map((row) => row.baseCode))}`,
+            `🚑 Avancadas sem aviso (${params.missingIntervention.length}): ${joinPendingCodes(sortTelegramInterventionCodes(params.missingIntervention.map((row) => row.baseCode)))}`,
+        );
+    }
+
+    if (params.disabledIntervention.length > 0) {
+        lines.push(
+            `⚫ Bases desativadas (${params.disabledIntervention.length}): ${joinPendingCodes(sortTelegramInterventionCodes(params.disabledIntervention.map((row) => row.baseCode)))}`,
         );
     }
 
     if (params.missingRegulation.length > 0) {
         lines.push(
-            `☎️ Ramais sem aviso (${params.missingRegulation.length}): ${joinPendingCodes(params.missingRegulation.map((row) => row.postCode))}`,
+            `☎️ Ramais sem aviso (${params.missingRegulation.length}): ${joinPendingCodes(sortTelegramRegulationCodes(params.missingRegulation.map((row) => row.postCode)))}`,
         );
     }
 
@@ -265,6 +286,13 @@ function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan
     }
 
     const coverage = summarizeCoverage(params.board, params.now);
+    const interventionOperationalTotal = params.board.intervention.length - coverage.disabledIntervention.length;
+    const regulationLines = [
+        renderSection(buildRegulationSection(coverage.confirmedRegulation), "- Nenhum ramal confirmado ate aqui"),
+        coverage.missingRegulation.length > 0
+            ? `☎️ Ramais sem aviso (${coverage.missingRegulation.length}): ${joinPendingCodes(sortTelegramRegulationCodes(coverage.missingRegulation.map((row) => row.postCode)))}`
+            : null,
+    ].filter((line): line is string => Boolean(line));
 
     return {
         noticeKey: `coverage:${bucket.toISOString()}`,
@@ -277,13 +305,13 @@ function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan
             unresolvedCount: coverage.unresolvedCount,
         },
         text: [
-            `🧭 Quadro ${formatHour(bucket)} | Intervenção ${coverage.confirmedIntervention.length}/${params.board.intervention.length} | Regulação ${coverage.confirmedRegulation.length}/${params.board.regulation.length}`,
+            `🧭 Quadro ${formatHour(bucket)} | Intervenção ${coverage.confirmedIntervention.length}/${interventionOperationalTotal} | Regulação ${coverage.confirmedRegulation.length}/${params.board.regulation.length}`,
             "",
             "Intervenção:",
             buildInterventionSection(params.board.intervention, params.now),
             "",
             "Regulação:",
-            buildRegulationSection(params.board.regulation),
+            regulationLines.join("\n"),
             "",
             resolveCoverageFooter({
                 now: params.now,
@@ -305,6 +333,7 @@ function buildCoverageCheckpointPlan(params: ReminderPlanningParams): ReminderPl
     const pendingLines = buildGroupedPendingLines({
         awaitingIntervention: coverage.awaitingIntervention,
         missingIntervention: coverage.missingIntervention,
+        disabledIntervention: coverage.disabledIntervention,
         missingRegulation: coverage.missingRegulation,
     });
 
@@ -346,6 +375,7 @@ function buildPaymentCheckpointPlan(params: ReminderPlanningParams): ReminderPla
     const pendingLines = buildGroupedPendingLines({
         awaitingIntervention: coverage.awaitingIntervention,
         missingIntervention: coverage.missingIntervention,
+        disabledIntervention: coverage.disabledIntervention,
         missingRegulation: coverage.missingRegulation,
     });
 

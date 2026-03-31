@@ -1,4 +1,4 @@
-export const BANK_HOURS_RULE_VERSION = 2;
+export const BANK_HOURS_RULE_VERSION = 3;
 export const ARRIVAL_GRACE_MINUTES = 15;
 export const DEPARTURE_GRACE_MINUTES = 15;
 
@@ -39,8 +39,8 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
 
     const rawArrivalDelay = Math.max(0, diffMinutes(scheduledStartAt, actualStartAt));
     const rawOvertime = Math.max(0, diffMinutes(scheduledEndAt, actualEndAt));
-    const arrivalDelayMinutes = rawArrivalDelay < ARRIVAL_GRACE_MINUTES ? 0 : rawArrivalDelay;
-    const overtimeMinutes = rawOvertime < DEPARTURE_GRACE_MINUTES ? 0 : rawOvertime;
+    const arrivalDelayMinutes = rawArrivalDelay <= ARRIVAL_GRACE_MINUTES ? 0 : rawArrivalDelay;
+    const overtimeMinutes = rawOvertime <= DEPARTURE_GRACE_MINUTES ? 0 : rawOvertime;
     const overtimeMultiplier: 1 | 2 = arrivalDelayMinutes === 0 ? 2 : 1;
     const creditedOvertimeMinutes = overtimeMinutes * overtimeMultiplier;
     const balanceMinutes = creditedOvertimeMinutes - arrivalDelayMinutes;
@@ -51,14 +51,14 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
 
     const explanation = arrivalDelayMinutes === 0
         ? (overtimeMinutes > 0
-            ? `Chegou com menos de ${ARRIVAL_GRACE_MINUTES} min de atraso e o excedente a partir de ${DEPARTURE_GRACE_MINUTES} min entrou em dobro.`
+            ? `Chegou com ate ${ARRIVAL_GRACE_MINUTES} min de atraso e o excedente acima de ${DEPARTURE_GRACE_MINUTES} min entrou em dobro.`
             : (rawOvertime > 0
-                ? `Chegou com menos de ${ARRIVAL_GRACE_MINUTES} min de atraso e a saida ficou com menos de ${DEPARTURE_GRACE_MINUTES} min alem da janela prevista, sem impacto no banco.`
-                : "Chegou dentro da tolerancia e nao gerou debito nem credito adicional."))
+                ? `Chegou com ate ${ARRIVAL_GRACE_MINUTES} min de atraso e a saida ficou com ate ${DEPARTURE_GRACE_MINUTES} min alem da janela prevista, sem impacto no banco.`
+                : `Chegou dentro da tolerancia de ate ${ARRIVAL_GRACE_MINUTES} min e nao gerou debito nem credito adicional.`))
         : (overtimeMinutes > 0
-            ? `Chegou com ${arrivalDelayMinutes} min de atraso e o excedente a partir de ${DEPARTURE_GRACE_MINUTES} min ficou simples.`
+            ? `Chegou com ${arrivalDelayMinutes} min de atraso e o excedente acima de ${DEPARTURE_GRACE_MINUTES} min ficou simples.`
             : (rawOvertime > 0
-                ? `Chegou com ${arrivalDelayMinutes} min de atraso e a saida ficou com menos de ${DEPARTURE_GRACE_MINUTES} min alem da janela prevista, sem credito compensatorio.`
+                ? `Chegou com ${arrivalDelayMinutes} min de atraso e a saida ficou com ate ${DEPARTURE_GRACE_MINUTES} min alem da janela prevista, sem credito compensatorio.`
                 : `Chegou com ${arrivalDelayMinutes} min de atraso e nao gerou credito adicional.`));
 
     return {

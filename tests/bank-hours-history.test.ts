@@ -36,7 +36,11 @@ function makeShift(overrides: Partial<RawBankHoursHistoryShift> = {}): RawBankHo
         creditedOvertimeMinutes: 0,
         balanceMinutes: 0,
         ruleCode: "ON_TIME_NO_OVERTIME",
-        bankHoursExplanation: "Chegou com menos de 15 min de atraso e a saida ficou com menos de 15 min alem da janela prevista, sem impacto no banco.",
+        bankHoursExplanation: "Chegou com ate 15 min de atraso e a saida ficou com ate 15 min alem da janela prevista, sem impacto no banco.",
+        manualBalanceMinutes: null,
+        manualBalanceNotes: null,
+        manualBalanceUpdatedAt: null,
+        manualBalanceActorEmail: null,
         auditTrail: [],
         ...overrides,
     };
@@ -187,4 +191,25 @@ test("buildBankHoursHistoryModel collapses a continuity chain into one bank-hour
     assert.equal(shift?.targetCode, "PR03 -> 1367");
     assert.equal(shift?.countedEndAt, "2026-03-26T10:20:00.000Z");
     assert.equal(shift?.balanceMinutes, 10);
+});
+
+test("buildBankHoursProof highlights a manual balance override over the automatic result", () => {
+    const proof = buildBankHoursProof(makeShift({
+        actualEndedAt: "2026-03-25T22:35:00.000Z",
+        effectiveEndedAt: "2026-03-25T22:35:00.000Z",
+        bankActualEndAt: "2026-03-25T22:35:00.000Z",
+        handoffEndedAt: "2026-03-25T22:35:00.000Z",
+        overtimeMinutes: 20,
+        creditedOvertimeMinutes: 40,
+        balanceMinutes: 40,
+        manualBalanceMinutes: 0,
+        manualBalanceNotes: "Plantao sem direito a banco por decisao auditada.",
+        manualBalanceUpdatedAt: "2026-03-26T12:00:00.000Z",
+        manualBalanceActorEmail: "admin@mnrs.com.br",
+    }));
+
+    assert.equal(proof.mode, "neutral");
+    assert.match(proof.summary, /ajustado manualmente/i);
+    assert.match(proof.items.join(" "), /admin@mnrs.com.br/);
+    assert.match(proof.items.join(" "), /sem direito a banco/i);
 });

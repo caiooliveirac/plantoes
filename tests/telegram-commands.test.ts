@@ -1,22 +1,81 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isTelegramDoctorAdminCommandText, parseTelegramDoctorAdminCommand } from "@/modules/telegram/admin-commands";
-import { parseTelegramCommand } from "@/modules/telegram/commands";
+import { isTelegramAdminOnlyCommand, parseTelegramCommand } from "@/modules/telegram/commands";
+import {
+    buildDeparturePriorityReply,
+    getCurrentDeparturePriorityView,
+    isTelegramDeparturePriorityCommandText,
+    parseTelegramDeparturePriorityCommand,
+} from "@/modules/telegram/departure-priority";
 import { isTelegramDepartureReportCommandText, parseTelegramDepartureReportCommand } from "@/modules/telegram/departure-report-commands";
 import { buildTelegramDepartureReport, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
+import { isTelegramBankHoursCommandText, parseTelegramBankHoursCommand } from "@/modules/telegram/bank-hours-commands";
 import { parseTelegramPaymentAdminCommand } from "@/modules/telegram/payment-commands";
 import { isTelegramShiftReportCommandText, parseTelegramShiftReportCommand } from "@/modules/telegram/shift-report-commands";
+import { isTelegramSummaryReportCommandText, parseTelegramSummaryReportCommand } from "@/modules/telegram/summary-report-commands";
+import { buildTelegramSummaryReport } from "@/modules/telegram/summary-report";
 import { buildGroupCorrectionAnnouncement, pickTelegramReply } from "@/modules/telegram/replies";
 import { buildTelegramShiftReport } from "@/modules/telegram/shift-report";
 import {
+    buildTelegramReviewLogData,
     buildTelegramJustificationFollowUpText,
     hasTelegramOperationalJustification,
     isBatchCancelKeyword,
     isBatchConfirmationKeyword,
     requiresTelegramDepartureAdjustmentJustification,
+    resolveLatestClosedShiftRequest,
     resolveTelegramSuccessReplyKind,
+    shouldUseTelegramSenderNameFallback,
+    shouldLinkTelegramArrivalToContinuitySource,
+    shouldDeferPendingNameSelectionToFreshParsing,
     shouldTreatTelegramArrivalAsContinuation,
 } from "@/modules/telegram/service";
+import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
+
+function makeInterventionPriorityRow(overrides: Partial<InterventionBoardRow> = {}): InterventionBoardRow {
+    return {
+        baseId: 1,
+        occupancyId: "int-priority-1",
+        baseCode: "PM04",
+        baseLabel: "PM04",
+        doctorId: "doc-int-1",
+        doctorName: "Ana Souza",
+        displayName: "Ana",
+        startedAt: "2026-03-30T10:00:00.000Z",
+        boardStartedAt: "2026-03-30T10:00:00.000Z",
+        scheduledEndAt: "2026-03-30T22:00:00.000Z",
+        shiftLabel: "SD",
+        roleLabel: null,
+        status: "active",
+        liveSource: "operations_v2",
+        liveUpdatedAt: null,
+        ...overrides,
+    };
+}
+
+function makeRegulationPriorityRow(overrides: Partial<RegulationBoardRow> = {}): RegulationBoardRow {
+    return {
+        postId: 1,
+        occupancyId: "reg-priority-1",
+        postCode: "2035",
+        postLabel: "2035",
+        defaultRole: "MR",
+        doctorId: "doc-reg-1",
+        doctorName: "Bruno Lima",
+        displayName: "Bruno",
+        startedAt: "2026-03-30T10:05:00.000Z",
+        boardStartedAt: "2026-03-30T10:05:00.000Z",
+        scheduledEndAt: "2026-03-30T22:15:00.000Z",
+        shiftLabel: "SD",
+        roleLabel: null,
+        ramalLabel: "2035",
+        status: "active",
+        liveSource: "operations_v2",
+        liveUpdatedAt: null,
+        ...overrides,
+    };
+}
 
 test("parseTelegramCommand parses corrigir with target, full name and time", () => {
     const parsed = parseTelegramCommand("/corrigir PM04 Marcela Souza 20:00");
@@ -26,6 +85,51 @@ test("parseTelegramCommand parses corrigir with target, full name and time", () 
     assert.equal(parsed?.targetCode, "PM04");
     assert.equal(parsed?.doctorName, "Marcela Souza");
     assert.equal(parsed?.time, "20:00");
+});
+
+test("buildTelegramReviewLogData tags reviewable operational inputs with context", () => {
+    const review = buildTelegramReviewLogData({
+        reason: "doctor_not_resolved",
+        parsed: {
+            sector: "INTERVENTION",
+            baseCode: "PM40",
+            arrivalTime: "19:20",
+            shiftType: "SN",
+            roleFunction: null,
+            isDeparture: true,
+            isContinuation: false,
+        },
+        doctorQuery: "Leonardo Carteado",
+        trainingCandidate: true,
+        looksLikeDeparture: true,
+        example: "Leonardo Carteado saindo PM40 19:20 porque fui liberado pela chefia",
+        candidates: [
+            { fullName: "Leonardo Carvalho" },
+            { fullName: "Leonardo Cartaxo" },
+        ],
+    });
+
+    assert.deepEqual(review, {
+        reviewRequired: true,
+        reviewQueue: "telegram_input_format_review",
+        reviewReason: "doctor_not_resolved",
+        reviewSummary: "não foi possível identificar o médico com segurança",
+        trainingCandidate: true,
+        trainingReason: "doctor_not_resolved",
+        reviewParsed: {
+            sector: "INTERVENTION",
+            baseCode: "PM40",
+            arrivalTime: "19:20",
+            shiftType: "SN",
+            roleFunction: null,
+            isDeparture: true,
+            isContinuation: false,
+        },
+        reviewDoctorQuery: "Leonardo Carteado",
+        reviewCandidates: ["Leonardo Carvalho", "Leonardo Cartaxo"],
+        reviewLooksLikeDeparture: true,
+        reviewSuggestedFormat: "Leonardo Carteado saindo PM40 19:20 porque fui liberado pela chefia",
+    });
 });
 
 test("parseTelegramCommand parses retirar with target and time", () => {
@@ -65,6 +169,62 @@ test("parseTelegramCommand parses remover with base alias", () => {
     assert.equal(parsed?.name, "remover");
     assert.equal(parsed?.sector, "INTERVENTION");
     assert.equal(parsed?.targetCode, "PM04");
+});
+
+test("parseTelegramCommand parses remover with doctor and shift for historical cleanup", () => {
+    const parsed = parseTelegramCommand("/remover Aline 1363 SD");
+
+    assert.equal(parsed?.name, "remover");
+    assert.equal(parsed?.sector, "REGULATION");
+    assert.equal(parsed?.targetCode, "1363");
+    assert.equal(parsed?.doctorName, "Aline");
+    assert.equal(parsed?.shiftLabel, "SD");
+});
+
+test("parseTelegramCommand parses /desativar and /ativar for intervention bases", () => {
+    const deactivate = parseTelegramCommand("/desativar PM40 19:05");
+
+    assert.equal(deactivate?.name, "desativar");
+    assert.equal(deactivate?.sector, "INTERVENTION");
+    assert.equal(deactivate?.targetCode, "PM40");
+    assert.equal(deactivate?.time, "19:05");
+
+    const reactivate = parseTelegramCommand("/ativar pm40");
+    assert.equal(reactivate?.name, "ativar");
+    assert.equal(reactivate?.sector, "INTERVENTION");
+    assert.equal(reactivate?.targetCode, "PM40");
+    assert.equal(reactivate?.time, null);
+});
+
+test("isTelegramAdminOnlyCommand marks remover as destructive and admin-only", () => {
+    assert.equal(isTelegramAdminOnlyCommand("remover"), true);
+    assert.equal(isTelegramAdminOnlyCommand("ativar"), true);
+    assert.equal(isTelegramAdminOnlyCommand("desativar"), true);
+    assert.equal(isTelegramAdminOnlyCommand("corrigir"), false);
+    assert.equal(isTelegramAdminOnlyCommand("retirar"), false);
+    assert.equal(isTelegramAdminOnlyCommand("ramal"), false);
+});
+
+test("shouldUseTelegramSenderNameFallback ignores messages with Telegram mentions", () => {
+    assert.equal(shouldUseTelegramSenderNameFallback("@chefe2031"), false);
+    assert.equal(shouldUseTelegramSenderNameFallback("2031 SD"), true);
+});
+
+test("parseTelegramCommand parses /ramal with optional function", () => {
+    const withRole = parseTelegramCommand("/ramal Emily 1363 RMT");
+
+    assert.equal(withRole?.name, "ramal");
+    assert.equal(withRole?.sector, "REGULATION");
+    assert.equal(withRole?.targetCode, "1363");
+    assert.equal(withRole?.doctorName, "Emily");
+    assert.equal(withRole?.roleLabel, "RMT");
+    assert.equal(withRole?.time, null);
+
+    const blankRole = parseTelegramCommand("/ramal Emily 1363");
+    assert.equal(blankRole?.name, "ramal");
+    assert.equal(blankRole?.targetCode, "1363");
+    assert.equal(blankRole?.doctorName, "Emily");
+    assert.equal(blankRole?.roleLabel, null);
 });
 
 test("parseTelegramDoctorAdminCommand parses full name, display name and code", () => {
@@ -144,6 +304,126 @@ test("parseTelegramDepartureReportCommand rejects unsupported trailing arguments
     assert.equal(parseTelegramDepartureReportCommand("/saidas ontem"), null);
     assert.equal(parseTelegramDepartureReportCommand("/saidas SD"), null);
     assert.equal(isTelegramDepartureReportCommandText("/saidas qualquer coisa"), true);
+});
+
+test("parseTelegramDeparturePriorityCommand reconhece o comando sem argumentos", () => {
+    assert.equal(isTelegramDeparturePriorityCommandText("/prioridadesaida"), true);
+    assert.deepEqual(parseTelegramDeparturePriorityCommand("/prioridadesaida"), {
+        name: "departure_priority",
+        rawBody: "",
+    });
+    assert.equal(parseTelegramDeparturePriorityCommand("/prioridadesaida agora"), null);
+});
+
+test("getCurrentDeparturePriorityView ignora MRV, RECIP e quem nao esta mais no quadro", async () => {
+    const view = await getCurrentDeparturePriorityView({
+        referenceAt: new Date("2026-03-30T15:05:00-03:00"),
+        board: {
+            generatedAt: "2026-03-30T18:05:00.000Z",
+            intervention: [
+                makeInterventionPriorityRow(),
+                makeInterventionPriorityRow({
+                    baseId: 2,
+                    occupancyId: null,
+                    baseCode: "BR05",
+                    baseLabel: "BR05",
+                    doctorId: null,
+                    doctorName: null,
+                    displayName: null,
+                    startedAt: null,
+                    boardStartedAt: null,
+                    scheduledEndAt: null,
+                    shiftLabel: null,
+                    status: "waiting",
+                }),
+            ],
+            regulation: [
+                makeRegulationPriorityRow(),
+                makeRegulationPriorityRow({
+                    postId: 2,
+                    occupancyId: "reg-priority-2032",
+                    postCode: "2032",
+                    postLabel: "2032",
+                    defaultRole: "MRV",
+                    doctorId: "doc-mrv",
+                    doctorName: "Marina Costa",
+                    displayName: "Marina",
+                    startedAt: "2026-03-30T09:55:00.000Z",
+                    boardStartedAt: "2026-03-30T09:55:00.000Z",
+                    roleLabel: null,
+                    ramalLabel: "2032",
+                }),
+                makeRegulationPriorityRow({
+                    postId: 3,
+                    occupancyId: "reg-priority-recip",
+                    postCode: "2036",
+                    postLabel: "2036",
+                    defaultRole: "MR",
+                    doctorId: "doc-recip",
+                    doctorName: "Renata Lima",
+                    displayName: "Renata",
+                    startedAt: "2026-03-30T09:50:00.000Z",
+                    boardStartedAt: "2026-03-30T09:50:00.000Z",
+                    roleLabel: null,
+                    ramalLabel: "2036",
+                }),
+            ],
+        },
+        mealBreakSession: { recipRamal: "2036" },
+    });
+
+    assert.equal(view.shiftLabel, "SD");
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["PM04", "2035"]);
+    assert.deepEqual(view.entries.map((entry) => entry.rank), [1, 2]);
+
+    const reply = buildDeparturePriorityReply(view);
+    assert.match(reply, /Fora da conta: saídas já declaradas, MRV e RECIP\./);
+    assert.match(reply, /1\. Ana Souza \| PM04 \| 07:00/);
+    assert.match(reply, /2\. Bruno Lima \| 2035 \| 07:05/);
+    assert.doesNotMatch(reply, /Marina Costa/);
+    assert.doesNotMatch(reply, /Renata Lima/);
+});
+
+test("parseTelegramSummaryReportCommand accepts bare /resumo and optional agora", () => {
+    assert.equal(isTelegramSummaryReportCommandText("/resumo"), true);
+
+    assert.deepEqual(parseTelegramSummaryReportCommand("/resumo"), {
+        name: "summary_report",
+        rawBody: "",
+    });
+
+    assert.deepEqual(parseTelegramSummaryReportCommand("/resumo agora"), {
+        name: "summary_report",
+        rawBody: "agora",
+    });
+
+    assert.equal(parseTelegramSummaryReportCommand("/resumo hoje"), null);
+});
+
+test("parseTelegramBankHoursCommand accepts doctor, shift and integer minutes", () => {
+    assert.equal(isTelegramBankHoursCommandText("/banco Aline SN 0"), true);
+
+    assert.deepEqual(parseTelegramBankHoursCommand("/banco Matheus Cordeiro SN -30"), {
+        name: "bank_hours_override",
+        doctorName: "Matheus Cordeiro",
+        shiftLabel: "SN",
+        balanceMinutes: -30,
+        rawBody: "Matheus Cordeiro SN -30",
+    });
+
+    assert.equal(parseTelegramBankHoursCommand("/banco Aline SN"), null);
+});
+
+test("resolveLatestClosedShiftRequest walks back to the latest closed shift of the requested label", () => {
+    assert.deepEqual(
+        resolveLatestClosedShiftRequest(new Date("2026-03-29T12:00:00-03:00"), "SN"),
+        { operationalDate: "2026-03-28", shiftLabel: "SN" },
+    );
+
+    assert.deepEqual(
+        resolveLatestClosedShiftRequest(new Date("2026-03-29T12:00:00-03:00"), "SD"),
+        { operationalDate: "2026-03-28", shiftLabel: "SD" },
+    );
 });
 
 test("resolveTelegramDepartureReportRequest defaults to the previous shift", () => {
@@ -274,7 +554,7 @@ test("buildTelegramDepartureReport lists arrival, departure and bank-hours impac
     });
 
     assert.match(report, /Saídas 28\/03\/2026 SN/);
-    assert.match(report, /Formato: alvo \| chegada \| nome \| saída \| banco/);
+    assert.match(report, /Formato: alvo \| chegada real \| nome \| saída \| banco/);
     assert.match(report, /Alocados 2\/3 \| revisar 1 \| vazios 1/);
     assert.match(report, /✅ 2031 \| 19:00 \| Ana Souza \| 07:20 \| BH \+0h00/);
     assert.match(report, /⚠️ PM04 \| 19:10 \| Bruno Lima \| 07:45 \| BH \+0h35/);
@@ -376,6 +656,136 @@ test("buildTelegramDepartureReport shows CONTINUA for carried P coverage and pre
     assert.match(report, /🔁 2031 \| 07:01 \| João Perrone \| 19:00 \| CONTINUA/);
     assert.doesNotMatch(report, /2031.*Plantão sem saída consolidada/);
     assert.match(report, /✅ CZ50 \| 07:00 \| Laisse Melo \| 19:12 \| BH \+0h00/);
+});
+
+test("buildTelegramDepartureReport uses carried P bank-hours once the final exit is known", () => {
+    const report = buildTelegramDepartureReport({
+        generatedAt: new Date("2026-03-29T12:00:00-03:00").toISOString(),
+        operationalDate: new Date("2026-03-28T12:00:00-03:00").toISOString(),
+        shiftLabel: "SN",
+        startedAt: new Date("2026-03-28T19:00:00-03:00").toISOString(),
+        endedAt: new Date("2026-03-29T07:00:00-03:00").toISOString(),
+        summary: {
+            totalTargets: 1,
+            assignedCount: 1,
+            readyForPaymentCount: 1,
+            needsReviewCount: 0,
+            unassignedCount: 0,
+        },
+        regulation: [],
+        intervention: [
+            {
+                domain: "intervention",
+                targetCode: "CN10",
+                targetLabel: "CN10",
+                sortOrder: 10,
+                defaultRole: null,
+                occupancyId: "int-1",
+                doctorId: "doc-1",
+                doctorName: "João Perrone",
+                displayName: "João Perrone",
+                startedAt: "2026-03-28T22:00:00.000Z",
+                endedAt: "2026-03-29T10:00:00.000Z",
+                actualEndedAt: "2026-03-29T10:00:00.000Z",
+                scheduledStartAt: "2026-03-28T22:00:00.000Z",
+                scheduledEndAt: "2026-03-29T10:00:00.000Z",
+                shiftLabel: "SN",
+                roleLabel: null,
+                ramalLabel: null,
+                source: "telegram",
+                candidateCount: 1,
+                paymentStatus: "ready_for_payment",
+                issues: [],
+                arrivalDelayMinutes: 0,
+                overtimeMinutes: 0,
+                creditedOvertimeMinutes: 0,
+                balanceMinutes: 0,
+                ruleCode: "ON_TIME_NO_OVERTIME",
+                bankHoursExplanation: "slot fechado sem impacto",
+                sourceShiftLabel: "P",
+                sourceStartedAt: "2026-03-28T10:01:54.000Z",
+                sourceBoardStartedAt: "2026-03-28T22:00:00.000Z",
+                sourceEndedAt: "2026-03-29T10:20:00.000Z",
+                sourceActualEndedAt: "2026-03-29T10:20:00.000Z",
+                sourceScheduledStartAt: "2026-03-28T10:00:00.000Z",
+                sourceScheduledEndAt: "2026-03-29T10:00:00.000Z",
+                sourceArrivalDelayMinutes: 0,
+                sourceOvertimeMinutes: 20,
+                sourceCreditedOvertimeMinutes: 40,
+                sourceBalanceMinutes: 40,
+                sourceRuleCode: "ON_TIME_DOUBLE_OVERTIME",
+                sourceBankHoursExplanation: "Chegou dentro da tolerancia e a saida excedeu a janela carregada.",
+                continuesBeyondShift: false,
+            },
+        ],
+    });
+
+    assert.match(report, /✅ CN10 \| 07:01 \| João Perrone \| 07:20 \| BH \+0h40 \(extra \+0h20 x2\)/);
+});
+
+test("buildTelegramDepartureReport uses source bank-hours for a single-slot SN when the real exit exceeded the slot boundary", () => {
+    const report = buildTelegramDepartureReport({
+        generatedAt: new Date("2026-03-29T12:00:00-03:00").toISOString(),
+        operationalDate: new Date("2026-03-28T12:00:00-03:00").toISOString(),
+        shiftLabel: "SN",
+        startedAt: new Date("2026-03-28T19:00:00-03:00").toISOString(),
+        endedAt: new Date("2026-03-29T07:00:00-03:00").toISOString(),
+        summary: {
+            totalTargets: 1,
+            assignedCount: 1,
+            readyForPaymentCount: 1,
+            needsReviewCount: 0,
+            unassignedCount: 0,
+        },
+        regulation: [],
+        intervention: [
+            {
+                domain: "intervention",
+                targetCode: "PM40",
+                targetLabel: "PM40",
+                sortOrder: 40,
+                defaultRole: null,
+                occupancyId: "int-2",
+                doctorId: "doc-2",
+                doctorName: "Victor Mangabeira",
+                displayName: "Victor Mangabeira",
+                startedAt: "2026-03-28T22:00:00.000Z",
+                endedAt: "2026-03-29T10:00:00.000Z",
+                actualEndedAt: "2026-03-29T10:00:00.000Z",
+                scheduledStartAt: "2026-03-28T22:00:00.000Z",
+                scheduledEndAt: "2026-03-29T10:00:00.000Z",
+                shiftLabel: "SN",
+                roleLabel: null,
+                ramalLabel: null,
+                source: "telegram",
+                candidateCount: 1,
+                paymentStatus: "ready_for_payment",
+                issues: [],
+                arrivalDelayMinutes: 0,
+                overtimeMinutes: 0,
+                creditedOvertimeMinutes: 0,
+                balanceMinutes: 0,
+                ruleCode: "ON_TIME_NO_OVERTIME",
+                bankHoursExplanation: "slot fechado sem impacto",
+                sourceShiftLabel: "SN",
+                sourceStartedAt: "2026-03-28T21:57:56.000Z",
+                sourceBoardStartedAt: "2026-03-28T21:57:56.000Z",
+                sourceEndedAt: "2026-03-29T10:27:29.000Z",
+                sourceActualEndedAt: "2026-03-29T10:27:29.000Z",
+                sourceScheduledStartAt: "2026-03-28T22:00:00.000Z",
+                sourceScheduledEndAt: "2026-03-29T10:00:00.000Z",
+                sourceArrivalDelayMinutes: 0,
+                sourceOvertimeMinutes: 27,
+                sourceCreditedOvertimeMinutes: 54,
+                sourceBalanceMinutes: 54,
+                sourceRuleCode: "ON_TIME_DOUBLE_OVERTIME",
+                sourceBankHoursExplanation: "Chegou com ate 15 min de atraso e o excedente acima de 15 min entrou em dobro.",
+                continuesBeyondShift: false,
+            },
+        ],
+    });
+
+    assert.match(report, /✅ PM40 \| 18:57 \| Victor Mangabeira \| 07:27 \| BH \+0h54 \(extra \+0h27 x2\)/);
 });
 
 test("parseTelegramShiftReportCommand accepts bare /plantao and optional agora", () => {
@@ -524,6 +934,362 @@ test("buildTelegramShiftReport separates confirmed rows from previous-shift carr
     assert.match(report, /🔴 2033/);
 });
 
+test("buildTelegramShiftReport reports disabled intervention bases outside the pending bucket", () => {
+    const report = buildTelegramShiftReport({
+        reference: new Date("2026-03-28T19:20:00-03:00"),
+        board: {
+            intervention: [
+                {
+                    baseId: 1,
+                    occupancyId: "int-1",
+                    baseCode: "PM04",
+                    baseLabel: "PM04",
+                    doctorId: "doc-1",
+                    doctorName: "Ana Souza",
+                    displayName: "Ana",
+                    startedAt: "2026-03-28T22:00:00.000Z",
+                    boardStartedAt: "2026-03-28T22:00:00.000Z",
+                    scheduledEndAt: "2026-03-29T10:00:00.000Z",
+                    shiftLabel: "SN",
+                    roleLabel: null,
+                    status: "active",
+                    liveSource: "operations_v2",
+                    liveUpdatedAt: null,
+                },
+                {
+                    baseId: 2,
+                    occupancyId: null,
+                    baseCode: "IT30",
+                    baseLabel: "IT30",
+                    doctorId: null,
+                    doctorName: null,
+                    displayName: null,
+                    startedAt: null,
+                    boardStartedAt: null,
+                    scheduledEndAt: null,
+                    shiftLabel: null,
+                    roleLabel: null,
+                    status: "disabled",
+                    disabledAt: "2026-03-28T21:30:00.000Z",
+                    disabledReason: "USA recolhida",
+                    liveSource: "none",
+                    liveUpdatedAt: null,
+                },
+            ],
+            regulation: [],
+        },
+    });
+
+    assert.match(report, /Intervenção confirmada 1\/1/);
+    assert.match(report, /⚫ IT30 - desativada às 18:30 \| USA recolhida/);
+    assert.doesNotMatch(report, /Intervenção sem aviso.*IT30/s);
+});
+
+test("buildTelegramDepartureReport lists disabled bases separately from empty targets", () => {
+    const report = buildTelegramDepartureReport({
+        generatedAt: "2026-03-28T23:00:00.000Z",
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        summary: {
+            totalTargets: 0,
+            assignedCount: 0,
+            readyForPaymentCount: 0,
+            needsReviewCount: 0,
+            unassignedCount: 0,
+            disabledCount: 1,
+        },
+        regulation: [],
+        intervention: [
+            {
+                domain: "intervention",
+                targetCode: "PP20",
+                targetLabel: "PP20",
+                sortOrder: 20,
+                defaultRole: null,
+                disabledAt: "2026-03-28T08:30:00.000Z",
+                disabledReason: "USA recolhida",
+                disabledDuringShift: true,
+                disabledEntireShift: true,
+                occupancyId: null,
+                doctorId: null,
+                doctorName: null,
+                displayName: null,
+                startedAt: null,
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: null,
+                scheduledEndAt: null,
+                shiftLabel: "SD",
+                roleLabel: null,
+                ramalLabel: null,
+                source: null,
+                candidateCount: 0,
+                paymentStatus: "ready_for_payment",
+                issues: ["Base desativada para este turno"],
+                arrivalDelayMinutes: null,
+                overtimeMinutes: null,
+                creditedOvertimeMinutes: null,
+                balanceMinutes: null,
+                ruleCode: null,
+                bankHoursExplanation: null,
+                continuesBeyondShift: false,
+            },
+        ],
+    });
+
+    assert.match(report, /desativadas 1/);
+    assert.match(report, /Desativadas:/);
+    assert.match(report, /⚫ PP20 \| 05:30 \| base desativada para o turno \| USA recolhida/);
+    assert.doesNotMatch(report, /Vazios: PP20/);
+});
+
+test("buildTelegramSummaryReport returns a copy-friendly day summary with exits first and regulation meal-break columns", () => {
+    const report = buildTelegramSummaryReport({
+        reference: new Date("2026-03-29T10:20:00-03:00"),
+        data: {
+            departureBoard: {
+                generatedAt: "2026-03-29T12:00:00.000Z",
+                operationalDate: "2026-03-28T12:00:00.000Z",
+                shiftLabel: "SN",
+                startedAt: "2026-03-28T22:00:00.000Z",
+                endedAt: "2026-03-29T10:00:00.000Z",
+                summary: {
+                    totalTargets: 2,
+                    assignedCount: 2,
+                    readyForPaymentCount: 2,
+                    needsReviewCount: 0,
+                    unassignedCount: 0,
+                },
+                intervention: [
+                    {
+                        domain: "intervention",
+                        targetCode: "PM04",
+                        targetLabel: "PM04",
+                        sortOrder: 4,
+                        defaultRole: null,
+                        occupancyId: "int-exit-1",
+                        doctorId: "doc-int-1",
+                        doctorName: "Ana Beatriz Souza",
+                        displayName: "Ana Souza",
+                        startedAt: "2026-03-28T22:00:00.000Z",
+                        endedAt: "2026-03-29T10:00:00.000Z",
+                        actualEndedAt: "2026-03-29T10:05:00.000Z",
+                        scheduledStartAt: "2026-03-28T22:00:00.000Z",
+                        scheduledEndAt: "2026-03-29T10:00:00.000Z",
+                        shiftLabel: "SN",
+                        roleLabel: null,
+                        ramalLabel: null,
+                        source: "telegram",
+                        candidateCount: 1,
+                        paymentStatus: "ready_for_payment",
+                        issues: [],
+                        arrivalDelayMinutes: 0,
+                        overtimeMinutes: 5,
+                        creditedOvertimeMinutes: 10,
+                        balanceMinutes: 10,
+                        ruleCode: "ON_TIME_DOUBLE_OVERTIME",
+                        bankHoursExplanation: "ok",
+                        continuesBeyondShift: false,
+                    },
+                ],
+                regulation: [
+                    {
+                        domain: "regulation",
+                        targetCode: "2032",
+                        targetLabel: "2032",
+                        sortOrder: 32,
+                        defaultRole: "MR",
+                        occupancyId: "reg-exit-1",
+                        doctorId: "doc-reg-1",
+                        doctorName: "Marina Costa Lima",
+                        displayName: "Marina Costa",
+                        startedAt: "2026-03-28T22:00:00.000Z",
+                        endedAt: "2026-03-29T10:00:00.000Z",
+                        actualEndedAt: "2026-03-29T10:15:00.000Z",
+                        scheduledStartAt: "2026-03-28T22:00:00.000Z",
+                        scheduledEndAt: "2026-03-29T10:15:00.000Z",
+                        shiftLabel: "SN",
+                        roleLabel: "MRV",
+                        ramalLabel: "2032",
+                        source: "telegram",
+                        candidateCount: 1,
+                        paymentStatus: "ready_for_payment",
+                        issues: [],
+                        arrivalDelayMinutes: 0,
+                        overtimeMinutes: 15,
+                        creditedOvertimeMinutes: 30,
+                        balanceMinutes: 30,
+                        ruleCode: "ON_TIME_DOUBLE_OVERTIME",
+                        bankHoursExplanation: "ok",
+                        continuesBeyondShift: false,
+                    },
+                ],
+            },
+            currentBoard: {
+                intervention: [
+                    {
+                        baseId: 4,
+                        occupancyId: "int-current-1",
+                        baseCode: "PM04",
+                        baseLabel: "PM04",
+                        doctorId: "doc-int-2",
+                        doctorName: "Bruno Lima Ferreira",
+                        displayName: "Bruno Lima",
+                        startedAt: "2026-03-29T10:00:00.000Z",
+                        boardStartedAt: "2026-03-29T10:00:00.000Z",
+                        scheduledEndAt: "2026-03-29T22:00:00.000Z",
+                        shiftLabel: "SD",
+                        roleLabel: null,
+                        status: "active",
+                        liveSource: "operations_v2",
+                        liveUpdatedAt: null,
+                    },
+                ],
+                regulation: [
+                    {
+                        postId: 32,
+                        occupancyId: "reg-current-1",
+                        postCode: "2032",
+                        postLabel: "2032",
+                        defaultRole: "MR",
+                        doctorId: "doc-reg-2",
+                        doctorName: "Carlos Eduardo Melo",
+                        displayName: "Carlos Melo",
+                        startedAt: "2026-03-29T10:03:00.000Z",
+                        boardStartedAt: "2026-03-29T10:03:00.000Z",
+                        scheduledEndAt: "2026-03-29T22:15:00.000Z",
+                        shiftLabel: "SD",
+                        roleLabel: "MRV",
+                        ramalLabel: "2032",
+                        status: "active",
+                        liveSource: "operations_v2",
+                        liveUpdatedAt: null,
+                    },
+                ],
+            },
+            mealBreakSession: {
+                kind: "telegram_meal_break_session",
+                version: 1,
+                mode: "day",
+                operationalDate: "2026-03-29",
+                stage: "completed",
+                trigger: "manual",
+                roster: [],
+                chiefRamal: "2031",
+                recipRamal: null,
+                mrvRamals: ["2032", "2151"],
+                mrvLunch1230Ramal: null,
+                lunchCapacities: { "11:30": 1, "12:30": 0, "13:30": 0 },
+                lunchAssignments: { "2032": "11:30" },
+                restAssignments: { "2032": "18:00" },
+                restChoiceCapacities: { "15:30": 0, "16:30": 0 },
+                lunchQueue: [],
+                restQueue: [],
+                nightWorkCapacities: { "23:00": 0, "03:00": 0 },
+                nightWorkAssignments: {},
+                dinnerAssignments: {},
+                dinnerDurationAssignments: {},
+                dinnerChoiceCapacities: { "20:30": 0, "21:00": 0, "21:30": 0 },
+                nightWorkQueue: [],
+                dinnerQueue: [],
+                createdAt: "2026-03-29T12:00:00.000Z",
+                updatedAt: "2026-03-29T12:00:00.000Z",
+                events: [],
+            },
+        },
+    });
+
+    assert.match(report, /SAIDAS 28\/03\/2026 SN/);
+    assert.match(report, /INTERVENCAO\nbase\|nome\|saida\nPM04\|Ana Souza\|07:05/);
+    assert.match(report, /REGULACAO\nramal\|nome\|saida\n2032\|Marina Lima\|07:15/);
+    assert.match(report, /CHEGADAS SD/);
+    assert.match(report, /INTERVENCAO\nbase\|nome\|chegada\nPM04\|Bruno Ferreira\|07:00/);
+    assert.match(report, /REGULACAO\nramal\|nome\|chegada\|almoco\|descanso\n2032\|Carlos Melo\|07:03\|11:30\|18:00/);
+});
+
+test("buildTelegramSummaryReport switches regulation columns to jantar and trabalho on SN", () => {
+    const report = buildTelegramSummaryReport({
+        reference: new Date("2026-03-29T20:20:00-03:00"),
+        data: {
+            departureBoard: {
+                generatedAt: "2026-03-29T23:00:00.000Z",
+                operationalDate: "2026-03-29T12:00:00.000Z",
+                shiftLabel: "SD",
+                startedAt: "2026-03-29T10:00:00.000Z",
+                endedAt: "2026-03-29T22:00:00.000Z",
+                summary: {
+                    totalTargets: 0,
+                    assignedCount: 0,
+                    readyForPaymentCount: 0,
+                    needsReviewCount: 0,
+                    unassignedCount: 0,
+                },
+                intervention: [],
+                regulation: [],
+            },
+            currentBoard: {
+                intervention: [],
+                regulation: [
+                    {
+                        postId: 54,
+                        occupancyId: "reg-night-1",
+                        postCode: "2154",
+                        postLabel: "2154",
+                        defaultRole: "MR",
+                        doctorId: "doc-night-1",
+                        doctorName: "Matheus Henrique Quezado Cordeiro",
+                        displayName: "Matheus Quezado",
+                        startedAt: "2026-03-29T22:25:14.000Z",
+                        boardStartedAt: "2026-03-29T22:25:14.000Z",
+                        scheduledEndAt: "2026-03-30T10:15:00.000Z",
+                        shiftLabel: "SN",
+                        roleLabel: "MR",
+                        ramalLabel: "2154",
+                        status: "active",
+                        liveSource: "operations_v2",
+                        liveUpdatedAt: null,
+                    },
+                ],
+            },
+            mealBreakSession: {
+                kind: "telegram_meal_break_session",
+                version: 1,
+                mode: "night",
+                operationalDate: "2026-03-29",
+                stage: "completed",
+                trigger: "manual",
+                roster: [],
+                chiefRamal: "2031",
+                recipRamal: null,
+                mrvRamals: ["2032", "2151"],
+                mrvLunch1230Ramal: null,
+                lunchCapacities: { "11:30": 0, "12:30": 0, "13:30": 0 },
+                lunchAssignments: {},
+                restAssignments: {},
+                restChoiceCapacities: { "15:30": 0, "16:30": 0 },
+                lunchQueue: [],
+                restQueue: [],
+                nightWorkCapacities: { "23:00": 1, "03:00": 0 },
+                nightWorkAssignments: { "2154": "23:00" },
+                dinnerAssignments: { "2154": "20:30" },
+                dinnerDurationAssignments: { "2154": "half_hour" },
+                dinnerChoiceCapacities: { "20:30": 1, "21:00": 0, "21:30": 0 },
+                nightWorkQueue: [],
+                dinnerQueue: [],
+                createdAt: "2026-03-29T23:00:00.000Z",
+                updatedAt: "2026-03-29T23:00:00.000Z",
+                events: [],
+            },
+        },
+    });
+
+    assert.match(report, /CHEGADAS SN/);
+    assert.match(report, /ramal\|nome\|chegada\|jantar\|trabalho/);
+    assert.match(report, /2154\|Matheus Cordeiro\|19:25\|20:30\|23:00/);
+});
+
 test("pickTelegramReply supports polite command denial", () => {
     const reply = pickTelegramReply("command_forbidden", 7, {});
 
@@ -601,9 +1367,10 @@ test("resolveTelegramSuccessReplyKind separates arrival, P arrival and continuat
     }), "arrival_recorded");
 });
 
-test("shouldTreatTelegramArrivalAsContinuation preserves the original arrival across explicit P, active P and shift rollover", () => {
+test("shouldTreatTelegramArrivalAsContinuation infers rollover for intervention and explicit SD→SN regulation cross-shift", () => {
     assert.equal(
         shouldTreatTelegramArrivalAsContinuation({
+            sector: "REGULATION",
             isDeparture: false,
             isContinuation: false,
             incomingShiftLabel: "P",
@@ -614,6 +1381,7 @@ test("shouldTreatTelegramArrivalAsContinuation preserves the original arrival ac
 
     assert.equal(
         shouldTreatTelegramArrivalAsContinuation({
+            sector: "REGULATION",
             isDeparture: false,
             isContinuation: false,
             incomingShiftLabel: "P",
@@ -624,16 +1392,40 @@ test("shouldTreatTelegramArrivalAsContinuation preserves the original arrival ac
 
     assert.equal(
         shouldTreatTelegramArrivalAsContinuation({
+            sector: "REGULATION",
             isDeparture: false,
             isContinuation: false,
             incomingShiftLabel: "SN",
             activeShiftLabel: "P",
+        }),
+        false,
+    );
+
+    assert.equal(
+        shouldTreatTelegramArrivalAsContinuation({
+            sector: "REGULATION",
+            isDeparture: false,
+            isContinuation: false,
+            incomingShiftLabel: "SN",
+            activeShiftLabel: "SD",
+        }),
+        true, // SD→SN regulation cross-shift is now treated as location update / continuation
+    );
+
+    assert.equal(
+        shouldTreatTelegramArrivalAsContinuation({
+            sector: "REGULATION",
+            isDeparture: false,
+            isContinuation: true,
+            incomingShiftLabel: "SN",
+            activeShiftLabel: "SD",
         }),
         true,
     );
 
     assert.equal(
         shouldTreatTelegramArrivalAsContinuation({
+            sector: "INTERVENTION",
             isDeparture: false,
             isContinuation: false,
             incomingShiftLabel: "SN",
@@ -644,6 +1436,7 @@ test("shouldTreatTelegramArrivalAsContinuation preserves the original arrival ac
 
     assert.equal(
         shouldTreatTelegramArrivalAsContinuation({
+            sector: "INTERVENTION",
             isDeparture: false,
             isContinuation: false,
             incomingShiftLabel: "SN",
@@ -651,6 +1444,122 @@ test("shouldTreatTelegramArrivalAsContinuation preserves the original arrival ac
         }),
         false,
     );
+});
+
+test("shouldLinkTelegramArrivalToContinuitySource links SD→SN regulation cross-shift and refuses same-shift or P-only rollover", () => {
+    assert.equal(
+        shouldLinkTelegramArrivalToContinuitySource({
+            parsed: {
+                sector: "REGULATION",
+                baseCode: "2154",
+                arrivalTime: "19:25",
+                shiftType: "SN",
+                roleFunction: "MR",
+                isDeparture: false,
+                isContinuation: false,
+            },
+            sourceShiftLabel: "SD",
+        }),
+        true, // SD→SN cross-shift: links to SD continuity group to preserve original arrival time
+    );
+
+    assert.equal(
+        shouldLinkTelegramArrivalToContinuitySource({
+            parsed: {
+                sector: "REGULATION",
+                baseCode: "2154",
+                arrivalTime: "19:25",
+                shiftType: "P",
+                roleFunction: "MR",
+                isDeparture: false,
+                isContinuation: false,
+            },
+            sourceShiftLabel: "SD",
+        }),
+        true,
+    );
+
+    assert.equal(
+        shouldLinkTelegramArrivalToContinuitySource({
+            parsed: {
+                sector: "REGULATION",
+                baseCode: "2154",
+                arrivalTime: "19:25",
+                shiftType: "SN",
+                roleFunction: "MR",
+                isDeparture: false,
+                isContinuation: true,
+            },
+            sourceShiftLabel: "SD",
+        }),
+        true,
+    );
+
+    assert.equal(
+        shouldLinkTelegramArrivalToContinuitySource({
+            parsed: {
+                sector: "REGULATION",
+                baseCode: "2154",
+                arrivalTime: "19:25",
+                shiftType: "SN",
+                roleFunction: "MR",
+                isDeparture: false,
+                isContinuation: false,
+            },
+            sourceShiftLabel: "SN",
+        }),
+        false,
+    );
+});
+
+test("shouldDeferPendingNameSelectionToFreshParsing leaves new operational launch out of stale candidate flow", () => {
+    assert.equal(shouldDeferPendingNameSelectionToFreshParsing("Caio Oliveira 2151 SD", [
+        {
+            id: "ana-1",
+            fullName: "Ana Beatriz D'Almeida Silva",
+            displayName: "Ana Beatriz D'Almeida",
+            normalizedName: "ANA BEATRIZ D'ALMEIDA SILVA",
+            score: 0,
+        },
+        {
+            id: "ana-2",
+            fullName: "Ana Beatriz de Andrade Carvalho",
+            displayName: "Ana Carvalho",
+            normalizedName: "ANA BEATRIZ DE ANDRADE CARVALHO",
+            score: 0,
+        },
+        {
+            id: "ana-3",
+            fullName: "Ana Beatriz Nunes Bonfim",
+            displayName: "Ana Bonfim",
+            normalizedName: "ANA BEATRIZ NUNES BONFIM",
+            score: 0,
+        },
+    ]), true);
+
+    assert.equal(shouldDeferPendingNameSelectionToFreshParsing("3", [
+        {
+            id: "ana-1",
+            fullName: "Ana Beatriz D'Almeida Silva",
+            displayName: "Ana Beatriz D'Almeida",
+            normalizedName: "ANA BEATRIZ D'ALMEIDA SILVA",
+            score: 0,
+        },
+        {
+            id: "ana-2",
+            fullName: "Ana Beatriz de Andrade Carvalho",
+            displayName: "Ana Carvalho",
+            normalizedName: "ANA BEATRIZ DE ANDRADE CARVALHO",
+            score: 0,
+        },
+        {
+            id: "ana-3",
+            fullName: "Ana Beatriz Nunes Bonfim",
+            displayName: "Ana Bonfim",
+            normalizedName: "ANA BEATRIZ NUNES BONFIM",
+            score: 0,
+        },
+    ]), false);
 });
 
 test("pickTelegramReply teaches how to justify a late departure", () => {

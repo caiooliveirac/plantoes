@@ -22,9 +22,16 @@ export const reviewChiefAccessRequestSchema = z.object({
     reviewNotes: z.string().trim().max(1000).optional(),
 });
 
+export const bootstrapChiefAccessSchema = z.object({
+    doctorId: z.string().uuid(),
+    email: z.string().email(),
+    temporaryPassword: z.string().trim().min(1),
+});
+
 export type CreateChiefInviteInput = z.infer<typeof createChiefInviteSchema>;
 export type SubmitChiefAccessRequestInput = z.infer<typeof submitChiefAccessRequestSchema>;
 export type ReviewChiefAccessRequestInput = z.infer<typeof reviewChiefAccessRequestSchema>;
+export type BootstrapChiefAccessInput = z.infer<typeof bootstrapChiefAccessSchema>;
 
 export function validateChiefInviteInput(input: unknown) {
     return createChiefInviteSchema.parse(input);
@@ -36,4 +43,8 @@ export function validateChiefAccessRequestInput(input: unknown) {
 
 export function validateChiefAccessReviewInput(input: unknown) {
     return reviewChiefAccessRequestSchema.parse(input);
+}
+
+export function validateChiefBootstrapAccessInput(input: unknown) {
+    return bootstrapChiefAccessSchema.parse(input);
 }

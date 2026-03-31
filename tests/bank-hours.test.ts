@@ -62,7 +62,7 @@ test("ignores arrival and late exit below 15 minutes", () => {
     assert.equal(result.balanceMinutes, 0);
 });
 
-test("starts crediting late departure from exactly 15 minutes", () => {
+test("keeps late departure neutral at exactly 15 minutes", () => {
     const result = calculateBankHours({
         scheduledStartAt: iso("2026-03-25T07:00:00-03:00"),
         scheduledEndAt: iso("2026-03-25T19:00:00-03:00"),
@@ -71,13 +71,13 @@ test("starts crediting late departure from exactly 15 minutes", () => {
     });
 
     assert.equal(result.arrivalDelayMinutes, 0);
-    assert.equal(result.overtimeMinutes, 15);
+    assert.equal(result.overtimeMinutes, 0);
     assert.equal(result.overtimeMultiplier, 2);
-    assert.equal(result.creditedOvertimeMinutes, 30);
-    assert.equal(result.balanceMinutes, 30);
+    assert.equal(result.creditedOvertimeMinutes, 0);
+    assert.equal(result.balanceMinutes, 0);
 });
 
-test("starts charging arrival delay from exactly 15 minutes", () => {
+test("keeps arrival delay neutral at exactly 15 minutes", () => {
     const result = calculateBankHours({
         scheduledStartAt: iso("2026-03-25T07:00:00-03:00"),
         scheduledEndAt: iso("2026-03-25T19:00:00-03:00"),
@@ -85,10 +85,10 @@ test("starts charging arrival delay from exactly 15 minutes", () => {
         actualEndAt: iso("2026-03-25T19:15:00-03:00"),
     });
 
-    assert.equal(result.arrivalDelayMinutes, 15);
-    assert.equal(result.overtimeMinutes, 15);
-    assert.equal(result.overtimeMultiplier, 1);
-    assert.equal(result.creditedOvertimeMinutes, 15);
+    assert.equal(result.arrivalDelayMinutes, 0);
+    assert.equal(result.overtimeMinutes, 0);
+    assert.equal(result.overtimeMultiplier, 2);
+    assert.equal(result.creditedOvertimeMinutes, 0);
     assert.equal(result.balanceMinutes, 0);
 });
 
@@ -136,7 +136,7 @@ test("continued shift ignores arrival and late exit below 15 minutes", () => {
     assert.equal(result.balanceMinutes, 0);
 });
 
-test("continued shift starts counting from exactly 15 minutes", () => {
+test("continued shift keeps exactly 15 minutes neutral", () => {
     const result = calculateBankHours({
         scheduledStartAt: iso("2026-03-25T19:00:00-03:00"),
         scheduledEndAt: iso("2026-03-26T07:00:00-03:00"),
@@ -144,10 +144,10 @@ test("continued shift starts counting from exactly 15 minutes", () => {
         actualEndAt: iso("2026-03-26T07:15:00-03:00"),
     });
 
-    assert.equal(result.arrivalDelayMinutes, 15);
-    assert.equal(result.overtimeMinutes, 15);
-    assert.equal(result.overtimeMultiplier, 1);
-    assert.equal(result.creditedOvertimeMinutes, 15);
+    assert.equal(result.arrivalDelayMinutes, 0);
+    assert.equal(result.overtimeMinutes, 0);
+    assert.equal(result.overtimeMultiplier, 2);
+    assert.equal(result.creditedOvertimeMinutes, 0);
     assert.equal(result.balanceMinutes, 0);
 });
 

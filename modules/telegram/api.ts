@@ -27,6 +27,20 @@ export interface TelegramUpdate {
     message?: TelegramMessage;
 }
 
+export interface TelegramReplyKeyboardMarkup {
+    keyboard: Array<Array<{ text: string }>>;
+    resize_keyboard?: boolean;
+    one_time_keyboard?: boolean;
+    selective?: boolean;
+}
+
+export interface TelegramReplyKeyboardRemove {
+    remove_keyboard: true;
+    selective?: boolean;
+}
+
+export type TelegramReplyMarkup = TelegramReplyKeyboardMarkup | TelegramReplyKeyboardRemove;
+
 async function callApi<T>(method: string, body: Record<string, unknown>) {
     const response = await fetch(`${getBaseUrl()}/${method}`, {
         method: "POST",
@@ -42,10 +56,26 @@ async function callApi<T>(method: string, body: Record<string, unknown>) {
     return data.result as T;
 }
 
-export function sendMessage(chatId: string | number, text: string, replyToMessageId?: number) {
+export function sendMessage(
+    chatId: string | number,
+    text: string,
+    replyToMessageId?: number,
+    replyMarkup?: TelegramReplyMarkup,
+) {
     return callApi<TelegramMessage>("sendMessage", {
         chat_id: Number(chatId),
         text,
         ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
 }
+
+export function buildChoiceKeyboard(rows: string[][]): TelegramReplyKeyboardMarkup {
+    return {
+        keyboard: rows.map((row) => row.map((text) => ({ text }))),
+        resize_keyboard: true,
+        one_time_keyboard: true,
+    };
+}
+
+export const REMOVE_KEYBOARD: TelegramReplyKeyboardRemove = { remove_keyboard: true };

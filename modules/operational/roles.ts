@@ -3,11 +3,16 @@ export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IE
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
 
 const COI_REGULATION_CODES = new Set(["1366", "1367", "1368"]);
-const MRV_DAY_REGULATION_CODES = new Set(["2032", "2151"]);
+const MRV_REGULATION_CODES = new Set(["2032", "2151"]);
+const REMOTE_PRIORITY_REGULATION_CODES = new Set(["1321", "1322", "1323", "1325", "1361", "1362", "1363", "1364", "1365"]);
 
 export function normalizeOperationalRoleLabel(value: string | null | undefined) {
     const normalized = value?.trim().toUpperCase() ?? "";
     return normalized.length > 0 ? normalized : null;
+}
+
+export function isRemotePriorityRegulationCode(code: string) {
+    return REMOTE_PRIORITY_REGULATION_CODES.has(code.trim().toUpperCase());
 }
 
 export function isStandardOperationalRoleCode(value: string | null | undefined): value is StandardOperationalRoleCode {
@@ -27,7 +32,7 @@ export function resolveFixedOperationalRole(params: {
         return "COI";
     }
 
-    if (params.domain === "regulation" && params.shiftLabel === "SD" && MRV_DAY_REGULATION_CODES.has(params.code)) {
+    if (params.domain === "regulation" && params.shiftLabel !== "SN" && MRV_REGULATION_CODES.has(params.code)) {
         return "MRV";
     }
 
@@ -41,9 +46,10 @@ export function resolveOperationalRoleLabel(params: {
     roleLabel?: string | null;
     defaultRole?: string | null;
 }) {
+    const explicitRole = normalizeOperationalRoleLabel(params.roleLabel);
     return resolveFixedOperationalRole(params)
-        ?? normalizeOperationalRoleLabel(params.roleLabel)
-        ?? normalizeOperationalRoleLabel(params.defaultRole)
+        ?? explicitRole
+        ?? (params.domain === "intervention" ? normalizeOperationalRoleLabel(params.defaultRole) : null)
         ?? null;
 }
 

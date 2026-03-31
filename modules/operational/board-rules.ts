@@ -173,10 +173,6 @@ export function resolveProlongedShiftExpiry(startedAt: string | Date | null, shi
 
     const parts = getSaoPauloParts(startedAt);
     const sameDaySeven = fromSaoPauloClockParts(parts.year, parts.month, parts.day, 7, 0);
-    if (new Date(startedAt).getTime() < sameDaySeven.getTime()) {
-        return sameDaySeven;
-    }
-
     return addDays(sameDaySeven, 1);
 }
 
@@ -215,6 +211,7 @@ function resolveInterventionVerificationBoundary(
 
 export function shouldKeepRegulationOccupancyVisible(params: {
     startedAt: string | Date | null;
+    boardStartedAt?: string | Date | null;
     shiftLabel: OccupancyShiftLabel;
     reference: string | Date;
 }) {
@@ -223,11 +220,15 @@ export function shouldKeepRegulationOccupancyVisible(params: {
         return true;
     }
 
-    if (!isBeforeCurrentOperationalShift(startedAt, reference)) {
+    const visibilityAnchorAt = shiftLabel === "P" && params.boardStartedAt
+        ? params.boardStartedAt
+        : startedAt;
+
+    if (!isBeforeCurrentOperationalShift(visibilityAnchorAt, reference)) {
         return true;
     }
 
-    const expiresAt = resolveImplicitOccupancyExpiry(startedAt, shiftLabel);
+    const expiresAt = resolveImplicitOccupancyExpiry(visibilityAnchorAt, shiftLabel);
     if (!expiresAt) {
         return false;
     }

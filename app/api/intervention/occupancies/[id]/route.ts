@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, interventionOccupancies } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { correctInterventionOccupancy } from "@/modules/operational/corrections";
+import { correctInterventionOccupancy, removeInterventionOccupancyRecord } from "@/modules/operational/corrections";
 
 const schema = z.object({
     doctorId: z.string().uuid().optional(),
@@ -15,6 +15,10 @@ const schema = z.object({
     shiftLabel: z.union([z.string().trim().max(100), z.null()]).optional(),
     roleLabel: z.union([z.string().trim().max(100), z.null()]).optional(),
     notes: z.union([z.string().trim().max(2000), z.null()]).optional(),
+});
+
+const deleteSchema = z.object({
+    notes: z.string().trim().min(8).max(2000),
 });
 
 export async function PATCH(request: NextRequest, context: RouteContext<"/api/intervention/occupancies/[id]">) {
@@ -89,6 +93,60 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/in
     } catch (error) {
         return NextResponse.json(
             { error: error instanceof Error ? error.message : "Unable to correct intervention occupancy." },
+            { status: 400 },
+        );
+    }
+}
+
+export async function DELETE(request: NextRequest, context: RouteContext<"/api/intervention/occupancies/[id]">) {
+    if (!hasDatabaseUrl()) {
+        return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
+    }
+
+    let session;
+    try {
+        session = await requireAuthenticatedSession(["admin"]);
+    } catch (error) {
+        const status = error instanceof AuthError ? error.status : 500;
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });
+    }
+
+    const parsed = deleteSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+        return NextResponse.json({ error: "Motivo obrigatorio para apagar ocupacao de intervencao." }, { status: 400 });
+    }
+
+    const { id } = await context.params;
+    try {
+        const existing = await getDb().query.interventionOccupancies.findFirst({
+            where: eq(interventionOccupancies.id, id),
+        });
+        if (!existing) {
+            return NextResponse.json({ error: "Intervention occupancy not found." }, { status: 404 });
+        }
+
+        const deleted = await removeInterventionOccupancyRecord(id, session.user.id);
+
+        await getDb().insert(auditLogs).values({
+            actorUserId: session.user.id,
+            action: "intervention_occupancy.deleted",
+            entityType: "intervention_occupancy",
+            entityId: id,
+            details: {
+                notes: parsed.data.notes,
+                doctorId: existing.doctorId,
+                startedAt: existing.startedAt.toISOString(),
+                endedAt: existing.endedAt?.toISOString() ?? null,
+                actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
+                shiftLabel: existing.shiftLabel,
+                continuityGroupId: existing.continuityGroupId,
+            },
+        });
+
+        return NextResponse.json({ occupancy: deleted });
+    } catch (error) {
+        return NextResponse.json(
+            { error: error instanceof Error ? error.message : "Unable to delete intervention occupancy." },
             { status: 400 },
         );
     }

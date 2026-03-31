@@ -1,6 +1,7 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import type { BankHoursDoctorHistory, BankHoursHistoryModel, BankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 
@@ -129,12 +130,40 @@ function renderProofLead(shift: BankHoursHistoryShift) {
 
 interface Props {
     history: BankHoursHistoryModel;
+    canManageOverrides: boolean;
 }
 
-export function BankHoursHistoryClient({ history }: Props) {
+function shiftKey(shift: BankHoursHistoryShift) {
+    return `${shift.domain}:${shift.occupancyId}`;
+}
+
+export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
+    const router = useRouter();
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
     const [selectedDoctorId, setSelectedDoctorId] = useState(history.doctors[0]?.doctorId ?? null);
+    const [overrideMinutesByShift, setOverrideMinutesByShift] = useState<Record<string, string>>({});
+    const [overrideNotesByShift, setOverrideNotesByShift] = useState<Record<string, string>>({});
+    const [overrideErrorsByShift, setOverrideErrorsByShift] = useState<Record<string, string>>({});
+    const [savingShiftKey, setSavingShiftKey] = useState<string | null>(null);
+    const [isSaving, startSavingTransition] = useTransition();
+
+    useEffect(() => {
+        const nextMinutes: Record<string, string> = {};
+        const nextNotes: Record<string, string> = {};
+
+        for (const doctor of history.doctors) {
+            for (const shift of doctor.shifts) {
+                nextMinutes[shiftKey(shift)] = String(shift.manualBalanceMinutes ?? shift.balanceMinutes ?? 0);
+                nextNotes[shiftKey(shift)] = shift.manualBalanceNotes ?? "";
+            }
+        }
+
+        setOverrideMinutesByShift(nextMinutes);
+        setOverrideNotesByShift(nextNotes);
+        setOverrideErrorsByShift({});
+        setSavingShiftKey(null);
+    }, [history.generatedAt, history.doctors]);
 
     const filteredDoctors = useMemo(() => {
         const normalized = normalizeSearch(deferredSearch);
@@ -161,6 +190,40 @@ export function BankHoursHistoryClient({ history }: Props) {
             setSelectedDoctorId(selectedDoctor.doctorId);
         }
     }, [filteredDoctors, selectedDoctor, selectedDoctorId]);
+
+    async function submitManualOverride(shift: BankHoursHistoryShift) {
+        const key = shiftKey(shift);
+        const rawMinutes = (overrideMinutesByShift[key] ?? "").trim();
+        const minutes = Number(rawMinutes);
+        const notes = (overrideNotesByShift[key] ?? "").trim();
+
+        if (!Number.isInteger(minutes)) {
+            throw new Error("Digite o saldo final em minutos inteiros, por exemplo 0, 30 ou -15.");
+        }
+
+        if (notes.length < 8) {
+            throw new Error("Explique o motivo com pelo menos 8 caracteres.");
+        }
+
+        const response = await fetch("/api/admin/bank-hours/overrides", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                domain: shift.domain,
+                occupancyId: shift.occupancyId,
+                balanceMinutes: minutes,
+                notes,
+            }),
+        });
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        if (!response.ok) {
+            throw new Error(body?.error || "Nao foi possivel salvar o ajuste manual.");
+        }
+
+        router.refresh();
+    }
 
     return (
         <main className="hours-shell">
@@ -401,6 +464,75 @@ export function BankHoursHistoryClient({ history }: Props) {
                                                 {shift.proof.items.map((item) => <li key={item}>{item}</li>)}
                                             </ul>
                                         </section>
+
+                                        {canManageOverrides && (
+                                            <section className="hours-override-box">
+                                                <div className="hours-override-header">
+                                                    <div>
+                                                        <span className="hours-proof-label">Ajuste manual do saldo</span>
+                                                        <strong>Forçar o saldo final desse plantão em minutos</strong>
+                                                    </div>
+                                                    {shift.manualBalanceMinutes !== null && (
+                                                        <span className="reports-badge warn">override ativo</span>
+                                                    )}
+                                                </div>
+
+                                                <p>
+                                                    Use quando o plantão deve permanecer no histórico, mas o saldo final precisa ser corrigido por decisão administrativa. O valor digitado passa a valer em saídas, na leitura de pagamento e nesta prova do banco.
+                                                </p>
+
+                                                <div className="hours-override-grid">
+                                                    <label className="hours-override-field compact">
+                                                        <span>Saldo final em minutos</span>
+                                                        <input
+                                                            type="number"
+                                                            value={overrideMinutesByShift[shiftKey(shift)] ?? ""}
+                                                            onChange={(event) => setOverrideMinutesByShift((current) => ({ ...current, [shiftKey(shift)]: event.target.value }))}
+                                                            disabled={isSaving}
+                                                        />
+                                                    </label>
+
+                                                    <label className="hours-override-field">
+                                                        <span>Motivo operacional</span>
+                                                        <textarea
+                                                            value={overrideNotesByShift[shiftKey(shift)] ?? ""}
+                                                            onChange={(event) => setOverrideNotesByShift((current) => ({ ...current, [shiftKey(shift)]: event.target.value }))}
+                                                            rows={3}
+                                                            placeholder="Ex.: saída existiu, mas esse plantão não gera banco por decisão auditada da coordenação"
+                                                            disabled={isSaving}
+                                                        />
+                                                    </label>
+                                                </div>
+
+                                                {overrideErrorsByShift[shiftKey(shift)] && (
+                                                    <div className="hours-override-error">{overrideErrorsByShift[shiftKey(shift)]}</div>
+                                                )}
+
+                                                <div className="hours-override-actions">
+                                                    <button
+                                                        type="button"
+                                                        className="payment-button primary"
+                                                        disabled={isSaving}
+                                                        onClick={() => {
+                                                            const key = shiftKey(shift);
+                                                            setSavingShiftKey(key);
+                                                            setOverrideErrorsByShift((current) => ({ ...current, [key]: "" }));
+                                                            startSavingTransition(() => {
+                                                                void submitManualOverride(shift).catch((error) => {
+                                                                    setOverrideErrorsByShift((current) => ({
+                                                                        ...current,
+                                                                        [key]: error instanceof Error ? error.message : "Falha ao salvar override do banco.",
+                                                                    }));
+                                                                    setSavingShiftKey(null);
+                                                                });
+                                                            });
+                                                        }}
+                                                    >
+                                                        {isSaving && savingShiftKey === shiftKey(shift) ? "Salvando..." : "Salvar saldo manual"}
+                                                    </button>
+                                                </div>
+                                            </section>
+                                        )}
 
                                         {shift.auditTrail.length > 0 && (
                                             <section className="hours-audit-box">

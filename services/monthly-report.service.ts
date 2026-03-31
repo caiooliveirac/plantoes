@@ -51,6 +51,7 @@ function mapPaymentAllocationAuditRow(row: Record<string, unknown>): PaymentAllo
         actualEndedAt: (row.actualEndedAt ?? null) as string | null,
         scheduledStartAt: (row.scheduledStartAt ?? null) as string | null,
         scheduledEndAt: (row.scheduledEndAt ?? null) as string | null,
+        continuityGroupId: (row.continuityGroupId ?? null) as string | null,
         shiftLabel: normalizePaymentShiftLabel(row.shiftLabel),
         roleLabel: (row.roleLabel ?? null) as string | null,
         ramalLabel: (row.ramalLabel ?? null) as string | null,

@@ -25,8 +25,9 @@ export default async function AdminBankHoursPage() {
         return <BankHoursUnavailable title="Banco indisponível" copy="Sem DATABASE_URL não existe histórico de banco de horas para consulta gerencial." />;
     }
 
+    let session;
     try {
-        await requireAuthenticatedSession(["admin", "chief"]);
+        session = await requireAuthenticatedSession(["admin", "chief"]);
     } catch (error) {
         if (error instanceof AuthError) {
             return (
@@ -41,5 +42,5 @@ export default async function AdminBankHoursPage() {
     }
 
     const history = await getBankHoursHistory();
-    return <BankHoursHistoryClient history={history} />;
+    return <BankHoursHistoryClient history={history} canManageOverrides={Boolean(session?.user.roles.includes("admin"))} />;
 }
