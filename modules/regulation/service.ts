@@ -13,6 +13,7 @@ export interface StartRegulationOccupancyInput {
     postId: number;
     continuityGroupId?: string | null;
     startedAt: Date;
+    boardStartedAt?: Date | null;
     scheduledStartAt?: Date | null;
     scheduledEndAt?: Date | null;
     shiftLabel?: string | null;
@@ -95,7 +96,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             scheduledStartAt: inferredScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
-            boardStartedAt: input.startedAt,
+            boardStartedAt: input.boardStartedAt ?? input.startedAt,
             shiftLabel: input.shiftLabel ?? null,
             roleLabel: input.roleLabel ?? null,
             ramalLabel: normalizeRegulationRamalLabel({

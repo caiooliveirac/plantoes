@@ -153,6 +153,7 @@ interface TelegramOperationalContinuityOccupancy {
     continuityGroupId: string;
     doctorId: string;
     startedAt: Date;
+    boardStartedAt: Date | null;
     endedAt: Date | null;
     actualEndedAt: Date | null;
     shiftLabel: string | null;
@@ -613,6 +614,7 @@ async function listTelegramDoctorOperationalOccupancies(doctorId: string) {
             continuityGroupId: occupancy.continuityGroupId,
             doctorId: occupancy.doctorId,
             startedAt: occupancy.startedAt,
+            boardStartedAt: occupancy.boardStartedAt,
             endedAt: occupancy.endedAt,
             actualEndedAt: occupancy.actualEndedAt,
             shiftLabel: occupancy.shiftLabel,
@@ -623,6 +625,7 @@ async function listTelegramDoctorOperationalOccupancies(doctorId: string) {
             continuityGroupId: occupancy.continuityGroupId,
             doctorId: occupancy.doctorId,
             startedAt: occupancy.startedAt,
+            boardStartedAt: occupancy.boardStartedAt,
             endedAt: occupancy.endedAt,
             actualEndedAt: occupancy.actualEndedAt,
             shiftLabel: occupancy.shiftLabel,
@@ -649,10 +652,14 @@ async function findTelegramContinuityContext(params: {
         })
         .sort(compareTelegramContinuitySource);
     const source = activeOccupancies[0] ?? recentClosed[0] ?? null;
-    const continuityStartedAt = source
+    const continuityChain = source
         ? eligible
             .filter((occupancy) => occupancy.continuityGroupId === source.continuityGroupId)
-            .sort((left, right) => left.startedAt.getTime() - right.startedAt.getTime())[0]?.startedAt ?? source.startedAt
+            .sort((left, right) => left.startedAt.getTime() - right.startedAt.getTime())
+        : [];
+    const carrier = continuityChain[0] ?? source;
+    const continuityStartedAt = carrier
+        ? (carrier.boardStartedAt ?? carrier.startedAt)
         : null;
 
     return {
@@ -3498,12 +3505,16 @@ async function applyParsedEntry(params: {
                 const continuationStartedAt = shouldUseContinuityContext
                     ? resolveOperationalShiftWindow(eventAt).startedAt
                     : eventAt;
+                const continuationBoardStartedAt = shouldUseContinuityContext && continuityContext?.source
+                    ? new Date(continuityContext.continuityStartedAt ?? continuityContext.source.startedAt)
+                    : undefined;
 
                 occupancyId = (await startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
                     postId: post.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: continuationStartedAt,
+                    boardStartedAt: continuationBoardStartedAt,
                     shiftLabel: parsed.shiftType,
                     roleLabel: parsed.roleFunction,
                     ramalLabel: parsed.baseCode,
@@ -3629,12 +3640,16 @@ async function applyParsedEntry(params: {
                 const continuationStartedAt = shouldUseContinuityContext
                     ? resolveOperationalShiftWindow(eventAt).startedAt
                     : eventAt;
+                const continuationBoardStartedAtIntv = shouldUseContinuityContext && continuityContext?.source
+                    ? new Date(continuityContext.continuityStartedAt ?? continuityContext.source.startedAt)
+                    : undefined;
 
                 occupancyId = (await startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,
                     baseId: base.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: continuationStartedAt,
+                    boardStartedAt: continuationBoardStartedAtIntv,
                     shiftLabel: parsed.shiftType,
                     roleLabel: parsed.roleFunction,
                     source: "telegram",
@@ -3691,8 +3706,10 @@ async function sendSuccessReply(
         const delayMs = eventAt.getTime() - shiftWindow.startedAt.getTime();
         const delayMin = Math.round(delayMs / 60000);
         if (delayMin > 0) {
+            const target = parsed.baseCode ?? "RAMAL/BASE";
             timeContextHint = `\n\n⏱ Registrado às *${time}* — ${delayMin}min após o início do turno (${shiftStartTime}).`
-                + "\nSe está *continuando* do turno anterior, avise: _Nome RAMAL/BASE continua SN/P_";
+                + `\nSe está *continuando* do turno anterior, corrija:`
+                + `\n_${doctorName} continuando ${target}_`;
         }
     }
 

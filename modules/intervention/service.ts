@@ -14,6 +14,7 @@ export interface StartInterventionOccupancyInput {
     baseId: number;
     continuityGroupId?: string | null;
     startedAt: Date;
+    boardStartedAt?: Date | null;
     scheduledStartAt?: Date | null;
     scheduledEndAt?: Date | null;
     shiftLabel?: string | null;
@@ -241,7 +242,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             scheduledStartAt: inferredScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
-            boardStartedAt: shouldTakeBoardImmediately || !existing ? input.startedAt : null,
+            boardStartedAt: shouldTakeBoardImmediately || !existing ? (input.boardStartedAt ?? input.startedAt) : null,
             shiftLabel: normalizedShiftLabel,
             roleLabel: input.roleLabel ?? null,
             source: input.source,
@@ -264,7 +265,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
 
             await tx.update(interventionOccupancies)
                 .set({
-                    boardStartedAt: input.startedAt,
+                    boardStartedAt: input.boardStartedAt ?? input.startedAt,
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
                 })

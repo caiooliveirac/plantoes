@@ -630,7 +630,7 @@ function mapRegulationDoctor(row: OperationalBoard["regulation"][number], mode: 
         ramal: normalizeRamal(row.postCode),
         name: row.doctorName?.trim() || row.displayName?.trim() || row.postCode,
         domain: "regulation",
-        startedAt: row.startedAt,
+        startedAt: row.boardStartedAt ?? row.startedAt,
         shiftLabel: effectiveShiftLabel,
         roleLabel: resolveOperationalRoleLabel({
             domain: "regulation",
