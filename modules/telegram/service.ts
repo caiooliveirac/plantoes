@@ -2587,6 +2587,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "━━━━━━━━━━━━━━━━━━",
             "📌 *Comandos disponíveis:*",
             "",
+            "  /cobrar — lembra a equipe do formato correto",
             "  /almoco — inicia divisão de almoço",
             "  /jantar — inicia divisão de jantar",
             "  /prioridade — mostra ordem de escolha",
@@ -2605,6 +2606,44 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         });
         await sendMessage(message.chat.id, helpText, message.message_id);
         return { ok: true, help: true };
+    }
+
+    if (normalizedText === "/cobrar") {
+        const cobrarText = [
+            "📢 *Atenção equipe!*",
+            "",
+            "Para eu preencher certo no sistema, por favor *sempre* avisem:",
+            "  ▸ Nome completo",
+            "  ▸ Base ou ramal",
+            "  ▸ SD, SN ou P",
+            "  ▸ Horário",
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "📌 *Exemplos:*",
+            "",
+            "▸ Intervenção:",
+            "  _Felipe Carvalho PM04 SN 19:00_",
+            "",
+            "▸ Regulação:",
+            "  _Luana Bordoni 2031 SN 19:00_",
+            "",
+            "▸ Se continua no posto:",
+            "  _Karla Pinto BR05 continua P 19:00_",
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "⚠️ Se a pessoa *segue* no posto, escrevam *continua*.",
+            "Se *assumiu agora*, escrevam *SD*, *SN* ou *P* na mesma linha.",
+            "",
+            "Sem aviso de continua/P ou ajuste da chefia,",
+            "a posição fica como *sem médico confirmado* no grupo.",
+        ].join("\n");
+
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "cobrar_command",
+        });
+        await sendMessage(message.chat.id, cobrarText);
+        return { ok: true, cobrar: true };
     }
 
     if (normalizedText === "/status" || normalizedText === "/meuturno") {
