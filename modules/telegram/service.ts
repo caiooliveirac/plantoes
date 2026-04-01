@@ -3495,11 +3495,15 @@ async function applyParsedEntry(params: {
                     });
                 }
 
+                const continuationStartedAt = shouldUseContinuityContext
+                    ? resolveOperationalShiftWindow(eventAt).startedAt
+                    : eventAt;
+
                 occupancyId = (await startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
                     postId: post.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
-                    startedAt: eventAt,
+                    startedAt: continuationStartedAt,
                     shiftLabel: parsed.shiftType,
                     roleLabel: parsed.roleFunction,
                     ramalLabel: parsed.baseCode,
@@ -3622,11 +3626,15 @@ async function applyParsedEntry(params: {
                     });
                 }
 
+                const continuationStartedAt = shouldUseContinuityContext
+                    ? resolveOperationalShiftWindow(eventAt).startedAt
+                    : eventAt;
+
                 occupancyId = (await startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,
                     baseId: base.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
-                    startedAt: eventAt,
+                    startedAt: continuationStartedAt,
                     shiftLabel: parsed.shiftType,
                     roleLabel: parsed.roleFunction,
                     source: "telegram",
@@ -3673,10 +3681,25 @@ async function sendSuccessReply(
             time,
         },
     );
-    const arrivalHint = replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded"
+
+    let timeContextHint = "";
+    if (replyKind === "continuation_recorded" || forceContinuation) {
+        timeContextHint = `\n\n🔗 Continuação detectada — computado desde *${time}* (turno anterior), sem atraso.`;
+    } else if (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") {
+        const shiftWindow = resolveOperationalShiftWindow(eventAt);
+        const shiftStartTime = shiftWindow.startedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
+        const delayMs = eventAt.getTime() - shiftWindow.startedAt.getTime();
+        const delayMin = Math.round(delayMs / 60000);
+        if (delayMin > 0) {
+            timeContextHint = `\n\n⏱ Registrado às *${time}* — ${delayMin}min após o início do turno (${shiftStartTime}).`
+                + "\nSe está *continuando* do turno anterior, avise: _Nome RAMAL/BASE continua SN/P_";
+        }
+    }
+
+    const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint
         ? "\n\n💡 Se trocar de ramal ou base, mande nova chegada no mesmo formato."
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${arrivalHint}`, replyToMessageId);
+    await sendMessage(chatId, `${text}${approximateMatchHint}${timeContextHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
