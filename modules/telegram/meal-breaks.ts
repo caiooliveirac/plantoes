@@ -3079,6 +3079,11 @@ export async function updateDayMealBreakEligibility(params: {
 }
 
 export async function sendTelegramMealBreakCycle(referenceDate = new Date()) {
+    // Meal-break sessions must be started manually via /almoco or /jantar.
+    // Automatic start was disabled to avoid interrupting the operational flow.
+    return { sent: 0, evaluated: 0 };
+
+    /* eslint-disable no-unreachable -- preserved for future reference */
     if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) {
         return { sent: 0, evaluated: 0 };
     }
@@ -3131,6 +3136,7 @@ export async function sendTelegramMealBreakCycle(referenceDate = new Date()) {
     }
 
     return { sent, evaluated };
+    /* eslint-enable no-unreachable */
 }
 
 export async function sendTelegramMealBreakMessages(params: {

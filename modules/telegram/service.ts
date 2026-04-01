@@ -3121,6 +3121,16 @@ async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
         return null;
     }
 
+    // If the message parses as an operational arrival/departure, let normal
+    // processing handle it instead of consuming it as a meal-break reply.
+    const operationalEntries = parseMessageMulti(message.text).filter(isOperationalParsedEntry);
+    if (operationalEntries.length > 0) {
+        return null;
+    }
+    if (looksLikeDepartureMessage(message.text)) {
+        return null;
+    }
+
     try {
         const result = await handleTelegramMealBreakReply({
             chatId: String(message.chat.id),
