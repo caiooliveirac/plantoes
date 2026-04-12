@@ -3786,6 +3786,82 @@ body {
     overflow: visible;
 }
 
+.chief-payable-order-legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px dashed rgba(164, 186, 219, 0.28);
+    background: rgba(9, 15, 25, 0.82);
+}
+
+.chief-payable-order-legend span {
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    font-weight: 700;
+}
+
+.chief-payable-order-legend strong {
+    font-size: 0.78rem;
+    letter-spacing: 0.1em;
+    color: #cfe0fb;
+}
+
+.chief-payable-target-sectors {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.chief-payable-target-sector {
+    display: grid;
+    gap: 10px;
+    align-content: start;
+    padding: 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(216, 225, 236, 0.12);
+    background: rgba(7, 12, 20, 0.82);
+}
+
+.chief-payable-target-sector header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.chief-payable-target-sector h4 {
+    margin: 0;
+    font-size: 0.74rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted-strong);
+}
+
+.chief-payable-target-sector small {
+    color: var(--muted);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+}
+
+.chief-payable-target-sector.usa {
+    border-color: rgba(255, 178, 96, 0.3);
+    background: linear-gradient(180deg, rgba(37, 23, 11, 0.76), rgba(16, 12, 20, 0.82));
+}
+
+.chief-payable-target-sector.regulation {
+    border-color: rgba(98, 168, 255, 0.3);
+    background: linear-gradient(180deg, rgba(13, 25, 44, 0.78), rgba(9, 13, 22, 0.84));
+}
+
+.chief-payable-target-sector.intervention {
+    border-color: rgba(74, 197, 169, 0.3);
+    background: linear-gradient(180deg, rgba(11, 30, 31, 0.78), rgba(8, 15, 20, 0.84));
+}
+
 .chief-payable-chip {
     min-height: 36px;
     padding: 0 12px;
@@ -3799,6 +3875,12 @@ body {
     letter-spacing: 0.08em;
     cursor: pointer;
     transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.chief-payable-target-sector .chief-payable-chip {
+    min-height: 38px;
+    font-size: 0.76rem;
+    letter-spacing: 0.07em;
 }
 
 .chief-payable-chip-row-priority .chief-payable-chip {
@@ -4068,6 +4150,10 @@ button.chief-payable-tag:focus-visible {
     }
 
     .chief-payable-control-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .chief-payable-target-sectors {
         grid-template-columns: 1fr;
     }
 

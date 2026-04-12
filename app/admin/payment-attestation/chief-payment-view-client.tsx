@@ -13,6 +13,50 @@ type ShiftFilter = "all" | "SD" | "SN";
 type DomainFilter = "all" | "regulation" | "intervention";
 type SortMode = "name" | "total" | "pending" | "sd" | "sn";
 
+const TARGET_PRIORITY_NUMBERS = [1, 2, 3, 4, 5, 10, 20] as const;
+
+function parseTargetPriority(code: string) {
+    const match = code.match(/(\d{1,2})(?!.*\d)/);
+    if (!match) {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    const value = Number(match[1]);
+    if (!Number.isFinite(value)) {
+        return Number.POSITIVE_INFINITY;
+    }
+
+    return value;
+}
+
+function targetCodeRank(code: string) {
+    const numeric = parseTargetPriority(code);
+    const priorityIndex = TARGET_PRIORITY_NUMBERS.findIndex((entry) => entry === numeric);
+
+    return {
+        priorityIndex: priorityIndex === -1 ? Number.POSITIVE_INFINITY : priorityIndex,
+        numeric,
+    };
+}
+
+function targetComparator(
+    left: { targetCode: string; targetLabel: string },
+    right: { targetCode: string; targetLabel: string },
+) {
+    const leftRank = targetCodeRank(left.targetCode);
+    const rightRank = targetCodeRank(right.targetCode);
+
+    if (leftRank.priorityIndex !== rightRank.priorityIndex) {
+        return leftRank.priorityIndex - rightRank.priorityIndex;
+    }
+
+    if (leftRank.numeric !== rightRank.numeric) {
+        return leftRank.numeric - rightRank.numeric;
+    }
+
+    return left.targetCode.localeCompare(right.targetCode, "pt-BR") || left.targetLabel.localeCompare(right.targetLabel, "pt-BR");
+}
+
 function normalize(value: string) {
     return value
         .normalize("NFD")
@@ -65,6 +109,25 @@ export function ChiefPaymentViewClient({ board }: Props) {
 
         return filtered;
     }, [board.targetOptions, domainFilter, normalizedTarget]);
+
+    const targetSectors = useMemo(() => {
+        const base = targetPills
+            .map((target) => ({
+                ...target,
+                isUsa: normalize(`${target.targetCode} ${target.targetLabel}`).includes("usa"),
+            }))
+            .sort(targetComparator);
+
+        const usa = base.filter((target) => target.isUsa);
+        const regulation = base.filter((target) => target.domain === "regulation" && !target.isUsa);
+        const intervention = base.filter((target) => target.domain === "intervention" && !target.isUsa);
+
+        return [
+            { key: "usa", title: "Setor USA", tone: "usa", targets: usa },
+            { key: "regulation", title: "Setor Regulação", tone: "regulation", targets: regulation },
+            { key: "intervention", title: "Setor Intervenção", tone: "intervention", targets: intervention },
+        ].filter((sector) => sector.targets.length > 0);
+    }, [targetPills]);
 
     const filterSummary = useMemo(() => {
         const readyDoctors = board.doctors.filter((doctor) => doctor.paymentStatus === "ready_for_payment").length;
@@ -432,21 +495,37 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         </button>
                     </div>
 
-                    <div className="chief-payable-chip-row chief-payable-target-pills">
-                        {targetPills.map((target) => {
-                            const value = `${target.domain}|${target.targetCode}`;
-                            return (
-                                <button
-                                    type="button"
-                                    key={value}
-                                    className={`chief-payable-chip ${targetFilter === value ? "active" : ""}`.trim()}
-                                    onClick={() => setTargetFilter(value)}
-                                    title={`${target.targetCode} · ${target.targetLabel}`}
-                                >
-                                    {target.targetCode} ({target.domain === "regulation" ? "Reg" : "Int"})
-                                </button>
-                            );
-                        })}
+                    <div className="chief-payable-order-legend" aria-label="Ordem operacional prioritária">
+                        <span>Ordem rápida</span>
+                        <strong>01 · 02 · 03 · 04 · 05 · 10 · 20</strong>
+                    </div>
+
+                    <div className="chief-payable-target-sectors">
+                        {targetSectors.map((sector) => (
+                            <section key={sector.key} className={`chief-payable-target-sector ${sector.tone}`.trim()}>
+                                <header>
+                                    <h4>{sector.title}</h4>
+                                    <small>{sector.targets.length} unidades</small>
+                                </header>
+
+                                <div className="chief-payable-chip-row chief-payable-target-pills">
+                                    {sector.targets.map((target) => {
+                                        const value = `${target.domain}|${target.targetCode}`;
+                                        return (
+                                            <button
+                                                type="button"
+                                                key={value}
+                                                className={`chief-payable-chip ${targetFilter === value ? "active" : ""}`.trim()}
+                                                onClick={() => setTargetFilter(value)}
+                                                title={`${target.targetCode} · ${target.targetLabel}`}
+                                            >
+                                                {target.targetCode} ({target.domain === "regulation" ? "Reg" : "Int"})
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </section>
+                        ))}
                     </div>
                 </article>
 
