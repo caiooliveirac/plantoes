@@ -1,4 +1,5 @@
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import {
     sortTelegramInterventionCodes,
     sortTelegramInterventionTargetRows,
@@ -70,7 +71,9 @@ function summarizeIssues(issues: string[]) {
         .map((issue) => issue
             .replace(/Plantao/g, "Plantão")
             .replace(/saida/g, "saída")
-            .replace(/consolidada/g, "consolidada"))
+            .replace(/consolidada/g, "consolidada")
+            .replace(/Lancamento manual ou corrigido manualmente/gi, "manual")
+            .replace(/sem saída consolidada/gi, "sem saída"))
         .join("; ");
 }
 
@@ -138,7 +141,7 @@ function resolveBankHoursLabel(row: PaymentAllocationRow) {
     }
 
     if (detailParts.length === 0) {
-        detailParts.push("sem impacto");
+        return "BH 0";
     }
 
     return `BH ${formatDuration(metrics.balanceMinutes, true)} (${detailParts.join(", ")})`;
@@ -149,7 +152,11 @@ function buildDepartureReportLine(row: PaymentAllocationRow) {
         return `⚪ ${row.targetCode} | --:-- | sem ocupação definida | --:-- | BH pendente`;
     }
 
-    const name = row.displayName ?? row.doctorName ?? "médico não identificado";
+    const name = formatDoctorSurfaceName({
+        fullName: row.doctorName,
+        displayName: row.displayName,
+        fallback: "médico não identificado",
+    });
     const visibleIssues = row.continuesBeyondShift
         ? row.issues.filter((issue) => !/sem saida consolidada/i.test(issue))
         : row.issues;
@@ -226,11 +233,25 @@ export function buildTelegramDepartureReport(board: PaymentAllocationBoard) {
         ? ["", "Intervenção:", interventionAssigned.map(buildDepartureReportLine).join("\n")]
         : [];
     const emptyBlock = emptyTargets.length > 0
-        ? ["", `Vazios: ${emptyTargets.join(", ")}`]
+        ? ["", `Vazios (${emptyTargets.length}): ${emptyTargets.join(", ")}`]
         : [];
     const disabledBlock = disabledTargets.length > 0
         ? ["", "Desativadas:", disabledTargets.map(buildDisabledDepartureLine).join("\n")]
         : [];
 
-    return [...header, ...regulationBlock, ...interventionBlock, ...emptyBlock, ...disabledBlock].join("\n");
+    const allAssigned = [...regulationAssigned, ...interventionAssigned];
+    const totalCredit = allAssigned.reduce((sum, row) => {
+        const bh = resolveReportedBankHours(row);
+        const balance = bh.balanceMinutes ?? 0;
+        return balance > 0 ? sum + balance : sum;
+    }, 0);
+    const totalDebit = allAssigned.reduce((sum, row) => {
+        const bh = resolveReportedBankHours(row);
+        const balance = bh.balanceMinutes ?? 0;
+        return balance < 0 ? sum + balance : sum;
+    }, 0);
+    const totalNet = totalCredit + totalDebit;
+    const bhFooter = ["", `BH turno: ${formatDuration(totalCredit, true)} crédito, ${formatDuration(totalDebit, true)} débito, saldo ${formatDuration(totalNet, true)}`];
+
+    return [...header, ...regulationBlock, ...interventionBlock, ...emptyBlock, ...disabledBlock, ...bhFooter].join("\n");
 }

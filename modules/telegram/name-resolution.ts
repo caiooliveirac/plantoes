@@ -7,6 +7,7 @@ export interface TelegramDoctorDirectoryEntry {
     id: string;
     fullName: string;
     displayName: string | null;
+    aliases?: string[];
     normalizedName: string;
     isActive?: boolean;
 }
@@ -15,6 +16,7 @@ export interface TelegramDoctorCandidate {
     id: string;
     fullName: string;
     displayName: string | null;
+    aliases?: string[];
     normalizedName: string;
     isActive?: boolean;
     score: number;
@@ -26,7 +28,7 @@ export function pickConfidentDoctorCandidate(query: string, candidates: Telegram
     }
 
     const [first, second] = candidates;
-    if (isExactCandidateMatch(query, first)) {
+    if (isExactCandidateMatch(query, first) && !(second && isExactCandidateMatch(query, second))) {
         return first;
     }
 
@@ -35,7 +37,7 @@ export function pickConfidentDoctorCandidate(query: string, candidates: Telegram
     const hasTwoOrMoreTokens = queryTokens.length >= 2;
 
     if (candidates.length === 1) {
-        return first.score >= 150 ? first : null;
+        return first.score >= 100 ? first : null;
     }
 
     if (hasTwoOrMoreTokens && first.score >= 220 && lead >= 25) {
@@ -56,7 +58,8 @@ export function pickConfidentDoctorCandidate(query: string, candidates: Telegram
 function tokenizeName(value: string) {
     return normalizeDoctorName(value)
         .split(/\s+/)
-        .filter((token) => token.length >= 2 && !NAME_PARTICLES.has(token));
+        .filter((token) => token.length >= 2 && !NAME_PARTICLES.has(token))
+        .map((token) => token.replace(/Y/g, "I"));
 }
 
 function hasAmbiguousFrequentPrefix(query: string) {
@@ -71,45 +74,45 @@ function hasAmbiguousFrequentPrefix(query: string) {
 function isExactCandidateMatch(query: string, candidate: TelegramDoctorCandidate) {
     const normalizedQuery = normalizeDoctorName(query);
     const normalizedDisplayName = candidate.displayName ? normalizeDoctorName(candidate.displayName) : "";
-    return candidate.normalizedName === normalizedQuery || normalizedDisplayName === normalizedQuery;
+    const normalizedAliases = (candidate.aliases ?? []).map((alias) => normalizeDoctorName(alias));
+    return candidate.normalizedName === normalizedQuery
+        || normalizedDisplayName === normalizedQuery
+        || normalizedAliases.includes(normalizedQuery);
 }
 
-export function scoreDoctorCandidate(query: string, doctor: TelegramDoctorDirectoryEntry) {
+function scoreCandidateVariant(query: string, variant: string | null | undefined) {
     const normalizedQuery = normalizeDoctorName(query);
-    if (!normalizedQuery) {
+    const normalizedVariant = normalizeDoctorName(variant ?? "");
+    if (!normalizedQuery || !normalizedVariant) {
         return 0;
     }
 
-    const doctorTokens = tokenizeName(doctor.fullName);
-    const queryTokens = tokenizeName(query);
-    const displayNormalized = doctor.displayName ? normalizeDoctorName(doctor.displayName) : "";
-
-    if (doctor.normalizedName === normalizedQuery) {
+    if (normalizedVariant === normalizedQuery) {
         return 1000;
     }
 
+    const variantTokens = tokenizeName(variant ?? "");
+    const queryTokens = tokenizeName(query);
     let score = 0;
-    if (doctor.normalizedName.includes(normalizedQuery)) {
+
+    if (normalizedVariant.includes(normalizedQuery)) {
         score += 220;
     }
-    if (displayNormalized && displayNormalized.includes(normalizedQuery)) {
-        score += 200;
-    }
 
-    const matchedTokens = queryTokens.filter((token) => doctorTokens.includes(token));
+    const matchedTokens = queryTokens.filter((token) => variantTokens.includes(token));
     score += matchedTokens.length * 70;
 
-    if (queryTokens[0] && doctorTokens[0] === queryTokens[0]) {
+    if (queryTokens[0] && variantTokens[0] === queryTokens[0]) {
         score += 55;
     }
-    if (queryTokens.at(-1) && doctorTokens.at(-1) === queryTokens.at(-1)) {
+    if (queryTokens.at(-1) && variantTokens.at(-1) === queryTokens.at(-1)) {
         score += 55;
     }
 
     if (
         queryTokens.length >= 2
-        && doctorTokens[0] === queryTokens[0]
-        && doctorTokens.includes(queryTokens.at(-1) as string)
+        && variantTokens[0] === queryTokens[0]
+        && variantTokens.includes(queryTokens.at(-1) as string)
     ) {
         score += 80;
     }
@@ -119,6 +122,19 @@ export function scoreDoctorCandidate(query: string, doctor: TelegramDoctorDirect
     }
 
     return score;
+}
+
+export function scoreDoctorCandidate(query: string, doctor: TelegramDoctorDirectoryEntry) {
+    const normalizedQuery = normalizeDoctorName(query);
+    if (!normalizedQuery) {
+        return 0;
+    }
+
+    return Math.max(
+        scoreCandidateVariant(query, doctor.fullName),
+        scoreCandidateVariant(query, doctor.displayName),
+        ...(doctor.aliases ?? []).map((alias) => scoreCandidateVariant(query, alias)),
+    );
 }
 
 export function resolveDoctorCandidates(

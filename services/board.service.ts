@@ -1,3 +1,26 @@
+/**
+ * Operational Board Service (read model)
+ *
+ * Purpose: Builds the real-time operational board view from regulation/intervention
+ * occupancies. Also provides payment allocation board and bank-hours summaries.
+ *
+ * Source of truth for: board display state (active/pending occupants per slot),
+ * payment allocation heuristics, bank-hours balance per doctor.
+ *
+ * Key exports:
+ *   - getOperationalBoard() — full board for a given shift window
+ *   - getPaymentAllocationBoard() — payment-focused view with candidate ranking
+ *
+ * DANGER: Hidden business rules embedded in SQL queries and row transformations.
+ * Bank-hours calculations depend on continuity group resolution which can span
+ * multiple shifts. Payment allocation uses a multi-factor heuristic (see
+ * docs/bug-hotspots.md for known edge cases).
+ *
+ * Invariants:
+ *   - Board rows are always scoped to a single operational shift window (SD/SN)
+ *   - Disabled slots appear explicitly (disabledEntireShift = true)
+ *   - Regulation posts with isNucleo=true get special pending-label logic
+ */
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
@@ -10,6 +33,7 @@ import {
   inferOperationalScheduledStartAt,
   inferRegulationScheduledEndAt,
 } from "@/modules/operational/rules";
+import { isNucleoRegulationPost, resolvePendingRegulationOccupantLabel } from "@/modules/operational/board-display";
 import { calculateBankHours } from "@/modules/bank-hours/calculator";
 import { buildContinuityBankHoursSpan } from "@/modules/bank-hours/continuity";
 import {
@@ -36,7 +60,9 @@ export interface RegulationBoardRow {
   shiftLabel: "SD" | "SN" | "P" | null;
   roleLabel: string | null;
   ramalLabel: string | null;
-  status: "active" | "waiting";
+  status: "active" | "waiting" | "disabled";
+  disabledAt?: string | null;
+  disabledReason?: string | null;
   liveSource: "operations_v2" | "legacy_live" | "none";
   liveUpdatedAt: string | null;
 }
@@ -111,11 +137,13 @@ export type PaymentAllocationStatus = "ready_for_payment" | "needs_review";
 
 export interface PaymentAllocationTargetDefinition {
   domain: "regulation" | "intervention";
+  targetId?: number | null;
   targetCode: string;
   targetLabel: string;
   sortOrder: number;
   defaultRole: string | null;
   disabledAt?: string | null;
+  reactivatedAt?: string | null;
   disabledReason?: string | null;
   disabledDuringShift?: boolean;
   disabledEntireShift?: boolean;
@@ -153,6 +181,7 @@ type PreviousOperationalRawRow = PaymentAllocationRawRow;
 
 export interface PaymentAllocationRow {
   domain: "regulation" | "intervention";
+  targetId?: number | null;
   targetCode: string;
   targetLabel: string;
   sortOrder: number;
@@ -174,6 +203,7 @@ export interface PaymentAllocationRow {
   roleLabel: string | null;
   ramalLabel: string | null;
   source: string | null;
+  notes?: string | null;
   candidateCount: number;
   paymentStatus: PaymentAllocationStatus;
   issues: string[];
@@ -215,6 +245,93 @@ export interface PaymentAllocationBoard {
   };
   regulation: PaymentAllocationRow[];
   intervention: PaymentAllocationRow[];
+}
+
+export interface OperationalSlotPresenceRow {
+  domain: "regulation" | "intervention";
+  targetId?: number | null;
+  targetCode: string;
+  targetLabel: string;
+  sortOrder: number;
+  defaultRole: string | null;
+  disabledAt?: string | null;
+  disabledReason?: string | null;
+  disabledDuringShift?: boolean;
+  disabledEntireShift?: boolean;
+  status: "occupied" | "empty" | "disabled";
+  doctorId: string | null;
+  doctorName: string | null;
+  displayName: string | null;
+  doctorLabel: string;
+  occupantLabels: string[];
+  occupancyIds: string[];
+  occupancyCount: number;
+}
+
+export interface OperationalSlotPresenceBoard {
+  generatedAt: string;
+  operationalDate: string;
+  shiftLabel: "SD" | "SN";
+  startedAt: string;
+  endedAt: string;
+  summary: {
+    totalTargets: number;
+    occupiedCount: number;
+    emptyCount: number;
+    disabledCount: number;
+  };
+  regulation: OperationalSlotPresenceRow[];
+  intervention: OperationalSlotPresenceRow[];
+}
+
+export interface HistoricalOperationalPresenceRow {
+  domain: "regulation" | "intervention";
+  targetId?: number | null;
+  targetCode: string;
+  targetLabel: string;
+  sortOrder: number;
+  defaultRole: string | null;
+  disabledAt?: string | null;
+  disabledReason?: string | null;
+  disabledDuringShift?: boolean;
+  disabledEntireShift?: boolean;
+  status: "occupied" | "empty" | "disabled";
+  occupancyId: string | null;
+  doctorId: string | null;
+  doctorName: string | null;
+  displayName: string | null;
+  doctorLabel: string;
+  occupantLabels: string[];
+  occupancyIds: string[];
+  occupancyCount: number;
+  startedAt: string | null;
+  endedAt: string | null;
+  actualEndedAt: string | null;
+  scheduledStartAt: string | null;
+  scheduledEndAt: string | null;
+  shiftLabel: "SD" | "SN" | "P" | null;
+  roleLabel: string | null;
+  ramalLabel: string | null;
+  source: string | null;
+  notes: string | null;
+  arrivalDelayMinutes: number | null;
+  issues: string[];
+}
+
+export interface HistoricalOperationalPresenceBoard {
+  generatedAt: string;
+  operationalDate: string;
+  shiftLabel: "SD" | "SN";
+  startedAt: string;
+  endedAt: string;
+  summary: {
+    totalTargets: number;
+    occupiedCount: number;
+    emptyCount: number;
+    disabledCount: number;
+  };
+  regulation: HistoricalOperationalPresenceRow[];
+  intervention: HistoricalOperationalPresenceRow[];
 }
 
 type LogicalShiftSlot = "SD" | "SN";
@@ -370,6 +487,27 @@ function isBotGeneratedNoise(notes: string | null | undefined) {
     || normalized.includes("DEBUG COMMAND CORRECTION");
 }
 
+/**
+ * Detects phantom zero-duration occupancies created by Telegram board-takeover
+ * race conditions. These records have started_at = ended_at = actualEndedAt and
+ * carry no real operational meaning — they pollute the candidate pipeline, create
+ * false "registros redundantes" issues, and contaminate bank hours entries.
+ *
+ * Occupancies where actualEndedAt differs from startedAt represent real work (the
+ * doctor was physically present) even if ended_at was set to startedAt by the
+ * board-takeover logic — these MUST NOT be filtered.
+ */
+function isTrueZeroDurationPhantom(row: PreviousOperationalRawRow): boolean {
+  if (!row.endedAt) return false;
+  const startMs = new Date(row.startedAt).getTime();
+  const endMs = new Date(row.endedAt).getTime();
+  if (startMs !== endMs) return false;
+  const effectiveEndMs = row.actualEndedAt
+    ? new Date(row.actualEndedAt).getTime()
+    : endMs;
+  return effectiveEndMs === startMs;
+}
+
 function hasDepartureEvidence(notes: string | null | undefined) {
   const normalized = normalizeFreeText(notes);
   return normalized.includes("SAIDA")
@@ -390,6 +528,23 @@ function resolveLogicalAnchorAt(row: PreviousOperationalRawRow) {
       && scheduleDriftMinutes <= MAX_SCHEDULE_DRIFT_MINUTES
     ) {
       return scheduledStartAt;
+    }
+
+    if (row.shiftLabel && row.shiftLabel !== "P") {
+      const startedAtSlotLabel = resolveSlotLabelFromStart(resolveSlotStartByTolerance(new Date(row.startedAt)));
+      const scheduledSlotLabel = resolveSlotLabelFromStart(resolveSlotStartByTolerance(scheduledStartAt));
+      if (startedAtSlotLabel !== row.shiftLabel && scheduledSlotLabel === row.shiftLabel) {
+        return scheduledStartAt;
+      }
+    }
+  }
+
+  if (row.boardStartedAt && row.shiftLabel && row.shiftLabel !== "P") {
+    const boardStartedAt = new Date(row.boardStartedAt);
+    const startedAtSlotLabel = resolveSlotLabelFromStart(resolveSlotStartByTolerance(new Date(row.startedAt)));
+    const boardSlotLabel = resolveSlotLabelFromStart(resolveSlotStartByTolerance(boardStartedAt));
+    if (startedAtSlotLabel !== row.shiftLabel && boardSlotLabel === row.shiftLabel) {
+      return boardStartedAt;
     }
   }
 
@@ -418,6 +573,8 @@ function resolvePreviousOperationalDate(reference = new Date()) {
 }
 
 function mapRegulationRow(row: Record<string, unknown>): RegulationBoardRow {
+  const rawStatus = String(row.status ?? "waiting");
+
   return {
     postId: Number(row.postId ?? row.post_id),
     occupancyId: (row.occupancyId ?? row.occupancy_id ?? null) as string | null,
@@ -433,7 +590,9 @@ function mapRegulationRow(row: Record<string, unknown>): RegulationBoardRow {
     shiftLabel: (row.shiftLabel ?? row.shift_label ?? null) as RegulationBoardRow["shiftLabel"],
     roleLabel: (row.roleLabel ?? row.role_label ?? null) as string | null,
     ramalLabel: (row.ramalLabel ?? row.ramal_label ?? null) as string | null,
-    status: String(row.status ?? "waiting") === "active" ? "active" : "waiting",
+    status: rawStatus === "disabled" ? "disabled" : rawStatus === "active" ? "active" : "waiting",
+    disabledAt: (row.disabledAt ?? row.disabled_at ?? null) as string | null,
+    disabledReason: (row.disabledReason ?? row.disabled_reason ?? null) as string | null,
     liveSource: (row.liveSource ?? row.live_source ?? "none") as RegulationBoardRow["liveSource"],
     liveUpdatedAt: (row.liveUpdatedAt ?? row.live_updated_at ?? null) as string | null,
   };
@@ -565,7 +724,7 @@ function isPlausibleSuccessorStart(row: PreviousOperationalRawRow) {
 
   const effectiveEndedAt = row.actualEndedAt ?? row.endedAt ?? null;
   const durationMinutes = resolveDurationMinutes(row.startedAt, effectiveEndedAt);
-  if (durationMinutes !== null && durationMinutes < MIN_TITULAR_DURATION_MINUTES) {
+  if (effectiveEndedAt !== null && (durationMinutes === null || durationMinutes < MIN_TITULAR_DURATION_MINUTES)) {
     return false;
   }
 
@@ -680,7 +839,7 @@ function demoteRegulationRowToWaiting(row: RegulationBoardRow): RegulationBoardR
     shiftLabel: null,
     roleLabel: null,
     ramalLabel: row.postCode,
-    status: "waiting",
+    status: row.status === "disabled" ? "disabled" : "waiting",
     liveSource: "none",
     liveUpdatedAt: null,
   };
@@ -1135,6 +1294,19 @@ export async function listRegulationBoard() {
         and cs.ramal is not null
         and coalesce(si.scheduled_end_at, si.scheduled_start_at + interval '18 hours', now()) >= now() - interval '6 hours'
         and coalesce(si.scheduled_start_at, now()) <= now() + interval '6 hours'
+    ),
+    active_deactivations as (
+      select
+        rpd.post_id,
+        rpd.deactivated_at,
+        rpd.notes,
+        row_number() over (
+          partition by rpd.post_id
+          order by rpd.deactivated_at desc, rpd.created_at desc
+        ) as row_rank
+      from operations_v2.regulation_post_deactivations rpd
+      where rpd.reactivated_at is null
+        and rpd.deactivated_at <= now()
     )
     select
       rp.id as "postId",
@@ -1142,43 +1314,22 @@ export async function listRegulationBoard() {
       rp.code as "postCode",
       rp.label as "postLabel",
       rp.default_role as "defaultRole",
+      case when ro.id is not null or lr.post_code is not null then coalesce(d.id, lr.doctor_id) else null end as "doctorId",
+      case when ro.id is not null or lr.post_code is not null then coalesce(d.full_name, lr.doctor_name) else null end as "doctorName",
+      case when ro.id is not null or lr.post_code is not null then coalesce(d.display_name, lr.display_name) else null end as "displayName",
+      case when ro.id is not null or lr.post_code is not null then coalesce(ro.started_at, lr.started_at) else null end as "startedAt",
+      case when ro.id is not null or lr.post_code is not null then coalesce(ro.board_started_at, lr.board_started_at) else null end as "boardStartedAt",
+      case when ro.id is not null or lr.post_code is not null then coalesce(ro.scheduled_end_at, lr.scheduled_end_at) else null end as "scheduledEndAt",
+      case when ro.id is not null or lr.post_code is not null then ro.shift_label else null end as "shiftLabel",
+      case when ro.id is not null or lr.post_code is not null then coalesce(ro.role_label, lr.role_label) else null end as "roleLabel",
+      case when ro.id is not null or lr.post_code is not null then coalesce(ro.ramal_label, lr.ramal_label, rp.code) else rp.code end as "ramalLabel",
+      ad.deactivated_at as "disabledAt",
+      ad.notes as "disabledReason",
       case
-        when ro.id is not null and ro.source <> 'import' then d.id
-        else coalesce(lr.doctor_id, d.id)
-      end as "doctorId",
-      case
-        when ro.id is not null and ro.source <> 'import' then d.full_name
-        else coalesce(lr.doctor_name, d.full_name)
-      end as "doctorName",
-      case
-        when ro.id is not null and ro.source <> 'import' then d.display_name
-        else coalesce(lr.display_name, d.display_name)
-      end as "displayName",
-      case
-        when ro.id is not null and ro.source <> 'import' then ro.started_at
-        else coalesce(lr.started_at, ro.started_at)
-      end as "startedAt",
-      case
-        when ro.id is not null and ro.source <> 'import' then ro.board_started_at
-        else coalesce(lr.board_started_at, ro.board_started_at)
-      end as "boardStartedAt",
-      case
-        when ro.id is not null and ro.source <> 'import' then ro.scheduled_end_at
-        else coalesce(lr.scheduled_end_at, ro.scheduled_end_at)
-      end as "scheduledEndAt",
-      case
-        when ro.id is not null and ro.source <> 'import' then ro.shift_label
-        else ro.shift_label
-      end as "shiftLabel",
-      case
-        when ro.id is not null and ro.source <> 'import' then ro.role_label
-        else coalesce(lr.role_label, ro.role_label)
-      end as "roleLabel",
-      case
-        when ro.id is not null and ro.source <> 'import' then coalesce(ro.ramal_label, rp.code)
-        else coalesce(lr.ramal_label, ro.ramal_label, rp.code)
-      end as "ramalLabel",
-      case when ro.id is not null or lr.post_code is not null then 'active' else 'waiting' end as "status",
+        when ro.id is not null or lr.post_code is not null then 'active'
+        when ad.post_id is not null then 'disabled'
+        else 'waiting'
+      end as "status",
       case
         when ro.id is not null and ro.source <> 'import' then 'operations_v2'
         when lr.post_code is not null then 'legacy_live'
@@ -1196,6 +1347,9 @@ export async function listRegulationBoard() {
     left join legacy_regulation lr
       on lr.post_code = rp.code
      and lr.row_rank = 1
+    left join active_deactivations ad
+      on ad.post_id = rp.id
+     and ad.row_rank = 1
     where rp.is_active = true
     order by rp.sort_order asc, rp.code asc
   `);
@@ -1259,61 +1413,29 @@ export async function listInterventionBoard() {
         ) as row_rank
       from operations_v2.intervention_base_deactivations ibd
       where ibd.reactivated_at is null
+        and ibd.deactivated_at <= now()
     )
     select
       ib.id as "baseId",
       io.id as "occupancyId",
       ib.code as "baseCode",
       ib.label as "baseLabel",
-      case
-        when ad.base_id is not null then null
-        when io.id is not null and io.source <> 'import' then d.id
-        else coalesce(li.doctor_id, d.id)
-      end as "doctorId",
-      case
-        when ad.base_id is not null then null
-        when io.id is not null and io.source <> 'import' then d.full_name
-        else coalesce(li.doctor_name, d.full_name)
-      end as "doctorName",
-      case
-        when ad.base_id is not null then null
-        when io.id is not null and io.source <> 'import' then d.display_name
-        else coalesce(li.display_name, d.display_name)
-      end as "displayName",
-      case
-        when ad.base_id is not null then null
-        when io.id is not null and io.source <> 'import' then io.started_at
-        else coalesce(li.started_at, io.started_at)
-      end as "startedAt",
-      case
-        when ad.base_id is not null then null
-        when io.id is not null and io.source <> 'import' then io.board_started_at
-        else coalesce(li.board_started_at, io.board_started_at)
-      end as "boardStartedAt",
-      case
-        when ad.base_id is not null then null
-        when io.id is not null and io.source <> 'import' then io.scheduled_end_at
-        else coalesce(li.scheduled_end_at, io.scheduled_end_at)
-      end as "scheduledEndAt",
-      case
-        when ad.base_id is not null then null
-        when io.id is not null and io.source <> 'import' then io.shift_label
-        else io.shift_label
-      end as "shiftLabel",
-      case
-        when ad.base_id is not null then null
-        when io.id is not null and io.source <> 'import' then io.role_label
-        else coalesce(li.role_label, io.role_label)
-      end as "roleLabel",
+      case when io.id is not null or li.base_code is not null then coalesce(d.id, li.doctor_id) else null end as "doctorId",
+      case when io.id is not null or li.base_code is not null then coalesce(d.full_name, li.doctor_name) else null end as "doctorName",
+      case when io.id is not null or li.base_code is not null then coalesce(d.display_name, li.display_name) else null end as "displayName",
+      case when io.id is not null or li.base_code is not null then coalesce(io.started_at, li.started_at) else null end as "startedAt",
+      case when io.id is not null or li.base_code is not null then coalesce(io.board_started_at, li.board_started_at) else null end as "boardStartedAt",
+      case when io.id is not null or li.base_code is not null then coalesce(io.scheduled_end_at, li.scheduled_end_at) else null end as "scheduledEndAt",
+      case when io.id is not null or li.base_code is not null then io.shift_label else null end as "shiftLabel",
+      case when io.id is not null or li.base_code is not null then coalesce(io.role_label, li.role_label) else null end as "roleLabel",
       ad.deactivated_at as "disabledAt",
       ad.notes as "disabledReason",
       case
-        when ad.base_id is not null then 'disabled'
         when io.id is not null or li.base_code is not null then 'active'
+        when ad.base_id is not null then 'disabled'
         else 'waiting'
       end as "status",
       case
-        when ad.base_id is not null then 'none'
         when io.id is not null and io.source <> 'import' then 'operations_v2'
         when li.base_code is not null then 'legacy_live'
         when io.id is not null then 'operations_v2'
@@ -1445,7 +1567,8 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
     select * from previous_intervention
   `);
 
-  const rawRows = (result as unknown as Record<string, unknown>[]).map(mapPreviousOperationalRow);
+  const rawRows = (result as unknown as Record<string, unknown>[]).map(mapPreviousOperationalRow)
+    .filter((row) => !isTrueZeroDurationPhantom(row));
   const successorStartMap = resolveSuccessorStartMap(rawRows);
 
   const logicalCandidates = collapseLogicalShiftCandidates(rawRows
@@ -1555,11 +1678,13 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
 function resolvePaymentAllocationTarget(row: Record<string, unknown>): PaymentAllocationTargetDefinition {
   return {
     domain: String(row.domain) === "regulation" ? "regulation" : "intervention",
+    targetId: row.targetId === null || row.targetId === undefined ? null : Number(row.targetId),
     targetCode: String(row.targetCode),
     targetLabel: String(row.targetLabel),
     sortOrder: Number(row.sortOrder ?? 0),
     defaultRole: (row.defaultRole ?? null) as string | null,
     disabledAt: (row.disabledAt ?? null) as string | null,
+    reactivatedAt: (row.reactivatedAt ?? null) as string | null,
     disabledReason: (row.disabledReason ?? null) as string | null,
     disabledDuringShift: Boolean(row.disabledDuringShift ?? false),
     disabledEntireShift: Boolean(row.disabledEntireShift ?? false),
@@ -1570,7 +1695,52 @@ function resolvePaymentAllocationStatus(issues: string[]): PaymentAllocationStat
   return issues.length > 0 ? "needs_review" : "ready_for_payment";
 }
 
-function comparePaymentAllocationRows(left: PaymentAllocationRow, right: PaymentAllocationRow) {
+function isNucleoPaymentTarget(target: PaymentAllocationTargetDefinition) {
+  return target.domain === "regulation" && isNucleoRegulationPost(target.targetCode);
+}
+
+function shouldIncludePaymentAllocationTarget(target: PaymentAllocationTargetDefinition, shiftLabel: "SD" | "SN") {
+  if (isNucleoPaymentTarget(target)) {
+    return shiftLabel === "SD";
+  }
+
+  return true;
+}
+
+function shouldAllowCarriedPaymentCandidate(params: {
+  target: PaymentAllocationTargetDefinition;
+  candidate: LogicalShiftCandidate;
+  slotStartIso: string;
+}) {
+  if (isNucleoPaymentTarget(params.target) && params.candidate.logicalSlotStart !== params.slotStartIso) {
+    return false;
+  }
+
+  return true;
+}
+
+function resolveEmptyPaymentAllocationIssues(params: {
+  target: PaymentAllocationTargetDefinition;
+  displacedByDoctorConflict: boolean;
+}) {
+  if (params.displacedByDoctorConflict) {
+    return ["Todos os candidatos deste alvo conflitam com alocacoes mais confiaveis do mesmo turno"];
+  }
+
+  if (isNucleoPaymentTarget(params.target)) {
+    return [
+      `${resolvePendingRegulationOccupantLabel(params.target.targetCode)}: chefia não lançou o médico do núcleo no SD.`,
+      "Pagamento do núcleo não pode reaproveitar o plantonista anterior.",
+    ];
+  }
+
+  return ["Sem ocupacao identificada para o turno"];
+}
+
+function comparePaymentAllocationRows(
+  left: { sortOrder: number; targetCode: string },
+  right: { sortOrder: number; targetCode: string },
+) {
   if (left.sortOrder !== right.sortOrder) {
     return left.sortOrder - right.sortOrder;
   }
@@ -1608,7 +1778,11 @@ function resolveCandidateCoverageEndAt(candidate: LogicalShiftCandidate) {
   if (candidate.shiftLabel === "P") {
     const plannedCoverageEndAt = resolvePlannedCoverageEndAt(candidate);
     if (!candidate.effectiveEndedAt) {
-      return plannedCoverageEndAt;
+      const shiftBoundary = resolveImplicitOccupancyExpiry(
+        candidate.logicalSlotStart,
+        candidate.shiftLabel,
+      )?.toISOString() ?? null;
+      return shiftBoundary ?? plannedCoverageEndAt;
     }
 
     if (!plannedCoverageEndAt) {
@@ -1868,6 +2042,7 @@ function buildEmptyPaymentAllocationRow(params: {
   const issues = params.issues ?? ["Sem ocupacao identificada para o turno"];
   return {
     domain: params.target.domain,
+    targetId: params.target.targetId ?? null,
     targetCode: params.target.targetCode,
     targetLabel: params.target.targetLabel,
     sortOrder: params.target.sortOrder,
@@ -1889,6 +2064,7 @@ function buildEmptyPaymentAllocationRow(params: {
     roleLabel: params.target.defaultRole,
     ramalLabel: params.target.domain === "regulation" ? params.target.targetCode : null,
     source: null,
+    notes: null,
     candidateCount: params.candidateCount ?? 0,
     paymentStatus: resolvePaymentAllocationStatus(issues),
     issues,
@@ -1922,8 +2098,8 @@ function buildDisabledPaymentAllocationRow(params: {
 }) {
   const issues = [
     params.target.disabledAt
-      ? `Base desativada desde ${new Date(params.target.disabledAt).toISOString()}`
-      : "Base desativada para este turno",
+      ? `Slot desativado desde ${new Date(params.target.disabledAt).toISOString()}`
+      : "Slot desativado para este turno",
   ];
 
   return {
@@ -1937,6 +2113,48 @@ function buildDisabledPaymentAllocationRow(params: {
   } satisfies PaymentAllocationRow;
 }
 
+function resolveChosenCandidateDeactivationOutcome(params: {
+  target: PaymentAllocationTargetDefinition;
+  chosenCandidate: LogicalShiftCandidate;
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+}) {
+  const disabledAt = params.target.disabledAt ?? null;
+  if (!params.target.disabledDuringShift || !disabledAt) {
+    return {
+      shouldSuppressChosenCoverage: false,
+      clearedDisabledState: null,
+    };
+  }
+
+  const actualWindow = buildPaymentAllocationActualWindow({
+    candidate: params.chosenCandidate,
+    slotStartIso: params.slotStartIso,
+    shiftLabel: params.shiftLabel,
+  });
+  const actualStartMs = new Date(actualWindow.actualStartAt).getTime();
+  const reactivatedAtMs = params.target.reactivatedAt
+    ? new Date(params.target.reactivatedAt).getTime()
+    : Number.POSITIVE_INFINITY;
+
+  if (actualStartMs >= reactivatedAtMs) {
+    return {
+      shouldSuppressChosenCoverage: false,
+      clearedDisabledState: {
+        disabledAt: null,
+        disabledReason: null,
+        disabledDuringShift: false,
+        disabledEntireShift: false,
+      },
+    };
+  }
+
+  return {
+    shouldSuppressChosenCoverage: true,
+    clearedDisabledState: null,
+  };
+}
+
 function buildChosenPaymentAllocationRow(params: {
   target: PaymentAllocationTargetDefinition;
   candidates: LogicalShiftCandidate[];
@@ -1945,6 +2163,12 @@ function buildChosenPaymentAllocationRow(params: {
   shiftLabel: "SD" | "SN";
   continuitySourceSummaryByOccupancyId: Map<string, ContinuitySourceSummary>;
   bankHoursBalanceOverridesByContinuityGroupId: Map<string, BankHoursBalanceOverrideSummary>;
+  disabledStateOverride?: {
+    disabledAt: string | null;
+    disabledReason: string | null;
+    disabledDuringShift: boolean;
+    disabledEntireShift: boolean;
+  } | null;
 }) {
   const chosen = params.chosenCandidate;
   const scheduledWindow = buildPaymentAllocationSlotWindow({
@@ -2005,17 +2229,24 @@ function buildChosenPaymentAllocationRow(params: {
     candidateCount: params.candidates.length,
     syntheticBankHours: effectiveBankHours,
   });
+  const disabledState = params.disabledStateOverride ?? {
+    disabledAt: params.target.disabledAt ?? null,
+    disabledReason: params.target.disabledReason ?? null,
+    disabledDuringShift: params.target.disabledDuringShift ?? false,
+    disabledEntireShift: params.target.disabledEntireShift ?? false,
+  };
 
   return {
     domain: params.target.domain,
+    targetId: params.target.targetId ?? null,
     targetCode: params.target.targetCode,
     targetLabel: params.target.targetLabel,
     sortOrder: params.target.sortOrder,
     defaultRole: params.target.defaultRole,
-    disabledAt: params.target.disabledAt,
-    disabledReason: params.target.disabledReason,
-    disabledDuringShift: params.target.disabledDuringShift,
-    disabledEntireShift: params.target.disabledEntireShift,
+    disabledAt: disabledState.disabledAt,
+    disabledReason: disabledState.disabledReason,
+    disabledDuringShift: disabledState.disabledDuringShift,
+    disabledEntireShift: disabledState.disabledEntireShift,
     occupancyId: chosen.occupancyId,
     doctorId: chosen.doctorId,
     doctorName: chosen.doctorName,
@@ -2029,6 +2260,7 @@ function buildChosenPaymentAllocationRow(params: {
     roleLabel: chosen.roleLabel ?? params.target.defaultRole,
     ramalLabel: chosen.ramalLabel ?? (params.target.domain === "regulation" ? params.target.targetCode : null),
     source: chosen.source,
+    notes: chosen.notes,
     candidateCount: params.candidates.length,
     paymentStatus: resolvePaymentAllocationStatus(issues),
     issues,
@@ -2065,7 +2297,11 @@ function resolvePaymentAllocationTargetChoices(params: {
     const key = [target.domain, target.targetCode].join("|");
     const candidates = sortPaymentAllocationCandidates({
       candidates: filterTargetPaymentCandidates({
-        candidates: params.candidatesByTarget.get(key) ?? [],
+        candidates: (params.candidatesByTarget.get(key) ?? []).filter((candidate) => shouldAllowCarriedPaymentCandidate({
+          target,
+          candidate,
+          slotStartIso: params.slotStartIso,
+        })),
         slotStartIso: params.slotStartIso,
       }),
       slotStartIso: params.slotStartIso,
@@ -2131,9 +2367,11 @@ export function buildPaymentAllocationBoardModel(params: {
   bankHoursBalanceOverridesByContinuityGroupId?: Map<string, BankHoursBalanceOverrideSummary>;
   generatedAt?: string;
 }) {
-  const successorStartMap = resolveSuccessorStartMap(params.rawRows);
-  const continuitySourceSummaryByOccupancyId = buildContinuitySourceSummaryMap(params.rawRows);
-  const logicalCandidates = collapseLogicalShiftCandidates(params.rawRows
+  const cleanRows = params.rawRows.filter((row) => !isTrueZeroDurationPhantom(row));
+  const successorStartMap = resolveSuccessorStartMap(cleanRows);
+  const continuitySourceSummaryByOccupancyId = buildContinuitySourceSummaryMap(cleanRows);
+  const eligibleTargets = params.targets.filter((target) => shouldIncludePaymentAllocationTarget(target, params.shiftLabel));
+  const logicalCandidates = collapseLogicalShiftCandidates(cleanRows
     .map(mapLogicalShiftCandidate)
     .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null))
     .filter((candidate) => doesCandidateCoverPaymentSlot(candidate, params.startedAt))
@@ -2150,7 +2388,7 @@ export function buildPaymentAllocationBoardModel(params: {
   }
 
   const targetChoices = resolvePaymentAllocationTargetChoices({
-    targets: params.targets,
+    targets: eligibleTargets,
     candidatesByTarget,
     slotStartIso: params.startedAt,
     shiftLabel: params.shiftLabel,
@@ -2158,6 +2396,33 @@ export function buildPaymentAllocationBoardModel(params: {
 
   const rows = targetChoices
     .map((choice) => {
+      if (choice.chosenCandidate) {
+        const deactivationOutcome = resolveChosenCandidateDeactivationOutcome({
+          target: choice.target,
+          chosenCandidate: choice.chosenCandidate,
+          slotStartIso: params.startedAt,
+          shiftLabel: params.shiftLabel,
+        });
+        if (deactivationOutcome.shouldSuppressChosenCoverage) {
+          return buildDisabledPaymentAllocationRow({
+            target: choice.target,
+            shiftLabel: params.shiftLabel,
+            candidateCount: choice.candidates.length,
+          });
+        }
+
+        return buildChosenPaymentAllocationRow({
+          target: choice.target,
+          candidates: choice.candidates,
+          chosenCandidate: choice.chosenCandidate,
+          slotStartIso: params.startedAt,
+          shiftLabel: params.shiftLabel,
+          continuitySourceSummaryByOccupancyId,
+          bankHoursBalanceOverridesByContinuityGroupId: params.bankHoursBalanceOverridesByContinuityGroupId ?? new Map(),
+          disabledStateOverride: deactivationOutcome.clearedDisabledState,
+        });
+      }
+
       if (choice.target.disabledEntireShift) {
         return buildDisabledPaymentAllocationRow({
           target: choice.target,
@@ -2166,31 +2431,22 @@ export function buildPaymentAllocationBoardModel(params: {
         });
       }
 
-      return choice.chosenCandidate
-        ? buildChosenPaymentAllocationRow({
+      return buildEmptyPaymentAllocationRow({
+        target: choice.target,
+        shiftLabel: params.shiftLabel,
+        candidateCount: choice.candidates.length,
+        issues: resolveEmptyPaymentAllocationIssues({
           target: choice.target,
-          candidates: choice.candidates,
-          chosenCandidate: choice.chosenCandidate,
-          slotStartIso: params.startedAt,
-          shiftLabel: params.shiftLabel,
-          continuitySourceSummaryByOccupancyId,
-          bankHoursBalanceOverridesByContinuityGroupId: params.bankHoursBalanceOverridesByContinuityGroupId ?? new Map(),
-        })
-        : buildEmptyPaymentAllocationRow({
-          target: choice.target,
-          shiftLabel: params.shiftLabel,
-          candidateCount: choice.candidates.length,
-          issues: choice.displacedByDoctorConflict
-            ? ["Todos os candidatos deste alvo conflitam com alocacoes mais confiaveis do mesmo turno"]
-            : undefined,
-        });
+          displacedByDoctorConflict: choice.displacedByDoctorConflict,
+        }),
+      });
     })
     .sort(comparePaymentAllocationRows);
 
   const regulation = rows.filter((row) => row.domain === "regulation");
   const intervention = rows.filter((row) => row.domain === "intervention");
-  const payableRows = rows.filter((row) => !row.disabledEntireShift);
-  const disabledCount = rows.filter((row) => row.disabledEntireShift).length;
+  const payableRows = rows.filter((row) => !(row.disabledDuringShift && !row.occupancyId));
+  const disabledCount = rows.filter((row) => row.disabledDuringShift && !row.occupancyId).length;
   const assignedCount = payableRows.filter((row) => Boolean(row.occupancyId)).length;
   const needsReviewCount = payableRows.filter((row) => row.paymentStatus === "needs_review").length;
   const readyForPaymentCount = payableRows.filter((row) => row.paymentStatus === "ready_for_payment").length;
@@ -2215,100 +2471,368 @@ export function buildPaymentAllocationBoardModel(params: {
   } satisfies PaymentAllocationBoard;
 }
 
-function parsePaymentAllocationOperationalDate(value: string | Date) {
-  if (value instanceof Date) {
-    return getOperationalLocalDateParts(value);
+function resolveSlotPresenceCandidateLabel(candidate: LogicalShiftCandidate) {
+  return candidate.displayName?.trim() || candidate.doctorName.trim();
+}
+
+function compareSlotPresenceCandidates(left: LogicalShiftCandidate, right: LogicalShiftCandidate) {
+  const leftStartedAt = new Date(left.startedAt).getTime();
+  const rightStartedAt = new Date(right.startedAt).getTime();
+  if (leftStartedAt !== rightStartedAt) {
+    return leftStartedAt - rightStartedAt;
   }
 
-  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) {
-    throw new Error("Operational date must use YYYY-MM-DD.");
+  const leftBoardStartedAt = left.boardStartedAt ? new Date(left.boardStartedAt).getTime() : Number.POSITIVE_INFINITY;
+  const rightBoardStartedAt = right.boardStartedAt ? new Date(right.boardStartedAt).getTime() : Number.POSITIVE_INFINITY;
+  if (leftBoardStartedAt !== rightBoardStartedAt) {
+    return leftBoardStartedAt - rightBoardStartedAt;
   }
+
+  return left.occupancyId.localeCompare(right.occupancyId, "pt-BR");
+}
+
+function buildOccupiedSlotPresenceRow(params: {
+  target: PaymentAllocationTargetDefinition;
+  candidates: LogicalShiftCandidate[];
+}): OperationalSlotPresenceRow {
+  const orderedCandidates = [...params.candidates].sort(compareSlotPresenceCandidates);
+  const primaryCandidate = orderedCandidates[0] as LogicalShiftCandidate;
+  const occupantLabels = orderedCandidates.map(resolveSlotPresenceCandidateLabel);
 
   return {
-    year: Number(match[1]),
-    month: Number(match[2]),
-    day: Number(match[3]),
+    domain: params.target.domain,
+    targetId: params.target.targetId ?? null,
+    targetCode: params.target.targetCode,
+    targetLabel: params.target.targetLabel,
+    sortOrder: params.target.sortOrder,
+    defaultRole: params.target.defaultRole,
+    disabledAt: params.target.disabledAt ?? null,
+    disabledReason: params.target.disabledReason ?? null,
+    disabledDuringShift: params.target.disabledDuringShift ?? false,
+    disabledEntireShift: params.target.disabledEntireShift ?? false,
+    status: "occupied",
+    doctorId: primaryCandidate.doctorId,
+    doctorName: primaryCandidate.doctorName,
+    displayName: primaryCandidate.displayName,
+    doctorLabel: occupantLabels.join(" -> "),
+    occupantLabels,
+    occupancyIds: orderedCandidates.map((candidate) => candidate.occupancyId),
+    occupancyCount: orderedCandidates.length,
   };
 }
 
-function resolvePaymentAllocationRequest(params: {
-  operationalDate?: string | Date | null;
-  shiftLabel?: "SD" | "SN" | null;
-  reference?: Date;
+function buildEmptySlotPresenceRow(params: {
+  target: PaymentAllocationTargetDefinition;
+}): OperationalSlotPresenceRow {
+  return {
+    domain: params.target.domain,
+    targetId: params.target.targetId ?? null,
+    targetCode: params.target.targetCode,
+    targetLabel: params.target.targetLabel,
+    sortOrder: params.target.sortOrder,
+    defaultRole: params.target.defaultRole,
+    disabledAt: params.target.disabledAt ?? null,
+    disabledReason: params.target.disabledReason ?? null,
+    disabledDuringShift: params.target.disabledDuringShift ?? false,
+    disabledEntireShift: params.target.disabledEntireShift ?? false,
+    status: params.target.disabledEntireShift ? "disabled" : "empty",
+    doctorId: null,
+    doctorName: null,
+    displayName: null,
+    doctorLabel: params.target.disabledEntireShift ? "Base desativada" : "Sem medico",
+    occupantLabels: [],
+    occupancyIds: [],
+    occupancyCount: 0,
+  };
+}
+
+function resolveHistoricalOperationalIssues(candidates: LogicalShiftCandidate[]) {
+  const issues: string[] = [];
+
+  if (candidates.length > 1) {
+    issues.push("Cobertura multipla no turno");
+  }
+
+  if (candidates.some((candidate) => candidate.source === "admin_correction")) {
+    issues.push("Lancamento manual ou corrigido manualmente");
+  }
+
+  return issues;
+}
+
+function buildOccupiedHistoricalOperationalPresenceRow(params: {
+  target: PaymentAllocationTargetDefinition;
+  candidates: LogicalShiftCandidate[];
+}): HistoricalOperationalPresenceRow {
+  const orderedCandidates = [...params.candidates].sort(compareSlotPresenceCandidates);
+  const primaryCandidate = orderedCandidates[0] as LogicalShiftCandidate;
+  const occupantLabels = orderedCandidates.map(resolveSlotPresenceCandidateLabel);
+
+  return {
+    domain: params.target.domain,
+    targetId: params.target.targetId ?? null,
+    targetCode: params.target.targetCode,
+    targetLabel: params.target.targetLabel,
+    sortOrder: params.target.sortOrder,
+    defaultRole: params.target.defaultRole,
+    disabledAt: params.target.disabledAt ?? null,
+    disabledReason: params.target.disabledReason ?? null,
+    disabledDuringShift: params.target.disabledDuringShift ?? false,
+    disabledEntireShift: params.target.disabledEntireShift ?? false,
+    status: "occupied",
+    occupancyId: primaryCandidate.occupancyId,
+    doctorId: primaryCandidate.doctorId,
+    doctorName: primaryCandidate.doctorName,
+    displayName: primaryCandidate.displayName,
+    doctorLabel: occupantLabels.join(" -> "),
+    occupantLabels,
+    occupancyIds: orderedCandidates.map((candidate) => candidate.occupancyId),
+    occupancyCount: orderedCandidates.length,
+    startedAt: primaryCandidate.startedAt,
+    endedAt: primaryCandidate.endedAt,
+    actualEndedAt: primaryCandidate.actualEndedAt,
+    scheduledStartAt: primaryCandidate.scheduledStartAt,
+    scheduledEndAt: primaryCandidate.scheduledEndAt,
+    shiftLabel: primaryCandidate.shiftLabel,
+    roleLabel: primaryCandidate.roleLabel,
+    ramalLabel: primaryCandidate.ramalLabel,
+    source: primaryCandidate.source,
+    notes: primaryCandidate.notes,
+    arrivalDelayMinutes: primaryCandidate.arrivalDelayMinutes,
+    issues: resolveHistoricalOperationalIssues(orderedCandidates),
+  };
+}
+
+function buildEmptyHistoricalOperationalPresenceRow(params: {
+  target: PaymentAllocationTargetDefinition;
+}): HistoricalOperationalPresenceRow {
+  const disabledEntireShift = params.target.disabledEntireShift ?? false;
+  const disabledDuringShift = params.target.disabledDuringShift ?? false;
+  const status = disabledEntireShift ? "disabled" : "empty";
+  const doctorLabel = status === "disabled"
+    ? params.target.domain === "regulation"
+      ? "Ramal desativado"
+      : "Base desativada"
+    : "Sem medico";
+
+  return {
+    domain: params.target.domain,
+    targetId: params.target.targetId ?? null,
+    targetCode: params.target.targetCode,
+    targetLabel: params.target.targetLabel,
+    sortOrder: params.target.sortOrder,
+    defaultRole: params.target.defaultRole,
+    disabledAt: params.target.disabledAt ?? null,
+    disabledReason: params.target.disabledReason ?? null,
+    disabledDuringShift,
+    disabledEntireShift,
+    status,
+    occupancyId: null,
+    doctorId: null,
+    doctorName: null,
+    displayName: null,
+    doctorLabel,
+    occupantLabels: [],
+    occupancyIds: [],
+    occupancyCount: 0,
+    startedAt: null,
+    endedAt: null,
+    actualEndedAt: null,
+    scheduledStartAt: null,
+    scheduledEndAt: null,
+    shiftLabel: null,
+    roleLabel: null,
+    ramalLabel: null,
+    source: null,
+    notes: null,
+    arrivalDelayMinutes: null,
+    issues: [],
+  };
+}
+
+export function buildOperationalSlotPresenceBoardModel(params: {
+  targets: PaymentAllocationTargetDefinition[];
+  rawRows: PaymentAllocationRawRow[];
+  operationalDate: string;
+  shiftLabel: "SD" | "SN";
+  startedAt: string;
+  endedAt: string;
+  generatedAt?: string;
 }) {
-  const reference = params.reference ?? new Date();
+  const cleanRows = params.rawRows.filter((row) => !isTrueZeroDurationPhantom(row));
+  const successorStartMap = resolveSuccessorStartMap(cleanRows);
+  const eligibleTargets = params.targets.filter((target) => shouldIncludePaymentAllocationTarget(target, params.shiftLabel));
+  const logicalCandidates = collapseLogicalShiftCandidates(cleanRows
+    .map(mapLogicalShiftCandidate)
+    .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null))
+    .filter((candidate) => doesCandidateCoverPaymentSlot(candidate, params.startedAt))
+  ).filter((candidate) => isEligibleTitularityCandidate(candidate))
+    .filter((candidate) => !isMicroCoverage(candidate))
+    .filter((candidate, _, all) => !shouldIgnoreDuplicateRestart(candidate, all));
 
-  if (params.operationalDate && !params.shiftLabel) {
-    throw new Error("Shift label is required when querying a specific operational date.");
+  const candidatesByTarget = new Map<string, LogicalShiftCandidate[]>();
+  for (const candidate of logicalCandidates) {
+    const key = [candidate.domain, candidate.targetCode].join("|");
+    const current = candidatesByTarget.get(key) ?? [];
+    current.push(candidate);
+    candidatesByTarget.set(key, current);
   }
 
-  if (!params.operationalDate) {
-    const currentShift = resolveOperationalShiftWindow(reference);
-    const parts = getOperationalLocalDateParts(currentShift.startedAt);
-    const startedAt = currentShift.shiftLabel === "SD"
-      ? fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 7, 0)
-      : fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 19, 0);
-    const shiftLabel = params.shiftLabel ?? currentShift.shiftLabel;
+  const rows = eligibleTargets
+    .map((target) => {
+      const key = [target.domain, target.targetCode].join("|");
+      const candidates = candidatesByTarget.get(key) ?? [];
+      if (candidates.length > 0) {
+        return buildOccupiedSlotPresenceRow({
+          target,
+          candidates,
+        });
+      }
 
-    if (shiftLabel !== currentShift.shiftLabel) {
-      throw new Error("Specific shift label without operational date is ambiguous. Provide YYYY-MM-DD as well.");
-    }
+      return buildEmptySlotPresenceRow({ target });
+    })
+    .sort(comparePaymentAllocationRows);
 
-    return {
-      operationalDate: fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 12, 0).toISOString(),
-      shiftLabel,
-      startedAt: startedAt.toISOString(),
-      endedAt: resolveSlotEnd(startedAt, shiftLabel).toISOString(),
-    };
-  }
-
-  const shiftLabel = params.shiftLabel as "SD" | "SN";
-  const parts = parsePaymentAllocationOperationalDate(params.operationalDate as string | Date);
-  const startedAt = shiftLabel === "SD"
-    ? fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 7, 0)
-    : fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 19, 0);
+  const regulation = rows.filter((row) => row.domain === "regulation");
+  const intervention = rows.filter((row) => row.domain === "intervention");
+  const occupiedCount = rows.filter((row) => row.status === "occupied").length;
+  const emptyCount = rows.filter((row) => row.status === "empty").length;
+  const disabledCount = rows.filter((row) => row.status === "disabled").length;
 
   return {
-    operationalDate: fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 12, 0).toISOString(),
-    shiftLabel,
-    startedAt: startedAt.toISOString(),
-    endedAt: resolveSlotEnd(startedAt, shiftLabel).toISOString(),
-  };
+    generatedAt: params.generatedAt ?? new Date().toISOString(),
+    operationalDate: params.operationalDate,
+    shiftLabel: params.shiftLabel,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+    summary: {
+      totalTargets: rows.length,
+      occupiedCount,
+      emptyCount,
+      disabledCount,
+    },
+    regulation,
+    intervention,
+  } satisfies OperationalSlotPresenceBoard;
 }
 
-export async function getPaymentAllocationBoard(params: {
-  operationalDate?: string | Date | null;
-  shiftLabel?: "SD" | "SN" | null;
-  reference?: Date;
-} = {}): Promise<PaymentAllocationBoard> {
-  const db = getDb();
-  const request = resolvePaymentAllocationRequest(params);
-  await expireInterventionBaseDeactivations(new Date(request.startedAt));
+export function buildHistoricalOperationalPresenceBoardModel(params: {
+  targets: PaymentAllocationTargetDefinition[];
+  rawRows: PaymentAllocationRawRow[];
+  operationalDate: string;
+  shiftLabel: "SD" | "SN";
+  startedAt: string;
+  endedAt: string;
+  generatedAt?: string;
+}) {
+  const cleanRows = params.rawRows.filter((row) => !isTrueZeroDurationPhantom(row));
+  const successorStartMap = resolveSuccessorStartMap(cleanRows);
+  const eligibleTargets = params.targets.filter((target) => shouldIncludePaymentAllocationTarget(target, params.shiftLabel));
+  const logicalCandidates = collapseLogicalShiftCandidates(cleanRows
+    .map(mapLogicalShiftCandidate)
+    .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null))
+    .filter((candidate) => doesCandidateCoverPaymentSlot(candidate, params.startedAt))
+  ).filter((candidate) => isEligibleTitularityCandidate(candidate))
+    .filter((candidate) => !isMicroCoverage(candidate))
+    .filter((candidate, _, all) => !shouldIgnoreDuplicateRestart(candidate, all));
+
+  const candidatesByTarget = new Map<string, LogicalShiftCandidate[]>();
+  for (const candidate of logicalCandidates) {
+    const key = [candidate.domain, candidate.targetCode].join("|");
+    const current = candidatesByTarget.get(key) ?? [];
+    current.push(candidate);
+    candidatesByTarget.set(key, current);
+  }
+
+  const rows = eligibleTargets
+    .map((target) => {
+      const key = [target.domain, target.targetCode].join("|");
+      const candidates = candidatesByTarget.get(key) ?? [];
+      if (candidates.length > 0) {
+        return buildOccupiedHistoricalOperationalPresenceRow({
+          target,
+          candidates,
+        });
+      }
+
+      return buildEmptyHistoricalOperationalPresenceRow({ target });
+    })
+    .sort(comparePaymentAllocationRows);
+
+  const regulation = rows.filter((row) => row.domain === "regulation");
+  const intervention = rows.filter((row) => row.domain === "intervention");
+  const occupiedCount = rows.filter((row) => row.status === "occupied").length;
+  const disabledCount = rows.filter((row) => row.status === "disabled").length;
+  const emptyCount = rows.filter((row) => row.status === "empty").length;
+
+  return {
+    generatedAt: params.generatedAt ?? new Date().toISOString(),
+    operationalDate: params.operationalDate,
+    shiftLabel: params.shiftLabel,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+    summary: {
+      totalTargets: rows.length,
+      occupiedCount,
+      emptyCount,
+      disabledCount,
+    },
+    regulation,
+    intervention,
+  } satisfies HistoricalOperationalPresenceBoard;
+}
+
+async function loadPaymentAllocationSourceData(
+  db: ReturnType<typeof getDb>,
+  request: ReturnType<typeof resolvePaymentAllocationRequest>,
+) {
   const queryStart = new Date(new Date(request.startedAt).getTime() - 86400000).toISOString();
   const queryEnd = new Date(new Date(request.endedAt).getTime() + 86400000).toISOString();
 
   const targetResult = await db.execute(sql`
     select
       'regulation' as domain,
+      rp.id as "targetId",
       rp.code as "targetCode",
       rp.label as "targetLabel",
       rp.sort_order as "sortOrder",
       rp.default_role as "defaultRole",
-      null::timestamptz as "disabledAt",
-      null::text as "disabledReason",
-      false as "disabledDuringShift",
-      false as "disabledEntireShift"
+      rpd.deactivated_at as "disabledAt",
+      rpd.reactivated_at as "reactivatedAt",
+      rpd.notes as "disabledReason",
+      case when rpd.post_id is not null then true else false end as "disabledDuringShift",
+      case
+        when rpd.post_id is not null
+          and rpd.deactivated_at <= ${request.startedAt}::timestamptz
+          and coalesce(rpd.reactivated_at, 'infinity'::timestamptz) >= ${request.endedAt}::timestamptz
+        then true
+        else false
+      end as "disabledEntireShift"
     from operations_v2.regulation_posts rp
+    left join lateral (
+      select
+        state.post_id,
+        state.deactivated_at,
+        state.reactivated_at,
+        state.notes
+      from operations_v2.regulation_post_deactivations state
+      where state.post_id = rp.id
+        and state.deactivated_at < ${request.endedAt}::timestamptz
+        and coalesce(state.reactivated_at, 'infinity'::timestamptz) > ${request.startedAt}::timestamptz
+      order by state.deactivated_at desc, state.created_at desc
+      limit 1
+    ) rpd on true
     where rp.is_active = true
     union all
     select
       'intervention' as domain,
+      ib.id as "targetId",
       ib.code as "targetCode",
       ib.label as "targetLabel",
       ib.sort_order as "sortOrder",
       null::text as "defaultRole",
       ibd.deactivated_at as "disabledAt",
+      ibd.reactivated_at as "reactivatedAt",
       ibd.notes as "disabledReason",
       case when ibd.base_id is not null then true else false end as "disabledDuringShift",
       case
@@ -2411,8 +2935,129 @@ export async function getPaymentAllocationBoard(params: {
 
   const rawRows = (rawResult as unknown as Record<string, unknown>[]).map(mapPreviousOperationalRow);
 
-  return buildPaymentAllocationBoardModel({
+  return {
+    request,
     targets: (targetResult as unknown as Record<string, unknown>[]).map(resolvePaymentAllocationTarget),
+    rawRows,
+  };
+}
+
+export async function getOperationalSlotPresenceBoard(params: {
+  operationalDate?: string | Date | null;
+  shiftLabel?: "SD" | "SN" | null;
+  reference?: Date;
+} = {}): Promise<OperationalSlotPresenceBoard> {
+  const db = getDb();
+  const request = resolvePaymentAllocationRequest(params);
+  const sourceData = await loadPaymentAllocationSourceData(db, request);
+
+  return buildOperationalSlotPresenceBoardModel({
+    targets: sourceData.targets,
+    rawRows: sourceData.rawRows,
+    operationalDate: request.operationalDate,
+    shiftLabel: request.shiftLabel,
+    startedAt: request.startedAt,
+    endedAt: request.endedAt,
+  });
+}
+
+export async function getHistoricalOperationalPresenceBoard(params: {
+  operationalDate?: string | Date | null;
+  shiftLabel?: "SD" | "SN" | null;
+  reference?: Date;
+} = {}): Promise<HistoricalOperationalPresenceBoard> {
+  const db = getDb();
+  const request = resolvePaymentAllocationRequest(params);
+  const sourceData = await loadPaymentAllocationSourceData(db, request);
+
+  return buildHistoricalOperationalPresenceBoardModel({
+    targets: sourceData.targets,
+    rawRows: sourceData.rawRows,
+    operationalDate: request.operationalDate,
+    shiftLabel: request.shiftLabel,
+    startedAt: request.startedAt,
+    endedAt: request.endedAt,
+  });
+}
+
+function parsePaymentAllocationOperationalDate(value: string | Date) {
+  if (value instanceof Date) {
+    return getOperationalLocalDateParts(value);
+  }
+
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new Error("Operational date must use YYYY-MM-DD.");
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function resolvePaymentAllocationRequest(params: {
+  operationalDate?: string | Date | null;
+  shiftLabel?: "SD" | "SN" | null;
+  reference?: Date;
+}) {
+  const reference = params.reference ?? new Date();
+
+  if (params.operationalDate && !params.shiftLabel) {
+    throw new Error("Shift label is required when querying a specific operational date.");
+  }
+
+  if (!params.operationalDate) {
+    const currentShift = resolveOperationalShiftWindow(reference);
+    const parts = getOperationalLocalDateParts(currentShift.startedAt);
+    const startedAt = currentShift.shiftLabel === "SD"
+      ? fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 7, 0)
+      : fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 19, 0);
+    const shiftLabel = params.shiftLabel ?? currentShift.shiftLabel;
+
+    if (shiftLabel !== currentShift.shiftLabel) {
+      throw new Error("Specific shift label without operational date is ambiguous. Provide YYYY-MM-DD as well.");
+    }
+
+    return {
+      operationalDate: fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 12, 0).toISOString(),
+      shiftLabel,
+      startedAt: startedAt.toISOString(),
+      endedAt: resolveSlotEnd(startedAt, shiftLabel).toISOString(),
+    };
+  }
+
+  const shiftLabel = params.shiftLabel as "SD" | "SN";
+  const parts = parsePaymentAllocationOperationalDate(params.operationalDate as string | Date);
+  const startedAt = shiftLabel === "SD"
+    ? fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 7, 0)
+    : fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 19, 0);
+
+  return {
+    operationalDate: fromOperationalLocalClockParts(parts.year, parts.month, parts.day, 12, 0).toISOString(),
+    shiftLabel,
+    startedAt: startedAt.toISOString(),
+    endedAt: resolveSlotEnd(startedAt, shiftLabel).toISOString(),
+  };
+}
+
+export async function getPaymentAllocationBoard(params: {
+  operationalDate?: string | Date | null;
+  shiftLabel?: "SD" | "SN" | null;
+  reference?: Date;
+  expireDeactivations?: boolean;
+} = {}): Promise<PaymentAllocationBoard> {
+  const db = getDb();
+  const request = resolvePaymentAllocationRequest(params);
+  if (params.expireDeactivations !== false) {
+    await expireInterventionBaseDeactivations(new Date(request.startedAt));
+  }
+  const sourceData = await loadPaymentAllocationSourceData(db, request);
+  const rawRows = sourceData.rawRows;
+
+  return buildPaymentAllocationBoardModel({
+    targets: sourceData.targets,
     rawRows,
     operationalDate: request.operationalDate,
     shiftLabel: request.shiftLabel,

@@ -3,6 +3,9 @@ export type OccupancyShiftLabel = OperationalShiftLabel | "P" | null;
 
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const PRE_SHIFT_TOLERANCE_MINUTES = 60;
+// Early-arrival detection window: arrivals within 3 h before the next boundary
+// are classified as belonging to the upcoming shift (04:00→SD, 16:00→SN).
+const EARLY_ARRIVAL_WINDOW_MINUTES = 180;
 const VERIFICATION_GRACE_MINUTES = 15;
 const OVERTIME_JUSTIFICATION_MINUTES = 15;
 
@@ -82,6 +85,21 @@ export function resolveOperationalShiftWindow(reference: string | Date) {
         nextBoundaryAt,
         previousBoundaryAt,
     };
+}
+
+/**
+ * When no explicit shift label is provided, resolve the shift for a new arrival.
+ * If the arrival falls within EARLY_ARRIVAL_WINDOW_MINUTES (3 h) before the next boundary,
+ * classify it as the upcoming shift rather than the current one.
+ * Examples: arrival at 04:00 (3 h before SD) → "SD"; arrival at 16:00 (3 h before SN) → "SN".
+ */
+export function resolveArrivalShiftLabel(arrivalAt: string | Date): OperationalShiftLabel {
+    const window = resolveOperationalShiftWindow(arrivalAt);
+    const msToNextBoundary = window.nextBoundaryAt.getTime() - new Date(arrivalAt).getTime();
+    if (msToNextBoundary > 0 && msToNextBoundary <= EARLY_ARRIVAL_WINDOW_MINUTES * 60000) {
+        return window.shiftLabel === "SD" ? "SN" : "SD";
+    }
+    return window.shiftLabel;
 }
 
 export function isBeforeCurrentOperationalShift(startedAt: string | Date | null, reference: string | Date) {
@@ -220,9 +238,7 @@ export function shouldKeepRegulationOccupancyVisible(params: {
         return true;
     }
 
-    const visibilityAnchorAt = shiftLabel === "P" && params.boardStartedAt
-        ? params.boardStartedAt
-        : startedAt;
+    const visibilityAnchorAt = params.boardStartedAt ?? startedAt;
 
     if (!isBeforeCurrentOperationalShift(visibilityAnchorAt, reference)) {
         return true;

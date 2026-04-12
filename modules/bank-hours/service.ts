@@ -1,10 +1,31 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import { BANK_HOURS_RULE_VERSION, calculateBankHours } from "@/modules/bank-hours/calculator";
+import { BANK_HOURS_RULE_VERSION, applyAnomalyGuard, calculateBankHours } from "@/modules/bank-hours/calculator";
 import { buildContinuityBankHoursSpan } from "@/modules/bank-hours/continuity";
 import { getDb } from "@/db";
 import { bankHoursBalanceOverrides, bankHoursEntries, interventionOccupancies, regulationOccupancies } from "@/db/schema";
 
 type Executor = any;
+
+/**
+ * Detects phantom zero-duration occupancies created by the Telegram board-takeover
+ * pipeline where started_at = ended_at and no real work was performed (actualEndedAt
+ * also equals startedAt or is absent). Occupancies where actualEndedAt differs from
+ * startedAt represent real work and must NOT be filtered.
+ */
+function isTrueZeroDuration(occupancy: {
+    startedAt: string | Date;
+    endedAt?: string | Date | null;
+    actualEndedAt?: string | Date | null;
+}): boolean {
+    if (!occupancy.endedAt) return false;
+    const startMs = new Date(occupancy.startedAt).getTime();
+    const endMs = new Date(occupancy.endedAt).getTime();
+    if (startMs !== endMs) return false;
+    const effectiveEndMs = occupancy.actualEndedAt
+        ? new Date(occupancy.actualEndedAt).getTime()
+        : endMs;
+    return effectiveEndMs === startMs;
+}
 
 export interface BankHoursBalanceOverrideSummary {
     continuityGroupId: string;
@@ -125,22 +146,32 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
         return null;
     }
 
+    // Always delete stale entries for the full set (including zero-duration artifacts)
     await deleteContinuityGroupBankHours(db, occupancies.map((occupancy) => ({
         domain: occupancy.domain,
         occupancyId: occupancy.occupancyId,
     })));
 
-    const span = buildContinuityBankHoursSpan(occupancies);
+    // Filter out phantom zero-duration occupancies before calculating bank hours.
+    // These are artifacts from the Telegram board-takeover pipeline — they carry no
+    // actual work and must not generate bank hours entries.
+    const meaningful = occupancies.filter((o) => !isTrueZeroDuration(o));
+    if (meaningful.length === 0) {
+        return null;
+    }
+
+    const span = buildContinuityBankHoursSpan(meaningful);
     if (!span.isClosed || !span.scheduledStartAt || !span.scheduledEndAt || !span.actualEndAt) {
         return null;
     }
 
-    const calculation = calculateBankHours({
+    const rawCalculation = calculateBankHours({
         scheduledStartAt: span.scheduledStartAt,
         scheduledEndAt: span.scheduledEndAt,
         actualStartAt: span.actualStartAt,
         actualEndAt: span.actualEndAt,
     });
+    const calculation = applyAnomalyGuard(rawCalculation);
     const override = (await listBankHoursBalanceOverridesByContinuityGroupIds(db, [continuityGroupId])).get(continuityGroupId) ?? null;
     const balanceMinutes = override?.balanceMinutes ?? calculation.balanceMinutes;
     const ruleCode = override ? MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE : calculation.ruleCode;

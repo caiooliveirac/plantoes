@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { telegramBotNotices } from "@/db/schema";
+import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import {
     getSaoPauloParts,
     hasPlannedInterventionCoverageForCurrentShift,
@@ -29,7 +30,7 @@ export interface ReminderBoardSnapshot {
 
 export interface ReminderPlan {
     noticeKey: string;
-    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint";
+    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "regulation_confirmation";
     text: string;
     payload: Record<string, unknown>;
 }
@@ -63,8 +64,8 @@ function formatCheckpointLabel(hour: number) {
     return `${String(hour).padStart(2, "0")}:00`;
 }
 
-function formatFullName(primary: string | null, fallback: string | null) {
-    return primary?.trim() || fallback?.trim() || "medico ainda nao identificado";
+function formatReminderDoctorName(fullName: string | null, displayName: string | null) {
+    return formatDoctorSurfaceName({ fullName, displayName, fallback: "medico ainda nao identificado" });
 }
 
 function renderSection(text: string, fallback: string) {
@@ -85,6 +86,12 @@ function resolveReminderChatIds() {
 }
 
 function isInterventionAwaitingNews(row: InterventionBoardRow, reference: Date) {
+    const currentShiftLabel = resolveOperationalShiftWindow(reference).shiftLabel;
+
+    if (row.shiftLabel === currentShiftLabel) {
+        return false;
+    }
+
     const hasPlannedCoverage = hasPlannedInterventionCoverageForCurrentShift({
         shiftLabel: row.shiftLabel,
         scheduledEndAt: row.scheduledEndAt,
@@ -96,11 +103,11 @@ function isInterventionAwaitingNews(row: InterventionBoardRow, reference: Date) 
         && shouldHighlightInterventionVerification(row.boardStartedAt ?? row.startedAt, reference, row.shiftLabel);
 }
 
-function describeInterventionAwaitingNews(row: InterventionBoardRow) {
-    const name = formatFullName(row.doctorName, row.displayName);
-    const lastShiftLabel = row.shiftLabel ?? "turno anterior";
-    const lastStartedAt = row.startedAt ? `${lastShiftLabel} desde ${formatHour(row.startedAt)}` : lastShiftLabel;
-    return `Sem medico confirmado neste turno. Ultimo aviso: ${name} | ${lastStartedAt}. So entra se avisar continua/P ou se a chefia atualizar.`;
+function describeInterventionAwaitingNews(row: InterventionBoardRow, currentShiftLabel: string) {
+    const name = formatReminderDoctorName(row.doctorName, row.displayName);
+    const lastShiftLabel = row.shiftLabel ?? "?";
+    const since = row.startedAt ? ` ${formatHour(row.startedAt)}` : "";
+    return `${name} (${lastShiftLabel}${since}) | sem confirmação p/ ${currentShiftLabel}`;
 }
 
 function summarizeCoverage(board: ReminderBoardSnapshot, reference: Date) {
@@ -122,40 +129,41 @@ function summarizeCoverage(board: ReminderBoardSnapshot, reference: Date) {
     };
 }
 
-function buildInterventionLine(row: InterventionBoardRow, reference: Date, includeArrival = false) {
-    const name = formatFullName(row.doctorName, row.displayName);
-    const arrival = includeArrival && row.startedAt ? ` | chegada ${formatHour(row.startedAt)}` : "";
+function buildInterventionLine(row: InterventionBoardRow, reference: Date, options: { includeArrival?: boolean; currentShiftLabel?: string } = {}) {
+    const name = formatReminderDoctorName(row.doctorName, row.displayName);
+    const arrival = options.includeArrival && row.startedAt ? ` | ${formatHour(row.startedAt)}` : "";
 
     if (row.status === "disabled") {
         const disabledAt = row.disabledAt ? ` às ${formatHour(row.disabledAt)}` : "";
         const reason = row.disabledReason?.trim() ? ` | ${row.disabledReason.trim()}` : "";
-        return `⚫ ${row.baseCode} - Base desativada${disabledAt}${reason}`;
+        return `⚫ ${row.baseCode} - Desativada${disabledAt}${reason}`;
     }
 
     if (row.status === "waiting") {
-        return `🔴 ${row.baseCode} - Aguardando confirmação da avançada`;
+        return `🔴 ${row.baseCode} - Aguardando avançada`;
     }
 
     if (isInterventionAwaitingNews(row, reference)) {
-        return `🔴 ${row.baseCode} - ${describeInterventionAwaitingNews(row)}`;
+        const shiftLabel = options.currentShiftLabel ?? resolveOperationalShiftWindow(reference).shiftLabel;
+        return `🟡 ${row.baseCode} - ${describeInterventionAwaitingNews(row, shiftLabel)}`;
     }
 
     return `✅ ${row.baseCode} - ${name}${arrival}`;
 }
 
 function buildRegulationLine(row: RegulationBoardRow, includeArrival = false) {
-    const name = formatFullName(row.doctorName, row.displayName);
-    const arrival = includeArrival && row.startedAt ? ` | chegada ${formatHour(row.startedAt)}` : "";
+    const name = formatReminderDoctorName(row.doctorName, row.displayName);
+    const arrival = includeArrival && row.startedAt ? ` | ${formatHour(row.startedAt)}` : "";
 
     if (row.status === "waiting") {
-        return `🔴 ${row.postCode} - Aguardando aviso de ramal`;
+        return `🔴 ${row.postCode} - Aguardando ramal`;
     }
 
     return `✅ ${row.postCode} - ${name}${arrival}`;
 }
 
-function buildInterventionSection(rows: InterventionBoardRow[], reference: Date, includeArrival = false) {
-    return sortTelegramInterventionRows(rows).map((row) => buildInterventionLine(row, reference, includeArrival)).join("\n");
+function buildInterventionSection(rows: InterventionBoardRow[], reference: Date, options: { includeArrival?: boolean; currentShiftLabel?: string } = {}) {
+    return sortTelegramInterventionRows(rows).map((row) => buildInterventionLine(row, reference, options)).join("\n");
 }
 
 function buildRegulationSection(rows: RegulationBoardRow[], includeArrival = false) {
@@ -176,13 +184,13 @@ function buildGroupedPendingLines(params: {
 
     if (params.awaitingIntervention.length > 0) {
         lines.push(
-            `🔴 Intervencao sem medico confirmado neste turno (${params.awaitingIntervention.length}): ${joinPendingCodes(sortTelegramInterventionCodes(params.awaitingIntervention.map((row) => row.baseCode)))}. So entra se avisar continua/P ou se a chefia atualizar.`,
+            `🔴 Intervenção sem confirmação (${params.awaitingIntervention.length}): ${joinPendingCodes(sortTelegramInterventionCodes(params.awaitingIntervention.map((row) => row.baseCode)))}`,
         );
     }
 
     if (params.missingIntervention.length > 0) {
         lines.push(
-            `🚑 Avancadas sem aviso (${params.missingIntervention.length}): ${joinPendingCodes(sortTelegramInterventionCodes(params.missingIntervention.map((row) => row.baseCode)))}`,
+            `🚑 Avançadas sem aviso (${params.missingIntervention.length}): ${joinPendingCodes(sortTelegramInterventionCodes(params.missingIntervention.map((row) => row.baseCode)))}`,
         );
     }
 
@@ -207,25 +215,25 @@ function resolveCoverageFooter(params: {
     missingRegulationCount: number;
 }) {
     if (params.unresolvedCount === 0) {
-        return "✅ Cobertura fechada até aqui. Obrigado por manterem base, ramal e turno claros para a coordenação.";
+        return "✅ Cobertura fechada.";
     }
 
     const elapsedMs = params.now.getTime() - resolveOperationalShiftWindow(params.now).startedAt.getTime();
     if (elapsedMs < 20 * 60 * 1000) {
         return params.missingRegulationCount > 0
-            ? "🫶 TARM precisa dos ramais ativos. Quem estiver na regulacao, por favor avise ramal e turno no padrao."
-            : "🫶 Quem continuou precisa avisar continua/P. Sem esse aviso ou ajuste da chefia, a avancada segue sem medico confirmado.";
+            ? "🫶 Regulação: avisem ramal e turno. TARM precisa dos ramais."
+            : "🫶 Quem continuou: avisem continua/P para confirmar posição.";
     }
 
     if (elapsedMs < 40 * 60 * 1000) {
         return params.missingRegulationCount > 0
-            ? "⚠️ Coordenação ainda está sem todos os ramais ativos. TARM precisa dos ramais ativos. Reguladores, por favor avisem o ramal agora para o TARM conseguir trabalhar com segurança."
-            : "⚠️ Coordenação ainda está sem avancadas confirmadas. Quem continuou precisa escrever continua/P agora. Sem isso ou ajuste da chefia, a posicao fica sem medico confirmado.";
+            ? "⚠️ TARM segue sem todos os ramais. Regulação: avisem agora."
+            : "⚠️ Posições sem continua/P seguem sem médico confirmado. Avisem agora.";
     }
 
     return params.missingRegulationCount > 0
-        ? "🚨 Sem aviso de base e ramal eu não fecho cobertura nem folha. TARM precisa dos ramais ativos. Regulação, por favor informe agora quem está em cada ramal."
-        : "🚨 Sem aviso de continua/P ou ajuste da chefia eu trato a avancada como sem medico confirmado no grupo, na cobertura e na folha. Intervencao, por favor atualize agora.";
+        ? "🚨 Sem ramal informado não fecho cobertura nem folha. Regulação: avisem agora."
+        : "🚨 Sem continua/P ou ajuste da chefia, posição fica sem médico na cobertura e folha.";
 }
 
 function pickInstructionExamples(nextShiftLabel: "SD" | "SN") {
@@ -287,10 +295,11 @@ function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan
 
     const coverage = summarizeCoverage(params.board, params.now);
     const interventionOperationalTotal = params.board.intervention.length - coverage.disabledIntervention.length;
+    const hasAwaitingNews = coverage.awaitingIntervention.length > 0;
     const regulationLines = [
-        renderSection(buildRegulationSection(coverage.confirmedRegulation), "- Nenhum ramal confirmado ate aqui"),
+        renderSection(buildRegulationSection(coverage.confirmedRegulation, true), "- Nenhum ramal confirmado até aqui"),
         coverage.missingRegulation.length > 0
-            ? `☎️ Ramais sem aviso (${coverage.missingRegulation.length}): ${joinPendingCodes(sortTelegramRegulationCodes(coverage.missingRegulation.map((row) => row.postCode)))}`
+            ? `Sem aviso (${coverage.missingRegulation.length}): ${joinPendingCodes(sortTelegramRegulationCodes(coverage.missingRegulation.map((row) => row.postCode)))}`
             : null,
     ].filter((line): line is string => Boolean(line));
 
@@ -305,12 +314,12 @@ function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan
             unresolvedCount: coverage.unresolvedCount,
         },
         text: [
-            `🧭 Quadro ${formatHour(bucket)} | Intervenção ${coverage.confirmedIntervention.length}/${interventionOperationalTotal} | Regulação ${coverage.confirmedRegulation.length}/${params.board.regulation.length}`,
+            `🧭 Quadro ${shiftWindow.shiftLabel} ${formatHour(bucket)} | Intervenção ${coverage.confirmedIntervention.length}/${interventionOperationalTotal} | Regulação ${coverage.confirmedRegulation.length}/${params.board.regulation.length}`,
             "",
-            "Intervenção:",
-            buildInterventionSection(params.board.intervention, params.now),
+            "🚑 Intervenção:",
+            buildInterventionSection(params.board.intervention, params.now, { includeArrival: true, currentShiftLabel: shiftWindow.shiftLabel }),
             "",
-            "Regulação:",
+            "☎️ Regulação:",
             regulationLines.join("\n"),
             "",
             resolveCoverageFooter({
@@ -318,6 +327,7 @@ function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan
                 unresolvedCount: coverage.unresolvedCount,
                 missingRegulationCount: coverage.missingRegulation.length,
             }),
+            ...(hasAwaitingNews ? ["🟡 = turno anterior sem confirmar continua/P"] : []),
         ].join("\n"),
     };
 }
@@ -350,13 +360,13 @@ function buildCoverageCheckpointPlan(params: ReminderPlanningParams): ReminderPl
             `📋 Fechamento público ${checkpointLabel}.`,
             "",
             "🚑 Intervenção confirmada:",
-            renderSection(buildInterventionSection(coverage.confirmedIntervention, params.now), "- Nenhuma avançada confirmada neste fechamento"),
+            renderSection(buildInterventionSection(coverage.confirmedIntervention, params.now, { includeArrival: true }), "- Nenhuma avançada confirmada neste fechamento"),
             "",
             "☎️ Regulação confirmada:",
-            renderSection(buildRegulationSection(coverage.confirmedRegulation), "- Nenhum ramal confirmado neste fechamento"),
+            renderSection(buildRegulationSection(coverage.confirmedRegulation, true), "- Nenhum ramal confirmado neste fechamento"),
             ...(pendingLines.length > 0
-                ? ["", "🟠 Pendências ainda abertas:", pendingLines.join("\n"), "", "⚠️ Quem ainda não avisou base ou ramal, por favor informe agora para a coordenação fechar a cobertura."]
-                : ["", "✅ Cobertura confirmada para a coordenação neste fechamento."]),
+                ? ["", "🟠 Pendências ainda abertas:", pendingLines.join("\n"), "", "⚠️ Quem não avisou base ou ramal, informe agora para fechar a cobertura."]
+                : ["", "✅ Cobertura confirmada neste fechamento."]),
         ].join("\n"),
     };
 }
@@ -370,8 +380,8 @@ function buildPaymentCheckpointPlan(params: ReminderPlanningParams): ReminderPla
     const checkpointLabel = formatCheckpointLabel(parts.hour);
     const shiftLabel = resolveOperationalShiftWindow(params.now).shiftLabel;
     const coverage = summarizeCoverage(params.board, params.now);
-    const confirmedIntervention = coverage.confirmedIntervention.map((row) => `- ${row.baseCode} - ${formatFullName(row.doctorName, row.displayName)} | chegada ${formatHour(row.startedAt)} | ${row.shiftLabel ?? shiftLabel}`);
-    const confirmedRegulation = coverage.confirmedRegulation.map((row) => `- ${row.postCode} - ${formatFullName(row.doctorName, row.displayName)} | chegada ${formatHour(row.startedAt)} | ${row.shiftLabel ?? shiftLabel}`);
+    const confirmedIntervention = coverage.confirmedIntervention.map((row) => `- ${row.baseCode} - ${formatReminderDoctorName(row.doctorName, row.displayName)} | chegada ${formatHour(row.startedAt)} | ${row.shiftLabel ?? shiftLabel}`);
+    const confirmedRegulation = coverage.confirmedRegulation.map((row) => `- ${row.postCode} - ${formatReminderDoctorName(row.doctorName, row.displayName)} | chegada ${formatHour(row.startedAt)} | ${row.shiftLabel ?? shiftLabel}`);
     const pendingLines = buildGroupedPendingLines({
         awaitingIntervention: coverage.awaitingIntervention,
         missingIntervention: coverage.missingIntervention,
@@ -391,14 +401,78 @@ function buildPaymentCheckpointPlan(params: ReminderPlanningParams): ReminderPla
         text: [
             `🧾 Registro ${checkpointLabel} para pagamento e banco de horas.`,
             "",
-            "🚑 Intervencao confirmada:",
-            confirmedIntervention.length > 0 ? confirmedIntervention.join("\n") : "- Nenhuma avancada confirmada neste recorte",
+            "🚑 Intervenção confirmada:",
+            confirmedIntervention.length > 0 ? confirmedIntervention.join("\n") : "- Nenhuma avançada confirmada neste recorte",
             "",
-            "☎️ Regulacao confirmada:",
+            "☎️ Regulação confirmada:",
             confirmedRegulation.length > 0 ? confirmedRegulation.join("\n") : "- Nenhum ramal confirmado neste recorte",
             ...(pendingLines.length > 0
-                ? ["", "🟠 Pendencias que ainda exigem conferencia:", pendingLines.join("\n")]
+                ? ["", "🟠 Pendências que exigem conferência:", pendingLines.join("\n")]
                 : []),
+        ].join("\n"),
+    };
+}
+
+function resolveRegulationConfirmationSlot(parts: ReturnType<typeof getSaoPauloParts>) {
+    if (parts.hour === 11 && parts.minute < 10) {
+        return "11:00";
+    }
+
+    if (parts.hour === 13 && parts.minute < 10) {
+        return "13:00";
+    }
+
+    if (parts.hour === 15 && parts.minute < 10) {
+        return "15:00";
+    }
+
+    if (parts.hour === 21 && parts.minute >= 30 && parts.minute < 40) {
+        return "21:30";
+    }
+
+    if (parts.hour === 22 && parts.minute < 10) {
+        return "22:00";
+    }
+
+    if (parts.hour === 22 && parts.minute >= 30 && parts.minute < 40) {
+        return "22:30";
+    }
+
+    return null;
+}
+
+function buildRegulationConfirmationPlan(params: ReminderPlanningParams): ReminderPlan | null {
+    const parts = getSaoPauloParts(params.now);
+    const slot = resolveRegulationConfirmationSlot(parts);
+    if (!slot) {
+        return null;
+    }
+
+    const confirmedRegulation = sortTelegramRegulationRows(
+        params.board.regulation.filter((row) => row.status === "active"),
+    );
+    const occupiedLines = confirmedRegulation.map((row) => `✅ ${row.postCode} - ${formatReminderDoctorName(row.doctorName, row.displayName)}`);
+    const occupiedCount = confirmedRegulation.length;
+    const dateLabel = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+
+    return {
+        noticeKey: `reg-confirm:${dateLabel}T${slot}`,
+        stage: "regulation_confirmation",
+        payload: {
+            checkpointLabel: slot,
+            occupiedCount,
+        },
+        text: [
+            `☎️🧭 Checagem da Regulação ${slot}`,
+            "",
+            `👥 Reguladores confirmados no turno: ${occupiedCount}`,
+            "",
+            "📞 Ramais ocupados agora:",
+            occupiedLines.length > 0 ? occupiedLines.join("\n") : "⚠️ Sem ramal ocupado registrado no momento.",
+            "",
+            "🧠 Inclui NUCLEO e PIAM quando ocupados.",
+            "👨‍✈️ Chefia, por favor confirme no grupo: são só esses mesmo ou faltou alguém confirmar?",
+            "🚨 Se faltou, avisem agora com nome + ramal + turno (SD/SN/P).",
         ].join("\n"),
     };
 }
@@ -409,6 +483,7 @@ export function buildReminderPlans(params: ReminderPlanningParams) {
         buildCoverageSnapshotPlan(params),
         buildCoverageCheckpointPlan(params),
         buildPaymentCheckpointPlan(params),
+        buildRegulationConfirmationPlan(params),
     ].filter((plan): plan is ReminderPlan => Boolean(plan));
 }
 

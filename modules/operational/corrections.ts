@@ -1,3 +1,23 @@
+/**
+ * Operational Occupancy Corrections
+ *
+ * Purpose: Correct, remove, and transfer regulation/intervention occupancies.
+ * Used by chief-access UI and Telegram /corrigir commands.
+ *
+ * Source of truth for: occupancy time corrections, cross-target transfers,
+ * and occupancy removal with proper bank-hours recalculation.
+ *
+ * DANGER: Zero test coverage (P0). Side effects include:
+ *   - Bank hours recalculation (syncBankHoursByContinuityGroup)
+ *   - Board state reconciliation (displacement, deactivation sync)
+ *   - Live board event emission (publishBoardUpdate)
+ *
+ * Invariants:
+ *   - startedAt < endedAt always (validated by validateChronology)
+ *   - Transfers displace any existing open occupancy at the target
+ *   - Removal cascades to bank-hours entries for that occupancy
+ *   - actualEndedAt tracks the real departure; endedAt tracks scheduled handoff
+ */
 import { and, asc, desc, eq, isNull, ne, notInArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
@@ -5,15 +25,16 @@ import {
     interventionBaseDeactivations,
     interventionBases,
     interventionOccupancies,
+    regulationPostDeactivations,
     regulationOccupancies,
     regulationPosts,
 } from "@/db/schema";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
-import { inferRegulationCoverageWindow } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
-import { expireStaleRegulationOccupancies } from "@/modules/regulation/service";
+import { expireStaleRegulationOccupancies, isRegulationPostDeactivationActive } from "@/modules/regulation/service";
 
 type OptionalDate = Date | null | undefined;
 type Executor = any;
@@ -29,6 +50,7 @@ interface OccupancySnapshot {
     domain: OperationalDomain;
     doctorId: string;
     continuityGroupId: string;
+    source: string | null;
     targetId: number;
     startedAt: Date;
     boardStartedAt: Date | null;
@@ -86,7 +108,7 @@ function sameTarget(left: OperationalTransferTargetInput, right: OperationalTran
     return left.domain === right.domain && left.targetId === right.targetId;
 }
 
-function mergeOperationalNotes(...segments: Array<string | null | undefined>) {
+export function mergeOperationalNotes(...segments: Array<string | null | undefined>) {
     const normalized = segments
         .map((segment) => segment?.trim())
         .filter((segment): segment is string => Boolean(segment));
@@ -116,7 +138,7 @@ function hasOwn<T extends object, K extends PropertyKey>(value: T, key: K): valu
     return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function validateChronology(startedAt: Date, boardStartedAt: Date | null, endedAt: Date | null, actualEndedAt: Date | null) {
+export function validateChronology(startedAt: Date, boardStartedAt: Date | null, endedAt: Date | null, actualEndedAt: Date | null) {
     if (boardStartedAt && boardStartedAt.getTime() < startedAt.getTime()) {
         throw new Error("Board start cannot be before the recorded arrival.");
     }
@@ -127,6 +149,30 @@ function validateChronology(startedAt: Date, boardStartedAt: Date | null, endedA
         throw new Error("Actual end cannot be before the recorded arrival.");
     }
     if (endedAt && boardStartedAt && endedAt.getTime() < boardStartedAt.getTime()) {
+        throw new Error("Board end cannot be before the board start.");
+    }
+}
+
+export function validateCorrectionChronology(params: {
+    startedAt: Date;
+    boardStartedAt: Date | null;
+    endedAt: Date | null;
+    actualEndedAt: Date | null;
+    startedAtChanged?: boolean;
+    boardStartedAtChanged?: boolean;
+    endedAtChanged?: boolean;
+    actualEndedAtChanged?: boolean;
+}) {
+    if ((params.startedAtChanged || params.boardStartedAtChanged) && params.boardStartedAt && params.boardStartedAt.getTime() < params.startedAt.getTime()) {
+        throw new Error("Board start cannot be before the recorded arrival.");
+    }
+    if ((params.startedAtChanged || params.endedAtChanged) && params.endedAt && params.endedAt.getTime() < params.startedAt.getTime()) {
+        throw new Error("Board end cannot be before the recorded arrival.");
+    }
+    if ((params.startedAtChanged || params.actualEndedAtChanged) && params.actualEndedAt && params.actualEndedAt.getTime() < params.startedAt.getTime()) {
+        throw new Error("Actual end cannot be before the recorded arrival.");
+    }
+    if ((params.endedAtChanged || params.boardStartedAtChanged) && params.endedAt && params.boardStartedAt && params.endedAt.getTime() < params.boardStartedAt.getTime()) {
         throw new Error("Board end cannot be before the board start.");
     }
 }
@@ -206,6 +252,7 @@ async function loadOccupancySnapshot(tx: Executor, params: {
             domain: "regulation",
             doctorId: occupancy.doctorId,
             continuityGroupId: occupancy.continuityGroupId,
+            source: occupancy.source,
             targetId: occupancy.postId,
             startedAt: occupancy.startedAt,
             boardStartedAt: occupancy.boardStartedAt,
@@ -233,6 +280,7 @@ async function loadOccupancySnapshot(tx: Executor, params: {
         domain: "intervention",
         doctorId: occupancy.doctorId,
         continuityGroupId: occupancy.continuityGroupId,
+        source: occupancy.source,
         targetId: occupancy.baseId,
         startedAt: occupancy.startedAt,
         boardStartedAt: occupancy.boardStartedAt,
@@ -255,6 +303,22 @@ async function resolveTargetMetadata(tx: Executor, target: OperationalTransferTa
 
         if (!post || !post.isActive) {
             throw new Error("Ramal de destino indisponivel para este remanejamento.");
+        }
+
+        const activeDeactivation = await tx.query.regulationPostDeactivations.findFirst({
+            where: and(
+                eq(regulationPostDeactivations.postId, target.targetId),
+                isNull(regulationPostDeactivations.reactivatedAt),
+            ),
+            orderBy: [desc(regulationPostDeactivations.deactivatedAt)],
+        });
+
+        if (activeDeactivation && isRegulationPostDeactivationActive({
+            deactivatedAt: activeDeactivation.deactivatedAt,
+            reactivatedAt: activeDeactivation.reactivatedAt,
+            referenceAt: new Date(),
+        })) {
+            throw new Error(`O ramal ${post.code} esta desativado e nao pode receber remanejamento agora.`);
         }
 
         return {
@@ -435,17 +499,43 @@ export async function correctRegulationOccupancy(
             throw new Error("Ramal de destino indisponivel para esta troca.");
         }
 
-        validateChronology(startedAt, boardStartedAt, endedAt, actualEndedAt);
+        // Only validate chronology when a temporal field is being edited.
+        // Continuity occupancies legitimately have boardStartedAt < startedAt
+        // (boardStartedAt = original arrival from previous shift, startedAt = continuation
+        // entry on the new shift). Non-temporal corrections (roleLabel, notes) must not
+        // trigger validation on pre-existing temporal state.
+        const startedAtChanged = hasOwn(input, "startedAt");
+        const boardStartedAtChanged = hasOwn(input, "boardStartedAt");
+        const endedAtChanged = hasOwn(input, "endedAt");
+        const actualEndedAtChanged = hasOwn(input, "actualEndedAt");
+        if (startedAtChanged || boardStartedAtChanged || endedAtChanged || actualEndedAtChanged) {
+            validateCorrectionChronology({
+                startedAt,
+                boardStartedAt,
+                endedAt,
+                actualEndedAt,
+                startedAtChanged,
+                boardStartedAtChanged,
+                endedAtChanged,
+                actualEndedAtChanged,
+            });
+        }
 
         // Recalculate scheduled window whenever startedAt or shiftLabel is corrected.
         // Without this, /corrigir would leave stale scheduled_start_at/scheduled_end_at
         // pointing at the wrong shift after an arrival-time or shift-label edit.
+        // For continuity entries (boardStartedAt > startedAt), use boardStartedAt as
+        // the window reference so the scheduled window matches the current shift.
         const nextShiftLabel = hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel;
-        const scheduledWindowChanged = hasOwn(input, "startedAt") || hasOwn(input, "shiftLabel");
+        const scheduledWindowChanged = hasOwn(input, "startedAt") || hasOwn(input, "shiftLabel") || hasOwn(input, "boardStartedAt");
+        const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
+            ? boardStartedAt
+            : startedAt;
         const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = scheduledWindowChanged
             ? inferRegulationCoverageWindow({
-                startedAt,
+                startedAt: windowReferenceAt,
                 shiftLabel: nextShiftLabel,
+                postCode: targetPost.code,
                 explicitScheduledStartAt: null,
                 explicitScheduledEndAt: null,
             })
@@ -515,16 +605,47 @@ export async function correctInterventionOccupancy(
         const endedAt = hasOwn(input, "endedAt") ? (input.endedAt ?? null) : existing.endedAt;
         const actualEndedAt = hasOwn(input, "actualEndedAt") ? (input.actualEndedAt ?? null) : existing.actualEndedAt;
 
-        validateChronology(startedAt, boardStartedAt, endedAt, actualEndedAt);
+        const startedAtChanged = hasOwn(input, "startedAt");
+        const boardStartedAtChanged = hasOwn(input, "boardStartedAt");
+        const endedAtChanged = hasOwn(input, "endedAt");
+        const actualEndedAtChanged = hasOwn(input, "actualEndedAt");
+        if (startedAtChanged || boardStartedAtChanged || endedAtChanged || actualEndedAtChanged) {
+            validateCorrectionChronology({
+                startedAt,
+                boardStartedAt,
+                endedAt,
+                actualEndedAt,
+                startedAtChanged,
+                boardStartedAtChanged,
+                endedAtChanged,
+                actualEndedAtChanged,
+            });
+        }
+
+        const nextShiftLabel = hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel;
+        const scheduledWindowChanged = startedAtChanged || boardStartedAtChanged || hasOwn(input, "shiftLabel");
+        const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
+            ? boardStartedAt
+            : startedAt;
+        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = scheduledWindowChanged
+            ? inferInterventionCoverageWindow({
+                startedAt: windowReferenceAt,
+                shiftLabel: nextShiftLabel,
+                explicitScheduledStartAt: null,
+                explicitScheduledEndAt: null,
+            })
+            : { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt };
 
         const [updated] = await tx.update(interventionOccupancies)
             .set({
                 doctorId: hasOwn(input, "doctorId") ? input.doctorId ?? existing.doctorId : existing.doctorId,
                 startedAt,
                 boardStartedAt,
+                scheduledStartAt: newScheduledStart,
+                scheduledEndAt: newScheduledEnd,
                 endedAt,
                 actualEndedAt,
-                shiftLabel: hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel,
+                shiftLabel: nextShiftLabel,
                 roleLabel: hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel,
                 notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,
@@ -661,9 +782,9 @@ export async function transferOperationalOccupancy(
 
         let displaced:
             | {
-                removedOccupancyId: string;
-                createdOccupancyId: string | null;
-                continuityGroupId: string;
+                removedSnapshot: OccupancySnapshot;
+                createdSnapshot: OccupancySnapshot | null;
+                relocationTarget: TargetMetadata | null;
             }
             | null = null;
 
@@ -703,16 +824,21 @@ export async function transferOperationalOccupancy(
                     affectedInterventionBases.add(relocated.targetId);
                 }
 
+                const relocatedSnapshot = await loadOccupancySnapshot(tx, {
+                    domain: relocated.domain,
+                    occupancyId: relocated.id,
+                });
+
                 displaced = {
-                    removedOccupancyId: displacedSnapshot.id,
-                    createdOccupancyId: relocated.id,
-                    continuityGroupId: displacedSnapshot.continuityGroupId,
+                    removedSnapshot: displacedSnapshot,
+                    createdSnapshot: relocatedSnapshot,
+                    relocationTarget: relocationTarget,
                 };
             } else {
                 displaced = {
-                    removedOccupancyId: displacedSnapshot.id,
-                    createdOccupancyId: null,
-                    continuityGroupId: displacedSnapshot.continuityGroupId,
+                    removedSnapshot: displacedSnapshot,
+                    createdSnapshot: null,
+                    relocationTarget: null,
                 };
             }
 
@@ -759,10 +885,18 @@ export async function transferOperationalOccupancy(
             await syncBankHoursByContinuityGroup(tx, continuityGroupId);
         }
 
+        const movedSnapshot = await loadOccupancySnapshot(tx, {
+            domain: created.domain,
+            occupancyId: created.id,
+        });
+
         return {
             movedOccupancyId: created.id,
             movedDomain: created.domain,
             displaced,
+            sourceSnapshot: source,
+            sourceTarget,
+            movedSnapshot,
             sourceContinuityGroupId: source.continuityGroupId,
             destination: destinationTarget,
         };

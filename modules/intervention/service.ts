@@ -1,18 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, isNull, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, isNotNull, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
-import { interventionBaseDeactivations, interventionBases, interventionOccupancies } from "@/db/schema";
+import { doctors, interventionBaseDeactivations, interventionBases, interventionOccupancies, regulationOccupancies } from "@/db/schema";
+import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours } from "@/modules/bank-hours/service";
-import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt } from "@/modules/operational/rules";
 
 type Executor = any;
+const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
+const MIN_SAFE_OCCUPANCY_DURATION_MS = 60 * 1000;
 
 export interface StartInterventionOccupancyInput {
     doctorId: string;
     baseId: number;
     continuityGroupId?: string | null;
+    previousOccupancyId?: string | null;
+    isContinuityEntry?: boolean;
     startedAt: Date;
     boardStartedAt?: Date | null;
     scheduledStartAt?: Date | null;
@@ -42,19 +47,39 @@ export function resolveContinuationBoardStartedAt(params: {
     boardStartedAt?: Date | null;
     continuedAt: Date;
 }) {
-    const currentBoardStartedAt = params.boardStartedAt ?? params.startedAt;
-    const continuationShiftStart = resolveOperationalShiftWindow(params.continuedAt).startedAt;
-    return continuationShiftStart.getTime() > currentBoardStartedAt.getTime()
-        ? continuationShiftStart
-        : currentBoardStartedAt;
+    // Always preserve the earliest boardStartedAt. When a doctor continues across
+    // shifts (SD→SN, P→SN), the board must reflect their original arrival time so
+    // that operational priority correctly shows who has been present longer.
+    return params.boardStartedAt ?? params.startedAt;
+}
+
+export function shouldReuseImplicitContinuitySource(referenceAt: Date, sourceEndedAt?: Date | null) {
+    if (!sourceEndedAt) {
+        return true;
+    }
+
+    return Math.abs(referenceAt.getTime() - sourceEndedAt.getTime()) <= AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS;
 }
 
 function clampOccupancyEndAt(startedAt: Date, endedAt: Date) {
     return endedAt.getTime() < startedAt.getTime() ? startedAt : endedAt;
 }
 
+export function resolveSafeInterventionHandoffAt(params: {
+    sourceStartedAt: Date;
+    requestedAt: Date;
+}) {
+    const handoffAt = params.requestedAt.getTime() >= params.sourceStartedAt.getTime()
+        ? params.requestedAt
+        : params.sourceStartedAt;
+
+    return handoffAt.getTime() - params.sourceStartedAt.getTime() >= MIN_SAFE_OCCUPANCY_DURATION_MS
+        ? handoffAt
+        : null;
+}
+
 export function resolveInterventionBaseDeactivationExpiresAt(deactivatedAt: Date) {
-    return resolveOperationalShiftWindow(deactivatedAt).nextBoundaryAt;
+    return new Date("9999-12-31T23:59:59.999Z");
 }
 
 export function isInterventionBaseDeactivationActive(params: {
@@ -66,12 +91,7 @@ export function isInterventionBaseDeactivationActive(params: {
         return false;
     }
 
-    const expiresAt = resolveInterventionBaseDeactivationExpiresAt(params.deactivatedAt);
-    const effectiveEndAt = params.reactivatedAt && params.reactivatedAt.getTime() < expiresAt.getTime()
-        ? params.reactivatedAt
-        : expiresAt;
-
-    return params.referenceAt.getTime() < effectiveEndAt.getTime();
+    return !params.reactivatedAt || params.referenceAt.getTime() < params.reactivatedAt.getTime();
 }
 
 export function resolveInterventionOccupancyActivationReferenceAt(params: {
@@ -92,13 +112,7 @@ async function closeExpiredInterventionBaseDeactivation(tx: Executor, params: {
     expiredAt: Date;
     updatedByUserId?: string | null;
 }) {
-    await tx.update(interventionBaseDeactivations)
-        .set({
-            reactivatedAt: params.expiredAt,
-            updatedByUserId: params.updatedByUserId ?? null,
-            updatedAt: new Date(),
-        })
-        .where(eq(interventionBaseDeactivations.id, params.deactivationId));
+    return;
 }
 
 async function findActiveInterventionBaseDeactivation(tx: Executor, params: {
@@ -110,6 +124,7 @@ async function findActiveInterventionBaseDeactivation(tx: Executor, params: {
         where: and(
             eq(interventionBaseDeactivations.baseId, params.baseId),
             isNull(interventionBaseDeactivations.reactivatedAt),
+            lte(interventionBaseDeactivations.deactivatedAt, params.referenceAt),
         ),
         orderBy: [desc(interventionBaseDeactivations.deactivatedAt)],
     });
@@ -118,51 +133,11 @@ async function findActiveInterventionBaseDeactivation(tx: Executor, params: {
         return null;
     }
 
-    if (isInterventionBaseDeactivationActive({
-        deactivatedAt: openDeactivation.deactivatedAt,
-        reactivatedAt: openDeactivation.reactivatedAt,
-        referenceAt: params.referenceAt,
-    })) {
-        return openDeactivation;
-    }
-
-    await closeExpiredInterventionBaseDeactivation(tx, {
-        deactivationId: openDeactivation.id,
-        expiredAt: resolveInterventionBaseDeactivationExpiresAt(openDeactivation.deactivatedAt),
-        updatedByUserId: params.updatedByUserId ?? null,
-    });
-
-    return null;
+    return openDeactivation;
 }
 
 export async function expireInterventionBaseDeactivations(referenceAt: Date, updatedByUserId?: string | null) {
-    const db = getDb();
-    return db.transaction(async (tx) => {
-        const openDeactivations = await tx.query.interventionBaseDeactivations.findMany({
-            where: isNull(interventionBaseDeactivations.reactivatedAt),
-            orderBy: [asc(interventionBaseDeactivations.deactivatedAt)],
-        });
-
-        let expiredCount = 0;
-        for (const deactivation of openDeactivations) {
-            if (isInterventionBaseDeactivationActive({
-                deactivatedAt: deactivation.deactivatedAt,
-                reactivatedAt: deactivation.reactivatedAt,
-                referenceAt,
-            })) {
-                continue;
-            }
-
-            await closeExpiredInterventionBaseDeactivation(tx, {
-                deactivationId: deactivation.id,
-                expiredAt: resolveInterventionBaseDeactivationExpiresAt(deactivation.deactivatedAt),
-                updatedByUserId: updatedByUserId ?? null,
-            });
-            expiredCount += 1;
-        }
-
-        return expiredCount;
-    });
+    return 0;
 }
 
 async function assertInterventionBaseExists(baseId: number) {
@@ -180,10 +155,90 @@ async function assertInterventionBaseExists(baseId: number) {
 
 export async function startInterventionOccupancy(input: StartInterventionOccupancyInput) {
     const db = getDb();
+    let autoReactivated = false;
+    let closedPreviousBaseId: number | null = null;
     const created = await db.transaction(async (tx) => {
-        const normalizedShiftLabel = input.shiftLabel ?? resolveOperationalShiftWindow(input.startedAt).shiftLabel;
+        const doctor = await tx.query.doctors.findFirst({
+            where: eq(doctors.id, input.doctorId),
+            columns: { metadata: true },
+        });
+        const defaultDoctorRoleLabel = input.roleLabel ?? extractDoctorPreferredOperationalRole(doctor?.metadata);
+
+        let resolvedContinuityGroupId = input.continuityGroupId ?? null;
+        if (!resolvedContinuityGroupId && input.previousOccupancyId) {
+            const previous = await tx.query.interventionOccupancies.findFirst({
+                where: eq(interventionOccupancies.id, input.previousOccupancyId),
+                columns: { continuityGroupId: true },
+            });
+            if (!previous) {
+                const previousReg = await tx.query.regulationOccupancies.findFirst({
+                    where: eq(regulationOccupancies.id, input.previousOccupancyId),
+                    columns: { continuityGroupId: true },
+                });
+                resolvedContinuityGroupId = previousReg?.continuityGroupId ?? null;
+            } else {
+                resolvedContinuityGroupId = previous.continuityGroupId ?? null;
+            }
+        }
+
+        // Step 2: auto-resolve for continuity entries — find doctor's most recent occupancy
+        if (input.isContinuityEntry && !resolvedContinuityGroupId) {
+            const latestInt = await tx.query.interventionOccupancies.findFirst({
+                where: eq(interventionOccupancies.doctorId, input.doctorId),
+                orderBy: [desc(interventionOccupancies.startedAt)],
+                columns: { continuityGroupId: true, boardStartedAt: true, startedAt: true, endedAt: true },
+            });
+            const latestReg = await tx.query.regulationOccupancies.findFirst({
+                where: eq(regulationOccupancies.doctorId, input.doctorId),
+                orderBy: [desc(regulationOccupancies.startedAt)],
+                columns: { continuityGroupId: true, boardStartedAt: true, startedAt: true, endedAt: true },
+            });
+            const latest = latestInt && latestReg
+                ? (latestInt.startedAt.getTime() >= latestReg.startedAt.getTime() ? latestInt : latestReg)
+                : (latestInt ?? latestReg);
+            if (latest && shouldReuseImplicitContinuitySource(input.startedAt, latest.endedAt ?? null)) {
+                resolvedContinuityGroupId = latest.continuityGroupId;
+            }
+        }
+
+        // Step 3: walk the continuity chain to find the earliest boardStartedAt
+        let resolvedBoardStartedAt: Date | null = input.boardStartedAt ?? null;
+        if (input.isContinuityEntry && resolvedContinuityGroupId && !input.boardStartedAt) {
+            const earliestInt = await tx.query.interventionOccupancies.findFirst({
+                where: and(
+                    eq(interventionOccupancies.doctorId, input.doctorId),
+                    eq(interventionOccupancies.continuityGroupId, resolvedContinuityGroupId),
+                ),
+                orderBy: [asc(interventionOccupancies.boardStartedAt)],
+                columns: { boardStartedAt: true, startedAt: true },
+            });
+            const earliestReg = await tx.query.regulationOccupancies.findFirst({
+                where: and(
+                    eq(regulationOccupancies.doctorId, input.doctorId),
+                    eq(regulationOccupancies.continuityGroupId, resolvedContinuityGroupId),
+                ),
+                orderBy: [asc(regulationOccupancies.boardStartedAt)],
+                columns: { boardStartedAt: true, startedAt: true },
+            });
+            const candidates = [earliestInt, earliestReg].filter(Boolean) as { boardStartedAt: Date; startedAt: Date }[];
+            if (candidates.length > 0) {
+                const earliest = candidates.reduce((best, current) => {
+                    const bestTime = (best.boardStartedAt ?? best.startedAt).getTime();
+                    const curTime = (current.boardStartedAt ?? current.startedAt).getTime();
+                    return curTime < bestTime ? current : best;
+                });
+                resolvedBoardStartedAt = earliest.boardStartedAt ?? earliest.startedAt;
+            }
+        }
+
+        const effectiveBoardStartedAt = resolvedBoardStartedAt ?? input.startedAt;
+
+        const windowReferenceAt = effectiveBoardStartedAt.getTime() > input.startedAt.getTime()
+            ? effectiveBoardStartedAt
+            : input.startedAt;
+        const normalizedShiftLabel = input.shiftLabel ?? resolveArrivalShiftLabel(windowReferenceAt);
         const { scheduledStartAt: inferredScheduledStartAt, scheduledEndAt: inferredScheduledEndAt } = inferInterventionCoverageWindow({
-            startedAt: input.startedAt,
+            startedAt: windowReferenceAt,
             shiftLabel: normalizedShiftLabel,
             explicitScheduledStartAt: input.scheduledStartAt ?? null,
             explicitScheduledEndAt: input.scheduledEndAt ?? null,
@@ -199,7 +254,15 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
         });
 
         if (activeDeactivation) {
-            throw new Error("Base desativada. Reative a USA antes de abrir nova cobertura.");
+            // Auto-reactivate: doctor arrival implicitly reactivates the base
+            await tx.update(interventionBaseDeactivations)
+                .set({
+                    reactivatedAt: input.startedAt,
+                    updatedByUserId: input.createdByUserId ?? null,
+                    updatedAt: new Date(),
+                })
+                .where(eq(interventionBaseDeactivations.id, activeDeactivation.id));
+            autoReactivated = true;
         }
         const existing = await tx.query.interventionOccupancies.findFirst({
             where: and(
@@ -207,6 +270,109 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 isNull(interventionOccupancies.endedAt),
             ),
         });
+
+        // Same doctor on same base: update in place instead of close+create.
+        if (existing && existing.doctorId === input.doctorId) {
+            // Preserve the earliest boardStartedAt — but only if it belongs to the current
+            // operational shift context. A stale anchor from a past shift would cause the
+            // occupancy to be invisible on the board (board-rules visibility check would expire it).
+            const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
+            const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
+            const existingAnchorIsStale = existing.boardStartedAt!.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
+            const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existing.boardStartedAt!.getTime())
+                ? effectiveBoardStartedAt
+                : existing.boardStartedAt!;
+
+            const keptContinuityGroupId = resolvedContinuityGroupId ?? existing.continuityGroupId;
+
+            // F2 safety: never allow started_at to advance forward past the existing value.
+            const keptStartedAt = input.startedAt.getTime() < existing.startedAt.getTime()
+                ? input.startedAt
+                : existing.startedAt;
+
+            const windowRef = keptBoardStartedAt.getTime() > keptStartedAt.getTime()
+                ? keptBoardStartedAt : keptStartedAt;
+            const { scheduledStartAt: recalcStart, scheduledEndAt: recalcEnd } = inferInterventionCoverageWindow({
+                startedAt: windowRef,
+                shiftLabel: input.shiftLabel ?? existing.shiftLabel,
+                explicitScheduledStartAt: null,
+                explicitScheduledEndAt: null,
+            });
+
+            const [updated] = await tx.update(interventionOccupancies)
+                .set({
+                    startedAt: keptStartedAt,
+                    boardStartedAt: keptBoardStartedAt,
+                    continuityGroupId: keptContinuityGroupId,
+                    scheduledStartAt: recalcStart,
+                    scheduledEndAt: recalcEnd,
+                    shiftLabel: input.shiftLabel ?? existing.shiftLabel,
+                    roleLabel: input.roleLabel !== undefined ? input.roleLabel : existing.roleLabel,
+                    notes: input.notes ? `${existing.notes ?? ""}\n${input.notes}`.trim() : existing.notes,
+                    updatedByUserId: input.createdByUserId ?? null,
+                    updatedAt: new Date(),
+                })
+                .where(eq(interventionOccupancies.id, existing.id))
+                .returning();
+
+            await syncInterventionBankHours(tx, existing.id);
+            return updated;
+        }
+
+        const otherBaseOccupancy = await tx.query.interventionOccupancies.findFirst({
+            where: and(
+                eq(interventionOccupancies.doctorId, input.doctorId),
+                ne(interventionOccupancies.baseId, input.baseId),
+                isNull(interventionOccupancies.endedAt),
+            ),
+            orderBy: [desc(interventionOccupancies.startedAt)],
+        });
+
+        if (otherBaseOccupancy) {
+            const otherCloseAt = resolveSafeInterventionHandoffAt({
+                sourceStartedAt: otherBaseOccupancy.startedAt,
+                requestedAt: input.startedAt,
+            });
+
+            if (otherCloseAt) {
+                await tx.update(interventionOccupancies)
+                    .set({
+                        endedAt: otherCloseAt,
+                        actualEndedAt: otherCloseAt,
+                        updatedByUserId: input.createdByUserId ?? null,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(interventionOccupancies.id, otherBaseOccupancy.id));
+
+                if (otherBaseOccupancy.boardStartedAt) {
+                    const replacement = await tx.query.interventionOccupancies.findFirst({
+                        where: and(
+                            eq(interventionOccupancies.baseId, otherBaseOccupancy.baseId),
+                            isNull(interventionOccupancies.boardStartedAt),
+                            isNull(interventionOccupancies.endedAt),
+                        ),
+                        orderBy: [asc(interventionOccupancies.startedAt)],
+                    });
+
+                    if (replacement && replacement.startedAt.getTime() <= otherCloseAt.getTime()) {
+                        await tx.update(interventionOccupancies)
+                            .set({
+                                boardStartedAt: otherCloseAt,
+                                updatedByUserId: input.createdByUserId ?? null,
+                                updatedAt: new Date(),
+                            })
+                            .where(eq(interventionOccupancies.id, replacement.id));
+                    }
+                }
+
+                await syncInterventionBankHours(tx, otherBaseOccupancy.id);
+                closedPreviousBaseId = otherBaseOccupancy.baseId;
+            }
+
+            if (!resolvedContinuityGroupId) {
+                resolvedContinuityGroupId = otherBaseOccupancy.continuityGroupId;
+            }
+        }
 
         const shouldTakeBoardImmediately = input.source !== "import";
         const currentBoardCarrier = existing?.boardStartedAt ? existing : await tx.query.interventionOccupancies.findFirst({
@@ -219,32 +385,40 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
         });
 
         if (shouldTakeBoardImmediately && currentBoardCarrier) {
-            const takeoverAt = input.startedAt.getTime() >= currentBoardCarrier.startedAt.getTime()
-                ? input.startedAt
-                : currentBoardCarrier.startedAt;
+            const takeoverAt = resolveSafeInterventionHandoffAt({
+                sourceStartedAt: currentBoardCarrier.startedAt,
+                requestedAt: input.startedAt,
+            });
 
-            await tx.update(interventionOccupancies)
-                .set({
-                    endedAt: takeoverAt,
-                    actualEndedAt: takeoverAt,
-                    updatedByUserId: input.createdByUserId ?? null,
-                    updatedAt: new Date(),
-                })
-                .where(eq(interventionOccupancies.id, currentBoardCarrier.id));
+            // P2: guard against zero-duration occupancies caused by retroactive or duplicate arrivals.
+            if (!takeoverAt && currentBoardCarrier.doctorId !== input.doctorId) {
+                throw new Error("arrival_conflicts_with_active_occupancy");
+            }
 
-            await syncInterventionBankHours(tx, currentBoardCarrier.id);
+            if (takeoverAt && currentBoardCarrier.doctorId !== input.doctorId) {
+                await tx.update(interventionOccupancies)
+                    .set({
+                        endedAt: takeoverAt,
+                        actualEndedAt: takeoverAt,
+                        updatedByUserId: input.createdByUserId ?? null,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(interventionOccupancies.id, currentBoardCarrier.id));
+
+                await syncInterventionBankHours(tx, currentBoardCarrier.id);
+            }
         }
 
         const [created] = await tx.insert(interventionOccupancies).values({
             doctorId: input.doctorId,
             baseId: input.baseId,
-            continuityGroupId: input.continuityGroupId ?? randomUUID(),
+            continuityGroupId: resolvedContinuityGroupId ?? randomUUID(),
             scheduledStartAt: inferredScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
-            boardStartedAt: shouldTakeBoardImmediately || !existing ? (input.boardStartedAt ?? input.startedAt) : null,
+            boardStartedAt: shouldTakeBoardImmediately || !existing ? effectiveBoardStartedAt : null,
             shiftLabel: normalizedShiftLabel,
-            roleLabel: input.roleLabel ?? null,
+            roleLabel: defaultDoctorRoleLabel ?? null,
             source: input.source,
             notes: input.notes ?? null,
             createdByUserId: input.createdByUserId ?? null,
@@ -276,7 +450,13 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
     });
 
     publishBoardUpdate(`intervention:start:${input.baseId}`);
-    return created;
+    if (closedPreviousBaseId) {
+        publishBoardUpdate(`intervention:end:${closedPreviousBaseId}`);
+    }
+    if (autoReactivated) {
+        publishBoardUpdate(`intervention:reactivate:${input.baseId}`);
+    }
+    return { ...created, autoReactivated };
 }
 
 export async function deactivateInterventionBase(input: DeactivateInterventionBaseInput) {

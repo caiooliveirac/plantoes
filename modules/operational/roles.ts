@@ -1,4 +1,4 @@
-export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IES", "RMT"] as const;
+export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IES", "RMT", "PSIQ"] as const;
 
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
 
@@ -49,7 +49,7 @@ export function resolveOperationalRoleLabel(params: {
     const explicitRole = normalizeOperationalRoleLabel(params.roleLabel);
     return resolveFixedOperationalRole(params)
         ?? explicitRole
-        ?? (params.domain === "intervention" ? normalizeOperationalRoleLabel(params.defaultRole) : null)
+        ?? normalizeOperationalRoleLabel(params.defaultRole)
         ?? null;
 }
 
@@ -74,14 +74,20 @@ export function getOperationalRoleTone(roleLabel: string | null | undefined) {
     if (normalized === "RECIP") {
         return "recip" as const;
     }
-    if (normalized === "COI" || normalized === "CP") {
+    if (normalized === "COI") {
         return "coi" as const;
+    }
+    if (normalized === "CP") {
+        return "cp" as const;
     }
     if (normalized === "IES") {
         return "ies" as const;
     }
     if (normalized === "RMT") {
         return "rmt" as const;
+    }
+    if (normalized === "PSIQ") {
+        return "psiq" as const;
     }
 
     return "neutral" as const;

@@ -1,8 +1,9 @@
 import { parseMessage } from "@/modules/telegram/parser";
 
-export type TelegramCommandName = "corrigir" | "retirar" | "remover" | "ramal" | "ativar" | "desativar";
+export type TelegramCommandName = "corrigir" | "retirar" | "remover" | "ramal" | "ativar" | "desativar" | "ontem" | "hoje" | "corrigirsaida";
 
 const DEPARTURE_COMMAND_ALIASES = new Set(["saiu", "saindo", "saida", "saída"]);
+const TELEGRAM_DEPARTURE_CORRECTION_COMMAND_PREFIX = /^\/corrigirsaida(?:@\w+)?\b\s*([\s\S]*)$/i;
 
 export interface ParsedTelegramCommand {
     name: TelegramCommandName;
@@ -16,12 +17,55 @@ export interface ParsedTelegramCommand {
     isDeparture: boolean;
 }
 
+export interface ParsedTelegramDepartureCorrectionCommand {
+    name: "corrigirsaida";
+    doctorName: string | null;
+    targetCode: string | null;
+    sector: "REGULATION" | "INTERVENTION" | null;
+    rawBody: string;
+}
+
 export function isTelegramAdminOnlyCommand(name: TelegramCommandName) {
     return name === "remover" || name === "ativar" || name === "desativar";
 }
 
+export function isTelegramDepartureCorrectionCommandText(text: string) {
+    return TELEGRAM_DEPARTURE_CORRECTION_COMMAND_PREFIX.test(text.trim());
+}
+
+export function parseTelegramDepartureCorrectionCommand(text: string): ParsedTelegramDepartureCorrectionCommand | null {
+    const match = text.trim().match(TELEGRAM_DEPARTURE_CORRECTION_COMMAND_PREFIX);
+    if (!match) {
+        return null;
+    }
+
+    const rawBody = match[1]?.trim() ?? "";
+    if (!rawBody) {
+        return null;
+    }
+
+    const parsed = parseMessage(rawBody);
+    const targetCode = parsed.baseCode ?? null;
+    const doctorName = parsed.extractedNames[0]
+        ?? (targetCode
+            ? rawBody.replace(new RegExp(`\\b${targetCode}\\b`, "i"), " ").trim() || null
+            : rawBody.trim() || null);
+
+    if (!doctorName) {
+        return null;
+    }
+
+    return {
+        name: "corrigirsaida",
+        doctorName,
+        targetCode,
+        sector: parsed.sector,
+        rawBody,
+    };
+}
+
 export function parseTelegramCommand(text: string): ParsedTelegramCommand | null {
-    const match = text.trim().match(/^\/(corrigir|retirar|remover|ramal|ativar|desativar|saiu|saindo|saida|saída)\b\s*([\s\S]*)$/i);
+    const match = text.trim().match(/^\/(corrigir|retirar|remover|ramal|ativar|desativar|saiu|saindo|saida|saída|ontem|hoje)\b\s*([\s\S]*)$/i);
     if (!match) {
         return null;
     }

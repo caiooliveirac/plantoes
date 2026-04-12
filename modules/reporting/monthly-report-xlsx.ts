@@ -148,7 +148,7 @@ function buildSummarySheet(workbook: ExcelJS.Workbook, model: MonthlyReportModel
     for (const group of model.groups) {
         const row = sheet.addRow([
             formatPaymentStatus(group.paymentStatus),
-            group.displayName || group.doctorName,
+            group.doctorName,
             group.shiftCount,
             group.inconsistentShiftCount,
             group.correctedShiftCount,
@@ -188,7 +188,7 @@ function buildDoctorsSheet(workbook: ExcelJS.Workbook, groups: MonthlyReportDoct
     for (const group of groups) {
         const row = sheet.addRow([
             formatPaymentStatus(group.paymentStatus),
-            group.displayName || group.doctorName,
+            group.doctorName,
             group.doctorName,
             group.shiftCount,
             group.inconsistentShiftCount,

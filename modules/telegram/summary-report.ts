@@ -1,5 +1,6 @@
 import type { MealBreakSession } from "@/modules/telegram/meal-breaks";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
 import {
     sortTelegramInterventionRows,
@@ -82,19 +83,27 @@ function buildSortedDepartureRows(rows: PaymentAllocationRow[], domain: "regulat
 
     return sortedRows
         .filter((row) => Boolean(row.occupancyId))
-        .map((row) => ({
-            code: row.targetCode,
-            name: compactDoctorName(row.doctorName ?? row.displayName),
-            exitAt: resolveSummaryExitAt(row),
-        }))
-        .filter((row) => Boolean(row.exitAt))
-        .map((row) => `${row.code}|${row.name}|${formatHour(row.exitAt)}`);
+        .map((row) => {
+            const code = row.targetCode;
+            const name = compactDoctorName(formatDoctorSurfaceName({ fullName: row.doctorName, displayName: row.displayName, fallback: "" }));
+            const exitAt = resolveSummaryExitAt(row);
+            const continua = row.continuesBeyondShift && !exitAt;
+            return { code, name, exitAt, continua };
+        })
+        .filter((row) => Boolean(row.exitAt) || row.continua)
+        .map((row) => row.continua
+            ? `${row.code}|${row.name}|continua`
+            : `${row.code}|${row.name}|${formatHour(row.exitAt)}`);
 }
 
-function buildInterventionArrivalRows(rows: InterventionBoardRow[]) {
+function buildInterventionArrivalRows(rows: InterventionBoardRow[], currentShiftLabel: "SD" | "SN") {
     return sortTelegramInterventionRows(rows)
         .filter((row) => row.status === "active" && Boolean(row.doctorId))
-        .map((row) => `${row.baseCode}|${compactDoctorName(row.doctorName ?? row.displayName)}|${formatHour(resolveSummaryArrivalAt(row))}`);
+        .map((row) => {
+            const name = compactDoctorName(formatDoctorSurfaceName({ fullName: row.doctorName, displayName: row.displayName, fallback: "" }));
+            const pSuffix = row.shiftLabel === "P" ? " (P)" : "";
+            return `${row.baseCode}|${name}|${formatHour(resolveSummaryArrivalAt(row))}${pSuffix}`;
+        });
 }
 
 function resolveRegulationMealBreakColumns(session: MealBreakSession | null, ramal: string, shiftLabel: "SD" | "SN") {
@@ -121,12 +130,19 @@ function buildRegulationArrivalRows(params: {
     rows: RegulationBoardRow[];
     mealBreakSession: MealBreakSession | null;
     shiftLabel: "SD" | "SN";
+    includeMealColumns: boolean;
 }) {
     return sortTelegramRegulationRows(params.rows)
         .filter((row) => row.status === "active" && Boolean(row.doctorId))
         .map((row) => {
+            const name = compactDoctorName(formatDoctorSurfaceName({ fullName: row.doctorName, displayName: row.displayName, fallback: "" }));
+            const pSuffix = row.shiftLabel === "P" ? " (P)" : "";
+            const base = `${row.postCode}|${name}|${formatHour(resolveSummaryArrivalAt(row))}${pSuffix}`;
+            if (!params.includeMealColumns) {
+                return base;
+            }
             const mealBreak = resolveRegulationMealBreakColumns(params.mealBreakSession, row.postCode, params.shiftLabel);
-            return `${row.postCode}|${compactDoctorName(row.doctorName ?? row.displayName)}|${formatHour(resolveSummaryArrivalAt(row))}|${mealBreak.first}|${mealBreak.second}`;
+            return `${base}|${mealBreak.first}|${mealBreak.second}`;
         });
 }
 
@@ -145,30 +161,36 @@ export function buildTelegramSummaryReport(params: {
 
     const departureInterventionRows = buildSortedDepartureRows(params.data.departureBoard.intervention, "intervention");
     const departureRegulationRows = buildSortedDepartureRows(params.data.departureBoard.regulation, "regulation");
-    const arrivalInterventionRows = buildInterventionArrivalRows(params.data.currentBoard.intervention);
+    const arrivalInterventionRows = buildInterventionArrivalRows(params.data.currentBoard.intervention, currentShiftLabel);
+    const hasMealData = params.data.mealBreakSession !== null;
     const arrivalRegulationRows = buildRegulationArrivalRows({
         rows: params.data.currentBoard.regulation,
         mealBreakSession: params.data.mealBreakSession,
         shiftLabel: currentShiftLabel,
+        includeMealColumns: hasMealData,
     });
 
-    const regulationHeader = currentShiftLabel === "SD"
-        ? "ramal|nome|chegada|almoco|descanso"
-        : "ramal|nome|chegada|jantar|trabalho";
+    const regulationHeader = !hasMealData
+        ? "ramal|nome|chegada"
+        : currentShiftLabel === "SD"
+            ? "ramal|nome|chegada|almoco|descanso"
+            : "ramal|nome|chegada|jantar|trabalho";
+
+    const depShiftLabel = params.data.departureBoard.shiftLabel ?? departureRequest.shiftLabel;
 
     return [
-        `RESUMO ${formatDateLabel(params.reference)}`,
+        `📋 RESUMO ${formatDateLabel(params.reference)} ${currentShiftLabel}`,
         "",
-        `SAIDAS ${formatDateLabel(params.data.departureBoard.operationalDate)} ${params.data.departureBoard.shiftLabel ?? departureRequest.shiftLabel}`,
+        `📤 SAÍDAS ${depShiftLabel} (${departureInterventionRows.length} int, ${departureRegulationRows.length} reg)`,
         "",
-        buildSection("INTERVENCAO", "base|nome|saida", departureInterventionRows),
+        buildSection("INTERVENÇÃO", "base|nome|saída", departureInterventionRows),
         "",
-        buildSection("REGULACAO", "ramal|nome|saida", departureRegulationRows),
+        buildSection("REGULAÇÃO", "ramal|nome|saída", departureRegulationRows),
         "",
-        `CHEGADAS ${currentShiftLabel}`,
+        `📥 CHEGADAS ${currentShiftLabel} (${arrivalInterventionRows.length} int, ${arrivalRegulationRows.length} reg)`,
         "",
-        buildSection("INTERVENCAO", "base|nome|chegada", arrivalInterventionRows),
+        buildSection("INTERVENÇÃO", "base|nome|chegada", arrivalInterventionRows),
         "",
-        buildSection("REGULACAO", regulationHeader, arrivalRegulationRows),
+        buildSection("REGULAÇÃO", regulationHeader, arrivalRegulationRows),
     ].join("\n");
 }

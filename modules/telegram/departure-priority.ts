@@ -1,4 +1,5 @@
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { compareTelegramInterventionCodes, compareTelegramRegulationCodes } from "@/modules/telegram/presentation-order";
 import { getCurrentOperationalMealBreakSession, type MealBreakSession } from "@/modules/telegram/meal-breaks";
@@ -89,7 +90,11 @@ function buildDeparturePriorityCandidates(params: {
         candidates.push({
             domain: "regulation",
             targetCode: row.postCode,
-            name: row.doctorName?.trim() || row.displayName?.trim() || row.postCode,
+            name: formatDoctorSurfaceName({
+                fullName: row.doctorName,
+                displayName: row.displayName,
+                fallback: row.postCode,
+            }),
             roleLabel,
             startedAt: row.startedAt,
         });
@@ -114,7 +119,11 @@ function buildDeparturePriorityCandidates(params: {
         candidates.push({
             domain: "intervention",
             targetCode: row.baseCode,
-            name: row.doctorName?.trim() || row.displayName?.trim() || row.baseCode,
+            name: formatDoctorSurfaceName({
+                fullName: row.doctorName,
+                displayName: row.displayName,
+                fallback: row.baseCode,
+            }),
             roleLabel,
             startedAt: row.startedAt,
         });

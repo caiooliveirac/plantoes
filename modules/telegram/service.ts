@@ -1,4 +1,35 @@
-import { and, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+/**
+ * Telegram Bot Processing Service (god module — extraction in progress)
+ *
+ * Purpose: Processes all Telegram webhook messages, dispatching arrivals,
+ * departures, continuations, commands, name resolution, batch processing,
+ * departure corrections, meal break routing, and admin commands.
+ *
+ * Source of truth for: Telegram message lifecycle (ingest → parse → resolve → apply → reply).
+ *
+ * Key flows:
+ *   1. processTelegramUpdate() — webhook entry point, routes to handlers
+ *   2. applyParsedEntry() — writes regulation/intervention occupancies
+ *   3. queuePendingNameSelection/DepartureJustification/DepartureCorrection — async resolution
+ *   4. handlePendingNameSelectionReply/DepartureJustificationReply/DepartureCorrectionReply — reply processing
+ *
+ * Extracted submodules:
+ *   - departure-flow.ts: Late departure reasons, correction candidates, batch keywords
+ *   - name-resolution.ts: Doctor name matching algorithms
+ *   - parser.ts: Message text parsing (arrival/departure/continuation)
+ *   - commands.ts: Command text detection and parsing
+ *   - replies.ts: Reply text generation
+ *   - meal-breaks.ts: Meal break scheduling and management
+ *
+ * DANGER: This file still holds ~5600 lines. Changes here risk silent regressions.
+ * Always run the full test suite after modifications.
+ *
+ * Invariants:
+ *   - Every Telegram message gets exactly one status: applied, pending_*, superseded, ignored, error
+ *   - Departure corrections require justification if the event time exceeds scheduled shift end
+ *   - Continuations preserve the original arrival time and create a new occupancy window
+ */
+import { and, desc, eq, gte, inArray, isNull, lte, lt, ne } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
     doctors,
@@ -11,19 +42,36 @@ import {
     users,
 } from "@/db/schema";
 import { applyBankHoursBalanceOverride, syncBankHoursByContinuityGroup } from "@/modules/bank-hours/service";
+import { extractDoctorAliases, formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
-import { createDoctorDirectoryEntry } from "@/modules/doctors/service";
+import { createDoctorDirectoryEntry, updateDoctorDirectoryEntry } from "@/modules/doctors/service";
 import { continueInterventionOccupancy, deactivateInterventionBase, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, requiresOvertimeJustification, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole } from "@/modules/operational/roles";
-import { resolveTelegramEventTime } from "@/modules/operational/rules";
-import { continueRegulationOccupancy, endRegulationOccupancy, startRegulationOccupancy } from "@/modules/regulation/service";
+import { resolveTelegramEventTime, resolveForcedDayEventTime } from "@/modules/operational/rules";
+import { continueRegulationOccupancy, deactivateRegulationPost, endRegulationOccupancy, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
+import {
+    compareDepartureCorrectionCandidates,
+    deserializeDepartureCorrectionCandidate,
+    getPendingDepartureJustificationAttemptCount,
+    normalizeTelegramReasonText,
+    resolveDepartureCorrectionReferenceAt,
+    resolveDepartureJustificationPromptKind,
+    serializeDepartureCorrectionCandidate,
+    stripTelegramOperationalFragments,
+    TELEGRAM_DEPARTURE_CORRECTION_WINDOW_MS,
+    type TelegramDepartureCorrectionCandidate,
+    type SerializedTelegramDepartureCorrectionCandidate,
+} from "@/modules/telegram/departure-flow";
 import {
     isTelegramDoctorAdminCommandText,
     parseTelegramDoctorAdminCommand,
     TELEGRAM_DOCTOR_ADMIN_COMMAND_USAGE,
+    isTelegramUndoCommandText,
+    parseTelegramUndoCommand,
 } from "@/modules/telegram/admin-commands";
+import { getUndoableActions, undoAction, type UndoableEntry } from "@/modules/operational/undo";
 import {
     buildDeparturePriorityCommandUsageReply,
     isTelegramDeparturePriorityCommandText,
@@ -50,40 +98,77 @@ import {
     TELEGRAM_DEPARTURE_REPORT_USAGE,
 } from "@/modules/telegram/departure-report-commands";
 import {
+    isTelegramSlotAuditCommandText,
+    parseTelegramSlotAuditCommand,
+    TELEGRAM_SLOT_AUDIT_USAGE,
+} from "@/modules/telegram/slot-audit-commands";
+import {
     isTelegramPaymentAdminCommandText,
     parseTelegramPaymentAdminCommand,
     TELEGRAM_PAYMENT_CORRECTION_USAGE,
     TELEGRAM_PAYMENT_REPORT_USAGE,
 } from "@/modules/telegram/payment-commands";
 import { buildTelegramDepartureReport, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
+import { buildTelegramSlotAuditMessages } from "@/modules/telegram/slot-audit-report";
 import { buildTelegramSummaryReport } from "@/modules/telegram/summary-report";
 import {
     buildMealBreakConsistencyAdminReply,
     buildMealBreakCommandUsageReply,
+    buildMealBreakExcludeCommandUsageReply,
     buildMealBreakPriorityCommandUsageReply,
     buildMealBreakErrorReply,
     buildMealBreakStageKeyboard,
     getCurrentOperationalMealBreakSession,
     handleTelegramMealBreakReply,
     isTelegramMealBreakCommandText,
+    isTelegramMealBreakExcludeCommandText,
     isTelegramMealBreakPriorityCommandText,
     parseTelegramMealBreakCommand,
+    parseTelegramMealBreakExcludeCommand,
     parseTelegramMealBreakPriorityCommand,
     resolveMealBreakLogDetails,
+    shouldPrioritizeTelegramMealBreakReply,
     resolveTelegramMealBreakSenderId,
     runTelegramMealBreakCommand,
+    runTelegramMealBreakExcludeCommand,
     runTelegramMealBreakPriorityCommand,
     sendTelegramMealBreakMessages,
 } from "@/modules/telegram/meal-breaks";
 import { buildTelegramShiftReport } from "@/modules/telegram/shift-report";
 import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, isTelegramChatAllowed, isTelegramPrivateControlUserId } from "@/modules/telegram/config";
-import { isTelegramAdminOnlyCommand, parseTelegramCommand } from "@/modules/telegram/commands";
-import { isCasualTelegramMessage, looksLikeDepartureMessage, parseMessageMulti, parseTelegramBatchLines, type ParsedMessage } from "@/modules/telegram/parser";
+import {
+    isTelegramAdminOnlyCommand,
+    isTelegramDepartureCorrectionCommandText,
+    parseTelegramCommand,
+    parseTelegramDepartureCorrectionCommand,
+} from "@/modules/telegram/commands";
+import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeMealBreakMessage, parseMessage, parseMessageMulti, parseTelegramBatchLines, type ParsedMessage } from "@/modules/telegram/parser";
 import type { TelegramUpdate } from "@/modules/telegram/api";
 import { buildChoiceKeyboard, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
 import { buildCandidatePromptReply, buildGroupCorrectionAnnouncement, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 import { getOperationalBoard, getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
+import { getOperationalSlotAuditReport } from "@/services/slot-audit.service";
+
+import {
+    isBatchConfirmationKeyword,
+    isBatchCancelKeyword,
+    parseTelegramStandaloneTime,
+    pickLikelyDepartureCorrectionCandidate,
+    resolveTelegramEligibleLateDepartureReason,
+    requiresTelegramDepartureAdjustmentJustification,
+} from "@/modules/telegram/departure-flow";
+import { compareTelegramInterventionCodes } from "@/modules/telegram/presentation-order";
+
+// Re-export from departure-flow so existing imports from "@/modules/telegram/service" keep working
+export {
+    isBatchConfirmationKeyword,
+    isBatchCancelKeyword,
+    parseTelegramStandaloneTime,
+    pickLikelyDepartureCorrectionCandidate,
+    resolveTelegramEligibleLateDepartureReason,
+    requiresTelegramDepartureAdjustmentJustification,
+} from "@/modules/telegram/departure-flow";
 
 interface PendingNameResolutionData {
     parsed: {
@@ -94,6 +179,7 @@ interface PendingNameResolutionData {
         roleFunction: string | null;
         isDeparture: boolean;
         isContinuation: boolean;
+        isReassignment: boolean;
     };
     candidates: Array<{ id: string; fullName: string; displayName: string | null; normalizedName: string }>;
     originalText: string;
@@ -110,18 +196,26 @@ interface PendingDepartureJustificationData {
         roleFunction: string | null;
         isDeparture: boolean;
         isContinuation: boolean;
+        isReassignment: boolean;
     };
-    resolvedDoctor: { id: string; fullName: string };
+    resolvedDoctor: ResolvedTelegramDoctorRef;
     originalText: string;
     originalEventAt: string;
     originalReferenceAt?: string;
+    invalidJustificationAttempts?: number;
+}
+
+interface PendingDepartureCorrectionData {
+    resolvedDoctor: ResolvedTelegramDoctorRef;
+    candidate: SerializedTelegramDepartureCorrectionCandidate;
+    originalText: string;
 }
 
 interface PendingBatchConfirmationEntry {
     lineNumber: number;
     rawLine: string;
     parsed: OperationalParsedEntry;
-    resolvedDoctor: { id: string; fullName: string };
+    resolvedDoctor: ResolvedTelegramDoctorRef;
     eventAt: string;
 }
 
@@ -141,8 +235,14 @@ interface PreparedBatchEntry {
     lineNumber: number;
     rawLine: string;
     parsed: OperationalParsedEntry;
-    resolvedDoctor: { id: string; fullName: string };
+    resolvedDoctor: ResolvedTelegramDoctorRef;
     eventAt: Date;
+}
+
+interface ResolvedTelegramDoctorRef {
+    id: string;
+    fullName: string;
+    displayName: string | null;
 }
 
 type OperationalParsedEntry = PendingNameResolutionData["parsed"];
@@ -160,6 +260,7 @@ interface TelegramOperationalContinuityOccupancy {
 }
 
 const TELEGRAM_CONTINUITY_LINK_WINDOW_MS = 18 * 60 * 60 * 1000;
+const TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 interface TelegramCommandActor {
     userId: string | null;
@@ -173,37 +274,13 @@ type TelegramReviewReason =
     | "departure_low_confidence_rephrase_required"
     | "departure_justification_required"
     | "doctor_not_resolved"
+    | "location_without_ramal"
+    | "low_confidence_no_name"
+    | "meal_break_outside_flow"
     | "no_operational_match"
     | "pending_name_selection";
 
 const TELEGRAM_REVIEW_QUEUE = "telegram_input_format_review";
-
-function normalizeBatchKeyword(text: string) {
-    return normalizeDoctorName(text)
-        .replace(/\s+/g, " ")
-        .trim();
-}
-
-export function isBatchConfirmationKeyword(text: string) {
-    const normalized = normalizeBatchKeyword(text);
-    return normalized === "CONFIRMAR"
-        || normalized === "CONFIRMAR SIM"
-        || normalized === "CONFIRMO"
-        || normalized === "CONFIRMADO"
-        || normalized === "CONFIRMA"
-        || normalized === "OK CONFIRMAR"
-        || normalized === "OK PODE LANCAR"
-        || normalized === "OK LANCAR"
-        || normalized === "PODE LANCAR"
-        || normalized === "LANCAR TUDO";
-}
-
-export function isBatchCancelKeyword(text: string) {
-    const normalized = normalizeBatchKeyword(text);
-    return normalized === "CANCELAR"
-        || normalized === "CANCELA"
-        || normalized === "DESCARTAR LOTE";
-}
 
 function canManageTelegramBatch(message: TelegramUpdate["message"]) {
     return message?.chat.type === "private" && isTelegramPrivateControlUserId(message.from?.id);
@@ -216,6 +293,15 @@ async function canManagePrivateMealBreak(message: TelegramUpdate["message"]) {
 
     const actor = await resolveTelegramCommandActor(message);
     return Boolean(actor?.roles.includes("admin"));
+}
+
+function canRunPrivateAdminSlotAudit(message: TelegramUpdate["message"]) {
+    if (message?.chat.type !== "private") {
+        return false;
+    }
+
+    const senderTelegramId = message.from?.id ? String(message.from.id) : null;
+    return Boolean(senderTelegramId && getTelegramAdminUserIds().includes(senderTelegramId));
 }
 
 function isPendingBatchConfirmationData(value: unknown): value is PendingBatchConfirmationData {
@@ -269,7 +355,7 @@ async function findPendingBatchConfirmation(chatId: string, senderTelegramId: st
 }
 
 function isTelegramContinuationEntry(parsed: OperationalParsedEntry) {
-    return !parsed.isDeparture && parsed.sector === "INTERVENTION" && parsed.isContinuation;
+    return !parsed.isDeparture && parsed.isContinuation;
 }
 
 function isTelegramContinuationIntent(parsed: OperationalParsedEntry) {
@@ -367,6 +453,10 @@ export function resolveTelegramSuccessReplyKind(params: {
     successKind?: "standard" | "departure_adjusted";
     forceContinuation?: boolean;
 }) {
+    if (params.parsed.isReassignment) {
+        return "reassignment_recorded";
+    }
+
     if (params.parsed.isDeparture) {
         return params.successKind === "departure_adjusted" ? "departure_adjusted" : "departure_recorded";
     }
@@ -417,6 +507,58 @@ function buildStructuredTelegramDepartureHint(params: {
     return `\n\nFormato mais seguro para saída: ${buildTelegramDepartureExample(params)}`;
 }
 
+const CRU_COI_LOCATION_PATTERN = /\b(CRU|COI)\b/i;
+
+const COI_EXAMPLE_RAMAIS = ["1366", "1367", "1368"];
+const CRU_EXAMPLE_RAMAIS = ["1321", "1361", "2031"];
+
+export function detectLocationWithoutRamal(text: string): { location: "CRU" | "COI" } | null {
+    const normalized = text.toUpperCase().replace(/[^A-Z0-9\s]/g, " ");
+    const match = normalized.match(CRU_COI_LOCATION_PATTERN);
+    if (!match) return null;
+    const hasRamal = /\b\d{4}\b/.test(normalized);
+    const hasBase = /\b[A-Z]{2}\d{2}\b/.test(normalized);
+    if (hasRamal || hasBase) return null;
+    return { location: match[1].toUpperCase() as "CRU" | "COI" };
+}
+
+export function buildLocationWithoutRamalReply(params: {
+    senderName: string;
+    location: "CRU" | "COI";
+    shiftLabel: string | null;
+    time: string | null;
+}) {
+    const name = params.senderName || "Fulano";
+    const locationFull = params.location === "COI"
+        ? "Centro de Operações Integrado (COI)"
+        : "Central de Regulação Urbana (CRU)";
+    const exampleRamais = params.location === "COI" ? COI_EXAMPLE_RAMAIS : CRU_EXAMPLE_RAMAIS;
+    const exampleRamal = exampleRamais[Math.floor(Math.random() * exampleRamais.length)];
+    const shift = params.shiftLabel || "SD";
+    const time = params.time || "07:00";
+
+    return [
+        `⚠️🏢 Recebi sua mensagem, mas "${params.location}" sozinho não é suficiente para eu registrar.`,
+        ``,
+        `O ${locationFull} tem vários ramais.`,
+        `Eu preciso saber *exatamente em qual ramal* o médico vai ficar.`,
+        ``,
+        `🚫 Assim NÃO funciona:`,
+        `  _${name} ${params.location} ${shift} ${time}_`,
+        ``,
+        `✅ Assim FUNCIONA:`,
+        `  _${name} ${exampleRamal} ${shift} ${time}_`,
+        ``,
+        `📋 Ramais do ${params.location}:`,
+        ...exampleRamais.map((r) => `  • ${r}`),
+        ``,
+        `👉 TARM ou chefia: perguntem ao médico em qual ramal ele está sentado e reenviem a mensagem com o número do ramal no lugar de "${params.location}".`,
+        ``,
+        `Exemplo pronto para copiar e ajustar:`,
+        `_${name} ${exampleRamal} ${shift} ${time}_`,
+    ].join("\n");
+}
+
 function toTelegramReviewParsedSnapshot(parsed: OperationalParsedEntry | null | undefined) {
     if (!parsed) {
         return null;
@@ -430,6 +572,7 @@ function toTelegramReviewParsedSnapshot(parsed: OperationalParsedEntry | null | 
         roleFunction: parsed.roleFunction,
         isDeparture: parsed.isDeparture,
         isContinuation: parsed.isContinuation,
+        isReassignment: parsed.isReassignment ?? false,
     };
 }
 
@@ -443,6 +586,8 @@ function resolveTelegramReviewSummary(reason: TelegramReviewReason) {
             return "saída registrada sem justificativa obrigatória";
         case "doctor_not_resolved":
             return "não foi possível identificar o médico com segurança";
+        case "location_without_ramal":
+            return "mensagem com CRU/COI mas sem ramal específico";
         case "no_operational_match":
             return "mensagem operacional não bateu no parser atual";
         case "pending_name_selection":
@@ -514,24 +659,6 @@ export function buildTelegramJustificationFollowUpText(originalText: string, jus
     return `${normalizedOriginal}\n[motivo complementar] ${normalizedJustification}`;
 }
 
-export function requiresTelegramDepartureAdjustmentJustification(params: {
-    startedAt: string | Date | null;
-    endedAt: string | Date | null;
-    eventAt: string | Date | null;
-}) {
-    if (!params.eventAt || !params.endedAt) {
-        return false;
-    }
-
-    const eventTime = new Date(params.eventAt).getTime();
-    const handoffTime = new Date(params.endedAt).getTime();
-    if (eventTime <= handoffTime) {
-        return false;
-    }
-
-    return requiresOvertimeJustification(params.startedAt, params.eventAt);
-}
-
 async function findRecentClosedInterventionOccupancy(params: {
     baseId: number;
     doctorId: string;
@@ -580,6 +707,50 @@ async function findRecentClosedRegulationOccupancy(params: {
 
         return Math.abs(params.eventAt.getTime() - occupancy.endedAt.getTime()) <= maxWindowMs;
     }) ?? null;
+}
+
+async function hasRegulationDepartureHandoff(params: {
+    postId: number;
+    doctorId: string;
+    occupancyId: string;
+    endedAt: Date;
+    eventAt: Date;
+}) {
+    const db = getDb();
+    const successor = await db.query.regulationOccupancies.findFirst({
+        where: and(
+            eq(regulationOccupancies.postId, params.postId),
+            ne(regulationOccupancies.id, params.occupancyId),
+            ne(regulationOccupancies.doctorId, params.doctorId),
+            gte(regulationOccupancies.startedAt, params.endedAt),
+            lte(regulationOccupancies.startedAt, params.eventAt),
+        ),
+        orderBy: [desc(regulationOccupancies.startedAt)],
+    });
+
+    return Boolean(successor);
+}
+
+async function hasInterventionDepartureHandoff(params: {
+    baseId: number;
+    doctorId: string;
+    occupancyId: string;
+    endedAt: Date;
+    eventAt: Date;
+}) {
+    const db = getDb();
+    const successor = await db.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.baseId, params.baseId),
+            ne(interventionOccupancies.id, params.occupancyId),
+            ne(interventionOccupancies.doctorId, params.doctorId),
+            gte(interventionOccupancies.startedAt, params.endedAt),
+            lte(interventionOccupancies.startedAt, params.eventAt),
+        ),
+        orderBy: [desc(interventionOccupancies.startedAt)],
+    });
+
+    return Boolean(successor);
 }
 
 function resolveTelegramOperationalEndedAt(occupancy: TelegramOperationalContinuityOccupancy) {
@@ -647,7 +818,7 @@ async function findTelegramContinuityContext(params: {
             const endedAt = resolveTelegramOperationalEndedAt(occupancy);
             return Boolean(
                 endedAt
-                && Math.abs(params.eventAt.getTime() - endedAt.getTime()) <= TELEGRAM_CONTINUITY_LINK_WINDOW_MS,
+                && shouldLinkRecentClosedTelegramContinuity(params.eventAt, endedAt),
             );
         })
         .sort(compareTelegramContinuitySource);
@@ -669,6 +840,37 @@ async function findTelegramContinuityContext(params: {
     };
 }
 
+const P_SHIFT_PRE_BOUNDARY_TOLERANCE_MS = 15 * 60 * 1000;
+const TELEGRAM_EXPLICIT_SHIFT_BOUNDARY_TOLERANCE_MS = 60 * 60 * 1000;
+
+export function shouldLinkRecentClosedTelegramContinuity(eventAt: Date, endedAt: Date) {
+    return Math.abs(eventAt.getTime() - endedAt.getTime()) <= TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS;
+}
+
+export function resolveContinuationShiftStart(eventAt: Date, shiftType: string | null | undefined): Date {
+    const window = resolveOperationalShiftWindow(eventAt);
+    const normalizedShiftType = shiftType?.toUpperCase();
+
+    if (normalizedShiftType === "P") {
+        const msToNextBoundary = window.nextBoundaryAt.getTime() - eventAt.getTime();
+        if (msToNextBoundary > 0 && msToNextBoundary <= P_SHIFT_PRE_BOUNDARY_TOLERANCE_MS) {
+            return window.nextBoundaryAt;
+        }
+    }
+
+    if ((normalizedShiftType === "SD" || normalizedShiftType === "SN") && normalizedShiftType !== window.shiftLabel) {
+        const expectedBoundary = window.nextBoundaryAt;
+        const boundaryDistanceMs = Math.abs(expectedBoundary.getTime() - eventAt.getTime());
+        if (boundaryDistanceMs <= TELEGRAM_EXPLICIT_SHIFT_BOUNDARY_TOLERANCE_MS) {
+            return expectedBoundary;
+        }
+
+        return eventAt;
+    }
+
+    return window.startedAt;
+}
+
 async function closeTelegramActiveContinuityOccupancies(params: {
     doctorId: string;
     eventAt: Date;
@@ -679,7 +881,17 @@ async function closeTelegramActiveContinuityOccupancies(params: {
         .filter((occupancy) => !occupancy.endedAt && occupancy.occupancyId !== params.excludeOccupancyId)
         .sort(compareTelegramContinuitySource);
 
+    const MIN_CLOSE_DURATION_MS = 60_000;
+
     for (const occupancy of activeOccupancies) {
+        // Skip closing if it would create a zero-duration artifact (endedAt ≈ startedAt).
+        // These phantoms corrupt bank hours entries and payment allocation.
+        const startedAtMs = new Date(occupancy.startedAt).getTime();
+        const resultingDurationMs = params.eventAt.getTime() - startedAtMs;
+        if (resultingDurationMs < MIN_CLOSE_DURATION_MS) {
+            continue;
+        }
+
         if (occupancy.domain === "regulation") {
             await endRegulationOccupancy(occupancy.occupancyId, {
                 endedAt: params.eventAt,
@@ -694,6 +906,118 @@ async function closeTelegramActiveContinuityOccupancies(params: {
     }
 
     return activeOccupancies;
+}
+
+async function listRecentDepartureCorrectionCandidates(params: {
+    doctorId: string;
+    referenceAt: Date;
+}) {
+    const db = getDb();
+    const [recentRegulation, recentIntervention] = await Promise.all([
+        db.query.regulationOccupancies.findMany({
+            where: eq(regulationOccupancies.doctorId, params.doctorId),
+            orderBy: [desc(regulationOccupancies.endedAt), desc(regulationOccupancies.actualEndedAt), desc(regulationOccupancies.startedAt)],
+            limit: 8,
+        }),
+        db.query.interventionOccupancies.findMany({
+            where: eq(interventionOccupancies.doctorId, params.doctorId),
+            orderBy: [desc(interventionOccupancies.endedAt), desc(interventionOccupancies.actualEndedAt), desc(interventionOccupancies.startedAt)],
+            limit: 8,
+        }),
+    ]);
+
+    const postIds = [...new Set(recentRegulation.map((occupancy) => occupancy.postId))];
+    const baseIds = [...new Set(recentIntervention.map((occupancy) => occupancy.baseId))];
+    const [posts, bases] = await Promise.all([
+        postIds.length > 0
+            ? db.query.regulationPosts.findMany({ where: inArray(regulationPosts.id, postIds) })
+            : Promise.resolve([]),
+        baseIds.length > 0
+            ? db.query.interventionBases.findMany({ where: inArray(interventionBases.id, baseIds) })
+            : Promise.resolve([]),
+    ]);
+
+    const postById = new Map(posts.map((post) => [post.id, post.code]));
+    const baseById = new Map(bases.map((base) => [base.id, base.code]));
+    const minimumRelevantAt = params.referenceAt.getTime() - TELEGRAM_DEPARTURE_CORRECTION_WINDOW_MS;
+
+    return [
+        ...recentRegulation.flatMap((occupancy) => {
+            const targetCode = postById.get(occupancy.postId);
+            if (!targetCode) {
+                return [];
+            }
+
+            const anchorAt = resolveDepartureCorrectionReferenceAt({
+                occupancyId: occupancy.id,
+                domain: "REGULATION",
+                targetCode,
+                shiftLabel: (occupancy.shiftLabel === "SD" || occupancy.shiftLabel === "SN" || occupancy.shiftLabel === "P") ? occupancy.shiftLabel : null,
+                roleLabel: occupancy.roleLabel,
+                startedAt: occupancy.startedAt,
+                endedAt: occupancy.endedAt,
+                actualEndedAt: occupancy.actualEndedAt,
+                isActive: !occupancy.endedAt,
+            });
+            if (anchorAt.getTime() < minimumRelevantAt && occupancy.startedAt.getTime() < minimumRelevantAt) {
+                return [];
+            }
+
+            return [{
+                occupancyId: occupancy.id,
+                domain: "REGULATION" as const,
+                targetCode,
+                shiftLabel: (occupancy.shiftLabel === "SD" || occupancy.shiftLabel === "SN" || occupancy.shiftLabel === "P") ? occupancy.shiftLabel : null,
+                roleLabel: occupancy.roleLabel,
+                startedAt: occupancy.startedAt,
+                endedAt: occupancy.endedAt,
+                actualEndedAt: occupancy.actualEndedAt,
+                isActive: !occupancy.endedAt,
+            } satisfies TelegramDepartureCorrectionCandidate];
+        }),
+        ...recentIntervention.flatMap((occupancy) => {
+            const targetCode = baseById.get(occupancy.baseId);
+            if (!targetCode) {
+                return [];
+            }
+
+            const anchorAt = resolveDepartureCorrectionReferenceAt({
+                occupancyId: occupancy.id,
+                domain: "INTERVENTION",
+                targetCode,
+                shiftLabel: (occupancy.shiftLabel === "SD" || occupancy.shiftLabel === "SN" || occupancy.shiftLabel === "P") ? occupancy.shiftLabel : null,
+                roleLabel: occupancy.roleLabel,
+                startedAt: occupancy.startedAt,
+                endedAt: occupancy.endedAt,
+                actualEndedAt: occupancy.actualEndedAt,
+                isActive: !occupancy.endedAt,
+            });
+            if (anchorAt.getTime() < minimumRelevantAt && occupancy.startedAt.getTime() < minimumRelevantAt) {
+                return [];
+            }
+
+            return [{
+                occupancyId: occupancy.id,
+                domain: "INTERVENTION" as const,
+                targetCode,
+                shiftLabel: (occupancy.shiftLabel === "SD" || occupancy.shiftLabel === "SN" || occupancy.shiftLabel === "P") ? occupancy.shiftLabel : null,
+                roleLabel: occupancy.roleLabel,
+                startedAt: occupancy.startedAt,
+                endedAt: occupancy.endedAt,
+                actualEndedAt: occupancy.actualEndedAt,
+                isActive: !occupancy.endedAt,
+            } satisfies TelegramDepartureCorrectionCandidate];
+        }),
+    ].sort(compareDepartureCorrectionCandidates);
+}
+
+function formatDepartureCorrectionCandidateSummary(candidate: TelegramDepartureCorrectionCandidate) {
+    const startedAt = formatTelegramReplyTime(candidate.startedAt);
+    const endedReference = candidate.actualEndedAt ?? candidate.endedAt;
+    const endedLabel = endedReference ? formatTelegramReplyTime(endedReference) : "ativo";
+    const domainLabel = candidate.domain === "REGULATION" ? "regulação" : "intervenção";
+    const shiftLabel = candidate.shiftLabel ? ` ${candidate.shiftLabel}` : "";
+    return `${candidate.targetCode} | ${domainLabel}${shiftLabel} | chegada ${startedAt} | saída ${endedLabel}`;
 }
 
 async function sendTelegramDepartureFailureReply(params: {
@@ -739,40 +1063,249 @@ async function sendTelegramDepartureFailureReply(params: {
     );
 }
 
+async function sendTelegramArrivalFailureReply(params: {
+    chatId: number;
+    replyToMessageId: number;
+    parsed: OperationalParsedEntry;
+    errorMessage: string;
+}) {
+    if (params.parsed.isDeparture) {
+        return;
+    }
+
+    const userMessage = params.errorMessage === "arrival_conflicts_with_active_occupancy"
+        ? `⚠️ Já há alguém ativo em *${params.parsed.baseCode}* com horário igual ou posterior. Use /retirar ${params.parsed.baseCode} antes de registrar nova chegada.`
+        : `⚠️ Não consegui registrar essa chegada. ${params.errorMessage}`;
+
+    await sendMessage(
+        params.chatId,
+        userMessage,
+        params.replyToMessageId,
+    );
+}
+
 function isOperationalParsedEntry(entry: ParsedMessage): entry is ParsedMessage & OperationalParsedEntry {
     return Boolean(entry.baseCode && entry.sector);
 }
 
-async function resolveDoctorId(rawName: string) {
+async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
+    sector: "REGULATION" | "INTERVENTION";
+    baseCode: string;
+    occupancyId: string;
+    shiftLabel: string | null;
+    continuityGroupId: string | null;
+    boardStartedAt: Date | null;
+} | null> {
     const db = getDb();
+
+    const regOcc = await db
+        .select({
+            id: regulationOccupancies.id,
+            postId: regulationOccupancies.postId,
+            shiftLabel: regulationOccupancies.shiftLabel,
+            continuityGroupId: regulationOccupancies.continuityGroupId,
+            boardStartedAt: regulationOccupancies.boardStartedAt,
+        })
+        .from(regulationOccupancies)
+        .where(and(eq(regulationOccupancies.doctorId, doctorId), isNull(regulationOccupancies.endedAt)))
+        .orderBy(desc(regulationOccupancies.startedAt))
+        .limit(1);
+
+    if (regOcc.length > 0) {
+        const post = await db.query.regulationPosts.findFirst({ where: eq(regulationPosts.id, regOcc[0].postId) });
+        if (post) {
+            return {
+                sector: "REGULATION",
+                baseCode: post.code,
+                occupancyId: regOcc[0].id,
+                shiftLabel: regOcc[0].shiftLabel,
+                continuityGroupId: regOcc[0].continuityGroupId,
+                boardStartedAt: regOcc[0].boardStartedAt,
+            };
+        }
+    }
+
+    const intOcc = await db
+        .select({
+            id: interventionOccupancies.id,
+            baseId: interventionOccupancies.baseId,
+            shiftLabel: interventionOccupancies.shiftLabel,
+            continuityGroupId: interventionOccupancies.continuityGroupId,
+            boardStartedAt: interventionOccupancies.boardStartedAt,
+        })
+        .from(interventionOccupancies)
+        .where(and(eq(interventionOccupancies.doctorId, doctorId), isNull(interventionOccupancies.endedAt)))
+        .orderBy(desc(interventionOccupancies.startedAt))
+        .limit(1);
+
+    if (intOcc.length > 0) {
+        const base = await db.query.interventionBases.findFirst({ where: eq(interventionBases.id, intOcc[0].baseId) });
+        if (base) {
+            return {
+                sector: "INTERVENTION",
+                baseCode: base.code,
+                occupancyId: intOcc[0].id,
+                shiftLabel: intOcc[0].shiftLabel,
+                continuityGroupId: intOcc[0].continuityGroupId,
+                boardStartedAt: intOcc[0].boardStartedAt,
+            };
+        }
+    }
+
+    return null;
+}
+
+async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageText: string, senderName: string | null): Promise<{
+    parsed: OperationalParsedEntry;
+    resolvedDoctor: ResolvedTelegramDoctorRef;
+} | null> {
+    if (!rawParsed.isContinuation || rawParsed.baseCode) {
+        return null;
+    }
+
+    const doctorQuery = rawParsed.extractedNames[0] ?? null;
+    const lookupQuery = doctorQuery || (shouldUseTelegramSenderNameFallback(messageText, senderName) ? senderName : null);
+    if (!lookupQuery) {
+        return null;
+    }
+
+    const resolved = await resolveDoctorWithFallback(lookupQuery);
+    if (!resolved.doctor) {
+        return null;
+    }
+
+    const activeOcc = await findActiveOccupancyByDoctorId(resolved.doctor.id);
+    if (!activeOcc) {
+        return null;
+    }
+
+    return {
+        parsed: {
+            sector: activeOcc.sector,
+            baseCode: activeOcc.baseCode,
+            arrivalTime: rawParsed.arrivalTime,
+            shiftType: rawParsed.shiftType,
+            roleFunction: rawParsed.roleFunction,
+            isDeparture: false,
+            isContinuation: true,
+            isReassignment: false,
+        },
+        resolvedDoctor: {
+            id: resolved.doctor.id,
+            fullName: resolved.doctor.fullName,
+            displayName: resolved.doctor.displayName,
+        },
+    };
+}
+
+/**
+ * Resolve departure messages that have no base code — e.g. "alexandre faria saindo"
+ * or "Leo Morais saindo do SN no COI as 07:22".
+ * Looks up the doctor's active occupancy to fill in the missing base code.
+ */
+async function resolveDepartureWithoutBase(rawParsed: ParsedMessage, messageText: string, senderName: string | null): Promise<{
+    parsed: OperationalParsedEntry;
+    resolvedDoctor: ResolvedTelegramDoctorRef;
+} | null> {
+    if (!rawParsed.isDeparture || rawParsed.baseCode) {
+        return null;
+    }
+
+    const doctorQuery = rawParsed.extractedNames[0] ?? null;
+    const lookupQuery = doctorQuery || (shouldUseTelegramSenderNameFallback(messageText, senderName) ? senderName : null);
+    if (!lookupQuery) {
+        return null;
+    }
+
+    const resolved = await resolveDoctorWithFallback(lookupQuery);
+    if (!resolved.doctor) {
+        return null;
+    }
+
+    const activeOcc = await findActiveOccupancyByDoctorId(resolved.doctor.id);
+    if (!activeOcc) {
+        return null;
+    }
+
+    return {
+        parsed: {
+            sector: activeOcc.sector,
+            baseCode: activeOcc.baseCode,
+            arrivalTime: rawParsed.arrivalTime,
+            shiftType: rawParsed.shiftType ?? (activeOcc.shiftLabel as ParsedMessage["shiftType"]),
+            roleFunction: rawParsed.roleFunction,
+            isDeparture: true,
+            isContinuation: false,
+            isReassignment: false,
+        },
+        resolvedDoctor: {
+            id: resolved.doctor.id,
+            fullName: resolved.doctor.fullName,
+            displayName: resolved.doctor.displayName,
+        },
+    };
+}
+
+async function resolveDoctorId(rawName: string) {
     const normalizedName = normalizeDoctorName(rawName);
     if (!normalizedName) {
         return null;
     }
 
-    const doctor = await db.query.doctors.findFirst({
-        where: and(
-            eq(doctors.normalizedName, normalizedName),
-            eq(doctors.isActive, true),
-        ),
+    const directory = await listDirectoryEntries();
+    const matches = directory.filter((doctor) => {
+        return normalizedName === normalizeDoctorName(doctor.fullName)
+            || normalizedName === normalizeDoctorName(doctor.displayName ?? "")
+            || extractDoctorAliases(doctor.metadata).some((alias) => normalizeDoctorName(alias) === normalizedName)
+            || normalizedName === doctor.normalizedName;
     });
 
-    return doctor ?? null;
+    return matches.length === 1 ? matches[0] : null;
 }
 
 async function listDirectoryEntries() {
     const db = getDb();
-    return db.select({
+    const rows = await db.select({
         id: doctors.id,
         fullName: doctors.fullName,
         displayName: doctors.displayName,
+        metadata: doctors.metadata,
         normalizedName: doctors.normalizedName,
         isActive: doctors.isActive,
     }).from(doctors).where(eq(doctors.isActive, true));
+
+    return rows.map((row) => ({
+        ...row,
+        aliases: extractDoctorAliases(row.metadata),
+    }));
 }
 
-export function shouldUseTelegramSenderNameFallback(messageText: string) {
-    return !/@\w+/i.test(messageText);
+export function isSharedAccountSender(senderName: string | null): boolean {
+    if (!senderName) return false;
+    const normalized = senderName.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return /\b\d{4}\b.*(?:MEDICO|CHEFE|MRV)/i.test(normalized)
+        || /\b(?:COI|CRU)\s*\d{4}\b/i.test(normalized)
+        || /\bMR\s+COI\b/i.test(normalized);
+}
+
+export function shouldUseTelegramSenderNameFallback(messageText: string, senderName?: string | null) {
+    if (/@\w+/i.test(messageText)) return false;
+    if (senderName && isSharedAccountSender(senderName)) return false;
+    return true;
+}
+
+export function resolveOperationalDoctorLookupQuery(params: {
+    doctorQuery: string | null;
+    senderName?: string | null;
+    messageText: string;
+}) {
+    if (params.doctorQuery) {
+        return params.doctorQuery;
+    }
+
+    return shouldUseTelegramSenderNameFallback(params.messageText, params.senderName)
+        ? (params.senderName ?? null)
+        : null;
 }
 
 async function resolveDoctorWithFallback(rawName: string) {
@@ -799,7 +1332,7 @@ async function resolveDoctorWithFallback(rawName: string) {
     };
 }
 
-function isExactDoctorMatch(query: string | null, doctor: { fullName: string; displayName: string | null } | null) {
+function isExactDoctorMatch(query: string | null, doctor: { fullName: string; displayName: string | null; metadata?: unknown } | null) {
     if (!query || !doctor) {
         return false;
     }
@@ -810,7 +1343,16 @@ function isExactDoctorMatch(query: string | null, doctor: { fullName: string; di
     }
 
     return normalizedQuery === normalizeDoctorName(doctor.fullName)
-        || normalizedQuery === normalizeDoctorName(doctor.displayName ?? "");
+        || normalizedQuery === normalizeDoctorName(doctor.displayName ?? "")
+        || extractDoctorAliases(doctor.metadata).some((alias) => normalizeDoctorName(alias) === normalizedQuery);
+}
+
+function resolveTelegramDoctorSurfaceName(doctor: { fullName: string; displayName?: string | null } | null | undefined) {
+    return formatDoctorSurfaceName({
+        fullName: doctor?.fullName,
+        displayName: doctor?.displayName ?? null,
+        fallback: "medico nao identificado",
+    });
 }
 
 function buildApproximateMatchHint(params: {
@@ -864,10 +1406,12 @@ async function prepareTelegramBatchEntries(message: TelegramUpdate["message"]) {
                 roleFunction: parsed.roleFunction,
                 isDeparture: parsed.isDeparture,
                 isContinuation: parsed.isContinuation,
+                isReassignment: parsed.isReassignment ?? false,
             },
             resolvedDoctor: {
                 id: doctor.id,
                 fullName: doctor.fullName,
+                displayName: doctor.displayName ?? null,
             },
             eventAt: resolveTelegramEventTime(referenceDate, parsed.arrivalTime),
         });
@@ -1062,6 +1606,82 @@ function buildResolutionData(current: unknown, patch: Record<string, unknown>) {
     };
 }
 
+function isLembretesCommandText(text: string) {
+    return /^\/lembretes(?:@\w+)?$/i.test(text.trim());
+}
+
+function buildLembretesCommandText(params: {
+    shiftLabel: "SD" | "SN";
+    regulationRows: Array<{ postCode: string; status: "active" | "waiting" | "disabled"; doctorName: string | null; displayName: string | null }>;
+    interventionRows: Array<{ baseCode: string; status: "active" | "waiting" | "disabled"; doctorName: string | null; displayName: string | null }>;
+}) {
+    const normalizeCode = (value: string) => value.trim().toUpperCase();
+    const isChiefPost = (code: string) => normalizeCode(code) === "2031";
+    const isNucleo = (code: string) => normalizeCode(code) === "NUCLEO";
+    const isPiam = (code: string) => normalizeCode(code) === "PIAM";
+    const doctorLabel = (fullName: string | null, displayName: string | null) => formatDoctorSurfaceName({
+        fullName,
+        displayName,
+        fallback: "medico nao identificado",
+    });
+
+    const regularRegulationRows = params.regulationRows.filter((row) => !isChiefPost(row.postCode) && !isNucleo(row.postCode) && !isPiam(row.postCode));
+    const regularActiveRegulationRows = regularRegulationRows
+        .filter((row) => row.status === "active")
+        .sort((left, right) => doctorLabel(left.doctorName, left.displayName).localeCompare(doctorLabel(right.doctorName, right.displayName), "pt-BR"));
+
+    const regulationHeadcount = regularActiveRegulationRows.length;
+
+    const regulationLines = regularActiveRegulationRows.length > 0
+        ? regularActiveRegulationRows.map((row) => `✅ ${doctorLabel(row.doctorName, row.displayName)} — ${row.postCode}`).join("\n")
+        : "⚠️ Nenhum regulador (fora 2031/NUCLEO/PIAM) confirmado.";
+
+    const nucleoRow = params.regulationRows.find((row) => isNucleo(row.postCode));
+    const piamRow = params.regulationRows.find((row) => isPiam(row.postCode));
+
+    const specialRegulationLines: string[] = [];
+    if (params.shiftLabel === "SD") {
+        specialRegulationLines.push(
+            nucleoRow?.status === "active"
+                ? `✅ NUCLEO — ${doctorLabel(nucleoRow.doctorName, nucleoRow.displayName)}`
+                : "⚠️ NUCLEO — sem confirmacao",
+        );
+    }
+    specialRegulationLines.push(
+        piamRow?.status === "active"
+            ? `✅ PIAM — ${doctorLabel(piamRow.doctorName, piamRow.displayName)}`
+            : "⚠️ PIAM — sem confirmacao",
+    );
+
+    const interventionLines = [...params.interventionRows]
+        .sort((left, right) => compareTelegramInterventionCodes(left.baseCode, right.baseCode))
+        .map((row) => {
+            if (row.status === "active") {
+                return `✅ ${row.baseCode} — ${doctorLabel(row.doctorName, row.displayName)}`;
+            }
+            if (row.status === "disabled") {
+                return `⚫ ${row.baseCode} — desativada`;
+            }
+            return `🚨 ${row.baseCode} — sem informacao`;
+        })
+        .join("\n");
+
+    return [
+        "📣👨‍✈️ CHEFIA, confere pra mim?",
+        "",
+        `☎️ Reguladores no quadro agora: ${regulationHeadcount}`,
+        regulationLines,
+        "",
+        ...specialRegulationLines,
+        "",
+        `🚑 USA ${params.shiftLabel} (quem esta onde):`,
+        interventionLines,
+        "",
+        "❓ Certeza que nao falta alguem?",
+        "⚡ Se faltou, avisem agora: Nome + base/ramal + SD/SN/P + horario.",
+    ].join("\n");
+}
+
 async function markTelegramTrainingCandidate(
     id: string,
     current: unknown,
@@ -1213,7 +1833,152 @@ async function findInterventionBaseByCode(code: string) {
     });
 }
 
-async function handleInterventionBaseStateCommand(params: {
+async function findRegulationPostByCode(code: string) {
+    return getDb().query.regulationPosts.findFirst({
+        where: eq(regulationPosts.code, code),
+    });
+}
+
+// ─── /desfazer Handler ─────────────────────────────────────────────────
+
+async function handleTelegramUndoCommand(params: {
+    message: TelegramUpdate["message"];
+    logId: string;
+    actor: TelegramCommandActor;
+    undoCommand: NonNullable<ReturnType<typeof parseTelegramUndoCommand>>;
+}) {
+    const { message, logId, actor, undoCommand } = params;
+    if (!message) return { ok: true, ignored: true };
+
+    const adminOpts = { adminWindow: true, skipOwnerCheck: true } as const;
+
+    if (undoCommand.name === "undo_list") {
+        // List recent undoable actions (all users, 12h window)
+        const actions = await getUndoableActions("__admin__", adminOpts);
+        if (actions.length === 0) {
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "undo_list",
+                resolutionData: { count: 0 },
+            });
+            await sendMessage(message.chat.id, "Nenhuma ação desfeível nas últimas 12h.", message.message_id);
+            return { ok: true };
+        }
+
+        const lines = await Promise.all(actions.map(async (a, i) => {
+            const label = await buildUndoActionLabel(a);
+            const ago = Math.ceil((Date.now() - new Date(a.createdAt).getTime()) / 60_000);
+            return `${i + 1}. ${label} (${ago} min atrás)`;
+        }));
+
+        const header = `📋 Ações desfeíveis (${actions.length}):\n\n`;
+        const footer = "\n\nPara desfazer, envie /desfazer N (ex: /desfazer 1)";
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "undo_list",
+            resolutionData: { count: actions.length },
+        });
+        await sendMessage(message.chat.id, header + lines.join("\n") + footer, message.message_id);
+        return { ok: true };
+    }
+
+    // undo_confirm — execute the undo
+    const actions = await getUndoableActions("__admin__", adminOpts);
+    const idx = undoCommand.index! - 1;
+
+    if (idx < 0 || idx >= actions.length) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            errorMessage: "undo_index_out_of_range",
+            parsedAction: "undo_confirm",
+            resolutionData: { index: undoCommand.index, available: actions.length },
+        });
+        await sendMessage(
+            message.chat.id,
+            actions.length === 0
+                ? "Nenhuma ação desfeível no momento."
+                : `Número inválido. Disponíveis: 1 a ${actions.length}. Envie /desfazer para listar.`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true };
+    }
+
+    const target = actions[idx];
+    const result = await undoAction(
+        target.auditLogId,
+        actor.userId ?? "__telegram_admin__",
+        `[telegram /desfazer] ${message.text}`,
+        adminOpts,
+    );
+
+    if (!result.success) {
+        await markTelegramProcessed(logId, {
+            status: "error",
+            errorMessage: result.message,
+            parsedAction: "undo_confirm",
+            resolutionData: { auditLogId: target.auditLogId, action: target.action },
+        });
+        await sendMessage(message.chat.id, `:/ ${result.message}`, message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    const label = await buildUndoActionLabel(target);
+    await markTelegramProcessed(logId, {
+        status: "accepted",
+        parsedAction: "undo_confirm",
+        resolutionData: { auditLogId: target.auditLogId, action: target.action },
+    });
+    await sendMessage(message.chat.id, `✅ Desfeito: ${label}\n${result.message}`, message.message_id);
+    return { ok: true };
+}
+
+async function buildUndoActionLabel(entry: UndoableEntry): Promise<string> {
+    const db = getDb();
+    const details = entry.details;
+    const doctorId = (details.beforeSnapshot as Record<string, unknown> | undefined)?.doctorId as string
+        ?? details.doctorId as string
+        ?? null;
+
+    let doctorName = "?";
+    if (doctorId) {
+        const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, doctorId) });
+        if (doc) doctorName = doc.displayName ?? doc.fullName;
+    }
+
+    const postId = (details.beforeSnapshot as Record<string, unknown> | undefined)?.postId as number
+        ?? details.postId as number
+        ?? null;
+    const baseId = (details.beforeSnapshot as Record<string, unknown> | undefined)?.baseId as number
+        ?? details.baseId as number
+        ?? null;
+
+    let targetLabel = "";
+    if (postId) {
+        const post = await db.query.regulationPosts.findFirst({ where: eq(regulationPosts.id, postId) });
+        if (post) targetLabel = post.code;
+    } else if (baseId) {
+        const base = await db.query.interventionBases.findFirst({ where: eq(interventionBases.id, baseId) });
+        if (base) targetLabel = base.code;
+    }
+
+    const actionLabels: Record<string, string> = {
+        "regulation_occupancy.started": "Início regulação",
+        "regulation_occupancy.corrected": "Correção regulação",
+        "regulation_occupancy.deleted": "Remoção regulação",
+        "intervention_occupancy.started": "Início intervenção",
+        "intervention_occupancy.corrected": "Correção intervenção",
+        "intervention_occupancy.deleted": "Remoção intervenção",
+        "operational_occupancy.transferred": "Remanejamento",
+    };
+
+    const actionLabel = actionLabels[entry.action] ?? entry.action;
+    const parts = [actionLabel];
+    if (targetLabel) parts.push(targetLabel);
+    if (doctorName !== "?") parts.push(doctorName);
+    return parts.join(" — ");
+}
+
+async function handleOperationalBaseStateCommand(params: {
     message: TelegramUpdate["message"];
     logId: string;
     actor: TelegramCommandActor;
@@ -1224,23 +1989,13 @@ async function handleInterventionBaseStateCommand(params: {
         return { ok: true, ignored: true };
     }
 
-    if (command.sector !== "INTERVENTION") {
-        await markTelegramProcessed(logId, {
-            status: "ignored",
-            errorMessage: "command_usage_invalid",
-            parsedDomain: command.sector,
-            parsedTargetCode: command.targetCode,
-            parsedAction: command.name,
-            resolutionData: { commandName: command.name, commandBody: command.rawBody },
-        });
-        await sendMessage(message.chat.id, pickTelegramReply("command_usage", message.message_id, {
-            usage: "/desativar PM40 | /desativar PM40 19:00 | /ativar PM40 | /ativar PM40 19:10",
-        }), message.message_id);
-        return { ok: true, ignored: true };
-    }
+    const usage = "/desativar PM40 | /desativar PM40 19:00 | /ativar PM40 | /ativar PM40 19:10 | /desativar 2031 | /ativar 2031 19:10";
+    const isRegulation = command.sector === "REGULATION";
+    const target = isRegulation
+        ? await findRegulationPostByCode(command.targetCode)
+        : await findInterventionBaseByCode(command.targetCode);
 
-    const base = await findInterventionBaseByCode(command.targetCode);
-    if (!base) {
+    if (!target) {
         await markTelegramProcessed(logId, {
             status: "ignored",
             errorMessage: "command_target_not_found",
@@ -1249,7 +2004,7 @@ async function handleInterventionBaseStateCommand(params: {
             parsedAction: command.name,
             resolutionData: { commandName: command.name, commandBody: command.rawBody },
         });
-        await sendMessage(message.chat.id, `:/ Nao encontrei a base ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
+        await sendMessage(message.chat.id, `:/ Nao encontrei ${isRegulation ? "o ramal" : "a base"} ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
         return { ok: true, ignored: true };
     }
 
@@ -1257,68 +2012,81 @@ async function handleInterventionBaseStateCommand(params: {
 
     try {
         if (command.name === "desativar") {
-            const result = await deactivateInterventionBase({
-                baseId: base.id,
-                deactivatedAt: eventAt,
-                notes: `[telegram /desativar] ${message.text}`,
-                createdByUserId: actor.userId,
-            });
+            const result = isRegulation
+                ? await deactivateRegulationPost({
+                    postId: target.id,
+                    deactivatedAt: eventAt,
+                    notes: `[telegram /desativar] ${message.text}`,
+                    createdByUserId: actor.userId,
+                })
+                : await deactivateInterventionBase({
+                    baseId: target.id,
+                    deactivatedAt: eventAt,
+                    notes: `[telegram /desativar] ${message.text}`,
+                    createdByUserId: actor.userId,
+                });
 
             await markTelegramProcessed(logId, {
                 status: "accepted",
-                parsedDomain: "INTERVENTION",
+                parsedDomain: command.sector,
                 parsedTargetCode: command.targetCode,
                 parsedAction: command.name,
                 relatedOccupancyId: result.closedOccupancyIds[0] ?? null,
                 resolutionData: {
                     actorRoles: actor.roles,
                     commandName: command.name,
-                    baseId: base.id,
+                    targetId: target.id,
                     effectiveAt: eventAt.toISOString(),
                     closedOccupancyIds: result.closedOccupancyIds,
                 },
             });
             await sendMessage(
                 message.chat.id,
-                `Base ${command.targetCode} desativada às ${formatTelegramReplyTime(eventAt)}.${result.closedOccupancyIds.length > 0 ? ` ${result.closedOccupancyIds.length} cobertura${result.closedOccupancyIds.length > 1 ? "s foram" : " foi"} encerrada${result.closedOccupancyIds.length > 1 ? "s" : ""} com auditoria.` : " Quadro atualizado."}`,
+                `${isRegulation ? "Ramal" : "Base"} ${command.targetCode} ${isRegulation ? "desativado" : "desativada"} às ${formatTelegramReplyTime(eventAt)}.${result.closedOccupancyIds.length > 0 ? ` ${result.closedOccupancyIds.length} cobertura${result.closedOccupancyIds.length > 1 ? "s foram" : " foi"} encerrada${result.closedOccupancyIds.length > 1 ? "s" : ""} com auditoria.` : " Quadro atualizado."}`,
                 message.message_id,
             );
             return { ok: true, updated: true };
         }
 
-        const state = await reactivateInterventionBase({
-            baseId: base.id,
-            reactivatedAt: eventAt,
-            updatedByUserId: actor.userId,
-        });
+        const state = isRegulation
+            ? await reactivateRegulationPost({
+                postId: target.id,
+                reactivatedAt: eventAt,
+                updatedByUserId: actor.userId,
+            })
+            : await reactivateInterventionBase({
+                baseId: target.id,
+                reactivatedAt: eventAt,
+                updatedByUserId: actor.userId,
+            });
 
         await markTelegramProcessed(logId, {
             status: "accepted",
-            parsedDomain: "INTERVENTION",
+            parsedDomain: command.sector,
             parsedTargetCode: command.targetCode,
             parsedAction: command.name,
             relatedOccupancyId: null,
             resolutionData: {
                 actorRoles: actor.roles,
                 commandName: command.name,
-                baseId: base.id,
+                targetId: target.id,
                 deactivatedAt: state.deactivatedAt,
                 reactivatedAt: state.reactivatedAt,
             },
         });
-        await sendMessage(message.chat.id, `Base ${command.targetCode} reativada às ${formatTelegramReplyTime(eventAt)} e liberada para nova cobertura.`, message.message_id);
+        await sendMessage(message.chat.id, `${isRegulation ? "Ramal" : "Base"} ${command.targetCode} ${isRegulation ? "reativado" : "reativada"} às ${formatTelegramReplyTime(eventAt)} e ${isRegulation ? "liberado" : "liberada"} para nova cobertura.`, message.message_id);
         return { ok: true, updated: true };
     } catch (error) {
         await markTelegramProcessed(logId, {
             status: "error",
-            parsedDomain: "INTERVENTION",
+            parsedDomain: command.sector,
             parsedTargetCode: command.targetCode,
             parsedAction: command.name,
             errorMessage: error instanceof Error ? error.message : "command_base_state_failed",
             resolutionData: {
                 actorRoles: actor.roles,
                 commandName: command.name,
-                baseId: base.id,
+                targetId: target.id,
             },
         });
         await sendMessage(message.chat.id, `:/ Nao consegui ${command.name} ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
@@ -1466,6 +2234,7 @@ async function tryHandleHistoricalRemovalCommand(params: {
         roleFunction: command.roleLabel,
         isDeparture: command.isDeparture,
         isContinuation: false,
+        isReassignment: false,
     };
 
     const candidates = await findHistoricalRemovableOccupancies({
@@ -1529,7 +2298,7 @@ async function tryHandleHistoricalRemovalCommand(params: {
             removedShiftLabel: deleted.shiftLabel,
         },
     });
-    await sendMessage(message.chat.id, `Registro apagado de ${command.targetCode}: ${resolved.doctor.fullName} (${deleted.shiftLabel ?? "--"} ${formatTelegramReplyTime(deleted.startedAt)}). O plantão foi removido do banco.`, message.message_id);
+    await sendMessage(message.chat.id, `Registro apagado de ${command.targetCode}: ${resolveTelegramDoctorSurfaceName(resolved.doctor)} (${deleted.shiftLabel ?? "--"} ${formatTelegramReplyTime(deleted.startedAt)}). O plantão foi removido do banco.`, message.message_id);
     return { ok: true, removed: true };
 }
 
@@ -1537,6 +2306,11 @@ async function loadDoctorFullName(doctorId: string) {
     const db = getDb();
     const doctor = await db.query.doctors.findFirst({ where: eq(doctors.id, doctorId) });
     return doctor?.fullName ?? "Medico nao identificado";
+}
+
+async function loadDoctorSurfaceName(doctorId: string) {
+    const doctor = await loadDoctorById(doctorId);
+    return resolveTelegramDoctorSurfaceName(doctor);
 }
 
 async function loadDoctorById(doctorId: string | null | undefined) {
@@ -1552,7 +2326,7 @@ function resolveCommandAuditUserId(actorUserId: string | null | undefined) {
     return actorUserId ?? null;
 }
 
-function doctorMatchesCommandQuery(query: string, doctor: { fullName: string; displayName: string | null }) {
+function doctorMatchesCommandQuery(query: string, doctor: { fullName: string; displayName: string | null; metadata?: unknown }) {
     const normalizedQuery = normalizeDoctorName(query);
     if (!normalizedQuery) {
         return false;
@@ -1565,8 +2339,12 @@ function doctorMatchesCommandQuery(query: string, doctor: { fullName: string; di
 
     const doctorTokens = new Set(normalizeDoctorName(doctor.fullName).split(/\s+/).filter(Boolean));
     const displayTokens = new Set(normalizeDoctorName(doctor.displayName ?? "").split(/\s+/).filter(Boolean));
+    const aliasTokens = new Set(
+        extractDoctorAliases(doctor.metadata)
+            .flatMap((alias) => normalizeDoctorName(alias).split(/\s+/).filter(Boolean)),
+    );
 
-    return queryTokens.every((token) => doctorTokens.has(token) || displayTokens.has(token));
+    return queryTokens.every((token) => doctorTokens.has(token) || displayTokens.has(token) || aliasTokens.has(token));
 }
 
 async function resolveCommandDoctor(params: {
@@ -1660,17 +2438,40 @@ async function resolveOperationalDoctor(params: {
     const activeDoctorId = active?.occupancy?.doctorId;
 
     if (params.parsed.isDeparture) {
+        if (params.doctorQuery) {
+            return {
+                ...(await resolveCommandDoctor({
+                    doctorQuery: params.doctorQuery,
+                    activeDoctorId,
+                })),
+                matchedBy: "command" as const,
+                active,
+            };
+        }
+
+        const lookupQuery = resolveOperationalDoctorLookupQuery({
+            doctorQuery: null,
+            senderName: params.senderName,
+            messageText: params.messageText,
+        });
+        const resolved = lookupQuery
+            ? await resolveDoctorWithFallback(lookupQuery)
+            : { doctor: null, candidates: [] as TelegramDoctorCandidate[], matchedBy: "none" as const };
+
         return {
-            ...(await resolveCommandDoctor({
-                doctorQuery: params.doctorQuery,
-                activeDoctorId,
-            })),
-            matchedBy: params.doctorQuery ? "command" as const : "none" as const,
+            doctor: resolved.doctor,
+            candidates: resolved.candidates,
+            usedActiveDoctorFallback: false,
+            matchedBy: resolved.matchedBy,
             active,
         };
     }
 
-    const lookupQuery = params.doctorQuery || (shouldUseTelegramSenderNameFallback(params.messageText) ? params.senderName : null);
+    const lookupQuery = resolveOperationalDoctorLookupQuery({
+        doctorQuery: params.doctorQuery,
+        senderName: params.senderName,
+        messageText: params.messageText,
+    });
     const resolved = lookupQuery
         ? await resolveDoctorWithFallback(lookupQuery)
         : { doctor: null, candidates: [] as TelegramDoctorCandidate[], matchedBy: "none" as const };
@@ -1684,15 +2485,18 @@ async function resolveOperationalDoctor(params: {
 }
 
 function buildDoctorDirectoryUsageReply() {
-    return `:/ Para cadastrar um medico, use ${TELEGRAM_DOCTOR_ADMIN_COMMAND_USAGE}. Apelido e codigo sao opcionais; para informar so o codigo, mande /medico cadastrar Nome Completo | | crm-123.`;
+    return `:/ Use ${TELEGRAM_DOCTOR_ADMIN_COMMAND_USAGE}. Para corrigir cadastro existente: /medico atualizar Busca Atual | Nome Completo Correto | Nome de exibicao | codigo | alias 1, alias 2.`;
 }
 
 function buildDoctorDirectorySummary(doctor: {
     fullName: string;
     displayName: string | null;
     externalCode: string | null;
+    metadata?: unknown;
+    aliases?: string[];
 }) {
     const details: string[] = [];
+    const aliases = doctor.aliases ?? extractDoctorAliases(doctor.metadata);
 
     if (doctor.displayName && normalizeDoctorName(doctor.displayName) !== normalizeDoctorName(doctor.fullName)) {
         details.push(`exibicao ${doctor.displayName}`);
@@ -1700,6 +2504,10 @@ function buildDoctorDirectorySummary(doctor: {
 
     if (doctor.externalCode) {
         details.push(`codigo ${doctor.externalCode}`);
+    }
+
+    if (aliases.length > 0) {
+        details.push(`aliases ${aliases.join(", ")}`);
     }
 
     return details.length > 0 ? ` (${details.join(", ")})` : "";
@@ -1797,12 +2605,48 @@ export function shouldDeferPendingNameSelectionToFreshParsing(text: string, cand
         return false;
     }
 
+    if (parseMessageMulti(cleaned).some(isOperationalParsedEntry)) {
+        return true;
+    }
+
     if (/^([1-9]\d*)$/.test(cleaned)) {
         return false;
     }
 
     if (pickCandidateFromReply(cleaned, candidates)) {
         return false;
+    }
+
+    return false;
+}
+
+export function shouldDeferPendingDepartureJustificationToFreshParsing(text: string) {
+    const cleaned = text.trim();
+    if (!cleaned) {
+        return false;
+    }
+
+    const parsedEntries = parseMessageMulti(cleaned).filter(isOperationalParsedEntry);
+    if (parsedEntries.length === 0) {
+        return false;
+    }
+
+    const normalized = cleaned.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const hasArrivalIntent = /\b(?:CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMINDO|ASSUMI|RENDENDO|RENDI|CONT\.?|CONTINUA|CONTINUO|CONTINUANDO|CONTINUAR|SEGUINDO|SEGUIR|SIGO|FICO|FICANDO|FIQUEI|FICAR|PERMANECO|PERMANECENDO|PERMANECE|PERMANECER|EMENDO|EMENDANDO|EMENDA|EMENDAR|PROSSIGO|PROSSEGUINDO|PROSSEGUIR)\b/.test(normalized)
+        || /\b(?:VOU|VAI|VAMOS)\s+(?:CONTINUAR|FICAR|PERMANECER|SEGUIR|EMENDAR|PROSSEGUIR)\b/.test(normalized);
+
+    return parsedEntries.some((entry) => entry.isDeparture || entry.isContinuation || Boolean(entry.arrivalTime) || Boolean(entry.shiftType))
+        || hasArrivalIntent;
+}
+
+export function shouldDeferPendingDepartureCorrectionToFreshParsing(text: string) {
+    const cleaned = text.trim();
+    if (!cleaned) {
+        return false;
+    }
+
+    if (cleaned.startsWith("/")) {
+        return true;
     }
 
     return parseMessageMulti(cleaned).some(isOperationalParsedEntry);
@@ -1817,7 +2661,11 @@ function buildPaymentAllocationReportLine(row: PaymentAllocationRow) {
         return `VAZ ${row.targetCode} - sem ocupacao`;
     }
 
-    const name = row.displayName ?? row.doctorName ?? "medico nao identificado";
+    const name = formatDoctorSurfaceName({
+        fullName: row.doctorName,
+        displayName: row.displayName,
+        fallback: "medico nao identificado",
+    });
     if (row.paymentStatus === "ready_for_payment") {
         return `OK ${row.targetCode} - ${name}`;
     }
@@ -1866,6 +2714,124 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     const message = update.message;
     if (!message?.text) {
         return null;
+    }
+
+    const slotAuditCommand = parseTelegramSlotAuditCommand(message.text, new Date(message.date * 1000));
+    if (slotAuditCommand || isTelegramSlotAuditCommandText(message.text)) {
+        if (!slotAuditCommand) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "slot_audit_usage_invalid",
+                parsedAction: "slot_audit_command",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, `:/ Use ${TELEGRAM_SLOT_AUDIT_USAGE}. Sem argumentos eu trago os ultimos 7 dias.`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        if (!canRunPrivateAdminSlotAudit(message)) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "slot_audit_private_admin_forbidden",
+                parsedAction: "slot_audit_command",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, ":/ Auditoria de slots so roda no privado para o admin configurado do bot.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        try {
+            const report = await getOperationalSlotAuditReport({
+                startDate: slotAuditCommand.startDate,
+                endDate: slotAuditCommand.endDate,
+                shiftLabel: slotAuditCommand.shiftLabel,
+                reference: new Date(message.date * 1000),
+            });
+            const messages = buildTelegramSlotAuditMessages(report);
+
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "slot_audit_command",
+                resolutionData: {
+                    commandName: slotAuditCommand.name,
+                    startDate: report.startDate,
+                    endDate: report.endDate,
+                    shiftLabel: report.shiftLabel,
+                    slotCount: report.summary.slotCount,
+                    emptyCount: report.summary.emptyCount,
+                    occupiedCount: report.summary.occupiedCount,
+                    disabledCount: report.summary.disabledCount,
+                },
+            });
+            await sendTelegramReplyBatch(message.chat.id, messages, message.message_id);
+            return { ok: true, slotAudit: true };
+        } catch (error) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: error instanceof Error ? error.message : "slot_audit_failed",
+                parsedAction: "slot_audit_command",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, error instanceof Error ? error.message : `:/ Use ${TELEGRAM_SLOT_AUDIT_USAGE}.`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+    }
+
+    const mealBreakExcludeCommand = parseTelegramMealBreakExcludeCommand(message.text);
+    if (mealBreakExcludeCommand || isTelegramMealBreakExcludeCommandText(message.text)) {
+        if (!mealBreakExcludeCommand) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "meal_break_exclude_usage_invalid",
+                parsedAction: "meal_break_exclude_command",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, buildMealBreakExcludeCommandUsageReply(), message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const actor = await resolveTelegramCommandActor(message);
+        if (!actor?.roles.includes("admin") && !actor?.roles.includes("chief")) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "meal_break_exclude_forbidden",
+                parsedAction: "meal_break_exclude_command",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, ":/ Apenas chefes e admins podem excluir ou incluir medicos na divisao.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const exclude = /^\/excluir/i.test(message.text.trim());
+        try {
+            const result = await runTelegramMealBreakExcludeCommand({
+                ramal: mealBreakExcludeCommand.ramal,
+                exclude,
+                referenceAt: new Date(message.date * 1000),
+                actorTelegramId: resolveTelegramMealBreakSenderId(update),
+            });
+
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "meal_break_exclude_command",
+                resolutionData: {
+                    ramal: mealBreakExcludeCommand.ramal,
+                    exclude,
+                    resultStatus: result.status,
+                },
+            });
+            await sendTelegramReplyBatch(message.chat.id, result.messages, message.message_id);
+            return { ok: true, mealBreakExclude: true };
+        } catch (error) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: error instanceof Error ? error.message : "meal_break_exclude_failed",
+                parsedAction: "meal_break_exclude_command",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, buildMealBreakErrorReply(error), message.message_id);
+            return { ok: true, ignored: true };
+        }
     }
 
     const mealBreakPriorityCommand = parseTelegramMealBreakPriorityCommand(message.text);
@@ -1982,6 +2948,51 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
     }
 
+    // ─── /desfazer — Admin Undo (private only) ─────────────────────────
+    if (isTelegramUndoCommandText(message.text)) {
+        const actor = await resolveTelegramCommandActor(message);
+        if (!actor || !actor.roles.includes("admin")) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "undo_command_forbidden",
+                parsedAction: "undo",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, ":/ O comando /desfazer fica restrito a admin.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        if (message.chat.type !== "private") {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "undo_command_private_only",
+                parsedAction: "undo",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, ":/ O /desfazer funciona só no privado do bot.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const undoCommand = parseTelegramUndoCommand(message.text);
+        if (!undoCommand) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "undo_command_usage_invalid",
+                parsedAction: "undo",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, "Uso: /desfazer (listar) ou /desfazer N (confirmar undo do item N)", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        return handleTelegramUndoCommand({
+            message,
+            logId,
+            actor,
+            undoCommand,
+        });
+    }
+
     const doctorDirectoryCommand = parseTelegramDoctorAdminCommand(message.text);
     if (doctorDirectoryCommand || isTelegramDoctorAdminCommandText(message.text)) {
         const actor = await resolveTelegramCommandActor(message);
@@ -2019,11 +3030,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
 
         try {
-            const result = await createDoctorDirectoryEntry({
-                fullName: doctorDirectoryCommand.fullName,
-                displayName: doctorDirectoryCommand.displayName,
-                externalCode: doctorDirectoryCommand.externalCode,
-            }, {
+            const auditContext = {
                 actorUserId: actor.userId,
                 source: "telegram_command",
                 details: {
@@ -2031,7 +3038,73 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     telegramActorName: actor.senderName,
                     telegramCommand: message.text,
                 },
-            });
+            };
+
+            if (doctorDirectoryCommand.name === "doctor_update") {
+                const result = await updateDoctorDirectoryEntry({
+                    lookup: doctorDirectoryCommand.lookup,
+                    fullName: doctorDirectoryCommand.fullName,
+                    displayName: doctorDirectoryCommand.displayName,
+                    externalCode: doctorDirectoryCommand.externalCode,
+                    aliases: doctorDirectoryCommand.aliases,
+                    hasDisplayName: doctorDirectoryCommand.hasDisplayName,
+                    hasExternalCode: doctorDirectoryCommand.hasExternalCode,
+                    hasAliases: doctorDirectoryCommand.hasAliases,
+                }, auditContext);
+
+                await markTelegramProcessed(logId, {
+                    status: result.status === "updated" || result.status === "reactivated_and_updated" ? "accepted" : "ignored",
+                    parsedAction: doctorDirectoryCommand.name,
+                    parsedDoctorName: result.status === "updated" || result.status === "reactivated_and_updated"
+                        ? result.doctor.fullName
+                        : doctorDirectoryCommand.lookup,
+                    resolutionData: {
+                        actorRoles: actor.roles,
+                        resultStatus: result.status,
+                        lookup: doctorDirectoryCommand.lookup,
+                        matches: result.status === "ambiguous" ? result.matches : undefined,
+                    },
+                });
+
+                if (result.status === "not_found") {
+                    await sendMessage(
+                        message.chat.id,
+                        `:/ Nao achei medico com "${doctorDirectoryCommand.lookup}" para atualizar.`,
+                        message.message_id,
+                    );
+                    return { ok: true, ignored: true };
+                }
+
+                if (result.status === "ambiguous") {
+                    await sendMessage(
+                        message.chat.id,
+                        [
+                            `:/ Achei mais de um medico para "${doctorDirectoryCommand.lookup}".`,
+                            ...result.matches.map((doctor, index) => `${index + 1}. ${resolveTelegramDoctorSurfaceName(doctor)}${buildDoctorDirectorySummary(doctor)}`),
+                            "",
+                            "Use um identificador mais especifico, como nome completo atual, codigo ou alias unico.",
+                        ].join("\n"),
+                        message.message_id,
+                    );
+                    return { ok: true, ignored: true };
+                }
+
+                await sendMessage(
+                    message.chat.id,
+                    result.status === "updated"
+                        ? `:) Diretorio atualizado. Corrigi ${resolveTelegramDoctorSurfaceName(result.doctor)}${buildDoctorDirectorySummary(result.doctor)}.`
+                        : `:) Diretorio atualizado. Reativei e corrigi ${resolveTelegramDoctorSurfaceName(result.doctor)}${buildDoctorDirectorySummary(result.doctor)}.`,
+                    message.message_id,
+                );
+                return { ok: true, doctorId: result.doctor.id };
+            }
+
+            const result = await createDoctorDirectoryEntry({
+                fullName: doctorDirectoryCommand.fullName,
+                displayName: doctorDirectoryCommand.displayName,
+                externalCode: doctorDirectoryCommand.externalCode,
+                aliases: doctorDirectoryCommand.aliases,
+            }, auditContext);
 
             await markTelegramProcessed(logId, {
                 status: "accepted",
@@ -2042,6 +3115,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     resultStatus: result.status,
                     externalCode: result.doctor.externalCode,
                     displayName: result.doctor.displayName,
+                    aliases: extractDoctorAliases(result.doctor.metadata),
                 },
             });
 
@@ -2066,12 +3140,12 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             await markTelegramProcessed(logId, {
                 status: "error",
                 errorMessage: error instanceof Error ? error.message : "doctor_command_failed",
-                parsedAction: "doctor_create",
+                parsedAction: doctorDirectoryCommand.name,
                 resolutionData: { rawCommand: message.text },
             });
             await sendMessage(
                 message.chat.id,
-                `:/ Nao consegui cadastrar esse medico. ${error instanceof Error ? error.message : "Falha inesperada."}`,
+                `:/ Nao consegui atualizar esse medico. ${error instanceof Error ? error.message : "Falha inesperada."}`,
                 message.message_id,
             );
             return { ok: true, ignored: true };
@@ -2205,7 +3279,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                         shiftLabel: board.shiftLabel,
                     },
                 });
-                await sendMessage(message.chat.id, `:) ${doctor.fullName} ja estava alocado em ${targetRow.targetCode} para ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`, message.message_id);
+                await sendMessage(message.chat.id, `:) ${resolveTelegramDoctorSurfaceName(doctor)} ja estava alocado em ${targetRow.targetCode} para ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`, message.message_id);
                 return { ok: true, occupancyId: targetRow.occupancyId };
             }
 
@@ -2248,7 +3322,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
             await sendMessage(
                 message.chat.id,
-                `:) Corrigi ${targetRow.targetCode} para ${doctor.fullName} em ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}. Agora ${describePaymentAllocationOutcome(refreshedRow)}.`,
+                `:) Corrigi ${targetRow.targetCode} para ${resolveTelegramDoctorSurfaceName(doctor)} em ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}. Agora ${describePaymentAllocationOutcome(refreshedRow)}.`,
                 message.message_id,
             );
             return { ok: true, occupancyId: updated.id };
@@ -2592,18 +3666,9 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "  _Vagner USB-03 08:30_",
             "",
             "━━━━━━━━━━━━━━━━━━",
-            "📌 *Comandos disponíveis:*",
+            "📌 Para ver *todos* os comandos com exemplos:",
+            "  /comandos",
             "",
-            "  /cobrar — lembra a equipe do formato correto",
-            "  /almoco — inicia divisão de almoço",
-            "  /jantar — inicia divisão de jantar",
-            "  /prioridade — mostra ordem de escolha",
-            "  /plantao — relatório do turno atual",
-            "  /resumo — resumo operacional",
-            "  /banco — consulta banco de horas",
-            "  /saidas — relatório de saídas",
-            "",
-            "━━━━━━━━━━━━━━━━━━",
             "💡 Em caso de dúvida, mande /ajuda novamente.",
         ].join("\n");
 
@@ -2612,6 +3677,186 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             parsedAction: "help_command",
         });
         await sendMessage(message.chat.id, helpText, message.message_id);
+        return { ok: true, help: true };
+    }
+
+    if (normalizedText === "/comandos") {
+        const isPrivate = message.chat.type === "private";
+        const actor = await resolveTelegramCommandActor(message);
+        const isAdmin = actor?.roles.includes("admin") ?? false;
+        const isChief = actor?.roles.some((r) => r === "admin" || r === "chief") ?? false;
+
+        const sections: string[] = [];
+
+        sections.push(
+            "📖 *TUTORIAL COMPLETO DE COMANDOS*",
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "📥 *CHEGADA / SAÍDA (mensagem livre no grupo)*",
+            "",
+            "▸ Chegada:",
+            `  _${buildTelegramArrivalExample({})}_`,
+            "  _Vagner USB-01 07:00 P_ (plantão P)",
+            "",
+            "▸ Saída:",
+            `  _${buildTelegramDepartureExample({})}_`,
+            "",
+            "▸ Continuação (emenda turno):",
+            "  _Vagner continuo USB-01_",
+            "",
+            "▸ Troca de base/ramal:",
+            "  _Vagner USB-03 08:30_ (nova msg de chegada)",
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "🔧 *CORREÇÕES (comandos /)*",
+            "",
+            "▸ /corrigir — corrige hora de chegada:",
+            "  _/corrigir PM04 20:00_",
+            "  _/corrigir PM04 Karen 20:00_ (troca médico + hora)",
+            "",
+            "▸ /corrigirsaida — corrige saída anterior:",
+            "  _/corrigirsaida Nome Sobrenome_",
+            "  _/corrigirsaida Nome Sobrenome 2035_ (se tiver base)",
+            "",
+            "▸ /ontem — fixa horário em ontem:",
+            "  _/ontem PM04 20:00_",
+            "",
+            "▸ /hoje — fixa horário em hoje:",
+            "  _/hoje PM04 07:00_",
+            "",
+            "▸ /retirar — registra saída/encerramento:",
+            "  _/retirar PM04 19:00_",
+            "  (sinônimos: /saiu, /saindo, /saida)",
+            "",
+            "▸ /ramal — altera função do ramal:",
+            "  _/ramal Emily 1363 RMT_",
+            "  _/ramal Emily 1363 PSIQ_",
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "🍽️ *ALMOÇO / JANTAR*",
+            "",
+            "▸ /almoco — inicia divisão de almoço (SD)",
+            "  _/almoco reiniciar_ (recomeça do zero)",
+            "",
+            "▸ /jantar — inicia divisão de jantar (SN)",
+            "  _/jantar reiniciar_",
+            "",
+            "▸ /prioridade — mostra ordem de escolha",
+            "",
+            "▸ /excluir — retira médico da divisão:",
+            "  _/excluir 2041_",
+            "",
+            "▸ /incluir — recoloca médico na divisão:",
+            "  _/incluir 2041_",
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "📊 *RELATÓRIOS*",
+            "",
+            "▸ /plantao — relatório do turno atual",
+            "",
+            "▸ /resumo — resumo operacional (contagem + refeição)",
+            "",
+            "▸ /saidas — relatório de saídas:",
+            "  _/saidas_ (turno atual)",
+            "  _/saidas ontem SD_",
+            "  _/saidas 2026-04-07 SN_",
+            "",
+            "▸ /prioridadesaida — quem pode sair primeiro",
+            "",
+            "▸ /status ou /meuturno — meu lançamento atual",
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "📢 *UTILIDADES*",
+            "",
+            "▸ /cobrar — lembrete para equipe informar chegada no formato certo",
+            "▸ /lembretes — cobra chefia com USA sem informacao + total de reguladores",
+            "▸ /ajuda — guia rápido",
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "🔐 *CHEFIA (grupo)*",
+            "",
+            "▸ /remover — apaga plantão (⚠️ só admin):",
+            "  _/remover PM04_",
+            "  _/remover Nome PM04 SD_",
+            "",
+            "▸ /ativar — reativa base/ramal:",
+            "  _/ativar PM40_",
+            "  _/ativar PM40 19:10_",
+            "  _/ativar 2031_ (regulação)",
+            "",
+            "▸ /desativar — desativa base/ramal:",
+            "  _/desativar PM40_",
+            "  _/desativar 2031 19:00_",
+            "",
+            `ℹ️ Acesso atual: ${isChief ? "chefia" : "usuário comum"}.`,
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "🔑 *CHEFIA (privado do bot)*",
+            "",
+            "▸ /pagamento conferir — confere alocação de pagamento:",
+            "  _/pagamento conferir_ (turno atual)",
+            "  _/pagamento conferir 2026-04-07 SD_",
+            "",
+            "▸ /pagamento corrigir — corrige pagamento:",
+            "  _/pagamento corrigir PM04 | Karen | 2026-04-07 | SD | motivo_",
+            "",
+            `ℹ️ Requer chat privado + chefia (agora: ${isPrivate ? "privado" : "grupo"}).`,
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "👑 *ADMIN (privado do bot)*",
+            "",
+            "▸ /desfazer — lista e desfaz ações (12h):",
+            "  _/desfazer_ (listar)",
+            "  _/desfazer 1_ (confirma undo #1)",
+            "",
+            "▸ /slots — auditoria de ocupação:",
+            "  _/slots_ (turno atual)",
+            "  _/slots 2026-04-07 SD_",
+            "  _/slots 2026-04-01 2026-04-07 SN_",
+            "",
+            "▸ /medico — cadastro/edição de médico:",
+            "  _/medico cadastrar Nome | Exibição | código | alias1, alias2_",
+            "  _/medico atualizar Busca | Novo Nome_",
+            "",
+            "▸ /banco — ajusta banco de horas:",
+            "  _/banco Nome Completo SD 0_",
+            "",
+            `ℹ️ Requer chat privado + admin (agora: ${isAdmin ? "admin" : "não admin"}; ${isPrivate ? "privado" : "grupo"}).`,
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "💡 Dica: mande /comandos a qualquer momento para rever este tutorial.",
+        );
+
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "comandos_tutorial",
+            resolutionData: { isAdmin, isChief, isPrivate },
+        });
+        await sendMessage(message.chat.id, sections.join("\n"), message.message_id);
         return { ok: true, help: true };
     }
 
@@ -2651,6 +3896,47 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         });
         await sendMessage(message.chat.id, cobrarText);
         return { ok: true, cobrar: true };
+    }
+
+    if (isLembretesCommandText(message.text)) {
+        const board = await getOperationalBoard();
+        const shiftLabel = resolveOperationalShiftWindow(new Date()).shiftLabel;
+        const regulationRows = board.regulation.map((row) => ({
+            postCode: row.postCode,
+            status: row.status,
+            doctorName: row.doctorName,
+            displayName: row.displayName,
+        }));
+        const interventionRows = board.intervention.map((row) => ({
+            baseCode: row.baseCode,
+            status: row.status,
+            doctorName: row.doctorName,
+            displayName: row.displayName,
+        }));
+
+        const lembretesText = buildLembretesCommandText({
+            shiftLabel,
+            regulationRows,
+            interventionRows,
+        });
+
+        const regulationHeadcount = regulationRows.filter((row) => {
+            const code = row.postCode.trim().toUpperCase();
+            return row.status === "active" && code !== "2031" && code !== "NUCLEO" && code !== "PIAM";
+        }).length;
+        const interventionWaitingCount = interventionRows.filter((row) => row.status === "waiting").length;
+
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "lembretes_command",
+            resolutionData: {
+                shiftLabel,
+                regulationHeadcount,
+                interventionWaitingCount,
+            },
+        });
+        await sendMessage(message.chat.id, lembretesText);
+        return { ok: true, lembretes: true };
     }
 
     if (normalizedText === "/status" || normalizedText === "/meuturno") {
@@ -2749,6 +4035,114 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         return { ok: true, status: true };
     }
 
+    const departureCorrectionCommand = parseTelegramDepartureCorrectionCommand(message.text);
+    if (departureCorrectionCommand || isTelegramDepartureCorrectionCommandText(message.text)) {
+        const actor = await resolveTelegramCommandActor(message);
+        if (!actor || !actor.roles.some((role) => role === "admin" || role === "chief")) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "command_forbidden",
+                parsedAction: "corrigirsaida",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, pickTelegramReply("command_forbidden", message.message_id, {}), message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        if (!departureCorrectionCommand?.doctorName) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "command_usage_invalid",
+                parsedAction: "corrigirsaida",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, pickTelegramReply("command_usage", message.message_id, {
+                usage: "/corrigirsaida Nome Sobrenome | /corrigirsaida Nome Sobrenome 2035",
+            }), message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const { doctor, candidates } = await resolveCommandDoctor({
+            doctorQuery: departureCorrectionCommand.doctorName,
+            activeDoctorId: null,
+        });
+        if (!doctor) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "command_doctor_not_resolved",
+                parsedAction: "corrigirsaida",
+                parsedDoctorName: departureCorrectionCommand.doctorName,
+                parsedTargetCode: departureCorrectionCommand.targetCode,
+                resolutionData: {
+                    doctorQuery: departureCorrectionCommand.doctorName,
+                    candidates: candidates.slice(0, 3),
+                },
+            });
+            await sendMessage(message.chat.id, buildNameUnresolvedReply(message.message_id, candidates), message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const recentCandidates = await listRecentDepartureCorrectionCandidates({
+            doctorId: doctor.id,
+            referenceAt: new Date(message.date * 1000),
+        });
+        const resolution = pickLikelyDepartureCorrectionCandidate({
+            candidates: recentCandidates,
+            targetCode: departureCorrectionCommand.targetCode,
+        });
+
+        if (!resolution.candidate && resolution.ambiguousCandidates.length === 0) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "departure_correction_target_not_found",
+                parsedAction: "corrigirsaida",
+                parsedDoctorName: doctor.fullName,
+                parsedTargetCode: departureCorrectionCommand.targetCode,
+            });
+            await sendMessage(
+                message.chat.id,
+                departureCorrectionCommand.targetCode
+                    ? `:/ Nao encontrei plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)} em ${departureCorrectionCommand.targetCode} para corrigir a saída.`
+                    : `:/ Nao encontrei plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)} para corrigir a saída.`,
+                message.message_id,
+            );
+            return { ok: true, ignored: true };
+        }
+
+        if (!resolution.candidate) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "departure_correction_ambiguous",
+                parsedAction: "corrigirsaida",
+                parsedDoctorName: doctor.fullName,
+                parsedTargetCode: departureCorrectionCommand.targetCode,
+                resolutionData: {
+                    ambiguousCandidates: resolution.ambiguousCandidates.map((candidate) => formatDepartureCorrectionCandidateSummary(candidate)),
+                },
+            });
+            await sendMessage(
+                message.chat.id,
+                [
+                    `:/ Achei mais de um plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)}.`,
+                    ...resolution.ambiguousCandidates.map((candidate, index) => `${index + 1}. ${formatDepartureCorrectionCandidateSummary(candidate)}`),
+                    "",
+                    `Reenvie com o alvo para eu travar o plantão certo. Ex.: /corrigirsaida ${resolveTelegramDoctorSurfaceName(doctor)} ${resolution.ambiguousCandidates[0]?.targetCode ?? "2035"}`,
+                ].join("\n"),
+                message.message_id,
+            );
+            return { ok: true, ignored: true };
+        }
+
+        await queuePendingDepartureCorrection({
+            logId,
+            message,
+            resolvedDoctor: { id: doctor.id, fullName: doctor.fullName, displayName: doctor.displayName ?? null },
+            candidate: resolution.candidate,
+            originalText: message.text,
+        });
+        return { ok: true, ignored: true, pending: true };
+    }
+
     const command = parseTelegramCommand(message.text);
     if (!command) {
         if (message.text.trim().startsWith("/")) {
@@ -2764,7 +4158,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 },
             });
             await sendMessage(message.chat.id, pickTelegramReply("command_usage", message.message_id, {
-                usage: "/corrigir PM04 20:00 | /retirar PM04 19:00 | /remover PM04 | /ramal Emily 1363 RMT | /desativar PM40 | /ativar PM40",
+                usage: "/corrigir PM04 20:00 | /retirar PM04 19:00 | /ramal Emily 1363 RMT | /comandos (ver todos)",
             }), message.message_id);
             return { ok: true, ignored: true };
         }
@@ -2798,14 +4192,14 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             message.chat.id,
             command.name === "remover"
                 ? ":/ O comando /remover fica restrito a admin porque apaga o plantão do banco e da trilha operacional."
-                : ":/ Os comandos /ativar e /desativar ficam restritos a admin porque alteram o estado operacional auditado da base.",
+                : ":/ Os comandos /ativar e /desativar ficam restritos a admin porque alteram o estado operacional auditado da base ou do ramal.",
             message.message_id,
         );
         return { ok: true, ignored: true };
     }
 
     if (command.name === "ativar" || command.name === "desativar") {
-        return handleInterventionBaseStateCommand({
+        return handleOperationalBaseStateCommand({
             message,
             logId,
             actor,
@@ -2821,6 +4215,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         roleFunction: command.roleLabel,
         isDeparture: command.isDeparture,
         isContinuation: false,
+        isReassignment: false,
     };
 
     const active = await findActiveOccupancyByTarget(parsedEntry);
@@ -2883,19 +4278,26 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
         try {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), command.time);
+
+            // Preserve boardStartedAt when it differs from startedAt (continuity record).
+            // The hasOwn check in correctRegulationOccupancy / correctInterventionOccupancy
+            // keeps the existing value when boardStartedAt is omitted from input.
+            const existingBoardStartedAt = active.occupancy!.boardStartedAt;
+            const existingStartedAt = active.occupancy!.startedAt;
+            const isContinuityRecord = existingBoardStartedAt
+                && existingStartedAt
+                && existingBoardStartedAt.getTime() !== existingStartedAt.getTime();
+
+            const correctionBase = {
+                doctorId: doctor.id,
+                startedAt: eventAt,
+                notes: `${active.occupancy!.notes ?? ""}\n[telegram /corrigir] ${message.text}`.trim(),
+                ...(isContinuityRecord ? {} : { boardStartedAt: eventAt }),
+            };
+
             const updated = command.sector === "REGULATION"
-                ? await correctRegulationOccupancy(active.occupancy.id, {
-                    doctorId: doctor.id,
-                    startedAt: eventAt,
-                    boardStartedAt: eventAt,
-                    notes: `${active.occupancy.notes ?? ""}\n[telegram /corrigir] ${message.text}`.trim(),
-                }, resolveCommandAuditUserId(null))
-                : await correctInterventionOccupancy(active.occupancy.id, {
-                    doctorId: doctor.id,
-                    startedAt: eventAt,
-                    boardStartedAt: eventAt,
-                    notes: `${active.occupancy.notes ?? ""}\n[telegram /corrigir] ${message.text}`.trim(),
-                }, resolveCommandAuditUserId(null));
+                ? await correctRegulationOccupancy(active.occupancy!.id, correctionBase, resolveCommandAuditUserId(null))
+                : await correctInterventionOccupancy(active.occupancy!.id, correctionBase, resolveCommandAuditUserId(null));
 
             await markTelegramProcessed(logId, {
                 status: "accepted",
@@ -2944,6 +4346,111 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
     }
 
+    if ((command.name === "ontem" || command.name === "hoje") && !command.isDeparture) {
+        if (!command.time) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "command_usage_invalid",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: command.name,
+            });
+            await sendMessage(message.chat.id, pickTelegramReply("command_usage", message.message_id, {
+                usage: `/${command.name} PM04 20:00 | /${command.name} PM04 Nome 20:00`,
+            }), message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const { doctor, candidates, usedActiveDoctorFallback } = await resolveCommandDoctor({
+            doctorQuery: command.doctorName,
+            activeDoctorId: active.occupancy.doctorId,
+        });
+        if (!doctor) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "command_doctor_not_resolved",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: command.name,
+                resolutionData: {
+                    doctorQuery: command.doctorName,
+                    activeDoctorId: active.occupancy.doctorId,
+                    candidates: candidates.slice(0, 3),
+                },
+            });
+            await sendMessage(message.chat.id, buildNameUnresolvedReply(message.message_id, candidates), message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        try {
+            const dayOffset = command.name === "ontem" ? -1 : 0;
+            const eventAt = resolveForcedDayEventTime(new Date(message.date * 1000), command.time, dayOffset);
+
+            const existingBoardStartedAt = active.occupancy!.boardStartedAt;
+            const existingStartedAt = active.occupancy!.startedAt;
+            const isContinuityRecord = existingBoardStartedAt
+                && existingStartedAt
+                && existingBoardStartedAt.getTime() !== existingStartedAt.getTime();
+
+            const correctionBase = {
+                doctorId: doctor.id,
+                startedAt: eventAt,
+                notes: `${active.occupancy!.notes ?? ""}\n[telegram /${command.name}] ${message.text}`.trim(),
+                ...(isContinuityRecord ? {} : { boardStartedAt: eventAt }),
+            };
+
+            const updated = command.sector === "REGULATION"
+                ? await correctRegulationOccupancy(active.occupancy!.id, correctionBase, resolveCommandAuditUserId(null))
+                : await correctInterventionOccupancy(active.occupancy!.id, correctionBase, resolveCommandAuditUserId(null));
+
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: command.name,
+                parsedDoctorName: doctor.fullName,
+                relatedOccupancyId: updated.id,
+                resolutionData: {
+                    actorRoles: actor.roles,
+                    commandName: command.name,
+                    usedActiveDoctorFallback,
+                    dayOffset,
+                },
+            });
+            await sendMessage(message.chat.id, pickTelegramReply("command_corrected", message.message_id, {
+                target: command.targetCode,
+                name: doctor.fullName,
+                time: formatTelegramReplyTime(eventAt),
+            }), message.message_id);
+
+            if (message.chat.type === "private") {
+                await announcePrivateCorrectionToGroups(message.message_id, {
+                    target: command.targetCode,
+                    name: doctor.fullName,
+                    time: formatTelegramReplyTime(eventAt),
+                });
+            }
+
+            return { ok: true, occupancyId: updated.id };
+        } catch (error) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: command.name,
+                parsedDoctorName: doctor.fullName,
+                errorMessage: error instanceof Error ? error.message : "command_day_correction_failed",
+                resolutionData: {
+                    actorRoles: actor.roles,
+                    commandName: command.name,
+                    usedActiveDoctorFallback,
+                },
+            });
+            await sendMessage(message.chat.id, `:/ Nao consegui corrigir ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+    }
+
     if (command.name === "ramal") {
         if (command.sector !== "REGULATION") {
             await markTelegramProcessed(logId, {
@@ -2954,7 +4461,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: command.name,
             });
             await sendMessage(message.chat.id, pickTelegramReply("command_usage", message.message_id, {
-                usage: "/ramal Nome Sobrenome 1363 RMT | /ramal Nome Sobrenome 1363",
+                usage: "/ramal Nome Sobrenome 1363 RMT | /ramal Nome Sobrenome 1363 PSIQ | /ramal Nome Sobrenome 1363",
             }), message.message_id);
             return { ok: true, ignored: true };
         }
@@ -2981,7 +4488,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
 
         if (doctor.id !== active.occupancy.doctorId) {
-            const activeDoctorName = await loadDoctorFullName(active.occupancy.doctorId);
+            const activeDoctorName = await loadDoctorSurfaceName(active.occupancy.doctorId);
             await markTelegramProcessed(logId, {
                 status: "ignored",
                 errorMessage: "command_role_doctor_mismatch",
@@ -3049,8 +4556,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             await sendMessage(
                 message.chat.id,
                 nextRoleLabel
-                    ? `Função atualizada em ${command.targetCode}: ${doctor.fullName} segue no mesmo plantão, agora como ${nextRoleLabel}. Chegada e meal break foram preservados.`
-                    : `Função removida em ${command.targetCode}: ${doctor.fullName} segue no mesmo plantão sem função operacional extra. Chegada e meal break foram preservados.`,
+                    ? `Função atualizada em ${command.targetCode}: ${resolveTelegramDoctorSurfaceName(doctor)} segue no mesmo plantão, agora como ${nextRoleLabel}. Chegada e meal break foram preservados.`
+                    : `Função removida em ${command.targetCode}: ${resolveTelegramDoctorSurfaceName(doctor)} segue no mesmo plantão sem função operacional extra. Chegada e meal break foram preservados.`,
                 message.message_id,
             );
             return { ok: true, occupancyId: updated.id };
@@ -3097,26 +4604,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             return { ok: true, ignored: true };
         }
 
-        if (
-            command.sector === "INTERVENTION"
-            && requiresOvertimeJustification(active.occupancy.startedAt, eventAt)
-            && !hasTelegramOperationalJustification(message.text, [command.targetCode, command.doctorName, command.time])
-        ) {
-            await markTelegramProcessed(logId, {
-                status: "ignored",
-                errorMessage: "departure_justification_required",
-                parsedDomain: command.sector,
-                parsedTargetCode: command.targetCode,
-                parsedAction: "departure",
-            });
-            await sendMessage(
-                message.chat.id,
-                ":| Depois de 07:15 ou 19:15 eu preciso da justificativa por escrito. Pode ser liberado pela chefia, ocorrencia 0729 ou atraso de quem veio render. Ex.: /saiu PP20 19:20 porque fui liberado pela chefia.",
-                message.message_id,
-            );
-            return { ok: true, ignored: true };
-        }
-
         const updated = command.sector === "REGULATION"
             ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null))
             : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null));
@@ -3142,7 +4629,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     const deleted = command.sector === "REGULATION"
         ? await removeRegulationOccupancyRecord(active.occupancy.id, resolveCommandAuditUserId(null))
         : await removeInterventionOccupancyRecord(active.occupancy.id, resolveCommandAuditUserId(null));
-    const doctorName = await loadDoctorFullName(deleted.doctorId);
+    const doctorName = await loadDoctorSurfaceName(deleted.doctorId);
 
     await markTelegramProcessed(logId, {
         status: "accepted",
@@ -3167,14 +4654,22 @@ async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
         return null;
     }
 
-    // If the message parses as an operational arrival/departure, let normal
-    // processing handle it instead of consuming it as a meal-break reply.
-    const operationalEntries = parseMessageMulti(message.text).filter(isOperationalParsedEntry);
-    if (operationalEntries.length > 0) {
-        return null;
-    }
-    if (looksLikeDepartureMessage(message.text)) {
-        return null;
+    const referenceAt = new Date(message.date * 1000);
+    const shouldPrioritize = await shouldPrioritizeTelegramMealBreakReply({
+        chatId: String(message.chat.id),
+        text: message.text,
+        referenceAt,
+    });
+    if (!shouldPrioritize) {
+        // If the message parses as an operational arrival/departure, let normal
+        // processing handle it instead of consuming it as a meal-break reply.
+        const operationalEntries = parseMessageMulti(message.text).filter(isOperationalParsedEntry);
+        if (operationalEntries.length > 0) {
+            return null;
+        }
+        if (looksLikeDepartureMessage(message.text)) {
+            return null;
+        }
     }
 
     try {
@@ -3182,7 +4677,7 @@ async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
             chatId: String(message.chat.id),
             text: message.text,
             senderTelegramId: resolveTelegramMealBreakSenderId(update),
-            referenceAt: new Date(message.date * 1000),
+            referenceAt,
         });
         if (!result) {
             return null;
@@ -3210,32 +4705,97 @@ async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
     }
 }
 
+const PENDING_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+async function expireStalependings(
+    chatId: string,
+    senderTelegramId: string,
+    status: "pending_name_selection" | "pending_departure_justification" | "pending_departure_correction",
+) {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    await db.update(telegramIngestedMessages)
+        .set({
+            status: "superseded",
+            errorMessage: "pending_expired",
+            processedAt: new Date(),
+        })
+        .where(and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, status),
+            lt(telegramIngestedMessages.createdAt, cutoff),
+        ));
+}
+
 async function findPendingNameSelection(chatId: string, senderTelegramId: string) {
     const db = getDb();
-    return db.query.telegramIngestedMessages.findFirst({
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    const fresh = await db.query.telegramIngestedMessages.findFirst({
         where: and(
             eq(telegramIngestedMessages.chatId, chatId),
             eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
             eq(telegramIngestedMessages.status, "pending_name_selection"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
         ),
         orderBy: [desc(telegramIngestedMessages.createdAt)],
     });
+    if (!fresh) {
+        await expireStalependings(chatId, senderTelegramId, "pending_name_selection");
+    }
+    return fresh ?? null;
 }
 
 async function findPendingDepartureJustification(chatId: string, senderTelegramId: string) {
     const db = getDb();
-    return db.query.telegramIngestedMessages.findFirst({
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    const fresh = await db.query.telegramIngestedMessages.findFirst({
         where: and(
             eq(telegramIngestedMessages.chatId, chatId),
             eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
             eq(telegramIngestedMessages.status, "pending_departure_justification"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
         ),
         orderBy: [desc(telegramIngestedMessages.createdAt)],
     });
+    if (!fresh) {
+        await expireStalependings(chatId, senderTelegramId, "pending_departure_justification");
+    }
+    return fresh ?? null;
+}
+
+async function findPendingDepartureCorrection(chatId: string, senderTelegramId: string) {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    const fresh = await db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "pending_departure_correction"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+    });
+    if (!fresh) {
+        await expireStalependings(chatId, senderTelegramId, "pending_departure_correction");
+    }
+    return fresh ?? null;
 }
 
 async function supersedePendingDepartureJustification(chatId: string, senderTelegramId: string, reason = "departure_justification_superseded") {
     const pending = await findPendingDepartureJustification(chatId, senderTelegramId);
+    if (!pending) {
+        return;
+    }
+
+    await markTelegramProcessed(pending.id, {
+        status: "superseded",
+        errorMessage: reason,
+    });
+}
+
+async function supersedePendingDepartureCorrection(chatId: string, senderTelegramId: string, reason = "departure_correction_superseded") {
+    const pending = await findPendingDepartureCorrection(chatId, senderTelegramId);
     if (!pending) {
         return;
     }
@@ -3273,11 +4833,24 @@ function isPendingDepartureJustificationData(value: unknown): value is PendingDe
     );
 }
 
+function isPendingDepartureCorrectionData(value: unknown): value is PendingDepartureCorrectionData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+    return Boolean(
+        candidate.resolvedDoctor
+        && candidate.candidate
+        && candidate.originalText,
+    );
+}
+
 async function queuePendingDepartureJustification(params: {
     logId: string;
     message: TelegramUpdate["message"];
     parsed: OperationalParsedEntry;
-    resolvedDoctor: { id: string; fullName: string };
+    resolvedDoctor: ResolvedTelegramDoctorRef;
     eventAt: Date;
     referenceAt: Date;
     originalText: string;
@@ -3316,22 +4889,74 @@ async function queuePendingDepartureJustification(params: {
                 roleFunction: params.parsed.roleFunction,
                 isDeparture: params.parsed.isDeparture,
                 isContinuation: params.parsed.isContinuation,
+                isReassignment: params.parsed.isReassignment ?? false,
             },
             resolvedDoctor: params.resolvedDoctor,
             originalText: params.originalText,
             originalEventAt: params.eventAt.toISOString(),
             originalReferenceAt: params.referenceAt.toISOString(),
+            invalidJustificationAttempts: 0,
         },
     });
 
     await sendMessage(
         params.message!.chat.id,
         pickTelegramReply("departure_justification_required", params.message!.message_id, {
-            name: params.resolvedDoctor.fullName,
+            name: resolveTelegramDoctorSurfaceName(params.resolvedDoctor),
             target: params.parsed.baseCode ?? "plantao",
             time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
             example: departureExample,
         }),
+        params.message!.message_id,
+    );
+}
+
+async function queuePendingDepartureCorrection(params: {
+    logId: string;
+    message: TelegramUpdate["message"];
+    resolvedDoctor: ResolvedTelegramDoctorRef;
+    candidate: TelegramDepartureCorrectionCandidate;
+    originalText: string;
+}) {
+    const senderTelegramId = params.message?.from?.id ? String(params.message.from.id) : null;
+    if (senderTelegramId) {
+        await supersedePendingDepartureCorrection(String(params.message!.chat.id), senderTelegramId, "departure_correction_replaced");
+        await supersedePendingDepartureJustification(String(params.message!.chat.id), senderTelegramId, "departure_justification_superseded_by_departure_correction");
+    }
+
+    await markTelegramProcessed(params.logId, {
+        status: "pending_departure_correction",
+        parsedDomain: params.candidate.domain,
+        parsedTargetCode: params.candidate.targetCode,
+        parsedAction: "departure_correction_request",
+        parsedDoctorName: params.resolvedDoctor.fullName,
+        resolutionData: {
+            resolvedDoctor: params.resolvedDoctor,
+            candidate: serializeDepartureCorrectionCandidate(params.candidate),
+            originalText: params.originalText,
+        },
+    });
+
+    const startedAt = formatTelegramReplyTime(params.candidate.startedAt);
+    const currentExit = params.candidate.actualEndedAt ?? params.candidate.endedAt;
+    const currentExitLabel = currentExit ? formatTelegramReplyTime(currentExit) : "ainda ativo";
+    const targetLabel = params.candidate.shiftLabel ? `${params.candidate.targetCode} ${params.candidate.shiftLabel}` : params.candidate.targetCode;
+    const domainLabel = params.candidate.domain === "REGULATION" ? "ramal" : "base";
+    const currentSituation = params.candidate.isActive
+        ? `Ele ainda aparece ativo em ${targetLabel}.`
+        : `Hoje o sistema está com saída ${currentExitLabel} em ${targetLabel}.`;
+
+    await sendMessage(
+        params.message!.chat.id,
+        [
+            `Achei o plantão de ${resolveTelegramDoctorSurfaceName(params.resolvedDoctor)}.`,
+            `${domainLabel} ${targetLabel} | chegada ${startedAt}`,
+            currentSituation,
+            "",
+            "Responda agora só com a hora correta da saída no formato HH:MM.",
+            "Ex.: 19:05",
+            "Se quiser cancelar, mande CANCELAR.",
+        ].join("\n"),
         params.message!.message_id,
     );
 }
@@ -3373,6 +4998,7 @@ async function queuePendingNameSelection(
                 roleFunction: parsed.roleFunction,
                 isDeparture: parsed.isDeparture,
                 isContinuation: parsed.isContinuation,
+                isReassignment: parsed.isReassignment ?? false,
             },
             candidates: candidates.slice(0, 3).map((candidate) => ({
                 id: candidate.id,
@@ -3400,25 +5026,187 @@ async function queuePendingNameSelection(
 
     await sendMessage(
         message!.chat.id,
-        `${buildCandidatePromptReply(message!.message_id, candidates)}\n\n${isTelegramContinuationIntent(parsed) ? "Se isso for continuidade, vou manter a chegada original e registrar apenas a confirmacao da passagem para o proximo plantao." : "Vou manter o horario da primeira mensagem."}${departureHint}`,
+        `${buildCandidatePromptReply(message!.message_id, candidates, { target: parsed.baseCode, time: parsed.arrivalTime, shift: parsed.shiftType })}\n\n${isTelegramContinuationIntent(parsed) ? "Se isso for continuidade, vou manter a chegada original e registrar apenas a confirmacao da passagem para o proximo plantao." : "Vou manter o horario da primeira mensagem."}${departureHint}`,
         message!.message_id,
         keyboard,
     );
 }
 
+async function handleTelegramReassignment(params: {
+    parsed: OperationalParsedEntry;
+    resolvedDoctor: ResolvedTelegramDoctorRef;
+    eventAt: Date;
+    messageText: string;
+}) {
+    const db = getDb();
+    const { parsed, resolvedDoctor, eventAt, messageText } = params;
+
+    // Step 1: Find the doctor's current active occupancy (any domain)
+    const activeOcc = await findActiveOccupancyByDoctorId(resolvedDoctor.id);
+    if (!activeOcc) {
+        throw new Error("Medico nao tem ocupacao ativa para remanejar. Registre a chegada normalmente.");
+    }
+
+    // Step 2: Resolve the target post/base
+    const targetCode = parsed.baseCode as string;
+    const sourceDomain = activeOcc.sector;
+    const sourceCode = activeOcc.baseCode;
+    const sourceOccupancyId = activeOcc.occupancyId;
+
+    if (sourceDomain === parsed.sector && sourceCode === targetCode) {
+        throw new Error(`Medico ja esta em ${targetCode}. Nao e necessario remanejar.`);
+    }
+
+    // Step 3: Check if the target has a conflicting occupancy from another doctor
+    if (parsed.sector === "REGULATION") {
+        const post = await db.query.regulationPosts.findFirst({
+            where: eq(regulationPosts.code, targetCode),
+        });
+        if (!post) {
+            throw new Error("Ramal de destino nao encontrado.");
+        }
+
+        const targetConflict = await db.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, post.id),
+                isNull(regulationOccupancies.endedAt),
+            ),
+        });
+        if (targetConflict && targetConflict.doctorId !== resolvedDoctor.id) {
+            throw new Error(`Ramal ${targetCode} ja esta ocupado por outro medico. Resolva o conflito pelo site da chefia.`);
+        }
+    } else {
+        const base = await db.query.interventionBases.findFirst({
+            where: eq(interventionBases.code, targetCode),
+        });
+        if (!base) {
+            throw new Error("Base de destino nao encontrada.");
+        }
+
+        const targetConflict = await db.query.interventionOccupancies.findFirst({
+            where: and(
+                eq(interventionOccupancies.baseId, base.id),
+                isNull(interventionOccupancies.endedAt),
+            ),
+        });
+        if (targetConflict && targetConflict.doctorId !== resolvedDoctor.id) {
+            throw new Error(`Base ${targetCode} ja esta ocupada por outro medico. Resolva o conflito pelo site da chefia.`);
+        }
+    }
+
+    // Step 4: End the source occupancy
+    if (sourceDomain === "REGULATION") {
+        await endRegulationOccupancy(sourceOccupancyId, {
+            endedAt: eventAt,
+            actualEndedAt: eventAt,
+        });
+    } else {
+        await endInterventionOccupancy(sourceOccupancyId, {
+            endedAt: eventAt,
+            actualEndedAt: eventAt,
+        });
+    }
+
+    // Step 5: Create new occupancy at the target, preserving continuity group
+    const notes = `Remanejado de ${sourceCode}. ${messageText}`.trim();
+    let occupancyId: string;
+    let autoReactivated = false;
+
+    // Preserve P-shift label: if source was "P", keep it regardless of parsed shift
+    const effectiveShiftLabel = activeOcc.shiftLabel === "P"
+        ? "P"
+        : (parsed.shiftType ?? activeOcc.shiftLabel);
+
+    if (parsed.sector === "REGULATION") {
+        const post = await db.query.regulationPosts.findFirst({
+            where: eq(regulationPosts.code, targetCode),
+        });
+        const regResult = await startRegulationOccupancy({
+            doctorId: resolvedDoctor.id,
+            postId: post!.id,
+            startedAt: eventAt,
+            shiftLabel: effectiveShiftLabel,
+            roleLabel: parsed.roleFunction,
+            ramalLabel: targetCode,
+            source: "telegram",
+            notes,
+            createdByUserId: null,
+            continuityGroupId: activeOcc.continuityGroupId,
+            boardStartedAt: activeOcc.boardStartedAt,
+        });
+        occupancyId = regResult.id;
+        if (regResult.autoReactivated) autoReactivated = true;
+    } else {
+        const base = await db.query.interventionBases.findFirst({
+            where: eq(interventionBases.code, targetCode),
+        });
+        const intResult = await startInterventionOccupancy({
+            doctorId: resolvedDoctor.id,
+            baseId: base!.id,
+            startedAt: eventAt,
+            shiftLabel: effectiveShiftLabel,
+            roleLabel: parsed.roleFunction,
+            source: "telegram",
+            notes,
+            createdByUserId: null,
+            continuityGroupId: activeOcc.continuityGroupId,
+            boardStartedAt: activeOcc.boardStartedAt,
+        });
+        occupancyId = intResult.id;
+        if (intResult.autoReactivated) autoReactivated = true;
+    }
+
+    // Step 6: Sync bank hours for the continuity group after reassignment
+    if (activeOcc.continuityGroupId) {
+        await syncBankHoursByContinuityGroup(db, activeOcc.continuityGroupId);
+    }
+
+    return {
+        occupancyId,
+        successKind: "standard" as const,
+        treatedAsContinuation: false,
+        replyTimeAt: eventAt,
+        autoReactivated,
+        effectiveShiftType: effectiveShiftLabel ?? null,
+        reassignedFrom: sourceCode,
+    };
+}
+
 async function applyParsedEntry(params: {
     parsed: OperationalParsedEntry;
-    resolvedDoctor: { id: string; fullName: string };
+    resolvedDoctor: ResolvedTelegramDoctorRef;
     eventAt: Date;
     referenceAt: Date;
     messageText: string;
 }) {
     const db = getDb();
     const { parsed, resolvedDoctor, eventAt, referenceAt, messageText } = params;
+
+    // Handle reassignment as a special case (end source + start target)
+    if (parsed.isReassignment) {
+        return handleTelegramReassignment({ parsed, resolvedDoctor, eventAt, messageText });
+    }
+
     let occupancyId: string | null = null;
     let successKind: "standard" | "departure_adjusted" = "standard";
     let treatedAsContinuation = false;
+    let autoReactivated = false;
     let replyTimeAt = eventAt;
+    let effectiveShiftType: string | null = parsed.shiftType ?? null;
+
+    // When no explicit shift is provided and the arrival time is near a shift boundary,
+    // use the message timestamp's shift to disambiguate.
+    // Example: arrival 18:55 (technically SD) but message sent 20:06 (SN) → doctor is arriving for SN.
+    if (!effectiveShiftType && !parsed.isDeparture) {
+        const arrivalShiftWindow = resolveOperationalShiftWindow(eventAt);
+        const messageShiftWindow = resolveOperationalShiftWindow(referenceAt);
+        if (arrivalShiftWindow.shiftLabel !== messageShiftWindow.shiftLabel) {
+            const minutesToBoundary = (arrivalShiftWindow.nextBoundaryAt.getTime() - eventAt.getTime()) / 60000;
+            if (minutesToBoundary >= 0 && minutesToBoundary <= 60) {
+                effectiveShiftType = messageShiftWindow.shiftLabel;
+            }
+        }
+    }
 
     if (parsed.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({
@@ -3449,6 +5237,30 @@ async function applyParsedEntry(params: {
                 });
                 if (!recentClosed) {
                     throw new Error("No active regulation occupancy found for this doctor/post.");
+                }
+
+                const hasHandoff = recentClosed.endedAt
+                    ? await hasRegulationDepartureHandoff({
+                        postId: post.id,
+                        doctorId: resolvedDoctor.id,
+                        occupancyId: recentClosed.id,
+                        endedAt: recentClosed.endedAt,
+                        eventAt,
+                    })
+                    : false;
+
+                if (
+                    requiresTelegramDepartureAdjustmentJustification({
+                        domain: "REGULATION",
+                        startedAt: recentClosed.startedAt,
+                        scheduledEndAt: recentClosed.scheduledEndAt,
+                        endedAt: recentClosed.endedAt,
+                        eventAt,
+                        hasSuccessorOccupancy: hasHandoff,
+                    })
+                    && !resolveTelegramEligibleLateDepartureReason(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+                ) {
+                    throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
 
                 occupancyId = (await correctRegulationOccupancy(recentClosed.id, {
@@ -3482,6 +5294,7 @@ async function applyParsedEntry(params: {
                 }, null)).id;
                 treatedAsContinuation = true;
                 replyTimeAt = activeOccupancy.startedAt;
+                effectiveShiftType = "P";
             } else {
                 const continuityContext = parsed.isDeparture
                     ? null
@@ -3503,25 +5316,34 @@ async function applyParsedEntry(params: {
                 }
 
                 const continuationStartedAt = shouldUseContinuityContext
-                    ? resolveOperationalShiftWindow(eventAt).startedAt
+                    ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
                     : eventAt;
                 const continuationBoardStartedAt = shouldUseContinuityContext && continuityContext?.source
                     ? new Date(continuityContext.continuityStartedAt ?? continuityContext.source.startedAt)
                     : undefined;
 
-                occupancyId = (await startRegulationOccupancy({
+                // Any continuity link means the doctor is crossing from a previous shift
+                // occupation into this one — the effective shift is always P (24h coverage).
+                // This covers: SD→SN, P→SN, null→SN, SN→SD, and any other cross-shift combination.
+                if (shouldUseContinuityContext && continuityContext?.source) {
+                    effectiveShiftType = "P";
+                }
+
+                const regResult = await startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
                     postId: post.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: continuationStartedAt,
                     boardStartedAt: continuationBoardStartedAt,
-                    shiftLabel: parsed.shiftType,
+                    shiftLabel: effectiveShiftType,
                     roleLabel: parsed.roleFunction,
                     ramalLabel: parsed.baseCode,
                     source: "telegram",
                     notes: messageText,
                     createdByUserId: null,
-                })).id;
+                });
+                occupancyId = regResult.id;
+                if (regResult.autoReactivated) autoReactivated = true;
 
                 if (shouldUseContinuityContext && continuityContext?.source) {
                     treatedAsContinuation = true;
@@ -3547,13 +5369,6 @@ async function applyParsedEntry(params: {
                 ),
             });
             if (occupancy) {
-                if (
-                    requiresOvertimeJustification(occupancy.startedAt, eventAt)
-                    && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
-                ) {
-                    throw new Error("Justificativa obrigatoria para registrar saida apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.");
-                }
-
                 occupancyId = (await endInterventionOccupancy(occupancy.id, {
                     endedAt: eventAt,
                     actualEndedAt: eventAt,
@@ -3570,13 +5385,24 @@ async function applyParsedEntry(params: {
 
                 if (
                     requiresTelegramDepartureAdjustmentJustification({
+                        domain: "INTERVENTION",
                         startedAt: recentClosed.startedAt,
+                        scheduledEndAt: recentClosed.scheduledEndAt,
                         endedAt: recentClosed.endedAt,
                         eventAt,
+                        hasSuccessorOccupancy: recentClosed.endedAt
+                            ? await hasInterventionDepartureHandoff({
+                                baseId: base.id,
+                                doctorId: resolvedDoctor.id,
+                                occupancyId: recentClosed.id,
+                                endedAt: recentClosed.endedAt,
+                                eventAt,
+                            })
+                            : false,
                     })
-                    && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+                    && !resolveTelegramEligibleLateDepartureReason(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
                 ) {
-                    throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. Inclua horario e motivo por escrito na mensagem.");
+                    throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
 
                 occupancyId = (await correctInterventionOccupancy(recentClosed.id, {
@@ -3617,6 +5443,7 @@ async function applyParsedEntry(params: {
                 }, null)).id;
                 treatedAsContinuation = true;
                 replyTimeAt = activeOccupancy.startedAt;
+                effectiveShiftType = "P";
             } else {
                 const continuityContext = parsed.isDeparture
                     ? null
@@ -3638,24 +5465,32 @@ async function applyParsedEntry(params: {
                 }
 
                 const continuationStartedAt = shouldUseContinuityContext
-                    ? resolveOperationalShiftWindow(eventAt).startedAt
+                    ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
                     : eventAt;
                 const continuationBoardStartedAtIntv = shouldUseContinuityContext && continuityContext?.source
                     ? new Date(continuityContext.continuityStartedAt ?? continuityContext.source.startedAt)
                     : undefined;
 
-                occupancyId = (await startInterventionOccupancy({
+                // Any continuity link means the doctor is crossing from a previous shift
+                // occupation into this one — the effective shift is always P (24h coverage).
+                if (shouldUseContinuityContext && continuityContext?.source) {
+                    effectiveShiftType = "P";
+                }
+
+                const intResult = await startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,
                     baseId: base.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: continuationStartedAt,
                     boardStartedAt: continuationBoardStartedAtIntv,
-                    shiftLabel: parsed.shiftType,
+                    shiftLabel: effectiveShiftType,
                     roleLabel: parsed.roleFunction,
                     source: "telegram",
                     notes: messageText,
                     createdByUserId: null,
-                })).id;
+                });
+                occupancyId = intResult.id;
+                if (intResult.autoReactivated) autoReactivated = true;
 
                 if (shouldUseContinuityContext && continuityContext?.source) {
                     treatedAsContinuation = true;
@@ -3666,7 +5501,7 @@ async function applyParsedEntry(params: {
         }
     }
 
-    return { occupancyId, successKind, treatedAsContinuation, replyTimeAt };
+    return { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom: null as string | null };
 }
 
 async function sendSuccessReply(
@@ -3680,6 +5515,9 @@ async function sendSuccessReply(
     approximateMatchHint = "",
     forceContinuation = false,
     replyTimeAt?: Date,
+    autoReactivated = false,
+    effectiveShiftType?: string | null,
+    reassignedFrom?: string | null,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const replyKind = resolveTelegramSuccessReplyKind({
@@ -3701,11 +5539,29 @@ async function sendSuccessReply(
     if (replyKind === "continuation_recorded" || forceContinuation) {
         timeContextHint = `\n\n🔗 Continuação detectada — computado desde *${time}* (turno anterior), sem atraso.`;
     } else if (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") {
-        const shiftWindow = resolveOperationalShiftWindow(eventAt);
-        const shiftStartTime = shiftWindow.startedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
-        const delayMs = eventAt.getTime() - shiftWindow.startedAt.getTime();
+        // Resolve the TARGET shift, not the clock-based current shift.
+        // Pre-shift windows: 05:00–06:59 → target SD; 17:00–18:59 → target SN.
+        // Explicit shiftType from the parser always overrides clock inference.
+        const clockShiftWindow = resolveOperationalShiftWindow(eventAt);
+        const eventParts = getSaoPauloParts(eventAt);
+        const isTargetSN = parsed.shiftType === "SN"
+            || (parsed.shiftType !== "SD" && eventParts.hour >= 17 && eventParts.hour < 19);
+        const isTargetSD = parsed.shiftType === "SD"
+            || (parsed.shiftType !== "SN" && eventParts.hour >= 5 && eventParts.hour < 7);
+        let targetShiftWindow = clockShiftWindow;
+        if (isTargetSN && clockShiftWindow.shiftLabel === "SD") {
+            targetShiftWindow = resolveOperationalShiftWindow(clockShiftWindow.nextBoundaryAt);
+        } else if (isTargetSD && clockShiftWindow.shiftLabel === "SN") {
+            targetShiftWindow = resolveOperationalShiftWindow(clockShiftWindow.nextBoundaryAt);
+        }
+
+        const shiftStartTime = targetShiftWindow.startedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
+        const delayMs = eventAt.getTime() - targetShiftWindow.startedAt.getTime();
         const delayMin = Math.round(delayMs / 60000);
-        if (delayMin > 0) {
+        if (delayMin < 0) {
+            // Arrived BEFORE the target shift start — early arrival, no delay hint needed
+            timeContextHint = `\n\n⏱ Registrado às *${time}* — ${Math.abs(delayMin)}min antes do início do turno ${targetShiftWindow.shiftLabel} (${shiftStartTime}).`;
+        } else if (delayMin > 0) {
             const target = parsed.baseCode ?? "RAMAL/BASE";
             timeContextHint = `\n\n⏱ Registrado às *${time}* — ${delayMin}min após o início do turno (${shiftStartTime}).`
                 + `\nSe está *continuando* do turno anterior, corrija:`
@@ -3713,10 +5569,23 @@ async function sendSuccessReply(
         }
     }
 
-    const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint
+    const resolvedShift = effectiveShiftType ?? parsed.shiftType;
+    const shiftHint = resolvedShift
+        ? `\n📋 Turno: *${resolvedShift === "SD" ? "SD (diurno)" : resolvedShift === "SN" ? "SN (noturno)" : "P (plantão 24h)"}*`
+        : "";
+
+    const reactivationHint = autoReactivated
+        ? `\n\n🔄 ${parsed.sector === "REGULATION" ? "Ramal" : "Base"} *${parsed.baseCode}* estava desativad${parsed.sector === "REGULATION" ? "o" : "a"} — reativad${parsed.sector === "REGULATION" ? "o" : "a"} automaticamente com a chegada.`
+        : "";
+
+    const reassignmentHint = reassignedFrom
+        ? `\n\n🔀 Remanejado de *${reassignedFrom}* para *${parsed.baseCode}*. Ocupação anterior encerrada.`
+        : "";
+
+    const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint && !autoReactivated
         ? "\n\n💡 Se trocar de ramal ou base, mande nova chegada no mesmo formato."
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${timeContextHint}${arrivalHint}`, replyToMessageId);
+    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${reactivationHint}${reassignmentHint}${timeContextHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
@@ -3729,29 +5598,8 @@ function formatTelegramReplyTime(value: Date) {
 }
 
 export function hasTelegramOperationalJustification(text: string, fragments: Array<string | null | undefined>) {
-    const normalized = text
-        .toUpperCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, " ");
-
-    let reduced = normalized.replace(/^\s*\/(?:CORRIGIR|RETIRAR|REMOVER|SAIU|SAINDO|SAIDA)\b/i, " ");
-    for (const fragment of fragments) {
-        if (!fragment) {
-            continue;
-        }
-
-        const escaped = fragment
-            .toUpperCase()
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, " ")
-            .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        reduced = reduced.replace(new RegExp(escaped, "gi"), " ");
-    }
-
-    reduced = reduced
-        .replace(/\b\d{1,2}[:.]\d{2}\b/g, " ")
-        .replace(/\b\d{1,2}H(?:\d{2})?\b/g, " ")
-        .replace(/\b(?:SD|SN|P|CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMINDO|ASSUMI|RENDENDO|RENDI|CONTINUO|CONTINUA|SEGUINDO|SIGO|SAINDO|SAIU|SAI|SAIDA|ENCERRANDO|ENCERREI|FINALIZANDO|FINALIZEI|LIBEREI|MOTIVO)\b/g, " ");
+    const normalized = normalizeTelegramReasonText(text);
+    const reduced = stripTelegramOperationalFragments(text, fragments);
 
     const meaningfulTokens = reduced
         .split(/\s+/)
@@ -3841,7 +5689,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
     try {
         const result = await applyParsedEntry({
             parsed: pending.resolutionData.parsed,
-            resolvedDoctor: { id: selected.id, fullName: selected.fullName },
+            resolvedDoctor: { id: selected.id, fullName: selected.fullName, displayName: selected.displayName ?? null },
             eventAt: new Date(pending.resolutionData.originalEventAt),
             referenceAt: new Date(pending.resolutionData.originalReferenceAt ?? pending.resolutionData.originalEventAt),
             messageText: pending.resolutionData.originalText,
@@ -3872,12 +5720,15 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             message.message_id,
             message.message_id,
             pending.resolutionData.parsed,
-            selected.fullName,
+            resolveTelegramDoctorSurfaceName(selected),
             new Date(pending.resolutionData.originalEventAt),
             result.successKind,
             "",
             result.treatedAsContinuation,
             result.replyTimeAt,
+            result.autoReactivated,
+            result.effectiveShiftType,
+            result.reassignedFrom,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -3891,7 +5742,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
                 logId,
                 message,
                 parsed: pending.resolutionData.parsed,
-                resolvedDoctor: { id: selected.id, fullName: selected.fullName },
+                resolvedDoctor: { id: selected.id, fullName: selected.fullName, displayName: selected.displayName ?? null },
                 eventAt: new Date(pending.resolutionData.originalEventAt),
                 referenceAt: new Date(pending.resolutionData.originalReferenceAt ?? pending.resolutionData.originalEventAt),
                 originalText: pending.resolutionData.originalText,
@@ -3918,6 +5769,12 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             doctorName: selected.fullName,
             errorMessage,
         });
+        await sendTelegramArrivalFailureReply({
+            chatId: message.chat.id,
+            replyToMessageId: message.message_id,
+            parsed: pending.resolutionData.parsed,
+            errorMessage,
+        });
         return { ok: true, ignored: true, processingError: true };
     }
 }
@@ -3933,7 +5790,20 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         return null;
     }
 
-    if (looksLikeDepartureMessage(message.text) && parseMessageMulti(message.text).some(isOperationalParsedEntry)) {
+    const pendingAttemptCount = getPendingDepartureJustificationAttemptCount(pending.resolutionData);
+    const promptKind = resolveDepartureJustificationPromptKind(pendingAttemptCount);
+    const replyTime = pending.resolutionData.parsed.arrivalTime ?? formatTelegramReplyTime(new Date(pending.resolutionData.originalEventAt));
+    const replyExample = buildTelegramDepartureExample({
+        doctorName: pending.resolutionData.resolvedDoctor.fullName,
+        target: pending.resolutionData.parsed.baseCode,
+        time: replyTime,
+    });
+
+    if (shouldDeferPendingDepartureJustificationToFreshParsing(message.text)) {
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: "departure_justification_deferred_to_fresh_parsing",
+        });
         return null;
     }
 
@@ -3970,19 +5840,165 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         });
         await sendMessage(
             message.chat.id,
-            pickTelegramReply("departure_justification_required", message.message_id, {
+            pickTelegramReply(promptKind, message.message_id, {
                 name: pending.resolutionData.resolvedDoctor.fullName,
                 target: pending.resolutionData.parsed.baseCode,
-                time: pending.resolutionData.parsed.arrivalTime ?? formatTelegramReplyTime(new Date(pending.resolutionData.originalEventAt)),
-                example: buildTelegramDepartureExample({
-                    doctorName: pending.resolutionData.resolvedDoctor.fullName,
-                    target: pending.resolutionData.parsed.baseCode,
-                    time: pending.resolutionData.parsed.arrivalTime ?? formatTelegramReplyTime(new Date(pending.resolutionData.originalEventAt)),
-                }),
+                time: replyTime,
+                example: replyExample,
             }),
             message.message_id,
         );
         return { ok: true, ignored: true, pending: true };
+    }
+
+    const eligibleReason = resolveTelegramEligibleLateDepartureReason(message.text);
+    if (!eligibleReason) {
+        if (pendingAttemptCount < 1) {
+            await markTelegramProcessed(pending.id, {
+                resolutionData: buildResolutionData(pending.resolutionData, {
+                    invalidJustificationAttempts: pendingAttemptCount + 1,
+                    latestInvalidJustificationReplyText: message.text,
+                }),
+            });
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                parsedDomain: pending.resolutionData.parsed.sector,
+                parsedTargetCode: pending.resolutionData.parsed.baseCode,
+                parsedAction: "departure_justification_pending",
+                parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+                errorMessage: "departure_justification_invalid_retry",
+                resolutionData: {
+                    pendingJustificationKept: true,
+                    invalidJustificationAttempts: pendingAttemptCount + 1,
+                },
+            });
+            await sendMessage(
+                message.chat.id,
+                pickTelegramReply("departure_justification_retry", message.message_id, {
+                    name: pending.resolutionData.resolvedDoctor.fullName,
+                    target: pending.resolutionData.parsed.baseCode,
+                    time: replyTime,
+                    example: replyExample,
+                }),
+                message.message_id,
+            );
+            return { ok: true, ignored: true, pending: true };
+        }
+
+        const eventAt = new Date(pending.resolutionData.originalEventAt);
+        const mergedText = buildTelegramJustificationFollowUpText(
+            pending.resolutionData.originalText,
+            message.text,
+        );
+
+        try {
+            let relatedOccupancyId: string;
+            if (pending.resolutionData.parsed.sector === "REGULATION") {
+                const post = await getDb().query.regulationPosts.findFirst({
+                    where: eq(regulationPosts.code, pending.resolutionData.parsed.baseCode),
+                });
+                if (!post) {
+                    throw new Error("Regulation post not found.");
+                }
+
+                const recentClosed = await findRecentClosedRegulationOccupancy({
+                    postId: post.id,
+                    doctorId: pending.resolutionData.resolvedDoctor.id,
+                    eventAt,
+                });
+                if (!recentClosed) {
+                    throw new Error("No active regulation occupancy found for this doctor/post.");
+                }
+
+                relatedOccupancyId = (await correctRegulationOccupancy(recentClosed.id, {
+                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida sem credito automatico", mergedText),
+                }, null)).id;
+            } else {
+                const base = await getDb().query.interventionBases.findFirst({
+                    where: eq(interventionBases.code, pending.resolutionData.parsed.baseCode),
+                });
+                if (!base) {
+                    throw new Error("Intervention base not found.");
+                }
+
+                const recentClosed = await findRecentClosedInterventionOccupancy({
+                    baseId: base.id,
+                    doctorId: pending.resolutionData.resolvedDoctor.id,
+                    eventAt,
+                });
+                if (!recentClosed) {
+                    throw new Error("No active intervention occupancy found for this doctor/base.");
+                }
+
+                relatedOccupancyId = (await correctInterventionOccupancy(recentClosed.id, {
+                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida sem credito automatico", mergedText),
+                }, null)).id;
+            }
+
+            await markTelegramProcessed(pending.id, {
+                status: "accepted",
+                relatedOccupancyId,
+                errorMessage: null,
+                resolutionData: buildResolutionData(pending.resolutionData, {
+                    invalidJustificationAttempts: pendingAttemptCount + 1,
+                    finalJustificationReplyText: message.text,
+                    automaticCreditGranted: false,
+                    manualReviewOnly: true,
+                }),
+            });
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedDomain: pending.resolutionData.parsed.sector,
+                parsedTargetCode: pending.resolutionData.parsed.baseCode,
+                parsedAction: "departure_justification_manual_review",
+                parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+                relatedOccupancyId,
+                errorMessage: null,
+                resolutionData: {
+                    justificationFromPending: true,
+                    automaticCreditGranted: false,
+                    manualReviewOnly: true,
+                },
+            });
+            await sendMessage(
+                message.chat.id,
+                pickTelegramReply("departure_justification_manual_review", message.message_id, {
+                    name: pending.resolutionData.resolvedDoctor.fullName,
+                    target: pending.resolutionData.parsed.baseCode,
+                    time: formatTelegramReplyTime(eventAt),
+                }),
+                message.message_id,
+            );
+            return { ok: true, occupancyId: relatedOccupancyId };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+            await markTelegramProcessed(pending.id, {
+                status: "error",
+                errorMessage,
+            });
+            await markTelegramProcessed(logId, {
+                status: "error",
+                parsedDomain: pending.resolutionData.parsed.sector,
+                parsedTargetCode: pending.resolutionData.parsed.baseCode,
+                parsedAction: "departure_justification_manual_review",
+                parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+                errorMessage,
+                resolutionData: {
+                    justificationFromPending: true,
+                    automaticCreditGranted: false,
+                    manualReviewOnly: true,
+                },
+            });
+            await sendTelegramDepartureFailureReply({
+                chatId: message.chat.id,
+                replyToMessageId: message.message_id,
+                seed: message.message_id,
+                parsed: pending.resolutionData.parsed,
+                doctorName: pending.resolutionData.resolvedDoctor.fullName,
+                errorMessage,
+            });
+            return { ok: true, ignored: true, processingError: true };
+        }
     }
 
     const mergedText = buildTelegramJustificationFollowUpText(
@@ -4006,6 +6022,8 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             errorMessage: null,
             resolutionData: buildResolutionData(pending.resolutionData, {
                 justificationReplyText: message.text,
+                matchedReasonCode: eligibleReason.code,
+                automaticCreditGranted: true,
             }),
         });
         await markTelegramProcessed(logId, {
@@ -4046,15 +6064,11 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             });
             await sendMessage(
                 message.chat.id,
-                pickTelegramReply("departure_justification_required", message.message_id, {
+                pickTelegramReply(promptKind, message.message_id, {
                     name: pending.resolutionData.resolvedDoctor.fullName,
                     target: pending.resolutionData.parsed.baseCode,
-                    time: pending.resolutionData.parsed.arrivalTime ?? formatTelegramReplyTime(new Date(pending.resolutionData.originalEventAt)),
-                    example: buildTelegramDepartureExample({
-                        doctorName: pending.resolutionData.resolvedDoctor.fullName,
-                        target: pending.resolutionData.parsed.baseCode,
-                        time: pending.resolutionData.parsed.arrivalTime ?? formatTelegramReplyTime(new Date(pending.resolutionData.originalEventAt)),
-                    }),
+                    time: replyTime,
+                    example: replyExample,
                 }),
                 message.message_id,
             );
@@ -4085,6 +6099,233 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             errorMessage,
         });
         return { ok: true, ignored: true, processingError: true };
+    }
+}
+
+async function applyPendingDepartureCorrection(params: {
+    candidate: TelegramDepartureCorrectionCandidate;
+    correctedTime: string;
+    messageText: string;
+    actorUserId?: string | null;
+}) {
+    const eventAt = resolveTelegramEventTime(resolveDepartureCorrectionReferenceAt(params.candidate), params.correctedTime);
+    if (eventAt.getTime() < params.candidate.startedAt.getTime()) {
+        throw new Error("Actual end cannot be before the recorded arrival.");
+    }
+
+    if (params.candidate.domain === "REGULATION") {
+        const existing = await getDb().query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, params.candidate.occupancyId),
+        });
+        if (!existing) {
+            throw new Error("Regulation occupancy not found.");
+        }
+
+        if (!existing.endedAt) {
+            const updated = await endRegulationOccupancy(existing.id, {
+                endedAt: eventAt,
+                actualEndedAt: eventAt,
+            }, resolveCommandAuditUserId(params.actorUserId));
+            return {
+                occupancyId: updated.id,
+                eventAt,
+                adjustedClosed: false,
+            };
+        }
+
+        const updated = await correctRegulationOccupancy(existing.id, {
+            actualEndedAt: eventAt,
+            notes: appendTelegramOperationalNote(existing.notes, "telegram corrigir saida", params.messageText),
+        }, resolveCommandAuditUserId(params.actorUserId));
+        return {
+            occupancyId: updated.id,
+            eventAt,
+            adjustedClosed: true,
+        };
+    }
+
+    const existing = await getDb().query.interventionOccupancies.findFirst({
+        where: eq(interventionOccupancies.id, params.candidate.occupancyId),
+    });
+    if (!existing) {
+        throw new Error("Intervention occupancy not found.");
+    }
+
+    if (!existing.endedAt) {
+        const updated = await endInterventionOccupancy(existing.id, {
+            endedAt: eventAt,
+            actualEndedAt: eventAt,
+        }, resolveCommandAuditUserId(params.actorUserId));
+        return {
+            occupancyId: updated.id,
+            eventAt,
+            adjustedClosed: false,
+        };
+    }
+
+    const updated = await correctInterventionOccupancy(existing.id, {
+        actualEndedAt: eventAt,
+        notes: appendTelegramOperationalNote(existing.notes, "telegram corrigir saida", params.messageText),
+    }, resolveCommandAuditUserId(params.actorUserId));
+    return {
+        occupancyId: updated.id,
+        eventAt,
+        adjustedClosed: true,
+    };
+}
+
+async function tryHandlePendingDepartureCorrection(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id) {
+        return null;
+    }
+
+    const pending = await findPendingDepartureCorrection(String(message.chat.id), String(message.from.id));
+    if (!pending || !isPendingDepartureCorrectionData(pending.resolutionData)) {
+        return null;
+    }
+
+    if (shouldDeferPendingDepartureCorrectionToFreshParsing(message.text)) {
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: "departure_correction_deferred_to_fresh_parsing",
+        });
+        return null;
+    }
+
+    const candidate = deserializeDepartureCorrectionCandidate(pending.resolutionData.candidate);
+
+    if (isBatchCancelKeyword(message.text)) {
+        await markTelegramProcessed(pending.id, {
+            status: "ignored",
+            errorMessage: "departure_correction_cancelled",
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedDomain: candidate.domain,
+            parsedTargetCode: candidate.targetCode,
+            parsedAction: "departure_correction_cancelled",
+            parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+            errorMessage: null,
+        });
+        await sendMessage(
+            message.chat.id,
+            `⚠️ Cancelado. A correção de saída de ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode} não foi aplicada.`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true };
+    }
+
+    if (isCasualTelegramMessage(message.text)) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedDomain: candidate.domain,
+            parsedTargetCode: candidate.targetCode,
+            parsedAction: "departure_correction_pending",
+            parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+            errorMessage: "departure_correction_pending",
+            resolutionData: { pendingDepartureCorrectionKept: true },
+        });
+        await sendMessage(
+            message.chat.id,
+            `Ainda estou aguardando só o horário correto da saída de ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode}. Responda em HH:MM, por exemplo 19:05.`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true, pending: true };
+    }
+
+    const correctedTime = parseTelegramStandaloneTime(message.text);
+    if (!correctedTime) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedDomain: candidate.domain,
+            parsedTargetCode: candidate.targetCode,
+            parsedAction: "departure_correction_pending",
+            parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+            errorMessage: "departure_correction_time_missing",
+            resolutionData: { pendingDepartureCorrectionKept: true },
+        });
+        await sendMessage(
+            message.chat.id,
+            `Preciso só da hora correta da saída em HH:MM para ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode}. Ex.: 19:05.`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true, pending: true };
+    }
+
+    const actor = await resolveTelegramCommandActor(message);
+
+    try {
+        const result = await applyPendingDepartureCorrection({
+            candidate,
+            correctedTime,
+            messageText: `${pending.resolutionData.originalText}\n[hora corrigida] ${message.text}`,
+            actorUserId: actor?.userId,
+        });
+
+        await markTelegramProcessed(pending.id, {
+            status: "accepted",
+            relatedOccupancyId: result.occupancyId,
+            errorMessage: null,
+            resolutionData: buildResolutionData(pending.resolutionData, {
+                correctedTime,
+                correctedAt: result.eventAt.toISOString(),
+                correctionReplyText: message.text,
+            }),
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedDomain: candidate.domain,
+            parsedTargetCode: candidate.targetCode,
+            parsedAction: "departure_correction_recorded",
+            parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+            relatedOccupancyId: result.occupancyId,
+            errorMessage: null,
+            resolutionData: {
+                correctedTime,
+                adjustedClosed: result.adjustedClosed,
+            },
+        });
+        await sendMessage(
+            message.chat.id,
+            result.adjustedClosed
+                ? `Saída real corrigida: ${pending.resolutionData.resolvedDoctor.fullName} ficou com ${correctedTime} em ${candidate.targetCode}. Painel preservado e banco de horas atualizado.`
+                : `Saída corrigida: considerei ${correctedTime} como horário real de saída de ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode}.`,
+            message.message_id,
+        );
+        return { ok: true, occupancyId: result.occupancyId };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "departure_correction_failed";
+        const isChronologyError = errorMessage.includes("Actual end cannot be before the recorded arrival.");
+
+        if (!isChronologyError) {
+            await markTelegramProcessed(pending.id, {
+                status: "error",
+                errorMessage,
+            });
+        }
+
+        await markTelegramProcessed(logId, {
+            status: isChronologyError ? "ignored" : "error",
+            parsedDomain: candidate.domain,
+            parsedTargetCode: candidate.targetCode,
+            parsedAction: "departure_correction_recorded",
+            parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+            errorMessage,
+            resolutionData: {
+                correctedTime,
+                pendingDepartureCorrectionKept: isChronologyError,
+            },
+        });
+
+        await sendMessage(
+            message.chat.id,
+            isChronologyError
+                ? `Esse horário ficou antes da chegada registrada de ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode}. Responda com outra hora em HH:MM.`
+                : `:/ Nao consegui corrigir a saída de ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode}. ${errorMessage}`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true, processingError: !isChronologyError };
     }
 }
 
@@ -4119,6 +6360,11 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     return pendingBatchResult;
                 }
 
+                const pendingDepartureCorrectionResult = await tryHandlePendingDepartureCorrection(update, log.id);
+                if (pendingDepartureCorrectionResult) {
+                    return pendingDepartureCorrectionResult;
+                }
+
                 const pendingDepartureJustificationResult = await tryHandlePendingDepartureJustification(update, log.id);
                 if (pendingDepartureJustificationResult) {
                     return pendingDepartureJustificationResult;
@@ -4130,6 +6376,27 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 if (pendingResult) {
                     return pendingResult;
                 }
+            }
+
+            // P3d: Solo digits without active pending are stale pending replies — ignore silently.
+            // In group chats, "1", "2", "3" are never intentional base registrations.
+            if (message.chat.type !== "private" && /^\d{1,2}$/.test(message.text.trim())) {
+                await markTelegramProcessed(log.id, {
+                    status: "ignored",
+                    errorMessage: "stale_pending_reply",
+                    resolutionData: { staleDigitReply: true },
+                });
+                return { ok: true, ignored: true };
+            }
+
+            // P3c: Messages with inline @mentions (not commands) are conversational — ignore silently.
+            if (message.chat.type !== "private" && /@\w+/.test(message.text) && !message.text.startsWith("/")) {
+                await markTelegramProcessed(log.id, {
+                    status: "ignored",
+                    errorMessage: "casual_at_mention",
+                    resolutionData: { casualAtMention: true },
+                });
+                return { ok: true, ignored: true };
             }
 
             if (message.chat.type === "private") {
@@ -4165,7 +6432,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                             buildTelegramBatchReviewReply({
                                 entries: entries.map((entry) => ({
                                     lineNumber: entry.lineNumber,
-                                    doctorName: entry.resolvedDoctor.fullName,
+                                    doctorName: entry.resolvedDoctor.displayName ?? entry.resolvedDoctor.fullName,
                                     targetCode: entry.parsed.baseCode,
                                     timeLabel: entry.parsed.arrivalTime ?? "continua",
                                     sector: entry.parsed.sector,
@@ -4184,7 +6451,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         buildTelegramBatchReviewReply({
                             entries: entries.map((entry) => ({
                                 lineNumber: entry.lineNumber,
-                                doctorName: entry.resolvedDoctor.fullName,
+                                doctorName: entry.resolvedDoctor.displayName ?? entry.resolvedDoctor.fullName,
                                 targetCode: entry.parsed.baseCode,
                                 timeLabel: entry.parsed.arrivalTime ?? "continua",
                                 sector: entry.parsed.sector,
@@ -4199,17 +6466,242 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 }
             }
 
+            // F5: Intercept meal-break-related messages BEFORE operational parsing.
+            // Messages like "1368 ALMOÇO 12:30" or "MARIANA ALMOÇO 1368" contain a ramal
+            // and would be parsed as arrivals, but the intent is meal-break scheduling.
+            if (looksLikeMealBreakMessage(message.text)) {
+                await markTelegramProcessed(log.id, {
+                    status: "ignored",
+                    errorMessage: "meal_break_outside_flow",
+                    resolutionData: buildTelegramReviewLogData({
+                        reason: "meal_break_outside_flow",
+                        trainingCandidate: false,
+                    }),
+                });
+                await sendMessage(
+                    message.chat.id,
+                    "Essa mensagem parece ser sobre almoço/descanso. Para dividir almoço, use /almoco — o bot vai guiar passo a passo.",
+                    message.message_id,
+                );
+                return { ok: true, ignored: true };
+            }
+
             const parsedEntries = parseMessageMulti(message.text).filter(isOperationalParsedEntry);
             if (parsedEntries.length === 0) {
+                // Continuation without base code: doctor says "Ana Luiza continua SN" without
+                // specifying the ramal/base. Look up the doctor's current active occupancy and
+                // auto-fill the target so the continuation can proceed normally.
+                const rawParsedForContinuation = parseMessage(message.text);
+                if (rawParsedForContinuation.isContinuation && !rawParsedForContinuation.baseCode) {
+                    const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
+                    const continuationResolved = await resolveContinuationWithoutBase(rawParsedForContinuation, message.text, senderName);
+                    if (continuationResolved) {
+                        const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), continuationResolved.parsed.arrivalTime);
+                        try {
+                            const result = await applyParsedEntry({
+                                parsed: continuationResolved.parsed,
+                                resolvedDoctor: continuationResolved.resolvedDoctor,
+                                eventAt,
+                                referenceAt: new Date(message.date * 1000),
+                                messageText: message.text,
+                            });
+
+                            if (message.from?.id) {
+                                await supersedePendingDepartureJustification(String(message.chat.id), String(message.from.id));
+                            }
+
+                            await markTelegramProcessed(log.id, {
+                                status: "accepted",
+                                parsedDomain: continuationResolved.parsed.sector,
+                                parsedTargetCode: continuationResolved.parsed.baseCode,
+                                parsedAction: resolveTelegramParsedAction(continuationResolved.parsed),
+                                parsedDoctorName: continuationResolved.resolvedDoctor.fullName,
+                                relatedOccupancyId: result.occupancyId,
+                                errorMessage: null,
+                                resolutionData: {
+                                    continuationMode: resolveTelegramContinuationMode(continuationResolved.parsed),
+                                    resolvedBaseFromActiveOccupancy: true,
+                                },
+                            });
+
+                            const doctorSurfaceName = continuationResolved.resolvedDoctor.displayName ?? continuationResolved.resolvedDoctor.fullName;
+                            await sendSuccessReply(
+                                message.chat.id,
+                                message.message_id,
+                                update.update_id,
+                                continuationResolved.parsed,
+                                doctorSurfaceName,
+                                eventAt,
+                                result.successKind,
+                                "",
+                                result.treatedAsContinuation,
+                                result.replyTimeAt,
+                                result.autoReactivated,
+                                result.effectiveShiftType,
+                                result.reassignedFrom,
+                            );
+                            return { ok: true, occupancyId: result.occupancyId };
+                        } catch (error) {
+                            const errorMsg = error instanceof Error ? error.message : "unknown_error";
+                            if (isTelegramJustificationRequiredError(errorMsg)) {
+                                await queuePendingDepartureJustification({
+                                    logId: log.id,
+                                    message,
+                                    parsed: continuationResolved.parsed,
+                                    resolvedDoctor: continuationResolved.resolvedDoctor,
+                                    eventAt,
+                                    referenceAt: new Date(message.date * 1000),
+                                    originalText: message.text,
+                                });
+                                return { ok: true, ignored: true, pending: true };
+                            }
+
+                            await markTelegramProcessed(log.id, {
+                                status: "error",
+                                parsedDomain: continuationResolved.parsed.sector,
+                                parsedTargetCode: continuationResolved.parsed.baseCode,
+                                parsedAction: resolveTelegramParsedAction(continuationResolved.parsed),
+                                parsedDoctorName: continuationResolved.resolvedDoctor.fullName,
+                                errorMessage: errorMsg,
+                            });
+                            await sendTelegramDepartureFailureReply({
+                                chatId: message.chat.id,
+                                replyToMessageId: message.message_id,
+                                seed: update.update_id,
+                                parsed: continuationResolved.parsed,
+                                doctorName: continuationResolved.resolvedDoctor.fullName,
+                                errorMessage: errorMsg,
+                            });
+                            return { ok: true, ignored: true, processingError: true };
+                        }
+                    }
+                }
+
+                // Departure without base code: doctor says "alexandre faria saindo" or
+                // "Leo Morais saindo do SN no COI as 07:22" without a specific ramal/base.
+                // Look up the doctor's active occupancy and auto-fill the target.
+                const rawParsedForDeparture = parseMessage(message.text);
+                if (rawParsedForDeparture.isDeparture && !rawParsedForDeparture.baseCode) {
+                    const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
+                    const departureResolved = await resolveDepartureWithoutBase(rawParsedForDeparture, message.text, senderName);
+                    if (departureResolved) {
+                        const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), departureResolved.parsed.arrivalTime);
+                        try {
+                            const result = await applyParsedEntry({
+                                parsed: departureResolved.parsed,
+                                resolvedDoctor: departureResolved.resolvedDoctor,
+                                eventAt,
+                                referenceAt: new Date(message.date * 1000),
+                                messageText: message.text,
+                            });
+
+                            if (message.from?.id) {
+                                await supersedePendingDepartureJustification(String(message.chat.id), String(message.from.id));
+                            }
+
+                            await markTelegramProcessed(log.id, {
+                                status: "accepted",
+                                parsedDomain: departureResolved.parsed.sector,
+                                parsedTargetCode: departureResolved.parsed.baseCode,
+                                parsedAction: resolveTelegramParsedAction(departureResolved.parsed),
+                                parsedDoctorName: departureResolved.resolvedDoctor.fullName,
+                                relatedOccupancyId: result.occupancyId,
+                                errorMessage: null,
+                                resolutionData: {
+                                    resolvedBaseFromActiveOccupancy: true,
+                                },
+                            });
+
+                            const doctorSurfaceName = departureResolved.resolvedDoctor.displayName ?? departureResolved.resolvedDoctor.fullName;
+                            await sendSuccessReply(
+                                message.chat.id,
+                                message.message_id,
+                                update.update_id,
+                                departureResolved.parsed,
+                                doctorSurfaceName,
+                                eventAt,
+                                result.successKind,
+                                "",
+                                result.treatedAsContinuation,
+                                result.replyTimeAt,
+                                result.autoReactivated,
+                                result.effectiveShiftType,
+                                result.reassignedFrom,
+                            );
+                            return { ok: true, occupancyId: result.occupancyId };
+                        } catch (error) {
+                            const errorMsg = error instanceof Error ? error.message : "unknown_error";
+                            if (isTelegramJustificationRequiredError(errorMsg)) {
+                                await queuePendingDepartureJustification({
+                                    logId: log.id,
+                                    message,
+                                    parsed: departureResolved.parsed,
+                                    resolvedDoctor: departureResolved.resolvedDoctor,
+                                    eventAt,
+                                    referenceAt: new Date(message.date * 1000),
+                                    originalText: message.text,
+                                });
+                                return { ok: true, ignored: true, pending: true };
+                            }
+
+                            await markTelegramProcessed(log.id, {
+                                status: "error",
+                                parsedDomain: departureResolved.parsed.sector,
+                                parsedTargetCode: departureResolved.parsed.baseCode,
+                                parsedAction: resolveTelegramParsedAction(departureResolved.parsed),
+                                parsedDoctorName: departureResolved.resolvedDoctor.fullName,
+                                errorMessage: errorMsg,
+                            });
+                            await sendTelegramDepartureFailureReply({
+                                chatId: message.chat.id,
+                                replyToMessageId: message.message_id,
+                                seed: update.update_id,
+                                parsed: departureResolved.parsed,
+                                doctorName: departureResolved.resolvedDoctor.fullName,
+                                errorMessage: errorMsg,
+                            });
+                            return { ok: true, ignored: true, processingError: true };
+                        }
+                    }
+                }
+
                 if (isCasualTelegramMessage(message.text)) {
                     await markTelegramProcessed(log.id, {
                         status: "ignored",
                         errorMessage: "casual_smalltalk",
                         resolutionData: { casual: true },
                     });
+                    // P5a: Only reply to casual messages in private chat. In groups, stay silent.
+                    if (message.chat.type === "private") {
+                        await sendMessage(
+                            message.chat.id,
+                            pickTelegramReply("casual_smalltalk", message.message_id, {}),
+                            message.message_id,
+                        );
+                    }
+                    return { ok: true, ignored: true };
+                }
+
+                const locationHint = detectLocationWithoutRamal(message.text);
+                if (locationHint) {
+                    const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
+                    const rawParsed = parseMessageMulti(message.text)[0];
+                    await markTelegramProcessed(log.id, {
+                        status: "ignored",
+                        errorMessage: "location_without_ramal",
+                        resolutionData: buildTelegramReviewLogData({
+                            reason: "location_without_ramal",
+                            trainingCandidate: true,
+                        }),
+                    });
                     await sendMessage(
                         message.chat.id,
-                        pickTelegramReply("casual_smalltalk", message.message_id, {}),
+                        buildLocationWithoutRamalReply({
+                            senderName: rawParsed?.extractedNames[0] ?? senderName ?? "",
+                            location: locationHint.location,
+                            shiftLabel: rawParsed?.shiftType ?? null,
+                            time: rawParsed?.arrivalTime ?? null,
+                        }),
                         message.message_id,
                     );
                     return { ok: true, ignored: true };
@@ -4236,12 +6728,21 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         message.message_id,
                     );
                 } else {
+                    const rawPartial = parseMessage(message.text);
+                    const partialParts: string[] = [];
+                    if (rawPartial.baseCode) partialParts.push(`base/ramal *${rawPartial.baseCode}*`);
+                    if (rawPartial.arrivalTime) partialParts.push(`horário *${rawPartial.arrivalTime}*`);
+                    if (rawPartial.shiftType) partialParts.push(`turno *${rawPartial.shiftType}*`);
+                    if (rawPartial.extractedNames.length > 0) partialParts.push(`nome *${rawPartial.extractedNames[0]}*`);
+                    const partialHint = partialParts.length > 0
+                        ? `\n\n🔍 Detectei: ${partialParts.join(", ")}${!rawPartial.baseCode ? " — faltou a *base ou ramal*" : !rawPartial.extractedNames.length ? " — faltou o *nome do médico*" : !rawPartial.sector ? " — não identifiquei se é regulação ou intervenção" : ""}.`
+                        : "";
                     await sendMessage(
                         message.chat.id,
                         pickTelegramReply("no_operational_match", message.message_id, {
                             arrivalExample: buildTelegramArrivalExample({}),
                             departureExample: buildTelegramDepartureExample({}),
-                        }),
+                        }) + partialHint,
                         message.message_id,
                     );
                 }
@@ -4249,6 +6750,39 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             }
 
             const firstParsed = parsedEntries.find((entry) => entry.isDeparture) ?? parsedEntries[0];
+
+            // F3 safety: reject low-confidence entries without extracted names in group chats.
+            // These are typically casual messages that accidentally contain a base/ramal number.
+            // In private chats (batch mode from chefia), this gate is skipped.
+            if (
+                message.chat.type !== "private"
+                && firstParsed.confidence !== "HIGH"
+                && firstParsed.extractedNames.length === 0
+                && !firstParsed.isDeparture
+            ) {
+                await markTelegramProcessed(log.id, {
+                    status: "ignored",
+                    parsedDomain: firstParsed.sector,
+                    parsedTargetCode: firstParsed.baseCode,
+                    parsedAction: "arrival",
+                    errorMessage: "low_confidence_no_name",
+                    resolutionData: buildTelegramReviewLogData({
+                        reason: "low_confidence_no_name",
+                        parsed: firstParsed,
+                        trainingCandidate: true,
+                    }),
+                });
+                await sendMessage(
+                    message.chat.id,
+                    pickTelegramReply("no_operational_match", message.message_id, {
+                        arrivalExample: buildTelegramArrivalExample({}),
+                        departureExample: buildTelegramDepartureExample({}),
+                    }) + `\n\n🔍 Detectei base/ramal *${firstParsed.baseCode}* mas não identifiquei o nome do médico.`,
+                    message.message_id,
+                );
+                return { ok: true, ignored: true };
+            }
+
             if (!firstParsed.isDeparture && looksLikeDepartureMessage(message.text)) {
                 const departureExample = buildTelegramDepartureExample({
                     doctorName: firstParsed.extractedNames[0] ?? ([message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null),
@@ -4340,9 +6874,9 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), firstParsed.arrivalTime);
 
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt } = await applyParsedEntry({
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom } = await applyParsedEntry({
                     parsed: firstParsed,
-                    resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName },
+                    resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
                     referenceAt: new Date(message.date * 1000),
                     messageText: message.text,
@@ -4370,14 +6904,17 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     message.message_id,
                     update.update_id,
                     firstParsed,
-                    resolvedDoctor.fullName,
+                    resolveTelegramDoctorSurfaceName(resolvedDoctor),
                     eventAt,
                     successKind,
                     matchedBy === "candidate"
-                        ? buildApproximateMatchHint({ doctorQuery, doctorName: resolvedDoctor.fullName })
+                        ? buildApproximateMatchHint({ doctorQuery, doctorName: resolveTelegramDoctorSurfaceName(resolvedDoctor) })
                         : "",
                     treatedAsContinuation,
                     replyTimeAt,
+                    autoReactivated,
+                    effectiveShiftType,
+                    reassignedFrom,
                 );
 
                 return { ok: true, occupancyId };
@@ -4388,7 +6925,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         logId: log.id,
                         message,
                         parsed: firstParsed,
-                        resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName },
+                        resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                         eventAt,
                         referenceAt: new Date(message.date * 1000),
                         originalText: message.text,
@@ -4413,6 +6950,12 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     seed: update.update_id,
                     parsed: firstParsed,
                     doctorName: resolvedDoctor.fullName,
+                    errorMessage,
+                });
+                await sendTelegramArrivalFailureReply({
+                    chatId: message.chat.id,
+                    replyToMessageId: message.message_id,
+                    parsed: firstParsed,
                     errorMessage,
                 });
                 return { ok: true, ignored: true, processingError: true };

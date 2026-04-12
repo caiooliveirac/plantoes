@@ -1,6 +1,14 @@
-export const BANK_HOURS_RULE_VERSION = 3;
+export const BANK_HOURS_RULE_VERSION = 4;
 export const ARRIVAL_GRACE_MINUTES = 15;
 export const DEPARTURE_GRACE_MINUTES = 15;
+
+/**
+ * Maximum credible delay or overtime in minutes.
+ * Any value above this threshold indicates a likely misconfigured scheduled window
+ * (e.g., P shift registered as SD, broken continuity chain, wrong scheduledStartAt).
+ * Bank hours entries exceeding this are clamped to 0 with ANOMALY_* rule code.
+ */
+export const ANOMALY_THRESHOLD_MINUTES = 360; // 6 hours
 
 export interface BankHoursCalculationInput {
     scheduledStartAt: Date | string;
@@ -69,5 +77,40 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
         balanceMinutes,
         ruleCode,
         explanation,
+    };
+}
+
+/**
+ * Detects scheduled window anomalies: delay or overtime above the credible threshold.
+ * Returns a clamped result with ANOMALY rule code when the calculated values are implausible.
+ * This catches: P shifts misregistered as SD/SN, orphaned scheduledStartAt from deleted
+ * continuity chains, or any data integrity issue producing phantom 12h+ credits/debits.
+ */
+export function applyAnomalyGuard(calculation: BankHoursCalculationResult): BankHoursCalculationResult {
+    const isAnomalousDelay = calculation.arrivalDelayMinutes > ANOMALY_THRESHOLD_MINUTES;
+    const isAnomalousOvertime = calculation.overtimeMinutes > ANOMALY_THRESHOLD_MINUTES;
+
+    if (!isAnomalousDelay && !isAnomalousOvertime) {
+        return calculation;
+    }
+
+    const anomalyType = isAnomalousDelay && isAnomalousOvertime
+        ? "ANOMALY_DELAY_AND_OVERTIME"
+        : isAnomalousDelay
+            ? "ANOMALY_EXCESSIVE_DELAY"
+            : "ANOMALY_EXCESSIVE_OVERTIME";
+
+    const detail = isAnomalousDelay
+        ? `Atraso calculado de ${calculation.arrivalDelayMinutes} min excede limite de ${ANOMALY_THRESHOLD_MINUTES} min.`
+        : `Overtime calculado de ${calculation.overtimeMinutes} min excede limite de ${ANOMALY_THRESHOLD_MINUTES} min.`;
+
+    return {
+        arrivalDelayMinutes: calculation.arrivalDelayMinutes,
+        overtimeMinutes: calculation.overtimeMinutes,
+        overtimeMultiplier: calculation.overtimeMultiplier,
+        creditedOvertimeMinutes: 0,
+        balanceMinutes: 0,
+        ruleCode: anomalyType,
+        explanation: `⚠️ ANOMALIA DETECTADA: ${detail} Provavel janela agendada incorreta (P registrado como SD/SN, grupo continuidade quebrado, etc). Saldo zerado automaticamente — requer revisao manual.`,
     };
 }

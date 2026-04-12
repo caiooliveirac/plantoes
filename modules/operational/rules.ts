@@ -1,6 +1,35 @@
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { isNucleoRegulationPost } from "@/modules/operational/board-display";
 
 const OPERATIONAL_LOCAL_OFFSET_MINUTES = -180;
+// Arrivals within 3 hours before the next shift boundary (04:00–06:59 for SD, 16:00–18:59 for SN)
+// are treated as early arrivals for the upcoming shift rather than the current one.
+const EARLY_ARRIVAL_WINDOW_MS = 3 * 60 * 60 * 1000;
+const NUCLEO_SD_START_HOUR = 8;
+
+function resolvePShiftAwareBaseShiftLabel(startedAt: Date, normalizedShiftLabel: string | null) {
+    const window = resolveOperationalShiftWindow(startedAt);
+    const msToNextBoundary = window.nextBoundaryAt.getTime() - startedAt.getTime();
+    if (msToNextBoundary > 0 && msToNextBoundary <= EARLY_ARRIVAL_WINDOW_MS) {
+        const nextShiftLabel = window.shiftLabel === "SD" ? "SN" as const : "SD" as const;
+        // Flip to the upcoming shift when the label is:
+        //   - null  (no label in the message — let time rule)
+        //   - "P"   (continuation — base shift comes from the upcoming window)
+        //   - same as the current window's shift  (auto-populated from board state, e.g. the
+        //     drawer defaulting to "SN" when a doctor arrives at 06:47 for the morning SD shift)
+        if (
+            normalizedShiftLabel === null
+            || normalizedShiftLabel === "P"
+            || normalizedShiftLabel === window.shiftLabel
+        ) {
+            return nextShiftLabel;
+        }
+    }
+    if (normalizedShiftLabel === "SD" || normalizedShiftLabel === "SN") {
+        return normalizedShiftLabel;
+    }
+    return window.shiftLabel;
+}
 
 function toOperationalLocalClock(date: Date) {
     return new Date(date.getTime() + (OPERATIONAL_LOCAL_OFFSET_MINUTES * 60000));
@@ -27,7 +56,7 @@ function resolveClosestScheduledStart(startedAt: Date, hour: number, minute: num
         : previousDay;
 }
 
-export function inferOperationalScheduledStartAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledStartAt?: Date | null) {
+export function inferOperationalScheduledStartAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledStartAt?: Date | null, postCode?: string | null) {
     if (explicitScheduledStartAt) {
         return explicitScheduledStartAt;
     }
@@ -38,7 +67,8 @@ export function inferOperationalScheduledStartAt(startedAt: Date, shiftLabel?: s
     }
 
     if (normalized === "SD") {
-        return resolveClosestScheduledStart(startedAt, 7, 0);
+        const hour = postCode && isNucleoRegulationPost(postCode) ? NUCLEO_SD_START_HOUR : 7;
+        return resolveClosestScheduledStart(startedAt, hour, 0);
     }
 
     return resolveClosestScheduledStart(startedAt, 19, 0);
@@ -87,9 +117,7 @@ export function inferInterventionCoverageWindow(params: {
     explicitScheduledEndAt?: Date | null;
 }) {
     const normalized = params.shiftLabel?.trim().toUpperCase() ?? null;
-    const baseShiftLabel = normalized === "SD" || normalized === "SN"
-        ? normalized
-        : resolveOperationalShiftWindow(params.startedAt).shiftLabel;
+    const baseShiftLabel = resolvePShiftAwareBaseShiftLabel(params.startedAt, normalized);
     const scheduledStartAt = inferOperationalScheduledStartAt(
         params.startedAt,
         baseShiftLabel,
@@ -118,17 +146,17 @@ export function inferInterventionCoverageWindow(params: {
 export function inferRegulationCoverageWindow(params: {
     startedAt: Date;
     shiftLabel?: string | null;
+    postCode?: string | null;
     explicitScheduledStartAt?: Date | null;
     explicitScheduledEndAt?: Date | null;
 }) {
     const normalized = params.shiftLabel?.trim().toUpperCase() ?? null;
-    const baseShiftLabel = normalized === "SD" || normalized === "SN"
-        ? normalized
-        : resolveOperationalShiftWindow(params.startedAt).shiftLabel;
+    const baseShiftLabel = resolvePShiftAwareBaseShiftLabel(params.startedAt, normalized);
     const scheduledStartAt = inferOperationalScheduledStartAt(
         params.startedAt,
         baseShiftLabel,
         params.explicitScheduledStartAt ?? null,
+        params.postCode ?? null,
     );
     let scheduledEndAt = inferRegulationScheduledEndAt(
         params.startedAt,
@@ -228,4 +256,23 @@ export function resolveTelegramEventTime(referenceDate: Date, hhmm?: string | nu
         const closestDistance = Math.abs(closest.getTime() - referenceDate.getTime());
         return candidateDistance < closestDistance ? candidate : closest;
     });
+}
+
+export function resolveForcedDayEventTime(referenceDate: Date, hhmm: string, dayOffset: number) {
+    const [hoursRaw, minutesRaw] = hhmm.split(":");
+    const hours = Number(hoursRaw);
+    const minutes = Number(minutesRaw);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
+        return referenceDate;
+    }
+
+    const local = toOperationalLocalClock(referenceDate);
+    const shifted = new Date(local.getTime() + dayOffset * 86400000);
+    return fromOperationalLocalClockParts(
+        shifted.getUTCFullYear(),
+        shifted.getUTCMonth() + 1,
+        shifted.getUTCDate(),
+        hours,
+        minutes,
+    );
 }

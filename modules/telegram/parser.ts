@@ -1,7 +1,8 @@
 import { STANDARD_OPERATIONAL_ROLE_CODES } from "@/modules/operational/roles";
+import { computeLevenshteinDistance } from "@/modules/telegram/departure-flow";
 
 const RAMAIS_REGULACAO = new Set([
-    "1321", "1322", "1323", "1324", "1325",
+    "1321", "1322", "1323", "1324", "1325", "1326", "1327", "1328", "1329",
     "1361", "1362", "1363", "1364", "1365", "1366", "1367", "1368",
     "2031", "2032", "2033", "2034", "2035",
     "2151", "2152", "2153", "2154",
@@ -29,27 +30,52 @@ const ABBREVIATION_MAP: Record<string, string> = {
 };
 
 const ARRIVAL_SIGNALS = [
-    /\b(?:CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMINDO|ASSUMI|RENDENDO|RENDI)\b/i,
+    /\b(?:CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMINDO|ASSUMI|RENDENDO)\b/i,
     /\b(?:TO\s+AQUI|TÔ\s+AQUI|ESTOU\s+AQUI|JA\s+AQUI|JÁ\s+AQUI)\b/i,
     /\b(?:CONTINUO|CONTINUA|SEGUINDO|SIGO)\b/i,
     /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i,
 ];
 
 const CONTINUATION_SIGNALS = [
-    /\b(?:CONT\.?|CONTINHA|CONTINUO|CONTINUA|CONTINUANDO|CONTINUEI|CONTINUAREI)\b/i,
-    /\b(?:SEGUINDO|SEGUE|SEGUI|SIGO)\b/i,
-    /\b(?:FICO|FICANDO|FIQUEI)\b/i,
-    /\b(?:PERMANEC?O|PERMANECENDO|PERMANECE)\b/i,
-    /\b(?:EMENDO|EMENDANDO|EMENDA)\b/i,
-    /\b(?:PROSSIGO|PROSSEGUINDO)\b/i,
-    /\bJA\s+(?:TO|TÔ|ESTOU)\s+(?:NA|NO)\b/i,
+    /\b(?:CONT\.?|CONTINHA|CONTINUO|CONTINUA|CONTINUANDO|CONTINUEI|CONTINUAREI|CONTINUAR)\b/i,
+    /\b(?:SEGUINDO|SEGUE|SEGUI|SIGO|SEGUIR)\b/i,
+    /\b(?:FICO|FICANDO|FIQUEI|FICAR)\b/i,
+    /\b(?:PERMANEC?O|PERMANECENDO|PERMANECE|PERMANECER)\b/i,
+    /\b(?:EMENDO|EMENDANDO|EMENDA|EMENDAR)\b/i,
+    /\b(?:PROSSIGO|PROSSEGUINDO|PROSSEGUIR)\b/i,
+    /\bJA\s+(?:TO|TO|ESTOU)\s+(?:NA|NO)\b/i,
     /\bNAO\s+(?:SAI[O]?|SAIO)\b/i,
+    /\b(?:VOU|VAI|VAMOS)\s+(?:CONTINUAR|CONTINUANDO|FICAR|FICANDO|PERMANECER|PERMANECENDO|SEGUIR|SEGUINDO|EMENDAR|EMENDANDO|PROSSEGUIR|PROSSEGUINDO)\b/i,
 ];
 
 const DEPARTURE_SIGNALS = [
     /\b(?:SAINDO|SAIU|SAI|SAIDA|SAÍDA|ENCERRANDO|ENCERREI|ENCERRADO|FINALIZANDO|FINALIZEI|LIBEREI|LIBERADO|LIBERADA|DESCENDO|DESCI|BAIXANDO|BAIXEI|TERMINEI|TERMINOU)\b/i,
     /\b(?:FIM|FINAL)\s+DE\s+PLANTAO\b/i,
     /\b(?:INDO|FUI|VOU)\s+EMBORA\b/i,
+    /\b(?:FUI|SENDO)\s+RENDID[OA]\b/i,
+];
+
+// F4: Fuzzy departure keywords — catch common typos like "aaindo", "saimo", "saiindo"
+const DEPARTURE_FUZZY_KEYWORDS = [
+    "SAINDO", "SAIU", "SAIDA", "ENCERRANDO", "ENCERREI", "ENCERRADO",
+    "FINALIZANDO", "FINALIZEI", "LIBERADO", "LIBERADA", "LIBEREI",
+    "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU",
+];
+
+function hasFuzzyDepartureSignal(normalized: string): boolean {
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    return tokens.some((token) =>
+        token.length >= 4 && DEPARTURE_FUZZY_KEYWORDS.some((keyword) => {
+            if (token === keyword) return false; // Already caught by regex
+            const threshold = keyword.length >= 10 ? 3 : keyword.length >= 7 ? 2 : 1;
+            return computeLevenshteinDistance(token, keyword) <= threshold;
+        }),
+    );
+}
+
+const REASSIGNMENT_SIGNALS = [
+    /\b(?:TROCANDO|TROCOU|MUDANDO|MUDOU)\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\b/i,
+    /\b(?:REMANEJAD[OA]|TRANSFERID[OA])\s+(?:PARA|P\/|PRO|PRA)\b/i,
 ];
 
 const RE_TIME_PATTERNS = [
@@ -60,12 +86,28 @@ const RE_TIME_PATTERNS = [
 
 const NAME_NOISE_TOKENS = new Set([
     "A", "AO", "AOS", "AS", "ATE", "ATÉ", "BOA", "BOM", "CHEGADA", "CHEGANDO", "CHEGUEI",
-    "CONT", "CONTINHA", "CONTINUA", "CONTINUO", "CONTINUANDO", "CONTINUEI", "CONTINUAREI", "CORRIJA", "CRU", "DA", "DAS", "DE",
-    "DESLOCANDO", "DIA", "DO", "DOS", "EM", "EMENDO", "EMENDANDO", "EMENDA", "ERRADO", "ESTA", "ESTÁ", "ESTOU", "FICO", "FICANDO", "FIQUEI", "HORARIO",
-    "HORÁRIO", "JA", "JÁ", "NA", "NAS", "NO", "NOITE", "NOS", "OLA", "OLA", "OI", "PARA", "PERMANECE", "PERMANECENDO", "PRESENTE",
-    "PROSSIGO", "PROSSEGUINDO", "RENDENDO", "RENDI", "SAI", "SAIU", "SAIDA", "SAÍDA", "SAINDO", "ENCERRANDO", "ENCERREI", "FINALIZANDO", "FINALIZEI", "LIBEREI", "SEGUE", "SEGUI", "SEGUIR", "SO", "SÓ", "TO",
-    "LIBERADO", "LIBERADA", "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU",
-    "TARDE", "TÔ", "TUDO", "BEM", "AGORA", "AI", "AÍ",
+    "CONT", "CONTINHA", "CONTINUA", "CONTINUO", "CONTINUANDO", "CONTINUEI", "CONTINUAREI", "CONTINUAR", "CORRIJA", "CRU", "DA", "DAS", "DE", "DESDE",
+    "DESLOCANDO", "DIA", "DO", "DOS", "EM", "EMENDO", "EMENDANDO", "EMENDA", "EMENDAR", "ENTRADA", "ERRADO", "ESTA", "ESTÁ", "ESTOU", "FICO", "FICANDO", "FIQUEI", "FICAR", "HORARIO",
+    "HORÁRIO", "JA", "JÁ", "LOGIN", "NA", "NAS", "NO", "NOITE", "NOS", "OLA", "OLA", "OI", "PARA", "PERMANECE", "PERMANECENDO", "PERMANECER", "POR", "PRESENTE",
+    "PROSSIGO", "PROSSEGUINDO", "PROSSEGUIR", "RENDENDO", "RENDI", "RENDIDA", "RENDIDO", "SAI", "SAIU", "SAIDA", "SAÍDA", "SAINDO", "ENCERRANDO", "ENCERREI", "FINALIZANDO", "FINALIZEI", "LIBEREI", "SEGUE", "SEGUI", "SEGUIR", "SEGUINDO", "SIGO", "SO", "SOMBRA", "SÓ", "TO",
+    "LIBERADO", "LIBERADA", "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU", "VOU", "VAI", "VAMOS",
+    "CHEFIA", "SISTEMA", "TARDE", "TÔ", "TUDO", "BEM", "AGORA", "AI", "AÍ",
+    // Tokens operacionais que contaminavam a query de nomes (audit 2026-04)
+    "MUDANDO", "MUDOU", "TROCANDO", "TROCOU", "LOGADA", "LOGADO", "LOGOU",
+    "REMANEJADO", "REMANEJADA", "TRANSFERIDO", "TRANSFERIDA",
+    "APOS", "APÓS", "REDIGIR", "OCORRENCIA", "OCORRENCIAS", "OCORRÊNCIA", "OCORRÊNCIAS",
+    "FUI", "PELA", "PELO", "PORQUE", "POIS", "RELATO", "PLANTAO", "PLANTÃO",
+    "TURNO", "DESATIVADA", "DESATIVADO", "ATIVADA", "ATIVADO",
+    "RECONHECEU", "RECONHECEU", "FURO", "ESCALA", "TEMPO", "COLEGA",
+    "RENDIÇÃO", "RENDICAO", "PASSAGEM", "HIGIENIZACAO", "HIGIENIZAÇÃO",
+    "ATENDIMENTO", "CHAMADO",
+    // Tokens adicionais identificados no audit diário (06/abr/2026)
+    "ESTAVA", "ESTAVAM", "NUCLEO", "PA", "CHAGADA", "POSICAO",
+    "ORDEM", "QUAL", "EMBORA", "RENDIDO", "RENDIDA",
+    // Tokens adicionais identificados no audit (07/abr/2026)
+    "PLANTA", "PLANTAR", "REALOCADO", "REALOCADA", "REALOCANDO",
+    "CORRIGIR", "CORRECAO", "MEDICO", "MEDICA", "MRV", "CHEFE",
+    "EU", "MEU", "MINHA", "INTE", "CB", "COMUNICO", "ALMOCO",
     ...STANDARD_OPERATIONAL_ROLE_CODES,
 ]);
 
@@ -85,12 +127,22 @@ const CASUAL_PATTERNS = [
     /\bGRATIDAO\b/i,
     /\bOTIMO\s+PLANTAO\b/i,
     /\bEXCELENTE\s+PLANTAO\b/i,
+    /\bPERFEIT[OA]\b/i,
+    /^K{3,}\b/i,
+    /\bVAI\s+DAR\s+CERTO\b/i,
+    /\bNAO\s+ENTENDI\b/i,
+    /\bDESIST[OI]\b/i,
+    // P6: conversational patterns that are not operational registrations
+    /\bAJUDA\b/i,
+    /\bQUEM\s+(?:E|ESTA|TA)\b/i,
+    /\bCADASTR/i,
+    /\bCOMO\s+(?:FAZ|FACO|USA)\b/i,
 ];
 
 const CASUAL_FILLER_TOKENS = new Set([
-    "A", "AE", "AI", "AÍ", "AMIGOS", "AMIGAS", "CHEFIA", "COLEGAS", "E", "EQUIPE",
-    "GALERA", "GENTE", "MEUS", "MINHAS", "PESSOAL", "PRA", "PARA", "QUERIDOS",
-    "QUERIDAS", "TURMA", "TIME", "TODOS", "TODAS", "VOCES", "VOCÊS",
+    "A", "AE", "AI", "AÍ", "AMIGOS", "AMIGAS", "CHEFIA", "COLEGAS", "DA", "DE", "DO", "E", "EQUIPE",
+    "GALERA", "GENTE", "JESUS", "MEUS", "MINHAS", "NAO", "O", "PESSOAL", "PRA", "PARA", "QUERIDOS",
+    "QUERIDAS", "SUA", "TURMA", "TIME", "TODOS", "TODAS", "VOCES", "VOCÊS",
 ]);
 
 export interface ParsedMessage {
@@ -102,6 +154,7 @@ export interface ParsedMessage {
     confidence: "HIGH" | "MEDIUM" | "LOW";
     isDeparture: boolean;
     isContinuation: boolean;
+    isReassignment: boolean;
     extractedNames: string[];
 }
 
@@ -113,7 +166,9 @@ export interface ParsedBatchMessageLine {
 }
 
 function normalizeTelegramText(value: string) {
-    return value.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return value
+        .replace(/[_*~`]/g, "")  // Strip Telegram markdown formatting
+        .toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 function isTelegramBatchHeading(line: string) {
@@ -164,13 +219,21 @@ export function parseTelegramBatchLines(text: string): ParsedBatchMessageLine[] 
 }
 
 export function parseMessageMulti(text: string): ParsedMessage[] {
+    // F1 fix: Try parsing the whole text first. If it yields a valid operational entry
+    // with baseCode + extractedNames, prefer that over splitting — splitting by \n can
+    // separate a doctor name from the base code (e.g. "Marcela Carvalho saindo da PM\n40").
+    const wholeParsed = parseMessage(text);
+    if (wholeParsed.baseCode && wholeParsed.extractedNames.length > 0) {
+        return [wholeParsed];
+    }
+
     const parts = text
         .split(/\n|(?<=[.!?;])\s+/)
         .map((entry) => entry.trim())
         .filter(Boolean);
 
     if (parts.length <= 1) {
-        return [parseMessage(text)];
+        return [wholeParsed.baseCode ? [wholeParsed] : [parseMessage(text)]].flat();
     }
 
     const parsedParts = parts.map((part) => parseMessage(part));
@@ -189,17 +252,30 @@ export function parseMessage(text: string): ParsedMessage {
     let roleFunction: string | null = null;
     let confidence: ParsedMessage["confidence"] = "LOW";
 
-    const baseMatch = normalized.match(/\b([A-Z]{2})[\s-]?(\d{2})\b/);
-    if (baseMatch) {
+    // Detect reassignment early so we can extract the TARGET base from after "para"
+    const isReassignment = REASSIGNMENT_SIGNALS.some((re) => re.test(normalized));
+    let baseExtractionSource = normalized;
+    if (isReassignment) {
+        const paraPattern = /\b(?:TROCANDO|TROCOU|MUDANDO|MUDOU|REMANEJAD[OA]|TRANSFERID[OA])\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\s+/i;
+        const paraMatch = normalized.match(paraPattern);
+        if (paraMatch && paraMatch.index !== undefined) {
+            baseExtractionSource = normalized.slice(paraMatch.index + paraMatch[0].length);
+        }
+    }
+
+    // Iterate all XX-NN matches to find the first valid intervention base
+    // (avoids false positives like "AS 07" blocking detection of "PR03")
+    for (const baseMatch of baseExtractionSource.matchAll(/\b([A-Z]{2})[\s-]?(\d{2})\b/g)) {
         const candidate = `${baseMatch[1]}${baseMatch[2]}`;
         if (BASES_INTERVENCAO.has(candidate)) {
             sector = "INTERVENTION";
             baseCode = candidate;
+            break;
         }
     }
 
     if (!baseCode) {
-        const ramalMatch = normalized.match(/(?:RAMAL|PA|POSICAO|REG)?\s*[:\-]?\s*(\d{4})\b/);
+        const ramalMatch = baseExtractionSource.match(/(?:RAMAL|PA|POSICAO|REG)?\s*[:\-]?\s*(\d{4})\b/);
         if (ramalMatch && RAMAIS_REGULACAO.has(ramalMatch[1])) {
             sector = "REGULATION";
             baseCode = ramalMatch[1];
@@ -207,13 +283,22 @@ export function parseMessage(text: string): ParsedMessage {
     }
 
     if (!baseCode) {
-        const bareBaseMatch = normalized.match(/(?:^|\s)(?:BASE|NA|NO|DA|DO)?\s*(?<![:\d])0?(01|02|03|04|05|10|20|30|40|50|60|70)\b(?!\s*[:h]\d)/);
+        const bareBaseMatch = baseExtractionSource.match(/(?:^|\s)(?:BASE|NA|NO|DA|DO)?\s*(?<![:\d])0?(01|02|03|04|05|10|20|30|40|50|60|70)\b(?!\s*[:h]\d)/);
         if (bareBaseMatch) {
             const resolved = ABBREVIATION_MAP[bareBaseMatch[1]];
             if (resolved) {
                 sector = "INTERVENTION";
                 baseCode = resolved;
             }
+        }
+    }
+
+    // Detect NUCLEO / PIAM as regulation positions (non-numeric codes)
+    if (!baseCode) {
+        const namedPostMatch = baseExtractionSource.match(/\b(NUCLEO|PIAM)\b/);
+        if (namedPostMatch) {
+            sector = "REGULATION";
+            baseCode = namedPostMatch[1];
         }
     }
 
@@ -225,14 +310,19 @@ export function parseMessage(text: string): ParsedMessage {
 
         const hours = (match[1] || "0").padStart(2, "0");
         const minutes = (match[2] || "00").padStart(2, "0");
+        if (hours === "24" && minutes === "00") {
+            // "24h" is a shift duration (plantão 24h), not a clock time.
+            continue;
+        }
         arrivalTime = `${hours}:${minutes}`;
         break;
     }
 
-    const shiftMatch = normalized.match(/\b(SD|SN|P|DIURNO|NOTURNO)\b/);
+    const shiftMatch = normalized.match(/\b(SD|SN|P|DIURNO|NOTURNO|24\s*H(?:S|ORAS?)?)\b/);
     if (shiftMatch) {
         if (shiftMatch[1] === "DIURNO") shiftType = "SD";
         else if (shiftMatch[1] === "NOTURNO") shiftType = "SN";
+        else if (shiftMatch[1].startsWith("24")) shiftType = "P";
         else shiftType = shiftMatch[1] as ParsedMessage["shiftType"];
     }
 
@@ -241,14 +331,17 @@ export function parseMessage(text: string): ParsedMessage {
         roleFunction = roleMatch[1];
     }
 
-    const extractedNames = extractNames(text);
     const isTransferToDestination = /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i.test(normalized);
-    const isDeparture = !isTransferToDestination && DEPARTURE_SIGNALS.some((re) => re.test(normalized));
-    const isContinuation = CONTINUATION_SIGNALS.some((re) => re.test(normalized));
+    const isDeparture = !isTransferToDestination && !isReassignment && (
+        DEPARTURE_SIGNALS.some((re) => re.test(normalized))
+        || hasFuzzyDepartureSignal(normalized)
+    );
+    const extractedNames = extractNames(text, { departureSplit: isDeparture, reassignmentSplit: isReassignment });
+    const isContinuation = !isReassignment && CONTINUATION_SIGNALS.some((re) => re.test(normalized));
     const hasArrivalSignal = ARRIVAL_SIGNALS.some((re) => re.test(normalized));
 
-    if (baseCode && (hasArrivalSignal || isDeparture || arrivalTime || shiftType || extractedNames.length > 0)) {
-        confidence = extractedNames.length > 0 || hasArrivalSignal || isDeparture ? "HIGH" : "MEDIUM";
+    if (baseCode && (hasArrivalSignal || isDeparture || isReassignment || arrivalTime || shiftType || extractedNames.length > 0)) {
+        confidence = extractedNames.length > 0 || hasArrivalSignal || isDeparture || isReassignment ? "HIGH" : "MEDIUM";
     } else if (baseCode) {
         confidence = "MEDIUM";
     }
@@ -262,6 +355,7 @@ export function parseMessage(text: string): ParsedMessage {
         confidence,
         isDeparture,
         isContinuation,
+        isReassignment,
         extractedNames,
     };
 }
@@ -274,11 +368,6 @@ export function isCasualTelegramMessage(text: string) {
     }
 
     if (trimmed.startsWith("/")) {
-        return false;
-    }
-
-    const hasCasualSignal = CASUAL_PATTERNS.some((pattern) => pattern.test(trimmed));
-    if (!hasCasualSignal) {
         return false;
     }
 
@@ -295,9 +384,21 @@ export function isCasualTelegramMessage(text: string) {
         return false;
     }
 
+    // Emoji-only messages (possibly with whitespace/punctuation)
+    const withoutEmoji = trimmed.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}\u{E0020}-\u{E007F}]/gu, "").replace(/[!?.;,\s]/g, "").trim();
+    if (!withoutEmoji) {
+        return true;
+    }
+
+    const hasCasualSignal = CASUAL_PATTERNS.some((pattern) => pattern.test(trimmed));
+    if (!hasCasualSignal) {
+        return false;
+    }
+
     const remainder = trimmed
         .replace(/[!?.;,/\\()[\]{}:+-]/g, " ")
-        .replace(/\b(?:OI|OLA|OLAA|OIE|E\s+AI|E\s+AII|SALVE|BOM\s+DIA|BOA\s+TARDE|BOA\s+NOITE|BOM\s+PLANTAO|BOM\s+TRABALHO|TUDO\s+BEM|TD\s+BEM|BELEZA|SHOW|VALEU|OBRIGAD[OA]|GRATIDAO|OTIMO\s+PLANTAO|EXCELENTE\s+PLANTAO)\b/gi, " ")
+        .replace(/\b(?:OI|OLA|OLAA|OIE|E\s+AI|E\s+AII|SALVE|BOM\s+DIA|BOA\s+TARDE|BOA\s+NOITE|BOM\s+PLANTAO|BOM\s+TRABALHO|TUDO\s+BEM|TD\s+BEM|BELEZA|SHOW|VALEU|OBRIGAD[OA]|GRATIDAO|OTIMO\s+PLANTAO|EXCELENTE\s+PLANTAO|PERFEITO|PERFEITA|VAI\s+DAR\s+CERTO|NAO\s+ENTENDI|DESIST[OI])\b/gi, " ")
+        .replace(/K{3,}/gi, " ")
         .split(/\s+/)
         .filter(Boolean)
         .filter((token) => !CASUAL_FILLER_TOKENS.has(token));
@@ -305,18 +406,50 @@ export function isCasualTelegramMessage(text: string) {
     return remainder.length <= 4;
 }
 
+// F5: Detect messages about meal breaks (almoço/descanso/jantar) that should NOT be
+// treated as arrivals. When someone writes "1368 ALMOÇO 12:30" or "MARIANA ALMOÇO 1368",
+// the ramal triggers operational parsing but the intent is meal-break scheduling.
+// Note: normalizeTelegramText strips accents, so ALMOÇO → ALMOCO, ALOMOÇO → ALOMOCO etc.
+const MEAL_BREAK_KEYWORDS = /\b(?:ALMOCO|ALOMOCO|ALMCO|DESCANSO|JANTAR|JANTA|REFEICAO)\b/;
+
+export function looksLikeMealBreakMessage(text: string): boolean {
+    return MEAL_BREAK_KEYWORDS.test(normalizeTelegramText(text));
+}
+
 export function looksLikeDepartureMessage(text: string) {
     const normalized = normalizeTelegramText(text);
     return DEPARTURE_SIGNALS.some((pattern) => pattern.test(normalized));
 }
 
-function extractNames(text: string) {
-    const cleaned = text
+function extractNames(text: string, options?: { departureSplit?: boolean; reassignmentSplit?: boolean }) {
+    // For departure messages with "rendida/rendido por", only keep the part BEFORE the split
+    // so we extract the departing doctor, not the replacing one.
+    let nameSource = text;
+    if (options?.departureSplit) {
+        const splitMatch = text.match(/\b(?:rendid[oa]|substituíd[oa]|trocad[oa])\s+(?:por|pelo|pela)\b/i);
+        if (splitMatch && splitMatch.index !== undefined) {
+            nameSource = text.slice(0, splitMatch.index);
+        }
+    }
+
+    // For reassignment messages, extract the doctor name from BEFORE the reassignment signal
+    if (options?.reassignmentSplit) {
+        const reassignmentMatch = text.match(/\b(?:trocando|trocou|mudando|mudou|remanejad[oa]|transferid[oa])\s+(?:para|p\/|pro|pra)\b/i);
+        if (reassignmentMatch && reassignmentMatch.index !== undefined) {
+            nameSource = text.slice(0, reassignmentMatch.index);
+        }
+    }
+
+    const cleaned = nameSource
+        .replace(/[_*~`]/g, "")  // Strip Telegram markdown
         .replace(/@\w+/g, " ")
-        .replace(/\b\d{1,2}[:.h]\d{0,2}\b/gi, " ")
+        .replace(/\b\d{1,2}[:.h]\d{0,2}\s*(?:hrs?|hs|horas?)?\b/gi, " ")  // times + hrs/hs suffix
         .replace(/\b[A-Z]{2}[\s\-]?\d{2}\b/gi, " ")
         .replace(/\b\d{4}\b/g, " ")
         .replace(/\b(?:SD|SN|P|DIURNO|NOTURNO)\b/gi, " ")
+        .replace(/\b\d+H?\b/gi, " ")
+        .replace(/\bP\/\b/gi, " ")
+        .replace(/\b(?:NUCLEO|PIAM)\b/gi, " ")  // Named regulation positions
         .replace(/[+\-:;!?.,()\[\]{}]/g, " ")
         .replace(/\bDr[a]?\.?\b/gi, " ")
         .trim();

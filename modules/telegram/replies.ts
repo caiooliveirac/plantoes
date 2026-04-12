@@ -1,7 +1,8 @@
-type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "continuation_recorded" | "departure_recorded" | "departure_adjusted" | "departure_justification_required" | "departure_justification_recorded" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
+type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "continuation_recorded" | "reassignment_recorded" | "departure_recorded" | "departure_adjusted" | "departure_justification_required" | "departure_justification_retry" | "departure_justification_recorded" | "departure_justification_manual_review" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
 
 interface NamedCandidate {
     fullName: string;
+    displayName?: string | null;
 }
 
 interface TelegramBatchReviewEntry {
@@ -46,6 +47,14 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Continua registrado.\n{name} já constava em {target} desde {time}.\nAqui eu apenas mantive a mesma cobertura rodando.",
         "Recebi como continuidade.\n{name} continua em {target} desde {time}.\nA entrada original ficou preservada.",
     ],
+    reassignment_recorded: [
+        "Remanejamento registrado.\n{name} agora está em {target} desde {time}.\nOcupação anterior encerrada automaticamente.",
+        "Troca anotada.\n{name} foi movido para {target} às {time}.\nO posto/base anterior já ficou liberado.",
+        "Remanejamento confirmado.\n{name} assumiu {target} às {time}.\nA posição anterior foi encerrada.",
+        "Mudança registrada.\n{name} passou para {target} às {time}.\nA ocupação de origem foi fechada.",
+        "Tudo certo com o remanejamento.\n{name} agora consta em {target} desde {time}.\nOrigem liberada no quadro.",
+        "Transferência feita.\n{name} está em {target} desde {time}.\nPosição anterior encerrada sem mexer em outros médicos.",
+    ],
     departure_recorded: [
         "Saída registrada para {name} em {target} as {time}.",
         "Anotei a saída de {name} de {target} as {time}.",
@@ -76,11 +85,16 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Atualizei a saída de {name} em {target} para {time}. Painel preservado, horário real ajustado para pagamento.",
     ],
     departure_justification_required: [
-        "Entendi a saída de {name} em {target}, mas como já havia cobertura nesse posto e você informou saída tardia, preciso da justificativa por escrito. Se esse horário já está certo, basta responder esta mensagem só com o motivo. Se o horário mudou, reenvie a saída completa assim: {example}",
-        "Para eu considerar essa saída tardia de {name} em {target}, preciso do motivo por escrito. Pode responder aqui só com a justificativa, por exemplo liberado pela chefia, ocorrência 0729 ou atraso de quem veio render. Se precisar trocar o horário, reenvie tudo assim: {example}",
-        "Não vou ignorar sua saída em {target}, mas já existe rendição nesse posto e por isso preciso da justificativa escrita. Se o horário {time} está correto, responda só o motivo nesta conversa. Se o horário mudou, mande a saída completa assim: {example}",
-        "Consigo salvar essa saída tardia de {name} em {target}, mas preciso da justificativa por escrito. Você pode responder só com o motivo nesta mesma conversa. Se quiser alterar o horário informado, reenvie a linha completa assim: {example}",
-        "Falta só a justificativa escrita para eu considerar a saída tardia de {name} em {target}. Se o horário está certo, responda apenas o motivo. Se precisar corrigir o horário, reenvie a saída completa assim: {example}",
+        "Entendi a saída tardia de {name} em {target}, mas aqui já havia rendição e só considero minutos extras para pagamento e banco de horas com motivo válido por escrito.\n\n🚑 Em ocorrência\nEx.: estava em ocorrência 0729\n\n🧼 Higienizando\nEx.: estava higienizando a viatura\n\nSe o horário {time} está certo, responda só com um desses motivos. Se o horário mudou, reenvie a saída completa assim: {example}",
+        "Como já havia outro médico em {target}, eu só consigo considerar essa saída tardia de {name} para pagamento e banco de horas com um destes motivos:\n\n🚑 Em ocorrência\nEx.: em atendimento de ocorrência 0729\n\n🧼 Higienizando\nEx.: em higienização da viatura\n\nSe {time} está correto, responda apenas o motivo. Se precisar trocar o horário, reenvie tudo assim: {example}",
+        "A saída de {name} em {target} foi entendida, mas para crédito automático desse atraso eu aceito só dois motivos:\n\n🚑 Em ocorrência\nEx.: ainda em ocorrência 0729\n\n🧼 Higienizando\nEx.: finalizando higienização da ambulância\n\nSe o horário já está certo, responda aqui só com o motivo. Se o horário mudou, mande a saída completa assim: {example}",
+        "Consigo revisar essa saída tardia de {name} em {target}, mas só entram para pagamento e banco de horas justificativas de um destes tipos:\n\n🚑 Em ocorrência\nEx.: estava em ocorrência\n\n🧼 Higienizando\nEx.: estava higienizando a viatura\n\nSe quiser manter {time}, responda só com o motivo. Se precisar alterar o horário, reenvie a linha completa assim: {example}",
+        "Falta só validar o motivo da saída tardia de {name} em {target}. Para considerar minutos extras eu aceito apenas:\n\n🚑 Em ocorrência\nEx.: em ocorrência 0729\n\n🧼 Higienizando\nEx.: em higienização da viatura\n\nSe o horário está certo, responda só com um desses motivos. Se precisar corrigir o horário, reenvie a saída completa assim: {example}",
+    ],
+    departure_justification_retry: [
+        "Ainda não consegui reconhecer um motivo válido para crédito automático dessa saída tardia de {name} em {target}.\n\n🚑 Em ocorrência\nEx.: estava em ocorrência 0729\n\n🧼 Higienizando\nEx.: estava higienizando a viatura\n\nPode tentar explicar mais uma vez só com o motivo. Se eu ainda não conseguir confirmar ocorrência ou higienização, deixo a justificativa salva para coordenação, mas sem crédito automático e só a chefia poderá lançar esses minutos extras.",
+        "O motivo que chegou ainda não fechou como ocorrência ou higienização para a saída tardia de {name} em {target}.\n\n🚑 Em ocorrência\nEx.: em atendimento de ocorrência 0729\n\n🧼 Higienizando\nEx.: em higienização da viatura\n\nMe responda mais uma vez só com o motivo. Se eu não conseguir validar, a explicação fica registrada para coordenação, mas sem crédito automático e com lançamento extra apenas pela chefia.",
+        "Para crédito automático dessa saída tardia em {target}, eu ainda preciso reconhecer um destes dois motivos:\n\n🚑 Em ocorrência\nEx.: ainda em ocorrência 0729\n\n🧼 Higienizando\nEx.: finalizando higienização da ambulância\n\nPode tentar mais uma vez. Se eu continuar sem certeza, salvo a justificativa para coordenação, mas sem pagar banco de horas automaticamente e com ajuste extra só pela chefia.",
     ],
     departure_justification_recorded: [
         "Justificativa recebida. Anexei o motivo à saída de {name} em {target} às {time}. Isso já ficou registrado para a coordenação, pagamento e banco de horas.",
@@ -88,6 +102,11 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Perfeito. Guardei a justificativa da saída de {name} em {target} às {time}. Ela segue junto para coordenação, pagamento e banco de horas.",
         "Justificativa salva com sucesso. A saída de {name} em {target} às {time} agora ficou acompanhada do motivo para a coordenação conferir.",
         "Tudo certo. Registrei a justificativa da saída de {name} em {target} às {time}. Esse motivo já vai junto no fluxo da coordenação e do banco de horas.",
+    ],
+    departure_justification_manual_review: [
+        "Guardei a justificativa da saída de {name} em {target} às {time} para coordenação, mas não consegui validar ocorrência ou higienização com segurança. Por isso, os minutos extras ficaram sem crédito automático. Se esse extra precisar entrar, só a chefia de plantão poderá lançar.",
+        "Anexei a explicação da saída de {name} em {target} às {time} para a coordenação revisar. Como eu não confirmei ocorrência nem higienização com segurança, não deixei crédito automático de banco de horas. Nesse caso, só a chefia pode lançar os minutos extras.",
+        "A justificativa de {name} em {target} às {time} ficou salva para conferência da coordenação. Como o motivo não fechou com segurança como ocorrência ou higienização, não houve crédito automático. Se for necessário lançar esse extra, fica a cargo da chefia.",
     ],
     departure_not_found: [
         "Entendi a saída de {name} em {target}, mas não achei ocupação compatível para fechar por aqui. Se a saída real foi diferente da rendição, reenvie assim: {example}",
@@ -234,10 +253,13 @@ const REPLY_PREFIX: Record<ReplyKind, string> = {
     arrival_recorded: "✅",
     arrival_p_recorded: "🔵🔁",
     continuation_recorded: "🔵🔁",
+    reassignment_recorded: "🔀",
     departure_recorded: "🔵📤",
     departure_adjusted: "🔵🛠️",
     departure_justification_required: "⚠️",
+    departure_justification_retry: "⚠️",
     departure_justification_recorded: "📝✅",
+    departure_justification_manual_review: "📝⚠️",
     departure_not_found: "⛔",
     departure_time_conflict: "⚠️",
     departure_missing_context: "⚠️",
@@ -267,7 +289,7 @@ function interpolate(template: string, params: Record<string, string>) {
 function formatCandidateList(candidates: NamedCandidate[]) {
     return candidates
         .slice(0, 3)
-        .map((candidate, index) => `${index + 1}. ${candidate.fullName}`)
+        .map((candidate, index) => `${index + 1}. ${candidate.displayName?.trim() || candidate.fullName}`)
         .join("\n");
 }
 
@@ -280,10 +302,15 @@ export function pickTelegramReply(kind: ReplyKind, seed: string | number, params
     return `${REPLY_PREFIX[kind]} ${interpolate(template, params)}`;
 }
 
-export function buildCandidatePromptReply(seed: string | number, candidates: NamedCandidate[]) {
+export function buildCandidatePromptReply(seed: string | number, candidates: NamedCandidate[], context?: { target?: string; time?: string | null; shift?: string | null }) {
     const intro = pickTelegramReply("candidate_prompt", seed, {});
     const list = formatCandidateList(candidates);
-    return `${intro}\n\nMais próximos:\n${list}\n\nResponda com 1, 2 ou 3.\nSe preferir, redigite nome e sobrenome.`;
+    const contextParts: string[] = [];
+    if (context?.target) contextParts.push(`📍 ${context.target}`);
+    if (context?.time) contextParts.push(`🕐 ${context.time}`);
+    if (context?.shift) contextParts.push(`📋 ${context.shift}`);
+    const contextLine = contextParts.length > 0 ? `\n\nDetectei: ${contextParts.join(" | ")}` : "";
+    return `${intro}${contextLine}\n\nMais próximos:\n${list}\n\nResponda com 1, 2 ou 3.\nSe preferir, redigite nome e sobrenome.`;
 }
 
 export function buildNameUnresolvedReply(seed: string | number, candidates: NamedCandidate[] = []) {

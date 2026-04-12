@@ -1,4 +1,5 @@
-import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { isBeforeCurrentOperationalShift, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import {
     compareTelegramInterventionCodes,
     compareTelegramRegulationCodes,
@@ -12,7 +13,7 @@ export interface TelegramShiftReportBoard {
     regulation: RegulationBoardRow[];
 }
 
-type ShiftReportStatus = "confirmed" | "carryover_pending" | "waiting" | "disabled";
+type ShiftReportStatus = "confirmed" | "carryover_pending" | "awaiting_news" | "waiting" | "disabled";
 
 interface ShiftReportInterventionRow {
     row: InterventionBoardRow;
@@ -29,6 +30,27 @@ interface ShiftReportModel {
     generatedAt: string;
     intervention: ShiftReportInterventionRow[];
     regulation: ShiftReportRegulationRow[];
+}
+
+function compactDoctorName(input: { fullName?: string | null; displayName?: string | null; fallback?: string }) {
+    const full = formatDoctorSurfaceName(input);
+    const tokens = full.split(/\s+/).filter(Boolean);
+    if (tokens.length <= 1) {
+        return full;
+    }
+
+    const particles = new Set(["de", "da", "do", "dos", "das", "e"]);
+    const suffixes = new Set(["Filho", "Neto", "Junior", "Jr", "Sobrinho"]);
+    const first = tokens[0] ?? full;
+    const filtered = tokens.filter((token) => !particles.has(token.toLowerCase()));
+    const last = filtered[filtered.length - 1] ?? tokens[tokens.length - 1] ?? first;
+    const previous = filtered[filtered.length - 2] ?? tokens[tokens.length - 2] ?? null;
+
+    if (suffixes.has(last) && previous) {
+        return `${first} ${previous} ${last}`;
+    }
+
+    return first === last ? first : `${first} ${last}`;
 }
 
 function formatDateTime(value: string | Date) {
@@ -52,7 +74,7 @@ function formatHour(value: string | Date | null) {
     }).format(new Date(value));
 }
 
-function resolveInterventionShiftStatus(row: InterventionBoardRow, currentShiftLabel: "SD" | "SN"): ShiftReportStatus {
+function resolveInterventionShiftStatus(row: InterventionBoardRow, currentShiftLabel: "SD" | "SN", reference: Date): ShiftReportStatus {
     if (row.status === "disabled") {
         return "disabled";
     }
@@ -65,15 +87,23 @@ function resolveInterventionShiftStatus(row: InterventionBoardRow, currentShiftL
         return "confirmed";
     }
 
-    return "carryover_pending";
+    if (row.shiftLabel === null && !isBeforeCurrentOperationalShift(row.boardStartedAt ?? row.startedAt, reference)) {
+        return "confirmed";
+    }
+
+    return "awaiting_news";
 }
 
-function resolveRegulationShiftStatus(row: RegulationBoardRow, currentShiftLabel: "SD" | "SN"): ShiftReportStatus {
+function resolveRegulationShiftStatus(row: RegulationBoardRow, currentShiftLabel: "SD" | "SN", reference: Date): ShiftReportStatus {
     if (row.status === "waiting") {
         return "waiting";
     }
 
     if (row.shiftLabel === currentShiftLabel || row.shiftLabel === "P") {
+        return "confirmed";
+    }
+
+    if (row.shiftLabel === null && !isBeforeCurrentOperationalShift(row.boardStartedAt ?? row.startedAt, reference)) {
         return "confirmed";
     }
 
@@ -88,27 +118,34 @@ function buildShiftReportModel(board: TelegramShiftReportBoard, reference: Date)
         generatedAt: reference.toISOString(),
         intervention: board.intervention.map((row) => ({
             row,
-            status: resolveInterventionShiftStatus(row, shiftWindow.shiftLabel),
+            status: resolveInterventionShiftStatus(row, shiftWindow.shiftLabel, reference),
         })),
         regulation: board.regulation.map((row) => ({
             row,
-            status: resolveRegulationShiftStatus(row, shiftWindow.shiftLabel),
+            status: resolveRegulationShiftStatus(row, shiftWindow.shiftLabel, reference),
         })),
     };
 }
 
 function buildInterventionConfirmedLine(item: ShiftReportInterventionRow, currentShiftLabel: "SD" | "SN") {
-    const name = item.row.doctorName ?? item.row.displayName ?? "médico não identificado";
+    const name = compactDoctorName({ fullName: item.row.doctorName, displayName: item.row.displayName, fallback: "médico não identificado" });
     if (item.row.shiftLabel === "P") {
-        return `✅ ${item.row.baseCode} - ${name} | P | chegada original ${formatHour(item.row.startedAt)} | cobre ${currentShiftLabel}`;
+        return `✅ ${item.row.baseCode} - ${name} | P desde ${formatHour(item.row.startedAt)}`;
     }
 
     return `✅ ${item.row.baseCode} - ${name} | chegada ${formatHour(item.row.startedAt)} | ${item.row.shiftLabel ?? currentShiftLabel}`;
 }
 
 function buildInterventionCarryoverLine(item: ShiftReportInterventionRow, currentShiftLabel: "SD" | "SN") {
-    const name = item.row.doctorName ?? item.row.displayName ?? "médico não identificado";
-    return `🟡 ${item.row.baseCode} - ${name} | ${item.row.shiftLabel ?? "turno anterior"} desde ${formatHour(item.row.startedAt)} | ainda no quadro, mas não confirmado para ${currentShiftLabel}`;
+    const name = compactDoctorName({ fullName: item.row.doctorName, displayName: item.row.displayName, fallback: "médico não identificado" });
+    return `🟡 ${item.row.baseCode} - ${name} | ${item.row.shiftLabel ?? "turno anterior"} desde ${formatHour(item.row.startedAt)} | não confirmado para ${currentShiftLabel}`;
+}
+
+function buildInterventionAwaitingNewsLine(item: ShiftReportInterventionRow, currentShiftLabel: "SD" | "SN") {
+    const name = compactDoctorName({ fullName: item.row.doctorName, displayName: item.row.displayName, fallback: "médico não identificado" });
+    const lastShiftLabel = item.row.shiftLabel ?? "turno anterior";
+    const since = item.row.startedAt ? ` desde ${formatHour(item.row.startedAt)}` : "";
+    return `🔴 ${item.row.baseCode} - ${name} | ${lastShiftLabel}${since} | sem confirmação para ${currentShiftLabel}`;
 }
 
 function buildInterventionDisabledLine(item: ShiftReportInterventionRow) {
@@ -118,17 +155,17 @@ function buildInterventionDisabledLine(item: ShiftReportInterventionRow) {
 }
 
 function buildRegulationConfirmedLine(item: ShiftReportRegulationRow, currentShiftLabel: "SD" | "SN") {
-    const name = item.row.doctorName ?? item.row.displayName ?? "médico não identificado";
+    const name = compactDoctorName({ fullName: item.row.doctorName, displayName: item.row.displayName, fallback: "médico não identificado" });
     if (item.row.shiftLabel === "P") {
-        return `✅ ${item.row.postCode} - ${name} | P | chegada original ${formatHour(item.row.startedAt)} | cobre ${currentShiftLabel}`;
+        return `✅ ${item.row.postCode} - ${name} | P desde ${formatHour(item.row.startedAt)}`;
     }
 
     return `✅ ${item.row.postCode} - ${name} | chegada ${formatHour(item.row.startedAt)} | ${item.row.shiftLabel ?? currentShiftLabel}`;
 }
 
 function buildRegulationCarryoverLine(item: ShiftReportRegulationRow, currentShiftLabel: "SD" | "SN") {
-    const name = item.row.doctorName ?? item.row.displayName ?? "médico não identificado";
-    return `🟡 ${item.row.postCode} - ${name} | ${item.row.shiftLabel ?? "turno anterior"} desde ${formatHour(item.row.startedAt)} | ainda visível no quadro, mas não confirmado para ${currentShiftLabel}`;
+    const name = compactDoctorName({ fullName: item.row.doctorName, displayName: item.row.displayName, fallback: "médico não identificado" });
+    return `🟡 ${item.row.postCode} - ${name} | ${item.row.shiftLabel ?? "turno anterior"} desde ${formatHour(item.row.startedAt)} | não confirmado para ${currentShiftLabel}`;
 }
 
 function listWaitingCodes(values: string[]) {
@@ -147,8 +184,8 @@ export function buildTelegramShiftReport(params: {
     const confirmedIntervention = model.intervention
         .filter((item) => item.status === "confirmed")
         .sort((left, right) => compareTelegramInterventionCodes(left.row.baseCode, right.row.baseCode));
-    const carryoverIntervention = model.intervention
-        .filter((item) => item.status === "carryover_pending")
+    const awaitingNewsIntervention = model.intervention
+        .filter((item) => item.status === "awaiting_news")
         .sort((left, right) => compareTelegramInterventionCodes(left.row.baseCode, right.row.baseCode));
     const disabledIntervention = model.intervention
         .filter((item) => item.status === "disabled")
@@ -163,51 +200,55 @@ export function buildTelegramShiftReport(params: {
     const waitingRegulation = sortTelegramRegulationCodes(model.regulation.filter((item) => item.status === "waiting").map((item) => item.row.postCode));
     const interventionOperationalTotal = model.intervention.length - disabledIntervention.length;
 
+    const hasCarryover = awaitingNewsIntervention.length > 0 || carryoverRegulation.length > 0;
+
     return [
-        `📋 Relato do plantão ${model.shiftLabel} em ${formatDateTime(model.generatedAt)}.`,
-        "Leitura por regra de negócio: quem ainda aparece no quadro vindo do turno anterior fica como pendência, não como entrada confirmada deste turno.",
+        `📋 Plantão ${model.shiftLabel} — ${formatDateTime(model.generatedAt)}`,
+        ...(hasCarryover ? ["Herança do turno anterior = pendência, não entrada confirmada."] : []),
         "",
-        `Intervenção confirmada ${confirmedIntervention.length}/${interventionOperationalTotal}:`,
+        `🚑 Intervenção ${confirmedIntervention.length}/${interventionOperationalTotal} confirmadas | ${awaitingNewsIntervention.length} herança | ${waitingIntervention.length} sem aviso | ${disabledIntervention.length} desativadas`,
+        "",
         confirmedIntervention.length > 0
             ? confirmedIntervention.map((item) => buildInterventionConfirmedLine(item, model.shiftLabel)).join("\n")
             : "- nenhuma avançada confirmada para este turno",
-        ...(carryoverIntervention.length > 0
+        ...(awaitingNewsIntervention.length > 0
             ? [
                 "",
-                "Intervenção ainda pendente por herança do turno anterior:",
-                carryoverIntervention.map((item) => buildInterventionCarryoverLine(item, model.shiftLabel)).join("\n"),
+                "Herança sem confirmação:",
+                awaitingNewsIntervention.map((item) => buildInterventionAwaitingNewsLine(item, model.shiftLabel)).join("\n"),
             ]
             : []),
         ...(waitingIntervention.length > 0
             ? [
                 "",
-                `Intervenção sem aviso para ${model.shiftLabel}:`,
+                `Sem aviso (${waitingIntervention.length}):`,
                 `🔴 ${listWaitingCodes(waitingIntervention)}`,
             ]
             : []),
         ...(disabledIntervention.length > 0
             ? [
                 "",
-                "Intervenção desativada no turno:",
+                "Desativadas:",
                 disabledIntervention.map((item) => buildInterventionDisabledLine(item)).join("\n"),
             ]
             : []),
         "",
-        `Regulação confirmada ${confirmedRegulation.length}/${model.regulation.length}:`,
+        `📞 Regulação ${confirmedRegulation.length}/${model.regulation.length} confirmados | ${carryoverRegulation.length} herança | ${waitingRegulation.length} sem aviso`,
+        "",
         confirmedRegulation.length > 0
             ? confirmedRegulation.map((item) => buildRegulationConfirmedLine(item, model.shiftLabel)).join("\n")
             : "- nenhum ramal confirmado para este turno",
         ...(carryoverRegulation.length > 0
             ? [
                 "",
-                "Regulação ainda pendente por herança do turno anterior:",
+                "Herança sem confirmação:",
                 carryoverRegulation.map((item) => buildRegulationCarryoverLine(item, model.shiftLabel)).join("\n"),
             ]
             : []),
         ...(waitingRegulation.length > 0
             ? [
                 "",
-                `Regulação sem aviso para ${model.shiftLabel}:`,
+                `Sem aviso (${waitingRegulation.length}):`,
                 `🔴 ${listWaitingCodes(waitingRegulation)}`,
             ]
             : []),

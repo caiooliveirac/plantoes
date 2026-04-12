@@ -223,6 +223,7 @@ function resolveScheduledWindow(shift: RawBankHoursHistoryShift) {
         ? inferRegulationCoverageWindow({
             startedAt,
             shiftLabel: shift.shiftLabel,
+            postCode: shift.targetCode,
             explicitScheduledStartAt: shift.bankScheduledStartAt ? new Date(shift.bankScheduledStartAt) : (shift.occupancyScheduledStartAt ? new Date(shift.occupancyScheduledStartAt) : null),
             explicitScheduledEndAt: shift.bankScheduledEndAt ? new Date(shift.bankScheduledEndAt) : (shift.occupancyScheduledEndAt ? new Date(shift.occupancyScheduledEndAt) : null),
         })
@@ -446,7 +447,7 @@ function compareDoctors(left: BankHoursDoctorHistory, right: BankHoursDoctorHist
         return right.correctionCount - left.correctionCount;
     }
 
-    return (left.displayName ?? left.doctorName).localeCompare(right.displayName ?? right.doctorName, "pt-BR");
+    return left.doctorName.localeCompare(right.doctorName, "pt-BR");
 }
 
 export function buildBankHoursHistoryModel(shifts: RawBankHoursHistoryShift[]): BankHoursHistoryModel {
