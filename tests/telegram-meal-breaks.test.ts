@@ -7,14 +7,19 @@ import {
     buildMealBreakPriorityReply,
     buildMealBreakPriorityReplyMessages,
     buildMealBreakRoster,
+    buildMealBreakStageKeyboard,
     createMealBreakSession,
     getCurrentMealBreakPriorityView,
     isTelegramMealBreakCommandText,
+    isTelegramMealBreakExcludeCommandText,
     isTelegramMealBreakPriorityCommandText,
     parseTelegramMealBreakCommand,
+    parseTelegramMealBreakExcludeCommand,
     parseTelegramMealBreakPriorityCommand,
     resolveMealBreakContinuityStartedAt,
     resolveMealBreakLunchCapacities,
+    shouldPreferMealBreakReplyForSession,
+    syncDaySessionState,
 } from "@/modules/telegram/meal-breaks";
 
 function makeBoard(): Parameters<typeof buildMealBreakRoster>[0] {
@@ -630,6 +635,8 @@ test("buildMealBreakRoster monta a fila do diurno sem chefia e sem noturno", () 
     assert.deepEqual(roster.mrvRamals, ["2032", "2151"]);
     assert.deepEqual(roster.roster.map((doctor) => doctor.ramal), ["2032", "2151", "2035", "2036", "2037", "2038", "2039"]);
     assert.equal(roster.roster.find((doctor) => doctor.ramal === "2032")?.roleLabel, "MRV");
+    assert.equal(roster.roster.find((doctor) => doctor.ramal === "2032")?.name, "Marina");
+    assert.equal(roster.roster.find((doctor) => doctor.ramal === "2036")?.name, "Bia");
     assert.equal(roster.roster.some((doctor) => doctor.ramal === "PP20"), false);
 });
 
@@ -664,10 +671,12 @@ test("getCurrentMealBreakPriorityView usa so o quadro atual e aplica piso remoto
     board.regulation[3] = {
         ...board.regulation[3]!,
         startedAt: "2026-03-29T10:10:00.000Z",
+        boardStartedAt: "2026-03-29T10:10:00.000Z",
     };
     board.regulation[4] = {
         ...board.regulation[4]!,
         startedAt: "2026-03-29T10:16:00.000Z",
+        boardStartedAt: "2026-03-29T10:16:00.000Z",
     };
     board.regulation[7] = {
         ...board.regulation[7]!,
@@ -678,6 +687,7 @@ test("getCurrentMealBreakPriorityView usa so o quadro atual e aplica piso remoto
         doctorName: "Leila Remota",
         displayName: "Leila",
         startedAt: "2026-03-29T10:01:00.000Z",
+        boardStartedAt: "2026-03-29T10:01:00.000Z",
         ramalLabel: "1361",
         roleLabel: "RMT",
     };
@@ -716,19 +726,23 @@ test("getCurrentMealBreakPriorityView avisa duplicidade e mantem uma unica ocorr
 
     assert.equal(view.entries.filter((entry) => ["2035", "2036"].includes(entry.ramal)).length, 1);
     assert.equal(view.warnings.length, 1);
-    assert.match(view.warnings[0]?.message ?? "", /Renata Lima aparece em mais de um ramal ativo: 2035, 2036\./);
+    assert.match(view.warnings[0]?.message ?? "", /Renata aparece em mais de um ramal ativo: 2035, 2036\./);
     assert.match(view.warnings[0]?.message ?? "", /A fila vai considerar 2035\./);
 
     const reply = buildMealBreakPriorityReply(view);
-    assert.match(reply, /⚠️ Renata Lima aparece em mais de um ramal ativo: 2035, 2036\. A fila vai considerar 2035\./);
+    assert.match(reply, /⚠️ Renata aparece em mais de um ramal ativo: 2035, 2036\. A fila vai considerar 2035\./);
 });
 
 test("applyMealBreakReply orders blank remote ramal by normal arrival instead of RMT penalty", () => {
     const board = makeBoard();
     board.regulation[3]!.startedAt = "2026-03-29T10:00:00.000Z";
+    board.regulation[3]!.boardStartedAt = "2026-03-29T10:00:00.000Z";
     board.regulation[4]!.startedAt = "2026-03-29T10:10:00.000Z";
+    board.regulation[4]!.boardStartedAt = "2026-03-29T10:10:00.000Z";
     board.regulation[5]!.startedAt = "2026-03-29T10:16:00.000Z";
+    board.regulation[5]!.boardStartedAt = "2026-03-29T10:16:00.000Z";
     board.regulation[7]!.startedAt = "2026-03-29T10:01:00.000Z";
+    board.regulation[7]!.boardStartedAt = "2026-03-29T10:01:00.000Z";
     board.regulation[7]!.roleLabel = null;
 
     const referenceAt = new Date("2026-03-29T09:05:00-03:00");
@@ -743,8 +757,16 @@ test("applyMealBreakReply orders blank remote ramal by normal arrival instead of
         actorTelegramId: "100",
     });
 
-    const recip = applyMealBreakReply({
+    const confirmed = applyMealBreakReply({
         session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
         text: "2035",
         senderTelegramId: "100",
         referenceAt,
@@ -780,6 +802,100 @@ test("createMealBreakSession recalcula vagas quando ha ramais dispensados do alm
     assert.deepEqual(session.restExcludedRamals, ["2037", "2038"]);
 });
 
+test("PIAM fica fora da divisao do almoco, das vagas e das escolhas", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const board = makeBoard();
+    board.regulation.push({
+        postId: 10,
+        occupancyId: "reg-piam",
+        postCode: "PIAM",
+        postLabel: "PIAM",
+        defaultRole: null,
+        doctorId: "doc-piam",
+        doctorName: "Paulo Piam",
+        displayName: "Paulo",
+        startedAt: "2026-03-29T10:08:00.000Z",
+        boardStartedAt: "2026-03-29T10:08:00.000Z",
+        scheduledEndAt: "2026-03-29T22:00:00.000Z",
+        shiftLabel: "SD",
+        roleLabel: null,
+        ramalLabel: "PIAM",
+        status: "active",
+        liveSource: "operations_v2",
+        liveUpdatedAt: null,
+    });
+
+    const roster = buildMealBreakRoster(board, referenceAt);
+    assert.equal(roster.roster.some((doctor) => doctor.ramal === "PIAM"), false);
+
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    assert.equal(session.roster.some((doctor) => doctor.ramal === "PIAM"), false);
+    assert.deepEqual(session.lunchCapacities, { "11:30": 3, "12:30": 2, "13:30": 2 });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+    assert.equal(mrv.session.lunchQueue.includes("PIAM"), false);
+    assert.equal(mrv.session.restQueue.includes("PIAM"), false);
+});
+
+test("NUCLEO fica fora de qualquer meal break — não participa de almoço nem descanso", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const board = makeBoard();
+    board.regulation.push({
+        postId: 20,
+        occupancyId: "reg-nucleo",
+        postCode: "NUCLEO",
+        postLabel: "Nucleo",
+        defaultRole: null,
+        doctorId: "doc-nucleo",
+        doctorName: "Maria Nucleo",
+        displayName: "Maria",
+        startedAt: "2026-03-29T11:00:00.000Z",
+        boardStartedAt: "2026-03-29T11:00:00.000Z",
+        scheduledEndAt: "2026-03-29T22:15:00.000Z",
+        shiftLabel: "SD",
+        roleLabel: null,
+        ramalLabel: "NUCLEO",
+        status: "active",
+        liveSource: "operations_v2",
+        liveUpdatedAt: null,
+    });
+
+    const roster = buildMealBreakRoster(board, referenceAt);
+    assert.equal(roster.roster.some((doctor) => doctor.ramal === "NUCLEO"), false,
+        "NUCLEO should not appear in the meal break roster");
+});
+
 test("applyMealBreakReply pula ramais dispensados na fila e no descanso", () => {
     const referenceAt = new Date("2026-03-29T09:05:00-03:00");
     const roster = buildMealBreakRoster(makeBoard(), referenceAt);
@@ -795,8 +911,16 @@ test("applyMealBreakReply pula ramais dispensados na fila e no descanso", () => 
         restExcludedRamals: ["2037"],
     });
 
-    const recip = applyMealBreakReply({
+    const confirmed = applyMealBreakReply({
         session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
         text: "2035",
         senderTelegramId: "100",
         referenceAt,
@@ -825,6 +949,323 @@ test("applyMealBreakReply pula ramais dispensados na fila e no descanso", () => 
 
     assert.equal(currentSession.restAssignments["2037"], undefined);
     assert.equal(currentSession.restQueue.includes("2037"), false);
+});
+
+test("PSIQ fica fora da divisao do almoco e recebe 12:30 e 18:00 fixos", async () => {
+    const board = makeBoard();
+    const psiqIndex = board.regulation.findIndex((entry) => entry.postCode === "2039");
+    assert.notEqual(psiqIndex, -1);
+    board.regulation[psiqIndex] = {
+        ...board.regulation[psiqIndex]!,
+        roleLabel: "PSIQ",
+        defaultRole: "PSIQ",
+    };
+
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    assert.equal(roster.roster.find((doctor) => doctor.ramal === "2039")?.roleLabel, "PSIQ");
+    assert.deepEqual(session.lunchCapacities, { "11:30": 2, "12:30": 2, "13:30": 2 });
+    assert.equal(session.lunchAssignments["2039"], "12:30");
+    assert.equal(session.restAssignments["2039"], "18:00");
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+    assert.equal(mrv.session.lunchQueue.includes("2039"), false);
+    assert.equal(mrv.session.restQueue.includes("2039"), false);
+
+    const view = await getCurrentMealBreakPriorityView({
+        referenceAt,
+        board,
+    });
+    assert.equal(view.entries.some((entry) => entry.ramal === "2039"), false);
+});
+
+test("PSIQ nao consome a vaga 12:30 dos demais", () => {
+    const board = makeBoard();
+    const psiqIndex = board.regulation.findIndex((entry) => entry.postCode === "2039");
+    assert.notEqual(psiqIndex, -1);
+    board.regulation[psiqIndex] = {
+        ...board.regulation[psiqIndex]!,
+        roleLabel: "PSIQ",
+        defaultRole: "PSIQ",
+    };
+
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+
+    const keyboard = buildMealBreakStageKeyboard(mrv.session);
+    assert.deepEqual(keyboard, {
+        keyboard: [[
+            { text: "2036 11:30" },
+            { text: "2036 12:30" },
+            { text: "2036 13:30" },
+        ], [
+            { text: "↩️ Desfazer" },
+        ]],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+    });
+});
+
+test("CP fica a criterio e sai da fila pendente do almoco", async () => {
+    const board = makeBoard();
+    const cpIndex = board.regulation.findIndex((entry) => entry.postCode === "2039");
+    assert.notEqual(cpIndex, -1);
+    board.regulation[cpIndex] = {
+        ...board.regulation[cpIndex]!,
+        roleLabel: "CP",
+        defaultRole: "CP",
+    };
+
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    assert.equal(roster.roster.some((doctor) => doctor.ramal === "2039"), false);
+
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+    assert.equal(mrv.session.lunchQueue.includes("2039"), false);
+
+    const view = await getCurrentMealBreakPriorityView({
+        referenceAt,
+        board,
+    });
+    assert.equal(view.entries.some((entry) => entry.ramal === "2039"), false);
+});
+
+test("resumo final mostra CP com almoco e descanso a criterio", () => {
+    const board = makeBoard();
+    const cpIndex = board.regulation.findIndex((entry) => entry.postCode === "2039");
+    assert.notEqual(cpIndex, -1);
+    board.regulation[cpIndex] = {
+        ...board.regulation[cpIndex]!,
+        roleLabel: "CP",
+        defaultRole: "CP",
+    };
+
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+    const lunch1 = applyMealBreakReply({
+        session: mrv.session,
+        text: "2036 11:30",
+        senderTelegramId: "102",
+        referenceAt,
+    });
+    assert.ok(lunch1);
+    const lunch2 = applyMealBreakReply({
+        session: lunch1.session,
+        text: "2037 12:30",
+        senderTelegramId: "103",
+        referenceAt,
+    });
+    assert.ok(lunch2);
+    const rest1 = applyMealBreakReply({
+        session: lunch2.session,
+        text: "2036 15:30",
+        senderTelegramId: "105",
+        referenceAt,
+    });
+    assert.ok(rest1);
+    assert.equal(rest1.status, "completed");
+
+    assert.match(rest1.messages[1] ?? "", /👑 CHEFIA/);
+    assert.match(rest1.messages[1] ?? "", /• Almoco a criterio/);
+    assert.match(rest1.messages[1] ?? "", /• Descanso a criterio/);
+});
+
+test("resumo final mostra PSIQ fixo em 12:30 e 18:00", () => {
+    const board = makeBoard();
+    const psiqIndex = board.regulation.findIndex((entry) => entry.postCode === "2039");
+    assert.notEqual(psiqIndex, -1);
+    board.regulation[psiqIndex] = {
+        ...board.regulation[psiqIndex]!,
+        roleLabel: "PSIQ",
+        defaultRole: "PSIQ",
+    };
+
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+    const lunch1 = applyMealBreakReply({
+        session: mrv.session,
+        text: "2036 11:30",
+        senderTelegramId: "102",
+        referenceAt,
+    });
+    assert.ok(lunch1);
+    const lunch2 = applyMealBreakReply({
+        session: lunch1.session,
+        text: "2037 12:30",
+        senderTelegramId: "103",
+        referenceAt,
+    });
+    assert.ok(lunch2);
+    const rest1 = applyMealBreakReply({
+        session: lunch2.session,
+        text: "2036 15:30",
+        senderTelegramId: "105",
+        referenceAt,
+    });
+    assert.ok(rest1);
+    assert.equal(rest1.status, "completed");
+
+    assert.match(rest1.messages[1] ?? "", /12:30\n(?:.*\n)*• Patricia \(PSIQ\)/);
+    assert.match(rest1.messages[1] ?? "", /18:00\n(?:.*\n)*• Patricia \(PSIQ\)/);
 });
 
 test("buildMealBreakRoster monta a fila do noturno com continuistas priorizados e sem CP", () => {
@@ -915,9 +1356,13 @@ test("applyMealBreakContinuityStarts preserva prioridade do presencial continuo 
 test("applyMealBreakReply empurra RMT para o corte de 07:15 na fila do almoco", () => {
     const board = makeBoard();
     board.regulation[3]!.startedAt = "2026-03-29T10:00:00.000Z";
+    board.regulation[3]!.boardStartedAt = "2026-03-29T10:00:00.000Z";
     board.regulation[4]!.startedAt = "2026-03-29T10:10:00.000Z";
+    board.regulation[4]!.boardStartedAt = "2026-03-29T10:10:00.000Z";
     board.regulation[5]!.startedAt = "2026-03-29T10:16:00.000Z";
+    board.regulation[5]!.boardStartedAt = "2026-03-29T10:16:00.000Z";
     board.regulation[7]!.startedAt = "2026-03-29T10:01:00.000Z";
+    board.regulation[7]!.boardStartedAt = "2026-03-29T10:01:00.000Z";
     board.regulation[7]!.roleLabel = "RMT";
 
     const referenceAt = new Date("2026-03-29T09:05:00-03:00");
@@ -932,8 +1377,16 @@ test("applyMealBreakReply empurra RMT para o corte de 07:15 na fila do almoco", 
         actorTelegramId: "100",
     });
 
-    const recip = applyMealBreakReply({
+    const confirmed = applyMealBreakReply({
         session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
         text: "2035",
         senderTelegramId: "100",
         referenceAt,
@@ -970,8 +1423,16 @@ test("applyMealBreakReply respeita a ordem manual recebida para a fila do almoco
         actorTelegramId: "100",
     });
 
-    const recip = applyMealBreakReply({
+    const confirmed = applyMealBreakReply({
         session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
         text: "2035",
         senderTelegramId: "100",
         referenceAt,
@@ -999,8 +1460,16 @@ test("applyMealBreakReply conduz almoco e descanso ate o fechamento", () => {
         actorTelegramId: "100",
     });
 
-    const recip = applyMealBreakReply({
+    const confirmed = applyMealBreakReply({
         session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
         text: "2035",
         senderTelegramId: "100",
         referenceAt,
@@ -1051,23 +1520,17 @@ test("applyMealBreakReply conduz almoco e descanso ate o fechamento", () => {
         senderTelegramId: "104",
         referenceAt,
     });
-    const lunch4 = applyMealBreakReply({
-        session: lunch3!.session,
-        text: "2039 13:30",
-        senderTelegramId: "105",
-        referenceAt,
-    });
-
-    assert.ok(lunch4);
-    assert.equal(lunch4?.session.stage, "awaiting_rest_choice");
-    assert.equal(lunch4?.session.restAssignments["2039"], "14:30");
-    assert.equal(lunch4?.session.restAssignments["2035"], "18:00");
-    assert.equal(lunch4?.session.restAssignments["2032"], "18:00");
-    assert.equal(lunch4?.session.restAssignments["2151"], "18:00");
-    assert.deepEqual(lunch4?.session.restQueue, ["2036", "2037", "2038"]);
+    assert.ok(lunch3);
+    assert.equal(lunch3?.session.stage, "awaiting_rest_choice");
+    assert.equal(lunch3?.session.lunchAssignments["2039"], "13:30");
+    assert.equal(lunch3?.session.restAssignments["2039"], "14:30");
+    assert.equal(lunch3?.session.restAssignments["2035"], "18:00");
+    assert.equal(lunch3?.session.restAssignments["2032"], "18:00");
+    assert.equal(lunch3?.session.restAssignments["2151"], "18:00");
+    assert.deepEqual(lunch3?.session.restQueue, ["2036", "2037", "2038"]);
 
     const rest1 = applyMealBreakReply({
-        session: lunch4!.session,
+        session: lunch3!.session,
         text: "2036 15:30",
         senderTelegramId: "106",
         referenceAt,
@@ -1082,11 +1545,170 @@ test("applyMealBreakReply conduz almoco e descanso ate o fechamento", () => {
         referenceAt,
     });
     assert.ok(rest2);
-    assert.equal(rest2?.session.stage, "completed");
-    assert.equal(rest2?.session.restAssignments["2038"], "15:30");
-    assert.match(rest2?.messages[1] ?? "", /🍽️ ALMOCO/);
-    assert.match(rest2?.messages[1] ?? "", /14:30\n• Patricia Paiva/);
-    assert.match(rest2?.messages[1] ?? "", /18:00\n• Marina Costa \(MRV\)\n• Carlos Melo \(MRV\)\n• Renata Lima \(RECIP\)/);
+    assert.equal(rest2?.session.stage, "awaiting_rest_choice");
+    assert.equal(rest2?.session.restAssignments["2038"], undefined);
+
+    const rest3 = applyMealBreakReply({
+        session: rest2!.session,
+        text: "2038 16:30",
+        senderTelegramId: "108",
+        referenceAt,
+    });
+    assert.ok(rest3);
+    assert.equal(rest3?.session.stage, "completed");
+    assert.equal(rest3?.session.restAssignments["2038"], "16:30");
+    assert.match(rest3?.messages[1] ?? "", /🍽️ ALMOCO/);
+    assert.match(rest3?.messages[1] ?? "", /14:30\n• Patricia/);
+    assert.match(rest3?.messages[1] ?? "", /18:00\n• Marina \(MRV\)\n• Carlos \(MRV\)\n• Renata \(RECIP\)/);
+});
+
+test("applyMealBreakReply fecha o almoco automaticamente quando sobra uma unica opcao", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+
+    const lunch1 = applyMealBreakReply({
+        session: mrv.session,
+        text: "2036 11:30",
+        senderTelegramId: "102",
+        referenceAt,
+    });
+    assert.ok(lunch1);
+    const lunch2 = applyMealBreakReply({
+        session: lunch1.session,
+        text: "2037 11:30",
+        senderTelegramId: "103",
+        referenceAt,
+    });
+    assert.ok(lunch2);
+    const lunch3 = applyMealBreakReply({
+        session: lunch2.session,
+        text: "2038 12:30",
+        senderTelegramId: "104",
+        referenceAt,
+    });
+    assert.ok(lunch3);
+    assert.equal(lunch3.session.stage, "awaiting_rest_choice");
+    assert.equal(lunch3.session.lunchAssignments["2039"], "13:30");
+    assert.deepEqual(lunch3.session.lunchQueue, []);
+});
+
+test("buildMealBreakStageKeyboard mantem as duas opcoes para o ultimo descanso impar", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+
+    const lunch1 = applyMealBreakReply({
+        session: mrv.session,
+        text: "2036 11:30",
+        senderTelegramId: "102",
+        referenceAt,
+    });
+    assert.ok(lunch1);
+    const lunch2 = applyMealBreakReply({
+        session: lunch1.session,
+        text: "2037 11:30",
+        senderTelegramId: "103",
+        referenceAt,
+    });
+    assert.ok(lunch2);
+    const lunch3 = applyMealBreakReply({
+        session: lunch2.session,
+        text: "2038 12:30",
+        senderTelegramId: "104",
+        referenceAt,
+    });
+    assert.ok(lunch3);
+    const rest1 = applyMealBreakReply({
+        session: lunch3.session,
+        text: "2036 15:30",
+        senderTelegramId: "105",
+        referenceAt,
+    });
+    assert.ok(rest1);
+    const rest2 = applyMealBreakReply({
+        session: rest1.session,
+        text: "2037 16:30",
+        senderTelegramId: "106",
+        referenceAt,
+    });
+    assert.ok(rest2);
+
+    const keyboard = buildMealBreakStageKeyboard(rest2.session);
+    assert.deepEqual(keyboard, {
+        keyboard: [[
+            { text: "2038 15:30" },
+            { text: "2038 16:30" },
+        ], [
+            { text: "↩️ Desfazer" },
+        ]],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+    });
 });
 
 test("applyMealBreakReply ignora conversa casual fora do formato", () => {
@@ -1110,6 +1732,246 @@ test("applyMealBreakReply ignora conversa casual fora do formato", () => {
     }), null);
 });
 
+test("shouldPreferMealBreakReplyForSession prioriza respostas da divisao sem confundir chegada operacional", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+    assert.equal(shouldPreferMealBreakReplyForSession(confirmed.session, "2035"), true);
+    assert.equal(shouldPreferMealBreakReplyForSession(confirmed.session, "Renata"), true);
+    assert.equal(shouldPreferMealBreakReplyForSession(confirmed.session, "2035 Renata 10:00"), false);
+    // Bug fix: name NOT in roster should still be intercepted so stage can reply "Nao reconheci"
+    // instead of falling through to operational arrival parsing.
+    assert.equal(shouldPreferMealBreakReplyForSession(confirmed.session, "Nome Inexistente"), true);
+    assert.equal(shouldPreferMealBreakReplyForSession(confirmed.session, "Fulano de Tal"), true);
+    // Arrival cues or ramal codes must still bail out to operational parsing:
+    assert.equal(shouldPreferMealBreakReplyForSession(confirmed.session, "1234 SD chegou"), false);
+    assert.equal(shouldPreferMealBreakReplyForSession(confirmed.session, "Medica SD"), false);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+    assert.equal(shouldPreferMealBreakReplyForSession(recip.session, "2032"), true);
+    assert.equal(shouldPreferMealBreakReplyForSession(recip.session, "Marina"), true);
+    assert.equal(shouldPreferMealBreakReplyForSession(recip.session, "2032 Marina 10:00"), false);
+    // Bug fix: name NOT in mrvRamals should be intercepted (stage handler shows "Nao reconheci")
+    assert.equal(shouldPreferMealBreakReplyForSession(recip.session, "Nome Nao MRV"), true);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+    assert.equal(shouldPreferMealBreakReplyForSession(mrv.session, "2036 11:30"), true);
+    assert.equal(shouldPreferMealBreakReplyForSession(mrv.session, "2036 Renata Lima 12:30"), true);
+    assert.equal(shouldPreferMealBreakReplyForSession(mrv.session, "2036 Renata 10:00"), false);
+    assert.equal(shouldPreferMealBreakReplyForSession(mrv.session, "2036 Renata 12:30 SD"), false);
+});
+
+test("shouldPreferMealBreakReplyForSession trata caso Thainara como almoço quando o ramal atual da fila e confirmado", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+
+    const currentRamal = mrv.session.lunchQueue[0];
+    assert.ok(currentRamal);
+    const currentDoctor = mrv.session.roster.find((doctor) => doctor.ramal === currentRamal);
+    assert.ok(currentDoctor);
+
+    const thainaraLikeText = `${currentRamal} ${currentDoctor.name} 12:30`;
+    assert.equal(shouldPreferMealBreakReplyForSession(mrv.session, thainaraLikeText), true);
+});
+
+test("shouldPreferMealBreakReplyForSession mantem chegada como padrao quando o alvo nao esta na vez", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+
+    const currentRamal = mrv.session.lunchQueue[0];
+    assert.ok(currentRamal);
+    const otherDoctor = mrv.session.roster.find((doctor) => doctor.ramal !== currentRamal && !mrv.session.mrvRamals.includes(doctor.ramal) && doctor.ramal !== mrv.session.recipRamal);
+    assert.ok(otherDoctor);
+
+    const likelyArrivalText = `${otherDoctor.ramal} ${otherDoctor.name} 11:30`;
+    assert.equal(shouldPreferMealBreakReplyForSession(mrv.session, likelyArrivalText), false);
+});
+
+test("applyMealBreakReply aceita formato ramal+nome+horario durante fila ativa", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "2032",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+
+    const lunch = applyMealBreakReply({
+        session: mrv.session,
+        text: "2036 Renata Lima 12:30",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+
+    assert.ok(lunch);
+    assert.equal(lunch?.status, "updated");
+    assert.equal(lunch?.session.lunchAssignments["2036"], "12:30");
+});
+
+test("applyMealBreakReply aceita nome do MRV na escolha do almoco 12:30", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+
+    const mrv = applyMealBreakReply({
+        session: recip.session,
+        text: "Marina",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+    assert.equal(mrv?.session.mrvLunch1230Ramal, "2032");
+    assert.equal(mrv?.session.lunchAssignments["2032"], "12:30");
+    assert.equal(mrv?.session.lunchAssignments["2151"], "13:30");
+    assert.equal(mrv?.session.stage, "awaiting_lunch_choice");
+});
+
 test("applyMealBreakReply conduz trabalho e jantar da noite ate o fechamento", () => {
     const referenceAt = new Date("2026-03-29T20:05:00-03:00");
     const roster = buildMealBreakRoster(makeNightBoard(), referenceAt, "night");
@@ -1124,12 +1986,22 @@ test("applyMealBreakReply conduz trabalho e jantar da noite ate o fechamento", (
         actorTelegramId: "900",
     });
 
-    assert.equal(session.stage, "awaiting_night_work_choice");
-    assert.deepEqual(session.nightWorkCapacities, { "23:00": 4, "03:00": 4 });
-    assert.deepEqual(session.nightWorkQueue, ["2032", "2033", "2034", "2035", "2036", "2037", "2038", "2039"]);
+    assert.equal(session.stage, "awaiting_confirmation");
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "900",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    assert.equal(confirmed.session.stage, "awaiting_night_work_choice");
+    assert.deepEqual(confirmed.session.nightWorkCapacities, { "23:00": 4, "03:00": 4 });
+    assert.deepEqual(confirmed.session.nightWorkQueue, ["2032", "2033", "2034", "2035", "2036", "2037", "2038", "2039"]);
 
     const work1 = applyMealBreakReply({
-        session,
+        session: confirmed.session,
         text: "2032 03:00",
         senderTelegramId: "901",
         referenceAt,
@@ -1156,41 +2028,20 @@ test("applyMealBreakReply conduz trabalho e jantar da noite ate o fechamento", (
         senderTelegramId: "904",
         referenceAt,
     });
+    assert.ok(work4);
     assert.equal(work4?.session.dinnerAssignments["2034"], "22:30");
     assert.equal(work4?.session.dinnerAssignments["2035"], "22:30");
 
-    const work5 = applyMealBreakReply({
-        session: work4!.session,
-        text: "2036 23:00",
-        senderTelegramId: "905",
-        referenceAt,
-    });
-    const work6 = applyMealBreakReply({
-        session: work5!.session,
-        text: "2037 23:00",
-        senderTelegramId: "906",
-        referenceAt,
-    });
-    const work7 = applyMealBreakReply({
-        session: work6!.session,
-        text: "2038 23:00",
-        senderTelegramId: "907",
-        referenceAt,
-    });
-    const work8 = applyMealBreakReply({
-        session: work7!.session,
-        text: "2039 23:00",
-        senderTelegramId: "908",
-        referenceAt,
-    });
-
-    assert.ok(work8);
-    assert.equal(work8?.session.stage, "awaiting_dinner_choice");
-    assert.deepEqual(work8?.session.dinnerChoiceCapacities, { "20:30": 2, "21:00": 1, "21:30": 1 });
-    assert.deepEqual(work8?.session.dinnerQueue, ["2036", "2037", "2038", "2039"]);
+    assert.equal(work4?.session.nightWorkAssignments["2036"], "23:00");
+    assert.equal(work4?.session.nightWorkAssignments["2037"], "23:00");
+    assert.equal(work4?.session.nightWorkAssignments["2038"], "23:00");
+    assert.equal(work4?.session.nightWorkAssignments["2039"], "23:00");
+    assert.equal(work4?.session.stage, "awaiting_dinner_choice");
+    assert.deepEqual(work4?.session.dinnerChoiceCapacities, { "20:30": 2, "21:00": 1, "21:30": 1 });
+    assert.deepEqual(work4?.session.dinnerQueue, ["2036", "2037", "2038", "2039"]);
 
     const dinner1 = applyMealBreakReply({
-        session: work8!.session,
+        session: work4!.session,
         text: "2036 20:30",
         senderTelegramId: "909",
         referenceAt,
@@ -1212,8 +2063,1010 @@ test("applyMealBreakReply conduz trabalho e jantar da noite ate o fechamento", (
     assert.equal(dinner3?.session.stage, "completed");
     assert.equal(dinner3?.session.dinnerAssignments["2039"], "21:30");
     assert.match(dinner3?.messages[1] ?? "", /🍽️ JANTAR/);
-    assert.match(dinner3?.messages[1] ?? "", /22:00\n• Marina Costa \(MRV\) - 1h/);
-    assert.match(dinner3?.messages[1] ?? "", /22:30\n• Renata Lima - 30min/);
+    assert.match(dinner3?.messages[1] ?? "", /22:00\n• Marina \(MRV\) - 1h/);
+    assert.match(dinner3?.messages[1] ?? "", /22:30\n• Renata - 30min/);
     assert.match(dinner3?.messages[1] ?? "", /🌙 TRABALHO\n23:00/);
-    assert.match(dinner3?.messages[1] ?? "", /03:00\n• Marina Costa \(MRV\)/);
+    assert.match(dinner3?.messages[1] ?? "", /03:00\n• Marina \(MRV\)/);
+});
+
+test("buildMealBreakRoster detecta MRVs por roleLabel em postos nao-padrao", () => {
+    const board = makeBoard();
+    // Move MRV from 2032 to 2153
+    board.regulation[1] = {
+        ...board.regulation[1]!,
+        postCode: "2153",
+        postLabel: "2153",
+        defaultRole: "MR",
+        roleLabel: "MRV",
+        ramalLabel: "2153",
+    };
+
+    const roster = buildMealBreakRoster(board, new Date("2026-03-29T09:05:00-03:00"));
+    assert.deepEqual(roster.mrvRamals, ["2153", "2151"]);
+    assert.equal(roster.roster.find((d) => d.ramal === "2153")?.roleLabel, "MRV");
+    assert.equal(roster.roster.find((d) => d.ramal === "2151")?.roleLabel, "MRV");
+});
+
+test("applyMealBreakReply conduz almoco com MRVs em postos nao-padrao (2151+2153)", () => {
+    const board = makeBoard();
+    board.regulation[1] = {
+        ...board.regulation[1]!,
+        postCode: "2153",
+        postLabel: "2153",
+        defaultRole: "MR",
+        roleLabel: "MRV",
+        ramalLabel: "2153",
+    };
+
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    assert.deepEqual(roster.mrvRamals, ["2153", "2151"]);
+
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+
+    const recip = applyMealBreakReply({
+        session: confirmed.session,
+        text: "2035",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(recip);
+    assert.equal(recip?.session.stage, "awaiting_mrv_lunch");
+
+    const mrv = applyMealBreakReply({
+        session: recip!.session,
+        text: "2153",
+        senderTelegramId: "101",
+        referenceAt,
+    });
+    assert.ok(mrv);
+    assert.equal(mrv?.session.lunchAssignments["2153"], "12:30");
+    assert.equal(mrv?.session.lunchAssignments["2151"], "13:30");
+    assert.deepEqual(mrv?.session.lunchQueue, ["2036", "2037", "2038", "2039"]);
+    assert.equal(mrv?.session.stage, "awaiting_lunch_choice");
+});
+
+test("parseTelegramMealBreakExcludeCommand aceita /excluir e /incluir com ramal", () => {
+    const excluir = parseTelegramMealBreakExcludeCommand("/excluir 2041");
+    assert.deepEqual(excluir, { name: "meal_break_exclude", ramal: "2041" });
+
+    const incluir = parseTelegramMealBreakExcludeCommand("/incluir 2041");
+    assert.deepEqual(incluir, { name: "meal_break_exclude", ramal: "2041" });
+
+    const withBot = parseTelegramMealBreakExcludeCommand("/excluir@SamuBot 2036");
+    assert.deepEqual(withBot, { name: "meal_break_exclude", ramal: "2036" });
+
+    assert.equal(parseTelegramMealBreakExcludeCommand("/excluir"), null);
+    assert.equal(parseTelegramMealBreakExcludeCommand("/excluir abc"), null);
+    assert.equal(parseTelegramMealBreakExcludeCommand("/excluir 20"), null);
+    assert.equal(parseTelegramMealBreakExcludeCommand("/excluir 2041 extra"), null);
+});
+
+test("isTelegramMealBreakExcludeCommandText reconhece /excluir e /incluir", () => {
+    assert.ok(isTelegramMealBreakExcludeCommandText("/excluir 2041"));
+    assert.ok(isTelegramMealBreakExcludeCommandText("/incluir 2041"));
+    assert.ok(isTelegramMealBreakExcludeCommandText("/excluir"));
+    assert.ok(isTelegramMealBreakExcludeCommandText("/incluir@SamuBot 2036"));
+    assert.ok(!isTelegramMealBreakExcludeCommandText("/almoco"));
+    assert.ok(!isTelegramMealBreakExcludeCommandText("excluir 2041"));
+});
+
+test("createMealBreakSession auto-detecta RECIP do roster quando roleLabel ja esta definido", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const board = makeBoard();
+    board.regulation[3]!.roleLabel = "RECIP";
+
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    assert.equal(session.recipRamal, "2035");
+    assert.equal(session.lunchAssignments["2035"], "11:30");
+    assert.equal(session.restAssignments["2035"], "18:00");
+
+    const confirmed = applyMealBreakReply({
+        session,
+        text: "✅ Confirmar",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+    assert.ok(confirmed);
+    assert.notEqual(confirmed.session.stage, "awaiting_recip");
+});
+
+test("createMealBreakSession nao auto-detecta RECIP se ramal e MRV", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const board = makeBoard();
+    board.regulation[1]!.roleLabel = "RECIP";
+
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    assert.equal(session.recipRamal, null);
+});
+
+test("createMealBreakSession respeita lunchExcluded ao auto-detectar RECIP", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const board = makeBoard();
+    board.regulation[3]!.roleLabel = "RECIP";
+
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+        lunchExcludedRamals: ["2035"],
+    });
+
+    assert.equal(session.recipRamal, "2035");
+    assert.equal(session.lunchAssignments["2035"], undefined);
+    assert.equal(session.restAssignments["2035"], "18:00");
+});
+
+test("descanso completa sem erro de vagas quando todos os medicos escolhem em sequencia", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    let session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    session = applyMealBreakReply({ session, text: "✅ Confirmar", senderTelegramId: "100", referenceAt })!.session;
+    session = applyMealBreakReply({ session, text: "2035", senderTelegramId: "100", referenceAt })!.session;
+    session = applyMealBreakReply({ session, text: "2032", senderTelegramId: "100", referenceAt })!.session;
+
+    const lunchSlots = ["11:30", "12:30", "13:30"] as const;
+    while (session.stage === "awaiting_lunch_choice") {
+        const ramal = session.lunchQueue[0]!;
+        const assigned = Object.values(session.lunchAssignments);
+        const slot = lunchSlots.find((s) => {
+            const used = assigned.filter((a) => a === s).length;
+            return used < (session.lunchCapacities as Record<string, number>)[s]!;
+        }) ?? "12:30";
+        session = applyMealBreakReply({ session, text: `${ramal} ${slot}`, senderTelegramId: "100", referenceAt })!.session;
+    }
+
+    if (session.stage !== "awaiting_rest_choice") {
+        assert.equal(session.stage, "completed");
+        return;
+    }
+
+    while (session.stage === "awaiting_rest_choice") {
+        const ramal = session.restQueue[0]!;
+        const assigned1530 = Object.values(session.restAssignments).filter((s) => s === "15:30").length;
+        const assigned1630 = Object.values(session.restAssignments).filter((s) => s === "16:30").length;
+        const remaining1530 = session.restChoiceCapacities["15:30"] - assigned1530;
+        const remaining1630 = session.restChoiceCapacities["16:30"] - assigned1630;
+        assert.ok(remaining1530 + remaining1630 >= session.restQueue.length,
+            `Vagas (${remaining1530}+${remaining1630}) devem cobrir fila (${session.restQueue.length}) antes de ${ramal} escolher`);
+
+        const slot = remaining1530 > 0 ? "15:30" : "16:30";
+        const result = applyMealBreakReply({ session, text: `${ramal} ${slot}`, senderTelegramId: "100", referenceAt });
+        assert.ok(result, `Escolha de ${ramal} para ${slot} nao deve falhar`);
+        assert.notEqual(result.status, "invalid", `${ramal} nao pode receber erro de vagas`);
+        session = result.session;
+    }
+
+    assert.equal(session.stage, "completed");
+});
+
+test("syncDaySessionState preserva capacidades de descanso quando ha escolhas 15:30/16:30 ja feitas", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    let session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    session = applyMealBreakReply({ session, text: "✅ Confirmar", senderTelegramId: "100", referenceAt })!.session;
+    session = applyMealBreakReply({ session, text: "2035", senderTelegramId: "100", referenceAt })!.session;
+    session = applyMealBreakReply({ session, text: "2032", senderTelegramId: "100", referenceAt })!.session;
+
+    const lunchSlots = ["11:30", "12:30", "13:30"] as const;
+    while (session.stage === "awaiting_lunch_choice") {
+        const ramal = session.lunchQueue[0]!;
+        const assigned = Object.values(session.lunchAssignments);
+        const slot = lunchSlots.find((s) => {
+            const used = assigned.filter((a) => a === s).length;
+            return used < (session.lunchCapacities as Record<string, number>)[s]!;
+        }) ?? "12:30";
+        session = applyMealBreakReply({ session, text: `${ramal} ${slot}`, senderTelegramId: "100", referenceAt })!.session;
+    }
+
+    if (session.stage !== "awaiting_rest_choice") {
+        return;
+    }
+
+    const totalRestQueue = session.restQueue.length;
+    assert.ok(totalRestQueue > 0, "restQueue deve ter medicos");
+
+    // Fazer metade das escolhas de descanso
+    const halfChoices = Math.floor(totalRestQueue / 2);
+    for (let i = 0; i < halfChoices; i++) {
+        const ramal = session.restQueue[0]!;
+        session = applyMealBreakReply({ session, text: `${ramal} 15:30`, senderTelegramId: "100", referenceAt })!.session;
+    }
+
+    if (session.stage !== "awaiting_rest_choice") {
+        return;
+    }
+
+    const queueBeforeSync = session.restQueue.length;
+    assert.ok(queueBeforeSync > 0, "ainda deve ter medicos na fila");
+
+    // Simular resync identico ao que updateDayMealBreakEligibility faz
+    const resynced = syncDaySessionState(session);
+
+    assert.equal(resynced.stage, "awaiting_rest_choice");
+    assert.equal(resynced.restQueue.length, queueBeforeSync);
+
+    const assigned1530 = Object.values(resynced.restAssignments).filter((s) => s === "15:30").length;
+    const assigned1630 = Object.values(resynced.restAssignments).filter((s) => s === "16:30").length;
+    const remaining1530 = resynced.restChoiceCapacities["15:30"] - assigned1530;
+    const remaining1630 = resynced.restChoiceCapacities["16:30"] - assigned1630;
+
+    assert.ok(
+        remaining1530 + remaining1630 >= resynced.restQueue.length,
+        `Apos resync: vagas (${remaining1530}+${remaining1630}=${remaining1530 + remaining1630}) devem cobrir fila (${resynced.restQueue.length}). ` +
+        `Capacidades: ${JSON.stringify(resynced.restChoiceCapacities)}, atribuidos: 15:30=${assigned1530}, 16:30=${assigned1630}`,
+    );
+});
+
+// ─── COI shared-position conflict prevention ───────────────────────────────
+
+function makeBoardWithCOI() {
+    const board = makeBoard();
+    // Add two COI posts (1367 and 1368)
+    board.regulation.push(
+        {
+            postId: 20,
+            occupancyId: "reg-1367",
+            postCode: "1367",
+            postLabel: "1367",
+            defaultRole: "MR",
+            doctorId: "doc-coi-1",
+            doctorName: "Lilian Barros",
+            displayName: "Lilian",
+            startedAt: "2026-03-29T10:08:00.000Z",
+            boardStartedAt: "2026-03-29T10:08:00.000Z",
+            scheduledEndAt: "2026-03-29T22:00:00.000Z",
+            shiftLabel: "SD",
+            roleLabel: "COI",
+            ramalLabel: "1367",
+            status: "active",
+            liveSource: "operations_v2",
+            liveUpdatedAt: null,
+        },
+        {
+            postId: 21,
+            occupancyId: "reg-1368",
+            postCode: "1368",
+            postLabel: "1368",
+            defaultRole: "MR",
+            doctorId: "doc-coi-2",
+            doctorName: "Claudio Azoubel",
+            displayName: "Claudio",
+            startedAt: "2026-03-29T10:09:00.000Z",
+            boardStartedAt: "2026-03-29T10:09:00.000Z",
+            scheduledEndAt: "2026-03-29T22:00:00.000Z",
+            shiftLabel: "SD",
+            roleLabel: "COI",
+            ramalLabel: "1368",
+            status: "active",
+            liveSource: "operations_v2",
+            liveUpdatedAt: null,
+        },
+    );
+    return board;
+}
+
+function advanceToRestPhase(startSession: ReturnType<typeof createMealBreakSession>, referenceAt: Date) {
+    let session = startSession;
+    // Confirm
+    session = applyMealBreakReply({ session, text: "✅ Confirmar", senderTelegramId: "100", referenceAt })!.session;
+    // RECIP
+    session = applyMealBreakReply({ session, text: "2035", senderTelegramId: "100", referenceAt })!.session;
+    // MRV
+    session = applyMealBreakReply({ session, text: "2032", senderTelegramId: "100", referenceAt })!.session;
+    // Advance through lunch queue until rest phase
+    while (session.stage === "awaiting_lunch_choice") {
+        const ramal = session.lunchQueue[0]!;
+        // Pick first available slot
+        const remaining = {
+            "11:30": session.lunchCapacities["11:30"] - Object.values(session.lunchAssignments).filter((s) => s === "11:30").length,
+            "12:30": session.lunchCapacities["12:30"] - Object.values(session.lunchAssignments).filter((s) => s === "12:30").length,
+            "13:30": session.lunchCapacities["13:30"] - Object.values(session.lunchAssignments).filter((s) => s === "13:30").length,
+        };
+        const slot = (["11:30", "12:30", "13:30"] as const).find((s) => remaining[s] > 0)!;
+        const result = applyMealBreakReply({ session, text: `${ramal} ${slot}`, senderTelegramId: "100", referenceAt });
+        assert.ok(result, `Lunch reply failed for ${ramal} ${slot}`);
+        session = result.session;
+    }
+    return session;
+}
+
+test("COI: rejeita escolha de descanso quando outro COI ja esta nesse horario", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    let session = advanceToRestPhase(initial, referenceAt);
+    assert.equal(session.stage, "awaiting_rest_choice");
+
+    // Find the two COI ramais in the rest queue
+    const coiInQueue = session.restQueue.filter((r) => r === "1367" || r === "1368");
+
+    if (coiInQueue.length < 2) {
+        // One or both COI may have been auto-assigned 14:30 (if they lunched at 13:30).
+        // Force a scenario: manually set restAssignments to put first COI at 15:30
+        const firstCoi = session.roster.find((d) => d.ramal === "1367" || d.ramal === "1368")!;
+        const secondCoi = session.roster.find((d) => (d.ramal === "1367" || d.ramal === "1368") && d.ramal !== firstCoi.ramal)!;
+        session = {
+            ...session,
+            restAssignments: { ...session.restAssignments, [firstCoi.ramal]: "15:30" },
+            restQueue: [secondCoi.ramal, ...session.restQueue.filter((r) => r !== firstCoi.ramal && r !== secondCoi.ramal)],
+        };
+    }
+
+    // Now whichever COI is first in queue, try to pick the same slot as its peer
+    const firstCoiRamal = session.restQueue.find((r) => r === "1367" || r === "1368")!;
+    const otherCoiRamal = firstCoiRamal === "1367" ? "1368" : "1367";
+    const peerSlot = session.restAssignments[otherCoiRamal] as string;
+    assert.ok(peerSlot, `Peer COI ${otherCoiRamal} should have a rest assignment`);
+
+    const result = applyMealBreakReply({
+        session,
+        text: `${firstCoiRamal} ${peerSlot}`,
+        senderTelegramId: "100",
+        referenceAt,
+    });
+
+    assert.ok(result);
+    assert.equal(result.status, "invalid", `COI ${firstCoiRamal} nao deveria conseguir escolher ${peerSlot} (mesmo slot que ${otherCoiRamal})`);
+    assert.ok(result.messages.some((m) => m.includes("COI")), "Mensagem deve mencionar COI");
+});
+
+test("COI: rejeita escolha de almoco quando outro COI ja esta nesse horario", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    let session = initial;
+    session = applyMealBreakReply({ session, text: "✅ Confirmar", senderTelegramId: "100", referenceAt })!.session;
+    session = applyMealBreakReply({ session, text: "2035", senderTelegramId: "100", referenceAt })!.session;
+    session = applyMealBreakReply({ session, text: "2032", senderTelegramId: "100", referenceAt })!.session;
+    assert.equal(session.stage, "awaiting_lunch_choice");
+
+    // Advance until a COI ramal is at front of queue
+    while (session.stage === "awaiting_lunch_choice" && session.lunchQueue[0] !== "1367" && session.lunchQueue[0] !== "1368") {
+        const ramal = session.lunchQueue[0]!;
+        const result = applyMealBreakReply({ session, text: `${ramal} 11:30`, senderTelegramId: "100", referenceAt });
+        if (!result || result.status === "invalid") {
+            // Slot full, try another
+            const r2 = applyMealBreakReply({ session, text: `${ramal} 12:30`, senderTelegramId: "100", referenceAt });
+            if (!r2 || r2.status === "invalid") {
+                session = applyMealBreakReply({ session, text: `${ramal} 13:30`, senderTelegramId: "100", referenceAt })!.session;
+            } else {
+                session = r2.session;
+            }
+        } else {
+            session = result.session;
+        }
+    }
+
+    if (session.stage !== "awaiting_lunch_choice") return;
+
+    const firstCoi = session.lunchQueue[0]!;
+    assert.ok(firstCoi === "1367" || firstCoi === "1368");
+
+    // Assign this COI to 12:30
+    const r1 = applyMealBreakReply({ session, text: `${firstCoi} 12:30`, senderTelegramId: "100", referenceAt });
+    if (!r1 || r1.status === "invalid") return; // slot full, skip test
+    session = r1.session;
+
+    // Now find the second COI in queue
+    const secondCoiIdx = session.lunchQueue.indexOf(firstCoi === "1367" ? "1368" : "1367");
+    if (secondCoiIdx < 0 || session.stage !== "awaiting_lunch_choice") return;
+
+    // Advance non-COI doctors before the second COI
+    while (session.stage === "awaiting_lunch_choice" && session.lunchQueue[0] !== "1367" && session.lunchQueue[0] !== "1368") {
+        const ramal = session.lunchQueue[0]!;
+        const trySlot = Object.entries({
+            "11:30": session.lunchCapacities["11:30"],
+            "13:30": session.lunchCapacities["13:30"],
+        }).find(([, cap]) => cap > 0)?.[0] ?? "11:30";
+        const result = applyMealBreakReply({ session, text: `${ramal} ${trySlot}`, senderTelegramId: "100", referenceAt });
+        if (!result || result.status === "invalid") {
+            session = applyMealBreakReply({ session, text: `${ramal} 13:30`, senderTelegramId: "100", referenceAt })!.session;
+        } else {
+            session = result.session;
+        }
+    }
+
+    if (session.stage !== "awaiting_lunch_choice") return;
+
+    const secondCoi = session.lunchQueue[0]!;
+    // Try to pick 12:30 (same as first COI)
+    const result = applyMealBreakReply({
+        session,
+        text: `${secondCoi} 12:30`,
+        senderTelegramId: "100",
+        referenceAt,
+    });
+
+    assert.ok(result);
+    assert.equal(result.status, "invalid", `COI ${secondCoi} nao deveria conseguir 12:30 (mesmo slot que ${firstCoi})`);
+    assert.ok(result.messages.some((m) => m.includes("COI")), "Mensagem deve mencionar COI");
+});
+
+test("COI: auto-assign de descanso desvia COI para slot alternativo quando unico slot restante conflita", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    let session = advanceToRestPhase(initial, referenceAt);
+    assert.equal(session.stage, "awaiting_rest_choice");
+
+    // Force scenario: COI-1 already at 16:30, COI-2 is in queue, and only 16:30 has capacity
+    session = {
+        ...session,
+        restAssignments: {
+            ...session.restAssignments,
+            "1368": "16:30",
+        },
+        restQueue: ["1367"],
+        restChoiceCapacities: { "15:30": 0, "16:30": 1 },
+        stage: "awaiting_rest_choice",
+    };
+
+    // autoAssignRemainingRestIfSingleOption should fire through syncDaySessionState
+    // but let's just test via applyMealBreakReply — since there's only 1 in queue and 1 slot,
+    // auto-assign fires. But the COI conflict should redirect 1367 to 15:30.
+    const resynced = syncDaySessionState(session);
+
+    // Verify 1367 did NOT get 16:30 (same as 1368)
+    assert.notEqual(
+        resynced.restAssignments["1367"],
+        resynced.restAssignments["1368"],
+        `COI 1367 (${resynced.restAssignments["1367"]}) e 1368 (${resynced.restAssignments["1368"]}) nao podem ter o mesmo descanso`,
+    );
+});
+
+test("COI: syncDaySessionState nao coloca dois COI no mesmo 14:30 quando ambos almocam 13:30", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // Set up: both COI lunched at 13:30, all lunches done, entering rest phase
+    let session: ReturnType<typeof createMealBreakSession> = {
+        ...initial,
+        stage: "awaiting_rest_choice",
+        lunchAssignments: {
+            ...initial.lunchAssignments,
+            "1367": "13:30",
+            "1368": "13:30",
+        },
+        lunchQueue: [],
+        recipRamal: "2035",
+        mrvLunch1230Ramal: "2032",
+    };
+
+    const synced = syncDaySessionState(session);
+
+    const rest1367 = synced.restAssignments["1367"];
+    const rest1368 = synced.restAssignments["1368"];
+
+    // At least one should be 14:30 (auto from 13:30 lunch), but NOT both
+    const both1430 = rest1367 === "14:30" && rest1368 === "14:30";
+    assert.ok(!both1430, `Ambos COI nao podem descansar as 14:30. 1367=${rest1367}, 1368=${rest1368}`);
+
+    // If both have assignments, they must differ
+    if (rest1367 && rest1368) {
+        assert.notEqual(rest1367, rest1368, `COI 1367 (${rest1367}) e 1368 (${rest1368}) nao podem ter o mesmo descanso`);
+    }
+
+    // syncDaySessionState should also fix the lunch conflict
+    assert.notEqual(
+        synced.lunchAssignments["1367"],
+        synced.lunchAssignments["1368"],
+        `COI 1367 (lunch=${synced.lunchAssignments["1367"]}) e 1368 (lunch=${synced.lunchAssignments["1368"]}) nao podem almocar no mesmo horario`,
+    );
+});
+
+test("COI: syncDaySessionState separa almocos e descansos duplicados quando ambos ja estao atribuidos", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // Both COI at 13:30 lunch → both would auto-get 14:30 rest, but sync must separate both
+    let session: ReturnType<typeof createMealBreakSession> = {
+        ...initial,
+        stage: "completed",
+        lunchAssignments: {
+            "2035": "11:30",
+            "2036": "11:30",
+            "2037": "11:30",
+            "2032": "12:30",
+            "2038": "12:30",
+            "2039": "12:30",
+            "2151": "13:30",
+            "1367": "13:30",
+            "1368": "13:30",
+        },
+        restAssignments: {
+            "2035": "18:00",
+            "2032": "18:00",
+            "2151": "18:00",
+            "1367": "15:30",
+            "1368": "15:30",
+        },
+        restQueue: [],
+        lunchQueue: [],
+        recipRamal: "2035",
+        mrvLunch1230Ramal: "2032",
+    };
+
+    const synced = syncDaySessionState(session);
+
+    assert.notEqual(
+        synced.lunchAssignments["1367"],
+        synced.lunchAssignments["1368"],
+        `Almoco: 1367=${synced.lunchAssignments["1367"]}, 1368=${synced.lunchAssignments["1368"]} nao podem coincidir`,
+    );
+
+    // At least one COI gets 14:30 (auto from 13:30 lunch) — they can't both be 14:30 or both be flex
+    const rest1367 = synced.restAssignments["1367"];
+    const rest1368 = synced.restAssignments["1368"];
+    if (rest1367 && rest1368) {
+        assert.notEqual(rest1367, rest1368,
+            `Descanso: 1367=${rest1367}, 1368=${rest1368} nao podem coincidir`,
+        );
+    }
+});
+
+test("COI: quando COI e o ultimo e unica vaga conflita, sistema forca horario alternativo no almoco", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // Simulate: COI-1 already at 12:30, COI-2 is next in queue, and only 12:30 has capacity
+    let session: ReturnType<typeof createMealBreakSession> = {
+        ...initial,
+        stage: "awaiting_lunch_choice",
+        lunchAssignments: {
+            ...initial.lunchAssignments,
+            "1368": "12:30",
+        },
+        lunchQueue: ["1367"],
+        recipRamal: "2035",
+        mrvLunch1230Ramal: "2032",
+        lunchCapacities: { "11:30": 0, "12:30": 1, "13:30": 0 },
+    };
+
+    // COI-2 tries 12:30 (the only slot with capacity) — should be auto-diverted, not stuck
+    const result = applyMealBreakReply({
+        session,
+        text: "1367 12:30",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+
+    assert.ok(result);
+    assert.notEqual(result.status, "invalid", "Nao deve travar — deve forcar horario alternativo");
+    assert.notEqual(
+        result.session.lunchAssignments["1367"],
+        result.session.lunchAssignments["1368"],
+        `Almoco COI-2 nao pode ser igual ao COI-1`,
+    );
+});
+
+test("COI: quando COI e o ultimo e unica vaga no descanso conflita, sistema forca horario alternativo", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // COI-1 at 16:30, COI-2 at front of queue, only 16:30 has capacity
+    let session: ReturnType<typeof createMealBreakSession> = {
+        ...initial,
+        stage: "awaiting_rest_choice",
+        restAssignments: {
+            ...initial.restAssignments,
+            "1368": "16:30",
+        },
+        restQueue: ["1367"],
+        restChoiceCapacities: { "15:30": 0, "16:30": 1 },
+        recipRamal: "2035",
+        mrvLunch1230Ramal: "2032",
+        lunchQueue: [],
+    };
+
+    // COI-2 tries 16:30 — conflicts with peer, and only 16:30 has capacity — should auto-force
+    const result = applyMealBreakReply({
+        session,
+        text: "1367 16:30",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+
+    assert.ok(result);
+    assert.notEqual(result.status, "invalid", "Nao deve travar — deve forcar horario alternativo");
+    assert.notEqual(
+        result.session.restAssignments["1367"],
+        result.session.restAssignments["1368"],
+        `Descanso COI-2 nao pode ser igual ao COI-1`,
+    );
+});
+
+// --- COI reservation: non-COI cannot take slot that would force COI conflict ---
+
+test("COI: nao-COI redirecionado no descanso quando escolha deixaria COIs sem opcao de separacao", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // COI-1 at 16:30, only 1 remaining at 15:30, non-COI tries 15:30 → would block COI-2
+    let session: ReturnType<typeof createMealBreakSession> = {
+        ...initial,
+        stage: "awaiting_rest_choice",
+        restAssignments: {
+            ...initial.restAssignments,
+            "1368": "16:30",
+        },
+        restQueue: ["2036", "1367"],
+        restChoiceCapacities: { "15:30": 1, "16:30": 2 },
+        recipRamal: "2035",
+        mrvLunch1230Ramal: "2032",
+        lunchQueue: [],
+    };
+
+    // 2036 (non-COI) tries 15:30 — taking the last slot COI-2 needs
+    const result = applyMealBreakReply({
+        session,
+        text: "2036 15:30",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+
+    assert.ok(result);
+    assert.notEqual(result.status, "invalid", "Deve redirecionar, nao rejeitar");
+    assert.equal(result.session.restAssignments["2036"], "16:30", "Nao-COI deve ser desviado para 16:30");
+    assert.ok(result.messages.some((m) => m.includes("COI")), "Mensagem deve mencionar separacao dos COIs");
+});
+
+test("COI: nao-COI redirecionado no almoco quando escolha deixaria COIs sem opcao de separacao", () => {
+    const board = makeBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // COI-1 at 12:30, only 11:30 and 12:30 have capacity. Non-COI tries 11:30 → COI-2 can only go 12:30 = conflict
+    let session: ReturnType<typeof createMealBreakSession> = {
+        ...initial,
+        stage: "awaiting_lunch_choice",
+        lunchAssignments: {
+            "1368": "12:30",
+        },
+        lunchQueue: ["2036", "1367"],
+        recipRamal: "2035",
+        mrvLunch1230Ramal: "2032",
+        lunchCapacities: { "11:30": 1, "12:30": 2, "13:30": 0 },
+    };
+
+    // 2036 tries 11:30 — would leave only 12:30 for COI-2 which conflicts with COI-1
+    const result = applyMealBreakReply({
+        session,
+        text: "2036 11:30",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+
+    assert.ok(result);
+    assert.notEqual(result.status, "invalid", "Deve redirecionar, nao rejeitar");
+    assert.equal(result.session.lunchAssignments["2036"], "12:30", "Nao-COI deve ser desviado para 12:30");
+    assert.ok(result.messages.some((m) => m.includes("COI")), "Mensagem deve mencionar separacao dos COIs");
+});
+
+// --- Night COI tests ---
+
+function makeNightBoardWithCOI() {
+    const board = makeNightBoard();
+    board.regulation.push(
+        {
+            postId: 20,
+            occupancyId: "reg-night-1367",
+            postCode: "1367",
+            postLabel: "1367",
+            defaultRole: "MR",
+            doctorId: "doc-night-coi-1",
+            doctorName: "Lilian Barros",
+            displayName: "Lilian",
+            startedAt: "2026-03-29T23:06:00.000Z",
+            boardStartedAt: "2026-03-29T23:06:00.000Z",
+            scheduledEndAt: "2026-03-30T11:00:00.000Z",
+            shiftLabel: "SN",
+            roleLabel: "COI",
+            ramalLabel: "1367",
+            status: "active",
+            liveSource: "operations_v2",
+            liveUpdatedAt: null,
+        },
+        {
+            postId: 21,
+            occupancyId: "reg-night-1368",
+            postCode: "1368",
+            postLabel: "1368",
+            defaultRole: "MR",
+            doctorId: "doc-night-coi-2",
+            doctorName: "Claudio Azoubel",
+            displayName: "Claudio",
+            startedAt: "2026-03-29T23:07:00.000Z",
+            boardStartedAt: "2026-03-29T23:07:00.000Z",
+            scheduledEndAt: "2026-03-30T11:00:00.000Z",
+            shiftLabel: "SN",
+            roleLabel: "COI",
+            ramalLabel: "1368",
+            status: "active",
+            liveSource: "operations_v2",
+            liveUpdatedAt: null,
+        },
+    );
+    return board;
+}
+
+test("COI noturno: rejeita escolha de trabalho quando outro COI ja esta nesse horario", () => {
+    const board = makeNightBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T20:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // Confirm session
+    let session = applyMealBreakReply({ session: initial, text: "✅ Confirmar", senderTelegramId: "100", referenceAt })!.session;
+
+    // COI-1 at 23:00
+    session = {
+        ...session,
+        nightWorkAssignments: { ...session.nightWorkAssignments, "1368": "23:00" },
+        nightWorkQueue: ["1367", ...session.nightWorkQueue.filter((r) => r !== "1367" && r !== "1368")],
+    };
+
+    // COI-2 tries 23:00
+    const result = applyMealBreakReply({
+        session,
+        text: "1367 23:00",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+
+    assert.ok(result);
+    assert.ok(result.status === "invalid" || result.session.nightWorkAssignments["1367"] !== "23:00",
+        "COI-2 nao deve ter 23:00 quando COI-1 tambem esta em 23:00");
+});
+
+test("COI noturno: rejeita escolha de jantar quando outro COI ja esta nesse horario", () => {
+    const board = makeNightBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T20:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // Confirm session
+    let session = applyMealBreakReply({ session: initial, text: "✅ Confirmar", senderTelegramId: "100", referenceAt })!.session;
+
+    // Both work 23:00, COI-1 dinner at 20:30
+    session = {
+        ...session,
+        stage: "awaiting_dinner_choice" as const,
+        nightWorkAssignments: {
+            ...session.nightWorkAssignments,
+            "1367": "23:00",
+            "1368": "23:00",
+        },
+        dinnerAssignments: { ...session.dinnerAssignments, "1368": "20:30" },
+        dinnerQueue: ["1367"],
+        nightWorkQueue: [],
+    };
+
+    // COI-2 tries 20:30
+    const result = applyMealBreakReply({
+        session,
+        text: "1367 20:30",
+        senderTelegramId: "100",
+        referenceAt,
+    });
+
+    assert.ok(result);
+    assert.ok(result.status === "invalid" || result.session.dinnerAssignments["1367"] !== "20:30",
+        "COI-2 nao deve jantar 20:30 quando COI-1 tambem janta 20:30");
+});
+
+test("COI noturno: nao-COI redirecionado no trabalho quando escolha bloquearia separacao", () => {
+    const board = makeNightBoardWithCOI();
+    const referenceAt = new Date("2026-03-29T20:05:00-03:00");
+    const roster = buildMealBreakRoster(board, referenceAt);
+    const initial = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    let session = applyMealBreakReply({ session: initial, text: "✅ Confirmar", senderTelegramId: "100", referenceAt })!.session;
+
+    // COI-1 at 03:00, non-COI tries 23:00 which is the last slot that would allow COI-2 to not conflict
+    // Remaining: 23:00=1, 03:00=0 after all others assigned
+    const allRamals = session.nightWorkQueue;
+    const coiRamals = ["1367", "1368"];
+    const nonCoiRamals = allRamals.filter((r) => !coiRamals.includes(r));
+    const lastNonCoi = nonCoiRamals[nonCoiRamals.length - 1];
+
+    // Fill all but last non-COI and both COIs
+    const assignments: Record<string, string> = { "1368": "03:00" };
+    for (const r of nonCoiRamals.slice(0, -1)) {
+        assignments[r] = "23:00";
+    }
+
+    session = {
+        ...session,
+        nightWorkAssignments: assignments,
+        nightWorkQueue: [lastNonCoi!, "1367"],
+        nightWorkCapacities: { "23:00": Math.ceil(session.roster.length / 2), "03:00": Math.floor(session.roster.length / 2) },
+    };
+
+    // last non-COI tries 23:00 — would use the last 23:00 slot, forcing COI-2 to 03:00 (conflict with COI-1)
+    const remaining2300 = session.nightWorkCapacities["23:00"] - Object.values(session.nightWorkAssignments).filter((s) => s === "23:00").length;
+    if (remaining2300 === 1) {
+        const result = applyMealBreakReply({
+            session,
+            text: `${lastNonCoi} 23:00`,
+            senderTelegramId: "100",
+            referenceAt,
+        });
+
+        assert.ok(result);
+        assert.notEqual(result.status, "invalid", "Deve redirecionar, nao rejeitar");
+        assert.equal(result.session.nightWorkAssignments[lastNonCoi!], "03:00", "Nao-COI deve ser desviado para 03:00");
+    }
 });
