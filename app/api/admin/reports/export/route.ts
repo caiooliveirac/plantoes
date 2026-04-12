@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { exportMonthlyAdminReportCsv, exportMonthlyAdminReportXlsx } from "@/services/monthly-report.service";
+import { exportMonthlyAdminReportCsv } from "@/services/monthly-report.service";
+import { exportChiefPayableShiftsXlsx } from "@/services/payable-shifts.service";
 
 export async function GET(request: NextRequest) {
     if (!hasDatabaseUrl()) {
@@ -31,7 +32,7 @@ export async function GET(request: NextRequest) {
         });
     }
 
-    const workbook = await exportMonthlyAdminReportXlsx(month);
+    const workbook = await exportChiefPayableShiftsXlsx(month);
 
     return new Response(workbook, {
         status: 200,

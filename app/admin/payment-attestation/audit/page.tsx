@@ -20,7 +20,7 @@ function PaymentAttestationUnavailable({ title, copy }: { title: string; copy: s
     );
 }
 
-export default async function AdminPaymentAttestationPage({
+export default async function AdminPaymentAttestationAuditPage({
     searchParams,
 }: {
     searchParams: Promise<{ date?: string; shift?: string }>;

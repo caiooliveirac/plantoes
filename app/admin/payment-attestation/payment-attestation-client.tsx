@@ -138,7 +138,7 @@ function primaryDoctorLabel(row: PaymentAttestationEntrySnapshot) {
         return "Sem ocupação consolidada";
     }
 
-    return row.displayName ?? row.doctorName ?? "Médico não identificado";
+    return row.doctorName ?? row.displayName ?? "Médico não identificado";
 }
 
 function summarizeIssues(row: PaymentAttestationEntrySnapshot) {
@@ -337,6 +337,7 @@ export function PaymentAttestationClient({ initialView }: Props) {
                 </div>
 
                 <div className="payment-hero-actions">
+                    <a className="reports-secondary-link" href="/admin/payment-closing">Abrir fechamento mensal</a>
                     <a className="reports-secondary-link" href="/admin/payment-allocation">Ajustar alocação</a>
                     <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
                     <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
@@ -397,7 +398,7 @@ export function PaymentAttestationClient({ initialView }: Props) {
 
                 <label className="payment-filter-field compact">
                     <span>Turno</span>
-                    <select value={shiftInput} onChange={(event) => setShiftInput(event.target.value as "SD" | "SN") }>
+                    <select value={shiftInput} onChange={(event) => setShiftInput(event.target.value as "SD" | "SN")}>
                         <option value="SD">SD</option>
                         <option value="SN">SN</option>
                     </select>
