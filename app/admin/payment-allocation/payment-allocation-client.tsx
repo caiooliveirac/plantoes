@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react";
+import { resolvePendingRegulationOccupantLabel } from "@/modules/operational/board-display";
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
 
 interface DoctorOption {
@@ -147,10 +148,14 @@ function primaryDoctorLabel(row: PaymentAllocationRow) {
     }
 
     if (!row.occupancyId) {
+        if (row.domain === "regulation") {
+            return resolvePendingRegulationOccupantLabel(row.targetCode);
+        }
+
         return "Sem ocupação consolidada";
     }
 
-    return row.displayName ?? row.doctorName ?? "Médico não identificado";
+    return row.doctorName ?? row.displayName ?? "Médico não identificado";
 }
 
 function summarizeIssues(row: PaymentAllocationRow) {

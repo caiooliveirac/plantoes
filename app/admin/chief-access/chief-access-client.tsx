@@ -42,8 +42,8 @@ function sortAssignments(assignments: ChiefAssignment[]) {
             return Number(right.mustChangePassword) - Number(left.mustChangePassword);
         }
 
-        const leftName = left.fullName ?? left.displayName ?? left.email;
-        const rightName = right.fullName ?? right.displayName ?? right.email;
+        const leftName = left.displayName ?? left.fullName ?? left.email;
+        const rightName = right.displayName ?? right.fullName ?? right.email;
         return leftName.localeCompare(rightName, "pt-BR");
     });
 }
@@ -243,15 +243,15 @@ export function ChiefAccessClient({ doctors, assignments: initialAssignments }: 
                                         className={`chief-access-doctor-option ${selected ? "selected" : ""}`.trim()}
                                         onClick={() => setSelectedDoctorId(doctor.id)}
                                     >
-                                        <strong>{doctor.fullName}</strong>
-                                        <span>{doctor.displayName ?? "Sem nome de exibição"}</span>
+                                        <strong>{doctor.displayName ?? doctor.fullName}</strong>
+                                        <span>{doctor.fullName}</span>
                                     </button>
                                 );
                             })}
                         </div>
 
                         <div className={`chief-access-selected-doctor ${selectedDoctor ? "visible" : ""}`.trim()}>
-                            {selectedDoctor ? `Selecionado: ${selectedDoctor.fullName}` : "Selecione o médico que vai operar como chief."}
+                            {selectedDoctor ? `Selecionado: ${selectedDoctor.displayName ?? selectedDoctor.fullName}` : "Selecione o médico que vai operar como chief."}
                         </div>
 
                         <label className="chief-access-field">
@@ -328,9 +328,9 @@ export function ChiefAccessClient({ doctors, assignments: initialAssignments }: 
                                 </div>
 
                                 <div className="chief-access-assignment-copy">
-                                    <strong>{assignment.fullName ?? assignment.displayName ?? "Médico sem vínculo"}</strong>
-                                    <span>{assignment.displayName && assignment.displayName !== assignment.fullName ? assignment.displayName : assignment.email}</span>
-                                    {assignment.displayName && assignment.displayName !== assignment.fullName && <small>{assignment.email}</small>}
+                                    <strong>{assignment.displayName ?? assignment.fullName ?? "Médico sem vínculo"}</strong>
+                                    <span>{assignment.fullName ?? assignment.email}</span>
+                                    <small>{assignment.email}</small>
                                 </div>
 
                                 <p className="chief-access-assignment-note">

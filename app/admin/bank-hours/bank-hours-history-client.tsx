@@ -86,8 +86,8 @@ function proofToneClass(mode: BankHoursHistoryShift["proof"]["mode"]) {
 
 function summarizeDoctorSearch(doctor: BankHoursDoctorHistory) {
     return normalizeSearch([
-        doctor.displayName ?? doctor.doctorName,
         doctor.doctorName,
+        doctor.displayName ?? doctor.doctorName,
         ...doctor.shifts.flatMap((shift) => [shift.targetCode, shift.targetLabel]),
     ].join(" "));
 }
@@ -322,8 +322,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
                             onClick={() => setSelectedDoctorId(doctor.doctorId)}
                         >
                             <div>
-                                <strong>{doctor.displayName || doctor.doctorName}</strong>
-                                <span>{doctor.doctorName}</span>
+                                <strong>{doctor.doctorName}</strong>
+                                <span>{doctor.displayName && doctor.displayName !== doctor.doctorName ? doctor.displayName : "Apelido não configurado"}</span>
                             </div>
 
                             <p className="hours-doctor-lead">{renderDoctorLead(doctor)}</p>
@@ -353,8 +353,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
                             <header className="hours-detail-header">
                                 <div>
                                     <p className="reports-kicker">Histórico do médico</p>
-                                    <h2>{selectedDoctor.displayName || selectedDoctor.doctorName}</h2>
-                                    <p>{selectedDoctor.doctorName}</p>
+                                    <h2>{selectedDoctor.doctorName}</h2>
+                                    <p>{selectedDoctor.displayName && selectedDoctor.displayName !== selectedDoctor.doctorName ? selectedDoctor.displayName : "Apelido não configurado"}</p>
                                 </div>
                                 <span className={`hours-balance-pill large ${shiftBalanceClass(selectedDoctor.balanceMinutes)}`}>{formatMinutesForHumans(selectedDoctor.balanceMinutes)}</span>
                             </header>

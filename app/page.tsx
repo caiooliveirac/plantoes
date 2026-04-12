@@ -2,7 +2,7 @@ import { hasDatabaseUrl } from "@/db";
 import { readAuthenticatedSession } from "@/lib/auth/server";
 import { OperationalBoardClient } from "@/app/operational-board-client";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
-import { getCurrentOperationalMealBreakSession } from "@/modules/telegram/meal-breaks";
+import { getCurrentOperationalMealBreakSession, getCurrentMealBreakEligibilityOverrides } from "@/modules/telegram/meal-breaks";
 import { getOperationalBoard, getPreviousOperationalBoard } from "@/services/board.service";
 import { listDoctorsForChiefInvite } from "@/services/chief-access.service";
 
@@ -35,11 +35,12 @@ export default async function HomePage() {
         session?.user.roles.some((role) => role === "admin" || role === "chief")
         && !session.user.mustChangePassword,
     );
-    const [board, previousShift, doctors, mealBreakSession] = await Promise.all([
+    const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility] = await Promise.all([
         getOperationalBoard(),
         getPreviousOperationalBoard(),
         canManage ? listDoctorsForChiefInvite() : Promise.resolve([]),
         getCurrentOperationalMealBreakSession(),
+        getCurrentMealBreakEligibilityOverrides(),
     ]);
 
     return (
@@ -49,6 +50,7 @@ export default async function HomePage() {
             regulation={board.regulation}
             intervention={board.intervention}
             mealBreakSession={mealBreakSession}
+            mealBreakEligibility={mealBreakEligibility}
             previousShift={previousShift}
             doctors={doctors}
             session={session ? {

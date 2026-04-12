@@ -5,6 +5,44 @@ import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { transferOperationalOccupancy } from "@/modules/operational/corrections";
 
+function serializeOccupancySnapshot(snapshot: {
+    id: string;
+    domain: "regulation" | "intervention";
+    doctorId: string;
+    continuityGroupId: string;
+    source: string | null;
+    targetId: number;
+    startedAt: Date;
+    boardStartedAt: Date | null;
+    endedAt: Date | null;
+    actualEndedAt: Date | null;
+    scheduledStartAt: Date | null;
+    scheduledEndAt: Date | null;
+    shiftLabel: string | null;
+    roleLabel: string | null;
+    ramalLabel: string | null;
+    notes: string | null;
+}) {
+    return {
+        id: snapshot.id,
+        domain: snapshot.domain,
+        doctorId: snapshot.doctorId,
+        continuityGroupId: snapshot.continuityGroupId,
+        source: snapshot.source,
+        targetId: snapshot.targetId,
+        startedAt: snapshot.startedAt.toISOString(),
+        boardStartedAt: snapshot.boardStartedAt?.toISOString() ?? null,
+        endedAt: snapshot.endedAt?.toISOString() ?? null,
+        actualEndedAt: snapshot.actualEndedAt?.toISOString() ?? null,
+        scheduledStartAt: snapshot.scheduledStartAt?.toISOString() ?? null,
+        scheduledEndAt: snapshot.scheduledEndAt?.toISOString() ?? null,
+        shiftLabel: snapshot.shiftLabel,
+        roleLabel: snapshot.roleLabel,
+        ramalLabel: snapshot.ramalLabel,
+        notes: snapshot.notes,
+    };
+}
+
 const targetSchema = z.object({
     domain: z.enum(["regulation", "intervention"]),
     targetId: z.number().int().positive(),
@@ -75,7 +113,16 @@ export async function POST(request: NextRequest) {
                 conflictResolution: parsed.data.conflictResolution ?? null,
                 movedOccupancyId: transfer.movedOccupancyId,
                 movedDomain: transfer.movedDomain,
-                displaced: transfer.displaced,
+                sourceSnapshot: serializeOccupancySnapshot(transfer.sourceSnapshot),
+                sourceTarget: transfer.sourceTarget,
+                movedSnapshot: serializeOccupancySnapshot(transfer.movedSnapshot),
+                displaced: transfer.displaced ? {
+                    removedSnapshot: serializeOccupancySnapshot(transfer.displaced.removedSnapshot),
+                    createdSnapshot: transfer.displaced.createdSnapshot
+                        ? serializeOccupancySnapshot(transfer.displaced.createdSnapshot)
+                        : null,
+                    relocationTarget: transfer.displaced.relocationTarget,
+                } : null,
                 sourceContinuityGroupId: transfer.sourceContinuityGroupId,
             },
         });

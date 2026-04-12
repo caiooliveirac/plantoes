@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { applyDoctorImport, parseDoctorImportFile, summarizeDoctorImport } from "@/modules/doctors/importer";
+import { parseDoctorImportFile, previewDoctorImport, summarizeDoctorImport } from "@/modules/doctors/importer";
 import { hasDatabaseUrl } from "@/db";
 
 export async function POST(request: NextRequest) {
@@ -16,10 +16,20 @@ export async function POST(request: NextRequest) {
     const rows = parseDoctorImportFile(body.fileName, body.content);
     const summary = summarizeDoctorImport(rows);
 
-    if (body.dryRun !== false || !hasDatabaseUrl()) {
+    if (!hasDatabaseUrl()) {
         return NextResponse.json({ mode: "dry-run", summary });
     }
 
-    const result = await applyDoctorImport(rows);
-    return NextResponse.json({ mode: "apply", summary, result });
+    const preview = await previewDoctorImport(rows);
+
+    if (body.dryRun === false) {
+        return NextResponse.json({
+            error: "Aplicação bloqueada via API para garantir backup obrigatório. Use o script db:import-doctors no servidor.",
+            mode: "dry-run",
+            summary,
+            preview,
+        }, { status: 409 });
+    }
+
+    return NextResponse.json({ mode: "dry-run", summary, preview });
 }

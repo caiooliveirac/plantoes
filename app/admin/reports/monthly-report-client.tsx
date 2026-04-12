@@ -163,6 +163,9 @@ export function MonthlyReportClient({ report }: Props) {
                     <a className="reports-primary-link" href="/admin/payment-attestation">
                         Abrir atesto diário
                     </a>
+                    <a className="reports-primary-link" href="/admin/payment-closing">
+                        Abrir fechamento mensal
+                    </a>
                     <a className="reports-primary-link" href={`/api/admin/reports/export?month=${report.monthKey}`}>
                         Exportar XLSX
                     </a>
@@ -261,8 +264,8 @@ export function MonthlyReportClient({ report }: Props) {
                             <article className="reports-group-card" key={group.doctorId}>
                                 <button type="button" className="reports-group-header" onClick={() => toggleDoctor(group.doctorId)}>
                                     <div>
-                                        <strong>{group.displayName || group.doctorName}</strong>
-                                        <span>{group.doctorName}</span>
+                                        <strong>{group.doctorName}</strong>
+                                        <span>{group.displayName && group.displayName !== group.doctorName ? group.displayName : "Apelido não configurado"}</span>
                                     </div>
 
                                     <div className="reports-group-badges">

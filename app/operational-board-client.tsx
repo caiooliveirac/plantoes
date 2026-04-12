@@ -2,7 +2,9 @@
 
 import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { OperationalHistoryPanel } from "@/components/operational-history-panel";
 import { buildOperationalRoleChoices, getOperationalRoleTone, resolveFixedOperationalRole, resolveOperationalRoleLabel } from "@/modules/operational/roles";
+import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
     MealBreakDinnerDuration,
     MealBreakDinnerSlot,
@@ -33,11 +35,11 @@ type ActionMode = "correct" | "end" | "start";
 type PriorityLevel = "critical" | "high" | "elevated" | "steady";
 type OperationalDomain = "regulation" | "intervention";
 type TransferConflictStrategy = "remove_destination" | "move_destination";
+type ViewMode = "live" | "history";
 
-const COI_CODES = new Set(["1366", "1367", "1368"]);
-const MRV_DAY_CODES = new Set(["2032", "2151"]);
 const NIGHT_WORK_OPTIONS: MealBreakNightWorkSlot[] = ["23:00", "03:00"];
 const NIGHT_DINNER_OPTIONS: MealBreakDinnerSlot[] = ["20:30", "21:00", "21:30"];
+const DAY_SLOT_OPTIONS = ["11:30", "12:30", "13:30", "14:30", "15:30", "16:30", "18:00"] as const;
 
 interface DoctorOption {
     id: string;
@@ -68,6 +70,7 @@ interface OperationalBoardClientProps {
     regulation: RegulationBoardRow[];
     intervention: InterventionBoardRow[];
     mealBreakSession: MealBreakSession | null;
+    mealBreakEligibility: { lunchExcludedRamals: string[]; restExcludedRamals: string[] };
     previousShift: PreviousOperationalBoard;
     doctors: DoctorOption[];
     session: SessionSummary | null;
@@ -78,6 +81,7 @@ interface FormState {
     startedAt: string;
     endedAt: string;
     roleLabel: string;
+    shiftOverride: string;
     targetKey: string;
     notes: string;
 }
@@ -138,6 +142,28 @@ function isDayMealBreakEligible(session: MealBreakSession | null, ramal: string)
     return Boolean(session?.mode === "day" && session.roster.some((doctor) => doctor.ramal === ramal));
 }
 
+const CHIEF_RAMAL = "2031";
+
+function resolveMealBreakExclusionHint(ramal: string, mode: "day" | "night") {
+    if (ramal === CHIEF_RAMAL) {
+        return mode === "day"
+            ? "O posto 2031 (chefia) fica fora da divisao automatica de almoco e descanso."
+            : "O posto 2031 (chefia) fica fora da divisao automatica de jantar e trabalho.";
+    }
+
+    if (isNucleoRegulationPost(ramal)) {
+        return "O NUCLEO nao participa da divisao de almoco, descanso, jantar ou trabalho.";
+    }
+
+    if (isPiamRegulationPost(ramal)) {
+        return "O PIAM nao participa da divisao de almoco, descanso, jantar ou trabalho.";
+    }
+
+    return mode === "day"
+        ? `O posto ${ramal} esta fora da divisao de almoco e descanso neste turno.`
+        : `O posto ${ramal} esta fora da divisao de jantar e trabalho neste turno.`;
+}
+
 function isMealBreakExcluded(session: MealBreakSession | null, ramal: string, kind: "lunch" | "rest") {
     if (!session || session.mode !== "day") {
         return false;
@@ -146,6 +172,12 @@ function isMealBreakExcluded(session: MealBreakSession | null, ramal: string, ki
     return kind === "lunch"
         ? session.lunchExcludedRamals.includes(ramal)
         : session.restExcludedRamals.includes(ramal);
+}
+
+function isSystemicallyExcludedFromMealBreak(ramal: string, mode: "day" | "night") {
+    if (isNucleoRegulationPost(ramal)) return true;
+    if (mode === "day" && isPiamRegulationPost(ramal)) return true;
+    return false;
 }
 
 function resolveRemainingDayLunchSlots(session: MealBreakSession | null) {
@@ -339,6 +371,10 @@ function matchesDoctorQuery(doctor: DoctorOption, query: string) {
 }
 
 function displayDoctorName(card: BoardCard) {
+    if (card.domain === "regulation" && card.status === "disabled") {
+        return "Ramal desativado";
+    }
+
     if (card.domain === "intervention" && card.status === "disabled") {
         return "Base desativada";
     }
@@ -347,11 +383,58 @@ function displayDoctorName(card: BoardCard) {
         return "Aguardando cobertura";
     }
 
+    if (card.domain === "regulation" && card.status === "waiting") {
+        return resolvePendingRegulationOccupantLabel(card.postCode);
+    }
+
     return card.displayName || card.doctorName || "Aguardando confirmação";
 }
 
 function canEditActiveCard(card: BoardCard) {
     return Boolean(card.occupancyId);
+}
+
+function canManageCardState(card: BoardCard) {
+    return card.domain === "regulation" ? card.postId > 0 : card.baseId > 0;
+}
+
+function cardStateSubject(card: BoardCard) {
+    return card.domain === "regulation" ? "ramal" : "base";
+}
+
+function cardStatePanelLabel(card: BoardCard) {
+    return card.domain === "regulation" ? "Estado do ramal" : "Estado da USA";
+}
+
+function cardStateActionLabel(card: BoardCard) {
+    const subject = cardStateSubject(card);
+    return card.status === "disabled"
+        ? `Reativar ${subject}`
+        : `Desativar ${subject}`;
+}
+
+function cardStateDescription(card: BoardCard) {
+    if (card.status === "disabled") {
+        return card.domain === "regulation"
+            ? "Use quando o ramal voltar a operar. O posto sai do estado desativado e volta para leitura normal do quadro."
+            : "Use quando a USA voltar a operar. A base sai do estado desativada e volta para leitura normal do quadro.";
+    }
+
+    return card.domain === "regulation"
+        ? "Use quando o ramal saiu de operação. A ação encerra coberturas abertas nesse horário para proteger banco de horas e pagamento."
+        : "Use quando a USA saiu de operação. A ação encerra coberturas abertas nesse horário para proteger banco de horas e pagamento.";
+}
+
+function cardStateReasonPlaceholder(card: BoardCard) {
+    if (card.status === "disabled") {
+        return card.domain === "regulation"
+            ? "Ex.: ramal reaberto e liberado para nova cobertura"
+            : "Ex.: USA reaberta e pronta para nova cobertura";
+    }
+
+    return card.domain === "regulation"
+        ? "Ex.: posto fechado, ramal indisponível, operação suspensa"
+        : "Ex.: USA recolhida, indisponível, veículo fora de operação";
 }
 
 function minutesSince(referenceIso: string, value: string | null) {
@@ -365,6 +448,13 @@ function minutesSince(referenceIso: string, value: string | null) {
     }
 
     return Math.max(0, Math.floor(diffMs / 60000));
+}
+
+/** Operational arrival for display and priority: boardStartedAt reflects the true
+ *  arrival when a doctor continues across shifts (SD→SN, P→SN). Falls back to
+ *  startedAt for occupancies without a separate board anchor. */
+function resolveOperationalArrival(card: BoardCard): string | null {
+    return card.boardStartedAt ?? card.startedAt;
 }
 
 function formatMinutesLabel(minutes: number | null) {
@@ -514,7 +604,7 @@ function resolvePriority(card: BoardCard, generatedAt: string): PriorityLevel {
         return "critical";
     }
 
-    const ageMinutes = minutesSince(generatedAt, card.startedAt);
+    const ageMinutes = minutesSince(generatedAt, resolveOperationalArrival(card));
     if (ageMinutes !== null && ageMinutes >= 720) {
         return "high";
     }
@@ -543,10 +633,10 @@ function priorityCopy(card: BoardCard, generatedAt: string) {
         return "Sem cobertura confirmada. Chefia precisa agir agora.";
     }
     if (priority === "high") {
-        return `Cobertura longa em curso: ${formatMinutesLabel(minutesSince(generatedAt, card.startedAt))}.`;
+        return `Cobertura longa em curso: ${formatMinutesLabel(minutesSince(generatedAt, resolveOperationalArrival(card)))}.`;
     }
     if (priority === "elevated") {
-        return `Em acompanhamento ha ${formatMinutesLabel(minutesSince(generatedAt, card.startedAt))}.`;
+        return `Em acompanhamento ha ${formatMinutesLabel(minutesSince(generatedAt, resolveOperationalArrival(card)))}.`;
     }
     return "Cobertura dentro do ritmo atual da operacao.";
 }
@@ -557,6 +647,7 @@ function buildInitialForm(card: BoardCard) {
         startedAt: toLocalDateTimeValue(card.startedAt),
         endedAt: toLocalDateTimeValue(),
         roleLabel: resolveCardFixedRole(card) ?? card.roleLabel ?? "",
+        shiftOverride: "",
         targetKey: card.domain === "regulation"
             ? buildTransferTargetKey("regulation", card.postId)
             : buildTransferTargetKey("intervention", card.baseId),
@@ -618,34 +709,8 @@ function extractTrailingNumber(value: string) {
     return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 }
 
-function regulationSortRank(code: string, shiftLabel: string) {
-    if (code === "2031") {
-        return 0;
-    }
-
-    if (shiftLabel === "SD" && code === "2151") {
-        return 1;
-    }
-
-    if (shiftLabel === "SD" && code === "2032") {
-        return 2;
-    }
-
-    if (code.startsWith("1")) {
-        return 4;
-    }
-
-    return 3;
-}
-
 function compareRegulationCards(left: RegulationCard, right: RegulationCard, shiftLabel: string) {
-    const leftRank = regulationSortRank(left.postCode, shiftLabel);
-    const rightRank = regulationSortRank(right.postCode, shiftLabel);
-    if (leftRank !== rightRank) {
-        return leftRank - rightRank;
-    }
-
-    return Number(left.postCode) - Number(right.postCode);
+    return compareRootBoardRegulationCodes(left.postCode, right.postCode, shiftLabel);
 }
 
 function isInterventionAwaitingNews(card: BoardCard, generatedAt: string) {
@@ -673,8 +738,42 @@ function requiresReasonForContinuation(card: BoardCard, generatedAt: string) {
     return card.domain === "intervention" && requiresOvertimeJustification(card.startedAt, generatedAt);
 }
 
-function rowEmphasisClass(card: BoardCard, shiftLabel: string, generatedAt: string) {
-    if (card.domain === "intervention" && card.status === "disabled") {
+function resolveRegulationRoleEmphasis(card: RegulationCard, mealBreakSession: MealBreakSession | null) {
+    const roleLabel = resolveCardRoleLabel(card);
+
+    if (isRecipRamal(mealBreakSession, card.postCode) || roleLabel === "RECIP") {
+        return "emphasis-recip";
+    }
+
+    if (roleLabel === "MRV" && card.shiftLabel !== "SN") {
+        return "emphasis-mrv-day";
+    }
+
+    if (roleLabel === "COI") {
+        return "emphasis-coi";
+    }
+
+    if (roleLabel === "PSIQ") {
+        return "emphasis-psiq";
+    }
+
+    if (roleLabel === "CP") {
+        return "emphasis-cp";
+    }
+
+    if (roleLabel === "RMT") {
+        return "emphasis-rmt";
+    }
+
+    if (roleLabel === "IES") {
+        return "emphasis-ies";
+    }
+
+    return "";
+}
+
+function rowEmphasisClass(card: BoardCard, shiftLabel: string, generatedAt: string, mealBreakSession: MealBreakSession | null) {
+    if (card.status === "disabled") {
         return "emphasis-disabled";
     }
 
@@ -690,15 +789,7 @@ function rowEmphasisClass(card: BoardCard, shiftLabel: string, generatedAt: stri
         return "";
     }
 
-    if (COI_CODES.has(card.postCode)) {
-        return "emphasis-coi";
-    }
-
-    if (resolveCardRoleLabel(card) === "MRV" && card.shiftLabel !== "SN") {
-        return "emphasis-mrv-day";
-    }
-
-    return "";
+    return resolveRegulationRoleEmphasis(card, mealBreakSession);
 }
 
 function rowAccentLabel(card: BoardCard, shiftLabel: string, generatedAt: string) {
@@ -710,12 +801,34 @@ function rowAccentLabel(card: BoardCard, shiftLabel: string, generatedAt: string
         return null;
     }
 
-    if (COI_CODES.has(card.postCode)) {
+    const emphasisClass = resolveRegulationRoleEmphasis(card, null);
+
+    if (emphasisClass === "emphasis-mrv-day") {
+        return "MRV";
+    }
+
+    if (emphasisClass === "emphasis-coi") {
         return "COI";
     }
 
-    if (resolveCardRoleLabel(card) === "MRV" && card.shiftLabel !== "SN") {
-        return "MRV";
+    if (emphasisClass === "emphasis-psiq") {
+        return "PSIQ";
+    }
+
+    if (emphasisClass === "emphasis-cp") {
+        return "CP";
+    }
+
+    if (emphasisClass === "emphasis-rmt") {
+        return "RMT";
+    }
+
+    if (emphasisClass === "emphasis-ies") {
+        return "IES";
+    }
+
+    if (emphasisClass === "emphasis-recip") {
+        return "RECIP";
     }
 
     return null;
@@ -736,8 +849,9 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, previousShift, doctors, session } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session } = props;
     const router = useRouter();
+    const [viewMode, setViewMode] = useState<ViewMode>("live");
     const [authOpen, setAuthOpen] = useState(false);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
     const [priorityDrawerOpen, setPriorityDrawerOpen] = useState(false);
@@ -752,13 +866,16 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [confirmPasswordInput, setConfirmPasswordInput] = useState("");
     const [isPasswordChanging, setIsPasswordChanging] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
+    const [professionalDrawerOpen, setProfessionalDrawerOpen] = useState(false);
     const [selectedCard, setSelectedCard] = useState<BoardCard | null>(null);
     const [actionMode, setActionMode] = useState<ActionMode | null>(null);
+    const [isContinuityEntry, setIsContinuityEntry] = useState(false);
     const [formState, setFormState] = useState<FormState>({
         doctorId: "",
         startedAt: toLocalDateTimeValue(),
         endedAt: toLocalDateTimeValue(),
         roleLabel: "",
+        shiftOverride: "",
         targetKey: "",
         notes: "",
     });
@@ -780,10 +897,16 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [isMealBreakSaving, setIsMealBreakSaving] = useState(false);
     const [isPriorityLoading, setIsPriorityLoading] = useState(false);
     const [isPrioritySaving, setIsPrioritySaving] = useState(false);
+    const [undoBanner, setUndoBanner] = useState<{ auditLogId: string; message: string; expiresAt: number } | null>(null);
+    const [undoNotes, setUndoNotes] = useState("");
+    const [isUndoing, setIsUndoing] = useState(false);
+    const [undoNotesOpen, setUndoNotesOpen] = useState(false);
     const [priorityView, setPriorityView] = useState<MealBreakPriorityView | null>(null);
     const [priorityNotesByRamal, setPriorityNotesByRamal] = useState<Record<string, string>>({});
     const [nightWorkInput, setNightWorkInput] = useState<MealBreakNightWorkSlot | "">("");
     const [dinnerInput, setDinnerInput] = useState<MealBreakDinnerSlot | "">("");
+    const [lunchSlotInput, setLunchSlotInput] = useState<string>("");
+    const [restSlotInput, setRestSlotInput] = useState<string>("");
     const [isRefreshing, startRefresh] = useTransition();
     const latestGeneratedAtRef = useRef(generatedAt);
 
@@ -812,14 +935,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
         setSelectedCard(nextSelected);
 
-        if (selectedCard.domain === "intervention" && selectedCard.status === "disabled" && nextSelected.status === "waiting") {
+        if (selectedCard.status === "disabled" && nextSelected.status === "waiting") {
             setActionMode("start");
             setFormState(buildInitialForm(nextSelected));
             syncSelectedDoctorLabel(nextSelected.doctorId ?? null);
             return;
         }
 
-        if (nextSelected.domain === "intervention" && nextSelected.status === "disabled") {
+        if (nextSelected.status === "disabled") {
             setActionMode(null);
         }
     }, [generatedAt]);
@@ -848,8 +971,21 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
     }, [session]);
 
+    useEffect(() => {
+        if (viewMode !== "history") {
+            return;
+        }
+
+        setPreviousShiftOpen(false);
+        setPriorityDrawerOpen(false);
+        setDrawerOpen(false);
+        setProfessionalDrawerOpen(false);
+        setTransferConfirmOpen(false);
+        setAuthOpen(false);
+    }, [viewMode]);
+
     const refreshIfBoardChanged = useEffectEvent(async () => {
-        if (drawerOpen || priorityDrawerOpen || isSubmitting || isRefreshing) {
+        if (drawerOpen || professionalDrawerOpen || priorityDrawerOpen || isSubmitting || isRefreshing) {
             return;
         }
 
@@ -941,8 +1077,76 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         };
     }, [refreshIfBoardChanged]);
 
+    // ─── Undo banner auto-dismiss ──────────────────────────────────
+    useEffect(() => {
+        if (!undoBanner) return;
+        const remainingMs = undoBanner.expiresAt - Date.now();
+        if (remainingMs <= 0) { setUndoBanner(null); return; }
+        const timerId = window.setTimeout(() => setUndoBanner(null), remainingMs);
+        return () => window.clearTimeout(timerId);
+    }, [undoBanner]);
+
+    async function fetchLatestUndoableAction() {
+        try {
+            const response = await fetch("/api/operational/undoable-actions");
+            if (!response.ok) return;
+            const body = await response.json() as { actions?: Array<{ auditLogId: string; action: string }> };
+            const latest = body.actions?.[0];
+            if (latest) {
+                const UNDO_BANNER_MS = 60_000;
+                setUndoBanner({
+                    auditLogId: latest.auditLogId,
+                    message: formatUndoActionLabel(latest.action),
+                    expiresAt: Date.now() + UNDO_BANNER_MS,
+                });
+                setUndoNotes("");
+                setUndoNotesOpen(false);
+            }
+        } catch { /* ignore */ }
+    }
+
+    function formatUndoActionLabel(action: string): string {
+        if (action.includes("started")) return "Chegada registrada";
+        if (action.includes("corrected")) return "Correção aplicada";
+        if (action.includes("deleted")) return "Ocupação removida";
+        if (action.includes("transferred")) return "Remanejamento aplicado";
+        return "Ação aplicada";
+    }
+
+    async function handleUndo() {
+        if (!undoBanner || !undoNotes.trim() || undoNotes.trim().length < 8) return;
+        setIsUndoing(true);
+        try {
+            const response = await fetch("/api/operational/undo", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ auditLogId: undoBanner.auditLogId, notes: undoNotes.trim() }),
+            });
+            const body = await response.json() as { message?: string; error?: string };
+            if (!response.ok) {
+                setUndoBanner(null);
+                setErrorMessage(body.error ?? "Falha ao desfazer.");
+                return;
+            }
+            setUndoBanner(null);
+            setSuccessMessage(body.message ?? "Ação desfeita com sucesso.");
+            startRefresh(() => { router.refresh(); });
+        } catch {
+            setUndoBanner(null);
+            setErrorMessage("Erro de rede ao desfazer.");
+        } finally {
+            setIsUndoing(false);
+        }
+    }
+
     const regulationCards: RegulationCard[] = regulation.map((row) => ({ ...row, domain: "regulation" }));
     const interventionCards: InterventionCard[] = intervention.map((row) => ({ ...row, domain: "intervention" }));
+    const rootBoardRegulationCards = regulationCards.filter((card) => shouldShowRegulationCardOnRootBoard({
+        postCode: card.postCode,
+        status: card.status,
+        doctorId: card.doctorId,
+        shiftLabel,
+    }));
     const regulationPostOptions = Array.from(new Map(
         [...regulationCards]
             .sort((left, right) => compareRegulationCards(left, right, shiftLabel))
@@ -964,9 +1168,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 occupantName: card.occupancyId ? displayDoctorName(card) : null,
             }]),
     ).values());
-    const visibleRegulationCards = regulationCards
-        .filter((card) => card.status === "active" && Boolean(card.doctorId))
+    const visibleRegulationCards = rootBoardRegulationCards
         .sort((left, right) => compareRegulationCards(left, right, shiftLabel));
+    const hasAvailableRegulationPost = rootBoardRegulationCards.some((card) => card.status === "waiting");
     const visibleInterventionCards = interventionCards
         .filter((card) => (card.status === "active" && Boolean(card.doctorId)) || card.status === "waiting" || card.status === "disabled")
         .sort((left, right) => extractTrailingNumber(left.baseCode) - extractTrailingNumber(right.baseCode));
@@ -985,14 +1189,17 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const selectedDoctor = doctors.find((doctor) => doctor.id === formState.doctorId) ?? null;
     const transferTargetOptions: TransferTargetOption[] = [
         ...regulationPostOptions.map((option) => {
-            const occupant = regulationCards.find((card) => card.postId === option.postId && Boolean(card.occupancyId)) ?? null;
+            const card = regulationCards.find((entry) => entry.postId === option.postId && (entry.status === "disabled" || Boolean(entry.occupancyId)))
+                ?? regulationCards.find((entry) => entry.postId === option.postId)
+                ?? null;
+            const occupant = card?.status === "active" && card.occupancyId ? card : null;
             return {
                 key: buildTransferTargetKey("regulation", option.postId),
                 domain: "regulation" as const,
                 targetId: option.postId,
                 code: option.postCode,
                 label: option.postLabel,
-                status: occupant ? "occupied" : "available",
+                status: card?.status === "disabled" ? "disabled" : occupant ? "occupied" : "available",
                 occupantName: occupant ? displayDoctorName(occupant) : null,
                 occupancyId: occupant?.occupancyId ?? null,
             } satisfies TransferTargetOption;
@@ -1038,8 +1245,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const selectedRestCurrent = selectedRegulationRamal
         ? resolveMealBreakSlot<MealBreakRestSlot>(mealBreakSession, selectedRegulationRamal, "restAssignments")
         : null;
-    const selectedLunchExcluded = selectedRegulationRamal ? isMealBreakExcluded(mealBreakSession, selectedRegulationRamal, "lunch") : false;
-    const selectedRestExcluded = selectedRegulationRamal ? isMealBreakExcluded(mealBreakSession, selectedRegulationRamal, "rest") : false;
+    const selectedRoleLabel = selectedCard ? resolveCardRoleLabel(selectedCard) : null;
+    const selectedIsIsolatedOrDiscretionary = mealBreakDisplayMode === "day" && (selectedRoleLabel === "PSIQ" || selectedRoleLabel === "CP");
+    const selectedLunchExcluded = selectedRegulationRamal
+        ? isMealBreakExcluded(mealBreakSession, selectedRegulationRamal, "lunch") || (!mealBreakSession && mealBreakEligibility.lunchExcludedRamals.includes(selectedRegulationRamal)) || selectedIsIsolatedOrDiscretionary
+        : false;
+    const selectedRestExcluded = selectedRegulationRamal
+        ? isMealBreakExcluded(mealBreakSession, selectedRegulationRamal, "rest") || (!mealBreakSession && mealBreakEligibility.restExcludedRamals.includes(selectedRegulationRamal)) || selectedIsIsolatedOrDiscretionary
+        : false;
     const selectedDinnerDuration = selectedRegulationRamal ? resolveDinnerDuration(mealBreakSession, selectedRegulationRamal) : null;
     const selectedLateDinner = resolveDefaultNightDinner(selectedDinnerDuration);
     const remainingDayLunchSlots = resolveRemainingDayLunchSlots(mealBreakSession);
@@ -1056,10 +1269,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         && selectedCard?.domain === "regulation"
         && selectedCard.status === "active"
         && selectedRegulationRamal
-        && isDayMealBreakEligible(mealBreakSession, selectedRegulationRamal),
+        && (isDayMealBreakEligible(mealBreakSession, selectedRegulationRamal) || (!mealBreakSession && mealBreakDisplayMode === "day")),
     );
     const showDayMealBreakSection = Boolean(
-        mealBreakSession?.mode === "day"
+        (mealBreakSession?.mode === "day" || (!mealBreakSession && mealBreakDisplayMode === "day"))
         && selectedCard?.domain === "regulation"
         && selectedCard.status === "active",
     );
@@ -1093,7 +1306,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     useEffect(() => {
         setNightWorkInput(selectedNightWorkCurrent ?? "");
         setDinnerInput(selectedDinnerCurrent ?? "");
-    }, [selectedDinnerCurrent, selectedNightWorkCurrent]);
+        setLunchSlotInput(selectedLunchCurrent ?? "");
+        setRestSlotInput(selectedRestCurrent ?? "");
+    }, [selectedDinnerCurrent, selectedNightWorkCurrent, selectedLunchCurrent, selectedRestCurrent]);
 
     useEffect(() => {
         if (!priorityView) {
@@ -1125,27 +1340,35 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     function openDrawer(card?: BoardCard) {
         resetTransferFlow();
         setDrawerOpen(true);
-        if (card) {
-            setSelectedCard(card);
-            setActionMode(card.status === "waiting" ? "start" : canEditActiveCard(card) ? "correct" : null);
-            if (card.status === "waiting" || canEditActiveCard(card)) {
-                setFormState(buildInitialForm(card));
-                syncSelectedDoctorLabel(card.doctorId ?? null);
-            }
-            setQuickExitAt(toLocalDateTimeValue());
-            setQuickExitReason("");
-            setBaseStateAt(toLocalDateTimeValue(card.domain === "intervention" ? card.disabledAt : null));
-            setBaseStateReason("");
+        resetDrawerFeedback();
+    }
+
+    function openProfessionalDrawer(card: BoardCard) {
+        resetTransferFlow();
+        setDrawerOpen(false);
+        setProfessionalDrawerOpen(true);
+        setSelectedCard(card);
+        setIsContinuityEntry(false);
+        setActionMode(card.status === "waiting" ? "start" : canEditActiveCard(card) ? "correct" : null);
+        if (card.status === "waiting" || canEditActiveCard(card)) {
+            setFormState(buildInitialForm(card));
+            syncSelectedDoctorLabel(card.doctorId ?? null);
         }
+        setQuickExitAt(toLocalDateTimeValue());
+        setQuickExitReason("");
+        setBaseStateAt(toLocalDateTimeValue(card.disabledAt ?? null));
+        setBaseStateReason("");
         resetDrawerFeedback();
     }
 
     function openAction(card: BoardCard, mode: ActionMode) {
         resetTransferFlow();
+        setDrawerOpen(false);
+        setProfessionalDrawerOpen(true);
+        setIsContinuityEntry(false);
         if (mode !== "start" && !canEditActiveCard(card)) {
             setSelectedCard(card);
             setActionMode(null);
-            setDrawerOpen(true);
             resetDrawerFeedback();
             return;
         }
@@ -1156,20 +1379,49 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         syncSelectedDoctorLabel(card.doctorId ?? null);
         setQuickExitAt(toLocalDateTimeValue());
         setQuickExitReason("");
-        setBaseStateAt(toLocalDateTimeValue(card.domain === "intervention" ? card.disabledAt : null));
+        setBaseStateAt(toLocalDateTimeValue(card.disabledAt ?? null));
         setBaseStateReason("");
-        setDrawerOpen(true);
         resetDrawerFeedback();
     }
 
-    function closeDrawer() {
+    function openGenericStartDrawer(domain: OperationalDomain) {
         resetTransferFlow();
         setDrawerOpen(false);
+        setProfessionalDrawerOpen(true);
+        setIsContinuityEntry(false);
+        const placeholder: BoardCard = domain === "regulation"
+            ? { domain: "regulation", postId: 0, postCode: "", postLabel: "", defaultRole: null, doctorId: null, doctorName: null, displayName: null, startedAt: null, boardStartedAt: null, scheduledEndAt: null, shiftLabel: null, roleLabel: null, ramalLabel: null, occupancyId: null, status: "waiting", disabledAt: null, disabledReason: null, liveSource: "none", liveUpdatedAt: null }
+            : { domain: "intervention", baseId: 0, baseCode: "", baseLabel: "", doctorId: null, doctorName: null, displayName: null, startedAt: null, boardStartedAt: null, scheduledEndAt: null, shiftLabel: null, roleLabel: null, occupancyId: null, status: "waiting", liveSource: "none", liveUpdatedAt: null, disabledAt: null, disabledReason: null };
+        setSelectedCard(placeholder);
+        setActionMode("start");
+        setFormState({
+            doctorId: "",
+            startedAt: toLocalDateTimeValue(),
+            endedAt: toLocalDateTimeValue(),
+            roleLabel: "",
+            shiftOverride: "",
+            targetKey: "",
+            notes: "",
+        });
+        setDoctorQuery("");
+        setQuickExitAt(toLocalDateTimeValue());
+        setQuickExitReason("");
+        resetDrawerFeedback();
+    }
+
+    function closeProfessionalDrawer() {
+        resetTransferFlow();
+        setProfessionalDrawerOpen(false);
         setActionMode(null);
         setSelectedCard(null);
         setDoctorQuery("");
         setQuickExitReason("");
         setBaseStateReason("");
+        setIsContinuityEntry(false);
+    }
+
+    function closeDrawer() {
+        setDrawerOpen(false);
     }
 
     function resetPriorityFeedback() {
@@ -1524,32 +1776,87 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     throw new Error("Selecione um medico para abrir a cobertura.");
                 }
 
+                const isGenericStart = (selectedCard.domain === "regulation" && selectedCard.postId === 0)
+                    || (selectedCard.domain === "intervention" && selectedCard.baseId === 0);
+
+                let resolvedPostId = selectedCard.domain === "regulation" ? selectedCard.postId : 0;
+                let resolvedBaseId = selectedCard.domain === "intervention" ? selectedCard.baseId : 0;
+                let resolvedPostCode = selectedCard.domain === "regulation" ? selectedCard.postCode : "";
+
+                if (isGenericStart) {
+                    if (!formState.targetKey) {
+                        throw new Error("Selecione o posto onde o medico vai atuar.");
+                    }
+                    const target = transferTargetOptions.find((option) => option.key === formState.targetKey);
+                    if (!target) {
+                        throw new Error("Posto selecionado nao encontrado.");
+                    }
+                    if (target.domain === "regulation") {
+                        resolvedPostId = target.targetId;
+                        resolvedPostCode = target.code;
+                    } else {
+                        resolvedBaseId = target.targetId;
+                    }
+                }
+
+                const effectiveShift = formState.shiftOverride === "P_INV" ? "P" : (formState.shiftOverride || shiftLabel);
+                const startedAtIso = toIsoDateTime(formState.startedAt);
+
+                // Continuity: find the doctor's current active occupancy if available (hint for service)
+                // The service auto-resolves continuityGroupId and boardStartedAt from the chain
+                let continuityPreviousOccupancyId: string | null = null;
+                if (isContinuityEntry && formState.doctorId) {
+                    const activeCard = allCards.find(
+                        (card) => card.doctorId === formState.doctorId && card.status === "active" && card.occupancyId,
+                    );
+                    if (activeCard?.occupancyId) {
+                        continuityPreviousOccupancyId = activeCard.occupancyId;
+                    }
+                }
+
+                // For continuity, boardStartedAt is null — the service resolves it from the chain
+                const boardStartedAtIso = isContinuityEntry
+                    ? null
+                    : effectiveShift === "P"
+                        ? null
+                        : startedAtIso;
+
+                const startNotes = isContinuityEntry && normalizedNotes
+                    ? `[Continuidade do turno anterior] ${normalizedNotes}`
+                    : normalizedNotes;
+
                 endpoint = selectedCard.domain === "regulation"
                     ? "/api/regulation/occupancies"
                     : "/api/intervention/occupancies";
                 payload = selectedCard.domain === "regulation"
                     ? {
                         doctorId: formState.doctorId,
-                        postId: selectedCard.postId,
-                        startedAt: toIsoDateTime(formState.startedAt),
+                        postId: resolvedPostId,
+                        previousOccupancyId: continuityPreviousOccupancyId,
+                        isContinuityEntry: isContinuityEntry || undefined,
+                        startedAt: startedAtIso,
+                        boardStartedAt: boardStartedAtIso,
                         scheduledStartAt: null,
                         scheduledEndAt: null,
-                        shiftLabel,
+                        shiftLabel: effectiveShift,
                         roleLabel: trimToNull(formState.roleLabel),
-                        ramalLabel: selectedCard.postCode,
+                        ramalLabel: resolvedPostCode,
                         source: "admin_correction",
-                        notes: normalizedNotes,
+                        notes: startNotes,
                     }
                     : {
                         doctorId: formState.doctorId,
-                        baseId: selectedCard.baseId,
-                        startedAt: toIsoDateTime(formState.startedAt),
+                        baseId: resolvedBaseId,
+                        previousOccupancyId: continuityPreviousOccupancyId,
+                        isContinuityEntry: isContinuityEntry || undefined,
+                        startedAt: startedAtIso,
+                        boardStartedAt: boardStartedAtIso,
                         scheduledStartAt: null,
                         scheduledEndAt: null,
-                        shiftLabel,
+                        shiftLabel: effectiveShift,
                         roleLabel: trimToNull(formState.roleLabel),
                         source: "admin_correction",
-                        notes: normalizedNotes,
+                        notes: startNotes,
                     };
             }
 
@@ -1569,13 +1876,18 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     ? (selectedCard.domain === "intervention" && canContinueIntervention(selectedCard, generatedAt)
                         ? "Saida registrada com trilha operacional especifica e quadro atualizado."
                         : "Cobertura encerrada e quadro atualizado.")
-                    : isTransferAction
-                        ? "Remanejamento aplicado. Quadro, pagamento e banco de horas foram recalculados."
-                        : "Acao aplicada. Atualizando o quadro operacional.",
+                    : isContinuityEntry
+                        ? "Continuidade registrada. Quadro, banco de horas e prioridade de refeicao atualizados."
+                        : isTransferAction
+                            ? "Remanejamento aplicado. Quadro, pagamento e banco de horas foram recalculados."
+                            : "Acao aplicada. Atualizando o quadro operacional.",
             );
             resetTransferFlow();
             setActionMode(null);
             setSelectedCard(null);
+            setIsContinuityEntry(false);
+            setProfessionalDrawerOpen(false);
+            if (session?.canManage) void fetchLatestUndoableAction();
             startRefresh(() => {
                 router.refresh();
             });
@@ -1637,6 +1949,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setSuccessMessage("Saida registrada com auditoria operacional e quadro atualizado.");
             setActionMode(null);
             setSelectedCard(null);
+            setProfessionalDrawerOpen(false);
+            if (session?.canManage) void fetchLatestUndoableAction();
             startRefresh(() => {
                 router.refresh();
             });
@@ -1647,9 +1961,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
     }
 
-    async function handleInterventionBaseState(card: InterventionCard, action: "deactivate" | "reactivate") {
+    async function handleCardState(card: BoardCard, action: "deactivate" | "reactivate") {
         if (!session?.canManage) {
-            setErrorMessage("Entre com perfil chief ou admin para atualizar o estado da base.");
+            setErrorMessage(`Entre com perfil chief ou admin para atualizar o estado d${card.domain === "regulation" ? "o" : "a"} ${cardStateSubject(card)}.`);
             return;
         }
 
@@ -1658,7 +1972,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setErrorMessage(null);
             setSuccessMessage(null);
 
-            const response = await fetch(`/api/intervention/bases/${card.baseId}/state`, {
+            const endpoint = card.domain === "regulation"
+                ? `/api/regulation/posts/${card.postId}/state`
+                : `/api/intervention/bases/${card.baseId}/state`;
+
+            const response = await fetch(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1670,14 +1988,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
             const responseBody = await response.json().catch(() => null) as { error?: string; closedOccupancyIds?: string[] } | null;
             if (!response.ok) {
-                throw new Error(responseBody?.error || "Falha ao atualizar o estado da base.");
+                throw new Error(responseBody?.error || `Falha ao atualizar o estado d${card.domain === "regulation" ? "o" : "a"} ${cardStateSubject(card)}.`);
             }
 
             setBaseStateReason("");
             setSuccessMessage(
                 action === "deactivate"
-                    ? `Base desativada. ${responseBody?.closedOccupancyIds?.length ? "Coberturas abertas foram encerradas com auditoria." : "Quadro atualizado."}`
-                    : "Base reativada e liberada para nova cobertura.",
+                    ? `${card.domain === "regulation" ? "Ramal desativado" : "Base desativada"}. ${responseBody?.closedOccupancyIds?.length ? "Coberturas abertas foram encerradas com auditoria." : "Quadro atualizado."}`
+                    : `${card.domain === "regulation" ? "Ramal reativado" : "Base reativada"} e ${card.domain === "regulation" ? "liberado" : "liberada"} para nova cobertura.`,
             );
             setActionMode(action === "reactivate" ? "start" : null);
             startRefresh(() => {
@@ -1771,6 +2089,42 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
     }
 
+    async function handleDayMealBreakSlotSave() {
+        if (!selectedCard || selectedCard.domain !== "regulation" || !session?.canManage) {
+            return;
+        }
+
+        try {
+            setIsMealBreakSaving(true);
+            setErrorMessage(null);
+            setSuccessMessage(null);
+
+            const response = await fetch(`/api/board/meal-breaks/regulation/${selectedCard.postCode}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    referenceAt: generatedAt,
+                    lunchSlot: lunchSlotInput || null,
+                    restSlot: restSlotInput || null,
+                }),
+            });
+
+            const responseBody = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(responseBody?.error || "Falha ao atualizar almoco ou descanso.");
+            }
+
+            setSuccessMessage("Almoco e descanso atualizados no quadro.");
+            startRefresh(() => {
+                router.refresh();
+            });
+        } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : "Falha operacional inesperada.");
+        } finally {
+            setIsMealBreakSaving(false);
+        }
+    }
+
     async function handleDayMealBreakToggle(kind: "lunch" | "rest", excluded: boolean) {
         if (!selectedCard || selectedCard.domain !== "regulation" || !session?.canManage) {
             return;
@@ -1839,8 +2193,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     function renderCardIdentityTags(card: BoardCard) {
         const items: React.ReactNode[] = [];
         const roleLabel = resolveCardRoleLabel(card);
+        const sessionRecip = card.domain === "regulation" && isRecipRamal(mealBreakSession, card.postCode);
 
-        if (roleLabel) {
+        if (roleLabel && !(roleLabel === "RECIP" && sessionRecip)) {
             items.push(<span key={`role-${cardCode(card)}`} className={`ops-role-badge ${getOperationalRoleTone(roleLabel)}`.trim()}>{roleLabel}</span>);
         }
 
@@ -1849,7 +2204,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 items.push(<span key={`mrv-${card.postCode}`} className="ops-inline-flag mrv">MRV</span>);
             }
 
-            if (isRecipRamal(mealBreakSession, card.postCode)) {
+            if (sessionRecip) {
                 items.push(<span key={`recip-${card.postCode}`} className="ops-inline-flag recip">RECIP</span>);
             }
         }
@@ -1860,20 +2215,29 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     function handleBoardRowKeyDown(event: React.KeyboardEvent<HTMLDivElement>, card: BoardCard) {
         if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            openDrawer(card);
+            openProfessionalDrawer(card);
         }
     }
 
     function renderRegulationRow(card: RegulationCard) {
-        const emphasisClass = rowEmphasisClass(card, shiftLabel, generatedAt);
+        const emphasisClass = rowEmphasisClass(card, shiftLabel, generatedAt, mealBreakSession);
+        const isDisabledRegulation = card.status === "disabled";
         const lunchSlot = mealBreakDisplayMode === "night"
             ? resolveMealBreakSlot<MealBreakDinnerSlot>(mealBreakSession, card.postCode, "dinnerAssignments")
             : resolveMealBreakSlot<MealBreakLunchSlot>(mealBreakSession, card.postCode, "lunchAssignments");
         const restSlot = mealBreakDisplayMode === "night"
             ? resolveMealBreakSlot<MealBreakNightWorkSlot>(mealBreakSession, card.postCode, "nightWorkAssignments")
             : resolveMealBreakSlot<MealBreakRestSlot>(mealBreakSession, card.postCode, "restAssignments");
-        const lunchExcluded = mealBreakDisplayMode === "day" ? isMealBreakExcluded(mealBreakSession, card.postCode, "lunch") : false;
-        const restExcluded = mealBreakDisplayMode === "day" ? isMealBreakExcluded(mealBreakSession, card.postCode, "rest") : false;
+        const rowRoleLabel = resolveCardRoleLabel(card);
+        const isRowIsolatedOrDiscretionary = mealBreakDisplayMode === "day" && (rowRoleLabel === "PSIQ" || rowRoleLabel === "CP");
+        const lunchExcluded = isSystemicallyExcludedFromMealBreak(card.postCode, mealBreakDisplayMode)
+            || (mealBreakDisplayMode === "day" && isMealBreakExcluded(mealBreakSession, card.postCode, "lunch"))
+            || isRowIsolatedOrDiscretionary
+            || (!mealBreakSession && mealBreakDisplayMode === "day" && mealBreakEligibility.lunchExcludedRamals.includes(card.postCode));
+        const restExcluded = isSystemicallyExcludedFromMealBreak(card.postCode, mealBreakDisplayMode)
+            || (mealBreakDisplayMode === "day" && isMealBreakExcluded(mealBreakSession, card.postCode, "rest"))
+            || isRowIsolatedOrDiscretionary
+            || (!mealBreakSession && mealBreakDisplayMode === "day" && mealBreakEligibility.restExcludedRamals.includes(card.postCode));
         const dinnerDuration = mealBreakDisplayMode === "night" ? resolveDinnerDuration(mealBreakSession, card.postCode) : null;
         const clickable = Boolean(session?.canManage);
 
@@ -1882,13 +2246,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 key={`${card.domain}-${card.postCode}`}
                 role="row"
                 className={`ops-grid-row regulation ${emphasisClass} ${clickable ? "clickable" : ""}`.trim()}
-                onClick={clickable ? () => openDrawer(card) : undefined}
+                onClick={clickable ? () => openProfessionalDrawer(card) : undefined}
                 onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={clickable ? 0 : undefined}
                 aria-label={clickable ? `Abrir ${displayDoctorName(card)} no ramal ${card.postCode}` : undefined}
             >
                 <div role="cell" className="ops-grid-cell column-time">
-                    <span className="ops-time-pill"><strong>{formatBoardTime(card.startedAt)}</strong></span>
+                    <span className={`ops-time-pill ${isDisabledRegulation ? "disabled" : ""}`.trim()}><strong>{isDisabledRegulation ? formatBoardTime(card.disabledAt ?? null) : formatBoardTime(resolveOperationalArrival(card))}</strong></span>
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
@@ -1900,7 +2264,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         <div className="ops-doctor-line primary">
                             <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
                             {renderCardIdentityTags(card)}
+                            {isDisabledRegulation && <span className="ops-inline-flag disabled">Desativado</span>}
                         </div>
+                        {isDisabledRegulation ? (
+                            <div className="ops-inline-flags subtle">
+                                {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
+                                {card.disabledReason && <span className="ops-doctor-note continuation">{card.disabledReason}</span>}
+                            </div>
+                        ) : null}
                     </div>
                 </div>
                 <div role="cell" className="ops-grid-cell column-lunch">
@@ -1925,7 +2296,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     }
 
     function renderInterventionRow(card: InterventionCard) {
-        const emphasisClass = rowEmphasisClass(card, shiftLabel, generatedAt);
+        const emphasisClass = rowEmphasisClass(card, shiftLabel, generatedAt, mealBreakSession);
         const isClickable = Boolean(session?.canManage);
         const isDisabledIntervention = card.status === "disabled";
         const isWaitingIntervention = card.status === "waiting";
@@ -1948,14 +2319,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 key={`${card.domain}-${card.baseCode}`}
                 role="row"
                 className={`ops-grid-row intervention ${emphasisClass} ${isClickable ? "clickable" : ""}`.trim()}
-                onClick={isClickable ? () => openDrawer(card) : undefined}
+                onClick={isClickable ? () => openProfessionalDrawer(card) : undefined}
                 onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={isClickable ? 0 : undefined}
                 aria-label={isClickable ? `Abrir ${displayDoctorName(card)} na base ${card.baseCode}` : undefined}
             >
                 <div role="cell" className="ops-grid-cell column-time">
                     <span className={`ops-time-pill ${isDisabledIntervention ? "disabled" : ""} ${isWaitingIntervention ? "waiting" : ""} ${isAwaitingNews ? "verification" : ""}`.trim()}>
-                        <strong>{isDisabledIntervention ? formatBoardTime(card.disabledAt ?? null) : isWaitingIntervention ? "Livre" : formatBoardTime(card.startedAt)}</strong>
+                        <strong>{isDisabledIntervention ? formatBoardTime(card.disabledAt ?? null) : isWaitingIntervention ? "Livre" : formatBoardTime(resolveOperationalArrival(card))}</strong>
                     </span>
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
@@ -2089,6 +2460,46 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     </button>
                 )}
 
+                {session?.canManage && !session.mustChangePassword && (
+                    <button
+                        type="button"
+                        className="ops-history-trigger payment-allocation"
+                        aria-label="Abrir visão principal de pagamento"
+                        title="Fechamento de pagamento"
+                        onClick={() => {
+                            setPreviousShiftOpen(false);
+                            setAuthOpen(false);
+                            router.push("/admin/payment-closing");
+                        }}
+                    >
+                        <span className="ops-history-trigger-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M3 6.75A2.75 2.75 0 0 1 5.75 4h12.5A2.75 2.75 0 0 1 21 6.75v10.5A2.75 2.75 0 0 1 18.25 20H5.75A2.75 2.75 0 0 1 3 17.25V6.75Zm2.75-1.25A1.25 1.25 0 0 0 4.5 6.75v10.5A1.25 1.25 0 0 0 5.75 18.5h12.5a1.25 1.25 0 0 0 1.25-1.25V6.75a1.25 1.25 0 0 0-1.25-1.25H5.75Zm1.5 3a.75.75 0 0 1 .75-.75h8a.75.75 0 0 1 0 1.5h-8a.75.75 0 0 1-.75-.75Zm0 3.75a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75Zm0 3.75a.75.75 0 0 1 .75-.75h3.25a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75Z" />
+                            </svg>
+                        </span>
+                    </button>
+                )}
+
+                {session?.roles.includes("admin") && !session.mustChangePassword && (
+                    <button
+                        type="button"
+                        className="ops-history-trigger slot-audit"
+                        aria-label="Abrir auditoria historica de slots"
+                        title="Auditoria de slots"
+                        onClick={() => {
+                            setPreviousShiftOpen(false);
+                            setAuthOpen(false);
+                            router.push("/admin/slot-audit");
+                        }}
+                    >
+                        <span className="ops-history-trigger-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M6.75 3.5A2.75 2.75 0 0 0 4 6.25v11A2.75 2.75 0 0 0 6.75 20h10.5A2.75 2.75 0 0 0 20 17.25v-11A2.75 2.75 0 0 0 17.25 3.5H6.75Zm0 1.5h10.5A1.25 1.25 0 0 1 18.5 6.25v11a1.25 1.25 0 0 1-1.25 1.25H6.75A1.25 1.25 0 0 1 5.5 17.25v-11A1.25 1.25 0 0 1 6.75 5Zm1.5 2.25a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Zm0 4a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 0-1.5H8.25Zm0 4a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Z" />
+                            </svg>
+                        </span>
+                    </button>
+                )}
+
                 <button
                     type="button"
                     className="ops-history-trigger bank-hours"
@@ -2107,24 +2518,74 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     </span>
                 </button>
 
-                <button
-                    type="button"
-                    className="ops-history-trigger"
-                    aria-label="Abrir fechamento do plantão anterior"
-                    title="Plantão anterior"
-                    onClick={() => {
-                        setPreviousShiftOpen((current) => !current);
-                        setAuthOpen(false);
-                    }}
-                >
-                    <span className="ops-history-trigger-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" focusable="false">
-                            <path d="M12 3.25a8.75 8.75 0 1 0 8.53 10.7.75.75 0 1 0-1.46-.35A7.25 7.25 0 1 1 12 4.75c1.94 0 3.7.76 5 2l-1.87.01a.75.75 0 0 0 0 1.5h3.67a.75.75 0 0 0 .75-.75V3.84a.75.75 0 0 0-1.5 0v1.79A8.7 8.7 0 0 0 12 3.25Zm-.75 4.5a.75.75 0 0 1 1.5 0v3.89l2.37 1.58a.75.75 0 0 1-.84 1.24l-2.7-1.8a.75.75 0 0 1-.33-.62V7.75Z" />
-                        </svg>
-                    </span>
-                </button>
-
                 {session?.canManage && (
+                    <button
+                        type="button"
+                        className={`ops-history-trigger historical-review ${viewMode === "history" ? "active" : ""}`.trim()}
+                        aria-label={viewMode === "history" ? "Voltar para a mesa operacional atual" : "Abrir auditoria histórica da cobertura"}
+                        title={viewMode === "history" ? "Voltar ao quadro atual" : "Modo histórico"}
+                        onClick={() => {
+                            setPreviousShiftOpen(false);
+                            setAuthOpen(false);
+                            setDrawerOpen(false);
+                            setProfessionalDrawerOpen(false);
+                            setPriorityDrawerOpen(false);
+                            setTransferConfirmOpen(false);
+                            setViewMode((current) => current === "history" ? "live" : "history");
+                        }}
+                    >
+                        <span className="ops-history-trigger-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M12 3.25a8.75 8.75 0 1 0 8.53 10.7.75.75 0 1 0-1.46-.35A7.25 7.25 0 1 1 12 4.75c1.94 0 3.7.76 5 2l-1.87.01a.75.75 0 0 0 0 1.5h3.67a.75.75 0 0 0 .75-.75V3.84a.75.75 0 0 0-1.5 0v1.79A8.7 8.7 0 0 0 12 3.25Zm-.75 4.5a.75.75 0 0 1 1.5 0v3.89l2.37 1.58a.75.75 0 0 1-.84 1.24l-2.7-1.8a.75.75 0 0 1-.33-.62V7.75Z" />
+                            </svg>
+                        </span>
+                    </button>
+                )}
+
+                {viewMode === "live" && (
+                    <button
+                        type="button"
+                        className="ops-history-trigger"
+                        aria-label="Abrir fechamento do plantão anterior"
+                        title="Plantão anterior"
+                        onClick={() => {
+                            setPreviousShiftOpen((current) => !current);
+                            setAuthOpen(false);
+                        }}
+                    >
+                        <span className="ops-history-trigger-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M12 3.25a8.75 8.75 0 1 0 8.53 10.7.75.75 0 1 0-1.46-.35A7.25 7.25 0 1 1 12 4.75c1.94 0 3.7.76 5 2l-1.87.01a.75.75 0 0 0 0 1.5h3.67a.75.75 0 0 0 .75-.75V3.84a.75.75 0 0 0-1.5 0v1.79A8.7 8.7 0 0 0 12 3.25Zm-.75 4.5a.75.75 0 0 1 1.5 0v3.89l2.37 1.58a.75.75 0 0 1-.84 1.24l-2.7-1.8a.75.75 0 0 1-.33-.62V7.75Z" />
+                            </svg>
+                        </span>
+                    </button>
+                )}
+
+                {viewMode === "live" && session?.canManage && (
+                    <button
+                        type="button"
+                        className="ops-history-trigger command-drawer"
+                        aria-label="Abrir fila critica e vigilancia"
+                        title="Fila critica"
+                        onClick={() => {
+                            setPreviousShiftOpen(false);
+                            setAuthOpen(false);
+                            setProfessionalDrawerOpen(false);
+                            openDrawer();
+                        }}
+                    >
+                        <span className="ops-history-trigger-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false">
+                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
+                            </svg>
+                        </span>
+                        {criticalCards.length > 0 && (
+                            <span className="ops-trigger-badge critical">{criticalCards.length}</span>
+                        )}
+                    </button>
+                )}
+
+                {viewMode === "live" && session?.canManage && (
                     <button
                         type="button"
                         className="ops-history-trigger priorities"
@@ -2188,6 +2649,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 </span>
                                 {session.roles.includes("admin") && !session.mustChangePassword && (
                                     <>
+                                        <a className="ops-auth-inline-link" href="/admin/payment-closing">
+                                            Abrir fechamento de pagamento
+                                        </a>
+                                        <a className="ops-auth-inline-link" href="/admin/slot-audit">
+                                            Auditar slots historicos
+                                        </a>
                                         <a className="ops-auth-inline-link" href="/admin/chief-access">
                                             Provisionar chief
                                         </a>
@@ -2195,6 +2662,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                             Abrir auditoria mensal
                                         </a>
                                     </>
+                                )}
+
+                                {session.roles.includes("chief") && !session.mustChangePassword && !session.roles.includes("admin") && (
+                                    <a className="ops-auth-inline-link" href="/admin/payment-closing">
+                                        Abrir fechamento de pagamento
+                                    </a>
                                 )}
                             </div>
 
@@ -2314,983 +2787,1235 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 </div>
             )}
 
-            <main className="ops-shell">
-                <section className="ops-command-center">
-                    <section className="ops-main-grid">
-                        <section className="ops-operational-panel regulation">
-                            <header className="ops-panel-header regulation">
-                                <div className="ops-panel-heading-stack">
-                                    <h2>Regulação</h2>
-                                    {mealBreakDisplayMode === "night" && (
-                                        <div className="ops-panel-legend" aria-label="Legenda do jantar noturno">
-                                            <span className="ops-panel-legend-label">Jantar</span>
-                                            <span className="ops-slot-chip dinner duration-one-hour">1h</span>
-                                            <span className="ops-slot-chip dinner duration-half-hour">30m</span>
-                                        </div>
-                                    )}
-                                </div>
-                            </header>
-
-                            <div className="ops-panel-table-wrap regulation">
-                                <div className="ops-grid-table regulation" role="table" aria-label="Quadro operacional da regulação">
-                                    <div className="ops-grid-header" role="rowgroup">
-                                        <div className="ops-grid-row ops-grid-row-header regulation" role="row">
-                                            <div role="columnheader" className="ops-grid-cell column-time">Chegada</div>
-                                            <div role="columnheader" className="ops-grid-cell column-code">Ramal</div>
-                                            <div role="columnheader" className="ops-grid-cell column-name">Nome</div>
-                                            <div role="columnheader" className="ops-grid-cell column-lunch">{mealBreakDisplayMode === "night" ? "Jantar" : "Almoço"}</div>
-                                            <div role="columnheader" className="ops-grid-cell column-rest">{mealBreakDisplayMode === "night" ? "Trabalho" : "Descanso"}</div>
-                                        </div>
-                                    </div>
-
-                                    <div className="ops-grid-body" role="rowgroup">
-                                        {visibleRegulationCards.length > 0 ? visibleRegulationCards.map((card) => renderRegulationRow(card)) : (
-                                            <div className="ops-empty-row">Nenhum ramal ativo na regulação neste turno.</div>
-                                        )}
-                                    </div>
-                                </div>
+            {undoBanner && (
+                <div className="ops-undo-banner">
+                    <div className="ops-undo-banner-content">
+                        <span className="ops-undo-banner-label">{undoBanner.message}</span>
+                        {undoNotesOpen ? (
+                            <div className="ops-undo-form">
+                                <input
+                                    type="text"
+                                    className="ops-undo-notes-input"
+                                    placeholder="Motivo do desfazer (min. 8 caracteres)"
+                                    value={undoNotes}
+                                    onChange={(event) => setUndoNotes(event.target.value)}
+                                    autoFocus
+                                />
+                                <button
+                                    type="button"
+                                    className="ops-undo-confirm-btn"
+                                    disabled={isUndoing || undoNotes.trim().length < 8}
+                                    onClick={() => void handleUndo()}
+                                >
+                                    {isUndoing ? "Desfazendo..." : "Confirmar"}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="ops-undo-cancel-btn"
+                                    onClick={() => { setUndoNotesOpen(false); setUndoNotes(""); }}
+                                >
+                                    Cancelar
+                                </button>
                             </div>
-                        </section>
-
-                        <section className="ops-operational-panel intervention">
-                            <header className="ops-panel-header intervention">
-                                <h2>Intervenção</h2>
-                            </header>
-
-                            <div className="ops-panel-table-wrap intervention">
-                                <div className="ops-grid-table intervention" role="table" aria-label="Quadro operacional da intervenção">
-                                    <div className="ops-grid-header" role="rowgroup">
-                                        <div className="ops-grid-row ops-grid-row-header intervention" role="row">
-                                            <div role="columnheader" className="ops-grid-cell column-time">Chegada</div>
-                                            <div role="columnheader" className="ops-grid-cell column-code">Base</div>
-                                            <div role="columnheader" className="ops-grid-cell column-name">Nome</div>
-                                        </div>
-                                    </div>
-
-                                    <div className="ops-grid-body" role="rowgroup">
-                                        {visibleInterventionCards.length > 0 ? visibleInterventionCards.map((card) => renderInterventionRow(card)) : (
-                                            <div className="ops-empty-row">Nenhuma base ativa ou aguardando neste turno.</div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
-                    </section>
-                </section>
-            </main>
-
-            <div className={`ops-history-backdrop ${previousShiftOpen ? "open" : ""}`} onClick={() => setPreviousShiftOpen(false)} />
-            <aside className={`ops-history-drawer ${previousShiftOpen ? "open" : ""}`} aria-hidden={!previousShiftOpen}>
-                <header className="ops-history-header">
-                    <div>
-                        <p className="ops-column-kicker">Fechamento operacional</p>
-                        <h2>Plantão anterior</h2>
-                    </div>
-                    <button type="button" className="chief-close-button" onClick={() => setPreviousShiftOpen(false)}>Fechar</button>
-                </header>
-
-                <div className="ops-history-summary">
-                    <span className="ops-section-shift">Dia operacional {formatOperationalDayLabel(previousShift.operationalDate)}</span>
-                    <span className="ops-section-count">Titulares e substituicoes classificados em P invertido, P, SD e SN</span>
-                    <span className="ops-section-updated">{filteredPreviousShiftTotal} de {previousShift.totalEntries} registros visiveis</span>
-                </div>
-
-                <section className="ops-history-search-shell">
-                    <div className="ops-history-search-copy">
-                        <p className="ops-section-eyebrow">Consulta rapida</p>
-                        <h3>Busque o medico e leia o plantao como entidade fechada</h3>
-                        <p>
-                            Aqui o eixo principal e responsabilidade operacional. O horario real continua importante para banco, auditoria e pagamento, mas o chefe consulta primeiro quem assumiu e quem entregou cada plantao.
-                        </p>
-                    </div>
-
-                    <label className="ops-history-search-field">
-                        <span className="ops-history-search-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M10.5 4.75a5.75 5.75 0 1 0 0 11.5 5.75 5.75 0 0 0 0-11.5Zm-7.25 5.75a7.25 7.25 0 1 1 12.39 5.12l4 4a.75.75 0 1 1-1.06 1.06l-4-4A7.25 7.25 0 0 1 3.25 10.5Z" />
-                            </svg>
-                        </span>
-                        <input
-                            type="search"
-                            value={previousShiftQuery}
-                            onChange={(event) => setPreviousShiftQuery(event.target.value)}
-                            placeholder="Buscar medico, base, ramal ou regra"
-                            aria-label="Buscar medico no fechamento do plantao anterior"
-                        />
-                        {previousShiftQuery && (
-                            <button type="button" className="ops-history-search-clear" onClick={() => setPreviousShiftQuery("")}>
-                                Limpar
+                        ) : (
+                            <button
+                                type="button"
+                                className="ops-undo-btn"
+                                onClick={() => setUndoNotesOpen(true)}
+                            >
+                                Desfazer
                             </button>
                         )}
-                    </label>
-                </section>
-
-                <div className="ops-history-grid">
-                    {previousShiftSections.map((section) => renderPreviousShiftSection(section))}
+                        <button
+                            type="button"
+                            className="ops-undo-dismiss"
+                            onClick={() => setUndoBanner(null)}
+                            aria-label="Fechar"
+                        >
+                            ✕
+                        </button>
+                    </div>
                 </div>
-            </aside>
+            )}
 
-            <div className={`ops-priority-backdrop ${priorityDrawerOpen ? "open" : ""}`} onClick={closePriorityDrawer} />
-            <aside className={`ops-priority-drawer ${priorityDrawerOpen ? "open" : ""}`} aria-hidden={!priorityDrawerOpen}>
-                <header className="ops-priority-header">
-                    <div>
-                        <p className="ops-column-kicker">Fila auditavel</p>
-                        <h2>Prioridades da escolha</h2>
-                    </div>
-                    <button type="button" className="chief-close-button" onClick={closePriorityDrawer}>Fechar</button>
-                </header>
-
-                {(prioritySuccessMessage || priorityErrorMessage) && (
-                    <div className={`chief-flash ${priorityErrorMessage ? "error" : "success"}`}>
-                        {priorityErrorMessage || prioritySuccessMessage}
-                    </div>
-                )}
-
-                <section className="ops-priority-summary">
-                    <span className="ops-section-shift">
-                        {priorityView?.mode === "night" ? "Jantar e trabalho" : "Almoco e descanso"}
-                    </span>
-                    <span className="ops-section-count">
-                        {priorityView ? `${priorityView.entries.length} medicos elegiveis` : "Carregando fila"}
-                    </span>
-                    <span className="ops-section-updated">
-                        {priorityView ? `Atualizado ${formatDateTimeDetail(priorityView.updatedAt)}` : "Aguardando leitura operacional"}
-                    </span>
-                </section>
-
-                <section className="ops-priority-copy-card">
-                    <p className="ops-section-eyebrow">Leitura de chefia</p>
-                    <h3>Confira a ordem antes de abrir o processo no bot</h3>
-                    <p>
-                        Cada linha mostra a hora que efetivamente pesa para o ranking. Quando houver continuidade entre plantões, penalidade de RMT ou ajuste manual de chefia, o motivo aparece junto na linha.
-                    </p>
-                </section>
-
-                <section className="ops-priority-list">
-                    {isPriorityLoading && <div className="ops-history-empty-state">Carregando a fila de prioridades...</div>}
-
-                    {!isPriorityLoading && priorityView?.entries.length === 0 && (
-                        <div className="ops-history-empty-state">Nenhum medico elegivel na fila atual de prioridade.</div>
-                    )}
-
-                    {!isPriorityLoading && priorityView?.entries.map((entry, index) => {
-                        const notesValue = priorityNotesByRamal[entry.ramal] ?? "";
-                        const canMoveUp = index > 0;
-                        const canMoveDown = index < priorityView.entries.length - 1;
-
-                        return (
-                            <article key={`priority-${entry.ramal}`} className={`ops-priority-entry ${entry.manualJustification ? "manual" : ""}`.trim()}>
-                                <div className="ops-priority-entry-header">
-                                    <div className="ops-priority-rank-block">
-                                        <strong>{String(entry.rank).padStart(2, "0")}</strong>
-                                        <span>{entry.ramal}</span>
+            <main className={`ops-shell ${viewMode === "history" ? "ops-shell-history" : ""}`.trim()}>
+                {viewMode === "history" ? (
+                    <OperationalHistoryPanel
+                        session={session}
+                        doctors={doctors}
+                        onReturnLive={() => setViewMode("live")}
+                    />
+                ) : (
+                    <section className="ops-command-center">
+                        <section className="ops-main-grid">
+                            <section className="ops-operational-panel regulation">
+                                <header className="ops-panel-header regulation">
+                                    <div className="ops-panel-heading-stack">
+                                        <h2>Regulação</h2>
+                                        {mealBreakDisplayMode === "night" && (
+                                            <div className="ops-panel-legend" aria-label="Legenda do jantar noturno">
+                                                <span className="ops-panel-legend-label">Jantar</span>
+                                                <span className="ops-slot-chip dinner duration-one-hour">1h</span>
+                                                <span className="ops-slot-chip dinner duration-half-hour">30m</span>
+                                            </div>
+                                        )}
                                     </div>
+                                </header>
 
-                                    <div className="ops-priority-entry-copy">
-                                        <div className="ops-priority-name-row">
-                                            <strong>{entry.name}</strong>
-                                            {entry.roleLabel && renderRoleBadge(entry.roleLabel)}
-                                            {entry.automaticRank !== entry.rank && <span className="ops-inline-flag warning">auto {entry.automaticRank}</span>}
+                                <div className="ops-panel-table-wrap regulation">
+                                    <div className="ops-grid-table regulation" role="table" aria-label="Quadro operacional da regulação">
+                                        <div className="ops-grid-header" role="rowgroup">
+                                            <div className="ops-grid-row ops-grid-row-header regulation" role="row">
+                                                <div role="columnheader" className="ops-grid-cell column-time">Chegada</div>
+                                                <div role="columnheader" className="ops-grid-cell column-code">Ramal</div>
+                                                <div role="columnheader" className="ops-grid-cell column-name">Nome</div>
+                                                <div role="columnheader" className="ops-grid-cell column-lunch">{mealBreakDisplayMode === "night" ? "Jantar" : "Almoço"}</div>
+                                                <div role="columnheader" className="ops-grid-cell column-rest">{mealBreakDisplayMode === "night" ? "Trabalho" : "Descanso"}</div>
+                                            </div>
                                         </div>
-                                        <span className="ops-priority-time-row">
-                                            Prioridade {formatBoardTime(entry.priorityStartedAt)}
-                                            {entry.continuityStartedAt && entry.continuityStartedAt !== entry.actualStartedAt && ` • chegada original ${formatBoardTime(entry.actualStartedAt)}`}
-                                        </span>
-                                        {entry.explanation && <p className="ops-priority-explanation">{entry.explanation}</p>}
-                                        {!entry.explanation && <p className="ops-priority-explanation neutral">Ordem direta pela chegada operacional.</p>}
+
+                                        <div className="ops-grid-body" role="rowgroup">
+                                            {visibleRegulationCards.length > 0 ? visibleRegulationCards.map((card) => renderRegulationRow(card)) : (
+                                                <div className="ops-empty-row">Nenhum ramal ativo na regulação neste turno.</div>
+                                            )}
+                                            {session?.canManage && hasAvailableRegulationPost && (
+                                                <div
+                                                    role="row"
+                                                    className="ops-grid-row regulation add-row clickable"
+                                                    onClick={() => openGenericStartDrawer("regulation")}
+                                                    onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") openGenericStartDrawer("regulation"); }}
+                                                    tabIndex={0}
+                                                    aria-label="Registrar nova chegada na regulação"
+                                                >
+                                                    <div role="cell" className="ops-grid-cell column-time">
+                                                        <span className="ops-time-pill add"><strong>+</strong></span>
+                                                    </div>
+                                                    <div role="cell" className="ops-grid-cell column-name" style={{ gridColumn: "span 4" }}>
+                                                        <span className="ops-add-row-label">Registrar chegada</span>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
+                            </section>
 
-                                <div className="ops-priority-actions">
-                                    <label className="chief-field full-width">
-                                        <span>Justificativa do ajuste</span>
-                                        <input
-                                            className="chief-input"
-                                            value={notesValue}
-                                            onChange={(event) => setPriorityNotesByRamal((current) => ({ ...current, [entry.ramal]: event.target.value }))}
-                                            placeholder="Ex.: continua desde a manhã, presencial em IES, priorizar por cobertura"
-                                            disabled={isPrioritySaving || isRefreshing}
-                                        />
-                                    </label>
+                            <section className="ops-operational-panel intervention">
+                                <header className="ops-panel-header intervention">
+                                    <h2>Intervenção</h2>
+                                </header>
 
-                                    <div className="ops-priority-move-buttons">
-                                        <button
-                                            type="button"
-                                            className="chief-secondary-button"
-                                            onClick={() => void handlePriorityMove(entry.ramal, 0)}
-                                            disabled={isPrioritySaving || isRefreshing || index === 0}
-                                        >
-                                            Topo
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="chief-secondary-button"
-                                            onClick={() => void handlePriorityMove(entry.ramal, index - 1)}
-                                            disabled={isPrioritySaving || isRefreshing || !canMoveUp}
-                                        >
-                                            Subir
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="chief-primary-button"
-                                            onClick={() => void handlePriorityMove(entry.ramal, index + 1)}
-                                            disabled={isPrioritySaving || isRefreshing || !canMoveDown}
-                                        >
-                                            Descer
-                                        </button>
+                                <div className="ops-panel-table-wrap intervention">
+                                    <div className="ops-grid-table intervention" role="table" aria-label="Quadro operacional da intervenção">
+                                        <div className="ops-grid-header" role="rowgroup">
+                                            <div className="ops-grid-row ops-grid-row-header intervention" role="row">
+                                                <div role="columnheader" className="ops-grid-cell column-time">Chegada</div>
+                                                <div role="columnheader" className="ops-grid-cell column-code">Base</div>
+                                                <div role="columnheader" className="ops-grid-cell column-name">Nome</div>
+                                            </div>
+                                        </div>
+
+                                        <div className="ops-grid-body" role="rowgroup">
+                                            {visibleInterventionCards.length > 0 ? visibleInterventionCards.map((card) => renderInterventionRow(card)) : (
+                                                <div className="ops-empty-row">Nenhuma base ativa ou aguardando neste turno.</div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
-                            </article>
-                        );
-                    })}
-                </section>
-            </aside>
-
-            <div className={`chief-drawer-backdrop ${drawerOpen ? "open" : ""}`} onClick={closeDrawer} />
-            <aside className={`chief-drawer ${drawerOpen ? "open" : ""}`} aria-hidden={!drawerOpen}>
-                <header className="chief-drawer-header">
-                    <div>
-                        <p className="ops-column-kicker">Comando de chefia</p>
-                        <h2>Fila critica e correcao rapida</h2>
-                    </div>
-                    <button type="button" className="chief-close-button" onClick={closeDrawer}>Fechar</button>
-                </header>
-
-                {(successMessage || errorMessage) && (
-                    <div className={`chief-flash ${errorMessage ? "error" : "success"}`}>
-                        {errorMessage || successMessage}
-                    </div>
+                            </section>
+                        </section>
+                    </section>
                 )}
+            </main>
 
-                {!session?.canManage && !session?.mustChangePassword && (
-                    <div className="chief-auth-warning">
-                        Esta mesa esta em leitura. Entre com perfil chief ou admin para habilitar abertura, correcao e encerramento.
-                    </div>
-                )}
+            {viewMode === "live" && (
+                <>
+                    <div className={`ops-history-backdrop ${previousShiftOpen ? "open" : ""}`} onClick={() => setPreviousShiftOpen(false)} />
+                    <aside className={`ops-history-drawer ${previousShiftOpen ? "open" : ""}`} aria-hidden={!previousShiftOpen}>
+                        <header className="ops-history-header">
+                            <div>
+                                <p className="ops-column-kicker">Fechamento operacional</p>
+                                <h2>Plantão anterior</h2>
+                            </div>
+                            <button type="button" className="chief-close-button" onClick={() => setPreviousShiftOpen(false)}>Fechar</button>
+                        </header>
 
-                {session?.mustChangePassword && (
-                    <div className="chief-auth-warning">
-                        Esta sessao ainda usa senha temporaria. Troque a senha no controle de acesso para liberar qualquer operacao de chefia.
-                    </div>
-                )}
-
-                <section className="chief-drawer-section">
-                    <div className="chief-stat-grid">
-                        <article className="chief-stat-card critical">
-                            <span className="ops-summary-label">Pendencias imediatas</span>
-                            <strong>{criticalCards.length}</strong>
-                        </article>
-                        <article className="chief-stat-card watch">
-                            <span className="ops-summary-label">Coberturas sob vigia</span>
-                            <strong>{watchCards.length}</strong>
-                        </article>
-                    </div>
-                </section>
-
-                <section className="chief-drawer-section">
-                    <div className="chief-section-heading">
-                        <h3>Vazios que pedem acao</h3>
-                        <span>{criticalCards.length}</span>
-                    </div>
-                    <div className="chief-queue-list">
-                        {criticalCards.length === 0 && <p className="chief-empty-copy">Nenhum vazio operacional neste instante.</p>}
-                        {criticalCards.map((card) => (
-                            <button key={`critical-${card.domain}-${cardCode(card)}`} type="button" className="chief-queue-item critical" onClick={() => openAction(card, "start")}>
-                                <strong>{cardCode(card)}</strong>
-                                <span>{cardLabel(card)}</span>
-                                <small>Abrir cobertura agora</small>
-                            </button>
-                        ))}
-                    </div>
-                </section>
-
-                <section className="chief-drawer-section">
-                    <div className="chief-section-heading">
-                        <h3>Tempo sob vigilância</h3>
-                        <span>{watchCards.length}</span>
-                    </div>
-                    <div className="chief-queue-list">
-                        {watchCards.length === 0 && <p className="chief-empty-copy">Nenhuma cobertura longa exigindo vigia especial.</p>}
-                        {watchCards.map((card) => (
-                            <button key={`watch-${card.domain}-${cardCode(card)}`} type="button" className="chief-queue-item watch" onClick={() => openAction(card, "correct")} disabled={!canEditActiveCard(card)}>
-                                <strong>{cardCode(card)}</strong>
-                                <span>{displayDoctorName(card)}</span>
-                                <small>{canEditActiveCard(card) ? `${formatMinutesLabel(minutesSince(generatedAt, card.startedAt))} em curso` : "Leitura ao vivo sem ocupacao v2"}</small>
-                            </button>
-                        ))}
-                    </div>
-                </section>
-
-                <section className="chief-drawer-section focus">
-                    {!selectedCard || !actionMode ? (
-                        <div className="chief-focus-empty">
-                            <h3>Selecione um card para acao rapida</h3>
-                            <p>Use os chips do quadro ou as filas deste drawer para abrir cobertura, corrigir medico ou horario e encerrar registro.</p>
+                        <div className="ops-history-summary">
+                            <span className="ops-section-shift">Dia operacional {formatOperationalDayLabel(previousShift.operationalDate)}</span>
+                            <span className="ops-section-count">Titulares e substituicoes classificados em P invertido, P, SD e SN</span>
+                            <span className="ops-section-updated">{filteredPreviousShiftTotal} de {previousShift.totalEntries} registros visiveis</span>
                         </div>
-                    ) : (
-                        <div className="chief-focus-panel">
-                            {canContinueIntervention(selectedCard, generatedAt) && session?.canManage && (
-                                <div className="chief-verification-strip">
-                                    <div>
-                                        <p className="ops-column-kicker">Pendencia de virada</p>
-                                        <strong>Aguardando noticia</strong>
-                                        <span>
-                                            Esse medico entrou antes da janela tolerada do turno atual. Confirme se vai continuar ou informe a saida com horario correto.
-                                        </span>
-                                    </div>
-                                    <div className="chief-timing-grid">
-                                        <article className="chief-timing-card">
-                                            <span>Chegada registrada</span>
-                                            <strong>{formatDateTimeDetail(selectedCard.startedAt)}</strong>
-                                        </article>
-                                        <article className="chief-timing-card">
-                                            <span>Saida prevista</span>
-                                            <strong>{formatDateTimeDetail(selectedCard.scheduledEndAt)}</strong>
-                                        </article>
-                                    </div>
-                                    <p className="chief-bank-hours-copy">
-                                        Banco de horas depende destes horarios. Use <strong>Continuar</strong> apenas se o medico realmente seguir no plantao. Se ele saiu, registre a saida com o horario mais fiel possivel.
-                                    </p>
-                                    <label className="chief-field full-width">
-                                        <span>{requiresReasonForContinuation(selectedCard, generatedAt) ? "Justificativa obrigatoria" : "Justificativa operacional"}</span>
-                                        <textarea
-                                            className="chief-input chief-textarea compact"
-                                            value={formState.notes}
-                                            onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
-                                            placeholder={requiresReasonForContinuation(selectedCard, generatedAt)
-                                                ? "Explique por que a continuidade foi liberada apos 07:15 ou 19:15"
-                                                : "Motivo operacional da continuidade, se necessario"}
-                                        />
-                                    </label>
-                                    <div className="chief-verification-actions">
-                                        <button
-                                            type="button"
-                                            className="chief-secondary-button"
-                                            onClick={() => {
-                                                setActionMode("end");
-                                                setFormState((current) => ({ ...current, endedAt: toLocalDateTimeValue() }));
-                                            }}
-                                            disabled={isSubmitting || isRefreshing}
-                                        >
-                                            Informar saida
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="chief-primary-button"
-                                            onClick={() => void handleContinueCard(selectedCard)}
-                                            disabled={isSubmitting || isRefreshing}
-                                        >
-                                            {isSubmitting || isRefreshing ? "Aplicando..." : "Continuar"}
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
 
-                            <div className="chief-focus-header">
-                                <div>
-                                    <p className="ops-column-kicker">Ação ativa</p>
-                                    <h3>{actionTitle(actionMode, selectedCard)}</h3>
-                                </div>
-                                <span className={`ops-priority-tag ${resolvePriority(selectedCard, generatedAt)}`}>{priorityLabel(resolvePriority(selectedCard, generatedAt))}</span>
+                        <section className="ops-history-search-shell">
+                            <div className="ops-history-search-copy">
+                                <p className="ops-section-eyebrow">Consulta rapida</p>
+                                <h3>Busque o medico e leia o plantao como entidade fechada</h3>
+                                <p>
+                                    Aqui o eixo principal e responsabilidade operacional. O horario real continua importante para banco, auditoria e pagamento, mas o chefe consulta primeiro quem assumiu e quem entregou cada plantao.
+                                </p>
                             </div>
 
-                            <div className="chief-context-card">
-                                <strong>{displayDoctorName(selectedCard)}</strong>
-                                <div className="chief-context-badges">
-                                    {renderRoleBadge(resolveCardRoleLabel(selectedCard))}
-                                    {selectedCard.domain === "intervention" && selectedCard.status === "disabled" && <span className="ops-inline-flag disabled">Desativada</span>}
-                                </div>
-                                <span>{cardLabel(selectedCard)}</span>
-                                <small>
-                                    {selectedCard.domain === "intervention" && selectedCard.status === "disabled"
-                                        ? `Desativada desde ${formatBoardTime(selectedCard.disabledAt ?? null)}`
-                                        : selectedCard.status === "waiting"
-                                            ? "Sem confirmacao ativa no quadro"
-                                            : `Marcado desde ${formatBoardTime(selectedCard.startedAt)}`}
-                                </small>
+                            <label className="ops-history-search-field">
+                                <span className="ops-history-search-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" focusable="false">
+                                        <path d="M10.5 4.75a5.75 5.75 0 1 0 0 11.5 5.75 5.75 0 0 0 0-11.5Zm-7.25 5.75a7.25 7.25 0 1 1 12.39 5.12l4 4a.75.75 0 1 1-1.06 1.06l-4-4A7.25 7.25 0 0 1 3.25 10.5Z" />
+                                    </svg>
+                                </span>
+                                <input
+                                    type="search"
+                                    value={previousShiftQuery}
+                                    onChange={(event) => setPreviousShiftQuery(event.target.value)}
+                                    placeholder="Buscar medico, base, ramal ou regra"
+                                    aria-label="Buscar medico no fechamento do plantao anterior"
+                                />
+                                {previousShiftQuery && (
+                                    <button type="button" className="ops-history-search-clear" onClick={() => setPreviousShiftQuery("")}>
+                                        Limpar
+                                    </button>
+                                )}
+                            </label>
+                        </section>
+
+                        <div className="ops-history-grid">
+                            {previousShiftSections.map((section) => renderPreviousShiftSection(section))}
+                        </div>
+                    </aside>
+                </>
+            )}
+
+            {viewMode === "live" && (
+                <>
+                    <div className={`ops-priority-backdrop ${priorityDrawerOpen ? "open" : ""}`} onClick={closePriorityDrawer} />
+                    <aside className={`ops-priority-drawer ${priorityDrawerOpen ? "open" : ""}`} aria-hidden={!priorityDrawerOpen}>
+                        <header className="ops-priority-header">
+                            <div>
+                                <p className="ops-column-kicker">Fila auditavel</p>
+                                <h2>Prioridades da escolha</h2>
                             </div>
+                            <button type="button" className="chief-close-button" onClick={closePriorityDrawer}>Fechar</button>
+                        </header>
 
-                            {selectedCard.domain === "intervention" && session?.canManage && (
-                                <div className="chief-departure-strip">
-                                    <div>
-                                        <p className="ops-column-kicker">Estado da USA</p>
-                                        <strong>{selectedCard.status === "disabled" ? "Reativar base" : "Desativar base"}</strong>
-                                        <span>
-                                            {selectedCard.status === "disabled"
-                                                ? "Use quando a USA voltar a operar. A base sai do estado desativada e volta para leitura normal do quadro."
-                                                : "Use quando a USA saiu de operação. A ação encerra coberturas abertas nesse horário para proteger banco de horas e pagamento."}
-                                        </span>
-                                    </div>
+                        {(prioritySuccessMessage || priorityErrorMessage) && (
+                            <div className={`chief-flash ${priorityErrorMessage ? "error" : "success"}`}>
+                                {priorityErrorMessage || prioritySuccessMessage}
+                            </div>
+                        )}
 
-                                    <div className="chief-timing-grid">
-                                        <label className="chief-field">
-                                            <span>{selectedCard.status === "disabled" ? "Horario da reativacao" : "Horario da desativacao"}</span>
-                                            <input
-                                                type="datetime-local"
-                                                className="chief-input"
-                                                value={baseStateAt}
-                                                onChange={(event) => setBaseStateAt(event.target.value)}
-                                            />
-                                        </label>
-                                        <label className="chief-field">
-                                            <span>Motivo operacional</span>
-                                            <textarea
-                                                className="chief-input chief-textarea compact"
-                                                value={baseStateReason}
-                                                onChange={(event) => setBaseStateReason(event.target.value)}
-                                                placeholder={selectedCard.status === "disabled"
-                                                    ? "Ex.: USA reaberta e pronta para nova cobertura"
-                                                    : "Ex.: USA recolhida, indisponível, veículo fora de operação"}
-                                            />
-                                        </label>
-                                    </div>
+                        <section className="ops-priority-summary">
+                            <span className="ops-section-shift">
+                                {priorityView?.mode === "night" ? "Jantar e trabalho" : "Almoco e descanso"}
+                            </span>
+                            <span className="ops-section-count">
+                                {priorityView ? `${priorityView.entries.length} medicos elegiveis` : "Carregando fila"}
+                            </span>
+                            <span className="ops-section-updated">
+                                {priorityView ? `Atualizado ${formatDateTimeDetail(priorityView.updatedAt)}` : "Aguardando leitura operacional"}
+                            </span>
+                        </section>
 
-                                    <div className="chief-verification-actions">
-                                        <button
-                                            type="button"
-                                            className={selectedCard.status === "disabled" ? "chief-primary-button" : "chief-danger-button"}
-                                            onClick={() => void handleInterventionBaseState(selectedCard, selectedCard.status === "disabled" ? "reactivate" : "deactivate")}
-                                            disabled={isSubmitting || isRefreshing}
-                                        >
-                                            {isSubmitting || isRefreshing
-                                                ? "Aplicando..."
-                                                : selectedCard.status === "disabled"
-                                                    ? "Reativar base"
-                                                    : "Desativar base"}
-                                        </button>
-                                    </div>
-                                </div>
+                        <section className="ops-priority-copy-card">
+                            <p className="ops-section-eyebrow">Leitura de chefia</p>
+                            <h3>Confira a ordem antes de abrir o processo no bot</h3>
+                            <p>
+                                Cada linha mostra a hora que efetivamente pesa para o ranking. Quando houver continuidade entre plantões, penalidade de RMT ou ajuste manual de chefia, o motivo aparece junto na linha.
+                            </p>
+                        </section>
+
+                        <section className="ops-priority-list">
+                            {isPriorityLoading && <div className="ops-history-empty-state">Carregando a fila de prioridades...</div>}
+
+                            {!isPriorityLoading && priorityView?.entries.length === 0 && (
+                                <div className="ops-history-empty-state">Nenhum medico elegivel na fila atual de prioridade.</div>
                             )}
 
-                            {showDayMealBreakSection && (
-                                <div className="chief-day-meal-break-card">
-                                    <div className="chief-section-heading">
-                                        <div>
-                                            <p className="ops-column-kicker">Divisao diurna</p>
-                                            <h3>Almoco e descanso</h3>
+                            {!isPriorityLoading && priorityView?.entries.map((entry, index) => {
+                                const notesValue = priorityNotesByRamal[entry.ramal] ?? "";
+                                const canMoveUp = index > 0;
+                                const canMoveDown = index < priorityView.entries.length - 1;
+
+                                return (
+                                    <article key={`priority-${entry.ramal}`} className={`ops-priority-entry ${entry.manualJustification ? "manual" : ""}`.trim()}>
+                                        <div className="ops-priority-entry-header">
+                                            <div className="ops-priority-rank-block">
+                                                <strong>{String(entry.rank).padStart(2, "0")}</strong>
+                                                <span>{entry.ramal}</span>
+                                            </div>
+
+                                            <div className="ops-priority-entry-copy">
+                                                <div className="ops-priority-name-row">
+                                                    <strong>{entry.name}</strong>
+                                                    {entry.roleLabel && renderRoleBadge(entry.roleLabel)}
+                                                    {entry.automaticRank !== entry.rank && <span className="ops-inline-flag warning">auto {entry.automaticRank}</span>}
+                                                </div>
+                                                <span className="ops-priority-time-row">
+                                                    Prioridade {formatBoardTime(entry.priorityStartedAt)}
+                                                    {entry.continuityStartedAt && entry.continuityStartedAt !== entry.actualStartedAt && ` • chegada original ${formatBoardTime(entry.actualStartedAt)}`}
+                                                </span>
+                                                {entry.explanation && <p className="ops-priority-explanation">{entry.explanation}</p>}
+                                                {!entry.explanation && <p className="ops-priority-explanation neutral">Ordem direta pela chegada operacional.</p>}
+                                            </div>
                                         </div>
-                                        {selectedRegulationRamal && isDayMealBreakEligible(mealBreakSession, selectedRegulationRamal) && (
-                                            <div className="chief-night-current">
-                                                {renderScheduleChip({
-                                                    slot: selectedLunchCurrent,
-                                                    kind: "lunch",
-                                                    pending: !selectedLunchCurrent,
-                                                    excluded: selectedLunchExcluded,
-                                                })}
-                                                {renderScheduleChip({
-                                                    slot: selectedRestCurrent,
-                                                    kind: "rest",
-                                                    pending: !selectedRestCurrent,
-                                                    excluded: selectedRestExcluded,
-                                                })}
-                                            </div>
-                                        )}
-                                    </div>
 
-                                    {!canEditSelectedDayMealBreak ? (
-                                        <p className="chief-field-hint">O posto 2031 fica fora da divisao automatica de almoco e descanso.</p>
-                                    ) : (
-                                        <>
-                                            <div className="chief-inline-help chief-meal-break-eligibility-note">
-                                                <strong>Vagas do almoco:</strong> {formatMealBreakCapacity(remainingDayLunchSlots, "Sem vagas livres no momento.")}
-                                                <br />
-                                                <strong>Vagas do descanso:</strong> {mealBreakSession?.stage === "awaiting_rest_choice" || mealBreakSession?.stage === "completed"
-                                                    ? formatMealBreakCapacity(remainingDayRestSlots, "Sem vagas livres no momento.")
-                                                    : "Abre depois que o almoco fechar."}
-                                                <br />
-                                                <strong>Fila pendente:</strong> almoço {mealBreakSession?.lunchQueue.length ?? 0} • descanso {mealBreakSession?.restQueue.length ?? 0}
-                                            </div>
+                                        <div className="ops-priority-actions">
+                                            <label className="chief-field full-width">
+                                                <span>Justificativa do ajuste</span>
+                                                <input
+                                                    className="chief-input"
+                                                    value={notesValue}
+                                                    onChange={(event) => setPriorityNotesByRamal((current) => ({ ...current, [entry.ramal]: event.target.value }))}
+                                                    placeholder="Ex.: continua desde a manhã, presencial em IES, priorizar por cobertura"
+                                                    disabled={isPrioritySaving || isRefreshing}
+                                                />
+                                            </label>
 
-                                            <div className="chief-day-meal-break-actions">
+                                            <div className="ops-priority-move-buttons">
                                                 <button
                                                     type="button"
-                                                    className={selectedLunchExcluded ? "chief-secondary-button" : "chief-danger-button"}
-                                                    onClick={() => void handleDayMealBreakToggle("lunch", !selectedLunchExcluded)}
-                                                    disabled={isMealBreakSaving || isRefreshing}
+                                                    className="chief-secondary-button"
+                                                    onClick={() => void handlePriorityMove(entry.ramal, 0)}
+                                                    disabled={isPrioritySaving || isRefreshing || index === 0}
                                                 >
-                                                    {isMealBreakSaving || isRefreshing
-                                                        ? "Aplicando..."
-                                                        : selectedLunchExcluded
-                                                            ? "Recolocar no almoço"
-                                                            : "Retirar do almoço"}
+                                                    Topo
                                                 </button>
                                                 <button
                                                     type="button"
-                                                    className={selectedRestExcluded ? "chief-secondary-button" : "chief-danger-button"}
-                                                    onClick={() => void handleDayMealBreakToggle("rest", !selectedRestExcluded)}
-                                                    disabled={isMealBreakSaving || isRefreshing}
+                                                    className="chief-secondary-button"
+                                                    onClick={() => void handlePriorityMove(entry.ramal, index - 1)}
+                                                    disabled={isPrioritySaving || isRefreshing || !canMoveUp}
                                                 >
-                                                    {isMealBreakSaving || isRefreshing
-                                                        ? "Aplicando..."
-                                                        : selectedRestExcluded
-                                                            ? "Recolocar no descanso"
-                                                            : "Retirar do descanso"}
+                                                    Subir
                                                 </button>
-                                            </div>
-
-                                            <p className="chief-field-hint">
-                                                Quando retirado, o bot pula este ramal na etapa correspondente e recalcula as vagas restantes da divisao.
-                                            </p>
-                                        </>
-                                    )}
-                                </div>
-                            )}
-
-                            {showNightMealBreakSection && (
-                                <div className="chief-night-meal-break-card">
-                                    <div className="chief-section-heading">
-                                        <div>
-                                            <p className="ops-column-kicker">Divisao noturna</p>
-                                            <h3>Jantar e trabalho</h3>
-                                        </div>
-                                        {selectedRegulationRamal && isNightMealBreakEligible(mealBreakSession, selectedRegulationRamal) && (
-                                            <div className="chief-night-current">
-                                                {renderScheduleChip({
-                                                    slot: selectedDinnerCurrent,
-                                                    kind: "dinner",
-                                                    pending: !selectedDinnerCurrent,
-                                                    duration: selectedDinnerDuration,
-                                                })}
-                                                {renderScheduleChip({
-                                                    slot: selectedNightWorkCurrent,
-                                                    kind: "work",
-                                                    pending: !selectedNightWorkCurrent,
-                                                })}
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {!canEditSelectedNightMealBreak ? (
-                                        <p className="chief-field-hint">O posto 2031 fica fora da divisao automatica do jantar e do trabalho da noite.</p>
-                                    ) : (
-                                        <>
-                                            <div className="chief-timing-grid chief-night-grid">
-                                                <label className="chief-field">
-                                                    <span>Trabalho da noite</span>
-                                                    <select
-                                                        className="chief-input chief-select"
-                                                        value={nightWorkInput}
-                                                        onChange={(event) => {
-                                                            const nextValue = event.target.value as MealBreakNightWorkSlot | "";
-                                                            setNightWorkInput(nextValue);
-                                                            if (nextValue === "03:00") {
-                                                                setDinnerInput(selectedLateDinner);
-                                                            }
-                                                            if (nextValue === "23:00" && (dinnerInput === "22:00" || dinnerInput === "22:30")) {
-                                                                setDinnerInput("");
-                                                            }
-                                                            if (!nextValue) {
-                                                                setDinnerInput("");
-                                                            }
-                                                        }}
-                                                        disabled={isMealBreakSaving || isRefreshing}
-                                                    >
-                                                        <option value="">Sem definicao</option>
-                                                        {NIGHT_WORK_OPTIONS.map((slot) => (
-                                                            <option key={slot} value={slot}>{slot}</option>
-                                                        ))}
-                                                    </select>
-                                                </label>
-
-                                                <label className="chief-field">
-                                                    <span>Jantar</span>
-                                                    <select
-                                                        className="chief-input chief-select"
-                                                        value={nightWorkInput === "03:00" ? selectedLateDinner : dinnerInput}
-                                                        onChange={(event) => setDinnerInput(event.target.value as MealBreakDinnerSlot | "")}
-                                                        disabled={isMealBreakSaving || isRefreshing || !nightWorkInput || nightWorkInput === "03:00"}
-                                                    >
-                                                        <option value="">Sem definicao</option>
-                                                        {NIGHT_DINNER_OPTIONS.map((slot) => (
-                                                            <option key={slot} value={slot}>{slot}</option>
-                                                        ))}
-                                                    </select>
-                                                    {nightWorkInput === "03:00" && (
-                                                        <small className="chief-field-hint">03:00 fixa automaticamente o jantar final em {selectedLateDinner}.</small>
-                                                    )}
-                                                </label>
-                                            </div>
-
-                                            <div className="chief-form-actions full-width">
                                                 <button
                                                     type="button"
                                                     className="chief-primary-button"
-                                                    onClick={() => void handleNightMealBreakSave()}
-                                                    disabled={isMealBreakSaving || isRefreshing}
+                                                    onClick={() => void handlePriorityMove(entry.ramal, index + 1)}
+                                                    disabled={isPrioritySaving || isRefreshing || !canMoveDown}
                                                 >
-                                                    {isMealBreakSaving || isRefreshing ? "Aplicando..." : "Salvar jantar/trabalho"}
+                                                    Descer
                                                 </button>
                                             </div>
-                                        </>
-                                    )}
-                                </div>
-                            )}
+                                        </div>
+                                    </article>
+                                );
+                            })}
+                        </section>
+                    </aside>
 
-                            {selectedCard.status === "active" && selectedCard.occupancyId && session?.canManage && (
-                                <div className="chief-departure-strip">
+                    <div className={`chief-drawer-backdrop ${drawerOpen ? "open" : ""}`} onClick={closeDrawer} />
+                    <aside className={`chief-drawer ${drawerOpen ? "open" : ""}`} aria-hidden={!drawerOpen}>
+                        <header className="chief-drawer-header">
+                            <div>
+                                <p className="ops-column-kicker">Comando de chefia</p>
+                                <h2>Fila critica e correcao rapida</h2>
+                            </div>
+                            <button type="button" className="chief-close-button" onClick={closeDrawer}>Fechar</button>
+                        </header>
+
+                        {(successMessage || errorMessage) && (
+                            <div className={`chief-flash ${errorMessage ? "error" : "success"}`}>
+                                {errorMessage || successMessage}
+                            </div>
+                        )}
+
+                        {!session?.canManage && !session?.mustChangePassword && (
+                            <div className="chief-auth-warning">
+                                Esta mesa esta em leitura. Entre com perfil chief ou admin para habilitar abertura, correcao e encerramento.
+                            </div>
+                        )}
+
+                        {session?.mustChangePassword && (
+                            <div className="chief-auth-warning">
+                                Esta sessao ainda usa senha temporaria. Troque a senha no controle de acesso para liberar qualquer operacao de chefia.
+                            </div>
+                        )}
+
+                        <section className="chief-drawer-section">
+                            <div className="chief-stat-grid">
+                                <article className="chief-stat-card critical">
+                                    <span className="ops-summary-label">Pendencias imediatas</span>
+                                    <strong>{criticalCards.length}</strong>
+                                </article>
+                                <article className="chief-stat-card watch">
+                                    <span className="ops-summary-label">Coberturas sob vigia</span>
+                                    <strong>{watchCards.length}</strong>
+                                </article>
+                            </div>
+                        </section>
+
+                        <section className="chief-drawer-section">
+                            <div className="chief-section-heading">
+                                <h3>Vazios que pedem acao</h3>
+                                <span>{criticalCards.length}</span>
+                            </div>
+                            <div className="chief-queue-list">
+                                {criticalCards.length === 0 && <p className="chief-empty-copy">Nenhum vazio operacional neste instante.</p>}
+                                {criticalCards.map((card) => (
+                                    <button key={`critical-${card.domain}-${cardCode(card)}`} type="button" className="chief-queue-item critical" onClick={() => openAction(card, "start")}>
+                                        <strong>{cardCode(card)}</strong>
+                                        <span>{cardLabel(card)}</span>
+                                        <small>Abrir cobertura agora</small>
+                                    </button>
+                                ))}
+                            </div>
+                        </section>
+
+                        <section className="chief-drawer-section">
+                            <div className="chief-section-heading">
+                                <h3>Tempo sob vigilância</h3>
+                                <span>{watchCards.length}</span>
+                            </div>
+                            <div className="chief-queue-list">
+                                {watchCards.length === 0 && <p className="chief-empty-copy">Nenhuma cobertura longa exigindo vigia especial.</p>}
+                                {watchCards.map((card) => (
+                                    <button key={`watch-${card.domain}-${cardCode(card)}`} type="button" className="chief-queue-item watch" onClick={() => openAction(card, "correct")} disabled={!canEditActiveCard(card)}>
+                                        <strong>{cardCode(card)}</strong>
+                                        <span>{displayDoctorName(card)}</span>
+                                        <small>{canEditActiveCard(card) ? `${formatMinutesLabel(minutesSince(generatedAt, resolveOperationalArrival(card)))} em curso` : "Leitura ao vivo sem ocupacao v2"}</small>
+                                    </button>
+                                ))}
+                            </div>
+                        </section>
+
+                        <section className="chief-drawer-section focus">
+                            <div className="chief-focus-empty">
+                                <h3>Clique em um profissional no quadro</h3>
+                                <p>Abra o card de qualquer profissional para corrigir medico, horario, funcao, lotacao, registrar continuidade, ajustar refeicao ou encerrar presenca.</p>
+                            </div>
+                        </section>
+                    </aside>
+
+                    <div className={`chief-drawer-backdrop ${professionalDrawerOpen ? "open" : ""}`} onClick={closeProfessionalDrawer} />
+                    <aside className={`chief-drawer professional-drawer ${professionalDrawerOpen ? "open" : ""}`} aria-hidden={!professionalDrawerOpen}>
+                        {selectedCard && (
+                            <>
+                                <header className="chief-drawer-header">
                                     <div>
-                                        <p className="ops-column-kicker">Saida rapida</p>
-                                        <strong>Registrar saída</strong>
-                                        <span>
-                                            Use este atalho para liberar o medico agora, com horario real e motivo auditavel.
-                                        </span>
+                                        <p className="ops-column-kicker">
+                                            {(selectedCard.domain === "regulation" && selectedCard.postId === 0) || (selectedCard.domain === "intervention" && selectedCard.baseId === 0)
+                                                ? (selectedCard.domain === "regulation" ? "Regulação" : "Intervenção")
+                                                : `${cardCode(selectedCard)} · ${cardLabel(selectedCard)}`}
+                                        </p>
+                                        <h2>
+                                            {(selectedCard.domain === "regulation" && selectedCard.postId === 0) || (selectedCard.domain === "intervention" && selectedCard.baseId === 0)
+                                                ? "Registrar chegada"
+                                                : displayDoctorName(selectedCard)}
+                                        </h2>
                                     </div>
+                                    <button type="button" className="chief-close-button" onClick={closeProfessionalDrawer}>Fechar</button>
+                                </header>
 
-                                    <div className="chief-timing-grid">
-                                        <label className="chief-field">
-                                            <span>Horario da saida</span>
-                                            <input
-                                                type="datetime-local"
-                                                className="chief-input"
-                                                value={quickExitAt}
-                                                onChange={(event) => setQuickExitAt(event.target.value)}
-                                            />
-                                        </label>
-                                        <label className="chief-field">
-                                            <span>Motivo da saida</span>
-                                            <textarea
-                                                className="chief-input chief-textarea compact"
-                                                value={quickExitReason}
-                                                onChange={(event) => setQuickExitReason(event.target.value)}
-                                                placeholder="Ex.: rendido, saiu da base, ajuste de registro, troca confirmada"
-                                            />
-                                        </label>
+                                {(successMessage || errorMessage) && (
+                                    <div className={`chief-flash ${errorMessage ? "error" : "success"}`}>
+                                        {errorMessage || successMessage}
                                     </div>
+                                )}
 
-                                    <div className="chief-verification-actions">
-                                        <button
-                                            type="button"
-                                            className="chief-danger-button"
-                                            onClick={() => void handleQuickDeparture(selectedCard)}
-                                            disabled={isSubmitting || isRefreshing || !trimToNull(quickExitReason)}
-                                        >
-                                            {isSubmitting || isRefreshing ? "Registrando..." : "Registrar saída"}
-                                        </button>
+                                {canContinueIntervention(selectedCard, generatedAt) && session?.canManage && (
+                                    <section className="chief-drawer-section">
+                                        <div className="chief-verification-strip">
+                                            <div>
+                                                <p className="ops-column-kicker">Pendencia de virada</p>
+                                                <strong>Aguardando noticia</strong>
+                                                <span>
+                                                    Esse medico entrou antes da janela tolerada do turno atual. Confirme se vai continuar ou informe a saida com horario correto.
+                                                </span>
+                                            </div>
+                                            <div className="chief-timing-grid">
+                                                <article className="chief-timing-card">
+                                                    <span>Chegada registrada</span>
+                                                    <strong>{formatDateTimeDetail(selectedCard.startedAt)}</strong>
+                                                </article>
+                                                <article className="chief-timing-card">
+                                                    <span>Saida prevista</span>
+                                                    <strong>{formatDateTimeDetail(selectedCard.scheduledEndAt)}</strong>
+                                                </article>
+                                            </div>
+                                            <p className="chief-bank-hours-copy">
+                                                Banco de horas depende destes horarios. Use <strong>Continuar</strong> apenas se o medico realmente seguir no plantao. Se ele saiu, registre a saida com o horario mais fiel possivel.
+                                            </p>
+                                            <label className="chief-field full-width">
+                                                <span>{requiresReasonForContinuation(selectedCard, generatedAt) ? "Justificativa obrigatoria" : "Justificativa operacional"}</span>
+                                                <textarea
+                                                    className="chief-input chief-textarea compact"
+                                                    value={formState.notes}
+                                                    onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
+                                                    placeholder={requiresReasonForContinuation(selectedCard, generatedAt)
+                                                        ? "Explique por que a continuidade foi liberada apos 07:15 ou 19:15"
+                                                        : "Motivo operacional da continuidade, se necessario"}
+                                                />
+                                            </label>
+                                            <div className="chief-verification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="chief-secondary-button"
+                                                    onClick={() => {
+                                                        setActionMode("end");
+                                                        setFormState((current) => ({ ...current, endedAt: toLocalDateTimeValue() }));
+                                                    }}
+                                                    disabled={isSubmitting || isRefreshing}
+                                                >
+                                                    Informar saida
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="chief-primary-button"
+                                                    onClick={() => void handleContinueCard(selectedCard)}
+                                                    disabled={isSubmitting || isRefreshing}
+                                                >
+                                                    {isSubmitting || isRefreshing ? "Aplicando..." : "Continuar"}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </section>
+                                )}
+
+                                {session?.canManage && canManageCardState(selectedCard) && (
+                                    <section className="chief-drawer-section">
+                                        <div className="chief-departure-strip">
+                                            <div>
+                                                <p className="ops-column-kicker">{cardStatePanelLabel(selectedCard)}</p>
+                                                <strong>{cardStateActionLabel(selectedCard)}</strong>
+                                                <span>{cardStateDescription(selectedCard)}</span>
+                                            </div>
+
+                                            <div className="chief-timing-grid">
+                                                <label className="chief-field">
+                                                    <span>{selectedCard.status === "disabled" ? "Horario da reativacao" : "Horario da desativacao"}</span>
+                                                    <input
+                                                        type="datetime-local"
+                                                        className="chief-input"
+                                                        value={baseStateAt}
+                                                        onChange={(event) => setBaseStateAt(event.target.value)}
+                                                    />
+                                                </label>
+                                                <label className="chief-field">
+                                                    <span>Motivo operacional</span>
+                                                    <textarea
+                                                        className="chief-input chief-textarea compact"
+                                                        value={baseStateReason}
+                                                        onChange={(event) => setBaseStateReason(event.target.value)}
+                                                        placeholder={cardStateReasonPlaceholder(selectedCard)}
+                                                    />
+                                                </label>
+                                            </div>
+
+                                            <div className="chief-verification-actions">
+                                                <button
+                                                    type="button"
+                                                    className={selectedCard.status === "disabled" ? "chief-primary-button" : "chief-danger-button"}
+                                                    onClick={() => void handleCardState(selectedCard, selectedCard.status === "disabled" ? "reactivate" : "deactivate")}
+                                                    disabled={isSubmitting || isRefreshing}
+                                                >
+                                                    {isSubmitting || isRefreshing ? "Aplicando..." : cardStateActionLabel(selectedCard)}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </section>
+                                )}
+
+                                {actionMode && (
+                                    <section className="chief-drawer-section">
+                                        <div className="chief-focus-header">
+                                            <div>
+                                                <p className="ops-column-kicker">Correcao operacional</p>
+                                                <h3>{actionTitle(actionMode, selectedCard)}</h3>
+                                            </div>
+                                            <span className={`ops-priority-tag ${resolvePriority(selectedCard, generatedAt)}`}>{priorityLabel(resolvePriority(selectedCard, generatedAt))}</span>
+                                        </div>
+
+                                        <form className="chief-action-form" onSubmit={handleSubmit}>
+                                            {(actionMode === "correct" || actionMode === "start") && (
+                                                <>
+                                                    <label className="chief-field full-width chief-doctor-picker">
+                                                        <span>Medico</span>
+                                                        <input
+                                                            className="chief-input"
+                                                            value={doctorQuery}
+                                                            onChange={(event) => {
+                                                                const nextQuery = event.target.value;
+                                                                setDoctorQuery(nextQuery);
+                                                                setFormState((current) => ({ ...current, doctorId: "" }));
+                                                            }}
+                                                            placeholder="Digite parte do nome e selecione o medico completo"
+                                                            autoComplete="off"
+                                                            disabled={isTransferAction}
+                                                        />
+
+                                                        {selectedDoctor && doctorSelectionLocked && (
+                                                            <div className="chief-doctor-selection">
+                                                                <strong>{doctorOptionLabel(selectedDoctor)}</strong>
+                                                                <button
+                                                                    type="button"
+                                                                    className="chief-selection-clear"
+                                                                    onClick={() => {
+                                                                        setDoctorQuery("");
+                                                                        setFormState((current) => ({ ...current, doctorId: "" }));
+                                                                    }}
+                                                                    disabled={isTransferAction}
+                                                                >
+                                                                    Trocar medico
+                                                                </button>
+                                                            </div>
+                                                        )}
+
+                                                        {!selectedDoctor && (
+                                                            <div className="chief-doctor-help">
+                                                                Digite alguns caracteres. O envio so libera depois que voce escolhe um nome completo da lista.
+                                                            </div>
+                                                        )}
+
+                                                        {!selectedDoctor && filteredDoctors.length > 0 && (
+                                                            <div className="chief-doctor-suggestions" role="listbox" aria-label="Sugestoes de medicos">
+                                                                {filteredDoctors.map((doctor) => (
+                                                                    <button
+                                                                        key={doctor.id}
+                                                                        type="button"
+                                                                        className="chief-doctor-option"
+                                                                        onClick={() => {
+                                                                            setFormState((current) => ({ ...current, doctorId: doctor.id }));
+                                                                            setDoctorQuery(doctorOptionLabel(doctor));
+                                                                        }}
+                                                                        disabled={isTransferAction}
+                                                                    >
+                                                                        <strong>{doctor.displayName ?? doctor.fullName}</strong>
+                                                                        {doctor.displayName && <span>{doctor.fullName}</span>}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
+
+                                                        {isTransferAction && (
+                                                            <div className="chief-inline-help chief-transfer-inline-note">
+                                                                O remanejamento reaproveita o medico ja registrado neste plantao. Para trocar o nome, volte o destino para o local atual e corrija o cadastro separadamente.
+                                                            </div>
+                                                        )}
+                                                    </label>
+
+                                                    {actionMode === "start" && selectedCard && (
+                                                        (selectedCard.domain === "regulation" && selectedCard.postId === 0) ||
+                                                        (selectedCard.domain === "intervention" && selectedCard.baseId === 0)
+                                                    ) && (
+                                                            <label className="chief-field">
+                                                                <span>{selectedCard.domain === "regulation" ? "Ramal" : "Base"}</span>
+                                                                <select
+                                                                    className="chief-input chief-select"
+                                                                    value={formState.targetKey}
+                                                                    onChange={(event) => setFormState((current) => ({ ...current, targetKey: event.target.value }))}
+                                                                >
+                                                                    <option value="">Selecione o posto</option>
+                                                                    {transferTargetOptions
+                                                                        .filter((option) => option.domain === selectedCard.domain && option.status === "available")
+                                                                        .map((option) => (
+                                                                            <option key={option.key} value={option.key}>
+                                                                                {option.code} · {option.label}
+                                                                            </option>
+                                                                        ))}
+                                                                </select>
+                                                                <small className="chief-field-hint">Apenas postos disponíveis são exibidos.</small>
+                                                            </label>
+                                                        )}
+
+                                                    {actionMode === "start" && (
+                                                        <div className="chief-continuity-toggle">
+                                                            <label className="chief-toggle-label">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={isContinuityEntry}
+                                                                    onChange={(event) => setIsContinuityEntry(event.target.checked)}
+                                                                />
+                                                                <span>Continua do turno anterior</span>
+                                                            </label>
+                                                            {isContinuityEntry && (
+                                                                <div className="chief-continuity-info">
+                                                                    <p>O sistema criará um novo registro neste posto vinculado ao anterior para banco de horas. O pagamento considerará cada segmento separadamente (turno/posto).</p>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+
+                                                    <label className="chief-field">
+                                                        <span>{isContinuityEntry ? "Horário de início neste posto" : actionMode === "start" ? "Horario de abertura" : "Horario corrigido"}</span>
+                                                        <input
+                                                            type="datetime-local"
+                                                            className="chief-input"
+                                                            value={formState.startedAt}
+                                                            onChange={(event) => setFormState((current) => ({ ...current, startedAt: event.target.value }))}
+                                                            disabled={isTransferAction}
+                                                        />
+                                                        {isContinuityEntry && (
+                                                            <small className="chief-field-hint">Horário em que o médico migrou para este posto. A chegada original será preservada para banco de horas.</small>
+                                                        )}
+                                                        {isTransferAction && (
+                                                            <small className="chief-field-hint">O novo registro nasce com o horario de chegada ja consolidado neste plantao.</small>
+                                                        )}
+                                                    </label>
+
+                                                    {actionMode === "start" && (
+                                                        <label className="chief-field">
+                                                            <span>Turno</span>
+                                                            <select
+                                                                className="chief-input chief-select"
+                                                                value={formState.shiftOverride}
+                                                                onChange={(event) => setFormState((current) => ({ ...current, shiftOverride: event.target.value }))}
+                                                            >
+                                                                <option value="">Automatico ({shiftLabel})</option>
+                                                                <option value="SD">SD — Serviço Diurno</option>
+                                                                <option value="SN">SN — Serviço Noturno</option>
+                                                                <option value="P">P — Prolongado (SD que fica até SN)</option>
+                                                                <option value="P_INV">P invertido — 24h noturno (chega 19h, sai 19h)</option>
+                                                            </select>
+                                                            <small className="chief-field-hint">
+                                                                {formState.shiftOverride === "P"
+                                                                    ? "O plantonista chegou no SD e vai ficar ate o final do SN. Banco de horas e pagamento cobrem os dois turnos."
+                                                                    : formState.shiftOverride === "P_INV"
+                                                                        ? "O plantonista chega as 19h e sai as 19h do dia seguinte. Turno de 24h noturno. Banco e pagamento cobrem SN e o SD seguinte."
+                                                                        : "Deixe em automatico para usar o turno da tela. Mude se o plantonista veio de outro turno."}
+                                                            </small>
+                                                        </label>
+                                                    )}
+
+                                                    <label className="chief-field">
+                                                        <span>Função operacional</span>
+                                                        <select
+                                                            className="chief-input chief-select"
+                                                            value={formState.roleLabel}
+                                                            onChange={(event) => setFormState((current) => ({ ...current, roleLabel: event.target.value }))}
+                                                            disabled={Boolean(resolveCardFixedRole(selectedCard)) && !(resolveCardFixedRole(selectedCard) === "MRV" && mealBreakDisplayMode === "night")}
+                                                        >
+                                                            <option value="">Sem função</option>
+                                                            {buildOperationalRoleChoices([
+                                                                resolveCardFixedRole(selectedCard),
+                                                                selectedCard.roleLabel,
+                                                            ]).map((role) => (
+                                                                <option key={role} value={role}>{role}</option>
+                                                            ))}
+                                                        </select>
+                                                        {resolveCardFixedRole(selectedCard) === "MRV" && mealBreakDisplayMode === "night" ? (
+                                                            <small className="chief-field-hint">Função MRV não se aplica à noite. Deixe em branco para retirar.</small>
+                                                        ) : resolveCardFixedRole(selectedCard) ? (
+                                                            <small className="chief-field-hint">Função travada por regra operacional deste posto neste turno.</small>
+                                                        ) : (
+                                                            <small className="chief-field-hint">Deixe em branco para remover a função sem mexer no plantão, na chegada ou no meal break. PSIQ fica fora da divisão automática do almoço.</small>
+                                                        )}
+                                                    </label>
+
+                                                    {actionMode === "correct" && (
+                                                        <label className="chief-field">
+                                                            <span>Destino operacional</span>
+                                                            <select
+                                                                className="chief-input chief-select"
+                                                                value={formState.targetKey}
+                                                                onChange={(event) => setFormState((current) => ({ ...current, targetKey: event.target.value }))}
+                                                            >
+                                                                <optgroup label="Regulacao">
+                                                                    {transferTargetOptions
+                                                                        .filter((option) => option.domain === "regulation")
+                                                                        .map((option) => (
+                                                                            <option key={option.key} value={option.key}>
+                                                                                {option.code} · {option.label}{option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
+                                                                            </option>
+                                                                        ))}
+                                                                </optgroup>
+                                                                <optgroup label="Intervencao">
+                                                                    {transferTargetOptions
+                                                                        .filter((option) => option.domain === "intervention")
+                                                                        .map((option) => (
+                                                                            <option key={option.key} value={option.key} disabled={option.status === "disabled"}>
+                                                                                {option.code} · {option.label}
+                                                                                {option.status === "disabled" ? " · indisponivel" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
+                                                                            </option>
+                                                                        ))}
+                                                                </optgroup>
+                                                            </select>
+                                                            <small className="chief-field-hint">
+                                                                {isTransferAction
+                                                                    ? "O remanejamento apaga o vinculo atual e recria o plantao no destino, preservando chegada, nome e continuidade do pagamento."
+                                                                    : "Mantenha o destino atual para corrigir so medico, horario ou funcao sem mudar a lotacao."}
+                                                            </small>
+                                                            {selectedTransferConflict && (
+                                                                <div className="chief-inline-help chief-transfer-inline-note warning">
+                                                                    {selectedTransferTarget?.code} ja esta ocupado por {selectedTransferConflict.occupantName}. Ao continuar, a chefia precisara retirar ou remanejar quem esta nesse destino.
+                                                                </div>
+                                                            )}
+                                                        </label>
+                                                    )}
+                                                </>
+                                            )}
+
+                                            {actionMode === "end" && (
+                                                <label className="chief-field">
+                                                    <span>Horario de encerramento</span>
+                                                    <input
+                                                        type="datetime-local"
+                                                        className="chief-input"
+                                                        value={formState.endedAt}
+                                                        onChange={(event) => setFormState((current) => ({ ...current, endedAt: event.target.value }))}
+                                                    />
+                                                </label>
+                                            )}
+
+                                            <label className="chief-field full-width">
+                                                <span>{isContinuityEntry ? "Motivo da continuidade" : actionMode === "correct" ? "Motivo da correcao" : "Notas operacionais"}</span>
+                                                <textarea
+                                                    className="chief-input chief-textarea"
+                                                    value={formState.notes}
+                                                    onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
+                                                    placeholder={isContinuityEntry
+                                                        ? "Ex.: Migrou do 2031 para o 1367 na virada do turno"
+                                                        : actionMode === "correct"
+                                                            ? isTransferAction
+                                                                ? "Explique o motivo operacional do remanejamento e o que acontece com o destino atual"
+                                                                : "Explique por que voce esta mudando o horario ou o medico deste registro"
+                                                            : "Contexto rapido de chefia ou observacao operacional"}
+                                                />
+                                            </label>
+
+                                            <div className="chief-form-actions full-width">
+                                                <button type="button" className="chief-secondary-button" onClick={() => setActionMode(null)}>
+                                                    Voltar
+                                                </button>
+                                                <button type="submit" className="chief-primary-button" disabled={isSubmitting || isRefreshing || !session?.canManage}>
+                                                    {isSubmitting || isRefreshing
+                                                        ? "Aplicando..."
+                                                        : isContinuityEntry
+                                                            ? "Registrar continuidade"
+                                                            : actionMode === "start"
+                                                                ? "Abrir cobertura"
+                                                                : actionMode === "end"
+                                                                    ? "Encerrar registro"
+                                                                    : isTransferAction
+                                                                        ? "Revisar remanejamento"
+                                                                        : "Salvar correcao"}
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </section>
+                                )}
+
+                                {!actionMode && session?.canManage && (
+                                    <section className="chief-drawer-section">
+                                        <div className="chief-focus-empty">
+                                            <p className="ops-column-kicker">Acoes disponiveis</p>
+                                            <div className="chief-action-shortcuts">
+                                                {canEditActiveCard(selectedCard) && (
+                                                    <button type="button" className="chief-secondary-button" onClick={() => {
+                                                        setActionMode("correct");
+                                                        setFormState(buildInitialForm(selectedCard));
+                                                        syncSelectedDoctorLabel(selectedCard.doctorId ?? null);
+                                                    }}>
+                                                        Corrigir quadro
+                                                    </button>
+                                                )}
+                                                {selectedCard.status === "waiting" && (
+                                                    <button type="button" className="chief-primary-button" onClick={() => {
+                                                        setActionMode("start");
+                                                        setFormState(buildInitialForm(selectedCard));
+                                                        syncSelectedDoctorLabel(selectedCard.doctorId ?? null);
+                                                    }}>
+                                                        Abrir cobertura
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </section>
+                                )}
+
+                                {showDayMealBreakSection && (
+                                    <section className="chief-drawer-section">
+                                        <div className="chief-day-meal-break-card">
+                                            <div className="chief-section-heading">
+                                                <div>
+                                                    <p className="ops-column-kicker">Divisao diurna</p>
+                                                    <h3>Almoco e descanso</h3>
+                                                </div>
+                                                {selectedRegulationRamal && isDayMealBreakEligible(mealBreakSession, selectedRegulationRamal) && (
+                                                    <div className="chief-night-current">
+                                                        {renderScheduleChip({
+                                                            slot: selectedLunchCurrent,
+                                                            kind: "lunch",
+                                                            pending: !selectedLunchCurrent,
+                                                            excluded: selectedLunchExcluded,
+                                                        })}
+                                                        {renderScheduleChip({
+                                                            slot: selectedRestCurrent,
+                                                            kind: "rest",
+                                                            pending: !selectedRestCurrent,
+                                                            excluded: selectedRestExcluded,
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {!canEditSelectedDayMealBreak ? (
+                                                <p className="chief-field-hint">{resolveMealBreakExclusionHint(selectedRegulationRamal ?? "", "day")}</p>
+                                            ) : (
+                                                <>
+                                                    {mealBreakSession && (
+                                                        <div className="chief-inline-help chief-meal-break-eligibility-note">
+                                                            <strong>Vagas do almoco:</strong> {formatMealBreakCapacity(remainingDayLunchSlots, "Sem vagas livres no momento.")}
+                                                            <br />
+                                                            <strong>Vagas do descanso:</strong> {mealBreakSession.stage === "awaiting_rest_choice" || mealBreakSession.stage === "completed"
+                                                                ? formatMealBreakCapacity(remainingDayRestSlots, "Sem vagas livres no momento.")
+                                                                : "Abre depois que o almoco fechar."}
+                                                            <br />
+                                                            <strong>Fila pendente:</strong> almoço {mealBreakSession.lunchQueue.length} • descanso {mealBreakSession.restQueue.length}
+                                                        </div>
+                                                    )}
+
+                                                    {!mealBreakSession && (
+                                                        <p className="chief-field-hint">
+                                                            A divisao ainda nao foi aberta. Exclusoes feitas agora serao aplicadas quando /almoco iniciar.
+                                                        </p>
+                                                    )}
+
+                                                    {mealBreakSession && (
+                                                        <div className="chief-timing-grid chief-night-grid">
+                                                            <label className="chief-field">
+                                                                <span>Almoço</span>
+                                                                <select
+                                                                    className="chief-input chief-select"
+                                                                    value={lunchSlotInput}
+                                                                    onChange={(event) => setLunchSlotInput(event.target.value)}
+                                                                    disabled={isMealBreakSaving || isRefreshing}
+                                                                >
+                                                                    <option value="">Sem definição</option>
+                                                                    {DAY_SLOT_OPTIONS.map((slot) => (
+                                                                        <option key={slot} value={slot}>{slot}</option>
+                                                                    ))}
+                                                                </select>
+                                                            </label>
+                                                            <label className="chief-field">
+                                                                <span>Descanso</span>
+                                                                <select
+                                                                    className="chief-input chief-select"
+                                                                    value={restSlotInput}
+                                                                    onChange={(event) => setRestSlotInput(event.target.value)}
+                                                                    disabled={isMealBreakSaving || isRefreshing}
+                                                                >
+                                                                    <option value="">Sem definição</option>
+                                                                    {DAY_SLOT_OPTIONS.map((slot) => (
+                                                                        <option key={slot} value={slot}>{slot}</option>
+                                                                    ))}
+                                                                </select>
+                                                            </label>
+                                                        </div>
+                                                    )}
+
+                                                    {mealBreakSession && (
+                                                        <div className="chief-form-actions full-width">
+                                                            <button
+                                                                type="button"
+                                                                className="chief-primary-button"
+                                                                onClick={() => void handleDayMealBreakSlotSave()}
+                                                                disabled={isMealBreakSaving || isRefreshing}
+                                                            >
+                                                                {isMealBreakSaving || isRefreshing ? "Aplicando..." : "Salvar almoço/descanso"}
+                                                            </button>
+                                                        </div>
+                                                    )}
+
+                                                    <div className="chief-day-meal-break-actions">
+                                                        <button
+                                                            type="button"
+                                                            className={selectedLunchExcluded ? "chief-secondary-button" : "chief-danger-button"}
+                                                            onClick={() => void handleDayMealBreakToggle("lunch", !selectedLunchExcluded)}
+                                                            disabled={isMealBreakSaving || isRefreshing}
+                                                        >
+                                                            {isMealBreakSaving || isRefreshing
+                                                                ? "Aplicando..."
+                                                                : selectedLunchExcluded
+                                                                    ? "Recolocar no almoço"
+                                                                    : "Retirar do almoço"}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className={selectedRestExcluded ? "chief-secondary-button" : "chief-danger-button"}
+                                                            onClick={() => void handleDayMealBreakToggle("rest", !selectedRestExcluded)}
+                                                            disabled={isMealBreakSaving || isRefreshing}
+                                                        >
+                                                            {isMealBreakSaving || isRefreshing
+                                                                ? "Aplicando..."
+                                                                : selectedRestExcluded
+                                                                    ? "Recolocar no descanso"
+                                                                    : "Retirar do descanso"}
+                                                        </button>
+                                                    </div>
+
+                                                    <p className="chief-field-hint">
+                                                        Quando retirado, o bot pula este ramal na etapa correspondente e recalcula as vagas restantes da divisao.
+                                                    </p>
+                                                </>
+                                            )}
+                                        </div>
+                                    </section>
+                                )}
+
+                                {showNightMealBreakSection && (
+                                    <section className="chief-drawer-section">
+                                        <div className="chief-night-meal-break-card">
+                                            <div className="chief-section-heading">
+                                                <div>
+                                                    <p className="ops-column-kicker">Divisao noturna</p>
+                                                    <h3>Jantar e trabalho</h3>
+                                                </div>
+                                                {selectedRegulationRamal && isNightMealBreakEligible(mealBreakSession, selectedRegulationRamal) && (
+                                                    <div className="chief-night-current">
+                                                        {renderScheduleChip({
+                                                            slot: selectedDinnerCurrent,
+                                                            kind: "dinner",
+                                                            pending: !selectedDinnerCurrent,
+                                                            duration: selectedDinnerDuration,
+                                                        })}
+                                                        {renderScheduleChip({
+                                                            slot: selectedNightWorkCurrent,
+                                                            kind: "work",
+                                                            pending: !selectedNightWorkCurrent,
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {!canEditSelectedNightMealBreak ? (
+                                                <p className="chief-field-hint">{resolveMealBreakExclusionHint(selectedRegulationRamal ?? "", "night")}</p>
+                                            ) : (
+                                                <>
+                                                    <div className="chief-timing-grid chief-night-grid">
+                                                        <label className="chief-field">
+                                                            <span>Trabalho da noite</span>
+                                                            <select
+                                                                className="chief-input chief-select"
+                                                                value={nightWorkInput}
+                                                                onChange={(event) => {
+                                                                    const nextValue = event.target.value as MealBreakNightWorkSlot | "";
+                                                                    setNightWorkInput(nextValue);
+                                                                    if (nextValue === "03:00") {
+                                                                        setDinnerInput(selectedLateDinner);
+                                                                    }
+                                                                    if (nextValue === "23:00" && (dinnerInput === "22:00" || dinnerInput === "22:30")) {
+                                                                        setDinnerInput("");
+                                                                    }
+                                                                    if (!nextValue) {
+                                                                        setDinnerInput("");
+                                                                    }
+                                                                }}
+                                                                disabled={isMealBreakSaving || isRefreshing}
+                                                            >
+                                                                <option value="">Sem definicao</option>
+                                                                {NIGHT_WORK_OPTIONS.map((slot) => (
+                                                                    <option key={slot} value={slot}>{slot}</option>
+                                                                ))}
+                                                            </select>
+                                                        </label>
+
+                                                        <label className="chief-field">
+                                                            <span>Jantar</span>
+                                                            <select
+                                                                className="chief-input chief-select"
+                                                                value={nightWorkInput === "03:00" ? selectedLateDinner : dinnerInput}
+                                                                onChange={(event) => setDinnerInput(event.target.value as MealBreakDinnerSlot | "")}
+                                                                disabled={isMealBreakSaving || isRefreshing || !nightWorkInput || nightWorkInput === "03:00"}
+                                                            >
+                                                                <option value="">Sem definicao</option>
+                                                                {NIGHT_DINNER_OPTIONS.map((slot) => (
+                                                                    <option key={slot} value={slot}>{slot}</option>
+                                                                ))}
+                                                            </select>
+                                                            {nightWorkInput === "03:00" && (
+                                                                <small className="chief-field-hint">03:00 fixa automaticamente o jantar final em {selectedLateDinner}.</small>
+                                                            )}
+                                                        </label>
+                                                    </div>
+
+                                                    <div className="chief-form-actions full-width">
+                                                        <button
+                                                            type="button"
+                                                            className="chief-primary-button"
+                                                            onClick={() => void handleNightMealBreakSave()}
+                                                            disabled={isMealBreakSaving || isRefreshing}
+                                                        >
+                                                            {isMealBreakSaving || isRefreshing ? "Aplicando..." : "Salvar jantar/trabalho"}
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </section>
+                                )}
+
+                                {selectedCard.status === "active" && selectedCard.occupancyId && session?.canManage && (
+                                    <section className="chief-drawer-section departure-zone">
+                                        <div className="chief-departure-strip">
+                                            <div>
+                                                <p className="ops-column-kicker">Saida do profissional</p>
+                                                <strong>Registrar saída</strong>
+                                                <span>
+                                                    Use este atalho para liberar o medico agora, com horario real e motivo auditavel.
+                                                </span>
+                                            </div>
+
+                                            <div className="chief-timing-grid">
+                                                <label className="chief-field">
+                                                    <span>Horario da saida</span>
+                                                    <input
+                                                        type="datetime-local"
+                                                        className="chief-input"
+                                                        value={quickExitAt}
+                                                        onChange={(event) => setQuickExitAt(event.target.value)}
+                                                    />
+                                                </label>
+                                                <label className="chief-field">
+                                                    <span>Motivo da saida</span>
+                                                    <textarea
+                                                        className="chief-input chief-textarea compact"
+                                                        value={quickExitReason}
+                                                        onChange={(event) => setQuickExitReason(event.target.value)}
+                                                        placeholder="Ex.: rendido, saiu da base, ajuste de registro, troca confirmada"
+                                                    />
+                                                </label>
+                                            </div>
+
+                                            <div className="chief-verification-actions">
+                                                <button
+                                                    type="button"
+                                                    className="chief-danger-button"
+                                                    onClick={() => void handleQuickDeparture(selectedCard)}
+                                                    disabled={isSubmitting || isRefreshing || !trimToNull(quickExitReason)}
+                                                >
+                                                    {isSubmitting || isRefreshing ? "Registrando..." : "Registrar saída"}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </section>
+                                )}
+                            </>
+                        )}
+                    </aside>
+
+                    {transferConfirmOpen && selectedCard && selectedTransferTarget && (
+                        <div className="chief-transfer-backdrop open" onClick={() => setTransferConfirmOpen(false)}>
+                            <section className="chief-transfer-modal" aria-label="Confirmacao de remanejamento" onClick={(event) => event.stopPropagation()}>
+                                <div className="chief-transfer-header">
+                                    <div>
+                                        <p className="ops-column-kicker">Remanejamento</p>
+                                        <h3>Confirmar troca de lotacao</h3>
+                                    </div>
+                                    <button type="button" className="chief-drawer-close" onClick={() => setTransferConfirmOpen(false)} aria-label="Fechar confirmacao de remanejamento">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                                            <path d="M6.4 5L12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4Z" />
+                                        </svg>
+                                    </button>
+                                </div>
+
+                                <p className="chief-transfer-copy">
+                                    O registro atual em {cardCode(selectedCard)} sera removido e o sistema abrira um novo registro em {selectedTransferTarget.code}, preservando o medico e a chegada ja consolidados para quadro, pagamento e banco de horas.
+                                </p>
+
+                                <div className="chief-transfer-grid">
+                                    <div className="chief-transfer-card source">
+                                        <span>Origem</span>
+                                        <strong>{cardCode(selectedCard)} · {cardLabel(selectedCard)}</strong>
+                                        <small>{displayDoctorName(selectedCard)}</small>
+                                    </div>
+                                    <div className="chief-transfer-card destination">
+                                        <span>Destino</span>
+                                        <strong>{selectedTransferTarget.code} · {selectedTransferTarget.label}</strong>
+                                        <small>{targetTypeLabel(selectedTransferTarget.domain)}</small>
                                     </div>
                                 </div>
-                            )}
 
-                            <form className="chief-action-form" onSubmit={handleSubmit}>
-                                {(actionMode === "correct" || actionMode === "start") && (
-                                    <>
-                                        <label className="chief-field full-width chief-doctor-picker">
-                                            <span>Medico</span>
-                                            <input
-                                                className="chief-input"
-                                                value={doctorQuery}
-                                                onChange={(event) => {
-                                                    const nextQuery = event.target.value;
-                                                    setDoctorQuery(nextQuery);
-                                                    setFormState((current) => ({ ...current, doctorId: "" }));
-                                                }}
-                                                placeholder="Digite parte do nome e selecione o medico completo"
-                                                autoComplete="off"
-                                                disabled={isTransferAction}
-                                            />
+                                {selectedTransferConflict ? (
+                                    <div className="chief-transfer-resolution-block">
+                                        <div className="chief-transfer-warning-card">
+                                            <strong>Destino ocupado</strong>
+                                            <span>{selectedTransferConflict.code} esta com {selectedTransferConflict.occupantName}.</span>
+                                        </div>
 
-                                            {selectedDoctor && doctorSelectionLocked && (
-                                                <div className="chief-doctor-selection">
-                                                    <strong>{doctorOptionLabel(selectedDoctor)}</strong>
-                                                    <button
-                                                        type="button"
-                                                        className="chief-selection-clear"
-                                                        onClick={() => {
-                                                            setDoctorQuery("");
-                                                            setFormState((current) => ({ ...current, doctorId: "" }));
-                                                        }}
-                                                        disabled={isTransferAction}
-                                                    >
-                                                        Trocar medico
-                                                    </button>
-                                                </div>
-                                            )}
+                                        <div className="chief-transfer-resolution-grid">
+                                            <label className={`chief-transfer-choice ${transferConflictStrategy === "remove_destination" ? "active" : ""}`.trim()}>
+                                                <input
+                                                    type="radio"
+                                                    name="transfer-conflict-strategy"
+                                                    value="remove_destination"
+                                                    checked={transferConflictStrategy === "remove_destination"}
+                                                    onChange={() => setTransferConflictStrategy("remove_destination")}
+                                                />
+                                                <span>Retirar {selectedTransferConflict.occupantName} do plantao</span>
+                                            </label>
+                                            <label className={`chief-transfer-choice ${transferConflictStrategy === "move_destination" ? "active" : ""}`.trim()}>
+                                                <input
+                                                    type="radio"
+                                                    name="transfer-conflict-strategy"
+                                                    value="move_destination"
+                                                    checked={transferConflictStrategy === "move_destination"}
+                                                    onChange={() => setTransferConflictStrategy("move_destination")}
+                                                />
+                                                <span>Remanejar {selectedTransferConflict.occupantName} para outro posto/base</span>
+                                            </label>
+                                        </div>
 
-                                            {!selectedDoctor && (
-                                                <div className="chief-doctor-help">
-                                                    Digite alguns caracteres. O envio so libera depois que voce escolhe um nome completo da lista.
-                                                </div>
-                                            )}
-
-                                            {!selectedDoctor && filteredDoctors.length > 0 && (
-                                                <div className="chief-doctor-suggestions" role="listbox" aria-label="Sugestoes de medicos">
-                                                    {filteredDoctors.map((doctor) => (
-                                                        <button
-                                                            key={doctor.id}
-                                                            type="button"
-                                                            className="chief-doctor-option"
-                                                            onClick={() => {
-                                                                setFormState((current) => ({ ...current, doctorId: doctor.id }));
-                                                                setDoctorQuery(doctorOptionLabel(doctor));
-                                                            }}
-                                                            disabled={isTransferAction}
-                                                        >
-                                                            <strong>{doctor.displayName ?? doctor.fullName}</strong>
-                                                            {doctor.displayName && <span>{doctor.fullName}</span>}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            )}
-
-                                            {isTransferAction && (
-                                                <div className="chief-inline-help chief-transfer-inline-note">
-                                                    O remanejamento reaproveita o medico ja registrado neste plantao. Para trocar o nome, volte o destino para o local atual e corrija o cadastro separadamente.
-                                                </div>
-                                            )}
-                                        </label>
-
-                                        <label className="chief-field">
-                                            <span>{actionMode === "start" ? "Horario de abertura" : "Horario corrigido"}</span>
-                                            <input
-                                                type="datetime-local"
-                                                className="chief-input"
-                                                value={formState.startedAt}
-                                                onChange={(event) => setFormState((current) => ({ ...current, startedAt: event.target.value }))}
-                                                disabled={isTransferAction}
-                                            />
-                                            {isTransferAction && (
-                                                <small className="chief-field-hint">O novo registro nasce com o horario de chegada ja consolidado neste plantao.</small>
-                                            )}
-                                        </label>
-
-                                        <label className="chief-field">
-                                            <span>Função operacional</span>
-                                            <select
-                                                className="chief-input chief-select"
-                                                value={formState.roleLabel}
-                                                onChange={(event) => setFormState((current) => ({ ...current, roleLabel: event.target.value }))}
-                                                disabled={Boolean(resolveCardFixedRole(selectedCard)) && !(resolveCardFixedRole(selectedCard) === "MRV" && mealBreakDisplayMode === "night")}
-                                            >
-                                                <option value="">Sem função</option>
-                                                {buildOperationalRoleChoices([
-                                                    resolveCardFixedRole(selectedCard),
-                                                    selectedCard.roleLabel,
-                                                ]).map((role) => (
-                                                    <option key={role} value={role}>{role}</option>
-                                                ))}
-                                            </select>
-                                            {resolveCardFixedRole(selectedCard) === "MRV" && mealBreakDisplayMode === "night" ? (
-                                                <small className="chief-field-hint">Função MRV não se aplica à noite. Deixe em branco para retirar.</small>
-                                            ) : resolveCardFixedRole(selectedCard) ? (
-                                                <small className="chief-field-hint">Função travada por regra operacional deste posto neste turno.</small>
-                                            ) : (
-                                                <small className="chief-field-hint">Deixe em branco para remover a função sem mexer no plantão, na chegada ou no meal break.</small>
-                                            )}
-                                        </label>
-
-                                        {actionMode === "correct" && (
-                                            <label className="chief-field">
-                                                <span>Destino operacional</span>
+                                        {transferConflictStrategy === "move_destination" && (
+                                            <label className="chief-field full-width">
+                                                <span>Novo destino de {selectedTransferConflict.occupantName}</span>
                                                 <select
                                                     className="chief-input chief-select"
-                                                    value={formState.targetKey}
-                                                    onChange={(event) => setFormState((current) => ({ ...current, targetKey: event.target.value }))}
+                                                    value={transferRelocationKey}
+                                                    onChange={(event) => setTransferRelocationKey(event.target.value)}
                                                 >
+                                                    <option value="">Selecione o posto/base alternativo</option>
                                                     <optgroup label="Regulacao">
-                                                        {transferTargetOptions
+                                                        {relocationTargetOptions
                                                             .filter((option) => option.domain === "regulation")
                                                             .map((option) => (
                                                                 <option key={option.key} value={option.key}>
-                                                                    {option.code} · {option.label}{option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
+                                                                    {option.code} · {option.label}
+                                                                    {option.key === selectedCardTargetKey ? " · libera a origem" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
                                                                 </option>
                                                             ))}
                                                     </optgroup>
                                                     <optgroup label="Intervencao">
-                                                        {transferTargetOptions
+                                                        {relocationTargetOptions
                                                             .filter((option) => option.domain === "intervention")
                                                             .map((option) => (
                                                                 <option key={option.key} value={option.key} disabled={option.status === "disabled"}>
                                                                     {option.code} · {option.label}
-                                                                    {option.status === "disabled" ? " · indisponivel" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
+                                                                    {option.status === "disabled" ? " · indisponivel" : option.key === selectedCardTargetKey ? " · libera a origem" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
                                                                 </option>
                                                             ))}
                                                     </optgroup>
                                                 </select>
-                                                <small className="chief-field-hint">
-                                                    {isTransferAction
-                                                        ? "O remanejamento apaga o vinculo atual e recria o plantao no destino, preservando chegada, nome e continuidade do pagamento."
-                                                        : "Mantenha o destino atual para corrigir so medico, horario ou funcao sem mudar a lotacao."}
-                                                </small>
-                                                {selectedTransferConflict && (
+                                                <small className="chief-field-hint">A origem atual pode ser usada para troca direta, desde que voce confirme este remanejamento.</small>
+                                                {relocationTargetConflict && (
                                                     <div className="chief-inline-help chief-transfer-inline-note warning">
-                                                        {selectedTransferTarget?.code} ja esta ocupado por {selectedTransferConflict.occupantName}. Ao continuar, a chefia precisara retirar ou remanejar quem esta nesse destino.
+                                                        {selectedRelocationTarget?.code} ja esta ocupado por {relocationTargetConflict.occupantName}. Escolha outro local vazio ou retire esse profissional antes.
                                                     </div>
                                                 )}
                                             </label>
                                         )}
-                                    </>
+                                    </div>
+                                ) : (
+                                    <div className="chief-transfer-info-card">
+                                        <strong>Destino livre</strong>
+                                        <span>O remanejamento vai apenas limpar a origem e recriar a lotacao em {selectedTransferTarget.code}.</span>
+                                    </div>
                                 )}
-
-                                {actionMode === "end" && (
-                                    <label className="chief-field">
-                                        <span>Horario de encerramento</span>
-                                        <input
-                                            type="datetime-local"
-                                            className="chief-input"
-                                            value={formState.endedAt}
-                                            onChange={(event) => setFormState((current) => ({ ...current, endedAt: event.target.value }))}
-                                        />
-                                    </label>
-                                )}
-
-                                <label className="chief-field full-width">
-                                    <span>{actionMode === "correct" ? "Motivo da correcao" : "Notas operacionais"}</span>
-                                    <textarea
-                                        className="chief-input chief-textarea"
-                                        value={formState.notes}
-                                        onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
-                                        placeholder={actionMode === "correct"
-                                            ? isTransferAction
-                                                ? "Explique o motivo operacional do remanejamento e o que acontece com o destino atual"
-                                                : "Explique por que voce esta mudando o horario ou o medico deste registro"
-                                            : "Contexto rapido de chefia ou observacao operacional"}
-                                    />
-                                </label>
 
                                 <div className="chief-form-actions full-width">
-                                    <button type="button" className="chief-secondary-button" onClick={() => setActionMode(null)}>
-                                        Voltar
+                                    <button type="button" className="chief-secondary-button" onClick={() => setTransferConfirmOpen(false)}>
+                                        Revisar drawer
                                     </button>
-                                    <button type="submit" className="chief-primary-button" disabled={isSubmitting || isRefreshing || !session?.canManage}>
-                                        {isSubmitting || isRefreshing
-                                            ? "Aplicando..."
-                                            : actionMode === "start"
-                                                ? "Abrir cobertura"
-                                                : actionMode === "end"
-                                                    ? "Encerrar registro"
-                                                    : isTransferAction
-                                                        ? "Revisar remanejamento"
-                                                        : "Salvar correcao"}
+                                    <button
+                                        type="button"
+                                        className="chief-primary-button"
+                                        disabled={isSubmitting || isRefreshing || (transferConflictStrategy === "move_destination" && (!selectedRelocationTarget || Boolean(relocationTargetConflict)))}
+                                        onClick={() => void submitOperationalAction({ confirmedTransfer: true })}
+                                    >
+                                        {isSubmitting || isRefreshing ? "Aplicando..." : "Confirmar remanejamento"}
                                     </button>
                                 </div>
-                            </form>
+                            </section>
                         </div>
                     )}
-                </section>
-            </aside>
-
-            {transferConfirmOpen && selectedCard && selectedTransferTarget && (
-                <div className="chief-transfer-backdrop open" onClick={() => setTransferConfirmOpen(false)}>
-                    <section className="chief-transfer-modal" aria-label="Confirmacao de remanejamento" onClick={(event) => event.stopPropagation()}>
-                        <div className="chief-transfer-header">
-                            <div>
-                                <p className="ops-column-kicker">Remanejamento</p>
-                                <h3>Confirmar troca de lotacao</h3>
-                            </div>
-                            <button type="button" className="chief-drawer-close" onClick={() => setTransferConfirmOpen(false)} aria-label="Fechar confirmacao de remanejamento">
-                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <path d="M6.4 5L12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4Z" />
-                                </svg>
-                            </button>
-                        </div>
-
-                        <p className="chief-transfer-copy">
-                            O registro atual em {cardCode(selectedCard)} sera removido e o sistema abrira um novo registro em {selectedTransferTarget.code}, preservando o medico e a chegada ja consolidados para quadro, pagamento e banco de horas.
-                        </p>
-
-                        <div className="chief-transfer-grid">
-                            <div className="chief-transfer-card source">
-                                <span>Origem</span>
-                                <strong>{cardCode(selectedCard)} · {cardLabel(selectedCard)}</strong>
-                                <small>{displayDoctorName(selectedCard)}</small>
-                            </div>
-                            <div className="chief-transfer-card destination">
-                                <span>Destino</span>
-                                <strong>{selectedTransferTarget.code} · {selectedTransferTarget.label}</strong>
-                                <small>{targetTypeLabel(selectedTransferTarget.domain)}</small>
-                            </div>
-                        </div>
-
-                        {selectedTransferConflict ? (
-                            <div className="chief-transfer-resolution-block">
-                                <div className="chief-transfer-warning-card">
-                                    <strong>Destino ocupado</strong>
-                                    <span>{selectedTransferConflict.code} esta com {selectedTransferConflict.occupantName}.</span>
-                                </div>
-
-                                <div className="chief-transfer-resolution-grid">
-                                    <label className={`chief-transfer-choice ${transferConflictStrategy === "remove_destination" ? "active" : ""}`.trim()}>
-                                        <input
-                                            type="radio"
-                                            name="transfer-conflict-strategy"
-                                            value="remove_destination"
-                                            checked={transferConflictStrategy === "remove_destination"}
-                                            onChange={() => setTransferConflictStrategy("remove_destination")}
-                                        />
-                                        <span>Retirar {selectedTransferConflict.occupantName} do plantao</span>
-                                    </label>
-                                    <label className={`chief-transfer-choice ${transferConflictStrategy === "move_destination" ? "active" : ""}`.trim()}>
-                                        <input
-                                            type="radio"
-                                            name="transfer-conflict-strategy"
-                                            value="move_destination"
-                                            checked={transferConflictStrategy === "move_destination"}
-                                            onChange={() => setTransferConflictStrategy("move_destination")}
-                                        />
-                                        <span>Remanejar {selectedTransferConflict.occupantName} para outro posto/base</span>
-                                    </label>
-                                </div>
-
-                                {transferConflictStrategy === "move_destination" && (
-                                    <label className="chief-field full-width">
-                                        <span>Novo destino de {selectedTransferConflict.occupantName}</span>
-                                        <select
-                                            className="chief-input chief-select"
-                                            value={transferRelocationKey}
-                                            onChange={(event) => setTransferRelocationKey(event.target.value)}
-                                        >
-                                            <option value="">Selecione o posto/base alternativo</option>
-                                            <optgroup label="Regulacao">
-                                                {relocationTargetOptions
-                                                    .filter((option) => option.domain === "regulation")
-                                                    .map((option) => (
-                                                        <option key={option.key} value={option.key}>
-                                                            {option.code} · {option.label}
-                                                            {option.key === selectedCardTargetKey ? " · libera a origem" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
-                                                        </option>
-                                                    ))}
-                                            </optgroup>
-                                            <optgroup label="Intervencao">
-                                                {relocationTargetOptions
-                                                    .filter((option) => option.domain === "intervention")
-                                                    .map((option) => (
-                                                        <option key={option.key} value={option.key} disabled={option.status === "disabled"}>
-                                                            {option.code} · {option.label}
-                                                            {option.status === "disabled" ? " · indisponivel" : option.key === selectedCardTargetKey ? " · libera a origem" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
-                                                        </option>
-                                                    ))}
-                                            </optgroup>
-                                        </select>
-                                        <small className="chief-field-hint">A origem atual pode ser usada para troca direta, desde que voce confirme este remanejamento.</small>
-                                        {relocationTargetConflict && (
-                                            <div className="chief-inline-help chief-transfer-inline-note warning">
-                                                {selectedRelocationTarget?.code} ja esta ocupado por {relocationTargetConflict.occupantName}. Escolha outro local vazio ou retire esse profissional antes.
-                                            </div>
-                                        )}
-                                    </label>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="chief-transfer-info-card">
-                                <strong>Destino livre</strong>
-                                <span>O remanejamento vai apenas limpar a origem e recriar a lotacao em {selectedTransferTarget.code}.</span>
-                            </div>
-                        )}
-
-                        <div className="chief-form-actions full-width">
-                            <button type="button" className="chief-secondary-button" onClick={() => setTransferConfirmOpen(false)}>
-                                Revisar drawer
-                            </button>
-                            <button
-                                type="button"
-                                className="chief-primary-button"
-                                disabled={isSubmitting || isRefreshing || (transferConflictStrategy === "move_destination" && (!selectedRelocationTarget || Boolean(relocationTargetConflict)))}
-                                onClick={() => void submitOperationalAction({ confirmedTransfer: true })}
-                            >
-                                {isSubmitting || isRefreshing ? "Aplicando..." : "Confirmar remanejamento"}
-                            </button>
-                        </div>
-                    </section>
-                </div>
+                </>
             )}
         </>
     );

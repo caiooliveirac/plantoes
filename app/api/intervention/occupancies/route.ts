@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs, doctors, interventionBases, interventionOccupancies } from "@/db/schema";
@@ -9,7 +9,11 @@ import { startInterventionOccupancy } from "@/modules/intervention/service";
 const schema = z.object({
     doctorId: z.string().uuid(),
     baseId: z.number().int().positive(),
+    continuityGroupId: z.string().uuid().optional().nullable(),
+    previousOccupancyId: z.string().uuid().optional().nullable(),
+    isContinuityEntry: z.boolean().optional(),
     startedAt: z.string().datetime(),
+    boardStartedAt: z.string().datetime().optional().nullable(),
     scheduledStartAt: z.string().datetime().optional().nullable(),
     scheduledEndAt: z.string().datetime().optional().nullable(),
     shiftLabel: z.string().trim().max(100).optional().nullable(),
@@ -77,7 +81,11 @@ export async function POST(request: NextRequest) {
         const created = await startInterventionOccupancy({
             doctorId: parsed.data.doctorId,
             baseId: parsed.data.baseId,
+            continuityGroupId: parsed.data.continuityGroupId ?? null,
+            previousOccupancyId: parsed.data.previousOccupancyId ?? null,
+            isContinuityEntry: parsed.data.isContinuityEntry ?? false,
             startedAt: new Date(parsed.data.startedAt),
+            boardStartedAt: parsed.data.boardStartedAt ? new Date(parsed.data.boardStartedAt) : null,
             scheduledStartAt: parsed.data.scheduledStartAt ? new Date(parsed.data.scheduledStartAt) : null,
             scheduledEndAt: parsed.data.scheduledEndAt ? new Date(parsed.data.scheduledEndAt) : null,
             shiftLabel: parsed.data.shiftLabel ?? null,
@@ -85,6 +93,16 @@ export async function POST(request: NextRequest) {
             source: parsed.data.source,
             notes: parsed.data.notes ?? null,
             createdByUserId: session.user.id,
+        });
+
+        // Detect if the start displaced someone (for undo support)
+        const displacedOccupancy = await getDb().query.interventionOccupancies.findFirst({
+            where: and(
+                eq(interventionOccupancies.baseId, created.baseId),
+                eq(interventionOccupancies.endedAt, created.startedAt),
+                ne(interventionOccupancies.id, created.id),
+            ),
+            orderBy: [desc(interventionOccupancies.startedAt)],
         });
 
         await getDb().insert(auditLogs).values({
@@ -96,6 +114,9 @@ export async function POST(request: NextRequest) {
                 doctorId: created.doctorId,
                 baseId: created.baseId,
                 startedAt: created.startedAt,
+                shiftLabel: created.shiftLabel,
+                displacedOccupancyId: displacedOccupancy?.id ?? null,
+                displacedDoctorId: displacedOccupancy?.doctorId ?? null,
             },
         });
 

@@ -86,6 +86,20 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/in
                 nextDoctorId: updated.doctorId,
                 previousStartedAt: existing.startedAt.toISOString(),
                 nextStartedAt: updated.startedAt.toISOString(),
+                beforeSnapshot: {
+                    doctorId: existing.doctorId,
+                    baseId: existing.baseId,
+                    startedAt: existing.startedAt.toISOString(),
+                    boardStartedAt: existing.boardStartedAt?.toISOString() ?? null,
+                    endedAt: existing.endedAt?.toISOString() ?? null,
+                    actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
+                    scheduledStartAt: existing.scheduledStartAt?.toISOString() ?? null,
+                    scheduledEndAt: existing.scheduledEndAt?.toISOString() ?? null,
+                    shiftLabel: existing.shiftLabel,
+                    roleLabel: existing.roleLabel,
+                    notes: existing.notes,
+                    continuityGroupId: existing.continuityGroupId,
+                },
             },
         });
 
@@ -135,11 +149,26 @@ export async function DELETE(request: NextRequest, context: RouteContext<"/api/i
             details: {
                 notes: parsed.data.notes,
                 doctorId: existing.doctorId,
+                baseId: existing.baseId,
                 startedAt: existing.startedAt.toISOString(),
                 endedAt: existing.endedAt?.toISOString() ?? null,
                 actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
                 shiftLabel: existing.shiftLabel,
                 continuityGroupId: existing.continuityGroupId,
+                beforeSnapshot: {
+                    doctorId: existing.doctorId,
+                    baseId: existing.baseId,
+                    startedAt: existing.startedAt.toISOString(),
+                    boardStartedAt: existing.boardStartedAt?.toISOString() ?? null,
+                    endedAt: existing.endedAt?.toISOString() ?? null,
+                    actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
+                    scheduledStartAt: existing.scheduledStartAt?.toISOString() ?? null,
+                    scheduledEndAt: existing.scheduledEndAt?.toISOString() ?? null,
+                    shiftLabel: existing.shiftLabel,
+                    roleLabel: existing.roleLabel,
+                    notes: existing.notes,
+                    continuityGroupId: existing.continuityGroupId,
+                },
             },
         });
 

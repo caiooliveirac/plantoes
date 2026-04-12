@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasDatabaseUrl } from "@/db";
+import { assertSingleRuntimeConfig, logRuntimeIdentity } from "@/lib/runtime-identity";
 import { getTelegramWebhookSecret } from "@/modules/telegram/config";
 import { processTelegramUpdate } from "@/modules/telegram/service";
 
 export async function POST(request: NextRequest) {
+    logRuntimeIdentity("api.telegram.webhook");
+    assertSingleRuntimeConfig("api.telegram.webhook");
+
     if (!hasDatabaseUrl()) {
         return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
     }
