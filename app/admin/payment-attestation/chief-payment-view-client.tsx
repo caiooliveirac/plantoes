@@ -396,24 +396,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
             </section>
 
             <section className="chief-payable-control-grid">
-                <article className="chief-payable-control-card">
-                    <h3>Status de médicos</h3>
-                    <div className="chief-payable-chip-row">
-                        <button type="button" className={`chief-payable-chip ${status === "all" ? "active" : ""}`.trim()} onClick={() => setStatus("all")}>
-                            Todos ({board.summary.doctorCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${status === "ready_for_payment" ? "active" : ""}`.trim()} onClick={() => setStatus("ready_for_payment")}>
-                            Prontos ({filterSummary.readyDoctors})
-                        </button>
-                        <button type="button" className={`chief-payable-chip warning ${status === "needs_review" ? "active" : ""}`.trim()} onClick={() => setStatus("needs_review")}>
-                            Revisão ({filterSummary.reviewDoctors})
-                        </button>
-                    </div>
-                </article>
-
-                <article className="chief-payable-control-card">
+                <article className="chief-payable-control-card chief-payable-control-card-priority">
                     <h3>Turno e domínio</h3>
-                    <div className="chief-payable-chip-row">
+                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
                         <button type="button" className={`chief-payable-chip ${shiftFilter === "all" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("all")}>
                             SD + SN ({board.summary.payableShiftCount})
                         </button>
@@ -434,14 +419,20 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         </button>
                     </div>
 
-                    <div className="chief-payable-chip-row chief-payable-target-pills">
+                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
                         <button
                             type="button"
-                            className={`chief-payable-chip ${targetFilter === "all" ? "active" : ""}`.trim()}
-                            onClick={() => setTargetFilter("all")}
+                            className={`chief-payable-chip ${normalizedTarget === "usa" ? "active" : ""}`.trim()}
+                            onClick={() => setTargetSearch(normalizedTarget === "usa" ? "" : "USA")}
                         >
+                            USA ({board.targetOptions.filter((target) => normalize([target.targetCode, target.targetLabel].join(" ")).includes("usa")).length})
+                        </button>
+                        <button type="button" className={`chief-payable-chip ${targetFilter === "all" ? "active" : ""}`.trim()} onClick={() => setTargetFilter("all")}>
                             Todas as bases/ramais ({targetPills.length})
                         </button>
+                    </div>
+
+                    <div className="chief-payable-chip-row chief-payable-target-pills">
                         {targetPills.map((target) => {
                             const value = `${target.domain}|${target.targetCode}`;
                             return (
@@ -456,6 +447,21 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                 </button>
                             );
                         })}
+                    </div>
+                </article>
+
+                <article className="chief-payable-control-card chief-payable-control-card-secondary">
+                    <h3>Status de médicos (secundário)</h3>
+                    <div className="chief-payable-chip-row">
+                        <button type="button" className={`chief-payable-chip ${status === "all" ? "active" : ""}`.trim()} onClick={() => setStatus("all")}>
+                            Todos ({board.summary.doctorCount})
+                        </button>
+                        <button type="button" className={`chief-payable-chip ${status === "ready_for_payment" ? "active" : ""}`.trim()} onClick={() => setStatus("ready_for_payment")}>
+                            Prontos ({filterSummary.readyDoctors})
+                        </button>
+                        <button type="button" className={`chief-payable-chip warning ${status === "needs_review" ? "active" : ""}`.trim()} onClick={() => setStatus("needs_review")}>
+                            Revisão ({filterSummary.reviewDoctors})
+                        </button>
                     </div>
                 </article>
             </section>
