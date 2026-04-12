@@ -55,10 +55,20 @@ O sistema consolida regulação, intervenção, chefia e banco de horas em uma b
 - npm run build
 - npm run db:migrate
 - npm run db:import-doctors -- --file ./algum-arquivo.csv --dry-run
-- comando Telegram admin: /medico cadastrar Nome Completo | Nome de exibicao | codigo
+- npm run db:import-doctors -- --file ./algum-arquivo.csv --allow-additions
+- comando Telegram admin: /medico cadastrar Nome Completo | Nome de exibicao | codigo | alias 1, alias 2
+- comando Telegram admin: /medico atualizar Busca Atual | Nome Completo Correto | Nome de exibicao | codigo | alias 1, alias 2
 - comando Telegram pagamento: /pagamento conferir [YYYY-MM-DD] [SD|SN]
 - comando Telegram correção de pagamento: /pagamento corrigir alvo | Nome Completo | [YYYY-MM-DD] | [SD|SN] | [motivo]
 - npm run test
+
+## Importacao segura de medicos
+
+- todo apply real agora exige backup automatico antes de gravar
+- o script gera dump SQL completo do schema `operations_v2` em `.backups/doctor-imports/<timestamp>/operations_v2.sql`
+- o mesmo diretório recebe `manifest.json` com resumo e preview da importacao
+- novas adicoes ficam bloqueadas por padrao; para criar medico novo, use `--allow-additions` somente depois de revisar o preview
+- a API `/api/doctors/import` ficou restrita a preview para evitar apply sem backup
 
 ## Estado atual
 

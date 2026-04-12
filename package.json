@@ -14,6 +14,7 @@
         "db:migrate": "tsx scripts/apply-migrations.ts",
         "db:import-doctors": "tsx scripts/import-doctors.ts",
         "telegram:worker": "node --import tsx scripts/telegram-reminder-worker.ts",
+        "runtime:guard-check": "bash scripts/runtime-guard-check.sh",
         "provision:initial-access": "tsx scripts/provision-initial-access.ts",
         "deploy:production": "bash scripts/deploy-production.sh"
     },
@@ -21,6 +22,7 @@
         "bcryptjs": "^3.0.3",
         "drizzle-orm": "^0.45.1",
         "exceljs": "^4.4.0",
+        "framer-motion": "^12.38.0",
         "next": "16.2.1",
         "next-auth": "^5.0.0-beta.30",
         "postgres": "^3.4.8",
