@@ -1,4 +1,5 @@
 import { getTelegramReminderPollMs } from "@/modules/telegram/config";
+import { assertSingleRuntimeConfig, logRuntimeIdentity } from "@/lib/runtime-identity";
 import { sendTelegramMealBreakCycle } from "@/modules/telegram/meal-breaks";
 import { sendTelegramReminderCycle } from "@/modules/telegram/reminders";
 
@@ -29,6 +30,9 @@ async function runCycle() {
 }
 
 async function main() {
+    logRuntimeIdentity("telegram.reminder.worker");
+    assertSingleRuntimeConfig("telegram.reminder.worker");
+
     await runCycle();
     const intervalMs = getTelegramReminderPollMs();
     setInterval(() => {
