@@ -9,6 +9,8 @@
         "dev": "next dev",
         "build": "next build",
         "start": "next start",
+        "test:deploy": "node --test --import tsx $(find tests -name '*.test.ts' ! -name 'telegram-meal-breaks.test.ts' -print)",
+        "test:full": "node --test --import tsx tests/**/*.test.ts",
         "test": "node --test --import tsx tests/**/*.test.ts",
         "bank-hours:rebuild": "tsx scripts/rebuild-bank-hours.ts",
         "scheduled-windows:repair": "tsx scripts/repair-scheduled-windows.ts",
