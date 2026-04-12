@@ -28,6 +28,7 @@ export interface RawMonthlyReportShift {
     scheduledStartAt: string | null;
     scheduledEndAt: string | null;
     shiftLabel: string | null;
+    roleLabel: string | null;
     source: MonthlyReportSource;
     notes: string | null;
     createdAt: string;

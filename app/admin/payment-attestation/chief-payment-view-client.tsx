@@ -65,6 +65,10 @@ function normalize(value: string) {
         .trim();
 }
 
+function formatUnits(value: number) {
+    return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(".", ",");
+}
+
 function cellAuditLink(monthKey: string, day: string, shift: "SD" | "SN") {
     return `/admin/payment-attestation/audit?date=${monthKey}-${day}&shift=${shift}`;
 }
@@ -134,8 +138,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
     const filterSummary = useMemo(() => {
         const readyDoctors = board.doctors.filter((doctor) => doctor.paymentStatus === "ready_for_payment").length;
         const reviewDoctors = board.doctors.length - readyDoctors;
-        const sdCount = board.payableShifts.filter((shift) => shift.shiftLabel === "SD").length;
-        const snCount = board.payableShifts.filter((shift) => shift.shiftLabel === "SN").length;
+        const sdCount = board.payableShifts
+            .filter((shift) => shift.shiftLabel === "SD")
+            .reduce((sum, shift) => sum + shift.paymentUnit, 0);
+        const snCount = board.payableShifts
+            .filter((shift) => shift.shiftLabel === "SN")
+            .reduce((sum, shift) => sum + shift.paymentUnit, 0);
         const regulationCount = board.payableShifts.filter((shift) => shift.domain === "regulation").length;
         const interventionCount = board.payableShifts.filter((shift) => shift.domain === "intervention").length;
 
@@ -471,7 +479,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
             <section className="chief-payable-summary">
                 <article className="chief-payable-summary-card">
                     <span>Unidades pagáveis</span>
-                    <strong>{board.summary.payableShiftCount}</strong>
+                    <strong>{formatUnits(board.summary.payableUnitCount)}</strong>
                 </article>
                 <article className="chief-payable-summary-card ready">
                     <span>Prontas</span>
@@ -516,10 +524,10 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             SD + SN ({board.summary.payableShiftCount})
                         </button>
                         <button type="button" className={`chief-payable-chip day ${shiftFilter === "SD" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SD")}>
-                            SD ({filterSummary.sdCount})
+                            SD ({formatUnits(filterSummary.sdCount)})
                         </button>
                         <button type="button" className={`chief-payable-chip night ${shiftFilter === "SN" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SN")}>
-                            SN ({filterSummary.snCount})
+                            SN ({formatUnits(filterSummary.snCount)})
                         </button>
                         <button type="button" className={`chief-payable-chip ${domainFilter === "all" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("all")}>
                             Regulação + Intervenção
@@ -885,22 +893,22 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                         <motion.a
                                                             key={shift.payableShiftId}
                                                             href={cellAuditLink(board.monthKey, cell.day, shift.shiftLabel)}
-                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"}`.trim()}
-                                                            title={`${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}`}
+                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.paymentTag ? "half" : ""}`.trim()}
+                                                            title={`${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
                                                             initial={{ opacity: 0, scale: 0.92 }}
                                                             animate={{ opacity: 1, scale: 1 }}
                                                             transition={{ duration: 0.15 }}
                                                         >
-                                                            {shift.tagCode}
+                                                            {shift.paymentTag ? `${shift.tagCode} ${shift.paymentTag}` : shift.tagCode}
                                                         </motion.a>
                                                     ))}
                                                 </div>
                                             </td>
                                         ))}
 
-                                        <td>{doctor.totalSD}</td>
-                                        <td>{doctor.totalSN}</td>
-                                        <td>{doctor.total}</td>
+                                        <td>{formatUnits(doctor.totalSD)}</td>
+                                        <td>{formatUnits(doctor.totalSN)}</td>
+                                        <td>{formatUnits(doctor.total)}</td>
                                         <td>{doctor.pendingCount}</td>
                                     </motion.tr>
                                 ))}

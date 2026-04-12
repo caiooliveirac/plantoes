@@ -401,11 +401,11 @@ test("buildReminderPlans publishes 11:00 regulation confirmation with occupied p
     const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
     assert.ok(confirmation);
     assert.match(confirmation?.text ?? "", /Checagem da Regulação 11:00/);
-    assert.match(confirmation?.text ?? "", /Reguladores confirmados no turno: 1/);
-    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
-    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
-    assert.match(confirmation?.text ?? "", /NUCLEO e PIAM/);
-    assert.match(confirmation?.text ?? "", /Chefia, por favor confirme/);
+    assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 0/);
+    assert.match(confirmation?.text ?? "", /Não conta 2031, NUCLEO nem PIAM/);
+    assert.match(confirmation?.text ?? "", /USAs com médico: 2/);
+    assert.match(confirmation?.text ?? "", /USAs sem informação \(1\): IT30/);
+    assert.match(confirmation?.text ?? "", /Chefia, confirme se falta regulador/);
 });
 
 test("buildReminderPlans publishes 22:30 regulation confirmation", () => {
@@ -417,9 +417,8 @@ test("buildReminderPlans publishes 22:30 regulation confirmation", () => {
     const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
     assert.ok(confirmation);
     assert.match(confirmation?.text ?? "", /Checagem da Regulação 22:30/);
-    assert.match(confirmation?.text ?? "", /Reguladores confirmados no turno: 1/);
-    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
-    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+    assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 0/);
+    assert.match(confirmation?.text ?? "", /USAs sem informação \(1\): IT30/);
 });
 
 test("buildReminderPlans publishes 22:00 regulation confirmation", () => {
@@ -431,9 +430,8 @@ test("buildReminderPlans publishes 22:00 regulation confirmation", () => {
     const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
     assert.ok(confirmation);
     assert.match(confirmation?.text ?? "", /Checagem da Regulação 22:00/);
-    assert.match(confirmation?.text ?? "", /Reguladores confirmados no turno: 1/);
-    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
-    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+    assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 0/);
+    assert.match(confirmation?.text ?? "", /USAs com médico: 2/);
 });
 
 test("buildReminderPlans publishes 13:00 regulation confirmation", () => {
@@ -445,8 +443,7 @@ test("buildReminderPlans publishes 13:00 regulation confirmation", () => {
     const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
     assert.ok(confirmation);
     assert.match(confirmation?.text ?? "", /Checagem da Regulação 13:00/);
-    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
-    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+    assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 0/);
 });
 
 test("buildReminderPlans publishes 15:00 regulation confirmation", () => {
@@ -458,8 +455,7 @@ test("buildReminderPlans publishes 15:00 regulation confirmation", () => {
     const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
     assert.ok(confirmation);
     assert.match(confirmation?.text ?? "", /Checagem da Regulação 15:00/);
-    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
-    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+    assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 0/);
 });
 
 test("buildReminderPlans publishes 21:30 regulation confirmation", () => {
@@ -471,6 +467,77 @@ test("buildReminderPlans publishes 21:30 regulation confirmation", () => {
     const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
     assert.ok(confirmation);
     assert.match(confirmation?.text ?? "", /Checagem da Regulação 21:30/);
-    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
-    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+    assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 0/);
+});
+
+test("buildReminderPlans ignores chief, NUCLEO and PIAM in regulation confirmation headcount", () => {
+    const board = makeBoard();
+    board.regulation.push(
+        {
+            postId: 3,
+            occupancyId: "reg-1362",
+            postCode: "1362",
+            postLabel: "1362",
+            defaultRole: "MR",
+            doctorId: "doc-1362",
+            doctorName: "Regulador Valido",
+            displayName: "Valido",
+            startedAt: "2026-03-26T14:00:00.000Z",
+            boardStartedAt: "2026-03-26T14:00:00.000Z",
+            scheduledEndAt: "2026-03-26T22:15:00.000Z",
+            shiftLabel: "SD",
+            roleLabel: "MR",
+            ramalLabel: "1362",
+            status: "active",
+            liveSource: "operations_v2",
+            liveUpdatedAt: null,
+        },
+        {
+            postId: 4,
+            occupancyId: "reg-nucleo",
+            postCode: "NUCLEO",
+            postLabel: "NUCLEO",
+            defaultRole: "MR",
+            doctorId: "doc-nucleo",
+            doctorName: "Nucleo",
+            displayName: "Nucleo",
+            startedAt: "2026-03-26T14:00:00.000Z",
+            boardStartedAt: "2026-03-26T14:00:00.000Z",
+            scheduledEndAt: "2026-03-26T22:15:00.000Z",
+            shiftLabel: "SD",
+            roleLabel: "MR",
+            ramalLabel: "NUCLEO",
+            status: "active",
+            liveSource: "operations_v2",
+            liveUpdatedAt: null,
+        },
+        {
+            postId: 5,
+            occupancyId: "reg-piam",
+            postCode: "PIAM",
+            postLabel: "PIAM",
+            defaultRole: "MR",
+            doctorId: "doc-piam",
+            doctorName: "Piam",
+            displayName: "Piam",
+            startedAt: "2026-03-26T14:00:00.000Z",
+            boardStartedAt: "2026-03-26T14:00:00.000Z",
+            scheduledEndAt: "2026-03-26T22:15:00.000Z",
+            shiftLabel: "SD",
+            roleLabel: "MR",
+            ramalLabel: "PIAM",
+            status: "active",
+            liveSource: "operations_v2",
+            liveUpdatedAt: null,
+        },
+    );
+
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-26T15:05:00-03:00"),
+        board,
+    });
+
+    const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
+    assert.ok(confirmation);
+    assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 1/);
 });

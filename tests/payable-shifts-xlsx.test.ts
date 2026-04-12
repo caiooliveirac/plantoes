@@ -17,6 +17,7 @@ function makeBoard(): ChiefPayableBoardModel {
         summary: {
             doctorCount: 1,
             payableShiftCount: 2,
+            payableUnitCount: 2,
             readyCount: 2,
             needsReviewCount: 0,
             segmentCount: 3,
@@ -59,6 +60,9 @@ function makeBoard(): ChiefPayableBoardModel {
                             auditStatus: "clean",
                             issues: [],
                             source: "telegram",
+                            roleLabel: null,
+                            paymentUnit: 1,
+                            paymentTag: null,
                         }],
                     },
                     {
@@ -84,6 +88,9 @@ function makeBoard(): ChiefPayableBoardModel {
                             auditStatus: "clean",
                             issues: [],
                             source: "telegram",
+                            roleLabel: null,
+                            paymentUnit: 1,
+                            paymentTag: null,
                         }],
                     },
                     { day: "03", shifts: [] },

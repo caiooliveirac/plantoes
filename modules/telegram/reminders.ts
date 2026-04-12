@@ -2,12 +2,14 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { telegramBotNotices } from "@/db/schema";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
+import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import {
     getSaoPauloParts,
     hasPlannedInterventionCoverageForCurrentShift,
     resolveOperationalShiftWindow,
     shouldHighlightInterventionVerification,
 } from "@/modules/operational/board-rules";
+import { endRegulationOccupancy } from "@/modules/regulation/service";
 import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAnnouncementChatIds, getTelegramReminderChatIds } from "@/modules/telegram/config";
 import {
@@ -172,6 +174,22 @@ function buildRegulationSection(rows: RegulationBoardRow[], includeArrival = fal
 
 function joinPendingCodes(values: string[]) {
     return values.join(", ");
+}
+
+function normalizeOperationalCode(value: string) {
+    return value.trim().toUpperCase();
+}
+
+function isChiefRegulationCode(code: string) {
+    return normalizeOperationalCode(code) === "2031";
+}
+
+function isNucleoRegulationCode(code: string) {
+    return normalizeOperationalCode(code) === "NUCLEO";
+}
+
+function isPiamRegulationCode(code: string) {
+    return normalizeOperationalCode(code) === "PIAM";
 }
 
 function buildGroupedPendingLines(params: {
@@ -448,11 +466,23 @@ function buildRegulationConfirmationPlan(params: ReminderPlanningParams): Remind
         return null;
     }
 
-    const confirmedRegulation = sortTelegramRegulationRows(
-        params.board.regulation.filter((row) => row.status === "active"),
+    const confirmedRegulation = sortTelegramRegulationRows(params.board.regulation.filter((row) => row.status === "active"));
+    const nonChiefRegulationCount = confirmedRegulation.filter((row) => {
+        const normalizedCode = normalizeOperationalCode(row.postCode);
+        return !isChiefRegulationCode(normalizedCode) && !isNucleoRegulationCode(normalizedCode) && !isPiamRegulationCode(normalizedCode);
+    }).length;
+
+    const activeIntervention = sortTelegramInterventionRows(params.board.intervention.filter((row) => row.status === "active"));
+    const waitingInterventionCodes = sortTelegramInterventionCodes(
+        params.board.intervention
+            .filter((row) => row.status === "waiting")
+            .map((row) => row.baseCode),
     );
-    const occupiedLines = confirmedRegulation.map((row) => `✅ ${row.postCode} - ${formatReminderDoctorName(row.doctorName, row.displayName)}`);
-    const occupiedCount = confirmedRegulation.length;
+    const disabledInterventionCodes = sortTelegramInterventionCodes(
+        params.board.intervention
+            .filter((row) => row.status === "disabled")
+            .map((row) => row.baseCode),
+    );
     const dateLabel = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
 
     return {
@@ -460,20 +490,27 @@ function buildRegulationConfirmationPlan(params: ReminderPlanningParams): Remind
         stage: "regulation_confirmation",
         payload: {
             checkpointLabel: slot,
-            occupiedCount,
+            nonChiefRegulationCount,
+            activeUsaCount: activeIntervention.length,
+            waitingUsaCount: waitingInterventionCodes.length,
         },
         text: [
             `☎️🧭 Checagem da Regulação ${slot}`,
             "",
-            `👥 Reguladores confirmados no turno: ${occupiedCount}`,
+            `👥 Reguladores logados além da chefia: ${nonChiefRegulationCount}`,
+            "ℹ️ Não conta 2031, NUCLEO nem PIAM.",
             "",
-            "📞 Ramais ocupados agora:",
-            occupiedLines.length > 0 ? occupiedLines.join("\n") : "⚠️ Sem ramal ocupado registrado no momento.",
+            `🚑 USAs com médico: ${activeIntervention.length}`,
+            waitingInterventionCodes.length > 0
+                ? `🚨 USAs sem informação (${waitingInterventionCodes.length}): ${joinPendingCodes(waitingInterventionCodes)}`
+                : "✅ Nenhuma USA sem informação.",
+            disabledInterventionCodes.length > 0
+                ? `⚫ USAs desativadas (${disabledInterventionCodes.length}): ${joinPendingCodes(disabledInterventionCodes)}`
+                : null,
             "",
-            "🧠 Inclui NUCLEO e PIAM quando ocupados.",
-            "👨‍✈️ Chefia, por favor confirme no grupo: são só esses mesmo ou faltou alguém confirmar?",
+            "👨‍✈️ Chefia, confirme se falta regulador para fechar a cobertura.",
             "🚨 Se faltou, avisem agora com nome + ramal + turno (SD/SN/P).",
-        ].join("\n"),
+        ].filter((line): line is string => Boolean(line)).join("\n"),
     };
 }
 
@@ -513,7 +550,12 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
         return { sent: 0, evaluated: 0 };
     }
 
-    const board = await getOperationalBoard();
+    let board = await getOperationalBoard();
+    const halfShiftAutoCheckoutSent = await runHalfShiftAutoCheckout(referenceDate, board);
+    if (halfShiftAutoCheckoutSent > 0) {
+        board = await getOperationalBoard();
+    }
+
     const plans = buildReminderPlans({
         now: referenceDate,
         board,
@@ -541,5 +583,80 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
         }
     }
 
-    return { sent, evaluated };
+    return { sent: sent + halfShiftAutoCheckoutSent, evaluated };
+}
+
+function formatHalfShiftAutoCheckoutText(params: {
+    doctorName: string | null;
+    displayName: string | null;
+    targetCode: string;
+}) {
+    const name = formatReminderDoctorName(params.doctorName, params.displayName);
+    return [
+        "🟠🕔 Meio plantao encerrado automaticamente.",
+        `${name} foi retirado de ${params.targetCode} as 17:00.`,
+        "Ja removi do quadro principal e registrei para pagamento como MEIO.",
+    ].join("\n");
+}
+
+async function runHalfShiftAutoCheckout(referenceDate: Date, board: ReminderBoardSnapshot) {
+    const chatIds = resolveReminderChatIds();
+    if (chatIds.length === 0) {
+        return 0;
+    }
+
+    const sentAt = 17 * 60;
+    const nowParts = getSaoPauloParts(referenceDate);
+    const nowMinutes = nowParts.hour * 60 + nowParts.minute;
+    if (nowMinutes < sentAt) {
+        return 0;
+    }
+
+    const dueRows = board.regulation.filter((row) => {
+        if (row.status !== "active" || !row.occupancyId || !isHalfShiftRoleLabel(row.roleLabel)) {
+            return false;
+        }
+
+        if (!row.scheduledEndAt) {
+            return true;
+        }
+
+        return new Date(row.scheduledEndAt).getTime() <= referenceDate.getTime();
+    });
+
+    if (dueRows.length === 0) {
+        return 0;
+    }
+
+    let sent = 0;
+    for (const row of dueRows) {
+        const scheduledEndAt = row.scheduledEndAt ? new Date(row.scheduledEndAt) : referenceDate;
+
+        try {
+            await endRegulationOccupancy(row.occupancyId as string, {
+                endedAt: scheduledEndAt,
+                actualEndedAt: scheduledEndAt,
+            });
+        } catch (error) {
+            console.error("telegram half-shift auto checkout failed", row.occupancyId, error);
+            continue;
+        }
+
+        const text = formatHalfShiftAutoCheckoutText({
+            doctorName: row.doctorName,
+            displayName: row.displayName,
+            targetCode: row.postCode,
+        });
+
+        const results = await Promise.allSettled(chatIds.map((chatId) => sendMessage(chatId, text)));
+        for (const result of results) {
+            if (result.status === "fulfilled") {
+                sent += 1;
+            } else {
+                console.error("telegram half-shift auto checkout broadcast failed", row.occupancyId, result.reason);
+            }
+        }
+    }
+
+    return sent;
 }

@@ -101,6 +101,19 @@ function sourceLabel(source: string | null) {
     return "Sem origem";
 }
 
+function isHalfShiftRow(row: PaymentAttestationEntrySnapshot) {
+    const normalized = (row.roleLabel ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .trim();
+
+    return normalized === "MEIO_PLANTAO"
+        || normalized === "MEIO PLANTAO"
+        || normalized.includes("MEIO PLANTAO")
+        || normalized === "MEIO";
+}
+
 function isDisabledRow(row: PaymentAttestationEntrySnapshot) {
     return row.disabledEntireShift;
 }
@@ -148,6 +161,10 @@ function summarizeIssues(row: PaymentAttestationEntrySnapshot) {
             parts.push(row.disabledReason.trim());
         }
         return parts.join(" • ");
+    }
+
+    if (row.issues.length === 0 && isHalfShiftRow(row)) {
+        return "Cobertura marcada como Meio Plantao (11:30-17:00).";
     }
 
     if (row.issues.length === 0) {
@@ -463,6 +480,7 @@ export function PaymentAttestationClient({ initialView }: Props) {
                                 <div className="payment-target-card-topline">
                                     <span className={`payment-status-pill ${statusTone(row)}`.trim()}>{statusLabel(row)}</span>
                                     <span className={`payment-domain-pill ${row.domain}`.trim()}>{domainLabel(row.domain)}</span>
+                                    {isHalfShiftRow(row) ? <span className="payment-status-pill warn">MEIO</span> : null}
                                 </div>
 
                                 <div>
@@ -531,6 +549,7 @@ export function PaymentAttestationClient({ initialView }: Props) {
                                     <span className="payment-eyebrow">Leitura operacional</span>
                                     <ul className="payment-detail-list">
                                         <li>Função: {selectedRow.roleLabel ?? selectedRow.defaultRole ?? "sem função declarada"}</li>
+                                        {isHalfShiftRow(selectedRow) ? <li>Tipo de cobertura: Meio Plantao da tarde (encerra as 17:00)</li> : null}
                                         <li>Ramal/base exibido: {selectedRow.ramalLabel ?? selectedRow.targetCode}</li>
                                         <li>Shift salvo: {selectedRow.shiftLabel ?? view.slot.shiftLabel}</li>
                                         <li>Regra do banco: {selectedRow.ruleCode ?? "não calculada"}</li>

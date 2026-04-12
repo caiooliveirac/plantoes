@@ -865,3 +865,19 @@ test("P3a: 'Lucio Parada fui rendido PR03' is departure, not arrival", () => {
     assert.equal(parsed.isDeparture, true);
     assert.equal(parsed.baseCode, "PR03");
 });
+
+test("doctor surname Liberato does not trigger false departure in compact arrival", () => {
+    const parsed = parseMessage("Francisco Liberato 1366 SD 07:00");
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1366");
+    assert.equal(parsed.isDeparture, false);
+    assert.ok(parsed.extractedNames[0]?.includes("Francisco"));
+    assert.ok(parsed.extractedNames[0]?.includes("Liberato"));
+});
+
+test("doctor surname Liberato does not trigger false departure when arrival intent is explicit", () => {
+    const parsed = parseMessage("Francisco Liberato chegou na 1366 07:00 SD");
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1366");
+    assert.equal(parsed.isDeparture, false);
+});

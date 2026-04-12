@@ -47,7 +47,8 @@ import { normalizeDoctorName } from "@/modules/doctors/importer";
 import { createDoctorDirectoryEntry, updateDoctorDirectoryEntry } from "@/modules/doctors/service";
 import { continueInterventionOccupancy, deactivateInterventionBase, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, requiresOvertimeJustification, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord } from "@/modules/operational/corrections";
+import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
+import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole } from "@/modules/operational/roles";
 import { resolveTelegramEventTime, resolveForcedDayEventTime } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, endRegulationOccupancy, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
@@ -261,6 +262,8 @@ interface TelegramOperationalContinuityOccupancy {
 
 const TELEGRAM_CONTINUITY_LINK_WINDOW_MS = 18 * 60 * 60 * 1000;
 const TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS = 2 * 60 * 60 * 1000;
+const TELEGRAM_HALF_SHIFT_AUTO_END_HHMM = "17:00";
+const TELEGRAM_HALF_SHIFT_ALREADY_CLOSED_ERROR = "half_shift_already_closed";
 
 interface TelegramCommandActor {
     userId: string | null;
@@ -411,6 +414,38 @@ export function shouldTreatTelegramArrivalAsContinuation(params: {
     return params.activeShiftLabel === "P";
 }
 
+export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    baseCode: string | null;
+    arrivalTime?: string | null;
+    shiftType?: string | null;
+    roleFunction?: string | null;
+    isDeparture: boolean;
+    isContinuation: boolean;
+    isReassignment?: boolean;
+    activeSector?: "REGULATION" | "INTERVENTION" | null;
+    activeBaseCode?: string | null;
+}) {
+    if (!params.baseCode) {
+        return false;
+    }
+
+    if (params.isDeparture || params.isContinuation || params.isReassignment) {
+        return false;
+    }
+
+    if (params.arrivalTime || params.shiftType || params.roleFunction) {
+        return false;
+    }
+
+    if (!params.activeSector || !params.activeBaseCode) {
+        return false;
+    }
+
+    // Keep implicit remanejamento conservative: same domain, only target switch.
+    return params.activeSector === params.sector && params.activeBaseCode !== params.baseCode;
+}
+
 export function shouldLinkTelegramArrivalToContinuitySource(params: {
     parsed: OperationalParsedEntry;
     sourceShiftLabel?: string | null;
@@ -452,8 +487,10 @@ export function resolveTelegramSuccessReplyKind(params: {
     parsed: OperationalParsedEntry;
     successKind?: "standard" | "departure_adjusted";
     forceContinuation?: boolean;
+    forceReassignment?: boolean;
+    forceHalfShift?: boolean;
 }) {
-    if (params.parsed.isReassignment) {
+    if (params.forceReassignment || params.parsed.isReassignment) {
         return "reassignment_recorded";
     }
 
@@ -465,11 +502,38 @@ export function resolveTelegramSuccessReplyKind(params: {
         return "continuation_recorded";
     }
 
+    if (params.forceHalfShift) {
+        return "half_shift_assumed";
+    }
+
     if (params.parsed.sector === "INTERVENTION" && params.parsed.shiftType === "P") {
         return "arrival_p_recorded";
     }
 
     return "arrival_recorded";
+}
+
+function resolveHalfShiftScheduledEndAt(referenceAt: Date) {
+    return resolveForcedDayEventTime(referenceAt, TELEGRAM_HALF_SHIFT_AUTO_END_HHMM, 0);
+}
+
+function shouldAssumeTelegramHalfShift(params: {
+    parsed: OperationalParsedEntry;
+    eventAt: Date;
+    effectiveShiftType: string | null;
+}) {
+    if (params.parsed.sector !== "REGULATION" || params.parsed.isDeparture || params.parsed.isContinuation) {
+        return false;
+    }
+
+    const normalizedShift = (params.effectiveShiftType ?? "").toUpperCase();
+    if (normalizedShift && normalizedShift !== "SD") {
+        return false;
+    }
+
+    const parts = getSaoPauloParts(params.eventAt);
+    const minuteOfDay = (parts.hour * 60) + parts.minute;
+    return minuteOfDay >= (10 * 60 + 30) && minuteOfDay < (17 * 60);
 }
 
 function appendTelegramOperationalNote(existingNotes: string | null | undefined, marker: string, messageText: string) {
@@ -842,9 +906,26 @@ async function findTelegramContinuityContext(params: {
 
 const P_SHIFT_PRE_BOUNDARY_TOLERANCE_MS = 15 * 60 * 1000;
 const TELEGRAM_EXPLICIT_SHIFT_BOUNDARY_TOLERANCE_MS = 60 * 60 * 1000;
+const TELEGRAM_CROSS_SHIFT_CONTINUITY_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 export function shouldLinkRecentClosedTelegramContinuity(eventAt: Date, endedAt: Date) {
-    return Math.abs(eventAt.getTime() - endedAt.getTime()) <= TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS;
+    const elapsedMs = eventAt.getTime() - endedAt.getTime();
+    if (elapsedMs < 0) {
+        return false;
+    }
+
+    if (elapsedMs <= TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS) {
+        return true;
+    }
+
+    const endedShift = resolveOperationalShiftWindow(endedAt);
+    const eventShift = resolveOperationalShiftWindow(eventAt);
+    const isCrossShiftResume = endedShift.shiftLabel !== eventShift.shiftLabel
+        && endedAt.getTime() < eventShift.startedAt.getTime();
+
+    return isCrossShiftResume
+        && elapsedMs <= TELEGRAM_CROSS_SHIFT_CONTINUITY_WINDOW_MS
+        && eventAt.getTime() <= eventShift.nextBoundaryAt.getTime();
 }
 
 export function resolveContinuationShiftStart(eventAt: Date, shiftType: string | null | undefined): Date {
@@ -1038,9 +1119,11 @@ async function sendTelegramDepartureFailureReply(params: {
         time: params.parsed.arrivalTime,
     });
 
-    let kind: "departure_justification_required" | "departure_not_found" | "departure_time_conflict" | null = null;
+    let kind: "departure_justification_required" | "departure_not_found" | "departure_time_conflict" | "half_shift_already_closed" | null = null;
     if (isTelegramJustificationRequiredError(params.errorMessage)) {
         kind = "departure_justification_required";
+    } else if (params.errorMessage === TELEGRAM_HALF_SHIFT_ALREADY_CLOSED_ERROR) {
+        kind = "half_shift_already_closed";
     } else if (params.errorMessage.includes("No active") || params.errorMessage.includes("not found")) {
         kind = "departure_not_found";
     } else if (params.errorMessage.includes("Actual end cannot be before the recorded arrival.")) {
@@ -1092,6 +1175,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
     sector: "REGULATION" | "INTERVENTION";
     baseCode: string;
     occupancyId: string;
+    startedAt: Date;
     shiftLabel: string | null;
     continuityGroupId: string | null;
     boardStartedAt: Date | null;
@@ -1102,6 +1186,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
         .select({
             id: regulationOccupancies.id,
             postId: regulationOccupancies.postId,
+            startedAt: regulationOccupancies.startedAt,
             shiftLabel: regulationOccupancies.shiftLabel,
             continuityGroupId: regulationOccupancies.continuityGroupId,
             boardStartedAt: regulationOccupancies.boardStartedAt,
@@ -1118,6 +1203,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
                 sector: "REGULATION",
                 baseCode: post.code,
                 occupancyId: regOcc[0].id,
+                startedAt: regOcc[0].startedAt,
                 shiftLabel: regOcc[0].shiftLabel,
                 continuityGroupId: regOcc[0].continuityGroupId,
                 boardStartedAt: regOcc[0].boardStartedAt,
@@ -1129,6 +1215,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
         .select({
             id: interventionOccupancies.id,
             baseId: interventionOccupancies.baseId,
+            startedAt: interventionOccupancies.startedAt,
             shiftLabel: interventionOccupancies.shiftLabel,
             continuityGroupId: interventionOccupancies.continuityGroupId,
             boardStartedAt: interventionOccupancies.boardStartedAt,
@@ -1145,6 +1232,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
                 sector: "INTERVENTION",
                 baseCode: base.code,
                 occupancyId: intOcc[0].id,
+                startedAt: intOcc[0].startedAt,
                 shiftLabel: intOcc[0].shiftLabel,
                 continuityGroupId: intOcc[0].continuityGroupId,
                 boardStartedAt: intOcc[0].boardStartedAt,
@@ -1155,7 +1243,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
     return null;
 }
 
-async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageText: string, senderName: string | null): Promise<{
+async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageText: string, senderName: string | null, referenceAt: Date): Promise<{
     parsed: OperationalParsedEntry;
     resolvedDoctor: ResolvedTelegramDoctorRef;
 } | null> {
@@ -1170,30 +1258,76 @@ async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageT
     }
 
     const resolved = await resolveDoctorWithFallback(lookupQuery);
-    if (!resolved.doctor) {
+    const resolvedDoctor = resolved.doctor ?? (resolved.candidates.length === 1
+        ? {
+            id: resolved.candidates[0].id,
+            fullName: resolved.candidates[0].fullName,
+            displayName: resolved.candidates[0].displayName ?? null,
+        }
+        : null);
+    if (!resolvedDoctor) {
         return null;
     }
 
-    const activeOcc = await findActiveOccupancyByDoctorId(resolved.doctor.id);
-    if (!activeOcc) {
+    const eventAt = resolveTelegramEventTime(referenceAt, rawParsed.arrivalTime);
+    const activeOcc = await findActiveOccupancyByDoctorId(resolvedDoctor.id);
+    let recoveredSector: "REGULATION" | "INTERVENTION" | null = activeOcc?.sector ?? null;
+    let recoveredBaseCode: string | null = activeOcc?.baseCode ?? null;
+    let recoveredShiftLabel: string | null = activeOcc?.shiftLabel ?? null;
+
+    if (!recoveredBaseCode) {
+        const continuityContext = await findTelegramContinuityContext({ doctorId: resolvedDoctor.id, eventAt });
+        const source = continuityContext?.source;
+        if (!source) {
+            return null;
+        }
+
+        if (source.domain === "regulation") {
+            const sourceReg = await getDb().query.regulationOccupancies.findFirst({
+                where: eq(regulationOccupancies.id, source.occupancyId),
+            });
+            if (!sourceReg) {
+                return null;
+            }
+
+            const post = await getDb().query.regulationPosts.findFirst({ where: eq(regulationPosts.id, sourceReg.postId) });
+            recoveredSector = "REGULATION";
+            recoveredBaseCode = post?.code ?? null;
+            recoveredShiftLabel = sourceReg.shiftLabel ?? source.shiftLabel;
+        } else {
+            const sourceInt = await getDb().query.interventionOccupancies.findFirst({
+                where: eq(interventionOccupancies.id, source.occupancyId),
+            });
+            if (!sourceInt) {
+                return null;
+            }
+
+            const base = await getDb().query.interventionBases.findFirst({ where: eq(interventionBases.id, sourceInt.baseId) });
+            recoveredSector = "INTERVENTION";
+            recoveredBaseCode = base?.code ?? null;
+            recoveredShiftLabel = sourceInt.shiftLabel ?? source.shiftLabel;
+        }
+    }
+
+    if (!recoveredSector || !recoveredBaseCode) {
         return null;
     }
 
     return {
         parsed: {
-            sector: activeOcc.sector,
-            baseCode: activeOcc.baseCode,
+            sector: recoveredSector,
+            baseCode: recoveredBaseCode,
             arrivalTime: rawParsed.arrivalTime,
-            shiftType: rawParsed.shiftType,
+            shiftType: rawParsed.shiftType ?? (recoveredShiftLabel as ParsedMessage["shiftType"]),
             roleFunction: rawParsed.roleFunction,
             isDeparture: false,
             isContinuation: true,
             isReassignment: false,
         },
         resolvedDoctor: {
-            id: resolved.doctor.id,
-            fullName: resolved.doctor.fullName,
-            displayName: resolved.doctor.displayName,
+            id: resolvedDoctor.id,
+            fullName: resolvedDoctor.fullName,
+            displayName: resolvedDoctor.displayName,
         },
     };
 }
@@ -2666,11 +2800,12 @@ function buildPaymentAllocationReportLine(row: PaymentAllocationRow) {
         displayName: row.displayName,
         fallback: "medico nao identificado",
     });
+    const halfTag = isHalfShiftRoleLabel(row.roleLabel) ? " [MEIO]" : "";
     if (row.paymentStatus === "ready_for_payment") {
-        return `OK ${row.targetCode} - ${name}`;
+        return `OK ${row.targetCode} - ${name}${halfTag}`;
     }
 
-    return `REV ${row.targetCode} - ${name} | ${summarizePaymentAllocationIssues(row.issues)}`;
+    return `REV ${row.targetCode} - ${name}${halfTag} | ${summarizePaymentAllocationIssues(row.issues)}`;
 }
 
 function buildPaymentAllocationReportReply(board: PaymentAllocationBoard) {
@@ -5037,12 +5172,21 @@ async function handleTelegramReassignment(params: {
     resolvedDoctor: ResolvedTelegramDoctorRef;
     eventAt: Date;
     messageText: string;
+    activeOcc?: {
+        sector: "REGULATION" | "INTERVENTION";
+        baseCode: string;
+        occupancyId: string;
+        startedAt: Date;
+        shiftLabel: string | null;
+        continuityGroupId: string | null;
+        boardStartedAt: Date | null;
+    } | null;
 }) {
     const db = getDb();
     const { parsed, resolvedDoctor, eventAt, messageText } = params;
 
     // Step 1: Find the doctor's current active occupancy (any domain)
-    const activeOcc = await findActiveOccupancyByDoctorId(resolvedDoctor.id);
+    const activeOcc = params.activeOcc ?? await findActiveOccupancyByDoctorId(resolvedDoctor.id);
     if (!activeOcc) {
         throw new Error("Medico nao tem ocupacao ativa para remanejar. Registre a chegada normalmente.");
     }
@@ -5058,6 +5202,7 @@ async function handleTelegramReassignment(params: {
     }
 
     // Step 3: Check if the target has a conflicting occupancy from another doctor
+    let destination: { domain: "regulation" | "intervention"; targetId: number };
     if (parsed.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({
             where: eq(regulationPosts.code, targetCode),
@@ -5075,6 +5220,10 @@ async function handleTelegramReassignment(params: {
         if (targetConflict && targetConflict.doctorId !== resolvedDoctor.id) {
             throw new Error(`Ramal ${targetCode} ja esta ocupado por outro medico. Resolva o conflito pelo site da chefia.`);
         }
+        destination = {
+            domain: "regulation",
+            targetId: post.id,
+        };
     } else {
         const base = await db.query.interventionBases.findFirst({
             where: eq(interventionBases.code, targetCode),
@@ -5092,83 +5241,35 @@ async function handleTelegramReassignment(params: {
         if (targetConflict && targetConflict.doctorId !== resolvedDoctor.id) {
             throw new Error(`Base ${targetCode} ja esta ocupada por outro medico. Resolva o conflito pelo site da chefia.`);
         }
+        destination = {
+            domain: "intervention",
+            targetId: base.id,
+        };
     }
 
-    // Step 4: End the source occupancy
-    if (sourceDomain === "REGULATION") {
-        await endRegulationOccupancy(sourceOccupancyId, {
-            endedAt: eventAt,
-            actualEndedAt: eventAt,
-        });
-    } else {
-        await endInterventionOccupancy(sourceOccupancyId, {
-            endedAt: eventAt,
-            actualEndedAt: eventAt,
-        });
-    }
+    const transferResult = await transferOperationalOccupancy(
+        sourceOccupancyId,
+        {
+            sourceDomain: sourceDomain === "REGULATION" ? "regulation" : "intervention",
+            destination,
+            roleLabel: parsed.roleFunction ?? undefined,
+            notes: `Remanejado via Telegram de ${sourceCode} para ${targetCode}. ${messageText}`.trim(),
+            conflictResolution: null,
+        },
+        null,
+    );
 
-    // Step 5: Create new occupancy at the target, preserving continuity group
-    const notes = `Remanejado de ${sourceCode}. ${messageText}`.trim();
-    let occupancyId: string;
-    let autoReactivated = false;
-
-    // Preserve P-shift label: if source was "P", keep it regardless of parsed shift
-    const effectiveShiftLabel = activeOcc.shiftLabel === "P"
-        ? "P"
-        : (parsed.shiftType ?? activeOcc.shiftLabel);
-
-    if (parsed.sector === "REGULATION") {
-        const post = await db.query.regulationPosts.findFirst({
-            where: eq(regulationPosts.code, targetCode),
-        });
-        const regResult = await startRegulationOccupancy({
-            doctorId: resolvedDoctor.id,
-            postId: post!.id,
-            startedAt: eventAt,
-            shiftLabel: effectiveShiftLabel,
-            roleLabel: parsed.roleFunction,
-            ramalLabel: targetCode,
-            source: "telegram",
-            notes,
-            createdByUserId: null,
-            continuityGroupId: activeOcc.continuityGroupId,
-            boardStartedAt: activeOcc.boardStartedAt,
-        });
-        occupancyId = regResult.id;
-        if (regResult.autoReactivated) autoReactivated = true;
-    } else {
-        const base = await db.query.interventionBases.findFirst({
-            where: eq(interventionBases.code, targetCode),
-        });
-        const intResult = await startInterventionOccupancy({
-            doctorId: resolvedDoctor.id,
-            baseId: base!.id,
-            startedAt: eventAt,
-            shiftLabel: effectiveShiftLabel,
-            roleLabel: parsed.roleFunction,
-            source: "telegram",
-            notes,
-            createdByUserId: null,
-            continuityGroupId: activeOcc.continuityGroupId,
-            boardStartedAt: activeOcc.boardStartedAt,
-        });
-        occupancyId = intResult.id;
-        if (intResult.autoReactivated) autoReactivated = true;
-    }
-
-    // Step 6: Sync bank hours for the continuity group after reassignment
-    if (activeOcc.continuityGroupId) {
-        await syncBankHoursByContinuityGroup(db, activeOcc.continuityGroupId);
-    }
+    const preservedArrivalAt = activeOcc.boardStartedAt ?? activeOcc.startedAt;
 
     return {
-        occupancyId,
+        occupancyId: transferResult.movedOccupancyId,
         successKind: "standard" as const,
         treatedAsContinuation: false,
-        replyTimeAt: eventAt,
-        autoReactivated,
-        effectiveShiftType: effectiveShiftLabel ?? null,
+        replyTimeAt: preservedArrivalAt,
+        autoReactivated: false,
+        effectiveShiftType: transferResult.movedSnapshot.shiftLabel ?? activeOcc.shiftLabel ?? null,
         reassignedFrom: sourceCode,
+        assumedHalfShift: false,
     };
 }
 
@@ -5182,9 +5283,26 @@ async function applyParsedEntry(params: {
     const db = getDb();
     const { parsed, resolvedDoctor, eventAt, referenceAt, messageText } = params;
 
+    const activeOcc = (!parsed.isDeparture && !parsed.isContinuation)
+        ? await findActiveOccupancyByDoctorId(resolvedDoctor.id)
+        : null;
+
+    const implicitReassignment = shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: parsed.sector,
+        baseCode: parsed.baseCode,
+        arrivalTime: parsed.arrivalTime,
+        shiftType: parsed.shiftType,
+        roleFunction: parsed.roleFunction,
+        isDeparture: parsed.isDeparture,
+        isContinuation: parsed.isContinuation,
+        isReassignment: parsed.isReassignment,
+        activeSector: activeOcc?.sector,
+        activeBaseCode: activeOcc?.baseCode,
+    });
+
     // Handle reassignment as a special case (end source + start target)
-    if (parsed.isReassignment) {
-        return handleTelegramReassignment({ parsed, resolvedDoctor, eventAt, messageText });
+    if (parsed.isReassignment || implicitReassignment) {
+        return handleTelegramReassignment({ parsed, resolvedDoctor, eventAt, messageText, activeOcc });
     }
 
     let occupancyId: string | null = null;
@@ -5237,6 +5355,13 @@ async function applyParsedEntry(params: {
                 });
                 if (!recentClosed) {
                     throw new Error("No active regulation occupancy found for this doctor/post.");
+                }
+
+                if (isHalfShiftRoleLabel(recentClosed.roleLabel)) {
+                    const autoEndedAt = recentClosed.endedAt ?? recentClosed.actualEndedAt ?? resolveHalfShiftScheduledEndAt(eventAt);
+                    if (eventAt.getTime() >= autoEndedAt.getTime()) {
+                        throw new Error(TELEGRAM_HALF_SHIFT_ALREADY_CLOSED_ERROR);
+                    }
                 }
 
                 const hasHandoff = recentClosed.endedAt
@@ -5296,15 +5421,35 @@ async function applyParsedEntry(params: {
                 replyTimeAt = activeOccupancy.startedAt;
                 effectiveShiftType = "P";
             } else {
+                const assumedHalfShift = shouldAssumeTelegramHalfShift({
+                    parsed,
+                    eventAt,
+                    effectiveShiftType,
+                });
+                const halfShiftScheduledEndAt = assumedHalfShift ? resolveHalfShiftScheduledEndAt(eventAt) : null;
                 const continuityContext = parsed.isDeparture
                     ? null
                     : await findTelegramContinuityContext({ doctorId: resolvedDoctor.id, eventAt });
+                const sourceShiftLabelForLink = continuityContext?.source
+                    ? (continuityContext.source.shiftLabel
+                        ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
+                    : undefined;
+                const inferredCrossShiftContinuation = Boolean(
+                    continuityContext?.source
+                    && !parsed.shiftType
+                    && !parsed.isContinuation
+                    && sourceShiftLabelForLink
+                    && sourceShiftLabelForLink !== resolveOperationalShiftWindow(eventAt).shiftLabel,
+                );
                 const shouldUseContinuityContext = Boolean(
                     continuityContext?.source
-                    && shouldLinkTelegramArrivalToContinuitySource({
-                        parsed,
-                        sourceShiftLabel: continuityContext.source.shiftLabel,
-                    }),
+                    && (
+                        shouldLinkTelegramArrivalToContinuitySource({
+                            parsed,
+                            sourceShiftLabel: sourceShiftLabelForLink,
+                        })
+                        || inferredCrossShiftContinuation
+                    ),
                 );
 
                 if (shouldUseContinuityContext) {
@@ -5335,8 +5480,10 @@ async function applyParsedEntry(params: {
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: continuationStartedAt,
                     boardStartedAt: continuationBoardStartedAt,
+                    scheduledStartAt: assumedHalfShift ? eventAt : undefined,
+                    scheduledEndAt: halfShiftScheduledEndAt ?? undefined,
                     shiftLabel: effectiveShiftType,
-                    roleLabel: parsed.roleFunction,
+                    roleLabel: assumedHalfShift ? HALF_SHIFT_ROLE_LABEL : parsed.roleFunction,
                     ramalLabel: parsed.baseCode,
                     source: "telegram",
                     notes: messageText,
@@ -5448,12 +5595,26 @@ async function applyParsedEntry(params: {
                 const continuityContext = parsed.isDeparture
                     ? null
                     : await findTelegramContinuityContext({ doctorId: resolvedDoctor.id, eventAt });
+                const sourceShiftLabelForLink = continuityContext?.source
+                    ? (continuityContext.source.shiftLabel
+                        ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
+                    : undefined;
+                const inferredCrossShiftContinuation = Boolean(
+                    continuityContext?.source
+                    && !parsed.shiftType
+                    && !parsed.isContinuation
+                    && sourceShiftLabelForLink
+                    && sourceShiftLabelForLink !== resolveOperationalShiftWindow(eventAt).shiftLabel,
+                );
                 const shouldUseContinuityContext = Boolean(
                     continuityContext?.source
-                    && shouldLinkTelegramArrivalToContinuitySource({
-                        parsed,
-                        sourceShiftLabel: continuityContext.source.shiftLabel,
-                    }),
+                    && (
+                        shouldLinkTelegramArrivalToContinuitySource({
+                            parsed,
+                            sourceShiftLabel: sourceShiftLabelForLink,
+                        })
+                        || inferredCrossShiftContinuation
+                    ),
                 );
 
                 if (shouldUseContinuityContext) {
@@ -5501,7 +5662,22 @@ async function applyParsedEntry(params: {
         }
     }
 
-    return { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom: null as string | null };
+    const assumedHalfShift = shouldAssumeTelegramHalfShift({
+        parsed,
+        eventAt,
+        effectiveShiftType,
+    }) && parsed.sector === "REGULATION" && !parsed.isDeparture;
+
+    return {
+        occupancyId,
+        successKind,
+        treatedAsContinuation,
+        replyTimeAt,
+        autoReactivated,
+        effectiveShiftType,
+        reassignedFrom: null as string | null,
+        assumedHalfShift,
+    };
 }
 
 async function sendSuccessReply(
@@ -5518,12 +5694,15 @@ async function sendSuccessReply(
     autoReactivated = false,
     effectiveShiftType?: string | null,
     reassignedFrom?: string | null,
+    assumedHalfShift = false,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const replyKind = resolveTelegramSuccessReplyKind({
         parsed,
         successKind,
         forceContinuation,
+        forceReassignment: Boolean(reassignedFrom),
+        forceHalfShift: assumedHalfShift,
     });
     const text = pickTelegramReply(
         replyKind,
@@ -5536,7 +5715,9 @@ async function sendSuccessReply(
     );
 
     let timeContextHint = "";
-    if (replyKind === "continuation_recorded" || forceContinuation) {
+    if (reassignedFrom) {
+        timeContextHint = `\n\n⏱ Mantido o horário original de chegada em *${time}* para banco de horas e prioridades.`;
+    } else if (replyKind === "continuation_recorded" || forceContinuation) {
         timeContextHint = `\n\n🔗 Continuação detectada — computado desde *${time}* (turno anterior), sem atraso.`;
     } else if (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") {
         // Resolve the TARGET shift, not the clock-based current shift.
@@ -5571,7 +5752,11 @@ async function sendSuccessReply(
 
     const resolvedShift = effectiveShiftType ?? parsed.shiftType;
     const shiftHint = resolvedShift
-        ? `\n📋 Turno: *${resolvedShift === "SD" ? "SD (diurno)" : resolvedShift === "SN" ? "SN (noturno)" : "P (plantão 24h)"}*`
+        ? `\n📋 Turno: *${resolvedShift === "SD" ? "SD (diurno)" : resolvedShift === "SN" ? "SN (noturno)" : "P (plantao 24h)"}*`
+        : "";
+
+    const halfShiftHint = assumedHalfShift
+        ? "\n\n🟠 Tipo de cobertura: *Meio Plantao da Tarde* (ate 17:00)."
         : "";
 
     const reactivationHint = autoReactivated
@@ -5583,9 +5768,9 @@ async function sendSuccessReply(
         : "";
 
     const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint && !autoReactivated
-        ? "\n\n💡 Se trocar de ramal ou base, mande nova chegada no mesmo formato."
+        ? "\n\n💡 Se for o mesmo médico mudando de ramal/base, pode mandar só o novo destino que registro como remanejamento sem mexer na chegada original."
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${reactivationHint}${reassignmentHint}${timeContextHint}${arrivalHint}`, replyToMessageId);
+    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${timeContextHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
@@ -5729,6 +5914,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             result.autoReactivated,
             result.effectiveShiftType,
             result.reassignedFrom,
+            result.assumedHalfShift,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -6494,7 +6680,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 const rawParsedForContinuation = parseMessage(message.text);
                 if (rawParsedForContinuation.isContinuation && !rawParsedForContinuation.baseCode) {
                     const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
-                    const continuationResolved = await resolveContinuationWithoutBase(rawParsedForContinuation, message.text, senderName);
+                    const continuationResolved = await resolveContinuationWithoutBase(rawParsedForContinuation, message.text, senderName, new Date(message.date * 1000));
                     if (continuationResolved) {
                         const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), continuationResolved.parsed.arrivalTime);
                         try {
@@ -6539,6 +6725,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.autoReactivated,
                                 result.effectiveShiftType,
                                 result.reassignedFrom,
+                                result.assumedHalfShift,
                             );
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
@@ -6874,7 +7061,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), firstParsed.arrivalTime);
 
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom } = await applyParsedEntry({
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift } = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
@@ -6915,6 +7102,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     autoReactivated,
                     effectiveShiftType,
                     reassignedFrom,
+                    assumedHalfShift,
                 );
 
                 return { ok: true, occupancyId };

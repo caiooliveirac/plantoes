@@ -130,6 +130,7 @@ function mapRow(row: Record<string, unknown>): RawMonthlyReportShift {
         scheduledStartAt: (row.scheduledStartAt ?? null) as string | null,
         scheduledEndAt: (row.scheduledEndAt ?? null) as string | null,
         shiftLabel: (row.shiftLabel ?? null) as string | null,
+        roleLabel: (row.roleLabel ?? null) as string | null,
         source: String(row.source) as RawMonthlyReportShift["source"],
         notes: (row.notes ?? null) as string | null,
         createdAt: String(row.createdAt),

@@ -58,7 +58,7 @@ const DEPARTURE_SIGNALS = [
 // F4: Fuzzy departure keywords — catch common typos like "aaindo", "saimo", "saiindo"
 const DEPARTURE_FUZZY_KEYWORDS = [
     "SAINDO", "SAIU", "SAIDA", "ENCERRANDO", "ENCERREI", "ENCERRADO",
-    "FINALIZANDO", "FINALIZEI", "LIBERADO", "LIBERADA", "LIBEREI",
+    "FINALIZANDO", "FINALIZEI",
     "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU",
 ];
 

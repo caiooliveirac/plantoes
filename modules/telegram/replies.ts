@@ -1,4 +1,4 @@
-type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "continuation_recorded" | "reassignment_recorded" | "departure_recorded" | "departure_adjusted" | "departure_justification_required" | "departure_justification_retry" | "departure_justification_recorded" | "departure_justification_manual_review" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
+type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "half_shift_assumed" | "continuation_recorded" | "reassignment_recorded" | "departure_recorded" | "departure_adjusted" | "half_shift_already_closed" | "departure_justification_required" | "departure_justification_retry" | "departure_justification_recorded" | "departure_justification_manual_review" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
 
 interface NamedCandidate {
     fullName: string;
@@ -38,6 +38,9 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "P registrado como entrada.\n{name} assumiu {target} as {time}.\nVou levar isso para este plantão e para o próximo.",
         "Tudo certo com o P.\n{name} ficou em {target} desde {time}.\nA cobertura já entra como dupla no operacional, para este turno e o seguinte.",
         "Entrada em P salva.\n{name} está em {target} a partir de {time}.\nIsso já cobre o turno de agora e o seguinte.",
+    ],
+    half_shift_assumed: [
+        "Supus que voce esta no meio plantao da tarde em {target}.\n{name} ficou registrado desde {time} e vou encerrar automaticamente as 17:00.\nNo pagamento, isso entra como MEIO.",
     ],
     continuation_recorded: [
         "Continuidade confirmada.\n{name} segue em {target} desde {time}.\nMantive a chegada original e só estendi a cobertura.",
@@ -83,6 +86,9 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Saída tardia de {name} alinhada em {target}: hora real {time}. Não mexi em quem assumiu no painel e atualizei banco de horas.",
         "Feito. {name} ficou com saída real às {time} em {target}, sem tirar a rendição do painel e com reflexo em pagamento.",
         "Atualizei a saída de {name} em {target} para {time}. Painel preservado, horário real ajustado para pagamento.",
+    ],
+    half_shift_already_closed: [
+        "Eu ja tinha tirado {name} do painel as 17:00 em {target}.\nEsse meio plantao fecha automatico no horario e ja foi registrado como MEIO para pagamento.\nPor enquanto nao tem banco de horas para essa funcao: a saida prevista era 17:00, distribuindo as ocorrencias.",
     ],
     departure_justification_required: [
         "Entendi a saída tardia de {name} em {target}, mas aqui já havia rendição e só considero minutos extras para pagamento e banco de horas com motivo válido por escrito.\n\n🚑 Em ocorrência\nEx.: estava em ocorrência 0729\n\n🧼 Higienizando\nEx.: estava higienizando a viatura\n\nSe o horário {time} está certo, responda só com um desses motivos. Se o horário mudou, reenvie a saída completa assim: {example}",
@@ -252,10 +258,12 @@ const REPLIES: Record<ReplyKind, string[]> = {
 const REPLY_PREFIX: Record<ReplyKind, string> = {
     arrival_recorded: "✅",
     arrival_p_recorded: "🔵🔁",
+    half_shift_assumed: "🟠🌓",
     continuation_recorded: "🔵🔁",
     reassignment_recorded: "🔀",
     departure_recorded: "🔵📤",
     departure_adjusted: "🔵🛠️",
+    half_shift_already_closed: "🟠⏱️",
     departure_justification_required: "⚠️",
     departure_justification_retry: "⚠️",
     departure_justification_recorded: "📝✅",

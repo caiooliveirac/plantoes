@@ -43,6 +43,7 @@ import {
     shouldDeferPendingDepartureJustificationToFreshParsing,
     shouldDeferPendingNameSelectionToFreshParsing,
     shouldTreatTelegramArrivalAsContinuation,
+    shouldTreatTelegramArrivalAsImplicitReassignment,
 } from "@/modules/telegram/service";
 import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
 
@@ -1556,6 +1557,19 @@ test("pickTelegramReply describes continuation without resetting arrival", () =>
     assert.match(reply, /^🔵🔁/u);
 });
 
+test("pickTelegramReply renders half-shift assumption with dedicated emoji and wording", () => {
+    const reply = pickTelegramReply("half_shift_assumed", 21, {
+        name: "Tiago Neves",
+        target: "2032",
+        time: "11:34",
+    });
+
+    assert.match(reply, /^🟠🌓/u);
+    assert.match(reply, /supus que voce esta no meio plantao da tarde/i);
+    assert.match(reply, /MEIO/i);
+    assert.match(reply, /17:00/);
+});
+
 test("resolveTelegramSuccessReplyKind separates arrival, P arrival and continuation", () => {
     assert.equal(resolveTelegramSuccessReplyKind({
         parsed: {
@@ -1610,6 +1624,20 @@ test("resolveTelegramSuccessReplyKind separates arrival, P arrival and continuat
             isReassignment: false,
         },
     }), "continuation_recorded");
+
+    assert.equal(resolveTelegramSuccessReplyKind({
+        parsed: {
+            sector: "REGULATION",
+            baseCode: "2032",
+            arrivalTime: "11:32",
+            shiftType: "SD",
+            roleFunction: null,
+            isDeparture: false,
+            isContinuation: false,
+            isReassignment: false,
+        },
+        forceHalfShift: true,
+    }), "half_shift_assumed");
 });
 
 test("shouldTreatTelegramArrivalAsContinuation infers rollover for intervention and explicit SD→SN regulation cross-shift", () => {
@@ -1797,6 +1825,68 @@ test("shouldLinkRecentClosedTelegramContinuity expires old closed shifts before 
         ),
         true,
     );
+
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-04-07T23:40:00-03:00"),
+            new Date("2026-04-07T18:18:00-03:00"),
+        ),
+        true,
+    );
+
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-04-08T18:33:00-03:00"),
+            new Date("2026-04-08T07:03:28-03:00"),
+        ),
+        false,
+    );
+});
+
+test("shouldTreatTelegramArrivalAsImplicitReassignment detects same-doctor sparse target switch", () => {
+    assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: "REGULATION",
+        baseCode: "1368",
+        arrivalTime: null,
+        shiftType: null,
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: false,
+        isReassignment: false,
+        activeSector: "REGULATION",
+        activeBaseCode: "1366",
+    }), true);
+});
+
+test("shouldTreatTelegramArrivalAsImplicitReassignment stays false for explicit new arrival", () => {
+    assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: "INTERVENTION",
+        baseCode: "PP20",
+        arrivalTime: "19:03",
+        shiftType: "SN",
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: false,
+        isReassignment: false,
+        activeSector: "INTERVENTION",
+        activeBaseCode: "PM40",
+    }), false);
+});
+
+test("resolveTelegramSuccessReplyKind can force reassignment wording for implicit remanejamento", () => {
+    assert.equal(resolveTelegramSuccessReplyKind({
+        parsed: {
+            sector: "REGULATION",
+            baseCode: "2035",
+            arrivalTime: null,
+            shiftType: null,
+            roleFunction: null,
+            isDeparture: false,
+            isContinuation: false,
+            isReassignment: false,
+        },
+        forceReassignment: true,
+    }), "reassignment_recorded");
 });
 
 test("resolveContinuationShiftStart honors the explicit next-shift boundary instead of snapping to the stale current window", () => {

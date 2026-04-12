@@ -38,6 +38,7 @@ function makeShift(overrides: Partial<RawMonthlyReportShift> = {}): RawMonthlyRe
         scheduledStartAt: "2026-03-10T07:00:00.000Z",
         scheduledEndAt: "2026-03-10T19:00:00.000Z",
         shiftLabel: "SD",
+        roleLabel: null,
         source: "telegram",
         notes: null,
         createdAt: "2026-03-10T07:01:00.000Z",

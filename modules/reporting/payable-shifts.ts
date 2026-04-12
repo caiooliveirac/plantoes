@@ -1,4 +1,5 @@
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
+import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
 
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const MIN_SEGMENT_MINUTES = 45;
@@ -70,6 +71,9 @@ export interface PayableShift {
     auditStatus: "clean" | "review";
     issues: string[];
     source: string | null;
+    roleLabel: string | null;
+    paymentUnit: number;
+    paymentTag: string | null;
 }
 
 export interface DisabledTargetSnapshot {
@@ -132,6 +136,7 @@ export interface ChiefPayableBoardModel {
     summary: {
         doctorCount: number;
         payableShiftCount: number;
+        payableUnitCount: number;
         readyCount: number;
         needsReviewCount: number;
         segmentCount: number;
@@ -304,6 +309,7 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
     const durationMinutes = resolveDurationMinutes(row.startedAt ?? board.startedAt, row.endedAt);
     const operationalDate = toOperationalDate(board.startedAt);
 
+    const isHalfShift = isHalfShiftRoleLabel(row.roleLabel);
     return {
         payableShiftId: [row.doctorId, board.startedAt, board.shiftLabel, row.domain, row.targetCode].join("|"),
         occupancyId: row.occupancyId,
@@ -323,8 +329,11 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
         durationMinutes,
         paymentStatus: row.paymentStatus,
         auditStatus: row.paymentStatus === "ready_for_payment" ? "clean" : "review",
-        issues: [...row.issues],
+        issues: isHalfShift ? [...row.issues, HALF_SHIFT_DISPLAY_LABEL] : [...row.issues],
         source: row.source,
+        roleLabel: row.roleLabel,
+        paymentUnit: resolvePaymentUnitFromRole(row.roleLabel),
+        paymentTag: isHalfShift ? HALF_SHIFT_TAG_LABEL : null,
     } satisfies PayableShift;
 }
 
@@ -574,8 +583,13 @@ export function buildChiefPayableBoard(params: {
             return left.targetCode.localeCompare(right.targetCode, "pt-BR");
         });
 
-        const totalSD = orderedShifts.filter((shift) => shift.shiftLabel === "SD").length;
-        const totalSN = orderedShifts.filter((shift) => shift.shiftLabel === "SN").length;
+        const totalSDUnits = orderedShifts
+            .filter((shift) => shift.shiftLabel === "SD")
+            .reduce((sum, shift) => sum + shift.paymentUnit, 0);
+        const totalSNUnits = orderedShifts
+            .filter((shift) => shift.shiftLabel === "SN")
+            .reduce((sum, shift) => sum + shift.paymentUnit, 0);
+        const totalUnits = orderedShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0);
         const pendingCount = orderedShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
         const paymentStatus = pendingCount > 0 ? "needs_review" : "ready_for_payment";
 
@@ -584,9 +598,9 @@ export function buildChiefPayableBoard(params: {
             doctorName: orderedShifts[0]?.doctorName ?? "Desconhecido",
             displayName: orderedShifts[0]?.displayName ?? null,
             paymentStatus,
-            totalSD,
-            totalSN,
-            total: orderedShifts.length,
+            totalSD: Number(totalSDUnits.toFixed(2)),
+            totalSN: Number(totalSNUnits.toFixed(2)),
+            total: Number(totalUnits.toFixed(2)),
             pendingCount,
             cells: days.map((day) => ({
                 day,
@@ -612,6 +626,7 @@ export function buildChiefPayableBoard(params: {
         summary: {
             doctorCount: doctors.length,
             payableShiftCount: params.payableShifts.length,
+            payableUnitCount: Number(params.payableShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2)),
             readyCount: params.payableShifts.filter((shift) => shift.paymentStatus === "ready_for_payment").length,
             needsReviewCount: params.payableShifts.filter((shift) => shift.paymentStatus === "needs_review").length,
             segmentCount: params.attestationSegments.length,
