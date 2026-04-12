@@ -30,7 +30,7 @@ export default async function AdminPaymentClosingPage({
     }
 
     try {
-        await requireAuthenticatedSession(["admin", "chief"]);
+        await requireAuthenticatedSession(["admin"]);
     } catch (error) {
         if (error instanceof AuthError) {
             return (

@@ -27,7 +27,7 @@ export default async function AdminBankHoursPage() {
 
     let session;
     try {
-        session = await requireAuthenticatedSession(["admin", "chief"]);
+        session = await requireAuthenticatedSession(["admin"]);
     } catch (error) {
         if (error instanceof AuthError) {
             return (

@@ -1,7 +1,8 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/db";
-import { doctors, paymentAttestationSlotEntries, paymentAttestationSlots, users, type paymentAttestationSlotStatusEnum } from "@/db/schema";
+import { doctors, interventionOccupancies, paymentAttestationSlotEntries, paymentAttestationSlots, regulationOccupancies, users, type paymentAttestationSlotStatusEnum } from "@/db/schema";
+import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { listDoctorSearchTerms } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
 import { getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
@@ -626,22 +627,74 @@ export async function applyManualPaymentAttestationCorrection(params: {
         throw new Error(`Alvo ${targetCode} nao encontrado no snapshot deste slot.`);
     }
 
+    // Find postId/baseId from the payment allocation board so we can create a real occupancy
+    const boardRow = [...board.regulation, ...board.intervention].find(
+        (row) => row.domain === params.domain && row.targetCode === targetCode,
+    );
+    const targetId = boardRow?.targetId ? Number(boardRow.targetId) : null;
+
+    const shiftStart = new Date(board.startedAt);
+    const shiftEnd = new Date(board.endedAt);
+    const newOccupancyId = randomUUID();
+    const newContinuityGroupId = randomUUID();
+
     await db.transaction(async (tx) => {
+        // Create a real occupancy record (backfill) so bank hours are computed correctly
+        if (targetId) {
+            if (params.domain === "regulation") {
+                await tx.insert(regulationOccupancies).values({
+                    id: newOccupancyId,
+                    doctorId: doctor.id,
+                    postId: targetId,
+                    continuityGroupId: newContinuityGroupId,
+                    startedAt: shiftStart,
+                    boardStartedAt: shiftStart,
+                    endedAt: shiftEnd,
+                    actualEndedAt: shiftEnd,
+                    scheduledStartAt: shiftStart,
+                    scheduledEndAt: shiftEnd,
+                    shiftLabel: params.shiftLabel,
+                    source: "admin_correction",
+                    notes: `Correcao retroativa via fechamento de pagamento: ${targetCode} → ${doctor.fullName}`,
+                    createdByUserId: params.actorUserId,
+                });
+                await syncRegulationBankHours(tx, newOccupancyId);
+            } else {
+                await tx.insert(interventionOccupancies).values({
+                    id: newOccupancyId,
+                    doctorId: doctor.id,
+                    baseId: targetId,
+                    continuityGroupId: newContinuityGroupId,
+                    startedAt: shiftStart,
+                    boardStartedAt: shiftStart,
+                    endedAt: shiftEnd,
+                    actualEndedAt: shiftEnd,
+                    scheduledStartAt: shiftStart,
+                    scheduledEndAt: shiftEnd,
+                    shiftLabel: params.shiftLabel,
+                    source: "admin_correction",
+                    notes: `Correcao retroativa via fechamento de pagamento: ${targetCode} → ${doctor.fullName}`,
+                    createdByUserId: params.actorUserId,
+                });
+                await syncInterventionBankHours(tx, newOccupancyId);
+            }
+        }
+
         await tx.update(paymentAttestationSlotEntries)
             .set({
                 disabledAt: null,
                 disabledReason: null,
                 disabledDuringShift: false,
                 disabledEntireShift: false,
-                occupancyId: currentEntry.occupancyId ?? randomUUID(),
+                occupancyId: targetId ? newOccupancyId : (currentEntry.occupancyId ?? randomUUID()),
                 doctorId: doctor.id,
                 doctorName: doctor.fullName,
                 displayName: doctor.displayName,
-                startedAt: currentEntry.startedAt ? new Date(currentEntry.startedAt) : new Date(slot.startedAt),
-                endedAt: currentEntry.endedAt ? new Date(currentEntry.endedAt) : new Date(slot.endedAt),
-                actualEndedAt: currentEntry.actualEndedAt ? new Date(currentEntry.actualEndedAt) : new Date(slot.endedAt),
-                scheduledStartAt: currentEntry.scheduledStartAt ? new Date(currentEntry.scheduledStartAt) : new Date(slot.startedAt),
-                scheduledEndAt: currentEntry.scheduledEndAt ? new Date(currentEntry.scheduledEndAt) : new Date(slot.endedAt),
+                startedAt: shiftStart,
+                endedAt: shiftEnd,
+                actualEndedAt: shiftEnd,
+                scheduledStartAt: shiftStart,
+                scheduledEndAt: shiftEnd,
                 shiftLabel: slot.shiftLabel,
                 source: "admin_correction",
                 paymentStatus: "ready_for_payment",

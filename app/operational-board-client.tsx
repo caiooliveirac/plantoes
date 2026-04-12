@@ -2460,7 +2460,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     </button>
                 )}
 
-                {session?.canManage && !session.mustChangePassword && (
+                {session?.roles.includes("admin") && !session.mustChangePassword && (
                     <button
                         type="button"
                         className="ops-history-trigger payment-allocation"
@@ -2500,6 +2500,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     </button>
                 )}
 
+                {session?.roles.includes("admin") && !session.mustChangePassword && (
                 <button
                     type="button"
                     className="ops-history-trigger bank-hours"
@@ -2517,6 +2518,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         </svg>
                     </span>
                 </button>
+                )}
 
                 {session?.canManage && (
                     <button

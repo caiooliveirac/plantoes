@@ -674,7 +674,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     </div>
 
                     <p className="payment-correction-note">
-                        ⚠️ Esta correção atualiza apenas o fechamento de pagamento. Registros operacionais e banco de horas não são alterados automaticamente — acesse a auditoria técnica se necessário.
+                        ✅ Esta ação cria uma ocupação real no banco de dados, calcula banco de horas automaticamente e registra o pagamento. Use para médicos que trabalharam mas não foram capturados pelo bot.
                     </p>
 
                     <div className="payment-correction-tabs">
