@@ -6,6 +6,44 @@ import { auditLogs, regulationOccupancies, regulationPosts } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { correctRegulationOccupancy, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 
+function serializeOccupancySnapshot(snapshot: {
+    id: string;
+    domain: "regulation" | "intervention";
+    doctorId: string;
+    continuityGroupId: string;
+    source: string | null;
+    targetId: number;
+    startedAt: Date;
+    boardStartedAt: Date | null;
+    endedAt: Date | null;
+    actualEndedAt: Date | null;
+    scheduledStartAt: Date | null;
+    scheduledEndAt: Date | null;
+    shiftLabel: string | null;
+    roleLabel: string | null;
+    ramalLabel: string | null;
+    notes: string | null;
+}) {
+    return {
+        id: snapshot.id,
+        domain: snapshot.domain,
+        doctorId: snapshot.doctorId,
+        continuityGroupId: snapshot.continuityGroupId,
+        source: snapshot.source,
+        targetId: snapshot.targetId,
+        startedAt: snapshot.startedAt.toISOString(),
+        boardStartedAt: snapshot.boardStartedAt?.toISOString() ?? null,
+        endedAt: snapshot.endedAt?.toISOString() ?? null,
+        actualEndedAt: snapshot.actualEndedAt?.toISOString() ?? null,
+        scheduledStartAt: snapshot.scheduledStartAt?.toISOString() ?? null,
+        scheduledEndAt: snapshot.scheduledEndAt?.toISOString() ?? null,
+        shiftLabel: snapshot.shiftLabel,
+        roleLabel: snapshot.roleLabel,
+        ramalLabel: snapshot.ramalLabel,
+        notes: snapshot.notes,
+    };
+}
+
 const schema = z.object({
     postId: z.number().int().positive().optional(),
     doctorId: z.string().uuid().optional(),
@@ -127,7 +165,16 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
                     notes: parsed.data.notes ?? null,
                     movedOccupancyId: transfer.movedOccupancyId,
                     movedDomain: transfer.movedDomain,
-                    displaced: transfer.displaced,
+                    sourceSnapshot: serializeOccupancySnapshot(transfer.sourceSnapshot),
+                    sourceTarget: transfer.sourceTarget,
+                    movedSnapshot: serializeOccupancySnapshot(transfer.movedSnapshot),
+                    displaced: transfer.displaced ? {
+                        removedSnapshot: serializeOccupancySnapshot(transfer.displaced.removedSnapshot),
+                        createdSnapshot: transfer.displaced.createdSnapshot
+                            ? serializeOccupancySnapshot(transfer.displaced.createdSnapshot)
+                            : null,
+                        relocationTarget: transfer.displaced.relocationTarget,
+                    } : null,
                     sourceContinuityGroupId: transfer.sourceContinuityGroupId,
                     compatibilityMode: "legacy_ramalLabel_patch",
                 },
@@ -166,6 +213,21 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
                 nextDoctorId: updated.doctorId,
                 previousStartedAt: existing.startedAt.toISOString(),
                 nextStartedAt: updated.startedAt.toISOString(),
+                beforeSnapshot: {
+                    doctorId: existing.doctorId,
+                    postId: existing.postId,
+                    startedAt: existing.startedAt.toISOString(),
+                    boardStartedAt: existing.boardStartedAt.toISOString(),
+                    endedAt: existing.endedAt?.toISOString() ?? null,
+                    actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
+                    scheduledStartAt: existing.scheduledStartAt?.toISOString() ?? null,
+                    scheduledEndAt: existing.scheduledEndAt?.toISOString() ?? null,
+                    shiftLabel: existing.shiftLabel,
+                    roleLabel: existing.roleLabel,
+                    ramalLabel: existing.ramalLabel,
+                    notes: existing.notes,
+                    continuityGroupId: existing.continuityGroupId,
+                },
             },
         });
 
@@ -215,11 +277,27 @@ export async function DELETE(request: NextRequest, context: RouteContext<"/api/r
             details: {
                 notes: parsed.data.notes,
                 doctorId: existing.doctorId,
+                postId: existing.postId,
                 startedAt: existing.startedAt.toISOString(),
                 endedAt: existing.endedAt?.toISOString() ?? null,
                 actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
                 shiftLabel: existing.shiftLabel,
                 continuityGroupId: existing.continuityGroupId,
+                beforeSnapshot: {
+                    doctorId: existing.doctorId,
+                    postId: existing.postId,
+                    startedAt: existing.startedAt.toISOString(),
+                    boardStartedAt: existing.boardStartedAt.toISOString(),
+                    endedAt: existing.endedAt?.toISOString() ?? null,
+                    actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
+                    scheduledStartAt: existing.scheduledStartAt?.toISOString() ?? null,
+                    scheduledEndAt: existing.scheduledEndAt?.toISOString() ?? null,
+                    shiftLabel: existing.shiftLabel,
+                    roleLabel: existing.roleLabel,
+                    ramalLabel: existing.ramalLabel,
+                    notes: existing.notes,
+                    continuityGroupId: existing.continuityGroupId,
+                },
             },
         });
 

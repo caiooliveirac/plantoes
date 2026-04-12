@@ -1,3 +1,27 @@
+/**
+ * Database Schema (operations_v2)
+ *
+ * 18 tables organized by domain:
+ *   - Core operational: regulationPosts, regulationOccupancies, interventionBases,
+ *     interventionOccupancies, regulationPostDeactivations, interventionBaseDeactivations
+ *   - Bank hours: bankHoursEntries, bankHoursBalanceOverrides, continuityGroups
+ *   - Telegram: telegramIngestedMessages, telegramBotNotices
+ *   - Doctors: doctors
+ *   - Auth: users, userRoles, loginAttempts
+ *   - Admin: paymentAttestations
+ *   - Reminders: telegramReminders
+ *
+ * Key relationships:
+ *   - Occupancies → Posts/Bases (many-to-one via postId/baseId)
+ *   - Occupancies → Doctors (many-to-one via doctorId)
+ *   - BankHoursEntries → Occupancies (via occupancyId + domain)
+ *   - ContinuityGroups link consecutive occupancies by same doctor
+ *
+ * Invariants:
+ *   - All timestamps are UTC (application handles São Paulo timezone conversion)
+ *   - isActive on doctors/posts/bases is a domain state, not a soft delete
+ *   - Occupancy.endedAt = scheduled handoff; actualEndedAt = real departure
+ */
 import {
     bigint,
     boolean,
@@ -168,6 +192,25 @@ export const interventionBaseDeactivations = operationsV2.table(
     (table) => [
         index("intervention_base_deactivations_base_idx").on(table.baseId, table.deactivatedAt),
         index("intervention_base_deactivations_active_idx").on(table.baseId, table.reactivatedAt),
+    ],
+);
+
+export const regulationPostDeactivations = operationsV2.table(
+    "regulation_post_deactivations",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        postId: integer("post_id").notNull().references(() => regulationPosts.id, { onDelete: "cascade" }),
+        deactivatedAt: timestamp("deactivated_at", { withTimezone: true }).notNull(),
+        reactivatedAt: timestamp("reactivated_at", { withTimezone: true }),
+        notes: text("notes"),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index("regulation_post_deactivations_post_idx").on(table.postId, table.deactivatedAt),
+        index("regulation_post_deactivations_active_idx").on(table.postId, table.reactivatedAt),
     ],
 );
 
