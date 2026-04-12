@@ -94,6 +94,7 @@ function makeBoard(): ChiefPayableBoardModel {
         disabledTargets: [],
         uncoveredTargets: [],
         attestationSegments: [],
+        allDoctorNames: [],
     };
 }
 

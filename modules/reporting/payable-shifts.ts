@@ -120,6 +120,7 @@ export interface ChiefPayableDoctorRow {
 }
 
 export interface ChiefPayableBoardModel {
+    allDoctorNames: string[];
     monthKey: string;
     monthLabel: string;
     presetMonths: Array<{ key: string; label: string }>;
@@ -534,6 +535,7 @@ export function buildChiefPayableBoard(params: {
     uncoveredTargets: UncoveredTargetSnapshot[];
     targetOptions: PayableTargetOption[];
     attestationSegments: AttestationSegment[];
+    allDoctorNames: string[];
 }) {
     const dayCount = new Date(params.rangeEndIso).getTime() > new Date(params.rangeStartIso).getTime()
         ? Math.round((new Date(params.rangeEndIso).getTime() - new Date(params.rangeStartIso).getTime()) / 86400000)
@@ -623,5 +625,6 @@ export function buildChiefPayableBoard(params: {
         disabledTargets: params.disabledTargets,
         uncoveredTargets: params.uncoveredTargets,
         attestationSegments: params.attestationSegments,
+        allDoctorNames: params.allDoctorNames,
     } satisfies ChiefPayableBoardModel;
 }

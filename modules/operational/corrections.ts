@@ -32,6 +32,7 @@ import {
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
+import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 import { expireStaleRegulationOccupancies, isRegulationPostDeactivationActive } from "@/modules/regulation/service";
@@ -67,6 +68,11 @@ interface OccupancySnapshot {
 interface TargetMetadata extends OperationalTransferTargetInput {
     code: string;
     label: string;
+}
+
+interface TransferShiftWindow {
+    shiftLabel: "SD" | "SN";
+    startedAt: Date;
 }
 
 export interface TransferOperationalOccupancyInput {
@@ -136,6 +142,35 @@ function displaceNoteLine(params: {
 
 function hasOwn<T extends object, K extends PropertyKey>(value: T, key: K): value is T & Record<K, unknown> {
     return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+export function resolveTransferShiftWindow(referenceAt: Date): TransferShiftWindow {
+    const currentWindow = resolveOperationalShiftWindow(referenceAt);
+    const targetShiftLabel = resolveArrivalShiftLabel(referenceAt);
+    if (targetShiftLabel === currentWindow.shiftLabel) {
+        return {
+            shiftLabel: currentWindow.shiftLabel,
+            startedAt: currentWindow.startedAt,
+        };
+    }
+
+    const nextWindow = resolveOperationalShiftWindow(currentWindow.nextBoundaryAt);
+    return {
+        shiftLabel: nextWindow.shiftLabel,
+        startedAt: nextWindow.startedAt,
+    };
+}
+
+export function filterTransferConflictsToShiftWindow<T extends {
+    id: string;
+    startedAt: Date;
+    boardStartedAt: Date | null;
+    scheduledStartAt: Date | null;
+}>(occupancies: T[], transferShiftStartAt: Date) {
+    return occupancies.filter((occupancy) => {
+        const referenceStart = occupancy.scheduledStartAt ?? occupancy.boardStartedAt ?? occupancy.startedAt;
+        return referenceStart.getTime() >= transferShiftStartAt.getTime();
+    });
 }
 
 export function validateChronology(startedAt: Date, boardStartedAt: Date | null, endedAt: Date | null, actualEndedAt: Date | null) {
@@ -735,10 +770,11 @@ export async function transferOperationalOccupancy(
             throw new Error("Escolha um destino diferente do posto/base atual para remanejar.");
         }
 
-        const destinationConflicts = await findOpenTargetOccupancies(tx, {
+        const transferShiftWindow = resolveTransferShiftWindow(new Date());
+        const destinationConflicts = filterTransferConflictsToShiftWindow(await findOpenTargetOccupancies(tx, {
             target: destinationTarget,
             excludeOccupancyIds: [source.id],
-        });
+        }), transferShiftWindow.startedAt);
         if (destinationConflicts.length > 1) {
             throw new Error(`O destino ${destinationTarget.code} tem multiplas ocupacoes abertas. Limpe o destino antes de remanejar.`);
         }

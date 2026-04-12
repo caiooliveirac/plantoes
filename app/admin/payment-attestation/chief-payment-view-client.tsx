@@ -270,6 +270,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
             return;
         }
 
+        const selectedDoctor = board.allDoctorNames.find((name) => normalize(name) === normalize(trimmedDoctor));
+        if (!selectedDoctor) {
+            setManualError("Selecione um médico válido na lista de sugestões.");
+            return;
+        }
+
         setManualBusy(true);
         setManualError(null);
         setManualFeedback(null);
@@ -287,7 +293,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     shift: manualDraft.shiftLabel,
                     domain: manualDraft.domain,
                     targetCode: manualDraft.targetCode,
-                    doctorName: trimmedDoctor,
+                    doctorName: selectedDoctor,
                 }),
             });
 
@@ -703,11 +709,17 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             <span>Médico para pagamento</span>
                             <input
                                 type="text"
+                                list="chief-payment-doctor-names"
                                 value={manualDoctorName}
                                 onChange={(event) => setManualDoctorName(event.target.value)}
                                 placeholder="Digite o nome do médico"
                             />
-                        </label>
+                            </label>
+                        <datalist id="chief-payment-doctor-names">
+                            {board.allDoctorNames.map((name) => (
+                                <option key={name} value={name} />
+                            ))}
+                        </datalist>
 
                         <div className="payment-filter-actions">
                             <button type="button" className="payment-button primary" onClick={() => void submitManualCorrection()} disabled={manualBusy}>

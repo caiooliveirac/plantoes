@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeOperationalNotes, validateChronology, validateCorrectionChronology } from "@/modules/operational/corrections";
+import {
+    filterTransferConflictsToShiftWindow,
+    mergeOperationalNotes,
+    resolveTransferShiftWindow,
+    validateChronology,
+    validateCorrectionChronology,
+} from "@/modules/operational/corrections";
 
 // ─── validateChronology ──────────────────────────────────────────────
 
@@ -160,4 +166,39 @@ test("mergeOperationalNotes handles all null/empty inputs", () => {
     assert.equal(mergeOperationalNotes(null), null);
     assert.equal(mergeOperationalNotes(null, null, null), null);
     assert.equal(mergeOperationalNotes("", "", ""), null);
+});
+
+test("resolveTransferShiftWindow treats 16:00 as next SN shift", () => {
+    const at1600Sp = new Date("2026-04-12T19:00:00.000Z");
+    const window = resolveTransferShiftWindow(at1600Sp);
+    assert.equal(window.shiftLabel, "SN");
+    assert.equal(window.startedAt.toISOString(), "2026-04-12T22:00:00.000Z");
+});
+
+test("resolveTransferShiftWindow treats 04:00 as next SD shift", () => {
+    const at0400Sp = new Date("2026-04-12T07:00:00.000Z");
+    const window = resolveTransferShiftWindow(at0400Sp);
+    assert.equal(window.shiftLabel, "SD");
+    assert.equal(window.startedAt.toISOString(), "2026-04-12T10:00:00.000Z");
+});
+
+test("filterTransferConflictsToShiftWindow ignores past-shift open occupancy", () => {
+    const transferShiftStartAt = new Date("2026-04-12T10:00:00.000Z");
+    const conflicts = filterTransferConflictsToShiftWindow([
+        {
+            id: "old",
+            startedAt: new Date("2026-04-11T09:56:46.000Z"),
+            boardStartedAt: new Date("2026-04-11T09:56:46.000Z"),
+            scheduledStartAt: new Date("2026-04-11T10:00:00.000Z"),
+        },
+        {
+            id: "current",
+            startedAt: new Date("2026-04-12T09:56:09.000Z"),
+            boardStartedAt: new Date("2026-04-12T09:56:09.000Z"),
+            scheduledStartAt: new Date("2026-04-12T10:00:00.000Z"),
+        },
+    ], transferShiftStartAt);
+
+    assert.equal(conflicts.length, 1);
+    assert.equal(conflicts[0]?.scheduledStartAt?.toISOString(), "2026-04-12T10:00:00.000Z");
 });

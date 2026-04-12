@@ -1,5 +1,6 @@
-import { sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
+import { doctors } from "@/db/schema";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
 import {
     buildAttestationSegments,
@@ -375,10 +376,11 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     const range = resolveMonthlyReportRange(monthKey);
     const rawStartIso = new Date(range.start.getTime() - 86400000).toISOString();
     const rawEndIso = new Date(range.end.getTime() + 86400000).toISOString();
-    const [targets, targetDeactivationIntervals, rawResultRows] = await Promise.all([
+    const [targets, targetDeactivationIntervals, rawResultRows, allDoctorRows] = await Promise.all([
         loadTargets(rawStartIso, rawEndIso),
         loadTargetDeactivationIntervals(rawStartIso, rawEndIso),
         loadRawRows(rawStartIso, rawEndIso),
+        getDb().select({ fullName: doctors.fullName }).from(doctors).where(eq(doctors.isActive, true)).orderBy(asc(doctors.fullName)),
     ]);
 
     const rawRows = rawResultRows.map(mapPaymentAllocationAuditRow);
@@ -421,6 +423,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         uncoveredTargets,
         targetOptions,
         attestationSegments,
+        allDoctorNames: allDoctorRows.map((row) => row.fullName),
     });
 }
 

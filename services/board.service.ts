@@ -1816,7 +1816,22 @@ function doesCandidateCoverPaymentSlot(candidate: LogicalShiftCandidate, slotSta
   }
 
   const coverageEndAt = resolveCandidateCoverageEndAt(candidate);
-  return Boolean(coverageEndAt && new Date(coverageEndAt).getTime() > slotStart);
+  if (!coverageEndAt) return false;
+  const coverageEndMs = new Date(coverageEndAt).getTime();
+  if (coverageEndMs > slotStart) return true;
+  // Boundary equality: resolveProlongedShiftExpiry returns exactly the next-slot start
+  // (e.g. 07:00 next day for a SN P-shift). Accept only when slotStartIso is the
+  // *immediately* next slot from the candidate's logical slot — this prevents an SD
+  // P-shift from bleeding 24h into the following SD while correctly including an
+  // SN P-shift that reaches the following morning's SD.
+  if (coverageEndMs === slotStart) {
+    const immediatelyNextSlotStart = resolveSlotEnd(
+      new Date(candidate.logicalSlotStart),
+      candidate.logicalSlot,
+    );
+    return immediatelyNextSlotStart.getTime() === slotStart;
+  }
+  return false;
 }
 
 function buildPaymentAllocationSlotWindow(params: {

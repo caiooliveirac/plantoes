@@ -730,3 +730,39 @@ test("buildPaymentAllocationBoardModel does not carry a regulation P without dep
     assert.equal(board.regulation[0]?.candidateCount, 0);
     assert.match(board.regulation[0]?.issues[0] ?? "", /Sem ocupacao identificada/i);
 });
+
+test("buildPaymentAllocationBoardModel carries SN P-shift with no exit into the immediately following SD slot (boundary equality)", () => {
+    // Guilherme scenario: doctor arrived in SN (e.g. 20:30 SP = 23:30 UTC), said "P"
+    // (continues). The P-shift's implicitExpiry = 07:00 SP next day = exactly the SD
+    // slot start. Must be included in the SD payment slot.
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({ targetCode: "PM40", targetLabel: "PM40", sortOrder: 40 })],
+        rawRows: [makeRow({
+            occupancyId: "occ-guilherme",
+            targetCode: "PM40",
+            targetLabel: "PM40",
+            doctorId: "doc-guilherme",
+            doctorName: "Guilherme Rabelo",
+            displayName: "Guilherme Rabelo",
+            // 20:30 SP April 11 = 23:30 UTC April 11 (arrived in SN)
+            startedAt: "2026-04-11T23:30:00.000Z",
+            boardStartedAt: "2026-04-11T23:30:00.000Z",
+            endedAt: null,
+            actualEndedAt: null,
+            scheduledStartAt: "2026-04-11T22:00:00.000Z",
+            scheduledEndAt: "2026-04-12T10:00:00.000Z",
+            shiftLabel: "P",
+            notes: "Guilherme PM40 P continua",
+        })],
+        // SD April 12: 07:00 SP = 10:00 UTC
+        operationalDate: "2026-04-12T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-04-12T10:00:00.000Z",
+        endedAt: "2026-04-12T22:00:00.000Z",
+        generatedAt: "2026-04-12T12:00:00.000Z",
+    });
+
+    assert.equal(board.intervention[0]?.doctorName, "Guilherme Rabelo");
+    assert.equal(board.intervention[0]?.occupancyId, "occ-guilherme");
+    assert.match(board.intervention[0]?.issues.join(" ") ?? "", /sem saida consolidada/i);
+});
