@@ -3,6 +3,7 @@ import test from "node:test";
 import {
     hasPlannedInterventionCoverageForCurrentShift,
     requiresOvertimeJustification,
+    resolveArrivalShiftLabel,
     resolveContinuationBadgeLabel,
     resolveImplicitOccupancyExpiry,
     resolveOvertimeJustificationThreshold,
@@ -12,8 +13,9 @@ import {
 } from "@/modules/operational/board-rules";
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
-import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveForcedDayEventTime, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
+import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
 
 test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T07:00:00-03:00")), "SD");
@@ -40,14 +42,14 @@ test("keeps fixed MRV role on continuation for 2032 and 2151", () => {
     }), "MRV");
 });
 
-test("allows blank role on non-fixed regulation ramal and keeps explicit overrides", () => {
+test("falls back to post default role on non-fixed regulation ramal and keeps explicit overrides", () => {
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
         code: "1363",
         shiftLabel: "SD",
         roleLabel: null,
         defaultRole: "MR",
-    }), null);
+    }), "MR");
 
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
@@ -64,6 +66,35 @@ test("allows blank role on non-fixed regulation ramal and keeps explicit overrid
         roleLabel: "IES",
         defaultRole: "MR",
     }), "IES");
+});
+
+test("regulation post defaultRole=RMT is inherited when no explicit role is given", () => {
+    // Scenario: Emily Thais or Malcom arrive at ramal 1363 (default_role=RMT) without saying "RMT"
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "1363",
+        shiftLabel: "P",
+        roleLabel: null,
+        defaultRole: "RMT",
+    }), "RMT");
+
+    // Explicit IES overrides defaultRole=RMT
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "1363",
+        shiftLabel: "SD",
+        roleLabel: "IES",
+        defaultRole: "RMT",
+    }), "IES");
+
+    // No defaultRole and no roleLabel → null (non-fixed post without default)
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "1363",
+        shiftLabel: "SD",
+        roleLabel: null,
+        defaultRole: null,
+    }), null);
 });
 
 test("flags intervention doctor from previous shift for verification at 19h boundary", () => {
@@ -223,6 +254,62 @@ test("resolveImplicitOccupancyExpiry uses base boundary for non-P and full span 
     );
 });
 
+test("cross-shift continuation: SN label with SD startedAt causes board disappearance, P label keeps visible", () => {
+    // BUG scenario: doctor continues from SD to SN at 18:38. Occupancy created with
+    // startedAt=07:00, boardStartedAt=07:00, shiftLabel=SN. At 19:16 the occupancy
+    // disappears because resolveImplicitOccupancyExpiry(07:00, "SN") = 19:00.
+    const sdStart = new Date("2026-04-05T07:00:00-03:00");
+
+    // With wrong shiftLabel "SN": visible at 19:14 but invisible at 19:16
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: sdStart,
+            boardStartedAt: sdStart,
+            shiftLabel: "SN",
+            reference: new Date("2026-04-05T19:14:00-03:00"),
+        }),
+        true,
+    );
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: sdStart,
+            boardStartedAt: sdStart,
+            shiftLabel: "SN",
+            reference: new Date("2026-04-05T19:16:00-03:00"),
+        }),
+        false, // BUG: doctor disappears from the board after 19:15
+    );
+
+    // With correct shiftLabel "P": visible until tomorrow 07:15
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: sdStart,
+            boardStartedAt: sdStart,
+            shiftLabel: "P",
+            reference: new Date("2026-04-05T19:16:00-03:00"),
+        }),
+        true,
+    );
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: sdStart,
+            boardStartedAt: sdStart,
+            shiftLabel: "P",
+            reference: new Date("2026-04-06T07:14:00-03:00"),
+        }),
+        true,
+    );
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: sdStart,
+            boardStartedAt: sdStart,
+            shiftLabel: "P",
+            reference: new Date("2026-04-06T07:16:00-03:00"),
+        }),
+        false, // P expires at 07:15 the next day — correct behavior
+    );
+});
+
 test("shows continuation badge only in the verification grace window", () => {
     assert.equal(resolveContinuationBadgeLabel({
         startedAt: new Date("2026-03-25T07:00:00-03:00"),
@@ -249,16 +336,19 @@ test("shows continuation badge only in the verification grace window", () => {
     }), "Continua as 07:00");
 });
 
-test("resolveContinuationBoardStartedAt avanca o marcador do quadro para o turno corrente", () => {
+test("resolveContinuationBoardStartedAt preserves the earliest board anchor across shifts", () => {
+    // Cross-shift continuation: doctor arrived at 19:28 SN, continues next day at 11:54. 
+    // Board retains original arrival (19:28) so priority ranking is accurate.
     assert.equal(
         resolveContinuationBoardStartedAt({
             startedAt: new Date("2026-03-25T19:28:00-03:00"),
             boardStartedAt: new Date("2026-03-25T19:28:00-03:00"),
             continuedAt: new Date("2026-03-26T11:54:00-03:00"),
         }).toISOString(),
-        new Date("2026-03-26T07:00:00-03:00").toISOString(),
+        new Date("2026-03-25T19:28:00-03:00").toISOString(),
     );
 
+    // Same-shift continuation: boardStartedAt already matches current shift → unchanged.
     assert.equal(
         resolveContinuationBoardStartedAt({
             startedAt: new Date("2026-03-25T19:28:00-03:00"),
@@ -266,6 +356,17 @@ test("resolveContinuationBoardStartedAt avanca o marcador do quadro para o turno
             continuedAt: new Date("2026-03-25T23:08:00-03:00"),
         }).toISOString(),
         new Date("2026-03-25T19:28:00-03:00").toISOString(),
+    );
+
+    // Cross-shift continuation with inherited boardStartedAt from SD: doctor arrived
+    // 07:20, source closed at 19:15. Continuation at 19:25 must keep 07:20 for priority.
+    assert.equal(
+        resolveContinuationBoardStartedAt({
+            startedAt: new Date("2026-04-05T19:00:00-03:00"),
+            boardStartedAt: new Date("2026-04-05T07:20:00-03:00"),
+            continuedAt: new Date("2026-04-05T19:25:00-03:00"),
+        }).toISOString(),
+        new Date("2026-04-05T07:20:00-03:00").toISOString(),
     );
 });
 
@@ -310,6 +411,48 @@ test("infers SD regulation start at 07:00 local operational time", () => {
     );
 
     assert.equal(result?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+});
+
+test("infers NUCLEO SD regulation start at 08:00 instead of 07:00", () => {
+    const result = inferOperationalScheduledStartAt(
+        new Date("2026-03-25T08:10:00-03:00"),
+        "SD",
+        null,
+        "NUCLEO",
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-25T08:00:00-03:00").toISOString());
+});
+
+test("NUCLEO arriving at 07:30 gets scheduledStart 08:00 — no false delay", () => {
+    const result = inferOperationalScheduledStartAt(
+        new Date("2026-03-25T07:30:00-03:00"),
+        "SD",
+        null,
+        "NUCLEO",
+    );
+
+    assert.equal(result?.toISOString(), new Date("2026-03-25T08:00:00-03:00").toISOString());
+});
+
+test("inferRegulationCoverageWindow uses 08:00 for NUCLEO SD", () => {
+    const result = inferRegulationCoverageWindow({
+        startedAt: new Date("2026-03-25T08:05:00-03:00"),
+        shiftLabel: "SD",
+        postCode: "NUCLEO",
+    });
+
+    assert.equal(result.scheduledStartAt?.toISOString(), new Date("2026-03-25T08:00:00-03:00").toISOString());
+    assert.equal(result.scheduledEndAt?.toISOString(), new Date("2026-03-25T19:15:00-03:00").toISOString());
+});
+
+test("inferRegulationCoverageWindow without postCode still uses 07:00 for SD", () => {
+    const result = inferRegulationCoverageWindow({
+        startedAt: new Date("2026-03-25T07:25:00-03:00"),
+        shiftLabel: "SD",
+    });
+
+    assert.equal(result.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
 });
 
 test("infers SN regulation start at 19:00 of the previous local day when arrival happens after midnight", () => {
@@ -405,6 +548,24 @@ test("parses explicit operational role in Telegram arrival", () => {
     assert.equal(parsed.baseCode, "1321");
     assert.equal(parsed.shiftType, "SD");
     assert.equal(parsed.roleFunction, "IES");
+});
+
+test("parses PSIQ as explicit operational role in Telegram arrival", () => {
+    const parsed = parseMessage("Emily Rocha 1363 07:00 SD PSIQ");
+
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1363");
+    assert.equal(parsed.shiftType, "SD");
+    assert.equal(parsed.roleFunction, "PSIQ");
+});
+
+test("parses new regulation posts 1326 to 1329 in Telegram arrival", () => {
+    const parsed = parseMessage("Leo Marins 1326 07:00 SD");
+
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1326");
+    assert.equal(parsed.shiftType, "SD");
+    assert.equal(parsed.isDeparture, false);
 });
 
 test("parses continuation wording without explicit P as continuation", () => {
@@ -586,6 +747,229 @@ test("parses intervention P shift with bare base alias and explicit time", () =>
     assert.deepEqual(parsed.extractedNames, ["Marcela"]);
 });
 
+test("extractNames strips noise tokens like desde, rendida, sombra, chefia from doctor names", () => {
+    const p1 = parseMessage("LEO MORAIS 24H CRU DESDE AS 07:00");
+    assert.deepEqual(p1.extractedNames, ["LEO MORAIS"]);
+
+    const p2 = parseMessage("Ananda Andrade saindo CRU 07:20 rendida por Ronaldo");
+    assert.ok(!p2.extractedNames[0]?.includes("rendida"), "should not include rendida");
+    assert.ok(!p2.extractedNames[0]?.includes("por"), "should not include por");
+
+    const p3 = parseMessage("ANA BEATRIZ 2031 SAINDO DA CHEFIA");
+    assert.deepEqual(p3.extractedNames, ["ANA BEATRIZ"]);
+
+    const p4 = parseMessage("Laisse SN na 30  desde as 18:58");
+    assert.deepEqual(p4.extractedNames, ["Laisse"]);
+
+    const p5 = parseMessage("Leonardo Cabanelas, CRU (sombra), chegada as 7:10");
+    assert.deepEqual(p5.extractedNames, ["Leonardo Cabanelas"]);
+});
+
+test("classifies emoji-only and filler-heavy messages as casual", () => {
+    assert.equal(isCasualTelegramMessage("😂"), true);
+    assert.equal(isCasualTelegramMessage("kkkkkkkkkkkk jesus"), true);
+    assert.equal(isCasualTelegramMessage("Vai dar certo"), true);
+    assert.equal(isCasualTelegramMessage("Não entendi"), true);
+    assert.equal(isCasualTelegramMessage("PerFeito! Sua Linda! BOm plan~tao"), true);
+});
+
+test("does not classify operational messages with CRU/COI as casual", () => {
+    assert.equal(isCasualTelegramMessage("Ronaldo Acácio CRU SD"), false);
+    assert.equal(isCasualTelegramMessage("Sadja Costa COI SN 19:14"), false);
+    assert.equal(isCasualTelegramMessage("Gerardson continua no COI"), false);
+});
+
+test("P arrival up to 60 min before boundary resolves to the upcoming shift, not the current one", () => {
+    // Doctor arrives at 06:44 with P — 16 min before the 07:00 SD boundary.
+    // Must resolve to SD (scheduledStart = 07:00), NOT SN (scheduledStart = 19:00 yesterday, which would create ~12h phantom delay).
+    const earlySD = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T06:44:00-03:00"),
+        shiftLabel: "P",
+    });
+    assert.equal(earlySD.baseShiftLabel, "SD");
+    assert.equal(earlySD.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+    assert.equal(earlySD.scheduledEndAt?.toISOString(), new Date("2026-03-26T07:00:00-03:00").toISOString());
+
+    // Same scenario at 06:30 — 30 min before boundary
+    const earlySD30 = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T06:30:00-03:00"),
+        shiftLabel: "P",
+    });
+    assert.equal(earlySD30.baseShiftLabel, "SD");
+    assert.equal(earlySD30.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+
+    // Doctor arrives at 18:30 with P — 30 min before the 19:00 SN boundary
+    const earlySN = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T18:30:00-03:00"),
+        shiftLabel: "P",
+    });
+    assert.equal(earlySN.baseShiftLabel, "SN");
+    assert.equal(earlySN.scheduledStartAt?.toISOString(), new Date("2026-03-25T19:00:00-03:00").toISOString());
+
+    // P at 06:01 — 59 min before boundary, still within tolerance
+    const earlySD59 = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T06:01:00-03:00"),
+        shiftLabel: "P",
+    });
+    assert.equal(earlySD59.baseShiftLabel, "SD");
+    assert.equal(earlySD59.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+
+    // Regulation variant: P at 06:44
+    const regEarlySD = inferRegulationCoverageWindow({
+        startedAt: new Date("2026-03-25T06:44:00-03:00"),
+        shiftLabel: "P",
+    });
+    assert.equal(regEarlySD.baseShiftLabel, "SD");
+    assert.equal(regEarlySD.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+});
+
+test("P arrival well inside the current shift stays on the current shift", () => {
+    // P at 22:00 — clearly SN, not approaching the SD boundary
+    const nightP = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T22:00:00-03:00"),
+        shiftLabel: "P",
+    });
+    assert.equal(nightP.baseShiftLabel, "SN");
+    assert.equal(nightP.scheduledStartAt?.toISOString(), new Date("2026-03-25T19:00:00-03:00").toISOString());
+
+    // P at 10:00 — clearly SD, not approaching the SN boundary
+    const dayP = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-25T10:00:00-03:00"),
+        shiftLabel: "P",
+    });
+    assert.equal(dayP.baseShiftLabel, "SD");
+    assert.equal(dayP.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
+});
+
+test("resolveArrivalShiftLabel classifies near-boundary arrivals to the upcoming shift", () => {
+    // 18:55 is 5 min before SN boundary → SN
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T18:55:00-03:00")), "SN");
+    // 16:00 is exactly 3 h before SN boundary → SN (at boundary of tolerance)
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T16:00:00-03:00")), "SN");
+    // 06:44 is 16 min before SD boundary → SD
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T06:44:00-03:00")), "SD");
+    // 06:01 is 59 min before SD boundary → SD
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T06:01:00-03:00")), "SD");
+    // 04:00 is exactly 3 h before SD boundary → SD (at boundary of tolerance)
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T04:00:00-03:00")), "SD");
+    // 03:59 is 3 h 01 min before SD boundary → SN (outside early window)
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T03:59:00-03:00")), "SN");
+    // 15:59 is 3 h 01 min before SN boundary → SD (outside early window)
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T15:59:00-03:00")), "SD");
+    // 15:00 is well inside SD → SD
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T15:00:00-03:00")), "SD");
+    // 22:00 is well inside SN → SN
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T22:00:00-03:00")), "SN");
+    // exactly 19:00 → SN (no tolerance needed, already in SN)
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T19:00:00-03:00")), "SN");
+    // exactly 07:00 → SD
+    assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T07:00:00-03:00")), "SD");
+});
+
+test("null shiftLabel arrival near boundary produces correct coverage window", () => {
+    // Cloud Sá scenario: arrival at 18:55 with no shift label → should get SN window
+    const nearBoundary = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-05T18:55:00-03:00"),
+        shiftLabel: null,
+    });
+    assert.equal(nearBoundary.baseShiftLabel, "SN");
+    assert.equal(nearBoundary.scheduledStartAt?.toISOString(), new Date("2026-04-05T19:00:00-03:00").toISOString());
+    assert.equal(nearBoundary.scheduledEndAt?.toISOString(), new Date("2026-04-06T07:00:00-03:00").toISOString());
+
+    // Same for regulation
+    const regNearBoundary = inferRegulationCoverageWindow({
+        startedAt: new Date("2026-04-05T18:55:00-03:00"),
+        shiftLabel: null,
+    });
+    assert.equal(regNearBoundary.baseShiftLabel, "SN");
+    assert.equal(regNearBoundary.scheduledStartAt?.toISOString(), new Date("2026-04-05T19:00:00-03:00").toISOString());
+
+    // Arrival at 06:30 with no label → should get SD window
+    const earlyMorning = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-05T06:30:00-03:00"),
+        shiftLabel: null,
+    });
+    assert.equal(earlyMorning.baseShiftLabel, "SD");
+    assert.equal(earlyMorning.scheduledStartAt?.toISOString(), new Date("2026-04-05T07:00:00-03:00").toISOString());
+    assert.equal(earlyMorning.scheduledEndAt?.toISOString(), new Date("2026-04-05T19:00:00-03:00").toISOString());
+
+    // Arrival at 10:00 with no label → should stay SD (well inside)
+    const midMorning = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-05T10:00:00-03:00"),
+        shiftLabel: null,
+    });
+    assert.equal(midMorning.baseShiftLabel, "SD");
+    assert.equal(midMorning.scheduledStartAt?.toISOString(), new Date("2026-04-05T07:00:00-03:00").toISOString());
+});
+
+test("explicit SN label at early-SD window is overridden to SD (Vinicius/CC70 drawer scenario)", () => {
+    // Chief adds Vinicius to CC70 at 06:47 — the drawer auto-populates shiftLabel="SN"
+    // (current board shift). The service must infer SD, not SN, for this arrival.
+    const drawerSNAt0647 = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-10T06:47:00-03:00"),
+        shiftLabel: "SN",
+    });
+    assert.equal(drawerSNAt0647.baseShiftLabel, "SD");
+    assert.equal(drawerSNAt0647.scheduledStartAt?.toISOString(), new Date("2026-04-10T07:00:00-03:00").toISOString());
+    assert.equal(drawerSNAt0647.scheduledEndAt?.toISOString(), new Date("2026-04-10T19:00:00-03:00").toISOString());
+
+    // Same for regulation
+    const regSNAt0647 = inferRegulationCoverageWindow({
+        startedAt: new Date("2026-04-10T06:47:00-03:00"),
+        shiftLabel: "SN",
+    });
+    assert.equal(regSNAt0647.baseShiftLabel, "SD");
+
+    // Arrival at 04:00 with explicit "SN" (matches current window) → SD
+    const extremeEarlySD = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-10T04:00:00-03:00"),
+        shiftLabel: "SN",
+    });
+    assert.equal(extremeEarlySD.baseShiftLabel, "SD");
+
+    // Arrival at 03:59 with explicit "SN" — outside the 3h window → stays SN
+    const justOutside = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-10T03:59:00-03:00"),
+        shiftLabel: "SN",
+    });
+    assert.equal(justOutside.baseShiftLabel, "SN");
+});
+
+test("explicit SD label at early-SN window is overridden to SN", () => {
+    // Doctor added at 16:47 with the drawer auto-populated shiftLabel="SD" → should be SN
+    const drawerSDAt1647 = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-10T16:47:00-03:00"),
+        shiftLabel: "SD",
+    });
+    assert.equal(drawerSDAt1647.baseShiftLabel, "SN");
+    assert.equal(drawerSDAt1647.scheduledStartAt?.toISOString(), new Date("2026-04-10T19:00:00-03:00").toISOString());
+
+    // Arrival at 16:00 (exactly 3 h before SN) with explicit "SD" → SN
+    const exactBoundary = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-10T16:00:00-03:00"),
+        shiftLabel: "SD",
+    });
+    assert.equal(exactBoundary.baseShiftLabel, "SN");
+
+    // Arrival at 15:59 with explicit "SD" — outside the 3h window → stays SD
+    const justOutsideSN = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-04-10T15:59:00-03:00"),
+        shiftLabel: "SD",
+    });
+    assert.equal(justOutsideSN.baseShiftLabel, "SD");
+});
+
+test("explicit SN that already differs from the current window is kept (chief intentional override)", () => {
+    // Doctor added at 18:57 with explicit "SN" — currently SD window but chief CHOSE SN
+    // (normalized "SN" != window.shiftLabel "SD" → no flip)
+    const intentionalSN = inferInterventionCoverageWindow({
+        startedAt: new Date("2026-03-28T18:57:00-03:00"),
+        shiftLabel: "SN",
+    });
+    assert.equal(intentionalSN.baseShiftLabel, "SN");
+    assert.equal(intentionalSN.scheduledStartAt?.toISOString(), new Date("2026-03-28T19:00:00-03:00").toISOString());
+});
+
 test("inferInterventionCoverageWindow extends P through the next shift when there is no explicit end", () => {
     const dayShift = inferInterventionCoverageWindow({
         startedAt: new Date("2026-03-25T07:25:00-03:00"),
@@ -686,4 +1070,117 @@ test("parses CONT abbreviation as intervention continuation", () => {
     assert.equal(parsed.isContinuation, true);
     assert.equal(parsed.isDeparture, false);
     assert.deepEqual(parsed.extractedNames, ["Vinicius Jesus"]);
+});
+
+test("detectLocationWithoutRamal identifies CRU/COI without ramal", () => {
+    assert.deepEqual(detectLocationWithoutRamal("Ronaldo Acácio CRU SD"), { location: "CRU" });
+    assert.deepEqual(detectLocationWithoutRamal("Sadja Costa COI SN 19:14"), { location: "COI" });
+    assert.deepEqual(detectLocationWithoutRamal("Gerardson continua no COI"), { location: "COI" });
+    assert.equal(detectLocationWithoutRamal("Fulano 1366 SD 07:00"), null);
+    assert.equal(detectLocationWithoutRamal("Fulano SM01 SD"), null);
+    assert.equal(detectLocationWithoutRamal("Bom dia pessoal"), null);
+});
+
+test("buildLocationWithoutRamalReply includes sender name, ramal list, and copy-paste example", () => {
+    const reply = buildLocationWithoutRamalReply({
+        senderName: "Sadja Costa",
+        location: "COI",
+        shiftLabel: "SN",
+        time: "19:14",
+    });
+    assert.ok(reply.includes("Sadja Costa"));
+    assert.ok(reply.includes("COI"));
+    assert.ok(reply.includes("1366"));
+    assert.ok(reply.includes("1367"));
+    assert.ok(reply.includes("1368"));
+    assert.ok(reply.includes("SN"));
+    assert.ok(reply.includes("19:14"));
+    assert.ok(reply.includes("NÃO funciona"));
+    assert.ok(reply.includes("FUNCIONA"));
+    assert.ok(reply.includes("TARM"));
+
+    const cruReply = buildLocationWithoutRamalReply({
+        senderName: "Ananda Andrade",
+        location: "CRU",
+        shiftLabel: "SD",
+        time: null,
+    });
+    assert.ok(cruReply.includes("Ananda Andrade"));
+    assert.ok(cruReply.includes("CRU"));
+    assert.ok(cruReply.includes("1321"));
+    assert.ok(cruReply.includes("Central de Regulação Urbana"));
+});
+
+test("resolveForcedDayEventTime with dayOffset=-1 forces yesterday", () => {
+    // Message sent April 1st 07:00 BRT, user wants 20:00 of yesterday (March 31)
+    const result = resolveForcedDayEventTime(
+        new Date("2026-04-01T07:00:00-03:00"),
+        "20:00",
+        -1,
+    );
+
+    assert.equal(result.toISOString(), new Date("2026-03-31T20:00:00-03:00").toISOString());
+});
+
+test("resolveForcedDayEventTime with dayOffset=0 forces today", () => {
+    // Message sent April 1st 07:00 BRT, user wants 07:00 of today (April 1st)
+    const result = resolveForcedDayEventTime(
+        new Date("2026-04-01T07:00:00-03:00"),
+        "07:00",
+        0,
+    );
+
+    assert.equal(result.toISOString(), new Date("2026-04-01T07:00:00-03:00").toISOString());
+});
+
+test("resolveForcedDayEventTime with dayOffset=0 does not drift to next day for late-night messages", () => {
+    // Message sent March 31 at 23:30 BRT, user wants 07:00 of today (March 31), NOT April 1
+    const result = resolveForcedDayEventTime(
+        new Date("2026-03-31T23:30:00-03:00"),
+        "07:00",
+        0,
+    );
+
+    assert.equal(result.toISOString(), new Date("2026-03-31T07:00:00-03:00").toISOString());
+});
+
+test("parses 'vou continuar' compound continuation without a base code", () => {
+    const parsed = parseMessage("Ana Luiza vou continuar SN");
+
+    assert.equal(parsed.isContinuation, true);
+    assert.equal(parsed.isDeparture, false);
+    assert.equal(parsed.shiftType, "SN");
+    assert.deepEqual(parsed.extractedNames, ["Ana Luiza"]);
+});
+
+test("parses 'vou ficar' and 'vou permanecer' as continuation signals", () => {
+    assert.equal(parseMessage("Maria vou ficar na PM04").isContinuation, true);
+    assert.equal(parseMessage("João vou permanecer CB02").isContinuation, true);
+    assert.equal(parseMessage("Carlos vai continuar SM01").isContinuation, true);
+});
+
+test("parses infinitive continuation forms: continuar, ficar, permanecer, seguir", () => {
+    assert.equal(parseMessage("Larissa continuar na 50").isContinuation, true);
+    assert.equal(parseMessage("Larissa ficar na 50").isContinuation, true);
+    assert.equal(parseMessage("Larissa permanecer na 50").isContinuation, true);
+    assert.equal(parseMessage("Larissa seguir na 50").isContinuation, true);
+    assert.equal(parseMessage("Larissa prosseguir na 50").isContinuation, true);
+});
+
+test("continuation without base code still parses isContinuation but has no sector", () => {
+    const parsed = parseMessage("Ana Luiza continua SN");
+
+    assert.equal(parsed.isContinuation, true);
+    assert.equal(parsed.baseCode, null);
+    assert.equal(parsed.sector, null);
+    assert.equal(parsed.shiftType, "SN");
+    assert.deepEqual(parsed.extractedNames, ["Ana Luiza"]);
+});
+
+test("does not leak continuation/vou tokens into doctor name extraction", () => {
+    const parsed = parseMessage("Vagner vou continuar PR03 SN");
+
+    assert.equal(parsed.isContinuation, true);
+    assert.equal(parsed.baseCode, "PR03");
+    assert.deepEqual(parsed.extractedNames, ["Vagner"]);
 });

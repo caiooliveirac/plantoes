@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { applyAnomalyGuard, calculateBankHours } from "@/modules/bank-hours/calculator";
 
 function iso(value: string) {
     return new Date(value).toISOString();
@@ -178,4 +178,66 @@ test("continued shift leaving early does not create benefit", () => {
     assert.equal(result.overtimeMinutes, 0);
     assert.equal(result.creditedOvertimeMinutes, 0);
     assert.equal(result.balanceMinutes, 0);
+});
+
+test("anomaly guard clamps excessive delay to zero balance", () => {
+    // P shift misregistered as SN: scheduledStart 19:00 but arrived 07:00 next day = 720 min "delay"
+    // Doctor left at 07:15 (within scheduled end), so no overtime to compensate
+    const raw = calculateBankHours({
+        scheduledStartAt: iso("2026-04-04T19:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-05T07:00:00-03:00"),
+        actualStartAt: iso("2026-04-05T07:00:00-03:00"),
+        actualEndAt: iso("2026-04-05T07:00:00-03:00"),
+    });
+
+    assert.equal(raw.arrivalDelayMinutes, 720);
+    assert.equal(raw.balanceMinutes, -720);
+
+    const guarded = applyAnomalyGuard(raw);
+    assert.equal(guarded.balanceMinutes, 0);
+    assert.equal(guarded.creditedOvertimeMinutes, 0);
+    assert.equal(guarded.ruleCode, "ANOMALY_EXCESSIVE_DELAY");
+    assert.ok(guarded.explanation.includes("ANOMALIA"));
+});
+
+test("anomaly guard clamps excessive overtime to zero balance", () => {
+    // SD scheduled 07:00-19:15 but doctor stayed until 07:00 next day = ~720 min overtime
+    const raw = calculateBankHours({
+        scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-05T19:15:00-03:00"),
+        actualStartAt: iso("2026-04-05T07:20:00-03:00"),
+        actualEndAt: iso("2026-04-06T06:55:00-03:00"),
+    });
+
+    assert.equal(raw.overtimeMinutes > 360, true);
+
+    const guarded = applyAnomalyGuard(raw);
+    assert.equal(guarded.balanceMinutes, 0);
+    assert.equal(guarded.creditedOvertimeMinutes, 0);
+    assert.ok(guarded.ruleCode.startsWith("ANOMALY_"));
+});
+
+test("anomaly guard passes through normal calculations unchanged", () => {
+    const raw = calculateBankHours({
+        scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-05T19:00:00-03:00"),
+        actualStartAt: iso("2026-04-05T07:12:00-03:00"),
+        actualEndAt: iso("2026-04-05T19:30:00-03:00"),
+    });
+
+    const guarded = applyAnomalyGuard(raw);
+    assert.deepEqual(guarded, raw);
+});
+
+test("anomaly guard passes through delay at exactly 360 minutes", () => {
+    const raw = calculateBankHours({
+        scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-05T19:00:00-03:00"),
+        actualStartAt: iso("2026-04-05T13:00:00-03:00"),
+        actualEndAt: iso("2026-04-05T19:00:00-03:00"),
+    });
+
+    assert.equal(raw.arrivalDelayMinutes, 360);
+    const guarded = applyAnomalyGuard(raw);
+    assert.deepEqual(guarded, raw);
 });

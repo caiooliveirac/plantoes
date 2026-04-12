@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isTelegramDoctorAdminCommandText, parseTelegramDoctorAdminCommand } from "@/modules/telegram/admin-commands";
-import { isTelegramAdminOnlyCommand, parseTelegramCommand } from "@/modules/telegram/commands";
+import {
+    isTelegramAdminOnlyCommand,
+    isTelegramDepartureCorrectionCommandText,
+    parseTelegramCommand,
+    parseTelegramDepartureCorrectionCommand,
+} from "@/modules/telegram/commands";
 import {
     buildDeparturePriorityReply,
     getCurrentDeparturePriorityView,
@@ -23,11 +28,19 @@ import {
     hasTelegramOperationalJustification,
     isBatchCancelKeyword,
     isBatchConfirmationKeyword,
+    parseTelegramStandaloneTime,
+    pickLikelyDepartureCorrectionCandidate,
+    resolveTelegramEligibleLateDepartureReason,
     requiresTelegramDepartureAdjustmentJustification,
+    resolveContinuationShiftStart,
     resolveLatestClosedShiftRequest,
     resolveTelegramSuccessReplyKind,
+    shouldLinkRecentClosedTelegramContinuity,
+    shouldDeferPendingDepartureCorrectionToFreshParsing,
     shouldUseTelegramSenderNameFallback,
+    isSharedAccountSender,
     shouldLinkTelegramArrivalToContinuitySource,
+    shouldDeferPendingDepartureJustificationToFreshParsing,
     shouldDeferPendingNameSelectionToFreshParsing,
     shouldTreatTelegramArrivalAsContinuation,
 } from "@/modules/telegram/service";
@@ -77,6 +90,31 @@ function makeRegulationPriorityRow(overrides: Partial<RegulationBoardRow> = {}):
     };
 }
 
+function makeDepartureCorrectionCandidate(overrides: Partial<{
+    occupancyId: string;
+    domain: "REGULATION" | "INTERVENTION";
+    targetCode: string;
+    shiftLabel: "SD" | "SN" | "P" | null;
+    roleLabel: string | null;
+    startedAt: Date;
+    endedAt: Date | null;
+    actualEndedAt: Date | null;
+    isActive: boolean;
+}> = {}) {
+    return {
+        occupancyId: "dep-candidate-1",
+        domain: "REGULATION" as const,
+        targetCode: "2035",
+        shiftLabel: "SD" as const,
+        roleLabel: null,
+        startedAt: new Date("2026-03-30T10:05:00.000Z"),
+        endedAt: new Date("2026-03-30T22:15:00.000Z"),
+        actualEndedAt: new Date("2026-03-30T22:05:00.000Z"),
+        isActive: false,
+        ...overrides,
+    };
+}
+
 test("parseTelegramCommand parses corrigir with target, full name and time", () => {
     const parsed = parseTelegramCommand("/corrigir PM04 Marcela Souza 20:00");
 
@@ -98,6 +136,7 @@ test("buildTelegramReviewLogData tags reviewable operational inputs with context
             roleFunction: null,
             isDeparture: true,
             isContinuation: false,
+            isReassignment: false,
         },
         doctorQuery: "Leonardo Carteado",
         trainingCandidate: true,
@@ -124,6 +163,7 @@ test("buildTelegramReviewLogData tags reviewable operational inputs with context
             roleFunction: null,
             isDeparture: true,
             isContinuation: false,
+            isReassignment: false,
         },
         reviewDoctorQuery: "Leonardo Carteado",
         reviewCandidates: ["Leonardo Carvalho", "Leonardo Cartaxo"],
@@ -210,6 +250,28 @@ test("shouldUseTelegramSenderNameFallback ignores messages with Telegram mention
     assert.equal(shouldUseTelegramSenderNameFallback("2031 SD"), true);
 });
 
+test("shouldUseTelegramSenderNameFallback blocks shared account senders", () => {
+    assert.equal(shouldUseTelegramSenderNameFallback("2031 SD", "2151 Médico MRV"), false);
+    assert.equal(shouldUseTelegramSenderNameFallback("2031 SD", "COI 1367"), false);
+    assert.equal(shouldUseTelegramSenderNameFallback("2031 SD", "MR COI 1368"), false);
+    assert.equal(shouldUseTelegramSenderNameFallback("2031 SD", "2031 CHEFE"), false);
+    assert.equal(shouldUseTelegramSenderNameFallback("2031 SD", "Ana Luiza"), true);
+    assert.equal(shouldUseTelegramSenderNameFallback("2031 SD", null), true);
+});
+
+test("isSharedAccountSender detects ramal/role-based Telegram account names", () => {
+    assert.equal(isSharedAccountSender("2151 Médico MRV"), true);
+    assert.equal(isSharedAccountSender("COI 1367"), true);
+    assert.equal(isSharedAccountSender("MR COI 1368"), true);
+    assert.equal(isSharedAccountSender("2031 CHEFE"), true);
+    assert.equal(isSharedAccountSender("2032 MEDICO"), true);
+    assert.equal(isSharedAccountSender("2154 MÉDICO"), true);
+    assert.equal(isSharedAccountSender("Ana Luiza Alves"), false);
+    assert.equal(isSharedAccountSender("Caio Oliveira"), false);
+    assert.equal(isSharedAccountSender(null), false);
+    assert.equal(isSharedAccountSender(""), false);
+});
+
 test("parseTelegramCommand parses /ramal with optional function", () => {
     const withRole = parseTelegramCommand("/ramal Emily 1363 RMT");
 
@@ -225,15 +287,57 @@ test("parseTelegramCommand parses /ramal with optional function", () => {
     assert.equal(blankRole?.targetCode, "1363");
     assert.equal(blankRole?.doctorName, "Emily");
     assert.equal(blankRole?.roleLabel, null);
+
+    const withPsiq = parseTelegramCommand("/ramal Emily 1363 PSIQ");
+    assert.equal(withPsiq?.name, "ramal");
+    assert.equal(withPsiq?.targetCode, "1363");
+    assert.equal(withPsiq?.doctorName, "Emily");
+    assert.equal(withPsiq?.roleLabel, "PSIQ");
+});
+
+test("parseTelegramDepartureCorrectionCommand parses doctor name with optional target", () => {
+    const withTarget = parseTelegramDepartureCorrectionCommand("/corrigirsaida Joao Pedro 2035");
+
+    assert.equal(withTarget?.name, "corrigirsaida");
+    assert.equal(withTarget?.doctorName, "Joao Pedro");
+    assert.equal(withTarget?.targetCode, "2035");
+    assert.equal(withTarget?.sector, "REGULATION");
+
+    const withoutTarget = parseTelegramDepartureCorrectionCommand("/corrigirsaida Joao Pedro");
+    assert.equal(withoutTarget?.doctorName, "Joao Pedro");
+    assert.equal(withoutTarget?.targetCode, null);
+    assert.equal(isTelegramDepartureCorrectionCommandText("/corrigirsaida Joao Pedro"), true);
+});
+
+test("parseTelegramCommand parses /ontem with target and time", () => {
+    const parsed = parseTelegramCommand("/ontem PM04 20:00");
+
+    assert.equal(parsed?.name, "ontem");
+    assert.equal(parsed?.sector, "INTERVENTION");
+    assert.equal(parsed?.targetCode, "PM04");
+    assert.equal(parsed?.time, "20:00");
+    assert.equal(parsed?.isDeparture, false);
+});
+
+test("parseTelegramCommand parses /hoje with target, name and time", () => {
+    const parsed = parseTelegramCommand("/hoje 2031 Samara 07:00");
+
+    assert.equal(parsed?.name, "hoje");
+    assert.equal(parsed?.sector, "REGULATION");
+    assert.equal(parsed?.targetCode, "2031");
+    assert.equal(parsed?.doctorName, "Samara");
+    assert.equal(parsed?.time, "07:00");
+    assert.equal(parsed?.isDeparture, false);
 });
 
 test("parseTelegramDoctorAdminCommand parses full name, display name and code", () => {
-    const parsed = parseTelegramDoctorAdminCommand("/medico cadastrar Ana Beatriz D'Almeida Silva | Ana Beatriz | crm-1");
+    const parsed = parseTelegramDoctorAdminCommand("/medico cadastrar Ana Beatriz D'Almeida Silva | Ana Beatriz | crm-1 | Ana Bia, Bia Almeida");
 
     assert.equal(parsed?.name, "doctor_create");
     assert.equal(parsed?.fullName, "Ana Beatriz D'Almeida Silva");
     assert.equal(parsed?.displayName, "Ana Beatriz");
     assert.equal(parsed?.externalCode, "crm-1");
+    assert.deepEqual(parsed?.aliases, ["Ana Bia", "Bia Almeida"]);
 });
 
 test("parseTelegramDoctorAdminCommand aceita cadastro com apenas nome completo", () => {
@@ -242,6 +346,18 @@ test("parseTelegramDoctorAdminCommand aceita cadastro com apenas nome completo",
     assert.equal(parsed?.fullName, "Monica Aragao");
     assert.equal(parsed?.displayName, null);
     assert.equal(parsed?.externalCode, null);
+});
+
+test("parseTelegramDoctorAdminCommand parses update with explicit lookup", () => {
+    const parsed = parseTelegramDoctorAdminCommand("/medico atualizar Ana Beatriz | Ana Beatriz D'Almeida Silva | Ana Beatriz | | Ana Bia, Bia Almeida");
+
+    assert.equal(parsed?.name, "doctor_update");
+    assert.equal(parsed?.lookup, "Ana Beatriz");
+    assert.equal(parsed?.fullName, "Ana Beatriz D'Almeida Silva");
+    assert.equal(parsed?.displayName, "Ana Beatriz");
+    assert.equal(parsed?.externalCode, null);
+    assert.deepEqual(parsed?.aliases, ["Ana Bia", "Bia Almeida"]);
+    assert.equal(parsed?.hasAliases, true);
 });
 
 test("isTelegramDoctorAdminCommandText reconhece o namespace mesmo quando o comando esta incompleto", () => {
@@ -378,8 +494,8 @@ test("getCurrentDeparturePriorityView ignora MRV, RECIP e quem nao esta mais no 
 
     const reply = buildDeparturePriorityReply(view);
     assert.match(reply, /Fora da conta: saídas já declaradas, MRV e RECIP\./);
-    assert.match(reply, /1\. Ana Souza \| PM04 \| 07:00/);
-    assert.match(reply, /2\. Bruno Lima \| 2035 \| 07:05/);
+    assert.match(reply, /1\. Ana \| PM04 \| 07:00/);
+    assert.match(reply, /2\. Bruno \| 2035 \| 07:05/);
     assert.doesNotMatch(reply, /Marina Costa/);
     assert.doesNotMatch(reply, /Renata Lima/);
 });
@@ -470,7 +586,7 @@ test("buildTelegramDepartureReport lists arrival, departure and bank-hours impac
                 occupancyId: "reg-1",
                 doctorId: "doc-1",
                 doctorName: "Ana Souza",
-                displayName: "Ana Souza",
+                displayName: "Ana",
                 startedAt: "2026-03-28T22:00:00.000Z",
                 endedAt: "2026-03-29T10:20:00.000Z",
                 actualEndedAt: "2026-03-29T10:20:00.000Z",
@@ -501,7 +617,7 @@ test("buildTelegramDepartureReport lists arrival, departure and bank-hours impac
                 occupancyId: "int-1",
                 doctorId: "doc-2",
                 doctorName: "Bruno Lima",
-                displayName: "Bruno Lima",
+                displayName: "Bruno",
                 startedAt: "2026-03-28T22:10:00.000Z",
                 endedAt: "2026-03-29T10:45:00.000Z",
                 actualEndedAt: "2026-03-29T10:45:00.000Z",
@@ -556,10 +672,10 @@ test("buildTelegramDepartureReport lists arrival, departure and bank-hours impac
     assert.match(report, /Saídas 28\/03\/2026 SN/);
     assert.match(report, /Formato: alvo \| chegada real \| nome \| saída \| banco/);
     assert.match(report, /Alocados 2\/3 \| revisar 1 \| vazios 1/);
-    assert.match(report, /✅ 2031 \| 19:00 \| Ana Souza \| 07:20 \| BH \+0h00/);
-    assert.match(report, /⚠️ PM04 \| 19:10 \| Bruno Lima \| 07:45 \| BH \+0h35/);
+    assert.match(report, /✅ 2031 \| 19:00 \| Ana \| 07:20 \| BH \+0h00 \(extra/);
+    assert.match(report, /⚠️ PM04 \| 19:10 \| Bruno \| 07:45 \| BH \+0h35/);
     assert.match(report, /revisar: saída ajustada depois da rendição/);
-    assert.match(report, /Vazios: IT30/);
+    assert.match(report, /Vazios \(1\): IT30/);
 });
 
 test("buildTelegramDepartureReport shows CONTINUA for carried P coverage and preserves a late actual departure", () => {
@@ -655,7 +771,7 @@ test("buildTelegramDepartureReport shows CONTINUA for carried P coverage and pre
     assert.match(report, /Alocados 2\/2 \| revisar 0 \| vazios 0/);
     assert.match(report, /🔁 2031 \| 07:01 \| João Perrone \| 19:00 \| CONTINUA/);
     assert.doesNotMatch(report, /2031.*Plantão sem saída consolidada/);
-    assert.match(report, /✅ CZ50 \| 07:00 \| Laisse Melo \| 19:12 \| BH \+0h00/);
+    assert.match(report, /✅ CZ50 \| 07:00 \| Laisse Melo \| 19:12 \| BH 0/);
 });
 
 test("buildTelegramDepartureReport uses carried P bank-hours once the final exit is known", () => {
@@ -924,13 +1040,13 @@ test("buildTelegramShiftReport separates confirmed rows from previous-shift carr
         },
     });
 
-    assert.match(report, /Relato do plantão SN/);
-    assert.match(report, /✅ PM04 - Ana Souza \| chegada 19:00 \| SN/);
-    assert.match(report, /🟡 BR05 - Joao Santana \| SD desde 07:18|🟡 BR05 - Joao Santana \| SD desde 07:18/);
-    assert.match(report, /ainda no quadro, mas não confirmado para SN/);
+    assert.match(report, /Plantão SN/);
+    assert.match(report, /✅ PM04 - Ana \| chegada 19:00 \| SN/);
+    assert.match(report, /🔴 BR05 - Joao \| SD desde 07:18/);
+    assert.match(report, /sem confirmação para SN/);
     assert.match(report, /🔴 IT30/);
-    assert.match(report, /✅ 2031 - Bruno Lima \| chegada 19:02 \| SN/);
-    assert.match(report, /🟡 2032 - Marina Costa/);
+    assert.match(report, /✅ 2031 - Bruno \| chegada 19:02 \| SN/);
+    assert.match(report, /🟡 2032 - Marina/);
     assert.match(report, /🔴 2033/);
 });
 
@@ -980,9 +1096,115 @@ test("buildTelegramShiftReport reports disabled intervention bases outside the p
         },
     });
 
-    assert.match(report, /Intervenção confirmada 1\/1/);
+    assert.match(report, /Intervenção 1\/1 confirmadas/);
     assert.match(report, /⚫ IT30 - desativada às 18:30 \| USA recolhida/);
-    assert.doesNotMatch(report, /Intervenção sem aviso.*IT30/s);
+    assert.doesNotMatch(report, /Sem aviso.*IT30/s);
+});
+
+test("buildTelegramShiftReport treats null shiftLabel with current-shift boardStartedAt as confirmed", () => {
+    const report = buildTelegramShiftReport({
+        reference: new Date("2026-03-29T11:00:00-03:00"),
+        board: {
+            intervention: [
+                {
+                    baseId: 1,
+                    occupancyId: "int-1",
+                    baseCode: "SM01",
+                    baseLabel: "SM01",
+                    doctorId: "doc-1",
+                    doctorName: "Carlos Mendes",
+                    displayName: "Carlos",
+                    startedAt: "2026-03-29T10:05:00.000Z",
+                    boardStartedAt: "2026-03-29T10:05:00.000Z",
+                    scheduledEndAt: "2026-03-29T22:00:00.000Z",
+                    shiftLabel: null,
+                    roleLabel: null,
+                    status: "active",
+                    liveSource: "operations_v2",
+                    liveUpdatedAt: null,
+                },
+            ],
+            regulation: [
+                {
+                    postId: 1,
+                    occupancyId: "reg-1",
+                    postCode: "2031",
+                    postLabel: "2031",
+                    defaultRole: "MR",
+                    doctorId: "doc-2",
+                    doctorName: "Felipe Ramos",
+                    displayName: "Felipe",
+                    startedAt: "2026-03-29T10:10:00.000Z",
+                    boardStartedAt: "2026-03-29T10:10:00.000Z",
+                    scheduledEndAt: "2026-03-29T22:15:00.000Z",
+                    shiftLabel: null,
+                    roleLabel: "MR",
+                    ramalLabel: "2031",
+                    status: "active",
+                    liveSource: "operations_v2",
+                    liveUpdatedAt: null,
+                },
+            ],
+        },
+    });
+
+    assert.match(report, /Plantão SD/);
+    assert.match(report, /✅ SM01 - Carlos \| chegada 07:05 \| SD/);
+    assert.match(report, /✅ 2031 - Felipe \| chegada 07:10 \| SD/);
+    assert.doesNotMatch(report, /Herança/);
+    assert.doesNotMatch(report, /sem confirmação/);
+});
+
+test("buildTelegramShiftReport shows null shiftLabel from previous shift as carryover for regulation and awaiting for intervention", () => {
+    const report = buildTelegramShiftReport({
+        reference: new Date("2026-03-29T11:00:00-03:00"),
+        board: {
+            intervention: [
+                {
+                    baseId: 1,
+                    occupancyId: "int-1",
+                    baseCode: "PM04",
+                    baseLabel: "PM04",
+                    doctorId: "doc-1",
+                    doctorName: "Joana Ferreira",
+                    displayName: "Joana",
+                    startedAt: "2026-03-28T22:30:00.000Z",
+                    boardStartedAt: "2026-03-28T22:30:00.000Z",
+                    scheduledEndAt: "2026-03-29T10:00:00.000Z",
+                    shiftLabel: null,
+                    roleLabel: null,
+                    status: "active",
+                    liveSource: "operations_v2",
+                    liveUpdatedAt: null,
+                },
+            ],
+            regulation: [
+                {
+                    postId: 1,
+                    occupancyId: "reg-1",
+                    postCode: "2032",
+                    postLabel: "2032",
+                    defaultRole: "MR",
+                    doctorId: "doc-2",
+                    doctorName: "Paulo Santos",
+                    displayName: "Paulo",
+                    startedAt: "2026-03-28T22:00:00.000Z",
+                    boardStartedAt: "2026-03-28T22:00:00.000Z",
+                    scheduledEndAt: "2026-03-29T10:15:00.000Z",
+                    shiftLabel: null,
+                    roleLabel: "MR",
+                    ramalLabel: "2032",
+                    status: "active",
+                    liveSource: "operations_v2",
+                    liveUpdatedAt: null,
+                },
+            ],
+        },
+    });
+
+    assert.match(report, /Plantão SD/);
+    assert.match(report, /🔴 PM04 - Joana \| turno anterior desde 19:30 \| sem confirmação para SD/);
+    assert.match(report, /🟡 2032 - Paulo \| turno anterior desde 19:00/);
 });
 
 test("buildTelegramDepartureReport lists disabled bases separately from empty targets", () => {
@@ -1183,7 +1405,9 @@ test("buildTelegramSummaryReport returns a copy-friendly day summary with exits 
                 mrvLunch1230Ramal: null,
                 lunchCapacities: { "11:30": 1, "12:30": 0, "13:30": 0 },
                 lunchAssignments: { "2032": "11:30" },
+                lunchExcludedRamals: [],
                 restAssignments: { "2032": "18:00" },
+                restExcludedRamals: [],
                 restChoiceCapacities: { "15:30": 0, "16:30": 0 },
                 lunchQueue: [],
                 restQueue: [],
@@ -1194,6 +1418,7 @@ test("buildTelegramSummaryReport returns a copy-friendly day summary with exits 
                 dinnerChoiceCapacities: { "20:30": 0, "21:00": 0, "21:30": 0 },
                 nightWorkQueue: [],
                 dinnerQueue: [],
+                undoSnapshots: [],
                 createdAt: "2026-03-29T12:00:00.000Z",
                 updatedAt: "2026-03-29T12:00:00.000Z",
                 events: [],
@@ -1201,12 +1426,12 @@ test("buildTelegramSummaryReport returns a copy-friendly day summary with exits 
         },
     });
 
-    assert.match(report, /SAIDAS 28\/03\/2026 SN/);
-    assert.match(report, /INTERVENCAO\nbase\|nome\|saida\nPM04\|Ana Souza\|07:05/);
-    assert.match(report, /REGULACAO\nramal\|nome\|saida\n2032\|Marina Lima\|07:15/);
+    assert.match(report, /SAÍDAS SN/);
+    assert.match(report, /INTERVENÇÃO\nbase\|nome\|saída\nPM04\|Ana Souza\|07:05/);
+    assert.match(report, /REGULAÇÃO\nramal\|nome\|saída\n2032\|Marina Costa\|07:15/);
     assert.match(report, /CHEGADAS SD/);
-    assert.match(report, /INTERVENCAO\nbase\|nome\|chegada\nPM04\|Bruno Ferreira\|07:00/);
-    assert.match(report, /REGULACAO\nramal\|nome\|chegada\|almoco\|descanso\n2032\|Carlos Melo\|07:03\|11:30\|18:00/);
+    assert.match(report, /INTERVENÇÃO\nbase\|nome\|chegada\nPM04\|Bruno Lima\|07:00/);
+    assert.match(report, /REGULAÇÃO\nramal\|nome\|chegada\|almoco\|descanso\n2032\|Carlos Melo\|07:03\|11:30\|18:00/);
 });
 
 test("buildTelegramSummaryReport switches regulation columns to jantar and trabalho on SN", () => {
@@ -1267,7 +1492,9 @@ test("buildTelegramSummaryReport switches regulation columns to jantar and traba
                 mrvLunch1230Ramal: null,
                 lunchCapacities: { "11:30": 0, "12:30": 0, "13:30": 0 },
                 lunchAssignments: {},
+                lunchExcludedRamals: [],
                 restAssignments: {},
+                restExcludedRamals: [],
                 restChoiceCapacities: { "15:30": 0, "16:30": 0 },
                 lunchQueue: [],
                 restQueue: [],
@@ -1278,6 +1505,7 @@ test("buildTelegramSummaryReport switches regulation columns to jantar and traba
                 dinnerChoiceCapacities: { "20:30": 1, "21:00": 0, "21:30": 0 },
                 nightWorkQueue: [],
                 dinnerQueue: [],
+                undoSnapshots: [],
                 createdAt: "2026-03-29T23:00:00.000Z",
                 updatedAt: "2026-03-29T23:00:00.000Z",
                 events: [],
@@ -1287,7 +1515,7 @@ test("buildTelegramSummaryReport switches regulation columns to jantar and traba
 
     assert.match(report, /CHEGADAS SN/);
     assert.match(report, /ramal\|nome\|chegada\|jantar\|trabalho/);
-    assert.match(report, /2154\|Matheus Cordeiro\|19:25\|20:30\|23:00/);
+    assert.match(report, /2154\|Matheus Quezado\|19:25\|20:30\|23:00/);
 });
 
 test("pickTelegramReply supports polite command denial", () => {
@@ -1338,6 +1566,7 @@ test("resolveTelegramSuccessReplyKind separates arrival, P arrival and continuat
             roleFunction: null,
             isDeparture: false,
             isContinuation: false,
+            isReassignment: false,
         },
     }), "arrival_p_recorded");
 
@@ -1350,6 +1579,7 @@ test("resolveTelegramSuccessReplyKind separates arrival, P arrival and continuat
             roleFunction: null,
             isDeparture: false,
             isContinuation: true,
+            isReassignment: false,
         },
         forceContinuation: true,
     }), "continuation_recorded");
@@ -1363,8 +1593,23 @@ test("resolveTelegramSuccessReplyKind separates arrival, P arrival and continuat
             roleFunction: null,
             isDeparture: false,
             isContinuation: false,
+            isReassignment: false,
         },
     }), "arrival_recorded");
+
+    // Regulation continuation with isContinuation=true should be continuation_recorded (not arrival)
+    assert.equal(resolveTelegramSuccessReplyKind({
+        parsed: {
+            sector: "REGULATION",
+            baseCode: "2151",
+            arrivalTime: null,
+            shiftType: "SN",
+            roleFunction: null,
+            isDeparture: false,
+            isContinuation: true,
+            isReassignment: false,
+        },
+    }), "continuation_recorded");
 });
 
 test("shouldTreatTelegramArrivalAsContinuation infers rollover for intervention and explicit SD→SN regulation cross-shift", () => {
@@ -1457,6 +1702,7 @@ test("shouldLinkTelegramArrivalToContinuitySource links SD→SN regulation cross
                 roleFunction: "MR",
                 isDeparture: false,
                 isContinuation: false,
+                isReassignment: false,
             },
             sourceShiftLabel: "SD",
         }),
@@ -1473,6 +1719,7 @@ test("shouldLinkTelegramArrivalToContinuitySource links SD→SN regulation cross
                 roleFunction: "MR",
                 isDeparture: false,
                 isContinuation: false,
+                isReassignment: false,
             },
             sourceShiftLabel: "SD",
         }),
@@ -1489,6 +1736,7 @@ test("shouldLinkTelegramArrivalToContinuitySource links SD→SN regulation cross
                 roleFunction: "MR",
                 isDeparture: false,
                 isContinuation: true,
+                isReassignment: false,
             },
             sourceShiftLabel: "SD",
         }),
@@ -1505,10 +1753,67 @@ test("shouldLinkTelegramArrivalToContinuitySource links SD→SN regulation cross
                 roleFunction: "MR",
                 isDeparture: false,
                 isContinuation: false,
+                isReassignment: false,
             },
             sourceShiftLabel: "SN",
         }),
         false,
+    );
+
+    // P→SN: doctor was registered as P-shift and sends "continuando SN". Should link
+    // to the P continuity group. The calling code must also preserve effectiveShiftType = "P"
+    // so that boardStartedAt (from the P arrival) + shiftLabel "P" keeps the occupancy visible.
+    assert.equal(
+        shouldLinkTelegramArrivalToContinuitySource({
+            parsed: {
+                sector: "REGULATION",
+                baseCode: "2035",
+                arrivalTime: null,
+                shiftType: "SN",
+                roleFunction: null,
+                isDeparture: false,
+                isContinuation: true,
+                isReassignment: false,
+            },
+            sourceShiftLabel: "P",
+        }),
+        true,
+    );
+});
+
+test("shouldLinkRecentClosedTelegramContinuity expires old closed shifts before they contaminate a new day", () => {
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-04-07T18:33:00-03:00"),
+            new Date("2026-04-07T07:03:28-03:00"),
+        ),
+        false,
+    );
+
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-04-07T19:20:00-03:00"),
+            new Date("2026-04-07T18:10:00-03:00"),
+        ),
+        true,
+    );
+});
+
+test("resolveContinuationShiftStart honors the explicit next-shift boundary instead of snapping to the stale current window", () => {
+    assert.equal(
+        resolveContinuationShiftStart(
+            new Date("2026-04-07T18:33:00-03:00"),
+            "SN",
+        ).toISOString(),
+        new Date("2026-04-07T19:00:00-03:00").toISOString(),
+    );
+
+    assert.equal(
+        resolveContinuationShiftStart(
+            new Date("2026-04-08T06:50:00-03:00"),
+            "SD",
+        ).toISOString(),
+        new Date("2026-04-08T07:00:00-03:00").toISOString(),
     );
 });
 
@@ -1560,6 +1865,102 @@ test("shouldDeferPendingNameSelectionToFreshParsing leaves new operational launc
             score: 0,
         },
     ]), false);
+
+    assert.equal(shouldDeferPendingNameSelectionToFreshParsing("Carolina Tanajura 1363 SN 06:39", [
+        {
+            id: "carol-1",
+            fullName: "Carolina Tanajura",
+            displayName: "Carol Tanajura",
+            normalizedName: "CAROLINA TANAJURA",
+            score: 0,
+        },
+        {
+            id: "carol-2",
+            fullName: "Carolina Tavares",
+            displayName: "Carol Tavares",
+            normalizedName: "CAROLINA TAVARES",
+            score: 0,
+        },
+    ]), true);
+});
+
+test("shouldDeferPendingDepartureJustificationToFreshParsing leaves fresh arrivals out of stale departure flow", () => {
+    assert.equal(shouldDeferPendingDepartureJustificationToFreshParsing("Laisse chegou na PP20 18:58 SN"), true);
+    assert.equal(shouldDeferPendingDepartureJustificationToFreshParsing("Lucio Parada avisou chegada na PR03 07:15 SD"), true);
+    assert.equal(shouldDeferPendingDepartureJustificationToFreshParsing("Lucio Parada continuando IT30"), true);
+});
+
+test("shouldDeferPendingDepartureJustificationToFreshParsing keeps plain-text reason attached to pending departure", () => {
+    assert.equal(shouldDeferPendingDepartureJustificationToFreshParsing("atraso de quem veio render"), false);
+    assert.equal(shouldDeferPendingDepartureJustificationToFreshParsing("liberado pela chefia apos ocorrencia"), false);
+});
+
+test("shouldDeferPendingDepartureCorrectionToFreshParsing preserves fresh commands and operational relaunches", () => {
+    assert.equal(shouldDeferPendingDepartureCorrectionToFreshParsing("/corrigirsaida Joao Pedro 2035"), true);
+    assert.equal(shouldDeferPendingDepartureCorrectionToFreshParsing("Laisse chegou na PP20 18:58 SN"), true);
+    assert.equal(shouldDeferPendingDepartureCorrectionToFreshParsing("19:05"), false);
+    assert.equal(shouldDeferPendingDepartureCorrectionToFreshParsing("atraso de rendicao"), false);
+});
+
+test("parseTelegramStandaloneTime extracts bare HH:MM replies", () => {
+    assert.equal(parseTelegramStandaloneTime("19:05"), "19:05");
+    assert.equal(parseTelegramStandaloneTime("saida real 07:12"), "07:12");
+    assert.equal(parseTelegramStandaloneTime("sem horario aqui"), null);
+});
+
+test("pickLikelyDepartureCorrectionCandidate chooses the latest unique recent shift and flags close ambiguity", () => {
+    const unambiguous = pickLikelyDepartureCorrectionCandidate({
+        candidates: [
+            makeDepartureCorrectionCandidate({
+                occupancyId: "latest",
+                targetCode: "2152",
+                startedAt: new Date("2026-03-31T10:00:00.000Z"),
+                endedAt: new Date("2026-03-31T22:15:00.000Z"),
+                actualEndedAt: new Date("2026-03-31T22:05:00.000Z"),
+            }),
+            makeDepartureCorrectionCandidate({
+                occupancyId: "older",
+                targetCode: "2035",
+                startedAt: new Date("2026-03-30T10:00:00.000Z"),
+                endedAt: new Date("2026-03-30T14:00:00.000Z"),
+                actualEndedAt: new Date("2026-03-30T14:00:00.000Z"),
+            }),
+        ],
+    });
+
+    assert.equal(unambiguous.candidate?.occupancyId, "latest");
+    assert.equal(unambiguous.ambiguousCandidates.length, 0);
+
+    const ambiguous = pickLikelyDepartureCorrectionCandidate({
+        candidates: [
+            makeDepartureCorrectionCandidate({
+                occupancyId: "late-reg",
+                domain: "REGULATION",
+                targetCode: "2035",
+                startedAt: new Date("2026-03-31T10:00:00.000Z"),
+                endedAt: new Date("2026-03-31T22:15:00.000Z"),
+                actualEndedAt: new Date("2026-03-31T22:05:00.000Z"),
+            }),
+            makeDepartureCorrectionCandidate({
+                occupancyId: "late-int",
+                domain: "INTERVENTION",
+                targetCode: "PM04",
+                startedAt: new Date("2026-03-31T10:00:00.000Z"),
+                endedAt: new Date("2026-03-31T20:30:00.000Z"),
+                actualEndedAt: new Date("2026-03-31T20:30:00.000Z"),
+            }),
+        ],
+    });
+
+    assert.equal(ambiguous.candidate, null);
+    assert.equal(ambiguous.ambiguousCandidates.length, 2);
+
+    const explicitTarget = pickLikelyDepartureCorrectionCandidate({
+        candidates: ambiguous.ambiguousCandidates,
+        targetCode: "PM04",
+    });
+
+    assert.equal(explicitTarget.candidate?.occupancyId, "late-int");
 });
 
 test("pickTelegramReply teaches how to justify a late departure", () => {
@@ -1567,14 +1968,30 @@ test("pickTelegramReply teaches how to justify a late departure", () => {
         name: "Vagner Barroso",
         target: "PR03",
         time: "19:20",
-        example: "Vagner Barroso saindo PR03 19:20 porque fui liberado pela chefia",
+        example: "Vagner Barroso saindo PR03 19:20 porque estava em ocorrência 0729",
     });
 
-    assert.match(reply, /motivo|justificativa|reenvie/i);
-    assert.match(reply, /chefia|ocorrência 0729|render/i);
-    assert.match(reply, /responder esta mensagem só com o motivo|responda só o motivo|responda apenas o motivo|responder aqui só com a justificativa|responda aqui só com a justificativa/i);
-    assert.match(reply, /horário mudou|reenvie a saída completa|se precisar trocar o horário/i);
+    assert.match(reply, /pagamento|banco de horas/i);
+    assert.match(reply, /ocorrência 0729|em ocorrência/i);
+    assert.match(reply, /higienizando|higienização/i);
+    assert.match(reply, /\n\n🚑/u);
+    assert.match(reply, /\n\n🧼/u);
+    assert.match(reply, /responda só com um desses motivos|responda apenas o motivo|responda aqui só com o motivo/i);
     assert.match(reply, /PR03/);
+});
+
+test("pickTelegramReply gives a second chance before blocking automatic credit", () => {
+    const reply = pickTelegramReply("departure_justification_retry", 41, {
+        name: "Vagner Barroso",
+        target: "PR03",
+        time: "19:20",
+        example: "Vagner Barroso saindo PR03 19:20 porque estava em ocorrência 0729",
+    });
+
+    assert.match(reply, /mais uma vez|tentar/i);
+    assert.match(reply, /ocorrência|higienização|higienizando/i);
+    assert.match(reply, /sem crédito automático|sem pagar banco de horas automaticamente/i);
+    assert.match(reply, /chefia/i);
 });
 
 test("pickTelegramReply confirms that the late-departure justification was attached for coordination", () => {
@@ -1588,6 +2005,38 @@ test("pickTelegramReply confirms that the late-departure justification was attac
     assert.match(reply, /justificativa|motivo/i);
     assert.match(reply, /coordenação/i);
     assert.match(reply, /pagamento|banco de horas/i);
+});
+
+test("pickTelegramReply explains when the justification stays only for manual review", () => {
+    const reply = pickTelegramReply("departure_justification_manual_review", 33, {
+        name: "Vagner Barroso",
+        target: "PR03",
+        time: "19:20",
+    });
+
+    assert.match(reply, /coordenação/i);
+    assert.match(reply, /sem crédito automático/i);
+    assert.match(reply, /chefia/i);
+});
+
+test("resolveTelegramEligibleLateDepartureReason aceita ocorrência com variações e typos", () => {
+    assert.equal(
+        resolveTelegramEligibleLateDepartureReason("Vagner saindo PR03 19:20 porque estava em ocorrência 0729", ["Vagner", "PR03", "19:20"])?.code,
+        "occurrence",
+    );
+    assert.equal(resolveTelegramEligibleLateDepartureReason("em ocorencia 0729")?.code, "occurrence");
+    assert.equal(resolveTelegramEligibleLateDepartureReason("atendendo chamado no local")?.code, "occurrence");
+});
+
+test("resolveTelegramEligibleLateDepartureReason aceita higienização com sinônimos e erros de digitação", () => {
+    assert.equal(resolveTelegramEligibleLateDepartureReason("estava higienizando a viatura")?.code, "hygienization");
+    assert.equal(resolveTelegramEligibleLateDepartureReason("estava higienisando a ambulancia")?.code, "hygienization");
+    assert.equal(resolveTelegramEligibleLateDepartureReason("limpeza da viatura")?.code, "hygienization");
+});
+
+test("resolveTelegramEligibleLateDepartureReason rejeita chefia e atraso de rendição", () => {
+    assert.equal(resolveTelegramEligibleLateDepartureReason("fui liberado pela chefia"), null);
+    assert.equal(resolveTelegramEligibleLateDepartureReason("atraso de quem veio render"), null);
 });
 
 test("buildTelegramJustificationFollowUpText appends a plain follow-up reason to the original departure message", () => {
@@ -1604,18 +2053,72 @@ test("buildTelegramJustificationFollowUpText appends a plain follow-up reason to
 test("requiresTelegramDepartureAdjustmentJustification only after operational grace even with handoff", () => {
     assert.equal(
         requiresTelegramDepartureAdjustmentJustification({
+            domain: "INTERVENTION",
             startedAt: new Date("2026-03-26T07:00:00-03:00"),
+            scheduledEndAt: new Date("2026-03-26T19:00:00-03:00"),
             endedAt: new Date("2026-03-26T19:01:00-03:00"),
             eventAt: new Date("2026-03-26T19:10:00-03:00"),
+            hasSuccessorOccupancy: true,
         }),
         false,
     );
 
     assert.equal(
         requiresTelegramDepartureAdjustmentJustification({
+            domain: "INTERVENTION",
             startedAt: new Date("2026-03-26T07:00:00-03:00"),
+            scheduledEndAt: new Date("2026-03-26T19:00:00-03:00"),
             endedAt: new Date("2026-03-26T19:01:00-03:00"),
             eventAt: new Date("2026-03-26T19:40:00-03:00"),
+            hasSuccessorOccupancy: true,
+        }),
+        true,
+    );
+
+    assert.equal(
+        requiresTelegramDepartureAdjustmentJustification({
+            domain: "INTERVENTION",
+            startedAt: new Date("2026-04-07T06:50:00-03:00"),
+            scheduledEndAt: new Date("2026-04-07T19:00:00-03:00"),
+            endedAt: new Date("2026-04-07T08:08:18-03:00"),
+            eventAt: new Date("2026-04-07T19:05:00-03:00"),
+            hasSuccessorOccupancy: true,
+        }),
+        false,
+    );
+
+    assert.equal(
+        requiresTelegramDepartureAdjustmentJustification({
+            domain: "INTERVENTION",
+            startedAt: new Date("2026-03-26T07:00:00-03:00"),
+            scheduledEndAt: new Date("2026-03-26T19:00:00-03:00"),
+            endedAt: new Date("2026-03-26T19:01:00-03:00"),
+            eventAt: new Date("2026-03-26T19:40:00-03:00"),
+            hasSuccessorOccupancy: false,
+        }),
+        false,
+    );
+
+    assert.equal(
+        requiresTelegramDepartureAdjustmentJustification({
+            domain: "REGULATION",
+            startedAt: new Date("2026-03-26T07:00:00-03:00"),
+            scheduledEndAt: new Date("2026-03-26T19:15:00-03:00"),
+            endedAt: new Date("2026-03-26T19:01:00-03:00"),
+            eventAt: new Date("2026-03-26T19:10:00-03:00"),
+            hasSuccessorOccupancy: true,
+        }),
+        false,
+    );
+
+    assert.equal(
+        requiresTelegramDepartureAdjustmentJustification({
+            domain: "REGULATION",
+            startedAt: new Date("2026-03-26T07:00:00-03:00"),
+            scheduledEndAt: new Date("2026-03-26T19:15:00-03:00"),
+            endedAt: new Date("2026-03-26T19:01:00-03:00"),
+            eventAt: new Date("2026-03-26T19:20:00-03:00"),
+            hasSuccessorOccupancy: true,
         }),
         true,
     );

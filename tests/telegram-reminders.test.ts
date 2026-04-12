@@ -124,14 +124,15 @@ test("buildReminderPlans publishes a 10-minute coverage snapshot with confirmed 
 
     const snapshot = plans.find((plan) => plan.stage === "coverage_snapshot");
     assert.ok(snapshot);
+    assert.match(snapshot?.text ?? "", /Quadro SN/);
     assert.match(snapshot?.text ?? "", /Intervenção 1\/3/);
-    assert.match(snapshot?.text ?? "", /✅ PM04 - Ana Souza/);
-    assert.match(snapshot?.text ?? "", /🔴 BR05 - Sem medico confirmado neste turno/);
-    assert.match(snapshot?.text ?? "", /So entra se avisar continua\/P ou se a chefia atualizar/);
-    assert.match(snapshot?.text ?? "", /🔴 IT30 - Aguardando confirmação da avançada/);
-    assert.match(snapshot?.text ?? "", /☎️ Ramais sem aviso \(1\): 2032/);
-    assert.doesNotMatch(snapshot?.text ?? "", /🔴 2032 - Aguardando aviso de ramal/);
-    assert.match(snapshot?.text ?? "", /TARM precisa dos ramais ativos/);
+    assert.match(snapshot?.text ?? "", /✅ PM04 - Ana \| 19:00/);
+    assert.match(snapshot?.text ?? "", /🟡 BR05 - Joao \(SD 07:18\) \| sem confirmação p\/ SN/);
+    assert.match(snapshot?.text ?? "", /🔴 IT30 - Aguardando avançada/);
+    assert.match(snapshot?.text ?? "", /Sem aviso \(1\): 2032/);
+    assert.doesNotMatch(snapshot?.text ?? "", /🔴 2032 - Aguardando ramal/);
+    assert.match(snapshot?.text ?? "", /TARM segue sem todos os ramais/);
+    assert.match(snapshot?.text ?? "", /🟡 = turno anterior sem confirmar continua\/P/);
 });
 
 test("buildReminderPlans treats disabled bases as explicit operational state instead of missing coverage", () => {
@@ -167,7 +168,7 @@ test("buildReminderPlans treats disabled bases as explicit operational state ins
     assert.doesNotMatch(checkpoint?.text ?? "", /🚑 Avancadas sem aviso \(1\): IT30/);
 });
 
-test("buildReminderPlans publishes the 08h/20h public checkpoint with full names", () => {
+test("buildReminderPlans publishes the 08h/20h public checkpoint with surface names", () => {
     const plans = buildReminderPlans({
         now: new Date("2026-03-25T20:05:00-03:00"),
         board: makeBoard(),
@@ -178,11 +179,11 @@ test("buildReminderPlans publishes the 08h/20h public checkpoint with full names
     assert.match(checkpoint?.text ?? "", /Fechamento público 20:00/);
     assert.match(checkpoint?.text ?? "", /🚑 Intervenção confirmada:/);
     assert.match(checkpoint?.text ?? "", /☎️ Regulação confirmada:/);
-    assert.match(checkpoint?.text ?? "", /PM04 - Ana Souza/);
-    assert.match(checkpoint?.text ?? "", /2031 - Bruno Lima/);
+    assert.match(checkpoint?.text ?? "", /PM04 - Ana \| 19:00/);
+    assert.match(checkpoint?.text ?? "", /2031 - Bruno \| 19:02/);
     assert.match(checkpoint?.text ?? "", /🟠 Pendências ainda abertas/);
-    assert.match(checkpoint?.text ?? "", /🔴 Intervencao sem medico confirmado neste turno \(1\): BR05\./);
-    assert.match(checkpoint?.text ?? "", /🚑 Avancadas sem aviso \(1\): IT30/);
+    assert.match(checkpoint?.text ?? "", /🔴 Intervenção sem confirmação \(1\): BR05/);
+    assert.match(checkpoint?.text ?? "", /🚑 Avançadas sem aviso \(1\): IT30/);
     assert.match(checkpoint?.text ?? "", /☎️ Ramais sem aviso \(1\): 2032/);
 });
 
@@ -216,13 +217,13 @@ test("buildReminderPlans publishes the 12h\/00h payment checkpoint with arrival 
     const checkpoint = plans.find((plan) => plan.stage === "payment_checkpoint");
     assert.ok(checkpoint);
     assert.match(checkpoint?.text ?? "", /Registro 00:00 para pagamento e banco de horas/);
-    assert.match(checkpoint?.text ?? "", /🚑 Intervencao confirmada:/);
-    assert.match(checkpoint?.text ?? "", /☎️ Regulacao confirmada:/);
-    assert.match(checkpoint?.text ?? "", /🟠 Pendencias que ainda exigem conferencia:/);
-    assert.match(checkpoint?.text ?? "", /PM04 - Ana Souza \| chegada 19:00 \| SN/);
-    assert.match(checkpoint?.text ?? "", /2031 - Bruno Lima \| chegada 19:02 \| SN/);
-    assert.match(checkpoint?.text ?? "", /🔴 Intervencao sem medico confirmado neste turno \(1\): BR05\./);
-    assert.match(checkpoint?.text ?? "", /🚑 Avancadas sem aviso \(1\): IT30/);
+    assert.match(checkpoint?.text ?? "", /🚑 Intervenção confirmada:/);
+    assert.match(checkpoint?.text ?? "", /☎️ Regulação confirmada:/);
+    assert.match(checkpoint?.text ?? "", /🟠 Pendências que exigem conferência:/);
+    assert.match(checkpoint?.text ?? "", /PM04 - Ana \| chegada 19:00 \| SN/);
+    assert.match(checkpoint?.text ?? "", /2031 - Bruno \| chegada 19:02 \| SN/);
+    assert.match(checkpoint?.text ?? "", /🔴 Intervenção sem confirmação \(1\): BR05/);
+    assert.match(checkpoint?.text ?? "", /🚑 Avançadas sem aviso \(1\): IT30/);
     assert.match(checkpoint?.text ?? "", /☎️ Ramais sem aviso \(2\): 2032, 2033/);
     assert.doesNotMatch(checkpoint?.text ?? "", /2032 \| Sem aviso de ramal/);
 });
@@ -349,8 +350,127 @@ test("buildReminderPlans presents intervention and regulation in operational cha
 
     const checkpoint = plans.find((plan) => plan.stage === "coverage_checkpoint");
     assert.ok(checkpoint);
-    assert.ok((checkpoint?.text ?? "").indexOf("✅ SM01 - Primeiro Base") < (checkpoint?.text ?? "").indexOf("✅ BR05 - Segundo Base"));
-    assert.ok((checkpoint?.text ?? "").indexOf("🚑 Avancadas sem aviso (1): IT30") > (checkpoint?.text ?? "").indexOf("✅ BR05 - Segundo Base"));
-    assert.ok((checkpoint?.text ?? "").indexOf("✅ 2031 - Chefia") < (checkpoint?.text ?? "").indexOf("✅ 1366 - Ultimo Ramal"));
+    assert.ok((checkpoint?.text ?? "").indexOf("✅ SM01 - Primeiro") < (checkpoint?.text ?? "").indexOf("✅ BR05 - Segundo"));
+    assert.ok((checkpoint?.text ?? "").indexOf("🚑 Avançadas sem aviso (1): IT30") > (checkpoint?.text ?? "").indexOf("✅ BR05 - Segundo"));
+    assert.ok((checkpoint?.text ?? "").indexOf("✅ 2031 - Chefia") < (checkpoint?.text ?? "").indexOf("✅ 1366 - Ultimo"));
     assert.match(checkpoint?.text ?? "", /☎️ Ramais sem aviso \(1\): 2032/);
+});
+
+test("buildReminderPlans treats SD with early arrival before tolerance as confirmed, not awaiting", () => {
+    const board: ReminderBoardSnapshot = {
+        generatedAt: "2026-03-25T10:20:00.000Z",
+        intervention: [
+            {
+                baseId: 1,
+                occupancyId: "int-early",
+                baseCode: "PM04",
+                baseLabel: "PM04",
+                doctorId: "doc-early",
+                doctorName: "Carlos Madrugador",
+                displayName: "Carlos",
+                startedAt: "2026-03-25T08:50:00.000Z",
+                boardStartedAt: "2026-03-25T08:50:00.000Z",
+                scheduledEndAt: "2026-03-25T22:00:00.000Z",
+                shiftLabel: "SD",
+                roleLabel: null,
+                status: "active",
+                liveSource: "operations_v2",
+                liveUpdatedAt: null,
+            },
+        ],
+        regulation: [],
+    };
+
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-25T07:20:00-03:00"),
+        board,
+    });
+
+    const snapshot = plans.find((plan) => plan.stage === "coverage_snapshot");
+    assert.ok(snapshot);
+    assert.match(snapshot?.text ?? "", /✅ PM04 - Carlos/);
+    assert.doesNotMatch(snapshot?.text ?? "", /🟡 PM04/);
+});
+
+test("buildReminderPlans publishes 11:00 regulation confirmation with occupied posts only", () => {
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-26T11:05:00-03:00"),
+        board: makeBoard(),
+    });
+
+    const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
+    assert.ok(confirmation);
+    assert.match(confirmation?.text ?? "", /Checagem da Regulação 11:00/);
+    assert.match(confirmation?.text ?? "", /Reguladores confirmados no turno: 1/);
+    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
+    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+    assert.match(confirmation?.text ?? "", /NUCLEO e PIAM/);
+    assert.match(confirmation?.text ?? "", /Chefia, por favor confirme/);
+});
+
+test("buildReminderPlans publishes 22:30 regulation confirmation", () => {
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-26T22:34:00-03:00"),
+        board: makeBoard(),
+    });
+
+    const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
+    assert.ok(confirmation);
+    assert.match(confirmation?.text ?? "", /Checagem da Regulação 22:30/);
+    assert.match(confirmation?.text ?? "", /Reguladores confirmados no turno: 1/);
+    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
+    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+});
+
+test("buildReminderPlans publishes 22:00 regulation confirmation", () => {
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-26T22:05:00-03:00"),
+        board: makeBoard(),
+    });
+
+    const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
+    assert.ok(confirmation);
+    assert.match(confirmation?.text ?? "", /Checagem da Regulação 22:00/);
+    assert.match(confirmation?.text ?? "", /Reguladores confirmados no turno: 1/);
+    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
+    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+});
+
+test("buildReminderPlans publishes 13:00 regulation confirmation", () => {
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-26T13:05:00-03:00"),
+        board: makeBoard(),
+    });
+
+    const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
+    assert.ok(confirmation);
+    assert.match(confirmation?.text ?? "", /Checagem da Regulação 13:00/);
+    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
+    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+});
+
+test("buildReminderPlans publishes 15:00 regulation confirmation", () => {
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-26T15:05:00-03:00"),
+        board: makeBoard(),
+    });
+
+    const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
+    assert.ok(confirmation);
+    assert.match(confirmation?.text ?? "", /Checagem da Regulação 15:00/);
+    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
+    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
+});
+
+test("buildReminderPlans publishes 21:30 regulation confirmation", () => {
+    const plans = buildReminderPlans({
+        now: new Date("2026-03-26T21:34:00-03:00"),
+        board: makeBoard(),
+    });
+
+    const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
+    assert.ok(confirmation);
+    assert.match(confirmation?.text ?? "", /Checagem da Regulação 21:30/);
+    assert.match(confirmation?.text ?? "", /✅ 2031 - Bruno/);
+    assert.doesNotMatch(confirmation?.text ?? "", /2032/);
 });

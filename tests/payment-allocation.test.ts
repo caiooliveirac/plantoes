@@ -102,6 +102,7 @@ test("buildPaymentAllocationBoardModel keeps empty targets visible as review row
     assert.match(board.regulation[0]?.issues[0] ?? "", /Sem ocupacao identificada/);
 });
 
+
 test("buildPaymentAllocationBoardModel excludes bases desativadas o turno inteiro from payable totals", () => {
     const board = buildPaymentAllocationBoardModel({
         targets: [makeTarget({
@@ -126,6 +127,106 @@ test("buildPaymentAllocationBoardModel excludes bases desativadas o turno inteir
     assert.equal(board.summary.disabledCount, 1);
     assert.equal(board.intervention[0]?.disabledEntireShift, true);
     assert.equal(board.intervention[0]?.paymentStatus, "ready_for_payment");
+});
+
+test("buildPaymentAllocationBoardModel clears disabled state when arrival happens after reactivation", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({
+            targetCode: "PP30",
+            targetLabel: "PP30",
+            sortOrder: 30,
+            disabledAt: "2026-03-28T08:30:00.000Z",
+            reactivatedAt: "2026-03-28T10:05:00.000Z",
+            disabledReason: "Manutencao",
+            disabledDuringShift: true,
+            disabledEntireShift: false,
+        })],
+        rawRows: [makeRow({
+            targetCode: "PP30",
+            targetLabel: "PP30",
+            startedAt: "2026-03-28T10:05:00.000Z",
+            boardStartedAt: "2026-03-28T10:05:00.000Z",
+            endedAt: null,
+            actualEndedAt: null,
+            scheduledStartAt: "2026-03-28T10:00:00.000Z",
+            scheduledEndAt: "2026-03-28T22:00:00.000Z",
+            notes: "PP30 Ana Souza 07:00",
+        })],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        generatedAt: "2026-03-28T23:00:00.000Z",
+    });
+
+    assert.equal(board.summary.totalTargets, 1);
+    assert.equal(board.summary.disabledCount, 0);
+    assert.equal(board.intervention[0]?.occupancyId, "occ-1");
+    assert.equal(board.intervention[0]?.doctorName, "Ana Souza");
+    assert.equal(board.intervention[0]?.disabledDuringShift, false);
+});
+
+test("buildPaymentAllocationBoardModel suppresses payable occupancy when deactivation happens later in the slot", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({
+            targetCode: "CN10",
+            targetLabel: "CN10",
+            sortOrder: 10,
+            disabledAt: "2026-03-28T12:12:00.000Z",
+            disabledReason: "Base recolhida",
+            disabledDuringShift: true,
+            disabledEntireShift: false,
+        })],
+        rawRows: [makeRow({
+            targetCode: "CN10",
+            targetLabel: "CN10",
+            startedAt: "2026-03-28T10:03:28.000Z",
+            boardStartedAt: "2026-03-28T10:03:28.000Z",
+            endedAt: "2026-03-28T11:15:11.000Z",
+            actualEndedAt: "2026-03-28T11:15:11.000Z",
+            scheduledStartAt: "2026-03-28T10:00:00.000Z",
+            scheduledEndAt: "2026-03-28T22:00:00.000Z",
+            notes: "CN10 Cecilia 07:00",
+        })],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        generatedAt: "2026-03-28T23:00:00.000Z",
+    });
+
+    assert.equal(board.summary.totalTargets, 0);
+    assert.equal(board.summary.disabledCount, 1);
+    assert.equal(board.intervention[0]?.occupancyId, null);
+    assert.equal(board.intervention[0]?.doctorName, null);
+    assert.equal(board.intervention[0]?.disabledDuringShift, true);
+});
+
+test("buildPaymentAllocationBoardModel conta ramal desativado como categoria propria na regulacao", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({
+            domain: "regulation",
+            targetCode: "1367",
+            targetLabel: "1367",
+            sortOrder: 7,
+            defaultRole: "MR",
+            disabledAt: "2026-03-28T08:30:00.000Z",
+            disabledReason: "Sem linha telefonica",
+            disabledDuringShift: true,
+            disabledEntireShift: true,
+        })],
+        rawRows: [],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        generatedAt: "2026-03-28T23:00:00.000Z",
+    });
+
+    assert.equal(board.summary.totalTargets, 0);
+    assert.equal(board.summary.disabledCount, 1);
+    assert.equal(board.regulation[0]?.disabledEntireShift, true);
+    assert.equal(board.regulation[0]?.paymentStatus, "ready_for_payment");
 });
 
 test("buildPaymentAllocationBoardModel carries explicit P arrival into the next shift payment slot", () => {
@@ -522,4 +623,110 @@ test("buildPaymentAllocationBoardModel reuses the first arrival from the continu
     assert.equal(board.regulation[0]?.sourceScheduledEndAt, "2026-03-29T10:15:00.000Z");
     assert.equal(board.regulation[0]?.sourceActualEndedAt, "2026-03-29T10:36:00.000Z");
     assert.equal(board.regulation[0]?.sourceBalanceMinutes, 42);
+});
+
+test("buildPaymentAllocationBoardModel excludes nucleo from SN payment allocation", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({
+            domain: "regulation",
+            targetCode: "NUCLEO",
+            targetLabel: "Núcleo",
+            sortOrder: 250,
+            defaultRole: null,
+        })],
+        rawRows: [],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SN",
+        startedAt: "2026-03-28T22:00:00.000Z",
+        endedAt: "2026-03-29T10:00:00.000Z",
+        generatedAt: "2026-03-29T12:00:00.000Z",
+    });
+
+    assert.equal(board.summary.totalTargets, 0);
+    assert.equal(board.regulation.length, 0);
+});
+
+test("buildPaymentAllocationBoardModel keeps nucleo on SD as remanejado when only previous-shift coverage exists", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({
+            domain: "regulation",
+            targetCode: "NUCLEO",
+            targetLabel: "Núcleo",
+            sortOrder: 250,
+            defaultRole: null,
+        })],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-nucleo-prev",
+                domain: "regulation",
+                targetCode: "NUCLEO",
+                targetLabel: "Núcleo",
+                doctorId: "doc-prev",
+                doctorName: "Médico do turno anterior",
+                displayName: "Anterior",
+                startedAt: "2026-03-27T22:00:00.000Z",
+                boardStartedAt: "2026-03-27T22:00:00.000Z",
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-03-27T22:00:00.000Z",
+                scheduledEndAt: "2026-03-28T10:00:00.000Z",
+                continuityGroupId: "cg-nucleo",
+                shiftLabel: "P",
+                ramalLabel: "NUCLEO",
+                source: "telegram",
+                notes: "Nucleo continuando sem novo titular",
+            }),
+        ],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        generatedAt: "2026-03-28T23:00:00.000Z",
+    });
+
+    assert.equal(board.regulation[0]?.targetCode, "NUCLEO");
+    assert.equal(board.regulation[0]?.occupancyId, null);
+    assert.equal(board.regulation[0]?.doctorName, null);
+    assert.equal(board.regulation[0]?.candidateCount, 0);
+    assert.equal(board.regulation[0]?.paymentStatus, "needs_review");
+    assert.match(board.regulation[0]?.issues.join(" ") ?? "", /REMANEJADO PARA CRU/i);
+    assert.match(board.regulation[0]?.issues.join(" ") ?? "", /não pode reaproveitar o plantonista anterior/i);
+});
+
+test("buildPaymentAllocationBoardModel does not carry a regulation P without departure into the next SD due to regulation buffer", () => {
+    // Briang scenario: P started at SD Apr 4, scheduledEndAt includes 15-min regulation buffer (07:15 local = 10:15 UTC).
+    // Without departure, the P should NOT bleed into SD Apr 5 (starts at 10:00 UTC).
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({ domain: "regulation", targetCode: "2152", targetLabel: "Ramal 2152", sortOrder: 52, defaultRole: null })],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-briang",
+                domain: "regulation",
+                targetCode: "2152",
+                targetLabel: "Ramal 2152",
+                doctorId: "doc-briang",
+                doctorName: "Briang Aaron Manuel Seguir Ibarra",
+                displayName: "Briang Ibarra",
+                startedAt: "2026-04-04T11:02:00.000Z",
+                boardStartedAt: "2026-04-04T11:02:00.000Z",
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-04-04T10:00:00.000Z",
+                scheduledEndAt: "2026-04-05T10:15:00.000Z",
+                shiftLabel: "P",
+                ramalLabel: "2152",
+                notes: "Briang 2152 08:02 P",
+            }),
+        ],
+        operationalDate: "2026-04-05T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-04-05T10:00:00.000Z",
+        endedAt: "2026-04-05T22:00:00.000Z",
+        generatedAt: "2026-04-05T15:00:00.000Z",
+    });
+
+    assert.equal(board.regulation[0]?.occupancyId, null);
+    assert.equal(board.regulation[0]?.doctorName, null);
+    assert.equal(board.regulation[0]?.candidateCount, 0);
+    assert.match(board.regulation[0]?.issues[0] ?? "", /Sem ocupacao identificada/i);
 });

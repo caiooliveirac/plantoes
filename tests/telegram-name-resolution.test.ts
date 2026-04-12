@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveOperationalDoctorLookupQuery } from "@/modules/telegram/service";
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates } from "@/modules/telegram/name-resolution";
 import { buildCandidatePromptReply, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 
@@ -29,6 +30,28 @@ test("resolveDoctorCandidates prioritizes exact and token-complete matches", () 
 
     assert.equal(candidates[0]?.id, "1");
     assert.ok((candidates[0]?.score ?? 0) > (candidates[1]?.score ?? 0));
+});
+
+test("resolveDoctorCandidates accepts exact alias without numeric disambiguation", () => {
+    const candidates = resolveDoctorCandidates("Bia Almeida", [
+        {
+            id: "1",
+            fullName: "Ana Beatriz D'Almeida Silva",
+            displayName: "Ana Beatriz",
+            aliases: ["Ana Bia", "Bia Almeida"],
+            normalizedName: "ANA BEATRIZ D'ALMEIDA SILVA",
+        },
+        {
+            id: "2",
+            fullName: "Ana Carolina Lima",
+            displayName: "Ana Lima",
+            aliases: ["Carol"],
+            normalizedName: "ANA CAROLINA LIMA",
+        },
+    ]);
+
+    assert.equal(candidates[0]?.id, "1");
+    assert.equal(pickConfidentDoctorCandidate("Bia Almeida", candidates)?.id, "1");
 });
 
 test("pickCandidateFromReply supports numeric follow-up", () => {
@@ -119,6 +142,30 @@ test("resolveDoctorCandidates prefers active doctor on score tie", () => {
     assert.equal(candidates[0]?.id, "41");
 });
 
+test("resolveOperationalDoctorLookupQuery prefere o nome explicito ao remetente", () => {
+    assert.equal(resolveOperationalDoctorLookupQuery({
+        doctorQuery: "Syone Feitosa",
+        senderName: "Joao Marcos",
+        messageText: "Saida BR05",
+    }), "Syone Feitosa");
+});
+
+test("resolveOperationalDoctorLookupQuery usa o remetente quando a mensagem nao traz medico", () => {
+    assert.equal(resolveOperationalDoctorLookupQuery({
+        doctorQuery: null,
+        senderName: "Joao Marcos",
+        messageText: "Saida BR05",
+    }), "Joao Marcos");
+});
+
+test("resolveOperationalDoctorLookupQuery bloqueia fallback por remetente em conta compartilhada", () => {
+    assert.equal(resolveOperationalDoctorLookupQuery({
+        doctorQuery: null,
+        senderName: "1366 MEDICO",
+        messageText: "Saida BR05",
+    }), null);
+});
+
 test("pickTelegramReply is deterministic for the same seed", () => {
     const first = pickTelegramReply("arrival_recorded", 1234, {
         name: "Ana Souza",
@@ -137,24 +184,24 @@ test("pickTelegramReply is deterministic for the same seed", () => {
 
 test("buildCandidatePromptReply lists numbered candidates and asks for redigitacao", () => {
     const reply = buildCandidatePromptReply(77, [
-        { fullName: "Ana Maria Souza" },
-        { fullName: "Ana Marta Sousa" },
-        { fullName: "Ana Paula Souza" },
+        { fullName: "Ana Maria Souza", displayName: "Ana Souza" },
+        { fullName: "Ana Marta Sousa", displayName: "Ana Marta" },
+        { fullName: "Ana Paula Souza", displayName: "Ana Paula" },
     ]);
 
-    assert.match(reply, /1\. Ana Maria Souza/);
+    assert.match(reply, /1\. Ana Souza/);
     assert.match(reply, /Responda com 1, 2 ou 3/);
     assert.match(reply, /redigite nome e sobrenome/i);
 });
 
 test("buildNameUnresolvedReply shows suggestions and asks to redigite", () => {
     const reply = buildNameUnresolvedReply(88, [
-        { fullName: "Bruno Lima" },
-        { fullName: "Bruna Lima" },
+        { fullName: "Bruno Lima", displayName: "Bruno" },
+        { fullName: "Bruna Lima", displayName: "Bruna" },
     ]);
 
     assert.match(reply, /Mais próximos/);
-    assert.match(reply, /Bruno Lima/);
+    assert.match(reply, /Bruno/);
     assert.match(reply, /redigite o nome/i);
 });
 
@@ -224,4 +271,44 @@ test("buildTelegramBatchApplyReply summarizes partial failures", () => {
 
     assert.match(reply, /Lancei 10 registros/);
     assert.match(reply, /8\. Regulation post not found\./);
+});
+
+test("resolveDoctorCandidates matches Y and I as phonetic equivalents", () => {
+    const phoneticDirectory = [
+        {
+            id: "p1",
+            fullName: "Emily Thays Jardim Santos",
+            displayName: "Emily Santos",
+            normalizedName: "EMILY SANTOS",
+        },
+        {
+            id: "p2",
+            fullName: "Bruno Lima",
+            displayName: "Bruno Lima",
+            normalizedName: "BRUNO LIMA",
+        },
+    ];
+
+    // "Emily Thais" (with I) must match "Emily Thays" (with Y) confidently
+    const candidates = resolveDoctorCandidates("Emily Thais", phoneticDirectory);
+    assert.equal(candidates[0]?.id, "p1");
+    assert.ok(candidates[0]!.score >= 280, `score ${candidates[0]!.score} too low for confident match`);
+
+    const picked = pickConfidentDoctorCandidate("Emily Thais", candidates);
+    assert.equal(picked?.id, "p1");
+});
+
+test("resolveDoctorCandidates matches Rayssa and Raissa as phonetic equivalents", () => {
+    const phoneticDirectory = [
+        {
+            id: "q1",
+            fullName: "Raissa Ferreira dos Santos",
+            displayName: "Raissa Santos",
+            normalizedName: "RAISSA SANTOS",
+        },
+    ];
+
+    const candidates = resolveDoctorCandidates("Rayssa Santos", phoneticDirectory);
+    assert.equal(candidates[0]?.id, "q1");
+    assert.ok(candidates[0]!.score >= 280, `score ${candidates[0]!.score} too low`);
 });

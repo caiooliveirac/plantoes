@@ -4,21 +4,19 @@ import {
     isInterventionBaseDeactivationActive,
     resolveInterventionOccupancyActivationReferenceAt,
     resolveInterventionBaseDeactivationExpiresAt,
+    resolveSafeInterventionHandoffAt,
+    shouldReuseImplicitContinuitySource,
 } from "@/modules/intervention/service";
+import { isRegulationPostDeactivationActive, shouldReuseImplicitRegulationContinuitySource } from "@/modules/regulation/service";
 
-test("resolveInterventionBaseDeactivationExpiresAt vence no fim do turno desativado", () => {
+test("resolveInterventionBaseDeactivationExpiresAt passa a representar persistencia indefinida", () => {
     assert.equal(
         resolveInterventionBaseDeactivationExpiresAt(new Date("2026-03-29T10:12:00-03:00")).toISOString(),
-        new Date("2026-03-29T19:00:00-03:00").toISOString(),
-    );
-
-    assert.equal(
-        resolveInterventionBaseDeactivationExpiresAt(new Date("2026-03-29T21:12:00-03:00")).toISOString(),
-        new Date("2026-03-30T07:00:00-03:00").toISOString(),
+        new Date("9999-12-31T23:59:59.999Z").toISOString(),
     );
 });
 
-test("isInterventionBaseDeactivationActive libera chegada no turno seguinte sem /ativar manual", () => {
+test("isInterventionBaseDeactivationActive exige /ativar manual para liberar turnos futuros", () => {
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
         reactivatedAt: null,
@@ -29,12 +27,26 @@ test("isInterventionBaseDeactivationActive libera chegada no turno seguinte sem 
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
         reactivatedAt: null,
         referenceAt: new Date("2026-03-29T19:00:00-03:00"),
-    }), false);
+    }), true);
 
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
         reactivatedAt: null,
         referenceAt: new Date("2026-03-29T21:00:00-03:00"),
+    }), true);
+});
+
+test("isInterventionBaseDeactivationActive respeita a ultima reativacao valida", () => {
+    assert.equal(isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
+        reactivatedAt: new Date("2026-03-30T08:00:00-03:00"),
+        referenceAt: new Date("2026-03-30T07:59:00-03:00"),
+    }), true);
+
+    assert.equal(isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
+        reactivatedAt: new Date("2026-03-30T08:00:00-03:00"),
+        referenceAt: new Date("2026-03-30T08:00:00-03:00"),
     }), false);
 });
 
@@ -64,7 +76,7 @@ test("resolveInterventionOccupancyActivationReferenceAt respeita SD/SN digitados
     );
 });
 
-test("chegada antecipada para SN usa a virada do turno para liberar base desativada", () => {
+test("chegada antecipada para SN continua bloqueada sem reativacao manual", () => {
     const referenceAt = resolveInterventionOccupancyActivationReferenceAt({
         startedAt: new Date("2026-03-30T18:10:00-03:00"),
         scheduledStartAt: new Date("2026-03-30T19:00:00-03:00"),
@@ -74,5 +86,121 @@ test("chegada antecipada para SN usa a virada do turno para liberar base desativ
         deactivatedAt: new Date("2026-03-30T10:12:00-03:00"),
         reactivatedAt: null,
         referenceAt,
+    }), true);
+});
+
+test("isRegulationPostDeactivationActive segue a mesma persistencia ate reativacao", () => {
+    assert.equal(isRegulationPostDeactivationActive({
+        deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
+        reactivatedAt: null,
+        referenceAt: new Date("2026-03-31T10:12:00-03:00"),
+    }), true);
+
+    assert.equal(isRegulationPostDeactivationActive({
+        deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
+        reactivatedAt: new Date("2026-03-31T09:00:00-03:00"),
+        referenceAt: new Date("2026-03-31T10:12:00-03:00"),
     }), false);
+});
+
+test("auto-reactivation on arrival: deactivation becomes inactive when reactivatedAt is set to arrival time", () => {
+    // Before auto-reactivation: base is deactivated, no reactivation recorded
+    assert.equal(isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-04-01T08:00:00-03:00"),
+        reactivatedAt: null,
+        referenceAt: new Date("2026-04-01T14:30:00-03:00"),
+    }), true);
+
+    // After auto-reactivation: arrival at 14:30 sets reactivatedAt, any check at or after that time sees inactive
+    assert.equal(isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-04-01T08:00:00-03:00"),
+        reactivatedAt: new Date("2026-04-01T14:30:00-03:00"),
+        referenceAt: new Date("2026-04-01T14:30:00-03:00"),
+    }), false);
+
+    // Same for regulation
+    assert.equal(isRegulationPostDeactivationActive({
+        deactivatedAt: new Date("2026-04-01T08:00:00-03:00"),
+        reactivatedAt: null,
+        referenceAt: new Date("2026-04-01T14:30:00-03:00"),
+    }), true);
+
+    assert.equal(isRegulationPostDeactivationActive({
+        deactivatedAt: new Date("2026-04-01T08:00:00-03:00"),
+        reactivatedAt: new Date("2026-04-01T14:30:00-03:00"),
+        referenceAt: new Date("2026-04-01T14:30:00-03:00"),
+    }), false);
+});
+
+test("auto-reactivation on SN arrival: pre-shift arrival at 18:15 reactivates for the upcoming SN", () => {
+    // Base deactivated during SD
+    assert.equal(isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-04-01T10:00:00-03:00"),
+        reactivatedAt: null,
+        referenceAt: new Date("2026-04-01T19:00:00-03:00"),
+    }), true);
+
+    // Doctor arrives at 18:15 (pre-SN window), auto-reactivates with arrival time
+    // The activation reference resolves to scheduledStartAt 19:00 for pre-shift
+    const activationRef = resolveInterventionOccupancyActivationReferenceAt({
+        startedAt: new Date("2026-04-01T18:15:00-03:00"),
+        scheduledStartAt: new Date("2026-04-01T19:00:00-03:00"),
+    });
+    // Deactivation was active at the scheduledStartAt reference
+    assert.equal(isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-04-01T10:00:00-03:00"),
+        reactivatedAt: null,
+        referenceAt: activationRef,
+    }), true);
+
+    // After auto-reactivation sets reactivatedAt = startedAt (18:15)
+    assert.equal(isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-04-01T10:00:00-03:00"),
+        reactivatedAt: new Date("2026-04-01T18:15:00-03:00"),
+        referenceAt: activationRef,
+    }), false);
+});
+
+test("implicit continuity reuse only links recent closed sources", () => {
+    assert.equal(
+        shouldReuseImplicitContinuitySource(
+            new Date("2026-04-07T18:33:52-03:00"),
+            new Date("2026-04-07T07:03:28-03:00"),
+        ),
+        false,
+    );
+
+    assert.equal(
+        shouldReuseImplicitContinuitySource(
+            new Date("2026-04-07T07:15:09-03:00"),
+            new Date("2026-04-07T07:12:52-03:00"),
+        ),
+        true,
+    );
+
+    assert.equal(
+        shouldReuseImplicitRegulationContinuitySource(
+            new Date("2026-04-07T18:33:52-03:00"),
+            new Date("2026-04-07T07:03:28-03:00"),
+        ),
+        false,
+    );
+});
+
+test("resolveSafeInterventionHandoffAt fecha a base anterior do medico no horario do remanejamento", () => {
+    const handoffAt = resolveSafeInterventionHandoffAt({
+        sourceStartedAt: new Date("2026-04-08T06:54:48-03:00"),
+        requestedAt: new Date("2026-04-08T07:00:00-03:00"),
+    });
+
+    assert.equal(handoffAt?.toISOString(), new Date("2026-04-08T07:00:00-03:00").toISOString());
+});
+
+test("resolveSafeInterventionHandoffAt bloqueia handoff de duracao zero", () => {
+    const handoffAt = resolveSafeInterventionHandoffAt({
+        sourceStartedAt: new Date("2026-04-08T07:00:00-03:00"),
+        requestedAt: new Date("2026-04-08T06:59:30-03:00"),
+    });
+
+    assert.equal(handoffAt, null);
 });

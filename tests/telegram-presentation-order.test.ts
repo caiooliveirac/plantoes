@@ -144,22 +144,22 @@ test("buildTelegramSummaryReport orders exits and arrivals with the same operati
                     unassignedCount: 0,
                 },
                 intervention: [
-                    makePaymentRow({ targetCode: "IT30", targetLabel: "IT30", doctorName: "Carlos Lima" }),
-                    makePaymentRow({ targetCode: "SM01", targetLabel: "SM01", doctorName: "Ana Souza" }),
+                    makePaymentRow({ targetCode: "IT30", targetLabel: "IT30", doctorName: "Carlos Lima", displayName: "Carlos Lima" }),
+                    makePaymentRow({ targetCode: "SM01", targetLabel: "SM01", doctorName: "Ana Souza", displayName: "Ana Souza" }),
                 ],
                 regulation: [
-                    makePaymentRow({ domain: "regulation", targetCode: "1366", targetLabel: "1366", defaultRole: "MR", ramalLabel: "1366", roleLabel: "MR", doctorName: "Bruno Lima" }),
-                    makePaymentRow({ domain: "regulation", targetCode: "2031", targetLabel: "2031", defaultRole: "MR", ramalLabel: "2031", roleLabel: "MR", doctorName: "Caio Melo" }),
+                    makePaymentRow({ domain: "regulation", targetCode: "1366", targetLabel: "1366", defaultRole: "MR", ramalLabel: "1366", roleLabel: "MR", doctorName: "Bruno Lima", displayName: "Bruno Lima" }),
+                    makePaymentRow({ domain: "regulation", targetCode: "2031", targetLabel: "2031", defaultRole: "MR", ramalLabel: "2031", roleLabel: "MR", doctorName: "Caio Melo", displayName: "Caio Melo" }),
                 ],
             },
             currentBoard: {
                 intervention: [
-                    makeInterventionRow({ baseCode: "IT30", baseLabel: "IT30", doctorName: "Carlos Lima" }),
-                    makeInterventionRow({ baseCode: "SM01", baseLabel: "SM01", doctorName: "Ana Souza" }),
+                    makeInterventionRow({ baseCode: "IT30", baseLabel: "IT30", doctorName: "Carlos Lima", displayName: "Carlos Lima" }),
+                    makeInterventionRow({ baseCode: "SM01", baseLabel: "SM01", doctorName: "Ana Souza", displayName: "Ana Souza" }),
                 ],
                 regulation: [
-                    makeRegulationRow({ postCode: "1366", postLabel: "1366", ramalLabel: "1366", doctorName: "Bruno Lima" }),
-                    makeRegulationRow({ postCode: "2031", postLabel: "2031", ramalLabel: "2031", doctorName: "Caio Melo" }),
+                    makeRegulationRow({ postCode: "1366", postLabel: "1366", ramalLabel: "1366", doctorName: "Bruno Lima", displayName: "Bruno Lima" }),
+                    makeRegulationRow({ postCode: "2031", postLabel: "2031", ramalLabel: "2031", doctorName: "Caio Melo", displayName: "Caio Melo" }),
                 ],
             },
             mealBreakSession: null,
@@ -168,8 +168,8 @@ test("buildTelegramSummaryReport orders exits and arrivals with the same operati
 
     assert.ok(report.indexOf("SM01|Ana Souza") < report.indexOf("IT30|Carlos Lima"));
     assert.ok(report.indexOf("2031|Caio Melo") < report.indexOf("1366|Bruno Lima"));
-    assert.ok(report.lastIndexOf("SM01|Ana Souza") < report.lastIndexOf("IT30|Carlos Lima"));
-    assert.ok(report.lastIndexOf("2031|Caio Melo") < report.lastIndexOf("1366|Bruno Lima"));
+    assert.ok(report.lastIndexOf("SM01|Ana") < report.lastIndexOf("IT30|Carlos Lima"));
+    assert.ok(report.lastIndexOf("2031|Caio Melo") < report.lastIndexOf("1366|Bruno"));
 });
 
 test("buildTelegramShiftReport orders confirmed, pending and disabled lines by operational chat order", () => {
