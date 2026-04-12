@@ -1,0 +1,94 @@
+name: CI → Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Only one deploy at a time — cancel in-flight runs on the same branch.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────────────────
+  # Test job: runs on every push and every PR.
+  # Uses the self-hosted runner so no Node/npm setup is needed.
+  # ──────────────────────────────────────────────────────────
+  test:
+    name: Run test suite
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      - name: Run tests
+        run: npm test
+        env:
+          # Tests that need DB use a localhost test database.
+          # Create it once with: createdb -U postgres plantoes_test
+          DATABASE_URL: ${{ vars.DATABASE_URL_TEST || 'postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2' }}
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+  # ──────────────────────────────────────────────────────────
+  # Deploy job: only runs on pushes to main (not PRs).
+  # The runner IS the production server — no SSH, no secrets.
+  # ──────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to production
+    needs: test
+    runs-on: self-hosted
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy (PM2 restart with env reload)
+        run: npm run deploy:production
+        env:
+          # Expose the commit SHA so ecosystem.config.cjs can forward it
+          # to PM2 and health endpoint shows it.
+          GIT_COMMIT_SHA: ${{ github.sha }}
+
+      - name: Validate — local upstream
+        run: |
+          HEALTH=$(curl -fsS http://127.0.0.1:3004/api/health)
+          echo "$HEALTH"
+          echo "$HEALTH" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert d.get('ok') == True, 'health.ok is not true'
+          rt = d.get('runtime', {})
+          assert rt.get('runtimeGuard') == 'ok', f'runtimeGuard: {rt.get(\"runtimeGuard\")}'
+          print('✓ local health ok')
+          "
+
+      - name: Validate — public host
+        run: |
+          CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://plantoes.mnrs.com.br/api/health)
+          echo "HTTP $CODE"
+          [ "$CODE" = "200" ] || (echo "::error::Public health returned $CODE" && exit 1)
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Deploy summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Actor: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          HEALTH=$(curl -fsS http://127.0.0.1:3004/api/health 2>/dev/null || echo '{}')
+          GUARD=$(echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runtime',{}).get('runtimeGuard','?'))")
+          echo "- Runtime guard: \`$GUARD\`" >> $GITHUB_STEP_SUMMARY

@@ -6,7 +6,158 @@ Nova base paralela para a operacao de plantao SAMU.
 
 O sistema consolida regulação, intervenção, chefia e banco de horas em uma base própria, com regras explícitas de turno, persistência operacional e leitura em tempo real para a mesa de plantão.
 
+## Setup local (macOS / Linux)
+
+### Requisitos
+
+| Ferramenta | Versão mínima |
+|---|---|
+| Node.js | 20.x ou superior (`node -v`) |
+| PostgreSQL | 14+ (Homebrew: `brew install postgresql@16`) |
+| npm | incluído com Node |
+
+### 1 — Clone e dependências
+
+```bash
+git clone git@github.com:caiooliveirac/plantoes.git
+cd plantoes
+npm install
+```
+
+### 2 — Banco de dados local
+
+```bash
+# Criar role e database (rodar uma vez)
+psql postgres -c "CREATE USER plantoes WITH PASSWORD 'plantoes';"
+psql postgres -c "CREATE DATABASE operations_v2 OWNER plantoes;"
+psql postgres -c "CREATE SCHEMA IF NOT EXISTS operations_v2 AUTHORIZATION plantoes;" operations_v2
+
+# Rodar todas as migrations
+npm run db:migrate
+```
+
+### 3 — Variáveis de ambiente
+
+```bash
+cp .env.example .env
+# Editar .env: ajustar DATABASE_URL, AUTH_SECRET e placeholders do Telegram
+```
+
+Valores mínimos para rodar local sem Telegram:
+```env
+DATABASE_URL=postgres://plantoes:plantoes@127.0.0.1:5432/operations_v2?options=-csearch_path%3Doperations_v2
+AUTH_SECRET=qualquer-string-de-32-chars-para-dev
+APP_BASE_URL=http://localhost:3000
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_GROUP_CHAT_ID=
+TELEGRAM_ALLOWED_CHAT_IDS=
+TELEGRAM_ADMIN_IDS=
+```
+
+### 4 — Rodar
+
+```bash
+npm run dev      # Next.js dev server em http://localhost:3000
+npm test         # suite de testes (não requer Telegram)
+```
+
+### 5 — Telegram local (opcional, com ngrok)
+
+```bash
+# Instalar ngrok: https://ngrok.com/download
+ngrok http 3000
+
+# Registrar webhook:
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://SEU-URL-NGROK/api/telegram/webhook"
+```
+
+---
+
 ## Objetivo
+
+- banco como fonte de verdade
+- backend pequeno e explicito
+- frontend fino
+- deploy previsivel
+- nenhum reaproveitamento obrigatorio do frontend legado
+- auth e trilhas de auditoria como pilares para crescimento operacional
+
+## Estrutura
+
+- app: paginas e endpoints
+- db: schema e migrations
+- modules: regras por dominio
+- services: composicao de leitura do quadro
+- scripts: importacao e migracao explicitas
+- tests: regras centrais
+
+## Regras operacionais de referencia
+
+- ver [OPERATIONAL_RULES.md](OPERATIONAL_RULES.md) para a matriz oficial de comportamento entre intervencao, regulacao, lembretes de Telegram e banco de horas
+- ver [RULES.md](RULES.md) para o mapa completo de regras de negocio com links para codigo
+- qualquer ajuste de janela de turno, tolerancia ou continuidade deve atualizar codigo, testes e esse documento de referencia na mesma entrega
+
+## Plano de autenticacao
+
+- ver [AUTH_PLAN.md](AUTH_PLAN.md) para o plano de convite por link, aprovacao manual por admin e separacao de permissao entre `chief` e `admin`
+- o plano tambem fixa a decisao de manter o painel principal em `/`, com login discreto e operacao persistida por rotas server-side sem depender de middleware como guarda principal
+
+## CI/CD
+
+Push para `main` dispara automaticamente o pipeline `.github/workflows/deploy.yml` em um runner self-hosted instalado no servidor de producao:
+
+1. `npm ci` + `npm test` (testes devem passar antes do deploy)
+2. `npx tsc --noEmit` (type check)
+3. `npm run build` + `npm run deploy:production` (PM2 restart com `--update-env`)
+4. Validacao do `/api/health` no upstream local e no host publico
+5. Summary com commit sha, runtime guard e webhook status
+
+Nao e necessario configurar secrets SSH no repositorio — o runner roda diretamente no servidor.
+
+## Deploy de producao
+
+- ver [DEPLOY.md](DEPLOY.md) antes de qualquer push com restart
+- a regra critica e: carregar `.env.production` antes do build e reiniciar os dois processos PM2 com `--update-env`, porque o worker pode perder `DATABASE_URL` se o deploy for feito de forma incompleta
+- preferir sempre `npm run deploy:production`
+
+## Principios arquiteturais
+
+- operacao primeiro: a visualizacao do quadro deve responder ao estado real do plantao e nao a heuristicas frouxas
+- escrita auditavel: toda acao de chefia ou ajuste futuro deve deixar trilha clara de ator, horario e payload
+- auth incremental: crescer de auth minima para auth por perfis sem reescrever o dominio
+- separacao de papeis: regulacao, intervencao, chefia e coordenacao compartilham a base, mas nao a mesma experiencia nem o mesmo poder de alteracao
+- compatibilidade operacional: integracoes com Telegram, banco de horas e importacao legada devem continuar desacopladas
+
+## Comandos
+
+- npm install
+- npm run dev
+- npm run build
+- npm run db:migrate
+- npm run db:import-doctors -- --file ./algum-arquivo.csv --dry-run
+- npm run db:import-doctors -- --file ./algum-arquivo.csv --allow-additions
+- comando Telegram admin: /medico cadastrar Nome Completo | Nome de exibicao | codigo | alias 1, alias 2
+- comando Telegram admin: /medico atualizar Busca Atual | Nome Completo Correto | Nome de exibicao | codigo | alias 1, alias 2
+- comando Telegram pagamento: /pagamento conferir [YYYY-MM-DD] [SD|SN]
+- comando Telegram correção de pagamento: /pagamento corrigir alvo | Nome Completo | [YYYY-MM-DD] | [SD|SN] | [motivo]
+- npm run test
+
+## Importacao segura de medicos
+
+- todo apply real agora exige backup automatico antes de gravar
+- o script gera dump SQL completo do schema `operations_v2` em `.backups/doctor-imports/<timestamp>/operations_v2.sql`
+- o mesmo diretório recebe `manifest.json` com resumo e preview da importacao
+- novas adicoes ficam bloqueadas por padrao; para criar medico novo, use `--allow-additions` somente depois de revisar o preview
+- a API `/api/doctors/import` ficou restrita a preview para evitar apply sem backup
+
+## Estado atual
+
+Esta primeira iteracao prioriza:
+
+- schema novo
+- importacao de medicos
+- fluxo de chefia persistido por invite e aprovacao manual
+- calculadora de banco de horas
 
 - banco como fonte de verdade
 - backend pequeno e explicito
