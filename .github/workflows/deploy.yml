@@ -34,7 +34,9 @@ jobs:
           DATABASE_URL: ${{ vars.DATABASE_URL_TEST || 'postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2' }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: |
+          npx next typegen
+          npx tsc --noEmit -p tsconfig.deploy.json
 
   # ──────────────────────────────────────────────────────────
   # Full regression: runs only on pull requests.
