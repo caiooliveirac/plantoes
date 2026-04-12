@@ -3213,6 +3213,70 @@ body {
     color: #ffd9df;
 }
 
+.payment-detail-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.payment-detail-card-header > div {
+    display: grid;
+    gap: 4px;
+}
+
+.payment-correction-note {
+    font-size: 0.72rem;
+    color: #ffc46b;
+    opacity: 0.85;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(40, 28, 8, 0.6);
+    border: 1px solid rgba(255, 196, 107, 0.14);
+    margin: 0;
+}
+
+.payment-correction-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.payment-correction-tab {
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    border: 1px solid rgba(145, 170, 205, 0.2);
+    background: transparent;
+    color: #8fabc7;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.payment-correction-tab:hover {
+    background: rgba(89, 166, 255, 0.08);
+    color: #c8dcf0;
+}
+
+.payment-correction-tab.active {
+    background: rgba(89, 166, 255, 0.15);
+    color: #d6eaff;
+    border-color: rgba(89, 166, 255, 0.36);
+}
+
+.payment-button.warning {
+    border-color: rgba(255, 184, 77, 0.36);
+    background: rgba(40, 28, 8, 0.7);
+    color: #ffc46b;
+}
+
+.payment-button.warning:hover {
+    background: rgba(255, 184, 77, 0.12);
+    color: #ffd98a;
+}
+
 .payment-grid {
     display: grid;
     grid-template-columns: minmax(340px, 0.78fr) minmax(0, 1.22fr);

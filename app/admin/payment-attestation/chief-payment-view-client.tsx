@@ -87,6 +87,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
         reason: string | null;
     } | null>(null);
     const [manualDoctorName, setManualDoctorName] = useState("");
+    const [manualDisableReason, setManualDisableReason] = useState("");
+    const [manualMode, setManualMode] = useState<"assign" | "disable">("assign");
     const [manualBusy, setManualBusy] = useState(false);
     const [manualError, setManualError] = useState<string | null>(null);
     const [manualFeedback, setManualFeedback] = useState<string | null>(null);
@@ -376,6 +378,54 @@ export function ChiefPaymentViewClient({ board }: Props) {
         }
     }
 
+    async function submitManualDisable() {
+        if (!manualDraft) {
+            return;
+        }
+
+        const trimmedReason = manualDisableReason.trim();
+        if (trimmedReason.length < 3) {
+            setManualError("Informe o motivo da desativação (mínimo 3 caracteres).");
+            return;
+        }
+
+        setManualBusy(true);
+        setManualError(null);
+        setManualFeedback(null);
+
+        try {
+            const date = `${board.monthKey}-${manualDraft.day}`;
+            const response = await fetch("/api/admin/payment-attestation/slot", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    action: "manual_disable",
+                    date,
+                    shift: manualDraft.shiftLabel,
+                    domain: manualDraft.domain,
+                    targetCode: manualDraft.targetCode,
+                    disabledReason: trimmedReason,
+                }),
+            });
+
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível aplicar a desativação manual.");
+            }
+
+            setManualFeedback("Desativação salva. Atualizando fechamento mensal...");
+            setManualDraft(null);
+            setManualDisableReason("");
+            window.location.reload();
+        } catch (error) {
+            setManualError(error instanceof Error ? error.message : "Falha ao salvar desativação manual.");
+        } finally {
+            setManualBusy(false);
+        }
+    }
+
     return (
         <main className="chief-payable-shell">
             <section className="chief-payable-hero">
@@ -597,6 +647,103 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 </section>
             ) : null}
 
+            {manualDraft ? (
+                <section className="payment-detail-card">
+                    <div className="payment-detail-card-header">
+                        <div>
+                            <span className="payment-eyebrow">Correção manual de pagamento</span>
+                            <strong>{manualDraft.targetCode} · {manualDraft.targetLabel} · {board.monthKey}-{manualDraft.day} · {manualDraft.shiftLabel}</strong>
+                            <p>
+                                Origem: {manualDraft.sourceType === "disabled" ? "Desativada" : "Sem médico"}
+                                {manualDraft.reason ? ` · ${manualDraft.reason}` : ""}
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            className="payment-button"
+                            onClick={() => {
+                                setManualDraft(null);
+                                setManualDoctorName("");
+                                setManualDisableReason("");
+                                setManualError(null);
+                            }}
+                            disabled={manualBusy}
+                        >
+                            ✕
+                        </button>
+                    </div>
+
+                    <p className="payment-correction-note">
+                        ⚠️ Esta correção atualiza apenas o fechamento de pagamento. Registros operacionais e banco de horas não são alterados automaticamente — acesse a auditoria técnica se necessário.
+                    </p>
+
+                    <div className="payment-correction-tabs">
+                        <button
+                            type="button"
+                            className={`payment-correction-tab ${manualMode === "assign" ? "active" : ""}`.trim()}
+                            onClick={() => setManualMode("assign")}
+                            disabled={manualBusy}
+                        >
+                            Atribuir médico
+                        </button>
+                        {manualDraft.sourceType === "uncovered" && (
+                            <button
+                                type="button"
+                                className={`payment-correction-tab ${manualMode === "disable" ? "active" : ""}`.trim()}
+                                onClick={() => setManualMode("disable")}
+                                disabled={manualBusy}
+                            >
+                                Marcar como desativada
+                            </button>
+                        )}
+                    </div>
+
+                    {manualMode === "assign" ? (
+                        <div className="chief-payable-filter-bar" style={{ marginTop: "0.5rem" }}>
+                            <label className="chief-payable-filter-field chief-payable-search" style={{ minWidth: "320px" }}>
+                                <span>Médico para pagamento</span>
+                                <input
+                                    type="text"
+                                    list="chief-payment-doctor-names"
+                                    value={manualDoctorName}
+                                    onChange={(event) => setManualDoctorName(event.target.value)}
+                                    placeholder="Digite o nome do médico"
+                                    autoFocus
+                                />
+                            </label>
+                            <datalist id="chief-payment-doctor-names">
+                                {board.allDoctorNames.map((name) => (
+                                    <option key={name} value={name} />
+                                ))}
+                            </datalist>
+                            <div className="payment-filter-actions">
+                                <button type="button" className="payment-button primary" onClick={() => void submitManualCorrection()} disabled={manualBusy}>
+                                    {manualBusy ? "Salvando..." : "Salvar correção"}
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="chief-payable-filter-bar" style={{ marginTop: "0.5rem" }}>
+                            <label className="chief-payable-filter-field" style={{ minWidth: "320px" }}>
+                                <span>Motivo da desativação</span>
+                                <input
+                                    type="text"
+                                    value={manualDisableReason}
+                                    onChange={(event) => setManualDisableReason(event.target.value)}
+                                    placeholder="Ex.: Sem demanda, veículo indisponível, escala reduzida"
+                                    autoFocus
+                                />
+                            </label>
+                            <div className="payment-filter-actions">
+                                <button type="button" className="payment-button warning" onClick={() => void submitManualDisable()} disabled={manualBusy}>
+                                    {manualBusy ? "Salvando..." : "Confirmar desativação"}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </section>
+            ) : null}
+
             <section className="chief-payable-table-shell">
                 <div className="chief-payable-table-scroll">
                     <table className="chief-payable-table">
@@ -647,6 +794,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                                 reason: item.disabledReason ?? null,
                                                             });
                                                             setManualDoctorName("");
+                                                            setManualDisableReason("");
+                                                            setManualMode("assign");
                                                             setManualError(null);
                                                         }}
                                                     >
@@ -697,6 +846,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                                 reason: item.reason ?? null,
                                                             });
                                                             setManualDoctorName("");
+                                                            setManualDisableReason("");
+                                                            setManualMode("assign");
                                                             setManualError(null);
                                                         }}
                                                     >
@@ -771,52 +922,6 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     </table>
                 </div>
             </section>
-
-            {manualDraft ? (
-                <section className="payment-detail-card" style={{ marginTop: "1rem" }}>
-                    <span className="payment-eyebrow">Correção manual de pagamento</span>
-                    <strong>{manualDraft.targetCode} · {manualDraft.targetLabel} · {board.monthKey}-{manualDraft.day} · {manualDraft.shiftLabel}</strong>
-                    <p>
-                        Origem: {manualDraft.sourceType === "disabled" ? "Desativada" : "Sem médico"}
-                        {manualDraft.reason ? ` · ${manualDraft.reason}` : ""}
-                    </p>
-                    <div className="chief-payable-filter-bar" style={{ marginTop: "0.75rem" }}>
-                        <label className="chief-payable-filter-field chief-payable-search" style={{ minWidth: "320px" }}>
-                            <span>Médico para pagamento</span>
-                            <input
-                                type="text"
-                                list="chief-payment-doctor-names"
-                                value={manualDoctorName}
-                                onChange={(event) => setManualDoctorName(event.target.value)}
-                                placeholder="Digite o nome do médico"
-                            />
-                            </label>
-                        <datalist id="chief-payment-doctor-names">
-                            {board.allDoctorNames.map((name) => (
-                                <option key={name} value={name} />
-                            ))}
-                        </datalist>
-
-                        <div className="payment-filter-actions">
-                            <button type="button" className="payment-button primary" onClick={() => void submitManualCorrection()} disabled={manualBusy}>
-                                {manualBusy ? "Salvando..." : "Salvar correção"}
-                            </button>
-                            <button
-                                type="button"
-                                className="payment-button"
-                                onClick={() => {
-                                    setManualDraft(null);
-                                    setManualDoctorName("");
-                                    setManualError(null);
-                                }}
-                                disabled={manualBusy}
-                            >
-                                Cancelar
-                            </button>
-                        </div>
-                    </div>
-                </section>
-            ) : null}
         </main>
     );
 }

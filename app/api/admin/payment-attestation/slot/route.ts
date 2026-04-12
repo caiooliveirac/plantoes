@@ -4,6 +4,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import {
+    applyManualDisableCorrection,
     applyManualPaymentAttestationCorrection,
     approvePaymentAttestationSlot,
     getPaymentAttestationSlotView,
@@ -14,10 +15,11 @@ import {
 const actionSchema = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     shift: z.enum(["SD", "SN"]).optional(),
-    action: z.enum(["refresh", "approve", "reopen", "manual_assign"]),
+    action: z.enum(["refresh", "approve", "reopen", "manual_assign", "manual_disable"]),
     domain: z.enum(["regulation", "intervention"]).optional(),
     targetCode: z.string().trim().min(1).max(32).optional(),
     doctorName: z.string().trim().min(3).max(255).optional(),
+    disabledReason: z.string().trim().min(3).max(255).optional(),
 });
 
 function getRequestParams(request: NextRequest) {
@@ -95,6 +97,12 @@ export async function POST(request: NextRequest) {
         }
     }
 
+    if (parsed.data.action === "manual_disable") {
+        if (!parsed.data.date || !parsed.data.shift || !parsed.data.domain || !parsed.data.targetCode || !parsed.data.disabledReason) {
+            return NextResponse.json({ error: "Para desativação manual informe data, turno, domínio, alvo e motivo." }, { status: 400 });
+        }
+    }
+
     try {
         const slot = parsed.data.action === "refresh"
             ? await refreshPaymentAttestationSlot({ ...params, actorUserId: session.user.id })
@@ -102,14 +110,23 @@ export async function POST(request: NextRequest) {
                 ? await approvePaymentAttestationSlot({ ...params, actorUserId: session.user.id })
                 : parsed.data.action === "reopen"
                     ? await reopenPaymentAttestationSlot(params)
-                    : await applyManualPaymentAttestationCorrection({
-                        operationalDate: parsed.data.date as string,
-                        shiftLabel: parsed.data.shift as "SD" | "SN",
-                        domain: parsed.data.domain as "regulation" | "intervention",
-                        targetCode: parsed.data.targetCode as string,
-                        doctorName: parsed.data.doctorName as string,
-                        actorUserId: session.user.id,
-                    });
+                    : parsed.data.action === "manual_disable"
+                        ? await applyManualDisableCorrection({
+                            operationalDate: parsed.data.date as string,
+                            shiftLabel: parsed.data.shift as "SD" | "SN",
+                            domain: parsed.data.domain as "regulation" | "intervention",
+                            targetCode: parsed.data.targetCode as string,
+                            disabledReason: parsed.data.disabledReason as string,
+                            actorUserId: session.user.id,
+                        })
+                        : await applyManualPaymentAttestationCorrection({
+                            operationalDate: parsed.data.date as string,
+                            shiftLabel: parsed.data.shift as "SD" | "SN",
+                            domain: parsed.data.domain as "regulation" | "intervention",
+                            targetCode: parsed.data.targetCode as string,
+                            doctorName: parsed.data.doctorName as string,
+                            actorUserId: session.user.id,
+                        });
 
         await getDb().insert(auditLogs).values({
             actorUserId: session.user.id,

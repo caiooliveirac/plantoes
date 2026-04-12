@@ -707,9 +707,143 @@ export async function applyManualPaymentAttestationCorrection(params: {
                 .where(eq(paymentAttestationSlots.id, slotId));
     });
 
-    const updated = await loadPersistedSlotRecord(db, slot.operationalDate.slice(0, 10), slot.shiftLabel);
+    const updated = await loadPersistedSlotRecord(db, slot.operationalDate, slot.shiftLabel);
     if (!updated) {
         throw new Error("Nao foi possivel recarregar o fechamento apos correção manual.");
+    }
+
+    return updated;
+}
+
+export async function applyManualDisableCorrection(params: {
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+    domain: "regulation" | "intervention";
+    targetCode: string;
+    disabledReason: string;
+    actorUserId: string;
+}) {
+    const date = params.operationalDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        throw new Error("Data operacional invalida.");
+    }
+
+    const targetCode = params.targetCode.trim().toUpperCase();
+    if (!targetCode) {
+        throw new Error("Target invalido para desativação manual.");
+    }
+
+    const reason = params.disabledReason.trim();
+    if (reason.length < 3) {
+        throw new Error("Informe motivo da desativação (minimo 3 caracteres).");
+    }
+
+    const board = await getPaymentAllocationBoard({
+        operationalDate: date,
+        shiftLabel: params.shiftLabel,
+    });
+    const db = getDb();
+
+    const persisted = await loadPersistedSlotRecord(db, board.operationalDate, board.shiftLabel);
+    const slot = persisted
+        ?? await refreshPaymentAttestationSlot({
+            operationalDate: date,
+            shiftLabel: params.shiftLabel,
+            actorUserId: params.actorUserId,
+        });
+
+    if (!slot.id) {
+        throw new Error("Nao foi possivel criar snapshot para aplicar desativação manual.");
+    }
+    const slotId = slot.id;
+
+    if (slot.status === "approved") {
+        throw new Error("Este fechamento esta aprovado. Reabra o slot antes de aplicar correções manuais.");
+    }
+
+    const currentEntry = slot.entries.find((entry) => entry.domain === params.domain && entry.targetCode === targetCode);
+    if (!currentEntry) {
+        throw new Error(`Alvo ${targetCode} nao encontrado no snapshot deste slot.`);
+    }
+
+    const now = new Date();
+    await db.transaction(async (tx) => {
+        await tx.update(paymentAttestationSlotEntries)
+            .set({
+                disabledAt: now,
+                disabledReason: reason,
+                disabledDuringShift: true,
+                disabledEntireShift: true,
+                occupancyId: null,
+                doctorId: null,
+                doctorName: null,
+                displayName: null,
+                source: "admin_correction",
+                paymentStatus: "needs_review",
+                issues: [`Desativacao manual: ${params.domain === "regulation" ? "ramal" : "base"} ${targetCode} marcada como desativada. Motivo: ${reason}`],
+            })
+            .where(and(
+                eq(paymentAttestationSlotEntries.slotId, slotId),
+                eq(paymentAttestationSlotEntries.domain, params.domain),
+                eq(paymentAttestationSlotEntries.targetCode, targetCode),
+            ));
+
+        const updatedRows = await tx.select().from(paymentAttestationSlotEntries)
+            .where(eq(paymentAttestationSlotEntries.slotId, slotId));
+
+        const updatedEntries = (updatedRows as Array<typeof paymentAttestationSlotEntries.$inferSelect>).map((entry) => ({
+            id: entry.id,
+            slotId: entry.slotId,
+            domain: entry.domain === "regulation" ? "regulation" : "intervention",
+            targetCode: entry.targetCode,
+            targetLabel: entry.targetLabel,
+            sortOrder: entry.sortOrder,
+            defaultRole: entry.defaultRole,
+            disabledAt: toIso(entry.disabledAt),
+            disabledReason: entry.disabledReason,
+            disabledDuringShift: entry.disabledDuringShift,
+            disabledEntireShift: entry.disabledEntireShift,
+            occupancyId: entry.occupancyId,
+            doctorId: entry.doctorId,
+            doctorName: entry.doctorName,
+            displayName: entry.displayName,
+            startedAt: toIso(entry.startedAt),
+            endedAt: toIso(entry.endedAt),
+            actualEndedAt: toIso(entry.actualEndedAt),
+            scheduledStartAt: toIso(entry.scheduledStartAt),
+            scheduledEndAt: toIso(entry.scheduledEndAt),
+            shiftLabel: entry.shiftLabel === "SD" || entry.shiftLabel === "SN" || entry.shiftLabel === "P" ? entry.shiftLabel : null,
+            roleLabel: entry.roleLabel,
+            ramalLabel: entry.ramalLabel,
+            source: entry.source,
+            candidateCount: entry.candidateCount,
+            paymentStatus: entry.paymentStatus === "ready_for_payment" ? "ready_for_payment" : "needs_review",
+            issues: Array.isArray(entry.issues) ? entry.issues.filter((issue): issue is string => typeof issue === "string") : [],
+            arrivalDelayMinutes: entry.arrivalDelayMinutes,
+            overtimeMinutes: entry.overtimeMinutes,
+            creditedOvertimeMinutes: entry.creditedOvertimeMinutes,
+            balanceMinutes: entry.balanceMinutes,
+            ruleCode: entry.ruleCode,
+            bankHoursExplanation: entry.bankHoursExplanation,
+        } satisfies PaymentAttestationEntrySnapshot));
+
+        const summary = buildSummary(updatedEntries);
+        await tx.update(paymentAttestationSlots)
+            .set({
+                totalTargets: summary.totalTargets,
+                readyCount: summary.readyCount,
+                needsReviewCount: summary.needsReviewCount,
+                unassignedCount: summary.unassignedCount,
+                disabledCount: summary.disabledCount,
+                lastRefreshedByUserId: params.actorUserId,
+                updatedAt: new Date(),
+            })
+            .where(eq(paymentAttestationSlots.id, slotId));
+    });
+
+    const updated = await loadPersistedSlotRecord(db, slot.operationalDate, slot.shiftLabel);
+    if (!updated) {
+        throw new Error("Nao foi possivel recarregar o fechamento apos desativação manual.");
     }
 
     return updated;
