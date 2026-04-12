@@ -3741,18 +3741,18 @@ body {
 .chief-payable-control-grid {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 16px;
-    margin-top: 16px;
+    gap: 10px;
+    margin-top: 10px;
 }
 
 .chief-payable-control-card {
     backdrop-filter: blur(14px);
     background: rgba(8, 13, 22, 0.9);
     border: 1px solid rgba(216, 225, 236, 0.11);
-    border-radius: 22px;
-    padding: 14px;
+    border-radius: 18px;
+    padding: 10px;
     display: grid;
-    gap: 10px;
+    gap: 8px;
 }
 
 .chief-payable-control-card h3 {
@@ -3764,7 +3764,7 @@ body {
 }
 
 .chief-payable-control-card-priority {
-    padding: 16px;
+    padding: 10px;
     border-color: rgba(116, 165, 235, 0.26);
     background:
         radial-gradient(circle at top left, rgba(57, 109, 199, 0.18), transparent 42%),
@@ -3779,7 +3779,7 @@ body {
 .chief-payable-chip-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
 }
 
 .chief-payable-target-pills {
@@ -3789,15 +3789,15 @@ body {
 .chief-payable-order-legend {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    border-radius: 14px;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 10px;
     border: 1px dashed rgba(164, 186, 219, 0.28);
     background: rgba(9, 15, 25, 0.82);
 }
 
 .chief-payable-order-legend span {
-    font-size: 0.66rem;
+    font-size: 0.62rem;
     text-transform: uppercase;
     letter-spacing: 0.12em;
     color: var(--muted);
@@ -3805,23 +3805,23 @@ body {
 }
 
 .chief-payable-order-legend strong {
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     letter-spacing: 0.1em;
     color: #cfe0fb;
 }
 
 .chief-payable-target-sectors {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 8px;
 }
 
 .chief-payable-target-sector {
     display: grid;
-    gap: 10px;
+    gap: 8px;
     align-content: start;
-    padding: 12px;
-    border-radius: 16px;
+    padding: 8px;
+    border-radius: 12px;
     border: 1px solid rgba(216, 225, 236, 0.12);
     background: rgba(7, 12, 20, 0.82);
 }
@@ -3835,7 +3835,7 @@ body {
 
 .chief-payable-target-sector h4 {
     margin: 0;
-    font-size: 0.74rem;
+    font-size: 0.7rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--muted-strong);
@@ -3843,7 +3843,7 @@ body {
 
 .chief-payable-target-sector small {
     color: var(--muted);
-    font-size: 0.68rem;
+    font-size: 0.64rem;
     letter-spacing: 0.06em;
 }
 
@@ -3863,13 +3863,13 @@ body {
 }
 
 .chief-payable-chip {
-    min-height: 36px;
-    padding: 0 12px;
+    min-height: 32px;
+    padding: 0 10px;
     border-radius: 999px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(5, 10, 18, 0.88);
     color: var(--muted-strong);
-    font-size: 0.7rem;
+    font-size: 0.66rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -3878,15 +3878,15 @@ body {
 }
 
 .chief-payable-target-sector .chief-payable-chip {
-    min-height: 38px;
-    font-size: 0.76rem;
-    letter-spacing: 0.07em;
+    min-height: 34px;
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
 }
 
 .chief-payable-chip-row-priority .chief-payable-chip {
-    min-height: 44px;
-    font-size: 0.82rem;
-    padding: 0 16px;
+    min-height: 38px;
+    font-size: 0.76rem;
+    padding: 0 12px;
     letter-spacing: 0.06em;
 }
 
@@ -3921,52 +3921,72 @@ body {
 }
 
 .chief-payable-filter-bar {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(260px, 1.4fr) minmax(220px, 1fr) minmax(210px, 0.8fr) minmax(190px, 0.8fr);
     align-items: end;
-    gap: 14px;
-    margin-top: 20px;
-    padding: 16px;
-    border-radius: 22px;
-    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 16px;
+}
+
+.chief-payable-inline-status {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 5px;
+}
+
+.chief-payable-inline-status > span {
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-size: 0.62rem;
+    font-weight: 700;
+}
+
+.chief-payable-chip-row-inline .chief-payable-chip {
+    min-height: 30px;
+    font-size: 0.64rem;
+    padding: 0 9px;
 }
 
 .chief-payable-filter-field {
     display: grid;
-    gap: 8px;
+    gap: 5px;
 }
 
 .chief-payable-filter-field span {
     color: var(--muted);
-    letter-spacing: 0.14em;
+    letter-spacing: 0.11em;
     text-transform: uppercase;
-    font-size: 0.72rem;
+    font-size: 0.64rem;
     font-weight: 700;
 }
 
 .chief-payable-search {
-    flex: 340px;
+    min-width: 0;
 }
 
 .chief-payable-target-search {
-    flex: 240px;
+    min-width: 0;
 }
 
 .chief-payable-filter-field.compact {
-    min-width: 150px;
+    min-width: 0;
 }
 
 .chief-payable-filter-field input,
 .chief-payable-filter-field select {
-    min-height: 44px;
-    padding: 0 14px;
-    border-radius: 14px;
+    min-height: 36px;
+    padding: 0 10px;
+    border-radius: 10px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     background: rgba(4, 10, 18, 0.92);
     color: var(--text);
 }
 
 .chief-payable-table-shell {
-    margin-top: 18px;
+    margin-top: 10px;
     border-radius: 26px;
     overflow: hidden;
 }
@@ -4157,6 +4177,10 @@ button.chief-payable-tag:focus-visible {
         grid-template-columns: 1fr;
     }
 
+    .chief-payable-filter-bar {
+        grid-template-columns: 1fr 1fr;
+    }
+
     .slot-audit-columns {
         grid-template-columns: 1fr;
     }
@@ -4196,6 +4220,10 @@ button.chief-payable-tag:focus-visible {
     }
 
     .chief-payable-summary {
+        grid-template-columns: 1fr;
+    }
+
+    .chief-payable-filter-bar {
         grid-template-columns: 1fr;
     }
 

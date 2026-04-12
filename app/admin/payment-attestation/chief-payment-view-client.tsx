@@ -123,9 +123,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
         const intervention = base.filter((target) => target.domain === "intervention" && !target.isUsa);
 
         return [
-            { key: "usa", title: "Setor USA", tone: "usa", targets: usa },
-            { key: "regulation", title: "Setor Regulação", tone: "regulation", targets: regulation },
-            { key: "intervention", title: "Setor Intervenção", tone: "intervention", targets: intervention },
+            { key: "usa", title: "USA", tone: "usa", targets: usa },
+            { key: "regulation", title: "Regulação", tone: "regulation", targets: regulation },
+            { key: "intervention", title: "Intervenção", tone: "intervention", targets: intervention },
         ].filter((sector) => sector.targets.length > 0);
     }, [targetPills]);
 
@@ -519,7 +519,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                 onClick={() => setTargetFilter(value)}
                                                 title={`${target.targetCode} · ${target.targetLabel}`}
                                             >
-                                                {target.targetCode} ({target.domain === "regulation" ? "Reg" : "Int"})
+                                                {target.targetCode}
                                             </button>
                                         );
                                     })}
@@ -528,10 +528,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         ))}
                     </div>
                 </article>
+            </section>
 
-                <article className="chief-payable-control-card chief-payable-control-card-secondary">
-                    <h3>Status de médicos (secundário)</h3>
-                    <div className="chief-payable-chip-row">
+            <section className="chief-payable-filter-bar">
+                <div className="chief-payable-inline-status" aria-label="Status de médicos">
+                    <span>Status</span>
+                    <div className="chief-payable-chip-row chief-payable-chip-row-inline">
                         <button type="button" className={`chief-payable-chip ${status === "all" ? "active" : ""}`.trim()} onClick={() => setStatus("all")}>
                             Todos ({board.summary.doctorCount})
                         </button>
@@ -542,10 +544,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             Revisão ({filterSummary.reviewDoctors})
                         </button>
                     </div>
-                </article>
-            </section>
+                </div>
 
-            <section className="chief-payable-filter-bar">
                 <label className="chief-payable-filter-field chief-payable-search">
                     <span>Filtrar médico</span>
                     <input
@@ -554,15 +554,6 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         onChange={(event) => setSearch(event.target.value)}
                         placeholder="Digite nome ou apelido"
                     />
-                </label>
-
-                <label className="chief-payable-filter-field compact">
-                    <span>Status</span>
-                    <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}>
-                        <option value="all">Todos</option>
-                        <option value="ready_for_payment">Pronto</option>
-                        <option value="needs_review">Revisar</option>
-                    </select>
                 </label>
 
                 <label className="chief-payable-filter-field chief-payable-target-search">
