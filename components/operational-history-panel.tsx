@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTransition } from "react";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import type {
     HistoricalOperationalBoard,
     HistoricalOperationalRow,
@@ -262,7 +263,7 @@ export function OperationalHistoryPanel({ session, doctors, onReturnLive }: Prop
         }
 
         void loadBoard();
-    }, [canViewHistory, loadBoard]);
+    }, [canViewHistory]);
 
     const selectedTargetOptions = board?.targetOptions[editorDomain] ?? [];
     const selectedTarget = selectedTargetOptions.find((option) => String(option.targetId ?? "") === formState.targetId) ?? null;
@@ -641,6 +642,15 @@ export function OperationalHistoryPanel({ session, doctors, onReturnLive }: Prop
 
                             <button type="button" className="chief-secondary-button" onClick={onReturnLive}>Agora operacional</button>
                         </div>
+
+                        {canViewHistory && (
+                            <AdminGlobalNavigationLinks
+                                current="history"
+                                containerClassName="ops-retro-navigation-links"
+                            >
+                                <button type="button" className="chief-primary-button" onClick={onReturnLive}>Voltar ao quadro</button>
+                            </AdminGlobalNavigationLinks>
+                        )}
                     </div>
                 </header>
 

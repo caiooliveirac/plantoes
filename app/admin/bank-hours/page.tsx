@@ -1,6 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { BankHoursHistoryClient } from "@/app/admin/bank-hours/bank-hours-history-client";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { getBankHoursHistory } from "@/services/bank-hours-history.service";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +12,7 @@ function BankHoursUnavailable({ title, copy }: { title: string; copy: string }) 
             <section className="hours-empty-state standalone">
                 <strong>{title}</strong>
                 <span>{copy}</span>
-                <div className="hours-empty-actions">
-                    <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
-                    <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
-                </div>
+                <AdminGlobalNavigationLinks current="bank-hours" containerClassName="hours-empty-actions" />
             </section>
         </main>
     );

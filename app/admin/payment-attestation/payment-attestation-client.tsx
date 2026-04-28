@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import type {
     PaymentAttestationEntrySnapshot,
     PaymentAttestationRecentSlot,
@@ -353,12 +354,7 @@ export function PaymentAttestationClient({ initialView }: Props) {
                     </p>
                 </div>
 
-                <div className="payment-hero-actions">
-                    <a className="reports-secondary-link" href="/admin/payment-closing">Abrir fechamento mensal</a>
-                    <a className="reports-secondary-link" href="/admin/payment-allocation">Ajustar alocação</a>
-                    <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
-                    <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
-                </div>
+                <AdminGlobalNavigationLinks current="payment-attestation" containerClassName="payment-hero-actions" />
             </section>
 
             <section className="reports-presets">

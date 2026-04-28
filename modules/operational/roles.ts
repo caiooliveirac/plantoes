@@ -47,10 +47,17 @@ export function resolveOperationalRoleLabel(params: {
     defaultRole?: string | null;
 }) {
     const explicitRole = normalizeOperationalRoleLabel(params.roleLabel);
-    return resolveFixedOperationalRole(params)
+    const resolved = resolveFixedOperationalRole(params)
         ?? explicitRole
         ?? normalizeOperationalRoleLabel(params.defaultRole)
         ?? null;
+
+    // 2032/2151 do not carry MRV role semantics on SN.
+    if (params.domain === "regulation" && params.shiftLabel === "SN" && MRV_REGULATION_CODES.has(params.code) && resolved === "MRV") {
+        return null;
+    }
+
+    return resolved;
 }
 
 export function isRemoteOperationalRole(roleLabel: string | null | undefined) {

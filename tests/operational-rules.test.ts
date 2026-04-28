@@ -310,6 +310,18 @@ test("cross-shift continuation: SN label with SD startedAt causes board disappea
     );
 });
 
+test("keeps active regulation visible when startedAt is current shift even with older boardStartedAt", () => {
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-04-16T07:18:00-03:00"),
+            boardStartedAt: new Date("2026-04-15T19:01:00-03:00"),
+            shiftLabel: "SD",
+            reference: new Date("2026-04-16T08:10:00-03:00"),
+        }),
+        true,
+    );
+});
+
 test("shows continuation badge only in the verification grace window", () => {
     assert.equal(resolveContinuationBadgeLabel({
         startedAt: new Date("2026-03-25T07:00:00-03:00"),
@@ -334,6 +346,32 @@ test("shows continuation badge only in the verification grace window", () => {
         shiftLabel: "P",
         reference: new Date("2026-03-26T07:10:00-03:00"),
     }), "Continua as 07:00");
+});
+
+test("shouldKeepRegulationOccupancyVisible hides cross-domain P when startedAt is from expired SN window", () => {
+    // Simulates what happened before the fix: CZ50 SN (21:53 yesterday) → 2153 SD (08:00 today).
+    // The new regulation occupancy was created with startedAt = 21:53 yesterday and shiftLabel = "P".
+    // resolveProlongedShiftExpiry(21:53 22Apr, "P") = 23Apr 07:00 → already past at 08:00.
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-04-22T21:53:00-03:00"),
+            boardStartedAt: new Date("2026-04-22T21:53:00-03:00"),
+            shiftLabel: "P",
+            reference: new Date("2026-04-23T08:00:00-03:00"),
+        }),
+        false, // this is the pre-fix behaviour — the occupancy was hidden
+    );
+
+    // After the fix: startedAt is set to eventAt (08:00 today), boardStartedAt keeps historical anchor.
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-04-23T08:00:00-03:00"),
+            boardStartedAt: new Date("2026-04-22T21:53:00-03:00"),
+            shiftLabel: "P",
+            reference: new Date("2026-04-23T08:00:00-03:00"),
+        }),
+        true, // startedAt is in current shift → immediately visible
+    );
 });
 
 test("resolveContinuationBoardStartedAt preserves the earliest board anchor across shifts", () => {
@@ -564,6 +602,16 @@ test("parses new regulation posts 1326 to 1329 in Telegram arrival", () => {
 
     assert.equal(parsed.sector, "REGULATION");
     assert.equal(parsed.baseCode, "1326");
+    assert.equal(parsed.shiftType, "SD");
+    assert.equal(parsed.isDeparture, false);
+});
+
+test("parses regulation arrival on ramal 1476 in Telegram arrival", () => {
+    const parsed = parseMessage("Karen Seifarth 1476 08:00 SD");
+
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1476");
+    assert.equal(parsed.arrivalTime, "08:00");
     assert.equal(parsed.shiftType, "SD");
     assert.equal(parsed.isDeparture, false);
 });

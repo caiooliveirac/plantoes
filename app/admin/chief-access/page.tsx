@@ -1,6 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { ChiefAccessClient } from "@/app/admin/chief-access/chief-access-client";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { listChiefAssignments, listDoctorsForChiefInvite } from "@/services/chief-access.service";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +12,7 @@ function ChiefAccessUnavailable({ title, copy }: { title: string; copy: string }
             <section className="chief-access-empty-state standalone large">
                 <strong>{title}</strong>
                 <span>{copy}</span>
-                <div className="chief-access-hero-actions">
-                    <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
-                    <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
-                </div>
+                <AdminGlobalNavigationLinks current="chief-access" containerClassName="chief-access-hero-actions" />
             </section>
         </main>
     );

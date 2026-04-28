@@ -123,6 +123,8 @@ O encerramento previsto e usado para fechamento e lembretes, nao como unico crit
 
 Esse relogio de `:15` e diferente da regra de virada do quadro, que ocorre em `07:00` e `19:00`.
 
+Para banco de horas, a matematica financeira continua ancorada na virada-base `07:00/19:00`. O `:15` da regulacao segue valendo para fechamento operacional, lembretes e exigencia de justificativa, mas nao pode ser reutilizado como uma segunda tolerancia na apuracao financeira.
+
 ## Lembretes automáticos do Telegram
 
 Os lembretes agora operam em cima do quadro operacional consolidado em `operations_v2`, nao mais em cima da agenda legada de `scheduledStartAt` e `scheduledEndAt`.
@@ -172,6 +174,7 @@ Banco de horas nao deve reutilizar automaticamente a regra visual do board.
 - se a chegada ficou dentro da tolerancia, eventual excedente na saida e creditado em dobro
 - se a tolerancia foi rompida, o excedente passa a ser simples
 - sair antes nao cria debito extra na regra atual
+- na regulacao, o horario previsto de saida para banco de horas e a virada-base `07:00/19:00`; o encerramento operacional `07:15/19:15` nao substitui essa referencia financeira
 - por isso, chegada registrada e saida registrada precisam continuar sendo tratadas como dados de alta confiabilidade; `Continuar` nao substitui nenhuma delas
 - no caso de intervencao em `Aguardando noticias`, o registro de saida precisa carregar trilha semantica propria para diferenciar "encerramento comum" de "saida informada apos alerta de virada"
 

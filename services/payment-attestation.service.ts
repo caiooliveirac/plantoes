@@ -1,13 +1,20 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/db";
-import { doctors, interventionOccupancies, paymentAttestationSlotEntries, paymentAttestationSlots, regulationOccupancies, users, type paymentAttestationSlotStatusEnum } from "@/db/schema";
+import { doctors, interventionBaseDeactivations, interventionOccupancies, paymentAttestationSlotEntries, paymentAttestationSlots, regulationOccupancies, regulationPostDeactivations, users, type paymentAttestationSlotStatusEnum } from "@/db/schema";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { listDoctorSearchTerms } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
 import { getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
 
 type Executor = any;
+
+interface DoctorPaymentMetadata {
+    preferredOperationalRole?: unknown;
+    paymentProfile?: {
+        isSpecialist?: unknown;
+    };
+}
 
 export type PaymentAttestationSlotLifecycleStatus = "preview" | "draft" | "approved";
 
@@ -113,6 +120,28 @@ function compareEntryOrder(left: PaymentAttestationEntrySnapshot, right: Payment
     }
 
     return left.targetCode.localeCompare(right.targetCode, "pt-BR");
+}
+
+function normalizeDoctorPaymentMetadata(value: unknown): DoctorPaymentMetadata {
+    if (!value || typeof value !== "object") {
+        return {};
+    }
+
+    return value as DoctorPaymentMetadata;
+}
+
+function resolveDoctorPaymentProfileFromMetadata(metadata: unknown) {
+    const normalized = normalizeDoctorPaymentMetadata(metadata);
+    const preferredRole = String(normalized.preferredOperationalRole ?? "").trim().toUpperCase();
+    if (preferredRole === "PSIQ") {
+        return "psychiatry" as const;
+    }
+
+    if (normalized.paymentProfile?.isSpecialist === true) {
+        return "specialist" as const;
+    }
+
+    return "generalist" as const;
 }
 
 function buildSummary(entries: PaymentAttestationEntrySnapshot[]): PaymentAttestationSlotSummary {
@@ -819,8 +848,37 @@ export async function applyManualDisableCorrection(params: {
         throw new Error(`Alvo ${targetCode} nao encontrado no snapshot deste slot.`);
     }
 
+    const boardRow = [...board.regulation, ...board.intervention].find(
+        (row) => row.domain === params.domain && row.targetCode === targetCode,
+    );
+    const targetId = boardRow?.targetId ? Number(boardRow.targetId) : null;
+    const shiftStart = new Date(board.startedAt);
+    const shiftEnd = new Date(board.endedAt);
+
     const now = new Date();
     await db.transaction(async (tx) => {
+        if (targetId) {
+            if (params.domain === "regulation") {
+                await tx.insert(regulationPostDeactivations).values({
+                    postId: targetId,
+                    deactivatedAt: shiftStart,
+                    reactivatedAt: shiftEnd,
+                    notes: `Desativacao manual via fechamento de pagamento (${targetCode} ${slot.shiftLabel} ${slot.operationalDate.slice(0, 10)}): ${reason}`,
+                    createdByUserId: params.actorUserId,
+                    updatedByUserId: params.actorUserId,
+                });
+            } else {
+                await tx.insert(interventionBaseDeactivations).values({
+                    baseId: targetId,
+                    deactivatedAt: shiftStart,
+                    reactivatedAt: shiftEnd,
+                    notes: `Desativacao manual via fechamento de pagamento (${targetCode} ${slot.shiftLabel} ${slot.operationalDate.slice(0, 10)}): ${reason}`,
+                    createdByUserId: params.actorUserId,
+                    updatedByUserId: params.actorUserId,
+                });
+            }
+        }
+
         await tx.update(paymentAttestationSlotEntries)
             .set({
                 disabledAt: now,
@@ -900,4 +958,45 @@ export async function applyManualDisableCorrection(params: {
     }
 
     return updated;
+}
+
+export async function setDoctorPaymentSpecialistProfile(params: {
+    doctorId: string;
+    isSpecialist: boolean;
+}) {
+    const [doctor] = await getDb().select({
+        id: doctors.id,
+        fullName: doctors.fullName,
+        metadata: doctors.metadata,
+    }).from(doctors)
+        .where(eq(doctors.id, params.doctorId))
+        .limit(1);
+
+    if (!doctor) {
+        throw new Error("Medico nao encontrado para atualizar perfil de pagamento.");
+    }
+
+    const current = normalizeDoctorPaymentMetadata(doctor.metadata);
+    const updatedMetadata: DoctorPaymentMetadata = {
+        ...current,
+        paymentProfile: {
+            ...(current.paymentProfile ?? {}),
+            isSpecialist: params.isSpecialist,
+        },
+    };
+
+    await getDb().update(doctors)
+        .set({
+            metadata: updatedMetadata,
+            updatedAt: new Date(),
+        })
+        .where(eq(doctors.id, params.doctorId));
+
+    const paymentProfile = resolveDoctorPaymentProfileFromMetadata(updatedMetadata);
+    return {
+        id: doctor.id,
+        fullName: doctor.fullName,
+        isSpecialist: updatedMetadata.paymentProfile?.isSpecialist === true,
+        paymentProfile,
+    };
 }

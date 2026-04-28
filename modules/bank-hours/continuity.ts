@@ -1,4 +1,4 @@
-import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
+import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 
 export type ContinuityDomain = "regulation" | "intervention";
 
@@ -111,23 +111,13 @@ export function buildContinuityCarrierLookup<T extends ContinuityRecord>(records
 }
 
 function resolveMemberScheduledWindow(member: ContinuityOccupancy) {
-    const startedAt = asDate(member.startedAt)!;
-    const explicitScheduledStartAt = asDate(member.scheduledStartAt);
-    const explicitScheduledEndAt = asDate(member.scheduledEndAt);
-
-    return member.domain === "intervention"
-        ? inferInterventionCoverageWindow({
-            startedAt,
-            shiftLabel: member.shiftLabel,
-            explicitScheduledStartAt,
-            explicitScheduledEndAt,
-        })
-        : inferRegulationCoverageWindow({
-            startedAt,
-            shiftLabel: member.shiftLabel,
-            explicitScheduledStartAt,
-            explicitScheduledEndAt,
-        });
+    return resolveBankHoursScheduledWindow({
+        domain: member.domain,
+        startedAt: member.startedAt,
+        shiftLabel: member.shiftLabel,
+        scheduledStartAt: member.scheduledStartAt,
+        scheduledEndAt: member.scheduledEndAt,
+    });
 }
 
 export function buildContinuityBankHoursSpan(records: ContinuityOccupancy[]) {

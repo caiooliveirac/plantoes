@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
 
 interface Props {
@@ -11,9 +12,64 @@ interface Props {
 type PaymentStatusFilter = "all" | "ready_for_payment" | "needs_review";
 type ShiftFilter = "all" | "SD" | "SN";
 type DomainFilter = "all" | "regulation" | "intervention";
+type CoverageFilter = "all" | "half" | "full";
 type SortMode = "name" | "total" | "pending" | "sd" | "sn";
+type DoctorProfile = "generalist" | "specialist" | "psychiatry";
+
+const MONEY_FORMATTER = new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+});
+
+function formatCurrency(value: number | null | undefined) {
+    const safeValue = Number.isFinite(value) ? Number(value) : 0;
+    return MONEY_FORMATTER.format(safeValue);
+}
+
+function paymentProfileLabel(profile: string | null | undefined) {
+    if (profile === "psychiatry") {
+        return "Psiquiatria";
+    }
+
+    if (profile === "specialist") {
+        return "Especialista";
+    }
+
+    return "Generalista";
+}
+
+function paymentProfileBadge(profile: DoctorProfile) {
+    if (profile === "specialist") {
+        return "ESP";
+    }
+
+    if (profile === "psychiatry") {
+        return "PSIQ";
+    }
+
+    return null;
+}
 
 const TARGET_PRIORITY_NUMBERS = [1, 2, 3, 4, 5, 10, 20] as const;
+
+const PROFILE_RATES: Record<DoctorProfile, { weekday: number; weekend: number }> = {
+    generalist: { weekday: 1244.87, weekend: 1381.10 },
+    specialist: { weekday: 1329.66, weekend: 1457.15 },
+    psychiatry: { weekday: 1299.82, weekend: 1411.47 },
+};
+
+function isWeekendDate(operationalDate: string) {
+    const date = new Date(`${operationalDate}T12:00:00-03:00`);
+    const day = date.getUTCDay();
+    return day === 0 || day === 6;
+}
+
+function resolveShiftAmount(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile) {
+    const rate = isWeekendDate(shift.operationalDate) ? PROFILE_RATES[profile].weekend : PROFILE_RATES[profile].weekday;
+    return Number((rate * shift.paymentUnit).toFixed(2));
+}
 
 function parseTargetPriority(code: string) {
     const match = code.match(/(\d{1,2})(?!.*\d)/);
@@ -65,8 +121,9 @@ function normalize(value: string) {
         .trim();
 }
 
-function formatUnits(value: number) {
-    return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(".", ",");
+function formatUnits(value: number | null | undefined) {
+    const safeValue = Number.isFinite(value) ? Number(value) : 0;
+    return Number.isInteger(safeValue) ? String(safeValue) : safeValue.toFixed(1).replace(".", ",");
 }
 
 function cellAuditLink(monthKey: string, day: string, shift: "SD" | "SN") {
@@ -79,6 +136,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
     const [status, setStatus] = useState<PaymentStatusFilter>("all");
     const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("all");
     const [domainFilter, setDomainFilter] = useState<DomainFilter>("all");
+    const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("all");
     const [targetFilter, setTargetFilter] = useState("all");
     const [sortMode, setSortMode] = useState<SortMode>("pending");
     const [manualDraft, setManualDraft] = useState<{
@@ -96,6 +154,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
     const [manualBusy, setManualBusy] = useState(false);
     const [manualError, setManualError] = useState<string | null>(null);
     const [manualFeedback, setManualFeedback] = useState<string | null>(null);
+    const [profileBusyDoctorId, setProfileBusyDoctorId] = useState<string | null>(null);
+    const [doctorProfileOverrides, setDoctorProfileOverrides] = useState<Record<string, DoctorProfile>>({});
+    const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
     const normalized = normalize(search);
     const normalizedTarget = normalize(targetSearch);
 
@@ -146,6 +207,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
             .reduce((sum, shift) => sum + shift.paymentUnit, 0);
         const regulationCount = board.payableShifts.filter((shift) => shift.domain === "regulation").length;
         const interventionCount = board.payableShifts.filter((shift) => shift.domain === "intervention").length;
+        const halfCount = board.payableShifts.filter((shift) => Boolean(shift.paymentTag)).length;
+        const fullCount = board.payableShifts.length - halfCount;
 
         return {
             readyDoctors,
@@ -154,6 +217,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
             snCount,
             regulationCount,
             interventionCount,
+            halfCount,
+            fullCount,
         };
     }, [board.doctors, board.payableShifts]);
 
@@ -166,6 +231,18 @@ export function ChiefPaymentViewClient({ board }: Props) {
 
         return board.days.map((day) => ({ day, count: counts.get(day) ?? 0 }));
     }, [board.days, board.payableShifts]);
+
+    const totalDueAmount = useMemo(() => {
+        return Number(board.doctors
+            .reduce((sum, doctor) => {
+                const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
+                const doctorDue = doctor.cells
+                    .flatMap((cell) => cell.shifts)
+                    .reduce((doctorSum, shift) => doctorSum + resolveShiftAmount(shift, paymentProfile), 0);
+                return sum + doctorDue;
+            }, 0)
+            .toFixed(2));
+    }, [board.doctors, doctorProfileOverrides]);
 
     const visibleDisabledTargets = useMemo(() => board.disabledTargets.filter((item) => {
         if (shiftFilter !== "all" && item.shiftLabel !== shiftFilter) {
@@ -263,6 +340,14 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             return false;
                         }
 
+                        if (coverageFilter === "half" && !shift.paymentTag) {
+                            return false;
+                        }
+
+                        if (coverageFilter === "full" && shift.paymentTag) {
+                            return false;
+                        }
+
                         if (targetFilter !== "all") {
                             const [targetDomain, targetCode] = targetFilter.split("|");
                             if (shift.domain !== targetDomain || shift.targetCode !== targetCode) {
@@ -274,15 +359,43 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             return true;
                         }
 
-                        const targetHaystack = normalize([shift.targetCode, shift.targetLabel, shift.tagCode].join(" "));
+                        const targetHaystack = normalize([shift.targetCode, shift.targetLabel, shift.tagCode, shift.paymentTag ?? ""].join(" "));
                         return targetHaystack.includes(normalizedTarget);
                     }),
                 }));
 
                 const visibleShifts = nextCells.flatMap((cell) => cell.shifts);
-                const totalSD = visibleShifts.filter((shift) => shift.shiftLabel === "SD").length;
-                const totalSN = visibleShifts.filter((shift) => shift.shiftLabel === "SN").length;
-                const total = visibleShifts.length;
+                const totalSD = Number(visibleShifts
+                    .filter((shift) => shift.shiftLabel === "SD")
+                    .reduce((sum, shift) => sum + shift.paymentUnit, 0)
+                    .toFixed(2));
+                const totalSN = Number(visibleShifts
+                    .filter((shift) => shift.shiftLabel === "SN")
+                    .reduce((sum, shift) => sum + shift.paymentUnit, 0)
+                    .toFixed(2));
+                const total = Number(visibleShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2));
+                const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
+                const totalSDDue = Number(visibleShifts
+                    .filter((shift) => shift.shiftLabel === "SD")
+                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
+                    .toFixed(2));
+                const totalSNDue = Number(visibleShifts
+                    .filter((shift) => shift.shiftLabel === "SN")
+                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
+                    .toFixed(2));
+                const totalDue = Number(visibleShifts
+                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
+                    .toFixed(2));
+                const weekdayShiftCount = visibleShifts.filter((shift) => !isWeekendDate(shift.operationalDate)).length;
+                const weekendShiftCount = visibleShifts.length - weekdayShiftCount;
+                const weekdayDue = Number(visibleShifts
+                    .filter((shift) => !isWeekendDate(shift.operationalDate))
+                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
+                    .toFixed(2));
+                const weekendDue = Number(visibleShifts
+                    .filter((shift) => isWeekendDate(shift.operationalDate))
+                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
+                    .toFixed(2));
                 const pendingCount = visibleShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
 
                 return {
@@ -291,6 +404,13 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     totalSD,
                     totalSN,
                     total,
+                    totalSDDue,
+                    totalSNDue,
+                    totalDue,
+                    weekdayShiftCount,
+                    weekendShiftCount,
+                    weekdayDue,
+                    weekendDue,
                     pendingCount,
                 };
             })
@@ -330,7 +450,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
         });
 
         return sorted;
-    }, [board.doctors, domainFilter, normalized, normalizedTarget, shiftFilter, sortMode, status, targetFilter]);
+    }, [board.doctors, coverageFilter, doctorProfileOverrides, domainFilter, normalized, normalizedTarget, shiftFilter, sortMode, status, targetFilter]);
 
     async function submitManualCorrection() {
         if (!manualDraft) {
@@ -434,6 +554,54 @@ export function ChiefPaymentViewClient({ board }: Props) {
         }
     }
 
+    async function toggleDoctorSpecialistProfile(doctorId: string, isSpecialist: boolean) {
+        const baseDoctor = board.doctors.find((doctor) => doctor.doctorId === doctorId);
+        const previousProfile = doctorProfileOverrides[doctorId] ?? ((baseDoctor?.paymentProfile ?? "generalist") as DoctorProfile);
+        const nextProfile: DoctorProfile = isSpecialist ? "specialist" : "generalist";
+
+        setProfileBusyDoctorId(doctorId);
+        setManualError(null);
+        setManualFeedback(null);
+        setDoctorProfileOverrides((current) => ({
+            ...current,
+            [doctorId]: nextProfile,
+        }));
+
+        try {
+            const response = await fetch("/api/admin/payment-attestation/slot", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    action: "set_doctor_payment_profile",
+                    doctorId,
+                    isSpecialist,
+                }),
+            });
+
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível atualizar o perfil de pagamento do médico.");
+            }
+
+            setManualFeedback("Perfil de pagamento atualizado.");
+        } catch (error) {
+            setDoctorProfileOverrides((current) => ({
+                ...current,
+                [doctorId]: previousProfile,
+            }));
+            setManualError(error instanceof Error ? error.message : "Falha ao atualizar perfil de pagamento.");
+        } finally {
+            setProfileBusyDoctorId(null);
+        }
+    }
+
+    const selectedDoctor = useMemo(
+        () => filteredDoctors.find((doctor) => doctor.doctorId === selectedDoctorId) ?? null,
+        [filteredDoctors, selectedDoctorId],
+    );
+
     return (
         <main className="chief-payable-shell">
             <section className="chief-payable-hero">
@@ -451,17 +619,14 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     <small>Use os filtros para refinar o fechamento por turno e domínio.</small>
                 </div>
 
-                <div className="chief-payable-hero-actions">
+                <AdminGlobalNavigationLinks current="payment-closing" containerClassName="chief-payable-hero-actions">
                     <a className="reports-primary-link" href={`/api/admin/reports/export?month=${board.monthKey}`}>
                         Exportar XLSX (payable shifts)
                     </a>
                     <a className="reports-secondary-link" href="/admin/payment-attestation/audit">
                         Abrir auditoria técnica
                     </a>
-                    <a className="reports-secondary-link" href="/admin/reports">
-                        Abrir relatório mensal técnico
-                    </a>
-                </div>
+                </AdminGlobalNavigationLinks>
             </section>
 
             <section className="reports-presets">
@@ -486,12 +651,16 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     <strong>{board.summary.readyCount}</strong>
                 </article>
                 <button className="chief-payable-summary-card review actionable" type="button" onClick={() => setStatus("needs_review")}>
-                    <span>Revisão</span>
+                    <span>Pendências</span>
                     <strong>{board.summary.needsReviewCount}</strong>
                 </button>
                 <article className="chief-payable-summary-card">
                     <span>Médicos</span>
                     <strong>{board.summary.doctorCount}</strong>
+                </article>
+                <article className="chief-payable-summary-card">
+                    <span>Valor devido</span>
+                    <strong>{formatCurrency(totalDueAmount)}</strong>
                 </article>
                 <article className="chief-payable-summary-card">
                     <span>Desativadas</span>
@@ -553,6 +722,18 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         </button>
                     </div>
 
+                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
+                        <button type="button" className={`chief-payable-chip ${coverageFilter === "all" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("all")}>
+                            Cobertura completa + meio
+                        </button>
+                        <button type="button" className={`chief-payable-chip warning ${coverageFilter === "half" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("half")}>
+                            Somente MEIO ({filterSummary.halfCount})
+                        </button>
+                        <button type="button" className={`chief-payable-chip ${coverageFilter === "full" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("full")}>
+                            Sem MEIO ({filterSummary.fullCount})
+                        </button>
+                    </div>
+
                     <div className="chief-payable-order-legend" aria-label="Ordem operacional prioritária">
                         <span>Ordem rápida</span>
                         <strong>01 · 02 · 03 · 04 · 05 · 10 · 20</strong>
@@ -599,7 +780,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             Prontos ({filterSummary.readyDoctors})
                         </button>
                         <button type="button" className={`chief-payable-chip warning ${status === "needs_review" ? "active" : ""}`.trim()} onClick={() => setStatus("needs_review")}>
-                            Revisão ({filterSummary.reviewDoctors})
+                            Pendências ({filterSummary.reviewDoctors})
                         </button>
                     </div>
                 </div>
@@ -762,7 +943,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                 <th>Total SD</th>
                                 <th>Total SN</th>
                                 <th>Total</th>
-                                <th>Pend.</th>
+                                <th>Valor semana</th>
+                                <th>Valor fim de semana</th>
+                                <th>Valor final</th>
                             </tr>
                         </thead>
 
@@ -818,6 +1001,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                     <td>-</td>
                                     <td>{visibleDisabledTargets.length}</td>
                                     <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
                                 </motion.tr>
 
                                 <motion.tr
@@ -869,10 +1055,17 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                     <td>-</td>
                                     <td>-</td>
                                     <td>{visibleUncoveredTargets.length}</td>
-                                    <td>!</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
                                 </motion.tr>
 
-                                {filteredDoctors.map((doctor, index) => (
+                                {filteredDoctors.map((doctor, index) => {
+                                    const doctorProfile = (doctor.paymentProfile ?? "generalist") as DoctorProfile;
+                                    const profileBadge = paymentProfileBadge(doctorProfile);
+
+                                    return (
                                     <motion.tr
                                         key={doctor.doctorId}
                                         layout
@@ -882,8 +1075,34 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                         transition={{ duration: 0.2, delay: Math.min(index * 0.018, 0.18) }}
                                     >
                                         <td className="sticky-col doctor">
-                                            <strong>{doctor.doctorName}</strong>
-                                            <span>{doctor.pendingCount > 0 ? "Revisar" : "Pronto"}</span>
+                                            <div className="chief-payable-doctor-cell">
+                                                <div className="chief-payable-doctor-main">
+                                                    <button
+                                                        type="button"
+                                                        className="chief-payable-doctor-button"
+                                                        onClick={() => setSelectedDoctorId(doctor.doctorId)}
+                                                    >
+                                                        <strong>{doctor.doctorName}</strong>
+                                                    </button>
+                                                    {profileBadge ? (
+                                                        <span className={`chief-payable-profile-badge ${doctorProfile}`.trim()}>{profileBadge}</span>
+                                                    ) : null}
+                                                </div>
+
+                                                {doctorProfile !== "psychiatry" ? (
+                                                    <label className="chief-payable-specialist-toggle">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={doctorProfile === "specialist"}
+                                                            onChange={(event) => {
+                                                                void toggleDoctorSpecialistProfile(doctor.doctorId, event.target.checked);
+                                                            }}
+                                                            disabled={profileBusyDoctorId === doctor.doctorId}
+                                                        />
+                                                        <span>ESP</span>
+                                                    </label>
+                                                ) : null}
+                                            </div>
                                         </td>
 
                                         {doctor.cells.map((cell) => (
@@ -899,7 +1118,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                             animate={{ opacity: 1, scale: 1 }}
                                                             transition={{ duration: 0.15 }}
                                                         >
-                                                            {shift.paymentTag ? `${shift.tagCode} ${shift.paymentTag}` : shift.tagCode}
+                                                            {shift.paymentTag ? `${shift.paymentTag} ${shift.tagCode}` : shift.tagCode}
                                                         </motion.a>
                                                     ))}
                                                 </div>
@@ -909,9 +1128,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                         <td>{formatUnits(doctor.totalSD)}</td>
                                         <td>{formatUnits(doctor.totalSN)}</td>
                                         <td>{formatUnits(doctor.total)}</td>
-                                        <td>{doctor.pendingCount}</td>
+                                        <td>{formatCurrency(doctor.weekdayDue)}</td>
+                                        <td>{formatCurrency(doctor.weekendDue)}</td>
+                                        <td className="chief-payable-final-value">{formatCurrency(doctor.totalDue)}</td>
                                     </motion.tr>
-                                ))}
+                                    );
+                                })}
 
                                 {filteredDoctors.length === 0 ? (
                                     <motion.tr
@@ -920,7 +1142,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                         animate={{ opacity: 1 }}
                                         exit={{ opacity: 0 }}
                                     >
-                                        <td className="chief-payable-empty" colSpan={board.days.length + 5}>
+                                        <td className="chief-payable-empty" colSpan={board.days.length + 8}>
                                             Nenhum médico encontrado com os filtros atuais.
                                         </td>
                                     </motion.tr>
@@ -930,6 +1152,43 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     </table>
                 </div>
             </section>
+
+            {selectedDoctor ? (
+                <div className="chief-payable-modal-backdrop" role="presentation" onClick={() => setSelectedDoctorId(null)}>
+                    <section className="chief-payable-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+                        <header className="chief-payable-modal-header">
+                            <div>
+                                <span className="payment-eyebrow">Resumo do médico</span>
+                                <h3>{selectedDoctor.doctorName}</h3>
+                                <p>{paymentProfileLabel(selectedDoctor.paymentProfile)} · {board.monthLabel}</p>
+                            </div>
+                            <button type="button" className="payment-button" onClick={() => setSelectedDoctorId(null)}>Fechar</button>
+                        </header>
+
+                        <div className="chief-payable-modal-grid">
+                            <article className="chief-payable-modal-card">
+                                <span>Plantões dia útil</span>
+                                <strong>{selectedDoctor.weekdayShiftCount}</strong>
+                                <small>
+                                    Tarifa: {formatCurrency(PROFILE_RATES[(selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile].weekday)} · Total: {formatCurrency(selectedDoctor.weekdayDue)}
+                                </small>
+                            </article>
+                            <article className="chief-payable-modal-card">
+                                <span>Plantões fim de semana</span>
+                                <strong>{selectedDoctor.weekendShiftCount}</strong>
+                                <small>
+                                    Tarifa: {formatCurrency(PROFILE_RATES[(selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile].weekend)} · Total: {formatCurrency(selectedDoctor.weekendDue)}
+                                </small>
+                            </article>
+                            <article className="chief-payable-modal-card emphasis">
+                                <span>Total a pagar no mês</span>
+                                <strong>{formatCurrency(selectedDoctor.totalDue)}</strong>
+                                <small>{formatCurrency(selectedDoctor.weekdayDue)} (semana) + {formatCurrency(selectedDoctor.weekendDue)} (fim de semana)</small>
+                            </article>
+                        </div>
+                    </section>
+                </div>
+            ) : null}
         </main>
     );
 }

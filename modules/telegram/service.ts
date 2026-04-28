@@ -46,7 +46,7 @@ import { extractDoctorAliases, formatDoctorSurfaceName } from "@/modules/doctors
 import { normalizeDoctorName } from "@/modules/doctors/importer";
 import { createDoctorDirectoryEntry, updateDoctorDirectoryEntry } from "@/modules/doctors/service";
 import { continueInterventionOccupancy, deactivateInterventionBase, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
-import { getSaoPauloParts, requiresOvertimeJustification, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { getSaoPauloParts, requiresOvertimeJustification, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole } from "@/modules/operational/roles";
@@ -143,6 +143,7 @@ import {
     parseTelegramCommand,
     parseTelegramDepartureCorrectionCommand,
 } from "@/modules/telegram/commands";
+import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp, type TelegramRecentSenderMessage } from "@/modules/telegram/command-suggestions";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeMealBreakMessage, parseMessage, parseMessageMulti, parseTelegramBatchLines, type ParsedMessage } from "@/modules/telegram/parser";
 import type { TelegramUpdate } from "@/modules/telegram/api";
 import { buildChoiceKeyboard, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
@@ -387,10 +388,12 @@ export function shouldTreatTelegramArrivalAsContinuation(params: {
                 || params.activeShiftLabel === "P";
         }
 
-        // Explicit SD→SN cross-shift: doctor already registered in SD and sends SN location update.
-        // Treat as location update / continuation to preserve the original SD arrival time for
-        // bank-hours and payment calculations (mirrors the existing INTERVENTION cross-shift logic).
-        if (params.incomingShiftLabel === "SN" && params.activeShiftLabel === "SD") {
+        // Explicit cross-shift updates in regulation must keep continuity instead of opening
+        // a brand-new arrival (ex.: SD→SN, P→SN, SN→SD, P→SD).
+        if (
+            (params.incomingShiftLabel === "SN" && (params.activeShiftLabel === "SD" || params.activeShiftLabel === "P"))
+            || (params.incomingShiftLabel === "SD" && (params.activeShiftLabel === "SN" || params.activeShiftLabel === "P"))
+        ) {
             return true;
         }
 
@@ -511,6 +514,24 @@ export function resolveTelegramSuccessReplyKind(params: {
     }
 
     return "arrival_recorded";
+}
+
+export function buildTelegramContinuationSourceHint(params: {
+    continuationFrom?: string | null;
+    targetCode?: string | null;
+    isContinuationReply: boolean;
+}) {
+    if (!params.isContinuationReply) {
+        return "";
+    }
+
+    const sourceCode = params.continuationFrom?.trim() || null;
+    const targetCode = params.targetCode?.trim() || null;
+    if (!sourceCode || !targetCode || sourceCode === targetCode) {
+        return "";
+    }
+
+    return `\n\n🔁 Mudanca confirmada: *${sourceCode}* → *${targetCode}* mantendo a mesma continuidade.`;
 }
 
 function resolveHalfShiftScheduledEndAt(referenceAt: Date) {
@@ -952,6 +973,20 @@ export function resolveContinuationShiftStart(eventAt: Date, shiftType: string |
     return window.startedAt;
 }
 
+export function resolveTelegramContinuationStartedAt(params: {
+    eventAt: Date;
+    shiftType: string | null | undefined;
+    continuityStartedAt?: Date | null;
+    sourceStartedAt?: Date | null;
+}) {
+    const continuityAnchor = params.continuityStartedAt ?? params.sourceStartedAt ?? null;
+    if (continuityAnchor && continuityAnchor.getTime() <= params.eventAt.getTime() + 900000) {
+        return new Date(continuityAnchor);
+    }
+
+    return resolveContinuationShiftStart(params.eventAt, params.shiftType);
+}
+
 async function closeTelegramActiveContinuityOccupancies(params: {
     doctorId: string;
     eventAt: Date;
@@ -1241,6 +1276,39 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
     }
 
     return null;
+}
+
+async function resolveTelegramContinuitySourceCode(source: TelegramOperationalContinuityOccupancy | null | undefined) {
+    if (!source) {
+        return null;
+    }
+
+    const db = getDb();
+    if (source.domain === "regulation") {
+        const occupancy = await db.query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, source.occupancyId),
+        });
+        if (!occupancy) {
+            return null;
+        }
+
+        const post = await db.query.regulationPosts.findFirst({
+            where: eq(regulationPosts.id, occupancy.postId),
+        });
+        return post?.code ?? null;
+    }
+
+    const occupancy = await db.query.interventionOccupancies.findFirst({
+        where: eq(interventionOccupancies.id, source.occupancyId),
+    });
+    if (!occupancy) {
+        return null;
+    }
+
+    const base = await db.query.interventionBases.findFirst({
+        where: eq(interventionBases.id, occupancy.baseId),
+    });
+    return base?.code ?? null;
 }
 
 async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageText: string, senderName: string | null, referenceAt: Date): Promise<{
@@ -2661,6 +2729,53 @@ function buildShiftReportCommandUsageReply() {
 
 function buildSummaryReportCommandUsageReply() {
     return `:/ Use ${TELEGRAM_SUMMARY_REPORT_USAGE}. Se quiser, pode escrever /resumo agora, mas não precisa de mais nada.`;
+}
+
+export function buildPublicTelegramCommandHelpReply() {
+    return [
+        "⚠️ Não reconheci esse comando.",
+        "",
+        "Comandos disponíveis para qualquer pessoa:",
+        "• /plantao -> mostra o relato do turno atual (quem está em cada base e ramal).",
+        "• /resumo -> mostra um resumo rápido da operação (contagens e status geral).",
+        "• /saidas -> mostra o relatório de saídas do turno (quem saiu e horários).",
+    ].join("\n");
+}
+
+async function listRecentTelegramSenderMessages(params: {
+    chatId: string;
+    senderTelegramId?: string | null;
+    senderName?: string | null;
+    currentLogId: string;
+    limit?: number;
+}) {
+    const db = getDb();
+    const limit = params.limit ?? 5;
+
+    if (!params.senderTelegramId && !params.senderName) {
+        return [] as TelegramRecentSenderMessage[];
+    }
+
+    const senderFilter = params.senderTelegramId
+        ? eq(telegramIngestedMessages.senderTelegramId, params.senderTelegramId)
+        : eq(telegramIngestedMessages.senderName, params.senderName ?? "");
+
+    return db.select({
+        rawText: telegramIngestedMessages.rawText,
+        parsedAction: telegramIngestedMessages.parsedAction,
+        parsedTargetCode: telegramIngestedMessages.parsedTargetCode,
+        parsedDoctorName: telegramIngestedMessages.parsedDoctorName,
+        status: telegramIngestedMessages.status,
+        errorMessage: telegramIngestedMessages.errorMessage,
+    })
+        .from(telegramIngestedMessages)
+        .where(and(
+            eq(telegramIngestedMessages.chatId, params.chatId),
+            senderFilter,
+            ne(telegramIngestedMessages.id, params.currentLogId),
+        ))
+        .orderBy(desc(telegramIngestedMessages.createdAt))
+        .limit(limit);
 }
 
 function buildBankHoursCommandUsageReply() {
@@ -4281,6 +4396,16 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     const command = parseTelegramCommand(message.text);
     if (!command) {
         if (message.text.trim().startsWith("/")) {
+            const recentMessages = await listRecentTelegramSenderMessages({
+                chatId: String(message.chat.id),
+                senderTelegramId: message.from?.id ? String(message.from.id) : null,
+                senderName: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null,
+                currentLogId: logId,
+            });
+            const suggestion = suggestTelegramCommandHelp({
+                text: message.text,
+                recentMessages,
+            });
             await markTelegramProcessed(logId, {
                 status: "ignored",
                 errorMessage: "command_parse_failed",
@@ -4290,11 +4415,15 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                         trainingCandidate: true,
                     }),
                     rawCommand: message.text,
+                    suggestionKind: suggestion?.kind ?? null,
+                    suggestedCommands: suggestion?.suggestions.map((item) => item.usage) ?? [],
                 },
             });
-            await sendMessage(message.chat.id, pickTelegramReply("command_usage", message.message_id, {
-                usage: "/corrigir PM04 20:00 | /retirar PM04 19:00 | /ramal Emily 1363 RMT | /comandos (ver todos)",
-            }), message.message_id);
+            await sendMessage(
+                message.chat.id,
+                suggestion ? buildTelegramCommandSuggestionReply(suggestion) : buildPublicTelegramCommandHelpReply(),
+                message.message_id,
+            );
             return { ok: true, ignored: true };
         }
         return null;
@@ -5270,6 +5399,7 @@ async function handleTelegramReassignment(params: {
         effectiveShiftType: transferResult.movedSnapshot.shiftLabel ?? activeOcc.shiftLabel ?? null,
         reassignedFrom: sourceCode,
         assumedHalfShift: false,
+        continuationFrom: null as string | null,
     };
 }
 
@@ -5283,7 +5413,7 @@ async function applyParsedEntry(params: {
     const db = getDb();
     const { parsed, resolvedDoctor, eventAt, referenceAt, messageText } = params;
 
-    const activeOcc = (!parsed.isDeparture && !parsed.isContinuation)
+    const activeOcc = !parsed.isDeparture
         ? await findActiveOccupancyByDoctorId(resolvedDoctor.id)
         : null;
 
@@ -5311,6 +5441,7 @@ async function applyParsedEntry(params: {
     let autoReactivated = false;
     let replyTimeAt = eventAt;
     let effectiveShiftType: string | null = parsed.shiftType ?? null;
+    let continuationFrom: string | null = null;
 
     // When no explicit shift is provided and the arrival time is near a shift boundary,
     // use the message timestamp's shift to disambiguate.
@@ -5458,10 +5589,20 @@ async function applyParsedEntry(params: {
                         eventAt,
                         excludeOccupancyId: activeOccupancy?.id ?? null,
                     });
+
+                    const sourceCode = activeOcc?.baseCode ?? await resolveTelegramContinuitySourceCode(continuityContext?.source);
+                    if (sourceCode && sourceCode !== parsed.baseCode) {
+                        continuationFrom = sourceCode;
+                    }
                 }
 
                 const continuationStartedAt = shouldUseContinuityContext
-                    ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
+                    ? resolveTelegramContinuationStartedAt({
+                        eventAt,
+                        shiftType: parsed.shiftType,
+                        continuityStartedAt: continuityContext?.continuityStartedAt,
+                        sourceStartedAt: continuityContext?.source?.startedAt,
+                    })
                     : eventAt;
                 const continuationBoardStartedAt = shouldUseContinuityContext && continuityContext?.source
                     ? new Date(continuityContext.continuityStartedAt ?? continuityContext.source.startedAt)
@@ -5474,11 +5615,23 @@ async function applyParsedEntry(params: {
                     effectiveShiftType = "P";
                 }
 
+                // When the continuity anchor is from a previous P-shift window that has
+                // already expired (e.g. cross-domain CZ50 SN 21:53 → 2153 SD at 08:00),
+                // shouldKeepRegulationOccupancyVisible would hide the new occupancy immediately.
+                // In that case anchor startedAt to eventAt so the occupancy is visible.
+                // boardStartedAt keeps the historical anchor for priority ordering.
+                const crossShiftExpiry = shouldUseContinuityContext
+                    ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
+                    : null;
+                const effectiveContinuationStartedAt = crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
+                    ? eventAt
+                    : continuationStartedAt;
+
                 const regResult = await startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
                     postId: post.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
-                    startedAt: continuationStartedAt,
+                    startedAt: effectiveContinuationStartedAt,
                     boardStartedAt: continuationBoardStartedAt,
                     scheduledStartAt: assumedHalfShift ? eventAt : undefined,
                     scheduledEndAt: halfShiftScheduledEndAt ?? undefined,
@@ -5623,10 +5776,20 @@ async function applyParsedEntry(params: {
                         eventAt,
                         excludeOccupancyId: activeOccupancy?.id ?? null,
                     });
+
+                    const sourceCode = activeOcc?.baseCode ?? await resolveTelegramContinuitySourceCode(continuityContext?.source);
+                    if (sourceCode && sourceCode !== parsed.baseCode) {
+                        continuationFrom = sourceCode;
+                    }
                 }
 
                 const continuationStartedAt = shouldUseContinuityContext
-                    ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
+                    ? resolveTelegramContinuationStartedAt({
+                        eventAt,
+                        shiftType: parsed.shiftType,
+                        continuityStartedAt: continuityContext?.continuityStartedAt,
+                        sourceStartedAt: continuityContext?.source?.startedAt,
+                    })
                     : eventAt;
                 const continuationBoardStartedAtIntv = shouldUseContinuityContext && continuityContext?.source
                     ? new Date(continuityContext.continuityStartedAt ?? continuityContext.source.startedAt)
@@ -5638,11 +5801,21 @@ async function applyParsedEntry(params: {
                     effectiveShiftType = "P";
                 }
 
+                // Same guard as the regulation branch: if the continuity anchor is from an
+                // already-expired P-shift window, anchor startedAt to eventAt so the occupancy
+                // is not treated as stale on arrival. boardStartedAt keeps the historical anchor.
+                const crossShiftExpiryIntv = shouldUseContinuityContext
+                    ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
+                    : null;
+                const effectiveContinuationStartedAtIntv = crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
+                    ? eventAt
+                    : continuationStartedAt;
+
                 const intResult = await startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,
                     baseId: base.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
-                    startedAt: continuationStartedAt,
+                    startedAt: effectiveContinuationStartedAtIntv,
                     boardStartedAt: continuationBoardStartedAtIntv,
                     shiftLabel: effectiveShiftType,
                     roleLabel: parsed.roleFunction,
@@ -5677,6 +5850,7 @@ async function applyParsedEntry(params: {
         effectiveShiftType,
         reassignedFrom: null as string | null,
         assumedHalfShift,
+        continuationFrom,
     };
 }
 
@@ -5695,6 +5869,7 @@ async function sendSuccessReply(
     effectiveShiftType?: string | null,
     reassignedFrom?: string | null,
     assumedHalfShift = false,
+    continuationFrom?: string | null,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const replyKind = resolveTelegramSuccessReplyKind({
@@ -5767,10 +5942,16 @@ async function sendSuccessReply(
         ? `\n\n🔀 Remanejado de *${reassignedFrom}* para *${parsed.baseCode}*. Ocupação anterior encerrada.`
         : "";
 
+    const continuationTargetHint = buildTelegramContinuationSourceHint({
+        continuationFrom,
+        targetCode: parsed.baseCode,
+        isContinuationReply: replyKind === "continuation_recorded" || forceContinuation,
+    });
+
     const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint && !autoReactivated
         ? "\n\n💡 Se for o mesmo médico mudando de ramal/base, pode mandar só o novo destino que registro como remanejamento sem mexer na chegada original."
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${timeContextHint}${arrivalHint}`, replyToMessageId);
+    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${continuationTargetHint}${timeContextHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
@@ -5915,6 +6096,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             result.effectiveShiftType,
             result.reassignedFrom,
             result.assumedHalfShift,
+            result.continuationFrom,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -6191,6 +6373,96 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         pending.resolutionData.originalText,
         message.text,
     );
+
+    // "chief_release" is a valid reason to stop the justification loop but does not
+    // grant automatic bank-hour credit — it requires manual review by the payroll team.
+    if (eligibleReason.code === "chief_release") {
+        const eventAt = new Date(pending.resolutionData.originalEventAt);
+        try {
+            let relatedOccupancyId: string;
+            if (pending.resolutionData.parsed.sector === "REGULATION") {
+                const post = await getDb().query.regulationPosts.findFirst({
+                    where: eq(regulationPosts.code, pending.resolutionData.parsed.baseCode),
+                });
+                if (!post) throw new Error("Regulation post not found.");
+                const recentClosed = await findRecentClosedRegulationOccupancy({
+                    postId: post.id,
+                    doctorId: pending.resolutionData.resolvedDoctor.id,
+                    eventAt,
+                });
+                if (!recentClosed) throw new Error("No active regulation occupancy found for this doctor/post.");
+                relatedOccupancyId = (await correctRegulationOccupancy(recentClosed.id, {
+                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida liberada pela chefia", mergedText),
+                }, null)).id;
+            } else {
+                const base = await getDb().query.interventionBases.findFirst({
+                    where: eq(interventionBases.code, pending.resolutionData.parsed.baseCode),
+                });
+                if (!base) throw new Error("Intervention base not found.");
+                const recentClosed = await findRecentClosedInterventionOccupancy({
+                    baseId: base.id,
+                    doctorId: pending.resolutionData.resolvedDoctor.id,
+                    eventAt,
+                });
+                if (!recentClosed) throw new Error("No active intervention occupancy found for this doctor/base.");
+                relatedOccupancyId = (await correctInterventionOccupancy(recentClosed.id, {
+                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida liberada pela chefia", mergedText),
+                }, null)).id;
+            }
+            await markTelegramProcessed(pending.id, {
+                status: "accepted",
+                relatedOccupancyId,
+                errorMessage: null,
+                resolutionData: buildResolutionData(pending.resolutionData, {
+                    justificationReplyText: message.text,
+                    matchedReasonCode: eligibleReason.code,
+                    automaticCreditGranted: false,
+                    manualReviewOnly: true,
+                }),
+            });
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedDomain: pending.resolutionData.parsed.sector,
+                parsedTargetCode: pending.resolutionData.parsed.baseCode,
+                parsedAction: "departure_justification_manual_review",
+                parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+                relatedOccupancyId,
+                errorMessage: null,
+                resolutionData: { justificationFromPending: true, automaticCreditGranted: false, manualReviewOnly: true },
+            });
+            await sendMessage(
+                message.chat.id,
+                pickTelegramReply("departure_justification_manual_review", message.message_id, {
+                    name: pending.resolutionData.resolvedDoctor.fullName,
+                    target: pending.resolutionData.parsed.baseCode,
+                    time: formatTelegramReplyTime(eventAt),
+                }),
+                message.message_id,
+            );
+            return { ok: true, occupancyId: relatedOccupancyId };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+            await markTelegramProcessed(pending.id, { status: "error", errorMessage });
+            await markTelegramProcessed(logId, {
+                status: "error",
+                parsedDomain: pending.resolutionData.parsed.sector,
+                parsedTargetCode: pending.resolutionData.parsed.baseCode,
+                parsedAction: "departure_justification_manual_review",
+                parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
+                errorMessage,
+                resolutionData: { justificationFromPending: true },
+            });
+            await sendTelegramDepartureFailureReply({
+                chatId: message.chat.id,
+                replyToMessageId: message.message_id,
+                seed: message.message_id,
+                parsed: pending.resolutionData.parsed,
+                doctorName: pending.resolutionData.resolvedDoctor.fullName,
+                errorMessage,
+            });
+            return { ok: true, ignored: true, processingError: true };
+        }
+    }
 
     try {
         const eventAt = new Date(pending.resolutionData.originalEventAt);
@@ -6726,6 +6998,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.effectiveShiftType,
                                 result.reassignedFrom,
                                 result.assumedHalfShift,
+                                result.continuationFrom,
                             );
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
@@ -6906,6 +7179,24 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         example: looksLikeDeparture ? buildTelegramDepartureExample({}) : null,
                     }),
                 });
+                const recentMessages = await listRecentTelegramSenderMessages({
+                    chatId: String(message.chat.id),
+                    senderTelegramId: message.from?.id ? String(message.from.id) : null,
+                    senderName: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null,
+                    currentLogId: log.id,
+                });
+                const suggestion = suggestTelegramCommandHelp({
+                    text: message.text,
+                    recentMessages,
+                });
+                if (suggestion) {
+                    await sendMessage(
+                        message.chat.id,
+                        buildTelegramCommandSuggestionReply(suggestion),
+                        message.message_id,
+                    );
+                    return { ok: true, ignored: true };
+                }
                 if (looksLikeDeparture) {
                     await sendMessage(
                         message.chat.id,
@@ -7061,7 +7352,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), firstParsed.arrivalTime);
 
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift } = await applyParsedEntry({
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom } = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
@@ -7103,6 +7394,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     effectiveShiftType,
                     reassignedFrom,
                     assumedHalfShift,
+                    continuationFrom,
                 );
 
                 return { ok: true, occupancyId };

@@ -40,6 +40,31 @@ export interface ReactivateRegulationPostInput {
     updatedByUserId?: string | null;
 }
 
+export function resolveHistoricalAdminCorrectionEndAt(params: {
+    source: StartRegulationOccupancyInput["source"];
+    startedAt: Date;
+    inferredScheduledEndAt: Date | null;
+    now: Date;
+}) {
+    if (params.source !== "admin_correction") {
+        return null;
+    }
+
+    if (!params.inferredScheduledEndAt) {
+        return null;
+    }
+
+    if (params.inferredScheduledEndAt.getTime() > params.now.getTime()) {
+        return null;
+    }
+
+    if (params.inferredScheduledEndAt.getTime() <= params.startedAt.getTime()) {
+        return null;
+    }
+
+    return params.inferredScheduledEndAt;
+}
+
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
 
@@ -101,8 +126,21 @@ export function shouldReuseImplicitRegulationContinuitySource(referenceAt: Date,
     return Math.abs(referenceAt.getTime() - sourceEndedAt.getTime()) <= AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS;
 }
 
+export function shouldReopenStaleSameDoctorRegulationOccupancy(params: {
+    existingStartedAt: Date;
+    existingBoardStartedAt: Date;
+    incomingStartedAt: Date;
+}) {
+    const currentShiftStart = resolveOperationalShiftWindow(params.incomingStartedAt).startedAt;
+    const preShiftToleranceMs = 60 * 60 * 1000;
+    const existingAnchorIsStale = params.existingBoardStartedAt.getTime() < (currentShiftStart.getTime() - preShiftToleranceMs);
+
+    return existingAnchorIsStale && params.incomingStartedAt.getTime() > params.existingStartedAt.getTime();
+}
+
 export async function startRegulationOccupancy(input: StartRegulationOccupancyInput) {
     const db = getDb();
+    const now = new Date();
     let autoReactivated = false;
     const created = await db.transaction(async (tx) => {
         const doctor = await tx.query.doctors.findFirst({
@@ -203,6 +241,12 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             explicitScheduledStartAt: input.scheduledStartAt ?? null,
             explicitScheduledEndAt: input.scheduledEndAt ?? null,
         });
+        const historicalCorrectionEndAt = resolveHistoricalAdminCorrectionEndAt({
+            source: input.source,
+            startedAt: input.startedAt,
+            inferredScheduledEndAt,
+            now,
+        });
         const activationReferenceAt = inferredScheduledStartAt && inferredScheduledStartAt.getTime() > input.startedAt.getTime()
             ? inferredScheduledStartAt
             : input.startedAt;
@@ -244,63 +288,101 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             orderBy: [desc(regulationOccupancies.startedAt)],
         });
 
+        let reopenedFromStaleSameDoctor = false;
+
         if (existing && existing.doctorId === input.doctorId) {
             // Same doctor on same post: update in place instead of close+create.
             // This prevents zero-duration ghost records and preserves the earliest boardStartedAt —
             // BUT only if that anchor is still from the current operational shift context.
             // If the existing boardStartedAt is from a past shift (i.e., more than 60 min before the
             // current shift start), carrying it forward would make the occupancy invisible on the board.
-            const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
-            const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
-            const existingAnchorIsStale = existing.boardStartedAt.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
-            const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existing.boardStartedAt.getTime())
-                ? effectiveBoardStartedAt
-                : existing.boardStartedAt;
-
-            const keptContinuityGroupId = resolvedContinuityGroupId ?? existing.continuityGroupId;
-
-            // F2 safety: never allow started_at to advance forward past the existing value.
-            // A re-arrival (same doctor, same post) should only move started_at EARLIER (correction),
-            // never later — a later time is likely a meal-break or typo (e.g. "12:30" = lunch, not arrival).
-            const keptStartedAt = input.startedAt.getTime() < existing.startedAt.getTime()
-                ? input.startedAt
-                : existing.startedAt;
-
-            const windowRef = keptBoardStartedAt.getTime() > keptStartedAt.getTime()
-                ? keptBoardStartedAt : keptStartedAt;
-            const { scheduledStartAt: recalcStart, scheduledEndAt: recalcEnd } = inferRegulationCoverageWindow({
-                startedAt: windowRef,
-                shiftLabel: input.shiftLabel ?? existing.shiftLabel,
-                postCode: targetPostCode,
-                explicitScheduledStartAt: null,
-                explicitScheduledEndAt: null,
+            const shouldReopenStale = shouldReopenStaleSameDoctorRegulationOccupancy({
+                existingStartedAt: existing.startedAt,
+                existingBoardStartedAt: existing.boardStartedAt,
+                incomingStartedAt: input.startedAt,
             });
 
-            const [updated] = await tx.update(regulationOccupancies)
-                .set({
-                    startedAt: keptStartedAt,
-                    boardStartedAt: keptBoardStartedAt,
-                    continuityGroupId: keptContinuityGroupId,
-                    scheduledStartAt: recalcStart,
-                    scheduledEndAt: recalcEnd,
-                    shiftLabel: input.shiftLabel ?? existing.shiftLabel,
-                    roleLabel: input.roleLabel !== undefined ? input.roleLabel : (existing.roleLabel ?? resolvedRoleLabel),
-                    ramalLabel: normalizeRegulationRamalLabel({
-                        actualPostCode: targetPostCode,
-                        requestedRamalLabel: input.ramalLabel ?? existing.ramalLabel,
-                    }),
-                    notes: input.notes ? `${existing.notes ?? ""}\n${input.notes}`.trim() : existing.notes,
-                    updatedByUserId: input.createdByUserId ?? null,
-                    updatedAt: new Date(),
-                })
-                .where(eq(regulationOccupancies.id, existing.id))
-                .returning();
+            if (shouldReopenStale) {
+                const closeAt = existing.scheduledEndAt && existing.scheduledEndAt.getTime() <= input.startedAt.getTime()
+                    ? existing.scheduledEndAt
+                    : input.startedAt;
+                const resultingDurationMs = closeAt.getTime() - existing.startedAt.getTime();
 
-            await syncRegulationBankHours(tx, existing.id);
-            return updated;
+                if (resultingDurationMs >= 60_000) {
+                    await tx.update(regulationOccupancies)
+                        .set({
+                            endedAt: closeAt,
+                            actualEndedAt: existing.actualEndedAt ?? closeAt,
+                            updatedByUserId: input.createdByUserId ?? null,
+                            updatedAt: new Date(),
+                        })
+                        .where(eq(regulationOccupancies.id, existing.id));
+
+                    await syncRegulationBankHours(tx, existing.id);
+                }
+
+                reopenedFromStaleSameDoctor = true;
+            }
+
+            if (!shouldReopenStale) {
+                const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
+                const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
+                const existingAnchorIsStale = existing.boardStartedAt.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
+                const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existing.boardStartedAt.getTime())
+                    ? effectiveBoardStartedAt
+                    : existing.boardStartedAt;
+
+                const keptContinuityGroupId = resolvedContinuityGroupId ?? existing.continuityGroupId;
+
+                // F2 safety: never allow started_at to advance forward past the existing value.
+                // A re-arrival (same doctor, same post) should only move started_at EARLIER (correction),
+                // never later — a later time is likely a meal-break or typo (e.g. "12:30" = lunch, not arrival).
+                const keptStartedAt = input.startedAt.getTime() < existing.startedAt.getTime()
+                    ? input.startedAt
+                    : existing.startedAt;
+
+                const windowRef = keptBoardStartedAt.getTime() > keptStartedAt.getTime()
+                    ? keptBoardStartedAt : keptStartedAt;
+                const { scheduledStartAt: recalcStart, scheduledEndAt: recalcEnd } = inferRegulationCoverageWindow({
+                    startedAt: windowRef,
+                    shiftLabel: input.shiftLabel ?? existing.shiftLabel,
+                    postCode: targetPostCode,
+                    explicitScheduledStartAt: null,
+                    explicitScheduledEndAt: null,
+                });
+
+                const [updated] = await tx.update(regulationOccupancies)
+                    .set({
+                        startedAt: keptStartedAt,
+                        boardStartedAt: keptBoardStartedAt,
+                        continuityGroupId: keptContinuityGroupId,
+                        scheduledStartAt: recalcStart,
+                        scheduledEndAt: recalcEnd,
+                        shiftLabel: input.shiftLabel ?? existing.shiftLabel,
+                        roleLabel: input.roleLabel !== undefined ? input.roleLabel : (existing.roleLabel ?? resolvedRoleLabel),
+                        ramalLabel: normalizeRegulationRamalLabel({
+                            actualPostCode: targetPostCode,
+                            requestedRamalLabel: input.ramalLabel ?? existing.ramalLabel,
+                        }),
+                        notes: input.notes ? `${existing.notes ?? ""}\n${input.notes}`.trim() : existing.notes,
+                        updatedByUserId: input.createdByUserId ?? null,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(regulationOccupancies.id, existing.id))
+                    .returning();
+
+                await syncRegulationBankHours(tx, existing.id);
+                return updated;
+            }
         }
 
-        if (existing) {
+        const shouldPreserveCurrentTargetOccupancy = Boolean(
+            historicalCorrectionEndAt
+            && existing
+            && input.startedAt.getTime() < existing.startedAt.getTime(),
+        );
+
+        if (existing && !reopenedFromStaleSameDoctor && !shouldPreserveCurrentTargetOccupancy) {
             const closeAt = input.startedAt.getTime() >= existing.startedAt.getTime()
                 ? resolveRegulationBoardEndAt(input.startedAt, existing.scheduledEndAt)
                 : existing.startedAt;
@@ -335,7 +417,13 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             orderBy: [desc(regulationOccupancies.startedAt)],
         });
 
-        if (otherRamalOccupancy) {
+        const shouldPreserveDoctorCurrentOtherRamal = Boolean(
+            historicalCorrectionEndAt
+            && otherRamalOccupancy
+            && input.startedAt.getTime() < otherRamalOccupancy.startedAt.getTime(),
+        );
+
+        if (otherRamalOccupancy && !shouldPreserveDoctorCurrentOtherRamal) {
             const otherCloseAt = input.startedAt.getTime() >= otherRamalOccupancy.startedAt.getTime()
                 ? resolveRegulationBoardEndAt(input.startedAt, otherRamalOccupancy.scheduledEndAt)
                 : otherRamalOccupancy.startedAt;
@@ -377,9 +465,15 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             }),
             source: input.source,
             notes: input.notes ?? null,
+            endedAt: historicalCorrectionEndAt,
+            actualEndedAt: historicalCorrectionEndAt,
             createdByUserId: input.createdByUserId ?? null,
             updatedByUserId: input.createdByUserId ?? null,
         }).returning();
+
+        if (historicalCorrectionEndAt) {
+            await syncRegulationBankHours(tx, created.id);
+        }
 
         return created;
     });

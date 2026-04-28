@@ -118,6 +118,13 @@ test("parses 'Ingrid Bandeira 1367 07:20' as regulation arrival with time", () =
     assert.equal(parsed.arrivalTime, "07:20");
 });
 
+test("parses 'Karen Seifarth 1476 08:00' as regulation arrival with time", () => {
+    const parsed = parseMessage("Karen Seifarth 1476 08:00");
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1476");
+    assert.equal(parsed.arrivalTime, "08:00");
+});
+
 test("parses 'Cláudio Teixeira PA 2034 às 07:00h' as regulation with time and accent", () => {
     const parsed = parseMessage("Cláudio Teixeira PA 2034 às 07:00h");
     assert.equal(parsed.sector, "REGULATION");
@@ -881,3 +888,16 @@ test("doctor surname Liberato does not trigger false departure when arrival inte
     assert.equal(parsed.baseCode, "1366");
     assert.equal(parsed.isDeparture, false);
 });
+
+test("'Recipiendário' (written-out form) is extracted as roleFunction RECIP", () => {
+    const parsed = parseMessage("Chegada Ângelo Spósito 2153 às 08:03 SD Recipiendário");
+    assert.equal(parsed.roleFunction, "RECIP");
+    assert.equal(parsed.baseCode, "2153");
+    assert.equal(parsed.isDeparture, false);
+});
+
+test("'/recip' written as short code also maps to RECIP", () => {
+    const parsed = parseMessage("Chegada Ângelo 2153 08:03 SD RECIP");
+    assert.equal(parsed.roleFunction, "RECIP");
+});
+

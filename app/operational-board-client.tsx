@@ -74,6 +74,7 @@ interface OperationalBoardClientProps {
     previousShift: PreviousOperationalBoard;
     doctors: DoctorOption[];
     session: SessionSummary | null;
+    initialViewMode?: ViewMode;
 }
 
 interface FormState {
@@ -849,9 +850,9 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live" } = props;
     const router = useRouter();
-    const [viewMode, setViewMode] = useState<ViewMode>("live");
+    const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
     const [authOpen, setAuthOpen] = useState(false);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
     const [priorityDrawerOpen, setPriorityDrawerOpen] = useState(false);
@@ -984,7 +985,30 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setAuthOpen(false);
     }, [viewMode]);
 
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const url = new URL(window.location.href);
+        if (viewMode === "history") {
+            url.searchParams.set("view", "history");
+        } else {
+            url.searchParams.delete("view");
+        }
+
+        const nextPath = `${url.pathname}${url.search}${url.hash}`;
+        const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        if (nextPath !== currentPath) {
+            window.history.replaceState(null, "", nextPath);
+        }
+    }, [viewMode]);
+
     const refreshIfBoardChanged = useEffectEvent(async () => {
+        if (viewMode === "history") {
+            return;
+        }
+
         if (drawerOpen || professionalDrawerOpen || priorityDrawerOpen || isSubmitting || isRefreshing) {
             return;
         }
@@ -2439,195 +2463,213 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
     return (
         <>
-            <div className={`ops-auth-dock ${authOpen ? "open" : ""}`.trim()}>
-                {session?.roles.includes("admin") && !session.mustChangePassword && (
+            {viewMode === "live" && (
+                <div className={`ops-auth-dock ${authOpen ? "open" : ""}`.trim()}>
+                    {session?.canManage && (
+                        <button
+                            type="button"
+                            className="ops-history-trigger historical-review"
+                            aria-label="Abrir auditoria histórica da cobertura"
+                            title="Modo histórico"
+                            onClick={() => {
+                                setPreviousShiftOpen(false);
+                                setAuthOpen(false);
+                                setDrawerOpen(false);
+                                setProfessionalDrawerOpen(false);
+                                setPriorityDrawerOpen(false);
+                                setTransferConfirmOpen(false);
+                                setViewMode("history");
+                            }}
+                        >
+                            <span className="ops-history-trigger-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M12 3.25a8.75 8.75 0 1 0 8.53 10.7.75.75 0 1 0-1.46-.35A7.25 7.25 0 1 1 12 4.75c1.94 0 3.7.76 5 2l-1.87.01a.75.75 0 0 0 0 1.5h3.67a.75.75 0 0 0 .75-.75V3.84a.75.75 0 0 0-1.5 0v1.79A8.7 8.7 0 0 0 12 3.25Zm-.75 4.5a.75.75 0 0 1 1.5 0v3.89l2.37 1.58a.75.75 0 0 1-.84 1.24l-2.7-1.8a.75.75 0 0 1-.33-.62V7.75Z" />
+                                </svg>
+                            </span>
+                            <span className="ops-history-trigger-label">Histórico operacional</span>
+                        </button>
+                    )}
+
+                    {session?.canManage && (
+                        <button
+                            type="button"
+                            className="ops-history-trigger"
+                            aria-label="Abrir fechamento do plantão anterior"
+                            title="Plantão anterior"
+                            onClick={() => {
+                                setAuthOpen(false);
+                                setDrawerOpen(false);
+                                setProfessionalDrawerOpen(false);
+                                setPriorityDrawerOpen(false);
+                                setTransferConfirmOpen(false);
+                                setPreviousShiftOpen((current) => !current);
+                            }}
+                        >
+                            <span className="ops-history-trigger-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M12 3.25a8.75 8.75 0 1 0 8.53 10.7.75.75 0 1 0-1.46-.35A7.25 7.25 0 1 1 12 4.75c1.94 0 3.7.76 5 2l-1.87.01a.75.75 0 0 0 0 1.5h3.67a.75.75 0 0 0 .75-.75V3.84a.75.75 0 0 0-1.5 0v1.79A8.7 8.7 0 0 0 12 3.25Zm-.75 4.5a.75.75 0 0 1 1.5 0v3.89l2.37 1.58a.75.75 0 0 1-.84 1.24l-2.7-1.8a.75.75 0 0 1-.33-.62V7.75Z" />
+                                </svg>
+                            </span>
+                            <span className="ops-history-trigger-label">Plantão anterior</span>
+                        </button>
+                    )}
+
+                    {session?.canManage && (
+                        <button
+                            type="button"
+                            className="ops-history-trigger command-drawer"
+                            aria-label="Abrir fila critica e vigilancia"
+                            title="Fila critica"
+                            onClick={() => {
+                                setPreviousShiftOpen(false);
+                                setAuthOpen(false);
+                                setProfessionalDrawerOpen(false);
+                                setPriorityDrawerOpen(false);
+                                setTransferConfirmOpen(false);
+                                openDrawer();
+                            }}
+                        >
+                            <span className="ops-history-trigger-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
+                                </svg>
+                            </span>
+                            <span className="ops-history-trigger-label">Fila crítica</span>
+                            {criticalCards.length > 0 && (
+                                <span className="ops-trigger-badge critical">{criticalCards.length}</span>
+                            )}
+                        </button>
+                    )}
+
+                    {session?.canManage && (
+                        <button
+                            type="button"
+                            className="ops-history-trigger priorities"
+                            aria-label="Abrir fila de prioridades do meal break"
+                            title="Prioridades"
+                            onClick={() => {
+                                setPreviousShiftOpen(false);
+                                setAuthOpen(false);
+                                setDrawerOpen(false);
+                                setProfessionalDrawerOpen(false);
+                                setTransferConfirmOpen(false);
+                                void openPriorityDrawer();
+                            }}
+                        >
+                            <span className="ops-history-trigger-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M4.75 5.25a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1-.75-.75Zm0 6a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1-.75-.75Zm.75 5.25a.75.75 0 0 0 0 1.5h3a.75.75 0 0 0 0-1.5h-3Zm5.75-10.5a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5H12a.75.75 0 0 1-.75-.75Zm0 6a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5H12a.75.75 0 0 1-.75-.75Zm.75 4.5a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5H12Z" />
+                                </svg>
+                            </span>
+                            <span className="ops-history-trigger-label">Prioridades refeição</span>
+                        </button>
+                    )}
+
+                    {session?.roles.includes("admin") && !session.mustChangePassword && (
+                        <button
+                            type="button"
+                            className="ops-history-trigger payment-allocation"
+                            aria-label="Abrir visão de alocação de pagamento"
+                            title="Alocação de pagamento"
+                            onClick={() => {
+                                setPreviousShiftOpen(false);
+                                setAuthOpen(false);
+                                router.push("/admin/payment-allocation");
+                            }}
+                        >
+                            <span className="ops-history-trigger-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M4.75 4h10.5A2.75 2.75 0 0 1 18 6.75v1.1h1.25A2.75 2.75 0 0 1 22 10.6v6.65A2.75 2.75 0 0 1 19.25 20h-10.5A2.75 2.75 0 0 1 6 17.25v-1.1H4.75A2.75 2.75 0 0 1 2 13.4V6.75A2.75 2.75 0 0 1 4.75 4Zm0 1.5A1.25 1.25 0 0 0 3.5 6.75v6.65a1.25 1.25 0 0 0 1.25 1.25H6v-4.05a2.75 2.75 0 0 1 2.75-2.75H16.5v-1.1a1.25 1.25 0 0 0-1.25-1.25H4.75Zm4 3.85A1.25 1.25 0 0 0 7.5 10.6v6.65a1.25 1.25 0 0 0 1.25 1.25h10.5a1.25 1.25 0 0 0 1.25-1.25V10.6a1.25 1.25 0 0 0-1.25-1.25H8.75Zm2.35 1.9h5.8a.75.75 0 0 1 0 1.5h-5.8a.75.75 0 0 1 0-1.5Zm0 3.5h3.2a.75.75 0 0 1 0 1.5h-3.2a.75.75 0 0 1 0-1.5Z" />
+                                </svg>
+                            </span>
+                            <span className="ops-history-trigger-label">Alocação pagamento</span>
+                        </button>
+                    )}
+
+                    {session?.roles.includes("admin") && !session.mustChangePassword && (
+                        <button
+                            type="button"
+                            className="ops-history-trigger payment-allocation"
+                            aria-label="Abrir visão principal de pagamento"
+                            title="Fechamento de pagamento"
+                            onClick={() => {
+                                setPreviousShiftOpen(false);
+                                setAuthOpen(false);
+                                router.push("/admin/payment-closing");
+                            }}
+                        >
+                            <span className="ops-history-trigger-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M3 6.75A2.75 2.75 0 0 1 5.75 4h12.5A2.75 2.75 0 0 1 21 6.75v10.5A2.75 2.75 0 0 1 18.25 20H5.75A2.75 2.75 0 0 1 3 17.25V6.75Zm2.75-1.25A1.25 1.25 0 0 0 4.5 6.75v10.5A1.25 1.25 0 0 0 5.75 18.5h12.5a1.25 1.25 0 0 0 1.25-1.25V6.75a1.25 1.25 0 0 0-1.25-1.25H5.75Zm1.5 3a.75.75 0 0 1 .75-.75h8a.75.75 0 0 1 0 1.5h-8a.75.75 0 0 1-.75-.75Zm0 3.75a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75Zm0 3.75a.75.75 0 0 1 .75-.75h3.25a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75Z" />
+                                </svg>
+                            </span>
+                            <span className="ops-history-trigger-label">Fechamento pagamento</span>
+                        </button>
+                    )}
+
+                    {session?.roles.includes("admin") && !session.mustChangePassword && (
+                        <button
+                            type="button"
+                            className="ops-history-trigger slot-audit"
+                            aria-label="Abrir auditoria historica de slots"
+                            title="Auditoria de slots"
+                            onClick={() => {
+                                setPreviousShiftOpen(false);
+                                setAuthOpen(false);
+                                router.push("/admin/slot-audit");
+                            }}
+                        >
+                            <span className="ops-history-trigger-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M6.75 3.5A2.75 2.75 0 0 0 4 6.25v11A2.75 2.75 0 0 0 6.75 20h10.5A2.75 2.75 0 0 0 20 17.25v-11A2.75 2.75 0 0 0 17.25 3.5H6.75Zm0 1.5h10.5A1.25 1.25 0 0 1 18.5 6.25v11a1.25 1.25 0 0 1-1.25 1.25H6.75A1.25 1.25 0 0 1 5.5 17.25v-11A1.25 1.25 0 0 1 6.75 5Zm1.5 2.25a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Zm0 4a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 0-1.5H8.25Zm0 4a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Z" />
+                                </svg>
+                            </span>
+                            <span className="ops-history-trigger-label">Auditoria de slots</span>
+                        </button>
+                    )}
+
+                    {session?.roles.includes("admin") && !session.mustChangePassword && (
+                        <button
+                            type="button"
+                            className="ops-history-trigger bank-hours"
+                            aria-label="Abrir visão de banco de horas"
+                            title="Banco de horas"
+                            onClick={() => {
+                                setPreviousShiftOpen(false);
+                                setAuthOpen(false);
+                                router.push("/admin/bank-hours");
+                            }}
+                        >
+                            <span className="ops-history-trigger-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" focusable="false">
+                                    <path d="M12 2.75a9.25 9.25 0 1 0 9.25 9.25A9.26 9.26 0 0 0 12 2.75Zm0 1.5a7.75 7.75 0 0 1 7.74 7.5h-1.9a5.85 5.85 0 0 0-4.34-5.34V4.26c.13 0 .25-.01.38-.01ZM10.88 4.34v2.07a5.86 5.86 0 0 0-4.45 5.34H4.26a7.77 7.77 0 0 1 6.62-7.41Zm-6.62 8.91h2.17a5.86 5.86 0 0 0 4.45 5.34v2.07a7.77 7.77 0 0 1-6.62-7.41Zm8.12 7.4v-2.06a5.85 5.85 0 0 0 4.34-5.34h3.02a7.75 7.75 0 0 1-7.36 7.4Zm-3.38-8.65a3 3 0 1 1 6 0 3 3 0 0 1-6 0Zm3-1.5a1.5 1.5 0 1 0 1.5 1.5 1.5 1.5 0 0 0-1.5-1.5Z" />
+                                </svg>
+                            </span>
+                            <span className="ops-history-trigger-label">Banco de horas</span>
+                        </button>
+                    )}
+
                     <button
                         type="button"
-                        className="ops-history-trigger payment-allocation"
-                        aria-label="Abrir visão de alocação de pagamento"
-                        title="Alocação de pagamento"
+                        className={`ops-auth-trigger ${session ? "connected" : ""}`.trim()}
+                        aria-label={session ? `Sessao ativa: ${summarizeRoles(session.roles)}. Abrir acesso operacional.` : "Abrir acesso operacional"}
+                        title={session ? `${summarizeRoles(session.roles)} • ${session.email}` : "Acesso operacional"}
                         onClick={() => {
-                            setPreviousShiftOpen(false);
-                            setAuthOpen(false);
-                            router.push("/admin/payment-allocation");
+                            setAuthOpen((current) => !current);
+                            setAuthError(null);
+                            setAuthInfo(null);
                         }}
                     >
-                        <span className="ops-history-trigger-icon" aria-hidden="true">
+                        <span className={`ops-auth-trigger-status ${session ? "connected" : "idle"}`.trim()} aria-hidden="true" />
+                        <span className="ops-auth-trigger-icon" aria-hidden="true">
                             <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M4.75 4h10.5A2.75 2.75 0 0 1 18 6.75v1.1h1.25A2.75 2.75 0 0 1 22 10.6v6.65A2.75 2.75 0 0 1 19.25 20h-10.5A2.75 2.75 0 0 1 6 17.25v-1.1H4.75A2.75 2.75 0 0 1 2 13.4V6.75A2.75 2.75 0 0 1 4.75 4Zm0 1.5A1.25 1.25 0 0 0 3.5 6.75v6.65a1.25 1.25 0 0 0 1.25 1.25H6v-4.05a2.75 2.75 0 0 1 2.75-2.75H16.5v-1.1a1.25 1.25 0 0 0-1.25-1.25H4.75Zm4 3.85A1.25 1.25 0 0 0 7.5 10.6v6.65a1.25 1.25 0 0 0 1.25 1.25h10.5a1.25 1.25 0 0 0 1.25-1.25V10.6a1.25 1.25 0 0 0-1.25-1.25H8.75Zm2.35 1.9h5.8a.75.75 0 0 1 0 1.5h-5.8a.75.75 0 0 1 0-1.5Zm0 3.5h3.2a.75.75 0 0 1 0 1.5h-3.2a.75.75 0 0 1 0-1.5Z" />
+                                <path d="M12 2.75a5 5 0 0 0-5 5v1.5H6.5A2.75 2.75 0 0 0 3.75 12v6.25A2.75 2.75 0 0 0 6.5 21h11a2.75 2.75 0 0 0 2.75-2.75V12a2.75 2.75 0 0 0-2.75-2.75H17V7.75a5 5 0 0 0-5-5Zm-3.5 6.5v-1.5a3.5 3.5 0 1 1 7 0v1.5h-7Zm3.5 3.25a1.75 1.75 0 0 1 .75 3.33V18a.75.75 0 0 1-1.5 0v-2.17a1.75 1.75 0 0 1 .75-3.33Z" />
                             </svg>
                         </span>
+                        <span className="ops-auth-sr">{session ? `${summarizeRoles(session.roles)} ${session.email}` : "Abrir acesso operacional"}</span>
                     </button>
-                )}
 
-                {session?.roles.includes("admin") && !session.mustChangePassword && (
-                    <button
-                        type="button"
-                        className="ops-history-trigger payment-allocation"
-                        aria-label="Abrir visão principal de pagamento"
-                        title="Fechamento de pagamento"
-                        onClick={() => {
-                            setPreviousShiftOpen(false);
-                            setAuthOpen(false);
-                            router.push("/admin/payment-closing");
-                        }}
-                    >
-                        <span className="ops-history-trigger-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M3 6.75A2.75 2.75 0 0 1 5.75 4h12.5A2.75 2.75 0 0 1 21 6.75v10.5A2.75 2.75 0 0 1 18.25 20H5.75A2.75 2.75 0 0 1 3 17.25V6.75Zm2.75-1.25A1.25 1.25 0 0 0 4.5 6.75v10.5A1.25 1.25 0 0 0 5.75 18.5h12.5a1.25 1.25 0 0 0 1.25-1.25V6.75a1.25 1.25 0 0 0-1.25-1.25H5.75Zm1.5 3a.75.75 0 0 1 .75-.75h8a.75.75 0 0 1 0 1.5h-8a.75.75 0 0 1-.75-.75Zm0 3.75a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75Zm0 3.75a.75.75 0 0 1 .75-.75h3.25a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75Z" />
-                            </svg>
-                        </span>
-                    </button>
-                )}
-
-                {session?.roles.includes("admin") && !session.mustChangePassword && (
-                    <button
-                        type="button"
-                        className="ops-history-trigger slot-audit"
-                        aria-label="Abrir auditoria historica de slots"
-                        title="Auditoria de slots"
-                        onClick={() => {
-                            setPreviousShiftOpen(false);
-                            setAuthOpen(false);
-                            router.push("/admin/slot-audit");
-                        }}
-                    >
-                        <span className="ops-history-trigger-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M6.75 3.5A2.75 2.75 0 0 0 4 6.25v11A2.75 2.75 0 0 0 6.75 20h10.5A2.75 2.75 0 0 0 20 17.25v-11A2.75 2.75 0 0 0 17.25 3.5H6.75Zm0 1.5h10.5A1.25 1.25 0 0 1 18.5 6.25v11a1.25 1.25 0 0 1-1.25 1.25H6.75A1.25 1.25 0 0 1 5.5 17.25v-11A1.25 1.25 0 0 1 6.75 5Zm1.5 2.25a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Zm0 4a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 0-1.5H8.25Zm0 4a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Z" />
-                            </svg>
-                        </span>
-                    </button>
-                )}
-
-                {session?.roles.includes("admin") && !session.mustChangePassword && (
-                <button
-                    type="button"
-                    className="ops-history-trigger bank-hours"
-                    aria-label="Abrir visão de banco de horas"
-                    title="Banco de horas"
-                    onClick={() => {
-                        setPreviousShiftOpen(false);
-                        setAuthOpen(false);
-                        router.push("/admin/bank-hours");
-                    }}
-                >
-                    <span className="ops-history-trigger-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" focusable="false">
-                            <path d="M12 2.75a9.25 9.25 0 1 0 9.25 9.25A9.26 9.26 0 0 0 12 2.75Zm0 1.5a7.75 7.75 0 0 1 7.74 7.5h-1.9a5.85 5.85 0 0 0-4.34-5.34V4.26c.13 0 .25-.01.38-.01ZM10.88 4.34v2.07a5.86 5.86 0 0 0-4.45 5.34H4.26a7.77 7.77 0 0 1 6.62-7.41Zm-6.62 8.91h2.17a5.86 5.86 0 0 0 4.45 5.34v2.07a7.77 7.77 0 0 1-6.62-7.41Zm8.12 7.4v-2.06a5.85 5.85 0 0 0 4.34-5.34h3.02a7.75 7.75 0 0 1-7.36 7.4Zm-3.38-8.65a3 3 0 1 1 6 0 3 3 0 0 1-6 0Zm3-1.5a1.5 1.5 0 1 0 1.5 1.5 1.5 1.5 0 0 0-1.5-1.5Z" />
-                        </svg>
-                    </span>
-                </button>
-                )}
-
-                {session?.canManage && (
-                    <button
-                        type="button"
-                        className={`ops-history-trigger historical-review ${viewMode === "history" ? "active" : ""}`.trim()}
-                        aria-label={viewMode === "history" ? "Voltar para a mesa operacional atual" : "Abrir auditoria histórica da cobertura"}
-                        title={viewMode === "history" ? "Voltar ao quadro atual" : "Modo histórico"}
-                        onClick={() => {
-                            setPreviousShiftOpen(false);
-                            setAuthOpen(false);
-                            setDrawerOpen(false);
-                            setProfessionalDrawerOpen(false);
-                            setPriorityDrawerOpen(false);
-                            setTransferConfirmOpen(false);
-                            setViewMode((current) => current === "history" ? "live" : "history");
-                        }}
-                    >
-                        <span className="ops-history-trigger-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M12 3.25a8.75 8.75 0 1 0 8.53 10.7.75.75 0 1 0-1.46-.35A7.25 7.25 0 1 1 12 4.75c1.94 0 3.7.76 5 2l-1.87.01a.75.75 0 0 0 0 1.5h3.67a.75.75 0 0 0 .75-.75V3.84a.75.75 0 0 0-1.5 0v1.79A8.7 8.7 0 0 0 12 3.25Zm-.75 4.5a.75.75 0 0 1 1.5 0v3.89l2.37 1.58a.75.75 0 0 1-.84 1.24l-2.7-1.8a.75.75 0 0 1-.33-.62V7.75Z" />
-                            </svg>
-                        </span>
-                    </button>
-                )}
-
-                {viewMode === "live" && (
-                    <button
-                        type="button"
-                        className="ops-history-trigger"
-                        aria-label="Abrir fechamento do plantão anterior"
-                        title="Plantão anterior"
-                        onClick={() => {
-                            setPreviousShiftOpen((current) => !current);
-                            setAuthOpen(false);
-                        }}
-                    >
-                        <span className="ops-history-trigger-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M12 3.25a8.75 8.75 0 1 0 8.53 10.7.75.75 0 1 0-1.46-.35A7.25 7.25 0 1 1 12 4.75c1.94 0 3.7.76 5 2l-1.87.01a.75.75 0 0 0 0 1.5h3.67a.75.75 0 0 0 .75-.75V3.84a.75.75 0 0 0-1.5 0v1.79A8.7 8.7 0 0 0 12 3.25Zm-.75 4.5a.75.75 0 0 1 1.5 0v3.89l2.37 1.58a.75.75 0 0 1-.84 1.24l-2.7-1.8a.75.75 0 0 1-.33-.62V7.75Z" />
-                            </svg>
-                        </span>
-                    </button>
-                )}
-
-                {viewMode === "live" && session?.canManage && (
-                    <button
-                        type="button"
-                        className="ops-history-trigger command-drawer"
-                        aria-label="Abrir fila critica e vigilancia"
-                        title="Fila critica"
-                        onClick={() => {
-                            setPreviousShiftOpen(false);
-                            setAuthOpen(false);
-                            setProfessionalDrawerOpen(false);
-                            openDrawer();
-                        }}
-                    >
-                        <span className="ops-history-trigger-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-                            </svg>
-                        </span>
-                        {criticalCards.length > 0 && (
-                            <span className="ops-trigger-badge critical">{criticalCards.length}</span>
-                        )}
-                    </button>
-                )}
-
-                {viewMode === "live" && session?.canManage && (
-                    <button
-                        type="button"
-                        className="ops-history-trigger priorities"
-                        aria-label="Abrir fila de prioridades do meal break"
-                        title="Prioridades"
-                        onClick={() => {
-                            setPreviousShiftOpen(false);
-                            setAuthOpen(false);
-                            void openPriorityDrawer();
-                        }}
-                    >
-                        <span className="ops-history-trigger-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M4.75 5.25a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1-.75-.75Zm0 6a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1-.75-.75Zm.75 5.25a.75.75 0 0 0 0 1.5h3a.75.75 0 0 0 0-1.5h-3Zm5.75-10.5a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5H12a.75.75 0 0 1-.75-.75Zm0 6a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5H12a.75.75 0 0 1-.75-.75Zm.75 4.5a.75.75 0 0 0 0 1.5h6.5a.75.75 0 0 0 0-1.5H12Z" />
-                            </svg>
-                        </span>
-                    </button>
-                )}
-
-                <button
-                    type="button"
-                    className={`ops-auth-trigger ${session ? "connected" : ""}`.trim()}
-                    aria-label={session ? `Sessao ativa: ${summarizeRoles(session.roles)}. Abrir acesso operacional.` : "Abrir acesso operacional"}
-                    title={session ? `${summarizeRoles(session.roles)} • ${session.email}` : "Acesso operacional"}
-                    onClick={() => {
-                        setAuthOpen((current) => !current);
-                        setAuthError(null);
-                        setAuthInfo(null);
-                    }}
-                >
-                    <span className={`ops-auth-trigger-status ${session ? "connected" : "idle"}`.trim()} aria-hidden="true" />
-                    <span className="ops-auth-trigger-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" focusable="false">
-                            <path d="M12 2.75a5 5 0 0 0-5 5v1.5H6.5A2.75 2.75 0 0 0 3.75 12v6.25A2.75 2.75 0 0 0 6.5 21h11a2.75 2.75 0 0 0 2.75-2.75V12a2.75 2.75 0 0 0-2.75-2.75H17V7.75a5 5 0 0 0-5-5Zm-3.5 6.5v-1.5a3.5 3.5 0 1 1 7 0v1.5h-7Zm3.5 3.25a1.75 1.75 0 0 1 .75 3.33V18a.75.75 0 0 1-1.5 0v-2.17a1.75 1.75 0 0 1 .75-3.33Z" />
-                        </svg>
-                    </span>
-                    <span className="ops-auth-sr">{session ? `${summarizeRoles(session.roles)} ${session.email}` : "Abrir acesso operacional"}</span>
-                </button>
-
-                <div className={`ops-auth-popover ${authOpen ? "open" : ""}`.trim()}>
+                    <div className={`ops-auth-popover ${authOpen ? "open" : ""}`.trim()}>
                     {session ? (
                         <div className="ops-auth-panel">
                             <div className="ops-auth-panel-header">
@@ -2780,10 +2822,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             </div>
                         </form>
                     )}
+                    </div>
                 </div>
-            </div>
+            )}
 
-            {(authError || authInfo) && (
+            {viewMode === "live" && (authError || authInfo) && (
                 <div className={`ops-auth-toast ${authError ? "error" : "success"}`.trim()}>
                     {authError || authInfo}
                 </div>

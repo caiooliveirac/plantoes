@@ -34,7 +34,7 @@ test("buildContinuityBankHoursSpan preserves first arrival and final exit across
     assert.equal(span.actualStartAt.toISOString(), new Date("2026-03-25T07:12:00-03:00").toISOString());
     assert.equal(span.actualEndAt?.toISOString(), new Date("2026-03-26T07:20:00-03:00").toISOString());
     assert.equal(span.scheduledStartAt?.toISOString(), new Date("2026-03-25T07:00:00-03:00").toISOString());
-    assert.equal(span.scheduledEndAt?.toISOString(), new Date("2026-03-26T07:15:00-03:00").toISOString());
+    assert.equal(span.scheduledEndAt?.toISOString(), new Date("2026-03-26T07:00:00-03:00").toISOString());
 });
 
 test("buildContinuityCarrierLookup points every member to the first operational record in the chain", () => {

@@ -17,6 +17,14 @@ curl -fsS http://127.0.0.1:3004/api/health
 curl -sk -o /dev/null -w "%{http_code}\n" https://plantoes.mnrs.com.br/api/health
 ```
 
+## Invariante critica de continuidade no Telegram
+
+Quando alterar parser, fluxo de chegada, ocupacoes, board, regras operacionais ou qualquer heuristica de continuidade:
+
+- Continuidade automatica so pode ser inferida a partir do turno atual ou do turno imediatamente anterior.
+- Nunca tratar uma mensagem de hoje como continuidade de ocupacao ativa/encerrada de dias atras.
+- Se a referencia encontrada for anterior a ultima virada de turno relevante, abrir novo plantao ou mandar para revisao; nao confirmar continuidade.
+
 Para mudancas de tela, incluir a rota alterada no teste externo (por exemplo `https://plantoes.mnrs.com.br/admin/payment-closing`).
 
 ## Regra de comunicacao de deploy

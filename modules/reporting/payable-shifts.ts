@@ -1,8 +1,25 @@
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
 import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
+import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
 
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const MIN_SEGMENT_MINUTES = 45;
+
+export type DoctorPaymentProfile = "generalist" | "specialist" | "psychiatry";
+
+const DOCTOR_PAYMENT_RATES: Record<DoctorPaymentProfile, { weekday: number; weekend: number }> = {
+    generalist: { weekday: 1244.87, weekend: 1381.10 },
+    specialist: { weekday: 1329.66, weekend: 1457.15 },
+    psychiatry: { weekday: 1299.82, weekend: 1411.47 },
+};
+
+interface DoctorPaymentMetadata {
+    preferredOperationalRole?: unknown;
+    paymentProfile?: {
+        isSpecialist?: unknown;
+    };
+    isPaymentSpecialist?: unknown;
+}
 
 export type AttestationSegmentStatus = "consolidated" | "discarded";
 export type AttestationSegmentDiscardReason =
@@ -119,6 +136,12 @@ export interface ChiefPayableDoctorRow {
     totalSD: number;
     totalSN: number;
     total: number;
+    totalSDDue?: number;
+    totalSNDue?: number;
+    totalDue?: number;
+    weekdayShiftCount?: number;
+    weekendShiftCount?: number;
+    paymentProfile?: DoctorPaymentProfile;
     pendingCount: number;
     cells: ChiefPayableCell[];
 }
@@ -137,6 +160,7 @@ export interface ChiefPayableBoardModel {
         doctorCount: number;
         payableShiftCount: number;
         payableUnitCount: number;
+        totalDueAmount?: number;
         readyCount: number;
         needsReviewCount: number;
         segmentCount: number;
@@ -162,6 +186,49 @@ function toOperationalDate(dateIso: string) {
     const month = String(local.getUTCMonth() + 1).padStart(2, "0");
     const day = String(local.getUTCDate()).padStart(2, "0");
     return `${year}-${month}-${day}`;
+}
+
+function isWeekendOperationalDate(operationalDate: string) {
+    const reference = new Date(`${operationalDate}T12:00:00-03:00`);
+    const day = reference.getUTCDay();
+    return day === 0 || day === 6;
+}
+
+function asDoctorPaymentMetadata(value: unknown): DoctorPaymentMetadata {
+    if (!value || typeof value !== "object") {
+        return {};
+    }
+
+    return value as DoctorPaymentMetadata;
+}
+
+export function resolveDoctorPaymentProfile(metadata: unknown): DoctorPaymentProfile {
+    const typed = asDoctorPaymentMetadata(metadata);
+    const preferredRole = String(typed.preferredOperationalRole ?? "").trim().toUpperCase();
+    if (preferredRole === "PSIQ") {
+        return "psychiatry";
+    }
+
+    const specialistFlag = typed.paymentProfile?.isSpecialist;
+    if (specialistFlag === true) {
+        return "specialist";
+    }
+
+    if (typed.isPaymentSpecialist === true) {
+        return "specialist";
+    }
+
+    return "generalist";
+}
+
+function resolveShiftDueAmount(params: {
+    profile: DoctorPaymentProfile;
+    operationalDate: string;
+    paymentUnit: number;
+}) {
+    const rates = DOCTOR_PAYMENT_RATES[params.profile];
+    const dayRate = isWeekendOperationalDate(params.operationalDate) ? rates.weekend : rates.weekday;
+    return Number((dayRate * params.paymentUnit).toFixed(2));
 }
 
 function resolveDurationMinutes(startedAt: string, endedAt: string | null) {
@@ -440,7 +507,10 @@ export function buildUncoveredTargetsFromBoards(params: {
         const day = operationalDate.slice(8, 10);
         const rows = [...board.regulation, ...board.intervention];
         for (const row of rows) {
-            if (row.domain !== "intervention") {
+            const isSpecialRegulationCoverage = row.domain === "regulation"
+                && (isPiamRegulationPost(row.targetCode) || (board.shiftLabel === "SD" && isNucleoRegulationPost(row.targetCode)));
+
+            if (row.domain !== "intervention" && !isSpecialRegulationCoverage) {
                 continue;
             }
 
@@ -545,6 +615,7 @@ export function buildChiefPayableBoard(params: {
     targetOptions: PayableTargetOption[];
     attestationSegments: AttestationSegment[];
     allDoctorNames: string[];
+    doctorPaymentProfiles?: Record<string, DoctorPaymentProfile>;
 }) {
     const dayCount = new Date(params.rangeEndIso).getTime() > new Date(params.rangeStartIso).getTime()
         ? Math.round((new Date(params.rangeEndIso).getTime() - new Date(params.rangeStartIso).getTime()) / 86400000)
@@ -590,6 +661,29 @@ export function buildChiefPayableBoard(params: {
             .filter((shift) => shift.shiftLabel === "SN")
             .reduce((sum, shift) => sum + shift.paymentUnit, 0);
         const totalUnits = orderedShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0);
+        const paymentProfile = params.doctorPaymentProfiles?.[doctorId] ?? "generalist";
+        const totalSDDueValue = orderedShifts
+            .filter((shift) => shift.shiftLabel === "SD")
+            .reduce((sum, shift) => sum + resolveShiftDueAmount({
+                profile: paymentProfile,
+                operationalDate: shift.operationalDate,
+                paymentUnit: shift.paymentUnit,
+            }), 0);
+        const totalSNDueValue = orderedShifts
+            .filter((shift) => shift.shiftLabel === "SN")
+            .reduce((sum, shift) => sum + resolveShiftDueAmount({
+                profile: paymentProfile,
+                operationalDate: shift.operationalDate,
+                paymentUnit: shift.paymentUnit,
+            }), 0);
+        const totalDueValue = orderedShifts
+            .reduce((sum, shift) => sum + resolveShiftDueAmount({
+                profile: paymentProfile,
+                operationalDate: shift.operationalDate,
+                paymentUnit: shift.paymentUnit,
+            }), 0);
+        const weekdayShiftCount = orderedShifts.filter((shift) => !isWeekendOperationalDate(shift.operationalDate)).length;
+        const weekendShiftCount = orderedShifts.length - weekdayShiftCount;
         const pendingCount = orderedShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
         const paymentStatus = pendingCount > 0 ? "needs_review" : "ready_for_payment";
 
@@ -601,6 +695,12 @@ export function buildChiefPayableBoard(params: {
             totalSD: Number(totalSDUnits.toFixed(2)),
             totalSN: Number(totalSNUnits.toFixed(2)),
             total: Number(totalUnits.toFixed(2)),
+            totalSDDue: Number(totalSDDueValue.toFixed(2)),
+            totalSNDue: Number(totalSNDueValue.toFixed(2)),
+            totalDue: Number(totalDueValue.toFixed(2)),
+            weekdayShiftCount,
+            weekendShiftCount,
+            paymentProfile,
             pendingCount,
             cells: days.map((day) => ({
                 day,
@@ -627,6 +727,7 @@ export function buildChiefPayableBoard(params: {
             doctorCount: doctors.length,
             payableShiftCount: params.payableShifts.length,
             payableUnitCount: Number(params.payableShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2)),
+            totalDueAmount: Number(doctors.reduce((sum, doctor) => sum + (doctor.totalDue ?? 0), 0).toFixed(2)),
             readyCount: params.payableShifts.filter((shift) => shift.paymentStatus === "ready_for_payment").length,
             needsReviewCount: params.payableShifts.filter((shift) => shift.paymentStatus === "needs_review").length,
             segmentCount: params.attestationSegments.length,

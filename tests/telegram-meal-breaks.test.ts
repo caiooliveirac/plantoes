@@ -496,7 +496,9 @@ test("resolveMealBreakLunchCapacities segue a distribuicao proporcional esperada
 
 test("parseTelegramMealBreakCommand reconhece o comando e o reinicio", () => {
     assert.equal(isTelegramMealBreakCommandText("/almoco"), true);
+    assert.equal(isTelegramMealBreakCommandText("/almoço"), true);
     assert.equal(isTelegramMealBreakCommandText("/almoco reiniciar"), true);
+    assert.equal(isTelegramMealBreakCommandText("/almoço reiniciar"), true);
     assert.equal(isTelegramMealBreakCommandText("/jantar"), true);
     assert.deepEqual(parseTelegramMealBreakCommand("/almoco"), {
         name: "meal_break",
@@ -504,7 +506,19 @@ test("parseTelegramMealBreakCommand reconhece o comando e o reinicio", () => {
         forceRestart: false,
         rawBody: "",
     });
+    assert.deepEqual(parseTelegramMealBreakCommand("/almoço"), {
+        name: "meal_break",
+        mode: "day",
+        forceRestart: false,
+        rawBody: "",
+    });
     assert.deepEqual(parseTelegramMealBreakCommand("/almoco reiniciar"), {
+        name: "meal_break",
+        mode: "day",
+        forceRestart: true,
+        rawBody: "reiniciar",
+    });
+    assert.deepEqual(parseTelegramMealBreakCommand("/almoço reiniciar"), {
         name: "meal_break",
         mode: "day",
         forceRestart: true,

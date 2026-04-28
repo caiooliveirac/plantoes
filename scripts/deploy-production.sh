@@ -20,6 +20,21 @@ info() {
     echo "[deploy][INFO] $*"
 }
 
+pm2_meta_value() {
+    local process_name="$1"
+    local field="$2"
+
+    pm2 jlist | node -e '
+const fs = require("fs");
+const processName = process.argv[1];
+const field = process.argv[2];
+const rows = JSON.parse(fs.readFileSync(0, "utf8"));
+const online = rows.find((row) => row?.name === processName && row?.pm2_env?.status === "online");
+const value = online?.pm2_env?.[field];
+process.stdout.write(typeof value === "string" ? value : "");
+' "$process_name" "$field"
+}
+
 resolve_leaf_child_pid() {
     local pid="$1"
     local child_pid=""
@@ -157,6 +172,20 @@ postdeploy_checks() {
     worker_pid="$(pm2 pid ${OFFICIAL_WORKER_NAME})"
     [[ -n "${web_pid}" && "${web_pid}" != "0" ]] || fail "Processo PM2 '${OFFICIAL_APP_NAME}' não está ativo."
     [[ -n "${worker_pid}" && "${worker_pid}" != "0" ]] || fail "Processo PM2 '${OFFICIAL_WORKER_NAME}' não está ativo."
+
+    local app_cwd worker_cwd app_commit worker_commit expected_commit
+    app_cwd="$(pm2_meta_value "${OFFICIAL_APP_NAME}" "pm_cwd")"
+    worker_cwd="$(pm2_meta_value "${OFFICIAL_WORKER_NAME}" "pm_cwd")"
+    expected_commit="${GIT_COMMIT_SHA:-unknown}"
+    app_commit="$(pm2_meta_value "${OFFICIAL_APP_NAME}" "GIT_COMMIT_SHA")"
+    worker_commit="$(pm2_meta_value "${OFFICIAL_WORKER_NAME}" "GIT_COMMIT_SHA")"
+
+    [[ "${app_cwd}" == "/home/ubuntu/plantoes" ]] || fail "CWD divergente no app PM2. Esperado '/home/ubuntu/plantoes', atual '${app_cwd:-vazio}'."
+    [[ "${worker_cwd}" == "/home/ubuntu/plantoes" ]] || fail "CWD divergente no worker PM2. Esperado '/home/ubuntu/plantoes', atual '${worker_cwd:-vazio}'."
+    [[ -n "${app_commit}" ]] || fail "GIT_COMMIT_SHA ausente no app PM2."
+    [[ -n "${worker_commit}" ]] || fail "GIT_COMMIT_SHA ausente no worker PM2."
+    [[ "${app_commit}" == "${expected_commit}" ]] || fail "Commit divergente no app PM2. Esperado '${expected_commit}', atual '${app_commit}'."
+    [[ "${worker_commit}" == "${expected_commit}" ]] || fail "Commit divergente no worker PM2. Esperado '${expected_commit}', atual '${worker_commit}'."
 
     local port
     port="$(tr '\0' '\n' < "/proc/${web_pid}/environ" | sed -n 's/^PORT=//p' | head -n 1)"

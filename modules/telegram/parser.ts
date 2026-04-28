@@ -4,6 +4,7 @@ import { computeLevenshteinDistance } from "@/modules/telegram/departure-flow";
 const RAMAIS_REGULACAO = new Set([
     "1321", "1322", "1323", "1324", "1325", "1326", "1327", "1328", "1329",
     "1361", "1362", "1363", "1364", "1365", "1366", "1367", "1368",
+    "1476",
     "2031", "2032", "2033", "2034", "2035",
     "2151", "2152", "2153", "2154",
     "2377",
@@ -326,7 +327,10 @@ export function parseMessage(text: string): ParsedMessage {
         else shiftType = shiftMatch[1] as ParsedMessage["shiftType"];
     }
 
-    const roleMatch = normalized.match(new RegExp(`\\b(${STANDARD_OPERATIONAL_ROLE_CODES.join("|")})\\b`));
+    // "RECIPIENDARIO" / "RECIPIENDARIA" are the written-out forms of "RECIP".
+    // Replace them before applying the word-boundary role regex (which only matches the short code).
+    const normalizedForRole = normalized.replace(/\bRECIPIENDARI[OA]\b/g, "RECIP");
+    const roleMatch = normalizedForRole.match(new RegExp(`\\b(${STANDARD_OPERATIONAL_ROLE_CODES.join("|")})\\b`));
     if (roleMatch?.[1]) {
         roleFunction = roleMatch[1];
     }

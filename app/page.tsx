@@ -25,7 +25,10 @@ function EmptyState() {
     );
 }
 
-export default async function HomePage() {
+export default async function HomePage({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
+    const params = searchParams ? await searchParams : undefined;
+    const initialViewMode = params?.view === "history" ? "history" : "live";
+
     if (!hasDatabaseUrl()) {
         return <EmptyState />;
     }
@@ -53,6 +56,7 @@ export default async function HomePage() {
             mealBreakEligibility={mealBreakEligibility}
             previousShift={previousShift}
             doctors={doctors}
+            initialViewMode={initialViewMode}
             session={session ? {
                 email: session.user.email,
                 roles: session.user.roles,

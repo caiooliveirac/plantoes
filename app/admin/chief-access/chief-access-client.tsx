@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffectEvent, useState } from "react";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 
 interface DoctorOption {
     id: string;
@@ -182,10 +183,7 @@ export function ChiefAccessClient({ doctors, assignments: initialAssignments }: 
                     </p>
                 </div>
 
-                <div className="chief-access-hero-actions">
-                    <a className="reports-secondary-link" href="/">Abrir quadro operacional</a>
-                    <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
-                </div>
+                <AdminGlobalNavigationLinks current="chief-access" containerClassName="chief-access-hero-actions" />
             </section>
 
             <section className="chief-access-summary-grid">

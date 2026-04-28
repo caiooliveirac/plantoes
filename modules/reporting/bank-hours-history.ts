@@ -1,11 +1,8 @@
 import { buildContinuityGroups } from "@/modules/bank-hours/continuity";
 import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { buildBankHoursBalanceOverrideExplanation, MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE } from "@/modules/bank-hours/service";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import {
-    inferInterventionCoverageWindow,
-    inferRegulationCoverageWindow,
-} from "@/modules/operational/rules";
 import type { MonthlyReportAuditEntry, MonthlyReportSource } from "@/modules/reporting/monthly-report";
 
 export interface RawBankHoursHistoryShift {
@@ -218,21 +215,14 @@ function resolveBaseShiftLabel(shift: RawBankHoursHistoryShift) {
 }
 
 function resolveScheduledWindow(shift: RawBankHoursHistoryShift) {
-    const startedAt = new Date(shift.startedAt);
-    const inferredWindow = shift.domain === "regulation"
-        ? inferRegulationCoverageWindow({
-            startedAt,
-            shiftLabel: shift.shiftLabel,
-            postCode: shift.targetCode,
-            explicitScheduledStartAt: shift.bankScheduledStartAt ? new Date(shift.bankScheduledStartAt) : (shift.occupancyScheduledStartAt ? new Date(shift.occupancyScheduledStartAt) : null),
-            explicitScheduledEndAt: shift.bankScheduledEndAt ? new Date(shift.bankScheduledEndAt) : (shift.occupancyScheduledEndAt ? new Date(shift.occupancyScheduledEndAt) : null),
-        })
-        : inferInterventionCoverageWindow({
-            startedAt,
-            shiftLabel: shift.shiftLabel,
-            explicitScheduledStartAt: shift.bankScheduledStartAt ? new Date(shift.bankScheduledStartAt) : (shift.occupancyScheduledStartAt ? new Date(shift.occupancyScheduledStartAt) : null),
-            explicitScheduledEndAt: shift.bankScheduledEndAt ? new Date(shift.bankScheduledEndAt) : (shift.occupancyScheduledEndAt ? new Date(shift.occupancyScheduledEndAt) : null),
-        });
+    const inferredWindow = resolveBankHoursScheduledWindow({
+        domain: shift.domain,
+        startedAt: shift.startedAt,
+        shiftLabel: shift.shiftLabel,
+        scheduledStartAt: shift.bankScheduledStartAt ?? shift.occupancyScheduledStartAt,
+        scheduledEndAt: shift.bankScheduledEndAt ?? shift.occupancyScheduledEndAt,
+        postCode: shift.domain === "regulation" ? shift.targetCode : null,
+    });
 
     return {
         scheduledStartAt: inferredWindow.scheduledStartAt?.toISOString() ?? null,

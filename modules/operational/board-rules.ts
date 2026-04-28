@@ -238,6 +238,13 @@ export function shouldKeepRegulationOccupancyVisible(params: {
         return true;
     }
 
+    // For cross-shift continuity, boardStartedAt may intentionally remain anchored to
+    // the original arrival (previous shift) while startedAt reflects the current shift
+    // takeover. In that case, never hide the active occupancy.
+    if (!isBeforeCurrentOperationalShift(startedAt, reference)) {
+        return true;
+    }
+
     const visibilityAnchorAt = params.boardStartedAt ?? startedAt;
 
     if (!isBeforeCurrentOperationalShift(visibilityAnchorAt, reference)) {

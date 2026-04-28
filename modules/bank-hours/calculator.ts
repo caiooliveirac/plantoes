@@ -1,4 +1,4 @@
-export const BANK_HOURS_RULE_VERSION = 4;
+export const BANK_HOURS_RULE_VERSION = 6;
 export const ARRIVAL_GRACE_MINUTES = 15;
 export const DEPARTURE_GRACE_MINUTES = 15;
 

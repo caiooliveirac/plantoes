@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyAnomalyGuard, calculateBankHours } from "@/modules/bank-hours/calculator";
+import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 
 function iso(value: string) {
     return new Date(value).toISOString();
@@ -178,6 +179,58 @@ test("continued shift leaving early does not create benefit", () => {
     assert.equal(result.overtimeMinutes, 0);
     assert.equal(result.creditedOvertimeMinutes, 0);
     assert.equal(result.balanceMinutes, 0);
+});
+
+test("regulation bank-hours window removes the duplicated 15-minute grace on exit", () => {
+    const window = resolveBankHoursScheduledWindow({
+        domain: "regulation",
+        startedAt: iso("2026-04-09T19:02:20-03:00"),
+        shiftLabel: "SN",
+        scheduledStartAt: iso("2026-04-09T19:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-10T07:15:00-03:00"),
+        postCode: "2031",
+    });
+
+    assert.equal(window.scheduledStartAt?.toISOString(), iso("2026-04-09T19:00:00-03:00"));
+    assert.equal(window.scheduledEndAt?.toISOString(), iso("2026-04-10T07:00:00-03:00"));
+
+    const result = calculateBankHours({
+        scheduledStartAt: window.scheduledStartAt!,
+        scheduledEndAt: window.scheduledEndAt!,
+        actualStartAt: iso("2026-04-09T19:02:20-03:00"),
+        actualEndAt: iso("2026-04-10T07:20:00-03:00"),
+    });
+
+    assert.equal(result.arrivalDelayMinutes, 0);
+    assert.equal(result.overtimeMinutes, 20);
+    assert.equal(result.creditedOvertimeMinutes, 40);
+    assert.equal(result.balanceMinutes, 40);
+});
+
+test("regulation bank-hours window preserves explicit custom end times", () => {
+    const window = resolveBankHoursScheduledWindow({
+        domain: "regulation",
+        startedAt: iso("2026-04-09T10:30:00-03:00"),
+        shiftLabel: "SD",
+        scheduledStartAt: iso("2026-04-09T10:30:00-03:00"),
+        scheduledEndAt: iso("2026-04-09T17:00:00-03:00"),
+        postCode: "2031",
+    });
+
+    assert.equal(window.scheduledEndAt?.toISOString(), iso("2026-04-09T17:00:00-03:00"));
+});
+
+test("regulation bank-hours window also normalizes explicit P ends at 07:15 or 19:15", () => {
+    const window = resolveBankHoursScheduledWindow({
+        domain: "regulation",
+        startedAt: iso("2026-04-07T07:00:00-03:00"),
+        shiftLabel: "P",
+        scheduledStartAt: iso("2026-04-07T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-07T19:15:00-03:00"),
+        postCode: "1368",
+    });
+
+    assert.equal(window.scheduledEndAt?.toISOString(), iso("2026-04-07T19:00:00-03:00"));
 });
 
 test("anomaly guard clamps excessive delay to zero balance", () => {

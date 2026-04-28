@@ -1,6 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { PaymentAttestationClient } from "@/app/admin/payment-attestation/payment-attestation-client";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { getPaymentAttestationSlotView } from "@/services/payment-attestation.service";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +12,7 @@ function PaymentAttestationUnavailable({ title, copy }: { title: string; copy: s
             <section className="payment-empty-state standalone large">
                 <strong>{title}</strong>
                 <span>{copy}</span>
-                <div className="payment-actions split">
-                    <a className="reports-secondary-link" href="/admin/payment-closing">Abrir fechamento mensal</a>
-                    <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
-                </div>
+                <AdminGlobalNavigationLinks current="payment-attestation" containerClassName="payment-actions split" />
             </section>
         </main>
     );

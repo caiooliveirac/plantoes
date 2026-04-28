@@ -940,11 +940,13 @@ body {
     position: relative;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    width: 44px;
-    min-width: 44px;
-    min-height: 44px;
-    border-radius: 999px;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 210px;
+    min-width: 210px;
+    min-height: 42px;
+    padding: 0 12px;
+    border-radius: 14px;
     border: 1px solid rgba(145, 170, 205, 0.1);
     background: rgba(10, 16, 25, 0.26);
     color: var(--muted-strong);
@@ -1015,12 +1017,21 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex: 0 0 auto;
 }
 
 .ops-history-trigger-icon svg {
     width: 16px;
     height: 16px;
     fill: currentColor;
+}
+
+.ops-history-trigger-label {
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
 }
 
 .ops-auth-popover {
@@ -4096,19 +4107,92 @@ body {
 
 .chief-payable-table td.doctor,
 .chief-payable-table th.doctor {
-    min-width: 280px;
-    max-width: 280px;
+    min-width: 320px;
+    max-width: 320px;
     text-align: left;
+}
+
+.chief-payable-doctor-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.chief-payable-doctor-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .chief-payable-table td.doctor strong {
     display: block;
-    line-height: 1.35;
+    line-height: 1.3;
 }
 
-.chief-payable-table td.doctor span {
-    color: var(--muted);
-    font-size: 0.74rem;
+.chief-payable-doctor-button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+    text-align: left;
+}
+
+.chief-payable-doctor-button:hover strong {
+    text-decoration: underline;
+}
+
+.chief-payable-profile-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 22px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    font-size: 0.63rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.chief-payable-profile-badge.specialist {
+    border-color: rgba(86, 179, 255, 0.6);
+    color: #cbe9ff;
+    background: rgba(11, 39, 64, 0.66);
+}
+
+.chief-payable-profile-badge.psychiatry {
+    border-color: rgba(115, 228, 169, 0.5);
+    color: #c8ffd5;
+    background: rgba(11, 51, 37, 0.5);
+}
+
+.chief-payable-specialist-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    width: fit-content;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(126, 221, 255, 0.32);
+    background: rgba(11, 31, 48, 0.62);
+    color: #cbe9ff;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.chief-payable-specialist-toggle input {
+    margin: 0;
+}
+
+.chief-payable-specialist-toggle input:disabled {
+    opacity: 0.55;
+    cursor: wait;
 }
 
 .chief-payable-cell-tags {
@@ -4161,6 +4245,13 @@ button.chief-payable-tag:focus-visible {
     color: #dcdcff;
 }
 
+.chief-payable-tag.half {
+    background: rgba(255, 196, 55, 0.2);
+    border-color: rgba(255, 196, 55, 0.6);
+    color: #fff4c2;
+    box-shadow: inset 0 0 0 1px rgba(255, 213, 98, 0.28);
+}
+
 .chief-payable-tag.disabled {
     border-style: dashed;
     background: rgba(255, 93, 108, 0.12);
@@ -4197,6 +4288,85 @@ button.chief-payable-tag:focus-visible {
     padding: 18px;
     background: rgba(11, 17, 27, 0.86);
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.chief-payable-final-value {
+    font-weight: 800;
+    color: #a8f7d2;
+    background: rgba(14, 46, 30, 0.35);
+}
+
+.chief-payable-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(4, 8, 16, 0.72);
+    backdrop-filter: blur(3px);
+}
+
+.chief-payable-modal {
+    width: min(680px, calc(100vw - 24px));
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: linear-gradient(180deg, rgba(8, 16, 30, 0.98), rgba(6, 12, 22, 0.98));
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+    padding: 16px;
+}
+
+.chief-payable-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.chief-payable-modal-header h3 {
+    margin: 2px 0 2px;
+    font-size: 1.05rem;
+}
+
+.chief-payable-modal-header p {
+    margin: 0;
+    color: var(--muted-strong);
+    font-size: 0.84rem;
+}
+
+.chief-payable-modal-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.chief-payable-modal-card {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    background: rgba(12, 24, 40, 0.66);
+    padding: 12px;
+    display: grid;
+    gap: 4px;
+}
+
+.chief-payable-modal-card span {
+    font-size: 0.75rem;
+    color: var(--muted-strong);
+}
+
+.chief-payable-modal-card strong {
+    font-size: 1.1rem;
+}
+
+.chief-payable-modal-card small {
+    color: var(--muted);
+    font-size: 0.74rem;
+}
+
+.chief-payable-modal-card.emphasis {
+    background: rgba(20, 54, 37, 0.58);
+    border-color: rgba(139, 255, 198, 0.28);
 }
 
 @media (max-width: 1180px) {
@@ -4295,6 +4465,10 @@ button.chief-payable-tag:focus-visible {
     .chief-payable-table th.doctor {
         min-width: 220px;
         max-width: 220px;
+    }
+
+    .chief-payable-modal-grid {
+        grid-template-columns: 1fr;
     }
 
     .hours-shell {
@@ -6507,9 +6681,14 @@ button.chief-payable-tag:focus-visible {
     }
 
     .ops-history-trigger {
-        width: 42px;
-        min-width: 42px;
+        width: auto;
+        min-width: 180px;
         min-height: 42px;
+        padding: 0 10px;
+    }
+
+    .ops-history-trigger-label {
+        font-size: 0.67rem;
     }
 
     .ops-auth-popover {
@@ -6704,6 +6883,7 @@ button.chief-payable-tag:focus-visible {
 
 .ops-shell-history {
     max-width: 1480px;
+    padding-top: 0;
 }
 
 .ops-history-trigger.historical-review {
@@ -6722,7 +6902,7 @@ button.chief-payable-tag:focus-visible {
 .ops-retro-shell {
     display: grid;
     gap: 12px;
-    padding: 6px 0 24px;
+    padding: 0 0 24px;
 }
 
 .ops-retro-header,
@@ -6740,6 +6920,9 @@ button.chief-payable-tag:focus-visible {
     gap: 12px;
     padding: 16px 18px;
     border-radius: 24px;
+    position: sticky;
+    top: 10px;
+    z-index: 5;
     background:
         radial-gradient(circle at top left, rgba(95, 168, 225, 0.14), transparent 30%),
         radial-gradient(circle at bottom right, rgba(197, 161, 106, 0.12), transparent 24%),
@@ -7278,6 +7461,23 @@ button.chief-payable-tag:focus-visible {
     }
 
     .ops-retro-domain-actions,
+
+    .ops-retro-navigation-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .ops-retro-navigation-links .reports-primary-link,
+    .ops-retro-navigation-links .reports-secondary-link {
+        min-height: 34px;
+    }
+
+    .ops-retro-navigation-links .chief-primary-button,
+    .ops-retro-navigation-links .chief-secondary-button {
+        min-height: 34px;
+    }
     .ops-retro-pending-header,
     .ops-retro-domain-header,
     .ops-retro-pending-item {

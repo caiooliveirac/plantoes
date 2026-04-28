@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import type { MonthlyReportDoctorGroup, MonthlyReportModel, MonthlyReportPaymentStatus, MonthlyReportShift } from "@/modules/reporting/monthly-report";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 
@@ -159,23 +160,14 @@ export function MonthlyReportClient({ report }: Props) {
                     </p>
                 </div>
 
-                <div className="reports-hero-actions">
-                    <a className="reports-primary-link" href="/admin/payment-attestation">
-                        Abrir atesto diário
-                    </a>
-                    <a className="reports-primary-link" href="/admin/payment-closing">
-                        Abrir fechamento mensal
-                    </a>
+                <AdminGlobalNavigationLinks current="reports" containerClassName="reports-hero-actions">
                     <a className="reports-primary-link" href={`/api/admin/reports/export?month=${report.monthKey}`}>
                         Exportar XLSX
                     </a>
                     <a className="reports-secondary-link" href={`/api/admin/reports/export?month=${report.monthKey}&format=csv`}>
                         Baixar CSV
                     </a>
-                    <a className="reports-secondary-link" href="/">
-                        Voltar ao quadro
-                    </a>
-                </div>
+                </AdminGlobalNavigationLinks>
             </section>
 
             <section className="reports-presets">

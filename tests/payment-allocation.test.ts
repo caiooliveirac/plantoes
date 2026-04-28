@@ -620,9 +620,9 @@ test("buildPaymentAllocationBoardModel reuses the first arrival from the continu
     assert.equal(board.regulation[0]?.sourceShiftLabel, "P");
     assert.equal(board.regulation[0]?.sourceStartedAt, "2026-03-28T10:06:00.000Z");
     assert.equal(board.regulation[0]?.sourceScheduledStartAt, "2026-03-28T10:00:00.000Z");
-    assert.equal(board.regulation[0]?.sourceScheduledEndAt, "2026-03-29T10:15:00.000Z");
+    assert.equal(board.regulation[0]?.sourceScheduledEndAt, "2026-03-29T10:00:00.000Z");
     assert.equal(board.regulation[0]?.sourceActualEndedAt, "2026-03-29T10:36:00.000Z");
-    assert.equal(board.regulation[0]?.sourceBalanceMinutes, 42);
+    assert.equal(board.regulation[0]?.sourceBalanceMinutes, 72);
 });
 
 test("buildPaymentAllocationBoardModel excludes nucleo from SN payment allocation", () => {

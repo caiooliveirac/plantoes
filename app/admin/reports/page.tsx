@@ -1,6 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { MonthlyReportClient } from "@/app/admin/reports/monthly-report-client";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { getMonthlyAdminReport } from "@/services/monthly-report.service";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +12,7 @@ function ReportsUnavailable({ title, copy }: { title: string; copy: string }) {
             <section className="reports-empty-state standalone">
                 <strong>{title}</strong>
                 <span>{copy}</span>
-                <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
+                <AdminGlobalNavigationLinks current="reports" />
             </section>
         </main>
     );

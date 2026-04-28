@@ -3699,7 +3699,8 @@ async function rollbackMealBreakAutoNotice(chatId: string, operationalDate: stri
 }
 
 export function isTelegramMealBreakCommandText(text: string) {
-    return /^\/(?:almoco|jantar)(?:@\w+)?\b/i.test(text.trim());
+    const normalized = text.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    return /^\/(?:almoco|jantar)(?:@\w+)?\b/i.test(normalized);
 }
 
 export function isTelegramMealBreakPriorityCommandText(text: string) {
@@ -3708,7 +3709,8 @@ export function isTelegramMealBreakPriorityCommandText(text: string) {
 
 export function parseTelegramMealBreakCommand(text: string): TelegramMealBreakCommand | null {
     const trimmed = text.trim();
-    const match = trimmed.match(/^\/(almoco|jantar)(?:@(\w+))?(?:\s+(reiniciar))?\s*$/i);
+    const normalized = trimmed.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const match = normalized.match(/^\/(almoco|jantar)(?:@(\w+))?(?:\s+(reiniciar))?\s*$/i);
     if (!match) {
         return null;
     }
@@ -3717,7 +3719,7 @@ export function parseTelegramMealBreakCommand(text: string): TelegramMealBreakCo
         name: "meal_break",
         mode: match[1]?.toLowerCase() === "jantar" ? "night" : "day",
         forceRestart: Boolean(match[3]),
-        rawBody: trimmed.replace(/^\/(?:almoco|jantar)(?:@\w+)?/i, "").trim(),
+        rawBody: normalized.replace(/^\/(?:almoco|jantar)(?:@\w+)?/i, "").trim(),
     };
 }
 

@@ -10,16 +10,19 @@ import {
     getPaymentAttestationSlotView,
     refreshPaymentAttestationSlot,
     reopenPaymentAttestationSlot,
+    setDoctorPaymentSpecialistProfile,
 } from "@/services/payment-attestation.service";
 
 const actionSchema = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     shift: z.enum(["SD", "SN"]).optional(),
-    action: z.enum(["refresh", "approve", "reopen", "manual_assign", "manual_disable"]),
+    action: z.enum(["refresh", "approve", "reopen", "manual_assign", "manual_disable", "set_doctor_payment_profile"]),
     domain: z.enum(["regulation", "intervention"]).optional(),
     targetCode: z.string().trim().min(1).max(32).optional(),
     doctorName: z.string().trim().min(3).max(255).optional(),
     disabledReason: z.string().trim().min(3).max(255).optional(),
+    doctorId: z.string().uuid().optional(),
+    isSpecialist: z.boolean().optional(),
 });
 
 function getRequestParams(request: NextRequest) {
@@ -103,7 +106,34 @@ export async function POST(request: NextRequest) {
         }
     }
 
+    if (parsed.data.action === "set_doctor_payment_profile") {
+        if (!parsed.data.doctorId || parsed.data.isSpecialist === undefined) {
+            return NextResponse.json({ error: "Para atualizar perfil de pagamento informe medico e flag especialista." }, { status: 400 });
+        }
+    }
+
     try {
+        if (parsed.data.action === "set_doctor_payment_profile") {
+            const doctor = await setDoctorPaymentSpecialistProfile({
+                doctorId: parsed.data.doctorId as string,
+                isSpecialist: parsed.data.isSpecialist as boolean,
+            });
+
+            await getDb().insert(auditLogs).values({
+                actorUserId: session.user.id,
+                action: `payment_attestation.${parsed.data.action}`,
+                entityType: "doctor",
+                entityId: doctor.id,
+                details: {
+                    doctorName: doctor.fullName,
+                    isSpecialist: doctor.isSpecialist,
+                    paymentProfile: doctor.paymentProfile,
+                },
+            });
+
+            return NextResponse.json({ ok: true, doctor });
+        }
+
         const slot = parsed.data.action === "refresh"
             ? await refreshPaymentAttestationSlot({ ...params, actorUserId: session.user.id })
             : parsed.data.action === "approve"

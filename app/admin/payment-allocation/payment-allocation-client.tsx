@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { resolvePendingRegulationOccupantLabel } from "@/modules/operational/board-display";
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
 
@@ -421,12 +422,7 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                     </p>
                 </div>
 
-                <div className="payment-hero-actions">
-                    <a className="reports-primary-link" href="/admin/payment-attestation">Abrir atesto diário</a>
-                    <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
-                    <a className="reports-secondary-link" href="/admin/bank-hours">Abrir banco de horas</a>
-                    <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
-                </div>
+                <AdminGlobalNavigationLinks current="payment-allocation" containerClassName="payment-hero-actions" />
             </section>
 
             <section className="payment-summary-grid">

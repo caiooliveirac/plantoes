@@ -20,6 +20,7 @@ Antes de qualquer alteração em backend, leia o arquivo `/RULES.md` na raiz do 
 
 - Sempre tratar `shiftLabel === null` como caso de primeira classe (29% das ocupações)
 - Sempre considerar P-shift cruzando virada de turno em lógica de boundaries
+- Em Telegram, continuidade automatica so pode inferir vinculo com o turno atual ou com o turno imediatamente anterior; nunca reutilizar ocupacao de dias atras
 - Nunca assumir que `startedAt` está no mesmo dia que `endedAt` (SN cruza meia-noite)
 - Nunca confundir os 3 relógios: tolerância do quadro (60 min) ≠ tolerância financeira (15 min)
 - `isActive = false` é estado de domínio, NÃO soft delete

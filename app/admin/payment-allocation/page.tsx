@@ -1,6 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { PaymentAllocationClient } from "@/app/admin/payment-allocation/payment-allocation-client";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { getPaymentAllocationBoard } from "@/services/board.service";
 import { listDoctorsForChiefInvite } from "@/services/chief-access.service";
 
@@ -12,10 +13,7 @@ function PaymentAllocationUnavailable({ title, copy }: { title: string; copy: st
             <section className="payment-empty-state standalone large">
                 <strong>{title}</strong>
                 <span>{copy}</span>
-                <div className="payment-actions split">
-                    <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
-                    <a className="reports-secondary-link" href="/admin/bank-hours">Abrir banco de horas</a>
-                </div>
+                <AdminGlobalNavigationLinks current="payment-allocation" containerClassName="payment-actions split" />
             </section>
         </main>
     );

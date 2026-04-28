@@ -1,5 +1,6 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { getOperationalSlotAuditReport } from "@/services/slot-audit.service";
 
 export const dynamic = "force-dynamic";
@@ -10,10 +11,7 @@ function SlotAuditUnavailable({ title, copy }: { title: string; copy: string }) 
             <section className="payment-empty-state standalone large">
                 <strong>{title}</strong>
                 <span>{copy}</span>
-                <div className="payment-actions split">
-                    <a className="reports-secondary-link" href="/admin/payment-allocation">Abrir alocação do turno</a>
-                    <a className="reports-secondary-link" href="/">Voltar para a mesa operacional</a>
-                </div>
+                <AdminGlobalNavigationLinks current="slot-audit" containerClassName="payment-actions split" />
             </section>
         </main>
     );
@@ -107,7 +105,7 @@ export default async function AdminSlotAuditPage({
                 <div className="slot-audit-hero-meta">
                     <span className="payment-status-pill large ready">{report.dayCount} dia(s)</span>
                     <span className="slot-audit-range-label">{formatDateLabel(report.startDate)} até {formatDateLabel(report.endDate)}</span>
-                    <a className="payment-button" href="/">Voltar para a mesa</a>
+                    <AdminGlobalNavigationLinks current="slot-audit" containerClassName="payment-hero-actions" />
                 </div>
             </section>
 

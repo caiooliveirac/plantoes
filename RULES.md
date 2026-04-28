@@ -131,6 +131,8 @@ O sistema tem **3 relógios que NÃO devem ser confundidos**:
 
 **⚠️**: Os `:15` da regulação são **diferentes** da virada do quadro (07:00/19:00). São usados para fechamento e lembretes.
 
+**⚠️ Regra financeira importante**: no banco de horas da regulação, a matemática usa a virada-base `07:00/19:00` e aplica a tolerância financeira de 15 min no calculador. Em outras palavras, `scheduledEndAt = 07:15/19:15` continua existindo para operação e lembretes, mas não pode virar uma segunda tolerância financeira na apuração.
+
 ### Visibilidade no quadro
 
 - Sem `P`: some do quadro quando a virada torna a ocupação inequivocamente antiga
@@ -243,6 +245,8 @@ Quando o médico diz "Ana Luiza continua SN" sem mencionar base/ramal:
 | 07:14 | 19:15 | +30 min (atraso perdoado → excedente dobrado) |
 | 07:15 | 19:15 | 0 min (atraso = 15 min, sem perdão; excedente < 15 min) |
 | 07:16 | 19:16 | 0 min (atraso > 15 min anula crédito duplo; excedente < 15 min) |
+
+Para regulação, isso significa: uma saída às `07:20` ou `19:20` deve ser lida como `20 min` além da virada-base, não `5 min` além do encerramento operacional `:15`.
 
 ### Justificativa de overtime
 

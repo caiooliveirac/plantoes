@@ -10,6 +10,7 @@ import {
     buildPayableShiftsFromBoards,
     buildPayableTargetOptions,
     type ChiefPayableBoardModel,
+    resolveDoctorPaymentProfile,
     type RawPresenceEvent,
 } from "@/modules/reporting/payable-shifts";
 import {
@@ -380,7 +381,15 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         loadTargets(rawStartIso, rawEndIso),
         loadTargetDeactivationIntervals(rawStartIso, rawEndIso),
         loadRawRows(rawStartIso, rawEndIso),
-        getDb().select({ fullName: doctors.fullName }).from(doctors).where(eq(doctors.isActive, true)).orderBy(asc(doctors.fullName)),
+        getDb()
+            .select({
+                id: doctors.id,
+                fullName: doctors.fullName,
+                metadata: doctors.metadata,
+            })
+            .from(doctors)
+            .where(eq(doctors.isActive, true))
+            .orderBy(asc(doctors.fullName)),
     ]);
 
     const rawRows = rawResultRows.map(mapPaymentAllocationAuditRow);
@@ -412,6 +421,10 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         selectedOccupancyIds,
     });
 
+    const doctorPaymentProfiles = Object.fromEntries(
+        allDoctorRows.map((row) => [row.id, resolveDoctorPaymentProfile(row.metadata)])
+    );
+
     return buildChiefPayableBoard({
         monthKey: range.monthKey,
         monthLabel: range.monthLabel,
@@ -424,6 +437,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         targetOptions,
         attestationSegments,
         allDoctorNames: allDoctorRows.map((row) => row.fullName),
+        doctorPaymentProfiles,
     });
 }
 

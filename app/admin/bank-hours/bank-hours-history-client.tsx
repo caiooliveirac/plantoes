@@ -2,6 +2,7 @@
 
 import { useDeferredValue, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import type { BankHoursDoctorHistory, BankHoursHistoryModel, BankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 
@@ -236,10 +237,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
                     </p>
                 </div>
 
-                <div className="hours-hero-actions">
-                    <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
-                    <a className="reports-secondary-link" href="/">Voltar ao quadro</a>
-                </div>
+                <AdminGlobalNavigationLinks current="bank-hours" containerClassName="hours-hero-actions" />
             </section>
 
             <section className="hours-summary-grid">

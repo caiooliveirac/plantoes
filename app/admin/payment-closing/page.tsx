@@ -1,6 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { ChiefPaymentViewClient } from "@/app/admin/payment-attestation/chief-payment-view-client";
+import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +12,7 @@ function PaymentClosingUnavailable({ title, copy }: { title: string; copy: strin
             <section className="payment-empty-state standalone large">
                 <strong>{title}</strong>
                 <span>{copy}</span>
-                <div className="payment-actions split">
-                    <a className="reports-secondary-link" href="/admin/payment-attestation">Abrir atesto turno a turno</a>
-                    <a className="reports-secondary-link" href="/admin/reports">Abrir auditoria mensal</a>
-                </div>
+                <AdminGlobalNavigationLinks current="payment-closing" containerClassName="payment-actions split" />
             </section>
         </main>
     );

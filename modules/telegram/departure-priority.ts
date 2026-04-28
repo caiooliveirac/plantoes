@@ -1,7 +1,8 @@
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
-import { normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
-import { compareTelegramInterventionCodes, compareTelegramRegulationCodes } from "@/modules/telegram/presentation-order";
+import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
+import { isRemoteOperationalRole, normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
+import { compareTelegramRegulationCodes } from "@/modules/telegram/presentation-order";
 import { getCurrentOperationalMealBreakSession, type MealBreakSession } from "@/modules/telegram/meal-breaks";
 import { getOperationalBoard } from "@/services/board.service";
 
@@ -14,7 +15,15 @@ export interface TelegramDeparturePriorityCommand {
 
 export interface DeparturePriorityEntry {
     rank: number;
-    domain: "regulation" | "intervention";
+    domain: "regulation";
+    targetCode: string;
+    name: string;
+    roleLabel: string | null;
+    startedAt: string;
+    priorityStartedAt: string;
+}
+
+export interface DeparturePriorityContinuationEntry {
     targetCode: string;
     name: string;
     roleLabel: string | null;
@@ -25,15 +34,25 @@ export interface DeparturePriorityView {
     generatedAt: string;
     shiftLabel: "SD" | "SN";
     entries: DeparturePriorityEntry[];
+    excludedContinuations: DeparturePriorityContinuationEntry[];
+    activeNightWorkSlot: "23:00" | "03:00" | null;
 }
 
 interface DeparturePriorityCandidate {
-    domain: "regulation" | "intervention";
+    domain: "regulation";
     targetCode: string;
     name: string;
     roleLabel: string | null;
     startedAt: string;
+    priorityStartedAt: string;
 }
+
+type DeparturePriorityMealBreakSession = {
+    recipRamal: string | null;
+    mode?: MealBreakSession["mode"];
+    stage?: MealBreakSession["stage"];
+    nightWorkAssignments?: MealBreakSession["nightWorkAssignments"];
+};
 
 function formatHour(value: string | Date) {
     return new Intl.DateTimeFormat("pt-BR", {
@@ -44,32 +63,101 @@ function formatHour(value: string | Date) {
     }).format(new Date(value));
 }
 
+function formatSaoPauloHourMinute(referenceAt: Date) {
+    const parts = new Intl.DateTimeFormat("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Sao_Paulo",
+    }).formatToParts(referenceAt);
+
+    const hour = Number(parts.find((part) => part.type === "hour")?.value ?? "0");
+    const minute = Number(parts.find((part) => part.type === "minute")?.value ?? "0");
+    return { hour, minute };
+}
+
+function resolveLateThresholdAt(referenceAt: Date) {
+    return resolveOperationalShiftWindow(referenceAt).startedAt.getTime() + (15 * 60 * 1000);
+}
+
+function resolvePriorityStartedAt(startedAt: string, roleLabel: string | null, thresholdAtMs: number) {
+    const startedAtMs = new Date(startedAt).getTime();
+    if (!isRemoteOperationalRole(roleLabel)) {
+        return startedAtMs;
+    }
+
+    return Math.max(startedAtMs, thresholdAtMs);
+}
+
+function resolveActiveNightWorkSlot(params: {
+    referenceAt: Date;
+    shiftLabel: "SD" | "SN";
+    mealBreakSession: DeparturePriorityMealBreakSession | null;
+}): "23:00" | "03:00" | null {
+    if (
+        params.shiftLabel !== "SN"
+        || !params.mealBreakSession
+        || params.mealBreakSession.mode !== "night"
+        || params.mealBreakSession.stage !== "completed"
+        || Object.keys(params.mealBreakSession.nightWorkAssignments ?? {}).length === 0
+    ) {
+        return null;
+    }
+
+    const { hour } = formatSaoPauloHourMinute(params.referenceAt);
+    // "23:00" turma: from 23:00 to 02:59
+    if (hour >= 23 || hour < 3) return "23:00";
+    // "03:00" turma: from 03:00 onwards (until shift ends ~19:00)
+    if (hour >= 3 && hour < 19) return "03:00";
+    return null;
+}
+
 function compareDeparturePriorityCandidates(left: DeparturePriorityCandidate, right: DeparturePriorityCandidate) {
+    const priorityStartedAtDiff = new Date(left.priorityStartedAt).getTime() - new Date(right.priorityStartedAt).getTime();
+    if (priorityStartedAtDiff !== 0) {
+        return priorityStartedAtDiff;
+    }
+
     const startedAtDiff = new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime();
     if (startedAtDiff !== 0) {
         return startedAtDiff;
     }
 
-    if (left.domain !== right.domain) {
-        return left.domain === "intervention" ? -1 : 1;
+    return compareTelegramRegulationCodes(left.targetCode, right.targetCode);
+}
+
+function compareDeparturePriorityContinuations(left: DeparturePriorityContinuationEntry, right: DeparturePriorityContinuationEntry) {
+    const startedAtDiff = new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime();
+    if (startedAtDiff !== 0) {
+        return startedAtDiff;
     }
 
-    return left.domain === "intervention"
-        ? compareTelegramInterventionCodes(left.targetCode, right.targetCode)
-        : compareTelegramRegulationCodes(left.targetCode, right.targetCode);
+    return compareTelegramRegulationCodes(left.targetCode, right.targetCode);
 }
 
 function isExcludedDepartureRole(roleLabel: string | null) {
     const normalized = normalizeOperationalRoleLabel(roleLabel);
-    return normalized === "MRV" || normalized === "RECIP";
+    return normalized === "CP"
+        || normalized === "MRV"
+        || normalized === "RECIP"
+        || isHalfShiftRoleLabel(roleLabel);
 }
 
 function buildDeparturePriorityCandidates(params: {
+    referenceAt: Date;
+    shiftLabel: "SD" | "SN";
     board: OperationalBoard;
-    mealBreakSession: Pick<MealBreakSession, "recipRamal"> | null;
+    mealBreakSession: DeparturePriorityMealBreakSession | null;
 }) {
     const recipRamal = params.mealBreakSession?.recipRamal ?? null;
     const candidates: DeparturePriorityCandidate[] = [];
+    const excludedContinuations: DeparturePriorityContinuationEntry[] = [];
+    const thresholdAtMs = resolveLateThresholdAt(params.referenceAt);
+    const activeNightWorkSlot = resolveActiveNightWorkSlot({
+        referenceAt: params.referenceAt,
+        shiftLabel: params.shiftLabel,
+        mealBreakSession: params.mealBreakSession,
+    });
 
     for (const row of params.board.regulation) {
         if (row.status !== "active" || !row.doctorId || !row.startedAt) {
@@ -83,9 +171,39 @@ function buildDeparturePriorityCandidates(params: {
             roleLabel: row.roleLabel,
             defaultRole: row.defaultRole,
         });
+        if (row.shiftLabel === "P") {
+            excludedContinuations.push({
+                targetCode: row.postCode,
+                name: formatDoctorSurfaceName({
+                    fullName: row.doctorName,
+                    displayName: row.displayName,
+                    fallback: row.postCode,
+                }),
+                roleLabel,
+                startedAt: row.startedAt,
+            });
+            continue;
+        }
+
+        if (params.shiftLabel === "SD" && row.shiftLabel !== "SD") {
+            continue;
+        }
+        if (params.shiftLabel === "SN" && row.shiftLabel === "SD") {
+            continue;
+        }
+
         if (isExcludedDepartureRole(roleLabel) || row.postCode === recipRamal) {
             continue;
         }
+
+        if (activeNightWorkSlot) {
+            const assignedSlot = params.mealBreakSession?.nightWorkAssignments?.[row.postCode] ?? null;
+            if (assignedSlot !== activeNightWorkSlot) {
+                continue;
+            }
+        }
+
+        const priorityStartedAt = new Date(resolvePriorityStartedAt(row.startedAt, roleLabel, thresholdAtMs)).toISOString();
 
         candidates.push({
             domain: "regulation",
@@ -97,39 +215,15 @@ function buildDeparturePriorityCandidates(params: {
             }),
             roleLabel,
             startedAt: row.startedAt,
+            priorityStartedAt,
         });
     }
 
-    for (const row of params.board.intervention) {
-        if (row.status !== "active" || !row.doctorId || !row.startedAt) {
-            continue;
-        }
-
-        const roleLabel = resolveOperationalRoleLabel({
-            domain: "intervention",
-            code: row.baseCode,
-            shiftLabel: row.shiftLabel,
-            roleLabel: row.roleLabel,
-            defaultRole: null,
-        });
-        if (isExcludedDepartureRole(roleLabel)) {
-            continue;
-        }
-
-        candidates.push({
-            domain: "intervention",
-            targetCode: row.baseCode,
-            name: formatDoctorSurfaceName({
-                fullName: row.doctorName,
-                displayName: row.displayName,
-                fallback: row.baseCode,
-            }),
-            roleLabel,
-            startedAt: row.startedAt,
-        });
-    }
-
-    return candidates.sort(compareDeparturePriorityCandidates);
+    return {
+        entries: candidates.sort(compareDeparturePriorityCandidates),
+        excludedContinuations: excludedContinuations.sort(compareDeparturePriorityContinuations),
+        activeNightWorkSlot,
+    };
 }
 
 export function isTelegramDeparturePriorityCommandText(text: string) {
@@ -150,48 +244,75 @@ export function parseTelegramDeparturePriorityCommand(text: string): TelegramDep
 }
 
 export function buildDeparturePriorityReply(view: DeparturePriorityView) {
-    const header = [
-        "📤 PRIORIDADE DE SAIDA",
-        `Plantão ${view.shiftLabel}. Fora da conta: saídas já declaradas, MRV e RECIP.`,
-    ];
+    const isNight = view.shiftLabel === "SN";
+    const header = ["📤 PRIORIDADE DE SAIDA"];
 
-    if (view.entries.length === 0) {
-        return [...header, "Sem plantonistas elegíveis no quadro agora."].join("\n");
+    if (isNight) {
+        header.push("Lista de reguladores no NOTURNO que realmente saem no fechamento.");
+        header.push("RMT recebe piso 19:15 (perde prioridade para presencial que chegou ate +15min).");
+        if (view.activeNightWorkSlot) {
+            header.push(`Janela ativa da divisao de jantar: ${view.activeNightWorkSlot}.`);
+        }
+    } else {
+        header.push("Lista de reguladores no DIURNO que realmente saem no fechamento.");
     }
 
-    const lines = view.entries.map((entry) => `${entry.rank}. ${entry.name} | ${entry.targetCode} | ${formatHour(entry.startedAt)}`);
+    header.push("Fora da lista principal: CP, MRV, RECIP, MEIO e quem está em P/continua.");
+
+    const lines: string[] = [];
+
+    if (view.entries.length === 0) {
+        lines.push("Sem reguladores elegiveis no quadro agora.");
+    } else {
+        lines.push(...view.entries.map((entry) => `${entry.rank}. ${entry.name} | ${entry.targetCode} | ${formatHour(entry.startedAt)}`));
+    }
+
+    lines.push("");
+    lines.push("🔁 Fora por estarem em P (continua):");
+    if (view.excludedContinuations.length === 0) {
+        lines.push("- Nenhum no momento.");
+    } else {
+        lines.push(...view.excludedContinuations.map((entry) => `- ${entry.name} | ${entry.targetCode} | ${formatHour(entry.startedAt)}`));
+    }
+
     return [...header, ...lines].join("\n");
 }
 
 export async function getCurrentDeparturePriorityView(params?: {
     referenceAt?: Date;
     board?: OperationalBoard;
-    mealBreakSession?: Pick<MealBreakSession, "recipRamal"> | null;
+    mealBreakSession?: DeparturePriorityMealBreakSession | null;
 }) {
     const referenceAt = params?.referenceAt ?? new Date();
+    const shiftLabel = resolveOperationalShiftWindow(referenceAt).shiftLabel;
     const board = params?.board ?? await getOperationalBoard();
     const mealBreakSession = params?.mealBreakSession === undefined
         ? await getCurrentOperationalMealBreakSession(referenceAt)
         : params.mealBreakSession;
-    const entries = buildDeparturePriorityCandidates({
+    const candidates = buildDeparturePriorityCandidates({
+        referenceAt,
+        shiftLabel,
         board,
         mealBreakSession,
-    }).map((entry, index) => ({
+    });
+    const entries = candidates.entries.map((entry, index) => ({
         ...entry,
         rank: index + 1,
     } satisfies DeparturePriorityEntry));
 
     return {
         generatedAt: board.generatedAt,
-        shiftLabel: resolveOperationalShiftWindow(referenceAt).shiftLabel,
+        shiftLabel,
         entries,
+        excludedContinuations: candidates.excludedContinuations,
+        activeNightWorkSlot: candidates.activeNightWorkSlot,
     } satisfies DeparturePriorityView;
 }
 
 export async function runTelegramDeparturePriorityCommand(params?: {
     referenceAt?: Date;
     board?: OperationalBoard;
-    mealBreakSession?: Pick<MealBreakSession, "recipRamal"> | null;
+    mealBreakSession?: DeparturePriorityMealBreakSession | null;
 }) {
     const view = await getCurrentDeparturePriorityView(params);
     return {

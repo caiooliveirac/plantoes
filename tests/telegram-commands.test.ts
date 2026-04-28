@@ -20,6 +20,7 @@ import { parseTelegramPaymentAdminCommand } from "@/modules/telegram/payment-com
 import { isTelegramShiftReportCommandText, parseTelegramShiftReportCommand } from "@/modules/telegram/shift-report-commands";
 import { isTelegramSummaryReportCommandText, parseTelegramSummaryReportCommand } from "@/modules/telegram/summary-report-commands";
 import { buildTelegramSummaryReport } from "@/modules/telegram/summary-report";
+import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp } from "@/modules/telegram/command-suggestions";
 import { buildGroupCorrectionAnnouncement, pickTelegramReply } from "@/modules/telegram/replies";
 import { buildTelegramShiftReport } from "@/modules/telegram/shift-report";
 import {
@@ -33,6 +34,7 @@ import {
     resolveTelegramEligibleLateDepartureReason,
     requiresTelegramDepartureAdjustmentJustification,
     resolveContinuationShiftStart,
+    resolveTelegramContinuationStartedAt,
     resolveLatestClosedShiftRequest,
     resolveTelegramSuccessReplyKind,
     shouldLinkRecentClosedTelegramContinuity,
@@ -44,6 +46,8 @@ import {
     shouldDeferPendingNameSelectionToFreshParsing,
     shouldTreatTelegramArrivalAsContinuation,
     shouldTreatTelegramArrivalAsImplicitReassignment,
+    buildTelegramContinuationSourceHint,
+    buildPublicTelegramCommandHelpReply,
 } from "@/modules/telegram/service";
 import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
 
@@ -124,6 +128,68 @@ test("parseTelegramCommand parses corrigir with target, full name and time", () 
     assert.equal(parsed?.targetCode, "PM04");
     assert.equal(parsed?.doctorName, "Marcela Souza");
     assert.equal(parsed?.time, "20:00");
+});
+
+test("buildPublicTelegramCommandHelpReply lista somente comandos publicos didaticos", () => {
+    const reply = buildPublicTelegramCommandHelpReply();
+
+    assert.match(reply, /\/plantao/);
+    assert.match(reply, /\/resumo/);
+    assert.match(reply, /\/saidas/);
+    assert.doesNotMatch(reply, /\/medico|\/banco|\/desfazer|\/ativar|\/desativar|\/remover/);
+});
+
+test("suggestTelegramCommandHelp sugere RECIP com duas opcoes no maximo", () => {
+    const result = suggestTelegramCommandHelp({
+        text: "/recipiendario Angelo",
+        recentMessages: [{ rawText: "Chegada Angelo Sposito 2153 às 08:03 SD", parsedTargetCode: "2153", parsedDoctorName: "Angelo Sposito" }],
+    });
+
+    assert.equal(result?.kind, "recip");
+    assert.equal(result?.suggestions.length, 2);
+    assert.match(result?.suggestions[0]?.usage ?? "", /RECIP/);
+    assert.match(result?.suggestions[1]?.usage ?? "", /\/ramal .* RECIP/);
+});
+
+test("suggestTelegramCommandHelp sugere sintaxe de saida e corrigirsaida para liberado chefia", () => {
+    const result = suggestTelegramCommandHelp({
+        text: "Saída Lucio Parada IT30 07:50 Liberado chefia",
+        recentMessages: [],
+    });
+
+    assert.equal(result?.kind, "departure");
+    assert.equal(result?.suggestions.length, 2);
+    assert.match(result?.suggestions[0]?.usage ?? "", /saindo IT30 07:50 porque fui liberado pela chefia/i);
+    assert.match(result?.suggestions[1]?.usage ?? "", /\/corrigirsaida .* IT30/i);
+});
+
+test("suggestTelegramCommandHelp usa contexto recente para respostas curtas de meal break", () => {
+    const result = suggestTelegramCommandHelp({
+        text: "confirmo",
+        recentMessages: [
+            { rawText: "/almoço", parsedAction: "meal_break_command" },
+            { rawText: "1367 13:30", parsedAction: "meal_break_reply" },
+        ],
+    });
+
+    assert.equal(result?.kind, "meal_break");
+    assert.deepEqual(result?.suggestions.map((item) => item.usage), ["/almoço", "/almoço reiniciar"]);
+});
+
+test("buildTelegramCommandSuggestionReply monta resposta curta e limita a duas sugestoes", () => {
+    const reply = buildTelegramCommandSuggestionReply({
+        kind: "short_reply",
+        intro: "Isso parece uma resposta curta.",
+        suggestions: [
+            { label: "Primeira", usage: "/plantao" },
+            { label: "Segunda", usage: "/resumo" },
+            { label: "Terceira", usage: "/saidas" },
+        ],
+    });
+
+    assert.match(reply, /Primeira/);
+    assert.match(reply, /Segunda/);
+    assert.doesNotMatch(reply, /Terceira/);
 });
 
 test("buildTelegramReviewLogData tags reviewable operational inputs with context", () => {
@@ -432,7 +498,7 @@ test("parseTelegramDeparturePriorityCommand reconhece o comando sem argumentos",
     assert.equal(parseTelegramDeparturePriorityCommand("/prioridadesaida agora"), null);
 });
 
-test("getCurrentDeparturePriorityView ignora MRV, RECIP e quem nao esta mais no quadro", async () => {
+test("getCurrentDeparturePriorityView lista so regulacao SD elegivel e separa continuidades em P", async () => {
     const view = await getCurrentDeparturePriorityView({
         referenceAt: new Date("2026-03-30T15:05:00-03:00"),
         board: {
@@ -471,6 +537,20 @@ test("getCurrentDeparturePriorityView ignora MRV, RECIP e quem nao esta mais no 
                     ramalLabel: "2032",
                 }),
                 makeRegulationPriorityRow({
+                    postId: 4,
+                    occupancyId: "reg-priority-cp",
+                    postCode: "2031",
+                    postLabel: "2031",
+                    defaultRole: "MR",
+                    doctorId: "doc-cp",
+                    doctorName: "Carla Prado",
+                    displayName: "Carla",
+                    startedAt: "2026-03-30T09:40:00.000Z",
+                    boardStartedAt: "2026-03-30T09:40:00.000Z",
+                    roleLabel: null,
+                    ramalLabel: "2031",
+                }),
+                makeRegulationPriorityRow({
                     postId: 3,
                     occupancyId: "reg-priority-recip",
                     postCode: "2036",
@@ -484,21 +564,192 @@ test("getCurrentDeparturePriorityView ignora MRV, RECIP e quem nao esta mais no 
                     roleLabel: null,
                     ramalLabel: "2036",
                 }),
+                makeRegulationPriorityRow({
+                    postId: 5,
+                    occupancyId: "reg-priority-p",
+                    postCode: "2154",
+                    postLabel: "2154",
+                    defaultRole: "MR",
+                    doctorId: "doc-p",
+                    doctorName: "Diego Silva",
+                    displayName: "Diego",
+                    startedAt: "2026-03-30T09:45:00.000Z",
+                    boardStartedAt: "2026-03-30T09:45:00.000Z",
+                    shiftLabel: "P",
+                    roleLabel: null,
+                    ramalLabel: "2154",
+                }),
             ],
         },
         mealBreakSession: { recipRamal: "2036" },
     });
 
     assert.equal(view.shiftLabel, "SD");
-    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["PM04", "2035"]);
-    assert.deepEqual(view.entries.map((entry) => entry.rank), [1, 2]);
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035"]);
+    assert.deepEqual(view.entries.map((entry) => entry.rank), [1]);
+    assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
 
     const reply = buildDeparturePriorityReply(view);
-    assert.match(reply, /Fora da conta: saídas já declaradas, MRV e RECIP\./);
-    assert.match(reply, /1\. Ana \| PM04 \| 07:00/);
-    assert.match(reply, /2\. Bruno \| 2035 \| 07:05/);
+    assert.match(reply, /Lista de reguladores no DIURNO/);
+    assert.match(reply, /Fora da lista principal: CP, MRV, RECIP, MEIO e quem est[aá] em P\/continua\./);
+    assert.match(reply, /1\. Bruno \| 2035 \| 07:05/);
+    assert.match(reply, /Fora por estarem em P \(continua\):/);
+    assert.match(reply, /- Diego \| 2154 \| 06:45/);
+    assert.doesNotMatch(reply, /Ana \| PM04/);
     assert.doesNotMatch(reply, /Marina Costa/);
     assert.doesNotMatch(reply, /Renata Lima/);
+    assert.doesNotMatch(reply, /Carla Prado/);
+});
+
+test("getCurrentDeparturePriorityView no SN aplica piso 19:15 para RMT e exclui continua SD", async () => {
+    const view = await getCurrentDeparturePriorityView({
+        referenceAt: new Date("2026-03-30T20:20:00-03:00"),
+        board: {
+            generatedAt: "2026-03-30T23:20:00.000Z",
+            intervention: [makeInterventionPriorityRow()],
+            regulation: [
+                makeRegulationPriorityRow({
+                    postCode: "2035",
+                    postLabel: "2035",
+                    doctorName: "Ana Presencial",
+                    displayName: "Ana",
+                    startedAt: "2026-03-30T22:10:00.000Z", // 19:10 local
+                    boardStartedAt: "2026-03-30T22:10:00.000Z",
+                    shiftLabel: "SN",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 2,
+                    postCode: "2036",
+                    postLabel: "2036",
+                    doctorName: "Bruno RMT",
+                    displayName: "Bruno",
+                    startedAt: "2026-03-30T21:59:00.000Z", // 18:59 local
+                    boardStartedAt: "2026-03-30T21:59:00.000Z",
+                    shiftLabel: "SN",
+                    roleLabel: "RMT",
+                }),
+                makeRegulationPriorityRow({
+                    postId: 5,
+                    postCode: "2032",
+                    postLabel: "2032",
+                    defaultRole: "MRV",
+                    doctorName: "Erika 2032",
+                    displayName: "Erika",
+                    startedAt: "2026-03-30T22:11:00.000Z", // 19:11 local
+                    boardStartedAt: "2026-03-30T22:11:00.000Z",
+                    shiftLabel: "SN",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 3,
+                    postCode: "2154",
+                    postLabel: "2154",
+                    doctorName: "Carla Continua SD",
+                    displayName: "Carla",
+                    startedAt: "2026-03-30T19:30:00.000Z",
+                    boardStartedAt: "2026-03-30T19:30:00.000Z",
+                    shiftLabel: "SD",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 4,
+                    postCode: "2153",
+                    postLabel: "2153",
+                    doctorName: "Diego P",
+                    displayName: "Diego",
+                    startedAt: "2026-03-30T19:20:00.000Z",
+                    boardStartedAt: "2026-03-30T19:20:00.000Z",
+                    shiftLabel: "P",
+                    roleLabel: null,
+                }),
+            ],
+        },
+        mealBreakSession: { recipRamal: null },
+    });
+
+    assert.equal(view.shiftLabel, "SN");
+    assert.equal(view.activeNightWorkSlot, null);
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035", "2032", "2036"]);
+    assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2153"]);
+
+    const ana = view.entries.find((entry) => entry.targetCode === "2035");
+    const erika = view.entries.find((entry) => entry.targetCode === "2032");
+    const bruno = view.entries.find((entry) => entry.targetCode === "2036");
+    assert.ok(ana);
+    assert.ok(erika);
+    assert.ok(bruno);
+    assert.equal(ana?.priorityStartedAt.slice(11, 16), "22:10");
+    assert.equal(erika?.priorityStartedAt.slice(11, 16), "22:11");
+    assert.equal(bruno?.priorityStartedAt.slice(11, 16), "22:15");
+
+    const reply = buildDeparturePriorityReply(view);
+    assert.match(reply, /NOTURNO/);
+    assert.match(reply, /RMT recebe piso 19:15/);
+    assert.match(reply, /1\. Ana \| 2035 \| 19:10/);
+    assert.match(reply, /2\. Erika \| 2032 \| 19:11/);
+    assert.match(reply, /3\. Bruno \| 2036 \| 18:59/);
+    assert.doesNotMatch(reply, /Carla Continua SD/);
+});
+
+test("getCurrentDeparturePriorityView no SN filtra por turma 23:00 antes de 03:00 e por 03:00 depois", async () => {
+    const board = {
+        generatedAt: "2026-03-31T04:40:00.000Z",
+        intervention: [makeInterventionPriorityRow()],
+        regulation: [
+            makeRegulationPriorityRow({
+                postCode: "2035",
+                postLabel: "2035",
+                doctorName: "Ana 23",
+                displayName: "Ana",
+                startedAt: "2026-03-30T22:05:00.000Z",
+                boardStartedAt: "2026-03-30T22:05:00.000Z",
+                shiftLabel: "SN",
+                roleLabel: null,
+            }),
+            makeRegulationPriorityRow({
+                postId: 2,
+                postCode: "2036",
+                postLabel: "2036",
+                doctorName: "Bruno 03",
+                displayName: "Bruno",
+                startedAt: "2026-03-30T22:06:00.000Z",
+                boardStartedAt: "2026-03-30T22:06:00.000Z",
+                shiftLabel: "SN",
+                roleLabel: null,
+            }),
+        ],
+    };
+
+    const mealBreakSession = {
+        recipRamal: null,
+        mode: "night" as const,
+        stage: "completed" as const,
+        nightWorkAssignments: {
+            "2035": "23:00" as const,
+            "2036": "03:00" as const,
+        },
+    };
+
+    const beforeThree = await getCurrentDeparturePriorityView({
+        referenceAt: new Date("2026-03-31T02:40:00-03:00"),
+        board,
+        mealBreakSession,
+    });
+
+    assert.equal(beforeThree.activeNightWorkSlot, "23:00");
+    assert.deepEqual(beforeThree.entries.map((entry) => entry.targetCode), ["2035"]);
+    assert.match(buildDeparturePriorityReply(beforeThree), /Janela ativa da divisao de jantar: 23:00\./);
+
+    const afterThree = await getCurrentDeparturePriorityView({
+        referenceAt: new Date("2026-03-31T03:10:00-03:00"),
+        board,
+        mealBreakSession,
+    });
+
+    assert.equal(afterThree.activeNightWorkSlot, "03:00");
+    assert.deepEqual(afterThree.entries.map((entry) => entry.targetCode), ["2036"]);
+    assert.match(buildDeparturePriorityReply(afterThree), /Janela ativa da divisao de jantar: 03:00\./);
 });
 
 test("parseTelegramSummaryReportCommand accepts bare /resumo and optional agora", () => {
@@ -1671,7 +1922,18 @@ test("shouldTreatTelegramArrivalAsContinuation infers rollover for intervention 
             incomingShiftLabel: "SN",
             activeShiftLabel: "P",
         }),
-        false,
+        true,
+    );
+
+    assert.equal(
+        shouldTreatTelegramArrivalAsContinuation({
+            sector: "REGULATION",
+            isDeparture: false,
+            isContinuation: false,
+            incomingShiftLabel: "SD",
+            activeShiftLabel: "P",
+        }),
+        true,
     );
 
     assert.equal(
@@ -1889,6 +2151,35 @@ test("resolveTelegramSuccessReplyKind can force reassignment wording for implici
     }), "reassignment_recorded");
 });
 
+test("buildTelegramContinuationSourceHint explicita troca de destino durante continuidade", () => {
+    assert.equal(
+        buildTelegramContinuationSourceHint({
+            continuationFrom: "PM40",
+            targetCode: "2153",
+            isContinuationReply: true,
+        }),
+        "\n\n🔁 Mudanca confirmada: *PM40* → *2153* mantendo a mesma continuidade.",
+    );
+
+    assert.equal(
+        buildTelegramContinuationSourceHint({
+            continuationFrom: "2153",
+            targetCode: "2153",
+            isContinuationReply: true,
+        }),
+        "",
+    );
+
+    assert.equal(
+        buildTelegramContinuationSourceHint({
+            continuationFrom: "PM40",
+            targetCode: "2153",
+            isContinuationReply: false,
+        }),
+        "",
+    );
+});
+
 test("resolveContinuationShiftStart honors the explicit next-shift boundary instead of snapping to the stale current window", () => {
     assert.equal(
         resolveContinuationShiftStart(
@@ -1904,6 +2195,30 @@ test("resolveContinuationShiftStart honors the explicit next-shift boundary inst
             "SD",
         ).toISOString(),
         new Date("2026-04-08T07:00:00-03:00").toISOString(),
+    );
+});
+
+test("resolveTelegramContinuationStartedAt preserves continuity chain start when available", () => {
+    assert.equal(
+        resolveTelegramContinuationStartedAt({
+            eventAt: new Date("2026-04-16T07:18:00-03:00"),
+            shiftType: null,
+            continuityStartedAt: new Date("2026-04-15T19:00:00-03:00"),
+            sourceStartedAt: new Date("2026-04-15T19:05:00-03:00"),
+        }).toISOString(),
+        new Date("2026-04-15T19:00:00-03:00").toISOString(),
+    );
+});
+
+test("resolveTelegramContinuationStartedAt falls back to shift-based start when continuity anchor is invalid", () => {
+    assert.equal(
+        resolveTelegramContinuationStartedAt({
+            eventAt: new Date("2026-04-16T07:18:00-03:00"),
+            shiftType: null,
+            continuityStartedAt: new Date("2026-04-16T08:10:00-03:00"),
+            sourceStartedAt: null,
+        }).toISOString(),
+        new Date("2026-04-16T07:00:00-03:00").toISOString(),
     );
 });
 
@@ -2124,8 +2439,10 @@ test("resolveTelegramEligibleLateDepartureReason aceita higienização com sinô
     assert.equal(resolveTelegramEligibleLateDepartureReason("limpeza da viatura")?.code, "hygienization");
 });
 
-test("resolveTelegramEligibleLateDepartureReason rejeita chefia e atraso de rendição", () => {
-    assert.equal(resolveTelegramEligibleLateDepartureReason("fui liberado pela chefia"), null);
+test("resolveTelegramEligibleLateDepartureReason aceita 'liberado pela chefia' como chief_release e rejeita atraso de redicao", () => {
+    assert.equal(resolveTelegramEligibleLateDepartureReason("fui liberado pela chefia")?.code, "chief_release");
+    assert.equal(resolveTelegramEligibleLateDepartureReason("liberado chefia")?.code, "chief_release");
+    assert.equal(resolveTelegramEligibleLateDepartureReason("chefia liberou")?.code, "chief_release");
     assert.equal(resolveTelegramEligibleLateDepartureReason("atraso de quem veio render"), null);
 });
 

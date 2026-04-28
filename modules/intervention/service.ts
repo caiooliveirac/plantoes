@@ -42,6 +42,31 @@ export interface ReactivateInterventionBaseInput {
     updatedByUserId?: string | null;
 }
 
+export function resolveHistoricalInterventionAdminCorrectionEndAt(params: {
+    source: StartInterventionOccupancyInput["source"];
+    startedAt: Date;
+    inferredScheduledEndAt: Date | null;
+    now: Date;
+}) {
+    if (params.source !== "admin_correction") {
+        return null;
+    }
+
+    if (!params.inferredScheduledEndAt) {
+        return null;
+    }
+
+    if (params.inferredScheduledEndAt.getTime() > params.now.getTime()) {
+        return null;
+    }
+
+    if (params.inferredScheduledEndAt.getTime() <= params.startedAt.getTime()) {
+        return null;
+    }
+
+    return params.inferredScheduledEndAt;
+}
+
 export function resolveContinuationBoardStartedAt(params: {
     startedAt: Date;
     boardStartedAt?: Date | null;
@@ -155,6 +180,7 @@ async function assertInterventionBaseExists(baseId: number) {
 
 export async function startInterventionOccupancy(input: StartInterventionOccupancyInput) {
     const db = getDb();
+    const now = new Date();
     let autoReactivated = false;
     let closedPreviousBaseId: number | null = null;
     const created = await db.transaction(async (tx) => {
@@ -243,6 +269,12 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             explicitScheduledStartAt: input.scheduledStartAt ?? null,
             explicitScheduledEndAt: input.scheduledEndAt ?? null,
         });
+        const historicalCorrectionEndAt = resolveHistoricalInterventionAdminCorrectionEndAt({
+            source: input.source,
+            startedAt: input.startedAt,
+            inferredScheduledEndAt,
+            now,
+        });
         const activationReferenceAt = resolveInterventionOccupancyActivationReferenceAt({
             startedAt: input.startedAt,
             scheduledStartAt: inferredScheduledStartAt,
@@ -328,7 +360,13 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             orderBy: [desc(interventionOccupancies.startedAt)],
         });
 
-        if (otherBaseOccupancy) {
+        const shouldPreserveDoctorCurrentOtherBase = Boolean(
+            historicalCorrectionEndAt
+            && otherBaseOccupancy
+            && input.startedAt.getTime() < otherBaseOccupancy.startedAt.getTime(),
+        );
+
+        if (otherBaseOccupancy && !shouldPreserveDoctorCurrentOtherBase) {
             const otherCloseAt = resolveSafeInterventionHandoffAt({
                 sourceStartedAt: otherBaseOccupancy.startedAt,
                 requestedAt: input.startedAt,
@@ -384,7 +422,13 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             orderBy: [desc(interventionOccupancies.boardStartedAt), desc(interventionOccupancies.startedAt)],
         });
 
-        if (shouldTakeBoardImmediately && currentBoardCarrier) {
+        const shouldPreserveCurrentBoardCarrier = Boolean(
+            historicalCorrectionEndAt
+            && currentBoardCarrier
+            && input.startedAt.getTime() < currentBoardCarrier.startedAt.getTime(),
+        );
+
+        if (shouldTakeBoardImmediately && currentBoardCarrier && !shouldPreserveCurrentBoardCarrier) {
             const takeoverAt = resolveSafeInterventionHandoffAt({
                 sourceStartedAt: currentBoardCarrier.startedAt,
                 requestedAt: input.startedAt,
@@ -421,11 +465,13 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             roleLabel: defaultDoctorRoleLabel ?? null,
             source: input.source,
             notes: input.notes ?? null,
+            endedAt: historicalCorrectionEndAt,
+            actualEndedAt: historicalCorrectionEndAt,
             createdByUserId: input.createdByUserId ?? null,
             updatedByUserId: input.createdByUserId ?? null,
         }).returning();
 
-        if (shouldTakeBoardImmediately) {
+        if (shouldTakeBoardImmediately && !historicalCorrectionEndAt) {
             await tx.update(interventionOccupancies)
                 .set({
                     boardStartedAt: null,
@@ -444,6 +490,10 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                     updatedAt: new Date(),
                 })
                 .where(eq(interventionOccupancies.id, created.id));
+        }
+
+        if (historicalCorrectionEndAt) {
+            await syncInterventionBankHours(tx, created.id);
         }
 
         return created;

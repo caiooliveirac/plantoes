@@ -7,6 +7,7 @@ import {
     buildUncoveredTargetsFromBoards,
     buildPayableShiftsFromBoards,
     buildPayableTargetOptions,
+    resolveDoctorPaymentProfile,
     type RawPresenceEvent,
 } from "@/modules/reporting/payable-shifts";
 import type { PaymentAllocationBoard } from "@/services/board.service";
@@ -516,6 +517,143 @@ test("buildUncoveredTargetsFromBoards ignores regulation ramais", () => {
     assert.equal(snapshots.length, 0);
 });
 
+test("buildUncoveredTargetsFromBoards includes PIAM uncovered on both shifts", () => {
+    const sdBoard = makeBoard({
+        shiftLabel: "SD",
+        regulation: [
+            {
+                domain: "regulation",
+                targetCode: "PIAM",
+                targetLabel: "PIAM",
+                sortOrder: 999,
+                defaultRole: null,
+                disabledAt: null,
+                disabledReason: null,
+                disabledDuringShift: false,
+                disabledEntireShift: false,
+                occupancyId: null,
+                doctorId: null,
+                doctorName: null,
+                displayName: null,
+                startedAt: null,
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: null,
+                scheduledEndAt: null,
+                shiftLabel: null,
+                roleLabel: null,
+                ramalLabel: null,
+                source: null,
+                notes: null,
+                candidateCount: 0,
+                paymentStatus: "needs_review",
+                issues: ["Sem ocupacao identificada para o turno"],
+                arrivalDelayMinutes: null,
+                overtimeMinutes: null,
+                creditedOvertimeMinutes: null,
+                balanceMinutes: null,
+                ruleCode: null,
+                bankHoursExplanation: null,
+                sourceShiftLabel: null,
+                sourceStartedAt: null,
+                sourceBoardStartedAt: null,
+                sourceEndedAt: null,
+                sourceActualEndedAt: null,
+                sourceScheduledStartAt: null,
+                sourceScheduledEndAt: null,
+                sourceArrivalDelayMinutes: null,
+                sourceOvertimeMinutes: null,
+                sourceCreditedOvertimeMinutes: null,
+                sourceBalanceMinutes: null,
+                sourceRuleCode: null,
+                sourceBankHoursExplanation: null,
+                continuesBeyondShift: false,
+            },
+        ],
+        intervention: [],
+    });
+    const snBoard = {
+        ...sdBoard,
+        shiftLabel: "SN" as const,
+        startedAt: "2026-04-10T22:00:00.000Z",
+        endedAt: "2026-04-11T10:00:00.000Z",
+    };
+
+    const snapshots = buildUncoveredTargetsFromBoards({ boards: [sdBoard, snBoard] });
+    assert.equal(snapshots.length, 2);
+    assert.deepEqual(snapshots.map((item) => item.shiftLabel), ["SD", "SN"]);
+    assert.ok(snapshots.every((item) => item.domain === "regulation" && item.targetCode === "PIAM"));
+});
+
+test("buildUncoveredTargetsFromBoards includes NUCLEO only on SD", () => {
+    const sdBoard = makeBoard({
+        shiftLabel: "SD",
+        regulation: [
+            {
+                domain: "regulation",
+                targetCode: "NUCLEO",
+                targetLabel: "NUCLEO",
+                sortOrder: 998,
+                defaultRole: null,
+                disabledAt: null,
+                disabledReason: null,
+                disabledDuringShift: false,
+                disabledEntireShift: false,
+                occupancyId: null,
+                doctorId: null,
+                doctorName: null,
+                displayName: null,
+                startedAt: null,
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: null,
+                scheduledEndAt: null,
+                shiftLabel: null,
+                roleLabel: null,
+                ramalLabel: null,
+                source: null,
+                notes: null,
+                candidateCount: 0,
+                paymentStatus: "needs_review",
+                issues: ["Sem ocupacao identificada para o turno"],
+                arrivalDelayMinutes: null,
+                overtimeMinutes: null,
+                creditedOvertimeMinutes: null,
+                balanceMinutes: null,
+                ruleCode: null,
+                bankHoursExplanation: null,
+                sourceShiftLabel: null,
+                sourceStartedAt: null,
+                sourceBoardStartedAt: null,
+                sourceEndedAt: null,
+                sourceActualEndedAt: null,
+                sourceScheduledStartAt: null,
+                sourceScheduledEndAt: null,
+                sourceArrivalDelayMinutes: null,
+                sourceOvertimeMinutes: null,
+                sourceCreditedOvertimeMinutes: null,
+                sourceBalanceMinutes: null,
+                sourceRuleCode: null,
+                sourceBankHoursExplanation: null,
+                continuesBeyondShift: false,
+            },
+        ],
+        intervention: [],
+    });
+    const snBoard = {
+        ...sdBoard,
+        shiftLabel: "SN" as const,
+        startedAt: "2026-04-10T22:00:00.000Z",
+        endedAt: "2026-04-11T10:00:00.000Z",
+    };
+
+    const snapshots = buildUncoveredTargetsFromBoards({ boards: [sdBoard, snBoard] });
+    assert.equal(snapshots.length, 1);
+    assert.equal(snapshots[0]?.targetCode, "NUCLEO");
+    assert.equal(snapshots[0]?.shiftLabel, "SD");
+    assert.equal(snapshots[0]?.domain, "regulation");
+});
+
 test("buildUncoveredTargetsFromBoards ignores future slots", () => {
     const board = makeBoard({
         startedAt: "2099-04-10T10:00:00.000Z",
@@ -562,4 +700,76 @@ test("buildUncoveredTargetsFromBoards ignores future slots", () => {
         maxSlotStartedAtIso: "2026-04-30T23:59:59.000Z",
     });
     assert.equal(snapshots.length, 0);
+});
+
+test("resolveDoctorPaymentProfile honors PSIQ and specialist flags", () => {
+    assert.equal(resolveDoctorPaymentProfile({ preferredOperationalRole: "PSIQ" }), "psychiatry");
+    assert.equal(resolveDoctorPaymentProfile({ paymentProfile: { isSpecialist: true } }), "specialist");
+    assert.equal(resolveDoctorPaymentProfile({ isPaymentSpecialist: true }), "specialist");
+    assert.equal(resolveDoctorPaymentProfile({}), "generalist");
+});
+
+test("buildChiefPayableBoard computes due amount by profile and weekday/weekend", () => {
+    const weekdayShift = {
+        ...makeBoard().intervention[0],
+        occupancyId: "occ-weekday",
+        startedAt: "2026-04-10T10:00:00.000Z",
+        endedAt: "2026-04-10T22:00:00.000Z",
+        actualEndedAt: "2026-04-10T22:00:00.000Z",
+        shiftLabel: "SD" as const,
+        sourceShiftLabel: "SD" as const,
+        continuesBeyondShift: false,
+    };
+    const weekendShift = {
+        ...makeBoard().intervention[0],
+        occupancyId: "occ-weekend",
+        startedAt: "2026-04-12T22:00:00.000Z",
+        endedAt: "2026-04-13T10:00:00.000Z",
+        actualEndedAt: "2026-04-13T10:00:00.000Z",
+        shiftLabel: "SN" as const,
+        sourceShiftLabel: "SN" as const,
+        continuesBeyondShift: false,
+    };
+
+    const payableShifts = buildPayableShiftsFromBoards([
+        makeBoard({
+            operationalDate: "2026-04-10T12:00:00.000Z",
+            shiftLabel: "SD",
+            startedAt: "2026-04-10T10:00:00.000Z",
+            endedAt: "2026-04-10T22:00:00.000Z",
+            intervention: [weekdayShift],
+        }),
+        makeBoard({
+            operationalDate: "2026-04-12T12:00:00.000Z",
+            shiftLabel: "SN",
+            startedAt: "2026-04-12T22:00:00.000Z",
+            endedAt: "2026-04-13T10:00:00.000Z",
+            intervention: [weekendShift],
+        }),
+    ]);
+
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-04",
+        monthLabel: "abril de 2026",
+        presetMonths: [{ key: "2026-04", label: "abril de 2026" }],
+        rangeStartIso: "2026-04-01T10:00:00.000Z",
+        rangeEndIso: "2026-05-01T10:00:00.000Z",
+        payableShifts,
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: buildPayableTargetOptions({ payableShifts, disabledTargets: [], uncoveredTargets: [] }),
+        attestationSegments: [],
+        allDoctorNames: [],
+        doctorPaymentProfiles: {
+            "doc-1": "specialist",
+        },
+    });
+
+    const doctor = board.doctors.find((entry) => entry.doctorId === "doc-1");
+    assert.ok(doctor);
+    assert.equal(doctor?.paymentProfile, "specialist");
+    assert.equal(doctor?.totalSDDue, 1329.66);
+    assert.equal(doctor?.totalSNDue, 1457.15);
+    assert.equal(doctor?.totalDue, 2786.81);
+    assert.equal(board.summary.totalDueAmount, 2786.81);
 });

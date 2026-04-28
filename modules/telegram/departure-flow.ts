@@ -20,7 +20,7 @@ import { normalizeDoctorName } from "@/modules/doctors/importer";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type TelegramEligibleLateDepartureReasonCode = "occurrence" | "hygienization";
+export type TelegramEligibleLateDepartureReasonCode = "occurrence" | "hygienization" | "chief_release";
 
 export interface TelegramDepartureCorrectionCandidate {
     occupancyId: string;
@@ -54,6 +54,7 @@ const TELEGRAM_DEPARTURE_CORRECTION_AMBIGUITY_GAP_MS = 6 * 60 * 60 * 1000;
 const TELEGRAM_LATE_DEPARTURE_REASON_KEYWORDS: Record<TelegramEligibleLateDepartureReasonCode, string[]> = {
     occurrence: ["OCORRENCIA", "OCORRENCIAS", "OCORR", "ATENDENDO", "ATENDIMENTO", "CHAMADO"],
     hygienization: ["HIGIENIZANDO", "HIGIENIZACAO", "HIGIENIZAR", "HIGIENE", "LIMPEZA", "LIMPANDO", "LAVANDO", "DESINFECCAO", "DESINFETANDO", "DESCONTAMINANDO"],
+    chief_release: ["CHEFIA", "CHEFE", "LIBERADO", "LIBERADA", "LIBEROU", "AUTORIZOU", "AUTORIZACAO", "AUTORIZADO", "DETERMINACAO"],
 };
 
 const TELEGRAM_LATE_DEPARTURE_REASON_STOPWORDS = new Set([
@@ -177,6 +178,17 @@ export function resolveTelegramEligibleLateDepartureReason(
         return { code: "hygienization", normalizedText: normalized };
     }
 
+    // "liberado chefia", "fui liberado pela chefia", "chefia liberou" etc.
+    if (/\b(?:LIBERADO|LIBERADA|LIBEROU)\b/.test(normalized) && /\b(?:CHEFIA|CHEFE)\b/.test(normalized)) {
+        return { code: "chief_release", normalizedText: normalized };
+    }
+    if (/\b(?:CHEFIA|CHEFE)\b/.test(normalized) && /\b(?:LIBEROU|AUTORIZOU|DETERMINOU|PEDIU|SOLICITOU|MANDOU|DISSE|FALOU)\b/.test(normalized)) {
+        return { code: "chief_release", normalizedText: normalized };
+    }
+    if (/\b(?:AUTORIZACAO|AUTORIZADO|AUTORIZADA|DETERMINACAO|DETERMINADO)\s+(?:DA\s+)?(?:CHEFIA|CHEFE)\b/.test(normalized)) {
+        return { code: "chief_release", normalizedText: normalized };
+    }
+
     const tokens = normalized
         .split(/\s+/)
         .map((token) => token.trim())
@@ -188,6 +200,10 @@ export function resolveTelegramEligibleLateDepartureReason(
 
     if (matchesTelegramLateDepartureReason(tokens, "hygienization")) {
         return { code: "hygienization", normalizedText: normalized };
+    }
+
+    if (matchesTelegramLateDepartureReason(tokens, "chief_release")) {
+        return { code: "chief_release", normalizedText: normalized };
     }
 
     return null;
