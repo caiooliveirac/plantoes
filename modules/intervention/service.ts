@@ -86,6 +86,32 @@ export function resolveExistingInterventionBoardAnchor(params: {
     return params.boardStartedAt ?? params.startedAt;
 }
 
+export function resolveSameDoctorBoardStartedAt(params: {
+    existingStartedAt: Date;
+    existingBoardStartedAt?: Date | null;
+    effectiveBoardStartedAt: Date;
+    currentShiftStart: Date;
+}) {
+    // Shadow occupancies intentionally keep boardStartedAt=null so they never contend
+    // for the unique active board-carrier slot on the base.
+    if (!params.existingBoardStartedAt) {
+        return null;
+    }
+
+    const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
+    const existingBoardAnchor = resolveExistingInterventionBoardAnchor({
+        startedAt: params.existingStartedAt,
+        boardStartedAt: params.existingBoardStartedAt,
+    });
+    const existingAnchorIsStale = existingBoardAnchor.getTime() < (params.currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
+
+    if (existingAnchorIsStale || params.effectiveBoardStartedAt.getTime() < existingBoardAnchor.getTime()) {
+        return params.effectiveBoardStartedAt;
+    }
+
+    return existingBoardAnchor;
+}
+
 export function shouldReuseImplicitContinuitySource(referenceAt: Date, sourceEndedAt?: Date | null) {
     if (!sourceEndedAt) {
         return true;
@@ -376,15 +402,12 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             // operational shift context. A stale anchor from a past shift would cause the
             // occupancy to be invisible on the board (board-rules visibility check would expire it).
             const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
-            const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
-            const existingBoardAnchor = resolveExistingInterventionBoardAnchor({
-                startedAt: existingSameDoctor.startedAt,
-                boardStartedAt: existingSameDoctor.boardStartedAt,
+            const keptBoardStartedAt = resolveSameDoctorBoardStartedAt({
+                existingStartedAt: existingSameDoctor.startedAt,
+                existingBoardStartedAt: existingSameDoctor.boardStartedAt,
+                effectiveBoardStartedAt,
+                currentShiftStart,
             });
-            const existingAnchorIsStale = existingBoardAnchor.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
-            const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existingBoardAnchor.getTime())
-                ? effectiveBoardStartedAt
-                : existingBoardAnchor;
 
             const keptContinuityGroupId = resolvedContinuityGroupId ?? existingSameDoctor.continuityGroupId;
 
@@ -393,7 +416,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 ? input.startedAt
                 : existingSameDoctor.startedAt;
 
-            const windowRef = keptBoardStartedAt.getTime() > keptStartedAt.getTime()
+            const windowRef = keptBoardStartedAt && keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                 ? keptBoardStartedAt : keptStartedAt;
             const { scheduledStartAt: recalcStart, scheduledEndAt: recalcEnd } = inferInterventionCoverageWindow({
                 startedAt: windowRef,

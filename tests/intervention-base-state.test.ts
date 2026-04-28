@@ -4,6 +4,7 @@ import {
     isInterventionShadowOccupancyNotes,
     isInterventionBaseDeactivationActive,
     resolveExistingInterventionBoardAnchor,
+    resolveSameDoctorBoardStartedAt,
     resolveInterventionArrivalBoardPolicy,
     resolveInterventionOccupancyActivationReferenceAt,
     resolveInterventionBaseDeactivationExpiresAt,
@@ -228,6 +229,28 @@ test("resolveExistingInterventionBoardAnchor usa startedAt quando boardStartedAt
             boardStartedAt,
         }).toISOString(),
         boardStartedAt.toISOString(),
+    );
+});
+
+test("resolveSameDoctorBoardStartedAt preserva nulo para sombra sem board carrier", () => {
+    const currentShiftStart = new Date("2026-04-28T10:00:00.000Z");
+    const effectiveBoardStartedAt = new Date("2026-04-28T10:14:00.000Z");
+
+    assert.equal(resolveSameDoctorBoardStartedAt({
+        existingStartedAt: new Date("2026-04-28T10:14:00.000Z"),
+        existingBoardStartedAt: null,
+        effectiveBoardStartedAt,
+        currentShiftStart,
+    }), null);
+
+    assert.equal(
+        resolveSameDoctorBoardStartedAt({
+            existingStartedAt: new Date("2026-04-28T10:14:00.000Z"),
+            existingBoardStartedAt: new Date("2026-04-28T10:16:00.000Z"),
+            effectiveBoardStartedAt,
+            currentShiftStart,
+        })?.toISOString(),
+        effectiveBoardStartedAt.toISOString(),
     );
 });
 
