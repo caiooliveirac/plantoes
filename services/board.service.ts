@@ -767,8 +767,9 @@ function resolveCandidateEffectiveEndedAt(candidate: LogicalShiftCandidate, succ
     candidate.logicalSlotStart,
     candidate.shiftLabel === "P" ? candidate.shiftLabel : candidate.logicalSlot,
   )?.toISOString() ?? null;
+  const canUseSuccessorBasedClosure = !candidate.isShadow;
   const successorBasedClosure = (() => {
-    if (!successorStartedAt || !implicitExpiry) {
+    if (!canUseSuccessorBasedClosure || !successorStartedAt || !implicitExpiry) {
       return null;
     }
 

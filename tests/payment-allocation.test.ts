@@ -130,6 +130,55 @@ test("buildPaymentAllocationBoardModel inclui titular e sombra como linhas pagav
     assert.deepEqual(pm40Rows.map((row) => row.doctorName).sort(), ["Leonardo Prado Faben", "Titular PM40"]);
 });
 
+test("buildPaymentAllocationBoardModel inclui sombra aberta no mesmo alvo quando o titular tambem esta aberto", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({ targetCode: "PM40", targetLabel: "PM40", sortOrder: 40 })],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-shadow-open",
+                targetCode: "PM40",
+                targetLabel: "PM40",
+                doctorId: "doc-leonardo",
+                doctorName: "Leonardo Prado Faben",
+                displayName: "Leonardo",
+                startedAt: "2026-04-28T10:14:00.000Z",
+                boardStartedAt: null,
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-04-28T10:00:00.000Z",
+                scheduledEndAt: "2026-04-28T22:00:00.000Z",
+                source: "telegram",
+                notes: "[telegram sombra] Leonardo Prado sombra PM40 07:14\n[telegram sombra] Leonardo Prado Faben PM40 sombra 07:14",
+            }),
+            makeRow({
+                occupancyId: "occ-titular-open",
+                targetCode: "PM40",
+                targetLabel: "PM40",
+                doctorId: "doc-karen",
+                doctorName: "Karen Seifarth Miranda",
+                displayName: "Karen Seifarth",
+                startedAt: "2026-04-28T10:16:12.000Z",
+                boardStartedAt: "2026-04-28T10:16:12.000Z",
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-04-28T10:00:00.000Z",
+                scheduledEndAt: "2026-04-28T22:00:00.000Z",
+                source: "telegram",
+                notes: "Karen Seifarth Miranda chegada pm40",
+            }),
+        ],
+        operationalDate: "2026-04-28T12:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-04-28T10:00:00.000Z",
+        endedAt: "2026-04-28T22:00:00.000Z",
+        generatedAt: "2026-04-28T13:00:00.000Z",
+    });
+
+    const pm40Rows = board.intervention.filter((row) => row.targetCode === "PM40" && row.occupancyId);
+    assert.equal(pm40Rows.length, 2);
+    assert.deepEqual(pm40Rows.map((row) => row.doctorName).sort(), ["Karen Seifarth Miranda", "Leonardo Prado Faben"]);
+});
+
 test("buildPaymentAllocationBoardModel keeps empty targets visible as review rows", () => {
     const board = buildPaymentAllocationBoardModel({
         targets: [
