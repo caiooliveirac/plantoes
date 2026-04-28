@@ -536,6 +536,22 @@ export function buildTelegramContinuationSourceHint(params: {
     return `\n\n🔁 Mudanca confirmada: *${sourceCode}* → *${targetCode}* mantendo a mesma continuidade.`;
 }
 
+export function resolveTelegramShadowFlag(parsed: Pick<OperationalParsedEntry, "isDeparture" | "isShadow">, messageText: string) {
+    if (parsed.isDeparture) {
+        return false;
+    }
+
+    if (parsed.isShadow) {
+        return true;
+    }
+
+    const normalized = messageText
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase();
+    return /\b(?:SOMBRA|SHADOW)\b/.test(normalized);
+}
+
 function resolveHalfShiftScheduledEndAt(referenceAt: Date) {
     return resolveForcedDayEventTime(referenceAt, TELEGRAM_HALF_SHIFT_AUTO_END_HHMM, 0);
 }
@@ -1609,6 +1625,7 @@ async function prepareTelegramBatchEntries(message: TelegramUpdate["message"]) {
                 arrivalTime: parsed.arrivalTime,
                 shiftType: parsed.shiftType,
                 roleFunction: parsed.roleFunction,
+                isShadow: parsed.isShadow ?? false,
                 isDeparture: parsed.isDeparture,
                 isContinuation: parsed.isContinuation,
                 isReassignment: parsed.isReassignment ?? false,
@@ -5263,6 +5280,7 @@ async function queuePendingNameSelection(
                 arrivalTime: parsed.arrivalTime,
                 shiftType: parsed.shiftType,
                 roleFunction: parsed.roleFunction,
+                isShadow: parsed.isShadow ?? false,
                 isDeparture: parsed.isDeparture,
                 isContinuation: parsed.isContinuation,
                 isReassignment: parsed.isReassignment ?? false,
@@ -5445,6 +5463,7 @@ async function applyParsedEntry(params: {
     let replyTimeAt = eventAt;
     let effectiveShiftType: string | null = parsed.shiftType ?? null;
     let continuationFrom: string | null = null;
+    const isShadowArrival = resolveTelegramShadowFlag(parsed, messageText);
 
     // When no explicit shift is provided and the arrival time is near a shift boundary,
     // use the message timestamp's shift to disambiguate.
@@ -5822,9 +5841,9 @@ async function applyParsedEntry(params: {
                     boardStartedAt: continuationBoardStartedAtIntv,
                     shiftLabel: effectiveShiftType,
                     roleLabel: parsed.roleFunction,
-                    isShadow: parsed.isShadow ?? false,
+                    isShadow: isShadowArrival,
                     source: "telegram",
-                    notes: parsed.isShadow
+                    notes: isShadowArrival
                         ? appendTelegramOperationalNote(null, "telegram sombra", messageText)
                         : messageText,
                     createdByUserId: null,
@@ -5957,7 +5976,10 @@ async function sendSuccessReply(
     const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint && !autoReactivated
         ? "\n\n💡 Se for o mesmo médico mudando de ramal/base, pode mandar só o novo destino que registro como remanejamento sem mexer na chegada original."
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${continuationTargetHint}${timeContextHint}${arrivalHint}`, replyToMessageId);
+    const shadowHint = parsed.isShadow && !parsed.isDeparture
+        ? "\n\n🫥 Cobertura marcada como *sombra*. Titular atual mantido no quadro."
+        : "";
+    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${continuationTargetHint}${timeContextHint}${shadowHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {

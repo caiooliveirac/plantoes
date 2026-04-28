@@ -42,6 +42,7 @@ import {
     shouldUseTelegramSenderNameFallback,
     isSharedAccountSender,
     shouldLinkTelegramArrivalToContinuitySource,
+    resolveTelegramShadowFlag,
     shouldDeferPendingDepartureJustificationToFreshParsing,
     shouldDeferPendingNameSelectionToFreshParsing,
     shouldTreatTelegramArrivalAsContinuation,
@@ -228,6 +229,7 @@ test("buildTelegramReviewLogData tags reviewable operational inputs with context
             arrivalTime: "19:20",
             shiftType: "SN",
             roleFunction: null,
+            isShadow: false,
             isDeparture: true,
             isContinuation: false,
             isReassignment: false,
@@ -237,6 +239,13 @@ test("buildTelegramReviewLogData tags reviewable operational inputs with context
         reviewLooksLikeDeparture: true,
         reviewSuggestedFormat: "Leonardo Carteado saindo PM40 19:20 porque fui liberado pela chefia",
     });
+});
+
+test("resolveTelegramShadowFlag preserves shadow across pending name-resolution flows", () => {
+    assert.equal(resolveTelegramShadowFlag({ isDeparture: false, isShadow: true }, "Leonardo PM40 07:14"), true);
+    assert.equal(resolveTelegramShadowFlag({ isDeparture: false, isShadow: false }, "Leonardo Prado sombra PM40 07:14"), true);
+    assert.equal(resolveTelegramShadowFlag({ isDeparture: false, isShadow: false }, "Leonardo Prado PM40 07:14"), false);
+    assert.equal(resolveTelegramShadowFlag({ isDeparture: true, isShadow: true }, "Leonardo sombra saindo PM40 19:20"), false);
 });
 
 test("parseTelegramCommand parses retirar with target and time", () => {
