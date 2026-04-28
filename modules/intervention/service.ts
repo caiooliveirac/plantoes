@@ -18,6 +18,7 @@ export interface StartInterventionOccupancyInput {
     continuityGroupId?: string | null;
     previousOccupancyId?: string | null;
     isContinuityEntry?: boolean;
+    isShadow?: boolean | null;
     startedAt: Date;
     boardStartedAt?: Date | null;
     scheduledStartAt?: Date | null;
@@ -132,6 +133,62 @@ export function resolveInterventionOccupancyActivationReferenceAt(params: {
         : params.startedAt;
 }
 
+function normalizeInterventionOperationalNotes(value: string | null | undefined) {
+    return (value ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase();
+}
+
+export function isInterventionShadowOccupancyNotes(notes: string | null | undefined) {
+    const normalized = normalizeInterventionOperationalNotes(notes);
+    return normalized.includes("[TELEGRAM SOMBRA]") || /\bSOMBRA\b/.test(normalized);
+}
+
+export function resolveStaleShadowInterventionEndedAt(params: {
+    notes: string | null | undefined;
+    scheduledEndAt?: Date | null;
+    endedAt?: Date | null;
+    referenceAt: Date;
+}) {
+    if (params.endedAt || !params.scheduledEndAt) {
+        return null;
+    }
+
+    if (!isInterventionShadowOccupancyNotes(params.notes)) {
+        return null;
+    }
+
+    if (params.referenceAt.getTime() < params.scheduledEndAt.getTime()) {
+        return null;
+    }
+
+    return params.scheduledEndAt;
+}
+
+export function shouldCloseInterventionBoardCarrierOnArrival(params: {
+    currentCarrierDoctorId: string;
+    arrivingDoctorId: string;
+    currentCarrierNotes: string | null | undefined;
+}) {
+    if (params.currentCarrierDoctorId === params.arrivingDoctorId) {
+        return false;
+    }
+
+    return !isInterventionShadowOccupancyNotes(params.currentCarrierNotes);
+}
+
+export function resolveInterventionArrivalBoardPolicy(params: {
+    source: StartInterventionOccupancyInput["source"];
+    isShadow?: boolean | null;
+    hasCurrentBoardCarrier: boolean;
+}) {
+    return {
+        shouldTakeBoardImmediately: params.source !== "import"
+            && (!params.isShadow || !params.hasCurrentBoardCarrier),
+    };
+}
+
 async function closeExpiredInterventionBaseDeactivation(tx: Executor, params: {
     deactivationId: string;
     expiredAt: Date;
@@ -183,6 +240,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
     const now = new Date();
     let autoReactivated = false;
     let closedPreviousBaseId: number | null = null;
+    await expireStaleShadowInterventionOccupancies(input.startedAt, input.createdByUserId ?? null);
     const created = await db.transaction(async (tx) => {
         const doctor = await tx.query.doctors.findFirst({
             where: eq(doctors.id, input.doctorId),
@@ -296,37 +354,39 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 .where(eq(interventionBaseDeactivations.id, activeDeactivation.id));
             autoReactivated = true;
         }
-        const existing = await tx.query.interventionOccupancies.findFirst({
+        const existingSameDoctor = await tx.query.interventionOccupancies.findFirst({
             where: and(
                 eq(interventionOccupancies.baseId, input.baseId),
+                eq(interventionOccupancies.doctorId, input.doctorId),
                 isNull(interventionOccupancies.endedAt),
             ),
+            orderBy: [desc(interventionOccupancies.boardStartedAt), desc(interventionOccupancies.startedAt)],
         });
 
         // Same doctor on same base: update in place instead of close+create.
-        if (existing && existing.doctorId === input.doctorId) {
+        if (existingSameDoctor) {
             // Preserve the earliest boardStartedAt — but only if it belongs to the current
             // operational shift context. A stale anchor from a past shift would cause the
             // occupancy to be invisible on the board (board-rules visibility check would expire it).
             const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
             const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
-            const existingAnchorIsStale = existing.boardStartedAt!.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
-            const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existing.boardStartedAt!.getTime())
+            const existingAnchorIsStale = existingSameDoctor.boardStartedAt!.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
+            const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existingSameDoctor.boardStartedAt!.getTime())
                 ? effectiveBoardStartedAt
-                : existing.boardStartedAt!;
+                : existingSameDoctor.boardStartedAt!;
 
-            const keptContinuityGroupId = resolvedContinuityGroupId ?? existing.continuityGroupId;
+            const keptContinuityGroupId = resolvedContinuityGroupId ?? existingSameDoctor.continuityGroupId;
 
             // F2 safety: never allow started_at to advance forward past the existing value.
-            const keptStartedAt = input.startedAt.getTime() < existing.startedAt.getTime()
+            const keptStartedAt = input.startedAt.getTime() < existingSameDoctor.startedAt.getTime()
                 ? input.startedAt
-                : existing.startedAt;
+                : existingSameDoctor.startedAt;
 
             const windowRef = keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                 ? keptBoardStartedAt : keptStartedAt;
             const { scheduledStartAt: recalcStart, scheduledEndAt: recalcEnd } = inferInterventionCoverageWindow({
                 startedAt: windowRef,
-                shiftLabel: input.shiftLabel ?? existing.shiftLabel,
+                shiftLabel: input.shiftLabel ?? existingSameDoctor.shiftLabel,
                 explicitScheduledStartAt: null,
                 explicitScheduledEndAt: null,
             });
@@ -338,16 +398,16 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                     continuityGroupId: keptContinuityGroupId,
                     scheduledStartAt: recalcStart,
                     scheduledEndAt: recalcEnd,
-                    shiftLabel: input.shiftLabel ?? existing.shiftLabel,
-                    roleLabel: input.roleLabel !== undefined ? input.roleLabel : existing.roleLabel,
-                    notes: input.notes ? `${existing.notes ?? ""}\n${input.notes}`.trim() : existing.notes,
+                    shiftLabel: input.shiftLabel ?? existingSameDoctor.shiftLabel,
+                    roleLabel: input.roleLabel !== undefined ? input.roleLabel : existingSameDoctor.roleLabel,
+                    notes: input.notes ? `${existingSameDoctor.notes ?? ""}\n${input.notes}`.trim() : existingSameDoctor.notes,
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
                 })
-                .where(eq(interventionOccupancies.id, existing.id))
+                .where(eq(interventionOccupancies.id, existingSameDoctor.id))
                 .returning();
 
-            await syncInterventionBankHours(tx, existing.id);
+            await syncInterventionBankHours(tx, existingSameDoctor.id);
             return updated;
         }
 
@@ -412,14 +472,18 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             }
         }
 
-        const shouldTakeBoardImmediately = input.source !== "import";
-        const currentBoardCarrier = existing?.boardStartedAt ? existing : await tx.query.interventionOccupancies.findFirst({
+        const currentBoardCarrier = await tx.query.interventionOccupancies.findFirst({
             where: and(
                 eq(interventionOccupancies.baseId, input.baseId),
                 isNotNull(interventionOccupancies.boardStartedAt),
                 isNull(interventionOccupancies.endedAt),
             ),
             orderBy: [desc(interventionOccupancies.boardStartedAt), desc(interventionOccupancies.startedAt)],
+        });
+        const { shouldTakeBoardImmediately } = resolveInterventionArrivalBoardPolicy({
+            source: input.source,
+            isShadow: input.isShadow ?? false,
+            hasCurrentBoardCarrier: Boolean(currentBoardCarrier),
         });
 
         const shouldPreserveCurrentBoardCarrier = Boolean(
@@ -429,17 +493,22 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
         );
 
         if (shouldTakeBoardImmediately && currentBoardCarrier && !shouldPreserveCurrentBoardCarrier) {
+            const shouldCloseCurrentBoardCarrier = shouldCloseInterventionBoardCarrierOnArrival({
+                currentCarrierDoctorId: currentBoardCarrier.doctorId,
+                arrivingDoctorId: input.doctorId,
+                currentCarrierNotes: currentBoardCarrier.notes,
+            });
             const takeoverAt = resolveSafeInterventionHandoffAt({
                 sourceStartedAt: currentBoardCarrier.startedAt,
                 requestedAt: input.startedAt,
             });
 
             // P2: guard against zero-duration occupancies caused by retroactive or duplicate arrivals.
-            if (!takeoverAt && currentBoardCarrier.doctorId !== input.doctorId) {
+            if (!takeoverAt && shouldCloseCurrentBoardCarrier) {
                 throw new Error("arrival_conflicts_with_active_occupancy");
             }
 
-            if (takeoverAt && currentBoardCarrier.doctorId !== input.doctorId) {
+            if (takeoverAt && shouldCloseCurrentBoardCarrier) {
                 await tx.update(interventionOccupancies)
                     .set({
                         endedAt: takeoverAt,
@@ -460,7 +529,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             scheduledStartAt: inferredScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
-            boardStartedAt: shouldTakeBoardImmediately || !existing ? effectiveBoardStartedAt : null,
+            boardStartedAt: shouldTakeBoardImmediately && !currentBoardCarrier ? effectiveBoardStartedAt : null,
             shiftLabel: normalizedShiftLabel,
             roleLabel: defaultDoctorRoleLabel ?? null,
             source: input.source,
@@ -623,6 +692,36 @@ export async function endInterventionOccupancy(
 
     publishBoardUpdate(`intervention:end:${id}`);
     return updated;
+}
+
+export async function expireStaleShadowInterventionOccupancies(referenceAt: Date, updatedByUserId?: string | null) {
+    const db = getDb();
+    const openOccupancies = await db.query.interventionOccupancies.findMany({
+        where: isNull(interventionOccupancies.endedAt),
+        orderBy: [asc(interventionOccupancies.scheduledEndAt), asc(interventionOccupancies.startedAt)],
+    });
+
+    let expiredCount = 0;
+    for (const occupancy of openOccupancies) {
+        const endedAt = resolveStaleShadowInterventionEndedAt({
+            notes: occupancy.notes,
+            scheduledEndAt: occupancy.scheduledEndAt,
+            endedAt: occupancy.endedAt,
+            referenceAt,
+        });
+
+        if (!endedAt) {
+            continue;
+        }
+
+        await endInterventionOccupancy(occupancy.id, {
+            endedAt,
+            actualEndedAt: endedAt,
+        }, updatedByUserId ?? null);
+        expiredCount += 1;
+    }
+
+    return expiredCount;
 }
 
 export async function continueInterventionOccupancy(

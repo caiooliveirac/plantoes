@@ -3,7 +3,7 @@ import test from "node:test";
 import { buildTelegramSlotAuditMessages } from "@/modules/telegram/slot-audit-report";
 import { isTelegramSlotAuditCommandText, parseTelegramSlotAuditCommand } from "@/modules/telegram/slot-audit-commands";
 import { buildOperationalSlotAuditReport } from "@/services/slot-audit.service";
-import type { OperationalSlotPresenceBoard } from "@/services/board.service";
+import { buildOperationalSlotPresenceBoardModel, type OperationalSlotPresenceBoard } from "@/services/board.service";
 
 function makeBoard(overrides: Partial<OperationalSlotPresenceBoard> = {}): OperationalSlotPresenceBoard {
     return {
@@ -297,4 +297,81 @@ test("buildOperationalSlotAuditReport mantém ocupação real do slot mesmo com 
 
     assert.equal(report.summary.occupiedCount, 1);
     assert.equal(report.slots[0]?.intervention[0]?.doctorLabel, "Ana -> Bruno");
+});
+
+test("buildOperationalSlotPresenceBoardModel mantém a PM40 ativa com Leonardo Prado Faben como sombra", () => {
+    const board = buildOperationalSlotPresenceBoardModel({
+        targets: [{
+            domain: "intervention",
+            targetId: 40,
+            targetCode: "PM40",
+            targetLabel: "PM40",
+            sortOrder: 40,
+            defaultRole: null,
+        }],
+        rawRows: [
+            {
+                occupancyId: "occ-titular",
+                domain: "intervention",
+                targetCode: "PM40",
+                targetLabel: "PM40",
+                doctorId: "doc-titular",
+                doctorName: "Titular PM40",
+                displayName: null,
+                startedAt: "2026-04-28T10:00:00.000Z",
+                boardStartedAt: "2026-04-28T10:00:00.000Z",
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-04-28T10:00:00.000Z",
+                scheduledEndAt: "2026-04-28T22:00:00.000Z",
+                continuityGroupId: "cg-titular",
+                shiftLabel: "SD",
+                roleLabel: null,
+                ramalLabel: null,
+                arrivalDelayMinutes: null,
+                overtimeMinutes: null,
+                creditedOvertimeMinutes: null,
+                balanceMinutes: null,
+                ruleCode: null,
+                bankHoursExplanation: null,
+                source: "telegram",
+                notes: "Titular PM40 07:00",
+            },
+            {
+                occupancyId: "occ-shadow",
+                domain: "intervention",
+                targetCode: "PM40",
+                targetLabel: "PM40",
+                doctorId: "doc-shadow",
+                doctorName: "Leonardo Prado Faben",
+                displayName: null,
+                startedAt: "2026-04-28T10:10:00.000Z",
+                boardStartedAt: null,
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-04-28T10:00:00.000Z",
+                scheduledEndAt: "2026-04-28T22:00:00.000Z",
+                continuityGroupId: "cg-shadow",
+                shiftLabel: "SD",
+                roleLabel: null,
+                ramalLabel: null,
+                arrivalDelayMinutes: null,
+                overtimeMinutes: null,
+                creditedOvertimeMinutes: null,
+                balanceMinutes: null,
+                ruleCode: null,
+                bankHoursExplanation: null,
+                source: "telegram",
+                notes: "[telegram sombra] Leonardo Prado Faben PM40 07:10 sombra",
+            },
+        ],
+        operationalDate: "2026-04-28T12:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-04-28T10:00:00.000Z",
+        endedAt: "2026-04-28T22:00:00.000Z",
+    });
+
+    assert.equal(board.intervention[0]?.doctorName, "Titular PM40");
+    assert.deepEqual(board.intervention[0]?.occupantLabels, ["Titular PM40", "Leonardo Prado Faben (sombra)"]);
+    assert.equal(board.intervention[0]?.occupancyCount, 2);
 });

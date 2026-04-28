@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    isInterventionShadowOccupancyNotes,
     isInterventionBaseDeactivationActive,
+    resolveInterventionArrivalBoardPolicy,
     resolveInterventionOccupancyActivationReferenceAt,
     resolveInterventionBaseDeactivationExpiresAt,
     resolveSafeInterventionHandoffAt,
+    resolveStaleShadowInterventionEndedAt,
+    shouldCloseInterventionBoardCarrierOnArrival,
     shouldReuseImplicitContinuitySource,
 } from "@/modules/intervention/service";
 import { isRegulationPostDeactivationActive, shouldReuseImplicitRegulationContinuitySource } from "@/modules/regulation/service";
@@ -203,4 +207,66 @@ test("resolveSafeInterventionHandoffAt bloqueia handoff de duracao zero", () => 
     });
 
     assert.equal(handoffAt, null);
+});
+
+test("resolveInterventionArrivalBoardPolicy preserva o titular quando a chegada eh sombra", () => {
+    assert.deepEqual(resolveInterventionArrivalBoardPolicy({
+        source: "telegram",
+        isShadow: true,
+        hasCurrentBoardCarrier: true,
+    }), {
+        shouldTakeBoardImmediately: false,
+    });
+});
+
+test("resolveInterventionArrivalBoardPolicy permite board imediato sem titular previo", () => {
+    assert.deepEqual(resolveInterventionArrivalBoardPolicy({
+        source: "telegram",
+        isShadow: true,
+        hasCurrentBoardCarrier: false,
+    }), {
+        shouldTakeBoardImmediately: true,
+    });
+});
+
+test("isInterventionShadowOccupancyNotes reconhece o caso do Leonardo Prado Faben na PM40", () => {
+    assert.equal(
+        isInterventionShadowOccupancyNotes("[telegram sombra] Leonardo Prado Faben PM40 07:10 sombra"),
+        true,
+    );
+});
+
+test("shouldCloseInterventionBoardCarrierOnArrival nao encerra sombra quando outro medico chega", () => {
+    assert.equal(shouldCloseInterventionBoardCarrierOnArrival({
+        currentCarrierDoctorId: "doc-shadow",
+        arrivingDoctorId: "doc-titular",
+        currentCarrierNotes: "[telegram sombra] Leonardo Prado Faben PM40 07:10 sombra",
+    }), false);
+
+    assert.equal(shouldCloseInterventionBoardCarrierOnArrival({
+        currentCarrierDoctorId: "doc-titular",
+        arrivingDoctorId: "doc-shadow",
+        currentCarrierNotes: "Titular PM40 07:00",
+    }), true);
+});
+
+test("resolveStaleShadowInterventionEndedAt encerra sombra exatamente no fim da janela", () => {
+    const scheduledEndAt = new Date("2026-04-28T22:00:00.000Z");
+
+    assert.equal(resolveStaleShadowInterventionEndedAt({
+        notes: "[telegram sombra] Leonardo Prado Faben PM40 07:10 sombra",
+        scheduledEndAt,
+        endedAt: null,
+        referenceAt: new Date("2026-04-28T21:59:00.000Z"),
+    }), null);
+
+    assert.equal(
+        resolveStaleShadowInterventionEndedAt({
+            notes: "[telegram sombra] Leonardo Prado Faben PM40 07:10 sombra",
+            scheduledEndAt,
+            endedAt: null,
+            referenceAt: new Date("2026-04-28T22:01:00.000Z"),
+        })?.toISOString(),
+        scheduledEndAt.toISOString(),
+    );
 });

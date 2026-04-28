@@ -42,7 +42,7 @@ import {
   MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE,
   type BankHoursBalanceOverrideSummary,
 } from "@/modules/bank-hours/service";
-import { expireInterventionBaseDeactivations } from "@/modules/intervention/service";
+import { expireInterventionBaseDeactivations, expireStaleShadowInterventionOccupancies } from "@/modules/intervention/service";
 import { expireStaleRegulationOccupancies } from "@/modules/regulation/service";
 
 export interface RegulationBoardRow {
@@ -1464,6 +1464,7 @@ export async function listInterventionBoard() {
 
 export async function getOperationalBoard() {
   await expireInterventionBaseDeactivations(new Date());
+  await expireStaleShadowInterventionOccupancies(new Date());
   await expireStaleRegulationOccupancies(new Date());
 
   const [regulation, intervention] = await Promise.all([
@@ -2372,6 +2373,54 @@ function resolvePaymentAllocationTargetChoices(params: {
   return choices;
 }
 
+function buildAdditionalShadowPaymentAllocationRows(params: {
+  targetChoices: PaymentAllocationTargetChoice[];
+  slotStartIso: string;
+  shiftLabel: "SD" | "SN";
+  continuitySourceSummaryByOccupancyId: Map<string, ContinuitySourceSummary>;
+  bankHoursBalanceOverridesByContinuityGroupId: Map<string, BankHoursBalanceOverrideSummary>;
+}) {
+  const rows: PaymentAllocationRow[] = [];
+
+  for (const choice of params.targetChoices) {
+    if (choice.target.disabledEntireShift) {
+      continue;
+    }
+
+    const chosenOccupancyId = choice.chosenCandidate?.occupancyId ?? null;
+    const shadowCandidates = choice.candidates.filter((candidate) => (
+      candidate.isShadow
+      && candidate.occupancyId !== chosenOccupancyId
+    ));
+
+    for (const shadowCandidate of shadowCandidates) {
+      const deactivationOutcome = resolveChosenCandidateDeactivationOutcome({
+        target: choice.target,
+        chosenCandidate: shadowCandidate,
+        slotStartIso: params.slotStartIso,
+        shiftLabel: params.shiftLabel,
+      });
+
+      if (deactivationOutcome.shouldSuppressChosenCoverage) {
+        continue;
+      }
+
+      rows.push(buildChosenPaymentAllocationRow({
+        target: choice.target,
+        candidates: [shadowCandidate],
+        chosenCandidate: shadowCandidate,
+        slotStartIso: params.slotStartIso,
+        shiftLabel: params.shiftLabel,
+        continuitySourceSummaryByOccupancyId: params.continuitySourceSummaryByOccupancyId,
+        bankHoursBalanceOverridesByContinuityGroupId: params.bankHoursBalanceOverridesByContinuityGroupId,
+        disabledStateOverride: deactivationOutcome.clearedDisabledState,
+      }));
+    }
+  }
+
+  return rows;
+}
+
 export function buildPaymentAllocationBoardModel(params: {
   targets: PaymentAllocationTargetDefinition[];
   rawRows: PaymentAllocationRawRow[];
@@ -2390,7 +2439,7 @@ export function buildPaymentAllocationBoardModel(params: {
     .map(mapLogicalShiftCandidate)
     .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null))
     .filter((candidate) => doesCandidateCoverPaymentSlot(candidate, params.startedAt))
-  ).filter((candidate) => isEligibleTitularityCandidate(candidate))
+  ).filter((candidate) => isEligiblePresenceCandidate(candidate))
     .filter((candidate) => !isMicroCoverage(candidate))
     .filter((candidate, _, all) => !shouldIgnoreDuplicateRestart(candidate, all));
 
@@ -2455,13 +2504,23 @@ export function buildPaymentAllocationBoardModel(params: {
           displacedByDoctorConflict: choice.displacedByDoctorConflict,
         }),
       });
-    })
+    });
+
+  const additionalShadowRows = buildAdditionalShadowPaymentAllocationRows({
+    targetChoices,
+    slotStartIso: params.startedAt,
+    shiftLabel: params.shiftLabel,
+    continuitySourceSummaryByOccupancyId,
+    bankHoursBalanceOverridesByContinuityGroupId: params.bankHoursBalanceOverridesByContinuityGroupId ?? new Map(),
+  });
+
+  const mergedRows = [...rows, ...additionalShadowRows]
     .sort(comparePaymentAllocationRows);
 
-  const regulation = rows.filter((row) => row.domain === "regulation");
-  const intervention = rows.filter((row) => row.domain === "intervention");
-  const payableRows = rows.filter((row) => !(row.disabledDuringShift && !row.occupancyId));
-  const disabledCount = rows.filter((row) => row.disabledDuringShift && !row.occupancyId).length;
+  const regulation = mergedRows.filter((row) => row.domain === "regulation");
+  const intervention = mergedRows.filter((row) => row.domain === "intervention");
+  const payableRows = mergedRows.filter((row) => !(row.disabledDuringShift && !row.occupancyId));
+  const disabledCount = mergedRows.filter((row) => row.disabledDuringShift && !row.occupancyId).length;
   const assignedCount = payableRows.filter((row) => Boolean(row.occupancyId)).length;
   const needsReviewCount = payableRows.filter((row) => row.paymentStatus === "needs_review").length;
   const readyForPaymentCount = payableRows.filter((row) => row.paymentStatus === "ready_for_payment").length;
@@ -2487,7 +2546,8 @@ export function buildPaymentAllocationBoardModel(params: {
 }
 
 function resolveSlotPresenceCandidateLabel(candidate: LogicalShiftCandidate) {
-  return candidate.displayName?.trim() || candidate.doctorName.trim();
+  const label = candidate.displayName?.trim() || candidate.doctorName.trim();
+  return candidate.isShadow ? `${label} (sombra)` : label;
 }
 
 function compareSlotPresenceCandidates(left: LogicalShiftCandidate, right: LogicalShiftCandidate) {
@@ -2511,7 +2571,7 @@ function buildOccupiedSlotPresenceRow(params: {
   candidates: LogicalShiftCandidate[];
 }): OperationalSlotPresenceRow {
   const orderedCandidates = [...params.candidates].sort(compareSlotPresenceCandidates);
-  const primaryCandidate = orderedCandidates[0] as LogicalShiftCandidate;
+  const primaryCandidate = orderedCandidates.find((candidate) => !candidate.isShadow) ?? orderedCandidates[0] as LogicalShiftCandidate;
   const occupantLabels = orderedCandidates.map(resolveSlotPresenceCandidateLabel);
 
   return {
@@ -2534,6 +2594,18 @@ function buildOccupiedSlotPresenceRow(params: {
     occupancyIds: orderedCandidates.map((candidate) => candidate.occupancyId),
     occupancyCount: orderedCandidates.length,
   };
+}
+
+function isEligiblePresenceCandidate(candidate: LogicalShiftCandidate) {
+  if (candidate.invalidTimeline || candidate.isLikelyNoise) {
+    return false;
+  }
+
+  if (candidate.domain === "intervention" && !candidate.boardStartedAt && candidate.shiftLabel !== "P" && !candidate.isShadow) {
+    return false;
+  }
+
+  return true;
 }
 
 function buildEmptySlotPresenceRow(params: {
@@ -2580,7 +2652,7 @@ function buildOccupiedHistoricalOperationalPresenceRow(params: {
   candidates: LogicalShiftCandidate[];
 }): HistoricalOperationalPresenceRow {
   const orderedCandidates = [...params.candidates].sort(compareSlotPresenceCandidates);
-  const primaryCandidate = orderedCandidates[0] as LogicalShiftCandidate;
+  const primaryCandidate = orderedCandidates.find((candidate) => !candidate.isShadow) ?? orderedCandidates[0] as LogicalShiftCandidate;
   const occupantLabels = orderedCandidates.map(resolveSlotPresenceCandidateLabel);
 
   return {
@@ -2681,7 +2753,7 @@ export function buildOperationalSlotPresenceBoardModel(params: {
     .map(mapLogicalShiftCandidate)
     .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null))
     .filter((candidate) => doesCandidateCoverPaymentSlot(candidate, params.startedAt))
-  ).filter((candidate) => isEligibleTitularityCandidate(candidate))
+  ).filter((candidate) => isEligiblePresenceCandidate(candidate))
     .filter((candidate) => !isMicroCoverage(candidate))
     .filter((candidate, _, all) => !shouldIgnoreDuplicateRestart(candidate, all));
 
@@ -2801,6 +2873,7 @@ async function loadPaymentAllocationSourceData(
   db: ReturnType<typeof getDb>,
   request: ReturnType<typeof resolvePaymentAllocationRequest>,
 ) {
+  await expireStaleShadowInterventionOccupancies(new Date(Math.min(Date.now(), new Date(request.endedAt).getTime())));
   const queryStart = new Date(new Date(request.startedAt).getTime() - 86400000).toISOString();
   const queryEnd = new Date(new Date(request.endedAt).getTime() + 86400000).toISOString();
 

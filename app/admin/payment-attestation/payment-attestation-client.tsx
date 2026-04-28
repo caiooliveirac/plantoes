@@ -23,7 +23,7 @@ function normalizeSearch(value: string) {
 }
 
 function rowKey(row: PaymentAttestationEntrySnapshot) {
-    return `${row.domain}:${row.targetCode}`;
+    return `${row.domain}:${row.targetCode}:${row.occupancyId ?? row.id ?? "none"}`;
 }
 
 function boardDateInputValue(operationalDateIso: string) {

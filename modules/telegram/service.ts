@@ -179,6 +179,7 @@ interface PendingNameResolutionData {
         arrivalTime: string | null;
         shiftType: "SD" | "SN" | "P" | null;
         roleFunction: string | null;
+        isShadow?: boolean;
         isDeparture: boolean;
         isContinuation: boolean;
         isReassignment: boolean;
@@ -196,6 +197,7 @@ interface PendingDepartureJustificationData {
         arrivalTime: string | null;
         shiftType: "SD" | "SN" | "P" | null;
         roleFunction: string | null;
+        isShadow?: boolean;
         isDeparture: boolean;
         isContinuation: boolean;
         isReassignment: boolean;
@@ -655,6 +657,7 @@ function toTelegramReviewParsedSnapshot(parsed: OperationalParsedEntry | null | 
         arrivalTime: parsed.arrivalTime,
         shiftType: parsed.shiftType,
         roleFunction: parsed.roleFunction,
+        isShadow: parsed.isShadow ?? false,
         isDeparture: parsed.isDeparture,
         isContinuation: parsed.isContinuation,
         isReassignment: parsed.isReassignment ?? false,
@@ -5819,8 +5822,11 @@ async function applyParsedEntry(params: {
                     boardStartedAt: continuationBoardStartedAtIntv,
                     shiftLabel: effectiveShiftType,
                     roleLabel: parsed.roleFunction,
+                    isShadow: parsed.isShadow ?? false,
                     source: "telegram",
-                    notes: messageText,
+                    notes: parsed.isShadow
+                        ? appendTelegramOperationalNote(null, "telegram sombra", messageText)
+                        : messageText,
                     createdByUserId: null,
                 });
                 occupancyId = intResult.id;

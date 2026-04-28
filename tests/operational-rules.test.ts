@@ -811,6 +811,7 @@ test("extractNames strips noise tokens like desde, rendida, sombra, chefia from 
 
     const p5 = parseMessage("Leonardo Cabanelas, CRU (sombra), chegada as 7:10");
     assert.deepEqual(p5.extractedNames, ["Leonardo Cabanelas"]);
+    assert.equal(p5.isShadow, true);
 });
 
 test("classifies emoji-only and filler-heavy messages as casual", () => {

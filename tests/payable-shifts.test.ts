@@ -154,6 +154,35 @@ test("buildPayableShiftsFromBoards splits continuous 24h coverage into SD and SN
     assert.equal(payable[0]?.occupancyId, payable[1]?.occupancyId);
 });
 
+test("buildPayableShiftsFromBoards inclui titular e sombra na mesma base e turno", () => {
+    const board = makeBoard({
+        intervention: [
+            makeBoard().intervention[0],
+            {
+                ...makeBoard().intervention[0],
+                occupancyId: "occ-shadow",
+                doctorId: "doc-2",
+                doctorName: "Bruna Sombra",
+                displayName: "Bruna",
+                notes: "[telegram sombra] Bruna Sombra BR60 10:05 sombra",
+            },
+        ],
+        summary: {
+            totalTargets: 1,
+            assignedCount: 1,
+            readyForPaymentCount: 1,
+            needsReviewCount: 0,
+            unassignedCount: 0,
+            disabledCount: 0,
+        },
+    });
+
+    const payable = buildPayableShiftsFromBoards([board]);
+
+    assert.equal(payable.length, 2);
+    assert.deepEqual(payable.map((item) => item.occupancyId).sort(), ["occ-24h", "occ-shadow"]);
+});
+
 test("buildChiefPayableBoard keeps two payable shifts in the same day cell", () => {
     const basePayable = buildPayableShiftsFromBoards([makeBoard()]);
     const disabled = buildDisabledTargetsFromBoards({ boards: [makeBoard({

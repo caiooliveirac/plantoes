@@ -83,6 +83,53 @@ test("buildPaymentAllocationBoardModel chooses a primary candidate and flags tar
     assert.match(board.intervention[0]?.issues.join(" ") ?? "", /Mais de um medico candidato/i);
 });
 
+test("buildPaymentAllocationBoardModel inclui titular e sombra como linhas pagaveis no mesmo alvo", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({ targetCode: "PM40", targetLabel: "PM40", sortOrder: 40 })],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-titular",
+                targetCode: "PM40",
+                targetLabel: "PM40",
+                doctorId: "doc-titular",
+                doctorName: "Titular PM40",
+                displayName: "Titular",
+                startedAt: "2026-04-28T10:00:00.000Z",
+                boardStartedAt: "2026-04-28T10:00:00.000Z",
+                endedAt: "2026-04-28T22:00:00.000Z",
+                actualEndedAt: "2026-04-28T22:00:00.000Z",
+                scheduledStartAt: "2026-04-28T10:00:00.000Z",
+                scheduledEndAt: "2026-04-28T22:00:00.000Z",
+                notes: "Titular PM40 07:00",
+            }),
+            makeRow({
+                occupancyId: "occ-shadow",
+                targetCode: "PM40",
+                targetLabel: "PM40",
+                doctorId: "doc-leonardo",
+                doctorName: "Leonardo Prado Faben",
+                displayName: "Leonardo",
+                startedAt: "2026-04-28T10:10:00.000Z",
+                boardStartedAt: null,
+                endedAt: "2026-04-28T22:00:00.000Z",
+                actualEndedAt: "2026-04-28T22:00:00.000Z",
+                scheduledStartAt: "2026-04-28T10:00:00.000Z",
+                scheduledEndAt: "2026-04-28T22:00:00.000Z",
+                notes: "[telegram sombra] Leonardo Prado Faben PM40 07:10 sombra",
+            }),
+        ],
+        operationalDate: "2026-04-28T12:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-04-28T10:00:00.000Z",
+        endedAt: "2026-04-28T22:00:00.000Z",
+        generatedAt: "2026-04-28T23:00:00.000Z",
+    });
+
+    const pm40Rows = board.intervention.filter((row) => row.targetCode === "PM40" && row.occupancyId);
+    assert.equal(pm40Rows.length, 2);
+    assert.deepEqual(pm40Rows.map((row) => row.doctorName).sort(), ["Leonardo Prado Faben", "Titular PM40"]);
+});
+
 test("buildPaymentAllocationBoardModel keeps empty targets visible as review rows", () => {
     const board = buildPaymentAllocationBoardModel({
         targets: [

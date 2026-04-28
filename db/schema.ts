@@ -408,7 +408,7 @@ export const paymentAttestationSlotEntries = operationsV2.table(
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
-        uniqueIndex("payment_attestation_slot_entries_target_idx").on(table.slotId, table.domain, table.targetCode),
+        uniqueIndex("payment_attestation_slot_entries_target_idx").on(table.slotId, table.domain, table.targetCode, table.occupancyId),
         index("payment_attestation_slot_entries_slot_idx").on(table.slotId, table.sortOrder),
         index("payment_attestation_slot_entries_doctor_idx").on(table.doctorId, table.createdAt),
     ],

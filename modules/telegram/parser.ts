@@ -152,6 +152,7 @@ export interface ParsedMessage {
     arrivalTime: string | null;
     shiftType: "SD" | "SN" | "P" | null;
     roleFunction: string | null;
+    isShadow?: boolean;
     confidence: "HIGH" | "MEDIUM" | "LOW";
     isDeparture: boolean;
     isContinuation: boolean;
@@ -335,6 +336,8 @@ export function parseMessage(text: string): ParsedMessage {
         roleFunction = roleMatch[1];
     }
 
+    const isShadow = /\b(?:SOMBRA|SHADOW)\b/i.test(normalized);
+
     const isTransferToDestination = /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i.test(normalized);
     const isDeparture = !isTransferToDestination && !isReassignment && (
         DEPARTURE_SIGNALS.some((re) => re.test(normalized))
@@ -356,6 +359,7 @@ export function parseMessage(text: string): ParsedMessage {
         arrivalTime,
         shiftType,
         roleFunction,
+        isShadow,
         confidence,
         isDeparture,
         isContinuation,
