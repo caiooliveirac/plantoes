@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 # Only one deploy at a time — cancel in-flight runs on the same branch.
 concurrency:
@@ -66,7 +67,7 @@ jobs:
     name: Deploy to production
     needs: test_smoke
     runs-on: self-hosted
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
       - name: Checkout
