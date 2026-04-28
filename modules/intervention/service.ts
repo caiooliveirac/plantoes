@@ -79,6 +79,13 @@ export function resolveContinuationBoardStartedAt(params: {
     return params.boardStartedAt ?? params.startedAt;
 }
 
+export function resolveExistingInterventionBoardAnchor(params: {
+    startedAt: Date;
+    boardStartedAt?: Date | null;
+}) {
+    return params.boardStartedAt ?? params.startedAt;
+}
+
 export function shouldReuseImplicitContinuitySource(referenceAt: Date, sourceEndedAt?: Date | null) {
     if (!sourceEndedAt) {
         return true;
@@ -370,10 +377,14 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             // occupancy to be invisible on the board (board-rules visibility check would expire it).
             const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
             const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
-            const existingAnchorIsStale = existingSameDoctor.boardStartedAt!.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
-            const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existingSameDoctor.boardStartedAt!.getTime())
+            const existingBoardAnchor = resolveExistingInterventionBoardAnchor({
+                startedAt: existingSameDoctor.startedAt,
+                boardStartedAt: existingSameDoctor.boardStartedAt,
+            });
+            const existingAnchorIsStale = existingBoardAnchor.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
+            const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existingBoardAnchor.getTime())
                 ? effectiveBoardStartedAt
-                : existingSameDoctor.boardStartedAt!;
+                : existingBoardAnchor;
 
             const keptContinuityGroupId = resolvedContinuityGroupId ?? existingSameDoctor.continuityGroupId;
 

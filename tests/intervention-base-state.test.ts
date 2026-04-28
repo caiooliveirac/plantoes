@@ -3,6 +3,7 @@ import test from "node:test";
 import {
     isInterventionShadowOccupancyNotes,
     isInterventionBaseDeactivationActive,
+    resolveExistingInterventionBoardAnchor,
     resolveInterventionArrivalBoardPolicy,
     resolveInterventionOccupancyActivationReferenceAt,
     resolveInterventionBaseDeactivationExpiresAt,
@@ -207,6 +208,27 @@ test("resolveSafeInterventionHandoffAt bloqueia handoff de duracao zero", () => 
     });
 
     assert.equal(handoffAt, null);
+});
+
+test("resolveExistingInterventionBoardAnchor usa startedAt quando boardStartedAt estiver nulo", () => {
+    const startedAt = new Date("2026-04-28T10:14:00.000Z");
+
+    assert.equal(
+        resolveExistingInterventionBoardAnchor({
+            startedAt,
+            boardStartedAt: null,
+        }).toISOString(),
+        startedAt.toISOString(),
+    );
+
+    const boardStartedAt = new Date("2026-04-28T10:16:00.000Z");
+    assert.equal(
+        resolveExistingInterventionBoardAnchor({
+            startedAt,
+            boardStartedAt,
+        }).toISOString(),
+        boardStartedAt.toISOString(),
+    );
 });
 
 test("resolveInterventionArrivalBoardPolicy preserva o titular quando a chegada eh sombra", () => {
