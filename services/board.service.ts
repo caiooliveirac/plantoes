@@ -1366,6 +1366,7 @@ export async function listRegulationBoard() {
     return shouldKeepRegulationOccupancyVisible({
       startedAt: row.startedAt,
       boardStartedAt: row.boardStartedAt,
+      scheduledEndAt: row.scheduledEndAt,
       shiftLabel: row.shiftLabel,
       reference,
     }) ? row : demoteRegulationRowToWaiting(row);
@@ -2570,8 +2571,14 @@ function compareSlotPresenceCandidates(left: LogicalShiftCandidate, right: Logic
 function buildOccupiedSlotPresenceRow(params: {
   target: PaymentAllocationTargetDefinition;
   candidates: LogicalShiftCandidate[];
+  slotStartIso: string;
 }): OperationalSlotPresenceRow {
-  const orderedCandidates = [...params.candidates].sort(compareSlotPresenceCandidates);
+  const orderedCandidates = [...params.candidates].sort((left, right) => {
+    const leftNative = left.logicalSlotStart === params.slotStartIso ? 0 : 1;
+    const rightNative = right.logicalSlotStart === params.slotStartIso ? 0 : 1;
+    if (leftNative !== rightNative) return leftNative - rightNative;
+    return compareSlotPresenceCandidates(left, right);
+  });
   const primaryCandidate = orderedCandidates.find((candidate) => !candidate.isShadow) ?? orderedCandidates[0] as LogicalShiftCandidate;
   const occupantLabels = orderedCandidates.map(resolveSlotPresenceCandidateLabel);
 
@@ -2651,8 +2658,14 @@ function resolveHistoricalOperationalIssues(candidates: LogicalShiftCandidate[])
 function buildOccupiedHistoricalOperationalPresenceRow(params: {
   target: PaymentAllocationTargetDefinition;
   candidates: LogicalShiftCandidate[];
+  slotStartIso: string;
 }): HistoricalOperationalPresenceRow {
-  const orderedCandidates = [...params.candidates].sort(compareSlotPresenceCandidates);
+  const orderedCandidates = [...params.candidates].sort((left, right) => {
+    const leftNative = left.logicalSlotStart === params.slotStartIso ? 0 : 1;
+    const rightNative = right.logicalSlotStart === params.slotStartIso ? 0 : 1;
+    if (leftNative !== rightNative) return leftNative - rightNative;
+    return compareSlotPresenceCandidates(left, right);
+  });
   const primaryCandidate = orderedCandidates.find((candidate) => !candidate.isShadow) ?? orderedCandidates[0] as LogicalShiftCandidate;
   const occupantLabels = orderedCandidates.map(resolveSlotPresenceCandidateLabel);
 
@@ -2774,6 +2787,7 @@ export function buildOperationalSlotPresenceBoardModel(params: {
         return buildOccupiedSlotPresenceRow({
           target,
           candidates,
+          slotStartIso: params.startedAt,
         });
       }
 
@@ -2840,6 +2854,7 @@ export function buildHistoricalOperationalPresenceBoardModel(params: {
         return buildOccupiedHistoricalOperationalPresenceRow({
           target,
           candidates,
+          slotStartIso: params.startedAt,
         });
       }
 

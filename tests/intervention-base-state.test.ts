@@ -11,6 +11,7 @@ import {
     resolveSafeInterventionHandoffAt,
     resolveStaleShadowInterventionEndedAt,
     shouldCloseInterventionBoardCarrierOnArrival,
+    shouldInheritContinuityFromOtherBaseOccupancy,
     shouldReuseImplicitContinuitySource,
 } from "@/modules/intervention/service";
 import { isRegulationPostDeactivationActive, shouldReuseImplicitRegulationContinuitySource } from "@/modules/regulation/service";
@@ -252,6 +253,17 @@ test("resolveSameDoctorBoardStartedAt preserva nulo para sombra sem board carrie
         })?.toISOString(),
         effectiveBoardStartedAt.toISOString(),
     );
+
+        const existingBoardStartedAt = new Date("2026-04-28T10:16:00.000Z");
+        assert.equal(
+            resolveSameDoctorBoardStartedAt({
+                existingStartedAt: new Date("2026-04-28T10:14:00.000Z"),
+                existingBoardStartedAt,
+                effectiveBoardStartedAt: null,
+                currentShiftStart,
+            })?.toISOString(),
+            existingBoardStartedAt.toISOString(),
+        );
 });
 
 test("resolveInterventionArrivalBoardPolicy preserva o titular quando a chegada eh sombra", () => {
@@ -314,4 +326,31 @@ test("resolveStaleShadowInterventionEndedAt encerra sombra exatamente no fim da 
         })?.toISOString(),
         scheduledEndAt.toISOString(),
     );
+});
+test("shouldInheritContinuityFromOtherBaseOccupancy só herda em remanejamento dentro do mesmo turno", () => {
+    // Remanejamento legítimo: aberto às 08:00 SD, chega outra base 13:00 mesmo SD
+    assert.equal(shouldInheritContinuityFromOtherBaseOccupancy({
+        otherBaseStartedAt: new Date("2026-05-03T08:00:00-03:00"),
+        eventAt: new Date("2026-05-03T13:00:00-03:00"),
+    }), true);
+
+    // Plantão SD aberto há um dia (esquecimento), nova chegada hoje à tarde → não herda
+    assert.equal(shouldInheritContinuityFromOtherBaseOccupancy({
+        otherBaseStartedAt: new Date("2026-05-02T08:00:00-03:00"),
+        eventAt: new Date("2026-05-03T15:00:00-03:00"),
+    }), false);
+
+    // Esquecimento atravessando boundary do dia: aberto às 18:00 SD, chega 21:00 SN
+    // mesmo dia → janelas operacionais distintas, não herda
+    assert.equal(shouldInheritContinuityFromOtherBaseOccupancy({
+        otherBaseStartedAt: new Date("2026-05-03T18:00:00-03:00"),
+        eventAt: new Date("2026-05-03T21:00:00-03:00"),
+    }), false);
+
+    // Caso Leo Morais (variante hipotética em que PR03 ficou aberto): aberto manhã,
+    // chegada à noite → janelas distintas, não herda
+    assert.equal(shouldInheritContinuityFromOtherBaseOccupancy({
+        otherBaseStartedAt: new Date("2026-05-03T07:00:00-03:00"),
+        eventAt: new Date("2026-05-03T19:09:59-03:00"),
+    }), false);
 });

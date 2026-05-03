@@ -230,6 +230,7 @@ function resolveInterventionVerificationBoundary(
 export function shouldKeepRegulationOccupancyVisible(params: {
     startedAt: string | Date | null;
     boardStartedAt?: string | Date | null;
+    scheduledEndAt?: string | Date | null;
     shiftLabel: OccupancyShiftLabel;
     reference: string | Date;
 }) {
@@ -249,6 +250,17 @@ export function shouldKeepRegulationOccupancyVisible(params: {
 
     if (!isBeforeCurrentOperationalShift(visibilityAnchorAt, reference)) {
         return true;
+    }
+
+    // Honor explicit operational commitment: if scheduledEndAt was set (e.g. via a
+    // continuation event extending coverage to the next shift boundary), keep the
+    // occupancy visible until that scheduled end + grace. This prevents the implicit
+    // P-shift expiry from hiding a continuation that was just confirmed.
+    if (params.scheduledEndAt) {
+        const scheduledEndAt = new Date(params.scheduledEndAt);
+        if (new Date(reference).getTime() < addMinutes(scheduledEndAt, VERIFICATION_GRACE_MINUTES).getTime()) {
+            return true;
+        }
     }
 
     const expiresAt = resolveImplicitOccupancyExpiry(visibilityAnchorAt, shiftLabel);

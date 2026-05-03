@@ -32,6 +32,7 @@ import {
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
+import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
@@ -459,7 +460,12 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
                 startedAt: params.source.startedAt,
                 boardStartedAt: params.source.boardStartedAt ?? params.source.startedAt,
                 shiftLabel: params.source.shiftLabel,
-                roleLabel: params.roleLabel ?? params.source.roleLabel,
+                roleLabel: applyOperationalRoleShiftPolicy({
+                    shiftLabel: params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
+                        ? params.source.shiftLabel
+                        : null,
+                    roleLabel: params.roleLabel ?? params.source.roleLabel,
+                }),
                 ramalLabel: params.destination.code,
                 source: "admin_correction",
                 notes: params.notes ?? null,
@@ -487,7 +493,12 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
             startedAt: params.source.startedAt,
             boardStartedAt: params.source.boardStartedAt ?? params.source.startedAt,
             shiftLabel: params.source.shiftLabel,
-            roleLabel: params.roleLabel ?? params.source.roleLabel,
+            roleLabel: applyOperationalRoleShiftPolicy({
+                shiftLabel: params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
+                    ? params.source.shiftLabel
+                    : null,
+                roleLabel: params.roleLabel ?? params.source.roleLabel,
+            }),
             source: "admin_correction",
             notes: params.notes ?? null,
             createdByUserId: params.updatedByUserId ?? null,
@@ -592,6 +603,14 @@ export async function correctRegulationOccupancy(
             }
         }
 
+        const requestedRoleLabel = hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel;
+        const sanitizedRoleLabel = applyOperationalRoleShiftPolicy({
+            shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
+                ? nextShiftLabel
+                : null,
+            roleLabel: requestedRoleLabel,
+        });
+
         const [updated] = await tx.update(regulationOccupancies)
             .set({
                 postId,
@@ -603,7 +622,7 @@ export async function correctRegulationOccupancy(
                 endedAt,
                 actualEndedAt,
                 shiftLabel: nextShiftLabel,
-                roleLabel: hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel,
+                roleLabel: sanitizedRoleLabel,
                 ramalLabel: normalizeRegulationRamalLabel({
                     actualPostCode: targetPost.code,
                     requestedRamalLabel: hasOwn(input, "ramalLabel") ? input.ramalLabel ?? null : existing.ramalLabel,
@@ -671,6 +690,14 @@ export async function correctInterventionOccupancy(
             })
             : { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt };
 
+        const requestedRoleLabel = hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel;
+        const sanitizedRoleLabel = applyOperationalRoleShiftPolicy({
+            shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
+                ? nextShiftLabel
+                : null,
+            roleLabel: requestedRoleLabel,
+        });
+
         const [updated] = await tx.update(interventionOccupancies)
             .set({
                 doctorId: hasOwn(input, "doctorId") ? input.doctorId ?? existing.doctorId : existing.doctorId,
@@ -681,7 +708,7 @@ export async function correctInterventionOccupancy(
                 endedAt,
                 actualEndedAt,
                 shiftLabel: nextShiftLabel,
-                roleLabel: hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel,
+                roleLabel: sanitizedRoleLabel,
                 notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),

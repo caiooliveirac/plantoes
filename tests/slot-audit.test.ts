@@ -375,3 +375,81 @@ test("buildOperationalSlotPresenceBoardModel mantém a PM40 ativa com Leonardo P
     assert.deepEqual(board.intervention[0]?.occupantLabels, ["Titular PM40", "Leonardo Prado Faben (sombra)"]);
     assert.equal(board.intervention[0]?.occupancyCount, 2);
 });
+
+test("buildOperationalSlotPresenceBoardModel prioriza o titular do slot quando ha P herdado encerrando as 07:13", () => {
+    const board = buildOperationalSlotPresenceBoardModel({
+        targets: [{
+            domain: "regulation",
+            targetId: 2031,
+            targetCode: "2031",
+            targetLabel: "Ramal 2031",
+            sortOrder: 1,
+            defaultRole: "MR",
+        }],
+        rawRows: [
+            {
+                occupancyId: "occ-cecilia-p",
+                domain: "regulation",
+                targetCode: "2031",
+                targetLabel: "Ramal 2031",
+                doctorId: "doc-cecilia",
+                doctorName: "Cecilia Veiga Malheiros Gil Braz",
+                displayName: null,
+                startedAt: "2026-04-28T10:35:00.000Z",
+                boardStartedAt: "2026-04-28T10:35:00.000Z",
+                endedAt: "2026-04-29T10:13:00.000Z",
+                actualEndedAt: null,
+                scheduledStartAt: "2026-04-28T10:00:00.000Z",
+                scheduledEndAt: "2026-04-29T10:00:00.000Z",
+                continuityGroupId: "cg-cecilia",
+                shiftLabel: "P",
+                roleLabel: "MR",
+                ramalLabel: "2031",
+                arrivalDelayMinutes: 35,
+                overtimeMinutes: 13,
+                creditedOvertimeMinutes: 13,
+                balanceMinutes: 0,
+                ruleCode: "continuity_p_shift",
+                bankHoursExplanation: null,
+                source: "telegram",
+                notes: "P herdado do dia anterior",
+            },
+            {
+                occupancyId: "occ-carolina-sd",
+                domain: "regulation",
+                targetCode: "2031",
+                targetLabel: "Ramal 2031",
+                doctorId: "doc-carolina",
+                doctorName: "Carolina Tanajura Monteiro",
+                displayName: null,
+                startedAt: "2026-04-29T10:13:00.000Z",
+                boardStartedAt: "2026-04-29T10:13:00.000Z",
+                endedAt: "2026-04-29T22:15:00.000Z",
+                actualEndedAt: null,
+                scheduledStartAt: "2026-04-29T10:00:00.000Z",
+                scheduledEndAt: "2026-04-29T22:00:00.000Z",
+                continuityGroupId: "cg-carolina",
+                shiftLabel: "SD",
+                roleLabel: "MR",
+                ramalLabel: "2031",
+                arrivalDelayMinutes: 13,
+                overtimeMinutes: 15,
+                creditedOvertimeMinutes: 15,
+                balanceMinutes: 0,
+                ruleCode: "standard",
+                bankHoursExplanation: null,
+                source: "telegram",
+                notes: "Titular do SD",
+            },
+        ],
+        operationalDate: "2026-04-29T12:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-04-29T10:00:00.000Z",
+        endedAt: "2026-04-29T22:00:00.000Z",
+    });
+
+    assert.equal(board.regulation[0]?.doctorName, "Carolina Tanajura Monteiro");
+    assert.equal(board.regulation[0]?.doctorLabel, "Carolina Tanajura Monteiro");
+    assert.deepEqual(board.regulation[0]?.occupantLabels, ["Carolina Tanajura Monteiro"]);
+    assert.equal(board.regulation[0]?.occupancyCount, 1);
+});

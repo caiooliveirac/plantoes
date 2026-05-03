@@ -55,11 +55,11 @@ function regulationSortBucket(code: string, shiftLabel: string) {
         return 0;
     }
 
-    if (shiftLabel === "SD" && normalized === "2151") {
+    if (shiftLabel !== "SN" && normalized === "2151") {
         return 1;
     }
 
-    if (shiftLabel === "SD" && normalized === "2032") {
+    if (shiftLabel !== "SN" && normalized === "2032") {
         return 2;
     }
 

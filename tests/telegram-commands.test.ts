@@ -37,6 +37,7 @@ import {
     resolveTelegramContinuationStartedAt,
     resolveLatestClosedShiftRequest,
     resolveTelegramSuccessReplyKind,
+    shouldLinkActiveTelegramContinuitySource,
     shouldLinkRecentClosedTelegramContinuity,
     shouldDeferPendingDepartureCorrectionToFreshParsing,
     shouldUseTelegramSenderNameFallback,
@@ -46,6 +47,8 @@ import {
     shouldDeferPendingDepartureJustificationToFreshParsing,
     shouldDeferPendingNameSelectionToFreshParsing,
     shouldTreatTelegramArrivalAsContinuation,
+    shouldReopenStaleTelegramInterventionContinuation,
+    shouldReopenStaleTelegramRegulationContinuation,
     shouldTreatTelegramArrivalAsImplicitReassignment,
     buildTelegramContinuationSourceHint,
     buildPublicTelegramCommandHelpReply,
@@ -1996,6 +1999,64 @@ test("shouldTreatTelegramArrivalAsContinuation infers rollover for intervention 
     );
 });
 
+test("shouldReopenStaleTelegramRegulationContinuation flags expired P anchors", () => {
+    assert.equal(
+        shouldReopenStaleTelegramRegulationContinuation({
+            activeShiftLabel: "P",
+            activeStartedAt: new Date("2026-04-27T19:14:00-03:00"),
+            eventAt: new Date("2026-04-28T08:55:00-03:00"),
+        }),
+        true,
+    );
+
+    assert.equal(
+        shouldReopenStaleTelegramRegulationContinuation({
+            activeShiftLabel: "P",
+            activeStartedAt: new Date("2026-04-28T07:20:00-03:00"),
+            eventAt: new Date("2026-04-28T08:55:00-03:00"),
+        }),
+        false,
+    );
+
+    assert.equal(
+        shouldReopenStaleTelegramRegulationContinuation({
+            activeShiftLabel: "SN",
+            activeStartedAt: new Date("2026-04-27T19:14:00-03:00"),
+            eventAt: new Date("2026-04-28T08:55:00-03:00"),
+        }),
+        false,
+    );
+});
+
+test("shouldReopenStaleTelegramInterventionContinuation flags expired P anchors", () => {
+    assert.equal(
+        shouldReopenStaleTelegramInterventionContinuation({
+            activeShiftLabel: "P",
+            activeStartedAt: new Date("2026-04-27T19:14:00-03:00"),
+            eventAt: new Date("2026-04-28T08:55:00-03:00"),
+        }),
+        true,
+    );
+
+    assert.equal(
+        shouldReopenStaleTelegramInterventionContinuation({
+            activeShiftLabel: "P",
+            activeStartedAt: new Date("2026-04-28T07:20:00-03:00"),
+            eventAt: new Date("2026-04-28T08:55:00-03:00"),
+        }),
+        false,
+    );
+
+    assert.equal(
+        shouldReopenStaleTelegramInterventionContinuation({
+            activeShiftLabel: "SD",
+            activeStartedAt: new Date("2026-04-27T19:14:00-03:00"),
+            eventAt: new Date("2026-04-28T08:55:00-03:00"),
+        }),
+        false,
+    );
+});
+
 test("shouldLinkTelegramArrivalToContinuitySource links SD→SN regulation cross-shift and refuses same-shift or P-only rollover", () => {
     assert.equal(
         shouldLinkTelegramArrivalToContinuitySource({
@@ -2086,7 +2147,8 @@ test("shouldLinkTelegramArrivalToContinuitySource links SD→SN regulation cross
     );
 });
 
-test("shouldLinkRecentClosedTelegramContinuity expires old closed shifts before they contaminate a new day", () => {
+test("shouldLinkRecentClosedTelegramContinuity só linka saída-e-volta-rápida dentro do mesmo turno", () => {
+    // saiu de manhã e volta no fim do mesmo SD: gap > 2h, não linka
     assert.equal(
         shouldLinkRecentClosedTelegramContinuity(
             new Date("2026-04-07T18:33:00-03:00"),
@@ -2095,28 +2157,222 @@ test("shouldLinkRecentClosedTelegramContinuity expires old closed shifts before 
         false,
     );
 
+    // saiu 18:10 SD e volta 19:20 SN: cruza o turno, não é continuidade implícita
     assert.equal(
         shouldLinkRecentClosedTelegramContinuity(
             new Date("2026-04-07T19:20:00-03:00"),
             new Date("2026-04-07T18:10:00-03:00"),
         ),
-        true,
+        false,
     );
 
+    // saiu 18:18 SD e volta 23:40 SN: turno SN inteiro passou sem ocupar
     assert.equal(
         shouldLinkRecentClosedTelegramContinuity(
             new Date("2026-04-07T23:40:00-03:00"),
             new Date("2026-04-07T18:18:00-03:00"),
         ),
-        true,
+        false,
     );
 
+    // dia seguinte → óbvio que não linka
     assert.equal(
         shouldLinkRecentClosedTelegramContinuity(
             new Date("2026-04-08T18:33:00-03:00"),
             new Date("2026-04-08T07:03:28-03:00"),
         ),
         false,
+    );
+
+    // saiu 09:30 SD e volta 11:00 SD (gap 1h30min, mesmo turno) → linka
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-04-07T11:00:00-03:00"),
+            new Date("2026-04-07T09:30:00-03:00"),
+        ),
+        true,
+    );
+
+    // caso Leo Morais: PR03 P fechado 07:33 BRT, CB02 P invertido 19:09 BRT (cross-shift, ~11.5h)
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-05-03T19:09:59-03:00"),
+            new Date("2026-05-03T07:33:28-03:00"),
+        ),
+        false,
+    );
+});
+
+test("shouldLinkRecentClosedTelegramContinuity rejeita gap negativo (endedAt no futuro)", () => {
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-05-03T08:00:00-03:00"),
+            new Date("2026-05-03T10:00:00-03:00"),
+        ),
+        false,
+    );
+});
+
+test("shouldLinkRecentClosedTelegramContinuity não cola quando termina e volta no boundary do turno", () => {
+    // saiu 06:55 SD da véspera e volta 07:30 (já é o SD do dia novo) — gap 35min mas turnos diferentes
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-05-04T07:30:00-03:00"),
+            new Date("2026-05-04T06:55:00-03:00"),
+        ),
+        false,
+    );
+
+    // saiu 18:55 SD e volta 19:10 SN — gap pequeno mas cruza para o turno seguinte
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-05-04T19:10:00-03:00"),
+            new Date("2026-05-04T18:55:00-03:00"),
+        ),
+        false,
+    );
+});
+
+test("shouldLinkActiveTelegramContinuitySource só linka enquanto a janela esperada do plantão ativo não expirou", () => {
+    // P aberto 07:00 BRT e chegada outra base 13:00 BRT mesmo dia → ainda dentro do P (24h)
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T07:00:00-03:00"),
+            activeShiftLabel: "P",
+            eventAt: new Date("2026-05-03T13:00:00-03:00"),
+        }),
+        true,
+    );
+
+    // P aberto 07:00 BRT, chegada 09:00 do dia seguinte → P já expirou (boundary 7h do dia seguinte)
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T07:00:00-03:00"),
+            activeShiftLabel: "P",
+            eventAt: new Date("2026-05-04T09:00:00-03:00"),
+        }),
+        false,
+    );
+
+    // SD aberto 07:30 e chegada 21:00 mesmo dia → SD esperado expira no próximo boundary (19:00)
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T07:30:00-03:00"),
+            activeShiftLabel: "SD",
+            eventAt: new Date("2026-05-03T21:00:00-03:00"),
+        }),
+        false,
+    );
+
+    // SD aberto 07:30 e chegada 14:00 mesmo dia → ainda dentro da janela SD
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T07:30:00-03:00"),
+            activeShiftLabel: "SD",
+            eventAt: new Date("2026-05-03T14:00:00-03:00"),
+        }),
+        true,
+    );
+
+    // SN aberto 19:00 e chegada 03:00 da madrugada do dia seguinte → ainda dentro do SN
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T19:00:00-03:00"),
+            activeShiftLabel: "SN",
+            eventAt: new Date("2026-05-04T03:00:00-03:00"),
+        }),
+        true,
+    );
+
+    // SN aberto 19:00 e chegada 14:00 do dia seguinte → SN já expirou no boundary 07:00
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T19:00:00-03:00"),
+            activeShiftLabel: "SN",
+            eventAt: new Date("2026-05-04T14:00:00-03:00"),
+        }),
+        false,
+    );
+
+    // shiftLabel desconhecido → cai pro boundary geral; depois dele, fonte stale
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T08:00:00-03:00"),
+            activeShiftLabel: null,
+            eventAt: new Date("2026-05-03T13:00:00-03:00"),
+        }),
+        true,
+    );
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T08:00:00-03:00"),
+            activeShiftLabel: null,
+            eventAt: new Date("2026-05-04T13:00:00-03:00"),
+        }),
+        false,
+    );
+
+    // chegada antes do início do ativo (clock skew) → permite, fluxo principal cuida
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T08:00:00-03:00"),
+            activeShiftLabel: "P",
+            eventAt: new Date("2026-05-03T07:30:00-03:00"),
+        }),
+        true,
+    );
+});
+
+test("regras de continuidade: chegadas P futuras nunca herdam plantão antigo (Leo Morais e variantes)", () => {
+    // Caso Leo Morais: PR03 P fechado 07:33 BRT, "CB02 P invertido" 19:09 BRT
+    // Não há fonte ativa válida porque o plantão fechou; recent-closed também recusa
+    // (cross-shift). Nada a herdar.
+    const leoEnded = new Date("2026-05-03T07:33:28-03:00");
+    const leoEvent = new Date("2026-05-03T19:09:59-03:00");
+    assert.equal(shouldLinkRecentClosedTelegramContinuity(leoEvent, leoEnded), false);
+
+    // Variante: doutor esquece de avisar saída, plantão P de ontem ainda aberto, chega
+    // hoje à noite anunciando "P invertido" em base diferente. Active stale → não linka.
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-02T08:00:00-03:00"),
+            activeShiftLabel: "P",
+            eventAt: new Date("2026-05-03T19:00:00-03:00"),
+        }),
+        false,
+    );
+
+    // Variante: doutor SD de ontem aberto (esquecimento), chega hoje à tarde "PR03 P".
+    // Active expirado → não linka.
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-02T07:30:00-03:00"),
+            activeShiftLabel: "SD",
+            eventAt: new Date("2026-05-03T15:00:00-03:00"),
+        }),
+        false,
+    );
+
+    // Caminho legítimo: doutor terminou SD agora há 30min e chega na mesma manhã na
+    // outra base. Mesma janela operacional, gap pequeno → linka.
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-05-03T13:00:00-03:00"),
+            new Date("2026-05-03T12:30:00-03:00"),
+        ),
+        true,
+    );
+
+    // Caminho legítimo: P em curso, doutor anuncia "P invertido" em outra base 6h depois
+    // (ex.: remanejamento real). Active ainda válido → linka (intervenção depois decide
+    // se herda continuity_group por shouldInheritContinuityFromOtherBaseOccupancy).
+    assert.equal(
+        shouldLinkActiveTelegramContinuitySource({
+            activeStartedAt: new Date("2026-05-03T07:00:00-03:00"),
+            activeShiftLabel: "P",
+            eventAt: new Date("2026-05-03T13:00:00-03:00"),
+        }),
+        true,
     );
 });
 
@@ -2459,6 +2715,12 @@ test("resolveTelegramEligibleLateDepartureReason aceita 'liberado pela chefia' c
     assert.equal(resolveTelegramEligibleLateDepartureReason("liberado chefia")?.code, "chief_release");
     assert.equal(resolveTelegramEligibleLateDepartureReason("chefia liberou")?.code, "chief_release");
     assert.equal(resolveTelegramEligibleLateDepartureReason("atraso de quem veio render"), null);
+});
+
+test("resolveTelegramEligibleLateDepartureReason aceita rendicao/troca de unidade como handoff", () => {
+    assert.equal(resolveTelegramEligibleLateDepartureReason("motivo: rendição agora")?.code, "handoff");
+    assert.equal(resolveTelegramEligibleLateDepartureReason("rendido por Vinicius Raimundo")?.code, "handoff");
+    assert.equal(resolveTelegramEligibleLateDepartureReason("finalizando apos troca de unidade")?.code, "handoff");
 });
 
 test("buildTelegramJustificationFollowUpText appends a plain follow-up reason to the original departure message", () => {

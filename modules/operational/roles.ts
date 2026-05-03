@@ -11,6 +11,18 @@ export function normalizeOperationalRoleLabel(value: string | null | undefined) 
     return normalized.length > 0 ? normalized : null;
 }
 
+export function applyOperationalRoleShiftPolicy(params: {
+    shiftLabel: "SD" | "SN" | "P" | null;
+    roleLabel: string | null | undefined;
+}) {
+    const normalizedRole = normalizeOperationalRoleLabel(params.roleLabel);
+    if (normalizedRole === "MRV" && params.shiftLabel === "SN") {
+        return null;
+    }
+
+    return normalizedRole;
+}
+
 export function isRemotePriorityRegulationCode(code: string) {
     return REMOTE_PRIORITY_REGULATION_CODES.has(code.trim().toUpperCase());
 }
@@ -46,14 +58,20 @@ export function resolveOperationalRoleLabel(params: {
     roleLabel?: string | null;
     defaultRole?: string | null;
 }) {
-    const explicitRole = normalizeOperationalRoleLabel(params.roleLabel);
+    const explicitRole = applyOperationalRoleShiftPolicy({
+        shiftLabel: params.shiftLabel,
+        roleLabel: params.roleLabel,
+    });
+    const defaultRole = applyOperationalRoleShiftPolicy({
+        shiftLabel: params.shiftLabel,
+        roleLabel: params.defaultRole,
+    });
     const resolved = resolveFixedOperationalRole(params)
         ?? explicitRole
-        ?? normalizeOperationalRoleLabel(params.defaultRole)
+        ?? defaultRole
         ?? null;
 
-    // 2032/2151 do not carry MRV role semantics on SN.
-    if (params.domain === "regulation" && params.shiftLabel === "SN" && MRV_REGULATION_CODES.has(params.code) && resolved === "MRV") {
+    if (resolved === "MRV" && params.shiftLabel === "SN") {
         return null;
     }
 

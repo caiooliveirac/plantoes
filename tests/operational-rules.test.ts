@@ -12,9 +12,10 @@ import {
     shouldKeepRegulationOccupancyVisible,
 } from "@/modules/operational/board-rules";
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
+import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationContinuationScheduledEndAt } from "@/modules/regulation/service";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveForcedDayEventTime, resolveTelegramEventTime } from "@/modules/operational/rules";
-import { isCasualTelegramMessage, looksLikeDepartureMessage, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
+import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
 
 test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
@@ -24,7 +25,7 @@ test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-26T06:59:00-03:00")), "SN");
 });
 
-test("keeps fixed MRV role on continuation for 2032 and 2151", () => {
+test("keeps fixed MRV role on day continuity for 2032 and 2151 and blocks it only on SN", () => {
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
         code: "2151",
@@ -40,6 +41,22 @@ test("keeps fixed MRV role on continuation for 2032 and 2151", () => {
         roleLabel: null,
         defaultRole: null,
     }), "MRV");
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2032",
+        shiftLabel: "SD",
+        roleLabel: null,
+        defaultRole: null,
+    }), "MRV");
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2151",
+        shiftLabel: "SN",
+        roleLabel: null,
+        defaultRole: null,
+    }), null);
 });
 
 test("falls back to post default role on non-fixed regulation ramal and keeps explicit overrides", () => {
@@ -210,6 +227,20 @@ test("hides regulation carry-over after boundary unless doctor declared P", () =
             reference: new Date("2026-03-26T07:15:00-03:00"),
         }),
         false,
+    );
+
+    // Caio Oliveira regression: explicit continuation extends scheduledEndAt to next
+    // shift boundary; visibility must respect that commitment instead of expiring at
+    // 07:15 due to the implicit P-shift rule.
+    assert.equal(
+        shouldKeepRegulationOccupancyVisible({
+            startedAt: new Date("2026-03-25T19:00:00-03:00"),
+            boardStartedAt: new Date("2026-03-25T19:00:00-03:00"),
+            scheduledEndAt: new Date("2026-03-26T19:15:00-03:00"),
+            shiftLabel: "P",
+            reference: new Date("2026-03-26T07:15:00-03:00"),
+        }),
+        true,
     );
 
     assert.equal(
@@ -828,6 +859,19 @@ test("does not classify operational messages with CRU/COI as casual", () => {
     assert.equal(isCasualTelegramMessage("Gerardson continua no COI"), false);
 });
 
+test("classifies vacancy/coverage chatter as operational meta conversation", () => {
+    assert.equal(looksLikeOperationalMetaConversation("2031 sem médico?"), true);
+    assert.equal(looksLikeOperationalMetaConversation("Quem cobre o 1366 agora?"), true);
+    assert.equal(looksLikeOperationalMetaConversation("Tem vaga no COI hoje?"), true);
+    assert.equal(looksLikeOperationalMetaConversation("PM40 descoberto neste turno"), true);
+});
+
+test("does not classify structured operational registrations as meta conversation", () => {
+    assert.equal(looksLikeOperationalMetaConversation("Leonardo 2031 07:00 SD"), false);
+    assert.equal(looksLikeOperationalMetaConversation("Ana saindo 1366 19:20"), false);
+    assert.equal(looksLikeOperationalMetaConversation("Rafaela continua COI SN"), false);
+});
+
 test("P arrival up to 60 min before boundary resolves to the upcoming shift, not the current one", () => {
     // Doctor arrives at 06:44 with P — 16 min before the 07:00 SD boundary.
     // Must resolve to SD (scheduledStart = 07:00), NOT SN (scheduledStart = 19:00 yesterday, which would create ~12h phantom delay).
@@ -1073,6 +1117,40 @@ test("inferRegulationCoverageWindow keeps an explicit P end without extending tw
     });
 
     assert.equal(carried.scheduledEndAt?.toISOString(), new Date("2026-03-26T07:15:00-03:00").toISOString());
+});
+
+test("resolveRegulationContinuationExplicitScheduledEndAt drops expired carry-over end", () => {
+    const continuationAt = new Date("2026-04-28T08:55:00-03:00");
+    const expiredScheduledEndAt = new Date("2026-04-28T07:15:00-03:00");
+
+    assert.equal(
+        resolveRegulationContinuationExplicitScheduledEndAt({
+            existingScheduledEndAt: expiredScheduledEndAt,
+            continuationAt,
+        }),
+        null,
+    );
+
+    const futureScheduledEndAt = new Date("2026-04-28T19:15:00-03:00");
+    assert.equal(
+        resolveRegulationContinuationExplicitScheduledEndAt({
+            existingScheduledEndAt: futureScheduledEndAt,
+            continuationAt,
+        })?.toISOString(),
+        futureScheduledEndAt.toISOString(),
+    );
+});
+
+test("resolveRegulationContinuationScheduledEndAt extends to next-day 19:15 when continuation is confirmed at 19:00", () => {
+    const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
+        existingStartedAt: new Date("2026-04-27T06:48:00-03:00"),
+        continuationAt: new Date("2026-04-27T19:00:58-03:00"),
+        postCode: "1367",
+        inferredScheduledStartAt: new Date("2026-04-27T07:00:00-03:00"),
+        explicitScheduledEndAt: null,
+    });
+
+    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-04-28T19:15:00-03:00").toISOString());
 });
 
 test("hasPlannedInterventionCoverageForCurrentShift suppresses next-boundary verification for explicit P", () => {

@@ -138,7 +138,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
     const [domainFilter, setDomainFilter] = useState<DomainFilter>("all");
     const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("all");
     const [targetFilter, setTargetFilter] = useState("all");
-    const [sortMode, setSortMode] = useState<SortMode>("pending");
+    const [sortMode, setSortMode] = useState<SortMode>("name");
     const [manualDraft, setManualDraft] = useState<{
         domain: "regulation" | "intervention";
         targetCode: string;

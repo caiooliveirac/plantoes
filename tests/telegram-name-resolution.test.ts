@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveOperationalDoctorLookupQuery } from "@/modules/telegram/service";
+import { resolveOperationalDoctorLookupQuery, shouldRejectLowConfidenceTelegramArrival, detectLocationWithoutRamal, buildLocationWithoutRamalReply, shouldAttemptSenderHistoryContinuationFallback } from "@/modules/telegram/service";
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates } from "@/modules/telegram/name-resolution";
 import { buildCandidatePromptReply, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 
@@ -164,6 +164,110 @@ test("resolveOperationalDoctorLookupQuery bloqueia fallback por remetente em con
         senderName: "1366 MEDICO",
         messageText: "Saida BR05",
     }), null);
+});
+
+test("shouldRejectLowConfidenceTelegramArrival permite shorthand legitimo via fallback do remetente", () => {
+    assert.equal(shouldRejectLowConfidenceTelegramArrival({
+        chatType: "group",
+        confidence: "MEDIUM",
+        extractedNamesCount: 0,
+        isDeparture: false,
+        messageText: "1367 03:00",
+        senderName: "Ana Luiza",
+    }), false);
+});
+
+test("shouldRejectLowConfidenceTelegramArrival mantém bloqueio para conta compartilhada e @mention", () => {
+    assert.equal(shouldRejectLowConfidenceTelegramArrival({
+        chatType: "group",
+        confidence: "MEDIUM",
+        extractedNamesCount: 0,
+        isDeparture: false,
+        messageText: "1367 03:00",
+        senderName: "1366 MEDICO",
+    }), true);
+
+    assert.equal(shouldRejectLowConfidenceTelegramArrival({
+        chatType: "group",
+        confidence: "MEDIUM",
+        extractedNamesCount: 0,
+        isDeparture: false,
+        messageText: "@chefe2031 1367 03:00",
+        senderName: "Ana Luiza",
+    }), true);
+});
+
+test("detectLocationWithoutRamal detecta CRU sem ramal", () => {
+    assert.deepEqual(detectLocationWithoutRamal("Rafaela Menoita SD CRU"), { location: "CRU" });
+    assert.deepEqual(detectLocationWithoutRamal("Fulano CRU 07:00"), { location: "CRU" });
+    assert.deepEqual(detectLocationWithoutRamal("Fulano COI SD"), { location: "COI" });
+});
+
+test("detectLocationWithoutRamal nao dispara quando ramal ja presente", () => {
+    assert.equal(detectLocationWithoutRamal("Rafaela 1321 SD CRU"), null);
+    assert.equal(detectLocationWithoutRamal("Fulano 1366 COI 07:00"), null);
+});
+
+test("buildLocationWithoutRamalReply inclui dica interativa quando interactive=true", () => {
+    const reply = buildLocationWithoutRamalReply({
+        senderName: "Rafaela",
+        location: "CRU",
+        shiftLabel: "SD",
+        time: "07:00",
+        interactive: true,
+    });
+    assert.match(reply, /responda.*apenas.*n[úu]mero do ramal/i);
+});
+
+test("buildLocationWithoutRamalReply sem dica interativa quando interactive=false", () => {
+    const reply = buildLocationWithoutRamalReply({
+        senderName: "Rafaela",
+        location: "CRU",
+        shiftLabel: "SD",
+        time: "07:00",
+        interactive: false,
+    });
+    assert.doesNotMatch(reply, /responda.*apenas/i);
+});
+
+test("shouldAttemptSenderHistoryContinuationFallback habilita fallback para continua sem nome explicito", () => {
+    assert.equal(shouldAttemptSenderHistoryContinuationFallback({
+        parsed: {
+            sector: "REGULATION",
+            baseCode: "2033",
+            arrivalTime: null,
+            shiftType: null,
+            roleFunction: null,
+            isDeparture: false,
+            isContinuation: true,
+            isReassignment: false,
+        },
+        doctorQuery: null,
+        senderName: "Rafaela Dias",
+        messageText: "continua na 2033",
+        chatId: "-123",
+        senderTelegramId: "12345",
+    }), true);
+});
+
+test("shouldAttemptSenderHistoryContinuationFallback bloqueia fallback para conta compartilhada", () => {
+    assert.equal(shouldAttemptSenderHistoryContinuationFallback({
+        parsed: {
+            sector: "REGULATION",
+            baseCode: "2033",
+            arrivalTime: null,
+            shiftType: null,
+            roleFunction: null,
+            isDeparture: false,
+            isContinuation: true,
+            isReassignment: false,
+        },
+        doctorQuery: null,
+        senderName: "2033 MEDICO",
+        messageText: "continua na 2033",
+        chatId: "-123",
+        senderTelegramId: "12345",
+    }), false);
 });
 
 test("pickTelegramReply is deterministic for the same seed", () => {

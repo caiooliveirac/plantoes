@@ -25,7 +25,7 @@ import { interventionOccupancies, regulationOccupancies, telegramBotNotices } fr
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
 import { isRemoteOperationalRole, isRemotePriorityRegulationCode, normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
-import { getSaoPauloParts, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { getSaoPauloParts, resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import type { TelegramUpdate } from "@/modules/telegram/api";
 import { buildChoiceKeyboard, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds } from "@/modules/telegram/config";
@@ -54,6 +54,7 @@ export interface MealBreakDoctor {
     ramal: string;
     name: string;
     domain: "regulation";
+    arrivalStartedAt?: string;
     startedAt: string;
     shiftLabel: "SD" | "SN" | "P";
     roleLabel: string | null;
@@ -78,6 +79,7 @@ export interface MealBreakSessionEvent {
     | "session_restarted"
     | "confirmation_accepted"
     | "recip_selected"
+    | "mrv_declared"
     | "mrv_selected"
     | "lunch_selected"
     | "rest_auto_selected"
@@ -98,6 +100,7 @@ export interface MealBreakSessionEvent {
 export interface MealBreakUndoSnapshot {
     stage: MealBreakStage;
     recipRamal: string | null;
+    mrvRamals: string[];
     mrvLunch1230Ramal: string | null;
     lunchAssignments: Record<string, MealBreakLunchSlot>;
     restAssignments: Record<string, MealBreakRestSlot>;
@@ -788,7 +791,8 @@ function resolveMealBreakDoctorShiftLabel(params: {
     }
 
     const currentShift = resolveOperationalShiftWindow(params.referenceAt);
-    return new Date(params.startedAt).getTime() >= currentShift.startedAt.getTime()
+    const inferredArrivalShift = resolveArrivalShiftLabel(params.startedAt);
+    return inferredArrivalShift === currentShift.shiftLabel
         ? currentShift.shiftLabel
         : "P";
 }
@@ -830,6 +834,7 @@ function mapRegulationDoctor(row: OperationalBoard["regulation"][number], mode: 
             fallback: row.postCode,
         }),
         domain: "regulation",
+        arrivalStartedAt: row.startedAt,
         startedAt: row.boardStartedAt ?? row.startedAt,
         shiftLabel: effectiveShiftLabel,
         roleLabel: resolveOperationalRoleLabel({
@@ -928,7 +933,14 @@ function hydrateMealBreakSession(session: MealBreakSession): MealBreakSession {
 }
 
 function resolveNightDinnerDuration(doctor: MealBreakDoctor): MealBreakDinnerDuration {
-    return doctor.shiftLabel === "P" ? "one_hour" : "half_hour";
+    if (doctor.shiftLabel !== "P") {
+        return "half_hour";
+    }
+
+    const arrivalStartedAt = doctor.arrivalStartedAt ?? doctor.startedAt;
+    return resolveArrivalShiftLabel(arrivalStartedAt) === "SD"
+        ? "one_hour"
+        : "half_hour";
 }
 
 function resolveDefaultNightDinnerSlot(duration: MealBreakDinnerDuration): MealBreakDinnerSlot {
@@ -1168,8 +1180,11 @@ export function buildMealBreakStageKeyboard(session: MealBreakSession): Telegram
     }
 
     if (session.stage === "awaiting_mrv_lunch") {
-        if (session.mrvRamals.length === 0) {
-            return undoRow.length > 0 ? buildChoiceKeyboard([undoRow]) : null;
+        if (session.mrvRamals.length < 2) {
+            const candidateRows = chunkChoices(resolveManualMrvCandidateRamals(session), 4);
+            const rows = [...candidateRows];
+            if (undoRow.length > 0) rows.push(undoRow);
+            return rows.length > 0 ? buildChoiceKeyboard(rows) : null;
         }
         const rows = [session.mrvRamals];
         if (undoRow.length > 0) rows.push(undoRow);
@@ -1377,6 +1392,23 @@ function buildCurrentPrompt(session: MealBreakSession) {
         return buildDayStartPrompt();
     }
     if (session.stage === "awaiting_mrv_lunch") {
+        if (session.mrvRamals.length < 2) {
+            const missingCount = 2 - session.mrvRamals.length;
+            const knownMrvs = session.mrvRamals.length > 0
+                ? [
+                    "MRVs ja identificados:",
+                    ...session.mrvRamals.map((ramal) => `• ${renderDoctorCompactSummary(session, ramal)}`),
+                    "",
+                ]
+                : [];
+            return [
+                `⚠️ Nao identifiquei os 2 MRVs ativos. Falta${missingCount > 1 ? "m" : ""} ${missingCount}.`,
+                "Adicione no painel e mande /almoco reiniciar, ou responda com o RAMAL do MRV faltante.",
+                "",
+                ...knownMrvs,
+                "Responda com um RAMAL ativo para registrar como MRV.",
+            ].join("\n");
+        }
         const doctors = session.mrvRamals.map((ramal) => {
             const doc = findDoctor(session, ramal);
             return `${ramal} · ${resolveDoctorCompactName(doc ?? { name: ramal })}`;
@@ -1492,7 +1524,7 @@ export function syncDaySessionState(session: MealBreakSession) {
         }
     }
 
-    const mrvPhaseComplete = session.mrvLunch1230Ramal || session.mrvRamals.length === 0;
+    const mrvPhaseComplete = Boolean(session.mrvLunch1230Ramal);
     const lunchQueue = mrvPhaseComplete
         ? session.roster
             .map((doctor) => doctor.ramal)
@@ -1554,7 +1586,7 @@ export function syncDaySessionState(session: MealBreakSession) {
             ? "awaiting_confirmation"
             : !session.recipRamal
                 ? "awaiting_recip"
-                : !session.mrvLunch1230Ramal && session.mrvRamals.length > 0
+                : !mrvPhaseComplete
                     ? "awaiting_mrv_lunch"
                     : lunchQueue.length > 0
                         ? "awaiting_lunch_choice"
@@ -1565,12 +1597,9 @@ export function syncDaySessionState(session: MealBreakSession) {
 }
 
 function syncNightSessionState(session: MealBreakSession) {
-    const dinnerDurationAssignments = { ...session.dinnerDurationAssignments };
-    for (const doctor of session.roster) {
-        if (!dinnerDurationAssignments[doctor.ramal]) {
-            dinnerDurationAssignments[doctor.ramal] = resolveNightDinnerDuration(doctor);
-        }
-    }
+    const dinnerDurationAssignments = Object.fromEntries(
+        session.roster.map((doctor) => [doctor.ramal, resolveNightDinnerDuration(doctor)]),
+    ) as Record<string, MealBreakDinnerDuration>;
 
     const nightWorkAssignments = { ...session.nightWorkAssignments };
     separateSharedPositionConflicts(session, nightWorkAssignments, NIGHT_WORK_SLOTS);
@@ -1614,6 +1643,44 @@ function syncNightSessionState(session: MealBreakSession) {
 function stripMealBreakRosterDoctor(doctor: MealBreakRosterDoctor): MealBreakDoctor {
     const { occupancyId: _occupancyId, ...mealBreakDoctor } = doctor;
     return mealBreakDoctor;
+}
+
+export function reconcileNightMealBreakSessionWithBoard(params: {
+    session: MealBreakSession;
+    board: OperationalBoard;
+}) {
+    if (params.session.mode !== "night") {
+        return params.session;
+    }
+
+    const boardArrivalByRamal = new Map(
+        params.board.regulation
+            .filter((row) => row.status === "active" && Boolean(row.startedAt))
+            .map((row) => [normalizeRamal(row.postCode), row.startedAt as string]),
+    );
+
+    let changed = false;
+    const roster = params.session.roster.map((doctor) => {
+        const liveArrivalStartedAt = boardArrivalByRamal.get(doctor.ramal) ?? null;
+        if (!liveArrivalStartedAt || doctor.arrivalStartedAt === liveArrivalStartedAt) {
+            return doctor;
+        }
+
+        changed = true;
+        return {
+            ...doctor,
+            arrivalStartedAt: liveArrivalStartedAt,
+        };
+    });
+
+    if (!changed) {
+        return params.session;
+    }
+
+    return syncNightSessionState({
+        ...params.session,
+        roster,
+    });
 }
 
 function buildMealBreakRosterEntries(
@@ -2242,6 +2309,7 @@ function captureUndoSnapshot(session: MealBreakSession, label: string): MealBrea
     return {
         stage: session.stage,
         recipRamal: session.recipRamal,
+        mrvRamals: [...session.mrvRamals],
         mrvLunch1230Ramal: session.mrvLunch1230Ramal,
         lunchAssignments: { ...session.lunchAssignments },
         restAssignments: { ...session.restAssignments },
@@ -2262,6 +2330,7 @@ function applyUndoSnapshot(session: MealBreakSession, snapshot: MealBreakUndoSna
     const restored: MealBreakSession = {
         ...session,
         recipRamal: snapshot.recipRamal,
+        mrvRamals: [...(snapshot.mrvRamals ?? session.mrvRamals)],
         mrvLunch1230Ramal: snapshot.mrvLunch1230Ramal,
         lunchAssignments: { ...snapshot.lunchAssignments },
         restAssignments: { ...snapshot.restAssignments },
@@ -2356,6 +2425,24 @@ function parseSingleRamalReply(text: string) {
         ramal,
         valid: Boolean(ramal) && tokens.length === 1,
     };
+}
+
+function chunkChoices(values: string[], size: number) {
+    const rows: string[][] = [];
+    for (let index = 0; index < values.length; index += size) {
+        rows.push(values.slice(index, index + size));
+    }
+    return rows;
+}
+
+function resolveManualMrvCandidateRamals(session: MealBreakSession) {
+    return session.roster
+        .filter((doctor) => doctor.ramal !== session.chiefRamal)
+        .filter((doctor) => doctor.ramal !== session.recipRamal)
+        .filter((doctor) => !session.mrvRamals.includes(doctor.ramal))
+        .filter((doctor) => !isMealBreakIsolatedRole(doctor.roleLabel))
+        .filter((doctor) => !isMealBreakDiscretionaryRole(doctor.roleLabel))
+        .map((doctor) => doctor.ramal);
 }
 
 function resolveSingleChoiceRamal(
@@ -2499,7 +2586,7 @@ export function shouldPreferMealBreakReplyForSession(session: MealBreakSession, 
     }
 
     if (session.stage === "awaiting_mrv_lunch") {
-        const candidate = resolveSingleChoiceRamal(session, text, session.mrvRamals);
+        const candidate = resolveSingleChoiceRamal(session, text, session.mrvRamals.length >= 2 ? session.mrvRamals : undefined);
         if (candidate.ambiguous || Boolean(candidate.ramal)) {
             return true;
         }
@@ -3242,13 +3329,13 @@ export function applyMealBreakReply(params: {
     }
 
     if (session.stage === "awaiting_mrv_lunch") {
-        const choiceResult = resolveSingleChoiceRamal(session, text, session.mrvRamals);
+        const choiceResult = resolveSingleChoiceRamal(session, text, session.mrvRamals.length >= 2 ? session.mrvRamals : undefined);
         if (choiceResult.ambiguous) {
             const candidates = choiceResult.candidates.map((doctor) => `• ${doctor.ramal} · ${resolveDoctorCompactName(doctor)}`).join("\n");
             return {
                 handled: true,
                 session,
-                messages: [`Encontrei mais de um MRV:\n${candidates}\n\nDigite o RAMAL para confirmar.`],
+                messages: [`Encontrei mais de uma opcao:\n${candidates}\n\nDigite o RAMAL para confirmar.`],
                 status: "invalid",
             };
         }
@@ -3257,8 +3344,74 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session,
-                messages: ["Clique ou envie o RAMAL ou nome do MRV que ficara com 12:30."],
+                messages: [session.mrvRamals.length < 2
+                    ? "Nao reconheci o MRV faltante. Atualize no painel e mande /almoco reiniciar, ou envie o RAMAL de um medico ativo."
+                    : "Clique ou envie o RAMAL ou nome do MRV que ficara com 12:30."],
                 status: "invalid",
+            };
+        }
+
+        if (session.mrvRamals.length < 2) {
+            if (choiceResult.ramal === session.chiefRamal || choiceResult.ramal === session.recipRamal) {
+                return {
+                    handled: true,
+                    session,
+                    messages: ["MRV nao pode ser chefia nem RECIP. Informe outro ramal."],
+                    status: "invalid",
+                };
+            }
+
+            if (session.mrvRamals.includes(choiceResult.ramal)) {
+                return {
+                    handled: true,
+                    session,
+                    messages: ["Esse MRV ja esta registrado. Informe o outro ramal MRV faltante."],
+                    status: "invalid",
+                };
+            }
+
+            const doctor = findDoctor(session, choiceResult.ramal);
+            if (!doctor) {
+                return {
+                    handled: true,
+                    session,
+                    messages: ["Nao reconheci esse ramal na lista ativa. Atualize no painel e mande /almoco reiniciar, ou informe outro ramal."],
+                    status: "invalid",
+                };
+            }
+
+            if (isMealBreakIsolatedRole(doctor.roleLabel) || isMealBreakDiscretionaryRole(doctor.roleLabel)) {
+                return {
+                    handled: true,
+                    session,
+                    messages: ["Esse ramal nao pode ser registrado como MRV nesta divisao. Informe outro."],
+                    status: "invalid",
+                };
+            }
+
+            const nextMrvSet = new Set([...session.mrvRamals, choiceResult.ramal]);
+            const sessionWithUndo = withUndoSnapshot(session, `MRV ${resolveDoctorCompactName(doctor)}`);
+            const syncedSession = syncDaySessionState(withEvent({
+                ...sessionWithUndo,
+                mrvRamals: session.roster
+                    .map((entry) => entry.ramal)
+                    .filter((ramal) => nextMrvSet.has(ramal)),
+                updatedAt: referenceAt.toISOString(),
+            }, {
+                type: "mrv_declared",
+                actorTelegramId: senderTelegramId,
+                ramal: choiceResult.ramal,
+            }, referenceAt));
+
+            return {
+                handled: true,
+                session: syncedSession,
+                messages: [[
+                    `✅ MRV registrado: ${resolveDoctorCompactName(doctor)} · ${choiceResult.ramal}`,
+                    "",
+                    buildCurrentPrompt(syncedSession),
+                ].join("\n")],
+                status: "updated",
             };
         }
 
@@ -3630,8 +3783,20 @@ async function loadMealBreakSession(chatId: string, operationalDate: string, mod
         return null;
     }
 
-    const session = hydrateMealBreakSession(row.payload);
-    return session.operationalDate === operationalDate && session.mode === mode ? session : null;
+    let session = hydrateMealBreakSession(row.payload);
+    if (session.operationalDate !== operationalDate || session.mode !== mode) {
+        return null;
+    }
+
+    if (mode === "night") {
+        const board = await getOperationalBoard();
+        session = reconcileNightMealBreakSessionWithBoard({
+            session,
+            board,
+        });
+    }
+
+    return session;
 }
 
 function getMealBreakVisibleChatIds() {
@@ -4330,6 +4495,10 @@ export function resolveMealBreakLogDetails(session: MealBreakSession | null) {
         return {};
     }
 
+    const dinnerDurations = Object.values(session.dinnerDurationAssignments ?? {});
+    const oneHourDinnerCount = dinnerDurations.filter((value) => value === "one_hour").length;
+    const halfHourDinnerCount = dinnerDurations.filter((value) => value === "half_hour").length;
+
     return {
         mealBreakMode: session.mode,
         mealBreakStage: session.stage,
@@ -4338,6 +4507,8 @@ export function resolveMealBreakLogDetails(session: MealBreakSession | null) {
         mealBreakAssignedRestCount: Object.keys(session.restAssignments).length,
         mealBreakAssignedNightWorkCount: Object.keys(session.nightWorkAssignments).length,
         mealBreakAssignedDinnerCount: Object.keys(session.dinnerAssignments).length,
+        mealBreakOneHourDinnerCount: oneHourDinnerCount,
+        mealBreakHalfHourDinnerCount: halfHourDinnerCount,
     };
 }
 

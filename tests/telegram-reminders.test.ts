@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildReminderPlans, type ReminderBoardSnapshot } from "@/modules/telegram/reminders";
+import { buildReminderPlans, resolveReminderRecipientsForPlan, type ReminderBoardSnapshot, type ReminderPlan } from "@/modules/telegram/reminders";
+
+function makePlan(overrides: Partial<ReminderPlan>): ReminderPlan {
+    return {
+        noticeKey: "coverage:2026-03-26T08:00",
+        stage: "coverage_checkpoint",
+        text: "test",
+        payload: {},
+        ...overrides,
+    };
+}
 
 function makeBoard(): ReminderBoardSnapshot {
     return {
@@ -114,6 +124,32 @@ test("buildReminderPlans sends an instructional call 10 minutes before the shift
     assert.match(instruction?.text ?? "", /2031 SN 19:00/);
     assert.match(instruction?.text ?? "", /continua P 19:00/);
     assert.match(instruction?.text ?? "", /sem medico confirmado no grupo/i);
+});
+
+test("resolveReminderRecipientsForPlan includes admins on noon payment checkpoint", () => {
+    const recipients = resolveReminderRecipientsForPlan({
+        plan: makePlan({
+            noticeKey: "payment:2026-03-26T12:00",
+            stage: "payment_checkpoint",
+        }),
+        reminderChatIds: ["-1001591556887"],
+        adminChatIds: ["1438288563", "140695090"],
+    });
+
+    assert.deepEqual(recipients, ["-1001591556887", "1438288563", "140695090"]);
+});
+
+test("resolveReminderRecipientsForPlan keeps regular plans in reminder chats only", () => {
+    const recipients = resolveReminderRecipientsForPlan({
+        plan: makePlan({
+            noticeKey: "coverage:2026-03-26T08:00",
+            stage: "coverage_checkpoint",
+        }),
+        reminderChatIds: ["-1001591556887"],
+        adminChatIds: ["1438288563", "140695090"],
+    });
+
+    assert.deepEqual(recipients, ["-1001591556887"]);
 });
 
 test("buildReminderPlans publishes a 10-minute coverage snapshot with confirmed and pending targets", () => {

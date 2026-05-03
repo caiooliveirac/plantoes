@@ -5,12 +5,27 @@ import { doctors, interventionBaseDeactivations, interventionBases, intervention
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours } from "@/modules/bank-hours/service";
+import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt } from "@/modules/operational/rules";
 
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
 const MIN_SAFE_OCCUPANCY_DURATION_MS = 60 * 1000;
+
+/**
+ * Remanejamento herda continuity_group_id do plantão aberto em outra base só quando a
+ * chegada nova cai na mesma janela operacional do plantão anterior. Plantão antigo aberto
+ * em outro turno (médico esqueceu de avisar saída há horas) não fundirá grupos.
+ */
+export function shouldInheritContinuityFromOtherBaseOccupancy(params: {
+    otherBaseStartedAt: Date;
+    eventAt: Date;
+}) {
+    const otherWindowStart = resolveOperationalShiftWindow(params.otherBaseStartedAt).startedAt.getTime();
+    const eventWindowStart = resolveOperationalShiftWindow(params.eventAt).startedAt.getTime();
+    return otherWindowStart === eventWindowStart;
+}
 
 export interface StartInterventionOccupancyInput {
     doctorId: string;
@@ -89,13 +104,22 @@ export function resolveExistingInterventionBoardAnchor(params: {
 export function resolveSameDoctorBoardStartedAt(params: {
     existingStartedAt: Date;
     existingBoardStartedAt?: Date | null;
-    effectiveBoardStartedAt: Date;
+    effectiveBoardStartedAt?: Date | null;
     currentShiftStart: Date;
 }) {
     // Shadow occupancies intentionally keep boardStartedAt=null so they never contend
     // for the unique active board-carrier slot on the base.
     if (!params.existingBoardStartedAt) {
         return null;
+    }
+
+    // Telegram shadow flows can preserve a null board anchor; in that case keep the
+    // current carrier anchor instead of crashing on getTime().
+    if (!params.effectiveBoardStartedAt) {
+        return resolveExistingInterventionBoardAnchor({
+            startedAt: params.existingStartedAt,
+            boardStartedAt: params.existingBoardStartedAt,
+        });
     }
 
     const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
@@ -418,11 +442,20 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
 
             const windowRef = keptBoardStartedAt && keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                 ? keptBoardStartedAt : keptStartedAt;
-            const { scheduledStartAt: recalcStart, scheduledEndAt: recalcEnd } = inferInterventionCoverageWindow({
+            const {
+                baseShiftLabel: recalcBaseShiftLabel,
+                scheduledStartAt: recalcStart,
+                scheduledEndAt: recalcEnd,
+            } = inferInterventionCoverageWindow({
                 startedAt: windowRef,
                 shiftLabel: input.shiftLabel ?? existingSameDoctor.shiftLabel,
                 explicitScheduledStartAt: null,
                 explicitScheduledEndAt: null,
+            });
+            const requestedRoleLabel = input.roleLabel !== undefined ? input.roleLabel : existingSameDoctor.roleLabel;
+            const nextRoleLabel = applyOperationalRoleShiftPolicy({
+                shiftLabel: recalcBaseShiftLabel,
+                roleLabel: requestedRoleLabel,
             });
 
             const [updated] = await tx.update(interventionOccupancies)
@@ -433,7 +466,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                     scheduledStartAt: recalcStart,
                     scheduledEndAt: recalcEnd,
                     shiftLabel: input.shiftLabel ?? existingSameDoctor.shiftLabel,
-                    roleLabel: input.roleLabel !== undefined ? input.roleLabel : existingSameDoctor.roleLabel,
+                    roleLabel: nextRoleLabel,
                     notes: input.notes ? `${existingSameDoctor.notes ?? ""}\n${input.notes}`.trim() : existingSameDoctor.notes,
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
@@ -501,7 +534,10 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 closedPreviousBaseId = otherBaseOccupancy.baseId;
             }
 
-            if (!resolvedContinuityGroupId) {
+            if (!resolvedContinuityGroupId && shouldInheritContinuityFromOtherBaseOccupancy({
+                otherBaseStartedAt: otherBaseOccupancy.startedAt,
+                eventAt: input.startedAt,
+            })) {
                 resolvedContinuityGroupId = otherBaseOccupancy.continuityGroupId;
             }
         }
@@ -565,7 +601,12 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             startedAt: input.startedAt,
             boardStartedAt: shouldTakeBoardImmediately && !currentBoardCarrier ? effectiveBoardStartedAt : null,
             shiftLabel: normalizedShiftLabel,
-            roleLabel: defaultDoctorRoleLabel ?? null,
+            roleLabel: applyOperationalRoleShiftPolicy({
+                shiftLabel: normalizedShiftLabel === "SD" || normalizedShiftLabel === "SN" || normalizedShiftLabel === "P"
+                    ? normalizedShiftLabel
+                    : null,
+                roleLabel: defaultDoctorRoleLabel,
+            }),
             source: input.source,
             notes: input.notes ?? null,
             endedAt: historicalCorrectionEndAt,

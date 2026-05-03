@@ -18,6 +18,7 @@ import {
     parseTelegramMealBreakPriorityCommand,
     resolveMealBreakContinuityStartedAt,
     resolveMealBreakLunchCapacities,
+    reconcileNightMealBreakSessionWithBoard,
     shouldPreferMealBreakReplyForSession,
     syncDaySessionState,
 } from "@/modules/telegram/meal-breaks";
@@ -1308,6 +1309,103 @@ test("buildMealBreakRoster inclui ocupacao ativa sem shiftLabel quando ela comec
 
     assert.ok(freshNight);
     assert.equal(freshNight?.shiftLabel, "SN");
+});
+
+test("jantar noturno dá 30min para chegada antecipada da SN mesmo sem shiftLabel", () => {
+    const referenceAt = new Date("2026-03-29T20:05:00-03:00");
+    const board = makeNightBoard();
+
+    board.regulation[1] = {
+        ...board.regulation[1]!,
+        startedAt: "2026-03-29T20:00:00.000Z",
+        boardStartedAt: "2026-03-29T20:00:00.000Z",
+        shiftLabel: null,
+    };
+
+    const roster = buildMealBreakRoster(board, referenceAt, "night");
+    const earlyNightDoctor = roster.roster.find((doctor) => doctor.ramal === "2032") ?? null;
+    assert.ok(earlyNightDoctor);
+    assert.equal(earlyNightDoctor?.shiftLabel, "SN");
+
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        mode: "night",
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "900",
+    });
+
+    assert.equal(session.dinnerDurationAssignments["2032"], "half_hour");
+});
+
+test("jantar noturno usa chegada real para duração mesmo com prioridade herdada", () => {
+    const referenceAt = new Date("2026-03-29T20:05:00-03:00");
+    const session = createMealBreakSession({
+        roster: [
+            {
+                doctorId: "doc-luiza",
+                ramal: "2032",
+                name: "Luiza",
+                domain: "regulation",
+                arrivalStartedAt: "2026-03-29T21:47:00.000Z", // 18:47 local: chegada para SN
+                startedAt: "2026-03-29T10:00:00.000Z", // horario herdado para ordenacao da fila
+                shiftLabel: "P",
+                roleLabel: null,
+            },
+        ],
+        chiefRamal: null,
+        mrvRamals: [],
+        referenceAt,
+        mode: "night",
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "900",
+    });
+
+    assert.equal(session.dinnerDurationAssignments["2032"], "half_hour");
+});
+
+test("sessao noturna legada corrige 1h indevida ao reconciliar com quadro ativo", () => {
+    const board = makeNightBoard();
+    board.regulation[1] = {
+        ...board.regulation[1]!,
+        startedAt: "2026-03-29T21:47:00.000Z", // 18:47 local SN
+        boardStartedAt: "2026-03-29T12:00:00.000Z", // ancora antiga usada na fila
+        shiftLabel: "P",
+    };
+
+    const session = createMealBreakSession({
+        roster: [
+            {
+                doctorId: "doc-luiza",
+                ramal: "2032",
+                name: "Luiza",
+                domain: "regulation",
+                startedAt: "2026-03-29T12:00:00.000Z",
+                shiftLabel: "P",
+                roleLabel: null,
+            },
+        ],
+        chiefRamal: null,
+        mrvRamals: [],
+        referenceAt: new Date("2026-03-29T20:05:00-03:00"),
+        mode: "night",
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "900",
+    });
+
+    assert.equal(session.dinnerDurationAssignments["2032"], "one_hour");
+
+    const reconciled = reconcileNightMealBreakSessionWithBoard({
+        session,
+        board,
+    });
+
+    assert.equal(reconciled.dinnerDurationAssignments["2032"], "half_hour");
 });
 
 test("resolveMealBreakContinuityStartedAt herda a chegada do plantao anterior mesmo com troca de base", () => {

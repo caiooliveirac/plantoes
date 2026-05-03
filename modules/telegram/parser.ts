@@ -146,6 +146,20 @@ const CASUAL_FILLER_TOKENS = new Set([
     "QUERIDAS", "SUA", "TURMA", "TIME", "TODOS", "TODAS", "VOCES", "VOCÊS",
 ]);
 
+const OPERATIONAL_META_KEYWORDS = [
+    /\bVAGA(?:S)?\b/i,
+    /\bCOBERTURA\b/i,
+    /\bSEM\s+MEDIC[OA]\b/i,
+    /\bFURO\b/i,
+    /\bDESCOBERT[OA]\b/i,
+    /\bQUEM\s+(?:COBRE|ASSUME|RENDE)\b/i,
+    /\bALGU[ÉE]M\s+(?:COBRE|ASSUME|RENDE)\b/i,
+    /\bPRECISA\s+DE\s+COBERTURA\b/i,
+];
+
+const OPERATIONAL_META_TARGET_CUES = /\b(?:\d{4}|[A-Z]{2}[\s-]?\d{2}|CRU|COI|NUCLEO|PIAM)\b/i;
+const OPERATIONAL_META_QUESTION_CUES = /[?]|\b(?:QUEM|ALGU[ÉE]M|TEM|TA|ESTA|ESTÁ|CADE|CAD[EÊ]|FALTA|PRECISA)\b/i;
+
 export interface ParsedMessage {
     sector: "REGULATION" | "INTERVENTION" | null;
     baseCode: string | null;
@@ -412,6 +426,45 @@ export function isCasualTelegramMessage(text: string) {
         .filter((token) => !CASUAL_FILLER_TOKENS.has(token));
 
     return remainder.length <= 4;
+}
+
+export function looksLikeOperationalMetaConversation(text: string) {
+    const normalized = normalizeTelegramText(text).trim();
+    if (!normalized || normalized.startsWith("/")) {
+        return false;
+    }
+
+    const hasMetaKeyword = OPERATIONAL_META_KEYWORDS.some((pattern) => pattern.test(normalized));
+    if (!hasMetaKeyword) {
+        return false;
+    }
+
+    const hasQuestionCue = OPERATIONAL_META_QUESTION_CUES.test(normalized);
+    const hasTargetCue = OPERATIONAL_META_TARGET_CUES.test(normalized);
+    if (!hasQuestionCue && !hasTargetCue) {
+        return false;
+    }
+
+    const hasExplicitOperationalSignal = ARRIVAL_SIGNALS.some((re) => re.test(normalized))
+        || CONTINUATION_SIGNALS.some((re) => re.test(normalized))
+        || DEPARTURE_SIGNALS.some((re) => re.test(normalized))
+        || REASSIGNMENT_SIGNALS.some((re) => re.test(normalized))
+        || hasFuzzyDepartureSignal(normalized);
+    if (hasExplicitOperationalSignal) {
+        return false;
+    }
+
+    // Guardrail: keep strongly-structured operational records out of this bucket.
+    const parsed = parseMessage(text);
+    const looksStructuredOperational = Boolean(
+        parsed.baseCode
+        && (parsed.arrivalTime || parsed.shiftType),
+    );
+    if (looksStructuredOperational && !hasQuestionCue) {
+        return false;
+    }
+
+    return true;
 }
 
 // F5: Detect messages about meal breaks (almoço/descanso/jantar) that should NOT be

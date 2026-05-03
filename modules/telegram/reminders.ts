@@ -11,7 +11,7 @@ import {
 } from "@/modules/operational/board-rules";
 import { endRegulationOccupancy } from "@/modules/regulation/service";
 import { sendMessage } from "@/modules/telegram/api";
-import { getTelegramAnnouncementChatIds, getTelegramReminderChatIds } from "@/modules/telegram/config";
+import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramReminderChatIds } from "@/modules/telegram/config";
 import {
     getOperationalBoard,
     type InterventionBoardRow,
@@ -85,6 +85,22 @@ function resolveReminderChatIds() {
     }
 
     return uniqueChatIds(getTelegramReminderChatIds());
+}
+
+function isNoonPaymentCheckpoint(plan: ReminderPlan) {
+    return plan.stage === "payment_checkpoint" && plan.noticeKey.endsWith("T12:00");
+}
+
+export function resolveReminderRecipientsForPlan(params: {
+    plan: ReminderPlan;
+    reminderChatIds: string[];
+    adminChatIds: string[];
+}) {
+    if (!isNoonPaymentCheckpoint(params.plan)) {
+        return uniqueChatIds(params.reminderChatIds);
+    }
+
+    return uniqueChatIds([...params.reminderChatIds, ...params.adminChatIds]);
 }
 
 function isInterventionAwaitingNews(row: InterventionBoardRow, reference: Date) {
@@ -545,8 +561,9 @@ async function rollbackNotice(chatId: string, plan: ReminderPlan) {
 }
 
 export async function sendTelegramReminderCycle(referenceDate = new Date()) {
-    const chatIds = resolveReminderChatIds();
-    if (chatIds.length === 0 || !process.env.TELEGRAM_BOT_TOKEN?.trim()) {
+    const reminderChatIds = resolveReminderChatIds();
+    const adminChatIds = uniqueChatIds(getTelegramAdminUserIds());
+    if (reminderChatIds.length === 0 || !process.env.TELEGRAM_BOT_TOKEN?.trim()) {
         return { sent: 0, evaluated: 0 };
     }
 
@@ -564,10 +581,16 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
     let sent = 0;
     let evaluated = 0;
 
-    for (const chatId of chatIds) {
-        evaluated += plans.length;
+    for (const plan of plans) {
+        const recipients = resolveReminderRecipientsForPlan({
+            plan,
+            reminderChatIds,
+            adminChatIds,
+        });
 
-        for (const plan of plans) {
+        evaluated += recipients.length;
+
+        for (const chatId of recipients) {
             const inserted = await markNoticeSent(plan, chatId);
             if (!inserted) {
                 continue;

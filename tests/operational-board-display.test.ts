@@ -16,6 +16,13 @@ test("root board keeps PIAM as the last visible regulation post at night", () =>
     );
 });
 
+test("root board keeps 2151 and 2032 prioritized on P shift like daytime", () => {
+    assert.deepEqual(
+        ["1366", "2032", "2151", "2031", "1321"].sort((left, right) => compareRootBoardRegulationCodes(left, right, "P")),
+        ["2031", "2151", "2032", "1321", "1366"],
+    );
+});
+
 test("root board keeps PIAM pending visible on any shift and nucleo only on SD", () => {
     assert.equal(shouldShowRegulationCardOnRootBoard({
         postCode: "PIAM",

@@ -6,6 +6,7 @@
  *
  * Invariants:
  * - Only "occurrence" and "hygienization" are eligible automatic-credit reasons.
+ * - Other accepted reasons (e.g. chief release, handoff/rendicao) are manual-review only.
  * - Fuzzy matching (Levenshtein ≤ 1–3 depending on keyword length) is intentional.
  * - Departure correction window: 48 hours from last shift.
  * - Ambiguity gap: 6 hours between candidates triggers disambiguation.
@@ -20,7 +21,7 @@ import { normalizeDoctorName } from "@/modules/doctors/importer";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type TelegramEligibleLateDepartureReasonCode = "occurrence" | "hygienization" | "chief_release";
+export type TelegramEligibleLateDepartureReasonCode = "occurrence" | "hygienization" | "chief_release" | "handoff";
 
 export interface TelegramDepartureCorrectionCandidate {
     occupancyId: string;
@@ -55,6 +56,7 @@ const TELEGRAM_LATE_DEPARTURE_REASON_KEYWORDS: Record<TelegramEligibleLateDepart
     occurrence: ["OCORRENCIA", "OCORRENCIAS", "OCORR", "ATENDENDO", "ATENDIMENTO", "CHAMADO"],
     hygienization: ["HIGIENIZANDO", "HIGIENIZACAO", "HIGIENIZAR", "HIGIENE", "LIMPEZA", "LIMPANDO", "LAVANDO", "DESINFECCAO", "DESINFETANDO", "DESCONTAMINANDO"],
     chief_release: ["CHEFIA", "CHEFE", "LIBERADO", "LIBERADA", "LIBEROU", "AUTORIZOU", "AUTORIZACAO", "AUTORIZADO", "DETERMINACAO"],
+    handoff: ["RENDIDO", "RENDIDA", "RENDICAO", "REDICAO", "RENDERAM", "RENDICAO", "TROCA", "UNIDADE", "SUBSTITUICAO"],
 };
 
 const TELEGRAM_LATE_DEPARTURE_REASON_STOPWORDS = new Set([
@@ -189,6 +191,19 @@ export function resolveTelegramEligibleLateDepartureReason(
         return { code: "chief_release", normalizedText: normalized };
     }
 
+    // "atraso de quem veio render" is not an eligible reason code; keep manual path behavior unchanged.
+    if (/\bATRAS\w*\b/.test(normalized) && /\b(?:REND\w*|RENDER\w*)\b/.test(normalized)) {
+        return null;
+    }
+
+    // Frequent late-departure explanations tied to handoff/replacement.
+    if (/\b(?:FUI\s+RENDID[OA]|SENDO\s+RENDID[OA]|RENDID[OA]\s+POR|RENDICAO|REDICAO)\b/.test(normalized)) {
+        return { code: "handoff", normalizedText: normalized };
+    }
+    if (/\b(?:TROCA|MUDANCA|SUBSTITUICAO)\b.*\b(?:UNIDADE|VIATURA|BASE)\b/.test(normalized)) {
+        return { code: "handoff", normalizedText: normalized };
+    }
+
     const tokens = normalized
         .split(/\s+/)
         .map((token) => token.trim())
@@ -204,6 +219,10 @@ export function resolveTelegramEligibleLateDepartureReason(
 
     if (matchesTelegramLateDepartureReason(tokens, "chief_release")) {
         return { code: "chief_release", normalizedText: normalized };
+    }
+
+    if (matchesTelegramLateDepartureReason(tokens, "handoff")) {
+        return { code: "handoff", normalizedText: normalized };
     }
 
     return null;

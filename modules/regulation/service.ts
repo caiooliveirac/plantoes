@@ -5,6 +5,7 @@ import { doctors, interventionOccupancies, regulationOccupancies, regulationPost
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncRegulationBankHours } from "@/modules/bank-hours/service";
+import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
@@ -138,6 +139,56 @@ export function shouldReopenStaleSameDoctorRegulationOccupancy(params: {
     return existingAnchorIsStale && params.incomingStartedAt.getTime() > params.existingStartedAt.getTime();
 }
 
+export function resolveRegulationContinuationExplicitScheduledEndAt(params: {
+    existingScheduledEndAt?: Date | null;
+    continuationAt: Date;
+}) {
+    const existingScheduledEndAt = params.existingScheduledEndAt ?? null;
+    if (!existingScheduledEndAt) {
+        return null;
+    }
+
+    return existingScheduledEndAt.getTime() > params.continuationAt.getTime()
+        ? existingScheduledEndAt
+        : null;
+}
+
+export function resolveRegulationContinuationScheduledEndAt(params: {
+    existingStartedAt: Date;
+    continuationAt: Date;
+    postCode?: string | null;
+    inferredScheduledStartAt?: Date | null;
+    explicitScheduledEndAt?: Date | null;
+}) {
+    const fromExisting = inferRegulationCoverageWindow({
+        startedAt: params.existingStartedAt,
+        shiftLabel: "P",
+        postCode: params.postCode ?? null,
+        explicitScheduledStartAt: params.inferredScheduledStartAt ?? null,
+        explicitScheduledEndAt: params.explicitScheduledEndAt ?? null,
+    }).scheduledEndAt;
+
+    const fromContinuation = inferRegulationCoverageWindow({
+        startedAt: params.continuationAt,
+        shiftLabel: "P",
+        postCode: params.postCode ?? null,
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    }).scheduledEndAt;
+
+    if (!fromExisting) {
+        return fromContinuation;
+    }
+
+    if (!fromContinuation) {
+        return fromExisting;
+    }
+
+    return fromContinuation.getTime() > fromExisting.getTime()
+        ? fromContinuation
+        : fromExisting;
+}
+
 export async function startRegulationOccupancy(input: StartRegulationOccupancyInput) {
     const db = getDb();
     const now = new Date();
@@ -229,17 +280,27 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
         if (!targetPostCode) {
             throw new Error("Ramal de destino indisponivel para esta abertura.");
         }
-        const resolvedRoleLabel = defaultDoctorRoleLabel ?? targetPost.defaultRole ?? null;
 
         const windowReferenceAt = effectiveBoardStartedAt.getTime() > input.startedAt.getTime()
             ? effectiveBoardStartedAt
             : input.startedAt;
-        const { scheduledStartAt: inferredScheduledStartAt, scheduledEndAt: inferredScheduledEndAt } = inferRegulationCoverageWindow({
+        const {
+            baseShiftLabel,
+            scheduledStartAt: inferredScheduledStartAt,
+            scheduledEndAt: inferredScheduledEndAt,
+        } = inferRegulationCoverageWindow({
             startedAt: windowReferenceAt,
             shiftLabel: input.shiftLabel ?? null,
             postCode: targetPostCode,
             explicitScheduledStartAt: input.scheduledStartAt ?? null,
             explicitScheduledEndAt: input.scheduledEndAt ?? null,
+        });
+        const resolvedRoleLabel = resolveOperationalRoleLabel({
+            domain: "regulation",
+            code: targetPostCode,
+            shiftLabel: baseShiftLabel,
+            roleLabel: defaultDoctorRoleLabel,
+            defaultRole: targetPost.defaultRole,
         });
         const historicalCorrectionEndAt = resolveHistoricalAdminCorrectionEndAt({
             source: input.source,
@@ -343,12 +404,24 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
 
                 const windowRef = keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                     ? keptBoardStartedAt : keptStartedAt;
-                const { scheduledStartAt: recalcStart, scheduledEndAt: recalcEnd } = inferRegulationCoverageWindow({
+                const {
+                    baseShiftLabel: recalcBaseShiftLabel,
+                    scheduledStartAt: recalcStart,
+                    scheduledEndAt: recalcEnd,
+                } = inferRegulationCoverageWindow({
                     startedAt: windowRef,
                     shiftLabel: input.shiftLabel ?? existing.shiftLabel,
                     postCode: targetPostCode,
                     explicitScheduledStartAt: null,
                     explicitScheduledEndAt: null,
+                });
+                const requestedRoleLabel = input.roleLabel !== undefined ? input.roleLabel : (existing.roleLabel ?? resolvedRoleLabel);
+                const nextRoleLabel = resolveOperationalRoleLabel({
+                    domain: "regulation",
+                    code: targetPostCode,
+                    shiftLabel: recalcBaseShiftLabel,
+                    roleLabel: requestedRoleLabel,
+                    defaultRole: targetPost.defaultRole,
                 });
 
                 const [updated] = await tx.update(regulationOccupancies)
@@ -359,7 +432,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                         scheduledStartAt: recalcStart,
                         scheduledEndAt: recalcEnd,
                         shiftLabel: input.shiftLabel ?? existing.shiftLabel,
-                        roleLabel: input.roleLabel !== undefined ? input.roleLabel : (existing.roleLabel ?? resolvedRoleLabel),
+                        roleLabel: nextRoleLabel,
                         ramalLabel: normalizeRegulationRamalLabel({
                             actualPostCode: targetPostCode,
                             requestedRamalLabel: input.ramalLabel ?? existing.ramalLabel,
@@ -646,19 +719,23 @@ export async function continueRegulationOccupancy(
             where: eq(regulationPosts.id, existing.postId),
             columns: { code: true },
         }))?.code ?? null;
+        const continuationAt = input?.continuedAt ?? new Date();
+        const explicitContinuationScheduledEndAt = resolveRegulationContinuationExplicitScheduledEndAt({
+            existingScheduledEndAt: existing.scheduledEndAt,
+            continuationAt,
+        });
         const baseShiftLabel = existing.shiftLabel && existing.shiftLabel !== "P"
             ? existing.shiftLabel
             : resolveOperationalShiftWindow(existing.startedAt).shiftLabel;
         const inferredScheduledStartAt = existing.scheduledStartAt
             ?? inferOperationalScheduledStartAt(existing.startedAt, baseShiftLabel, null, postCode);
-        const { scheduledEndAt: nextScheduledEndAt } = inferRegulationCoverageWindow({
-            startedAt: existing.startedAt,
-            shiftLabel: "P",
+        const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
+            existingStartedAt: existing.startedAt,
+            continuationAt,
             postCode,
-            explicitScheduledStartAt: inferredScheduledStartAt,
-            explicitScheduledEndAt: existing.scheduledEndAt,
+            inferredScheduledStartAt,
+            explicitScheduledEndAt: explicitContinuationScheduledEndAt,
         });
-        const continuationAt = input?.continuedAt ?? new Date();
         const nextBoardStartedAt = resolveRegulationContinuationBoardStartedAt({
             startedAt: existing.startedAt,
             boardStartedAt: existing.boardStartedAt,
