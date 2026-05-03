@@ -63,7 +63,14 @@ function resolveRegulationOrderBucket(value: string) {
     if (normalized.startsWith("1")) {
         return 2;
     }
-    return 3;
+    // PIAM precisa vir antes de NUCLEO (nunca apresentar NUCLEO → PIAM nessa ordem).
+    if (normalized === "PIAM") {
+        return 3;
+    }
+    if (normalized === "NUCLEO") {
+        return 4;
+    }
+    return 5;
 }
 
 export function compareTelegramRegulationCodes(left: string, right: string) {

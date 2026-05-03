@@ -679,15 +679,20 @@ test("getCurrentDeparturePriorityView no SN aplica piso 19:15 para RMT e exclui 
 
     assert.equal(view.shiftLabel, "SN");
     assert.equal(view.activeNightWorkSlot, null);
-    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035", "2032", "2036"]);
-    assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2153"]);
+    // Diego (2153) está em P mas iniciou no SD anterior, então sai no fechamento do SN
+    // e entra no ranking principal — não na lista de continuação.
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2153", "2035", "2032", "2036"]);
+    assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), []);
 
+    const diego = view.entries.find((entry) => entry.targetCode === "2153");
     const ana = view.entries.find((entry) => entry.targetCode === "2035");
     const erika = view.entries.find((entry) => entry.targetCode === "2032");
     const bruno = view.entries.find((entry) => entry.targetCode === "2036");
+    assert.ok(diego);
     assert.ok(ana);
     assert.ok(erika);
     assert.ok(bruno);
+    assert.equal(diego?.priorityStartedAt.slice(11, 16), "19:20");
     assert.equal(ana?.priorityStartedAt.slice(11, 16), "22:10");
     assert.equal(erika?.priorityStartedAt.slice(11, 16), "22:11");
     assert.equal(bruno?.priorityStartedAt.slice(11, 16), "22:15");
@@ -695,9 +700,10 @@ test("getCurrentDeparturePriorityView no SN aplica piso 19:15 para RMT e exclui 
     const reply = buildDeparturePriorityReply(view);
     assert.match(reply, /NOTURNO/);
     assert.match(reply, /RMT recebe piso 19:15/);
-    assert.match(reply, /1\. Ana \| 2035 \| 19:10/);
-    assert.match(reply, /2\. Erika \| 2032 \| 19:11/);
-    assert.match(reply, /3\. Bruno \| 2036 \| 18:59/);
+    assert.match(reply, /1\. Diego \| 2153 \| 16:20/);
+    assert.match(reply, /2\. Ana \| 2035 \| 19:10/);
+    assert.match(reply, /3\. Erika \| 2032 \| 19:11/);
+    assert.match(reply, /4\. Bruno \| 2036 \| 18:59/);
     assert.doesNotMatch(reply, /Carla Continua SD/);
 });
 

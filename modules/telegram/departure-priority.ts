@@ -1,4 +1,4 @@
-import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { isBeforeCurrentOperationalShift, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { isRemoteOperationalRole, normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
@@ -49,6 +49,7 @@ interface DeparturePriorityCandidate {
 
 type DeparturePriorityMealBreakSession = {
     recipRamal: string | null;
+    mrvRamals?: MealBreakSession["mrvRamals"];
     mode?: MealBreakSession["mode"];
     stage?: MealBreakSession["stage"];
     nightWorkAssignments?: MealBreakSession["nightWorkAssignments"];
@@ -150,6 +151,7 @@ function buildDeparturePriorityCandidates(params: {
     mealBreakSession: DeparturePriorityMealBreakSession | null;
 }) {
     const recipRamal = params.mealBreakSession?.recipRamal ?? null;
+    const mrvRamals = new Set(params.mealBreakSession?.mrvRamals ?? []);
     const candidates: DeparturePriorityCandidate[] = [];
     const excludedContinuations: DeparturePriorityContinuationEntry[] = [];
     const thresholdAtMs = resolveLateThresholdAt(params.referenceAt);
@@ -172,27 +174,36 @@ function buildDeparturePriorityCandidates(params: {
             defaultRole: row.defaultRole,
         });
         if (row.shiftLabel === "P") {
-            excludedContinuations.push({
-                targetCode: row.postCode,
-                name: formatDoctorSurfaceName({
-                    fullName: row.doctorName,
-                    displayName: row.displayName,
-                    fallback: row.postCode,
-                }),
-                roleLabel,
-                startedAt: row.startedAt,
-            });
-            continue;
+            // P iniciado dentro do plantão atual → continua para o próximo (excluir do ranking).
+            // P iniciado num plantão anterior → está terminando agora; trata como saída regular.
+            const startedDuringCurrentShift = !isBeforeCurrentOperationalShift(row.startedAt, params.referenceAt);
+            if (startedDuringCurrentShift) {
+                excludedContinuations.push({
+                    targetCode: row.postCode,
+                    name: formatDoctorSurfaceName({
+                        fullName: row.doctorName,
+                        displayName: row.displayName,
+                        fallback: row.postCode,
+                    }),
+                    roleLabel,
+                    startedAt: row.startedAt,
+                });
+                continue;
+            }
+        } else {
+            if (params.shiftLabel === "SD" && row.shiftLabel !== "SD") {
+                continue;
+            }
+            if (params.shiftLabel === "SN" && row.shiftLabel === "SD") {
+                continue;
+            }
         }
 
-        if (params.shiftLabel === "SD" && row.shiftLabel !== "SD") {
-            continue;
-        }
-        if (params.shiftLabel === "SN" && row.shiftLabel === "SD") {
-            continue;
-        }
-
-        if (isExcludedDepartureRole(roleLabel) || row.postCode === recipRamal) {
+        if (
+            isExcludedDepartureRole(roleLabel)
+            || row.postCode === recipRamal
+            || mrvRamals.has(row.postCode)
+        ) {
             continue;
         }
 
