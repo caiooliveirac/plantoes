@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
@@ -158,6 +159,8 @@ export async function POST(request: NextRequest) {
                 entityId: `${result.operationalDate}|${result.shiftLabel}|${result.domain}|${result.targetCode}`,
                 details: result,
             });
+            revalidatePath("/admin/payment-closing");
+            revalidatePath("/admin/payment-attestation");
             return NextResponse.json({ ok: true, ...result });
         }
 
@@ -203,6 +206,8 @@ export async function POST(request: NextRequest) {
             operationalDate: slot.operationalDate.slice(0, 10),
             shiftLabel: slot.shiftLabel,
         });
+        revalidatePath("/admin/payment-closing");
+        revalidatePath("/admin/payment-attestation");
         return NextResponse.json(view);
     } catch (error) {
         return NextResponse.json(

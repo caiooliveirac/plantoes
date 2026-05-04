@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
@@ -169,6 +169,10 @@ function dayKindClassName(operationalDate: string) {
 
 export function ChiefPaymentViewClient({ board }: Props) {
     const router = useRouter();
+    const [, startRefreshTransition] = useTransition();
+    const requestRouterRefresh = useCallback(() => {
+        startRefreshTransition(() => { router.refresh(); });
+    }, [router]);
     const [search, setSearch] = useState("");
     const [targetSearch, setTargetSearch] = useState("");
     const [status, setStatus] = useState<PaymentStatusFilter>("all");
@@ -666,7 +670,14 @@ export function ChiefPaymentViewClient({ board }: Props) {
             setManualFeedback(`Salvo: ${manualDraft.targetCode} ${manualDraft.shiftLabel} dia ${manualDraft.day} → ${selectedDoctor}.`);
             setManualDraft(null);
             setManualDoctorName("");
-            router.refresh();
+            // O novo plantao vira "ready_for_payment". Se o usuario filtrou por
+            // "Pendencias", a linha do medico atribuido seria invisivel apos o
+            // refresh — impossivel de confirmar visualmente. Resetamos o filtro
+            // de status para "all" para garantir que a atribuicao apareca.
+            if (status === "needs_review") {
+                setStatus("all");
+            }
+            requestRouterRefresh();
         } catch (error) {
             setManualError(error instanceof Error ? error.message : "Falha ao salvar correção manual.");
         } finally {
@@ -725,7 +736,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
             setManualFeedback(`Desativada: ${manualDraft.targetCode} ${manualDraft.shiftLabel} dia ${manualDraft.day}.`);
             setManualDraft(null);
             setManualDisableReason("");
-            router.refresh();
+            requestRouterRefresh();
         } catch (error) {
             setManualError(error instanceof Error ? error.message : "Falha ao salvar desativação manual.");
         } finally {
@@ -777,7 +788,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
             });
             setManualFeedback(`Removido: ${draft.targetCode} ${draft.shiftLabel} dia ${draft.day} (${draft.doctorName}).`);
             setShiftActionDraft(null);
-            router.refresh();
+            requestRouterRefresh();
         } catch (error) {
             // Rollback optimistic
             setPendingRemovals((prev) => {
