@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
+import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
 
 interface Props {
     board: ChiefPayableBoardModel;
@@ -78,9 +79,7 @@ const PROFILE_RATES: Record<DoctorProfile, { weekday: number; weekend: number }>
 };
 
 function isWeekendDate(operationalDate: string) {
-    const date = new Date(`${operationalDate}T12:00:00-03:00`);
-    const day = date.getUTCDay();
-    return day === 0 || day === 6;
+    return isPremiumRateDate(operationalDate);
 }
 
 function resolveShiftAmount(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile) {
@@ -145,6 +144,27 @@ function formatUnits(value: number | null | undefined) {
 
 function cellAuditLink(monthKey: string, day: string, shift: "SD" | "SN") {
     return `/admin/payment-attestation/audit?date=${monthKey}-${day}&shift=${shift}`;
+}
+
+const WEEKDAY_LABELS_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"] as const;
+
+function formatOperationalDate(operationalDate: string) {
+    const [year, month, day] = operationalDate.split("-");
+    const reference = new Date(`${operationalDate}T12:00:00-03:00`);
+    const weekday = WEEKDAY_LABELS_PT[reference.getUTCDay()];
+    return { dayMonth: `${day}/${month}/${year.slice(2)}`, weekday };
+}
+
+function dayKindLabel(operationalDate: string) {
+    if (isSamuHolidayDate(operationalDate)) return "Feriado";
+    if (isStrictWeekendDate(operationalDate)) return "Fim de semana";
+    return "Dia útil";
+}
+
+function dayKindClassName(operationalDate: string) {
+    if (isSamuHolidayDate(operationalDate)) return "holiday";
+    if (isStrictWeekendDate(operationalDate)) return "weekend";
+    return "weekday";
 }
 
 export function ChiefPaymentViewClient({ board }: Props) {
@@ -1187,7 +1207,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                 <th>Total SN</th>
                                 <th>Total</th>
                                 <th>Valor semana</th>
-                                <th>Valor fim de semana</th>
+                                <th>Valor fim de semana / feriado</th>
                                 <th>Valor final</th>
                             </tr>
                         </thead>
@@ -1489,7 +1509,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                 </small>
                             </article>
                             <article className="chief-payable-modal-card">
-                                <span>Plantões fim de semana</span>
+                                <span>Plantões fim de semana / feriado</span>
                                 <strong>{selectedDoctor.weekendShiftCount}</strong>
                                 <small>
                                     Tarifa: {formatCurrency(PROFILE_RATES[(selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile].weekend)} · Total: {formatCurrency(selectedDoctor.weekendDue)}
@@ -1498,9 +1518,70 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             <article className="chief-payable-modal-card emphasis">
                                 <span>Total a pagar no mês</span>
                                 <strong>{formatCurrency(selectedDoctor.totalDue)}</strong>
-                                <small>{formatCurrency(selectedDoctor.weekdayDue)} (semana) + {formatCurrency(selectedDoctor.weekendDue)} (fim de semana)</small>
+                                <small>{formatCurrency(selectedDoctor.weekdayDue)} (semana) + {formatCurrency(selectedDoctor.weekendDue)} (fim de semana / feriado)</small>
                             </article>
                         </div>
+
+                        {(() => {
+                            const profile = (selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile;
+                            const flatShifts = selectedDoctor.cells
+                                .flatMap((cell) => cell.shifts)
+                                .filter((shift) => !pendingRemovals.has(shift.payableShiftId))
+                                .slice()
+                                .sort((left, right) => {
+                                    const byDate = left.operationalDate.localeCompare(right.operationalDate);
+                                    if (byDate !== 0) return byDate;
+                                    if (left.shiftLabel !== right.shiftLabel) return left.shiftLabel === "SD" ? -1 : 1;
+                                    return left.targetCode.localeCompare(right.targetCode, "pt-BR");
+                                });
+
+                            return (
+                                <section className="chief-payable-modal-shifts">
+                                    <header>
+                                        <h4>Plantão a plantão</h4>
+                                        <small>Confira contra a nota fiscal do plantonista — {flatShifts.length} {flatShifts.length === 1 ? "plantão" : "plantões"}</small>
+                                    </header>
+
+                                    {flatShifts.length === 0 ? (
+                                        <p className="chief-payable-modal-shifts-empty">Nenhum plantão pagável neste mês com os filtros atuais.</p>
+                                    ) : (
+                                        <ol className="chief-payable-modal-shifts-list">
+                                            {flatShifts.map((shift) => {
+                                                const { dayMonth, weekday } = formatOperationalDate(shift.operationalDate);
+                                                const kindLabel = dayKindLabel(shift.operationalDate);
+                                                const kindClass = dayKindClassName(shift.operationalDate);
+                                                const value = resolveShiftAmount(shift, profile);
+                                                const rate = isPremiumRateDate(shift.operationalDate)
+                                                    ? PROFILE_RATES[profile].weekend
+                                                    : PROFILE_RATES[profile].weekday;
+
+                                                return (
+                                                    <li key={shift.payableShiftId} className="chief-payable-modal-shift-row">
+                                                        <span className="chief-payable-modal-shift-date">
+                                                            <strong>{dayMonth}</strong>
+                                                            <small>{weekday}</small>
+                                                        </span>
+                                                        <span className={`chief-payable-modal-shift-turn ${shift.shiftLabel === "SD" ? "sd" : "sn"}`}>
+                                                            {shift.shiftLabel}
+                                                        </span>
+                                                        <span className="chief-payable-modal-shift-target">
+                                                            {shift.targetCode}
+                                                            {shift.paymentTag ? <em className="chief-payable-modal-shift-half">{shift.paymentTag}</em> : null}
+                                                        </span>
+                                                        <span className={`chief-payable-modal-shift-kind ${kindClass}`}>{kindLabel}</span>
+                                                        <span className="chief-payable-modal-shift-rate">
+                                                            {formatCurrency(rate)}
+                                                            {shift.paymentUnit !== 1 ? <em> × {formatUnits(shift.paymentUnit)}</em> : null}
+                                                        </span>
+                                                        <span className="chief-payable-modal-shift-value">{formatCurrency(value)}</span>
+                                                    </li>
+                                                );
+                                            })}
+                                        </ol>
+                                    )}
+                                </section>
+                            );
+                        })()}
                     </section>
                 </div>
             ) : null}

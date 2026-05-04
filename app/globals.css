@@ -4490,6 +4490,161 @@ button.chief-payable-tag:focus-visible {
     border-color: rgba(139, 255, 198, 0.28);
 }
 
+.chief-payable-modal-shifts {
+    margin-top: 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 12px;
+}
+
+.chief-payable-modal-shifts header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.chief-payable-modal-shifts header h4 {
+    margin: 0;
+    font-size: 0.92rem;
+}
+
+.chief-payable-modal-shifts header small {
+    color: var(--muted);
+    font-size: 0.74rem;
+}
+
+.chief-payable-modal-shifts-empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.82rem;
+}
+
+.chief-payable-modal-shifts-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 4px;
+    max-height: 320px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.chief-payable-modal-shift-row {
+    display: grid;
+    grid-template-columns: 64px 32px minmax(60px, 1fr) 110px 130px 100px;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    background: rgba(12, 24, 40, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.82rem;
+}
+
+.chief-payable-modal-shift-date {
+    display: grid;
+    line-height: 1.1;
+}
+
+.chief-payable-modal-shift-date strong {
+    font-size: 0.86rem;
+}
+
+.chief-payable-modal-shift-date small {
+    color: var(--muted);
+    font-size: 0.7rem;
+}
+
+.chief-payable-modal-shift-turn {
+    text-align: center;
+    font-weight: 700;
+    border-radius: 6px;
+    padding: 2px 0;
+    font-size: 0.74rem;
+}
+
+.chief-payable-modal-shift-turn.sd {
+    background: rgba(255, 196, 90, 0.18);
+    color: #ffd58a;
+}
+
+.chief-payable-modal-shift-turn.sn {
+    background: rgba(120, 160, 255, 0.18);
+    color: #b6c8ff;
+}
+
+.chief-payable-modal-shift-target {
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.chief-payable-modal-shift-half {
+    font-style: normal;
+    font-size: 0.64rem;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255, 196, 90, 0.18);
+    color: #ffd58a;
+}
+
+.chief-payable-modal-shift-kind {
+    font-size: 0.72rem;
+    text-align: center;
+    padding: 2px 6px;
+    border-radius: 6px;
+    color: var(--muted-strong);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.chief-payable-modal-shift-kind.weekend {
+    color: #b6c8ff;
+    background: rgba(120, 160, 255, 0.14);
+}
+
+.chief-payable-modal-shift-kind.holiday {
+    color: #ffb38a;
+    background: rgba(255, 140, 90, 0.18);
+}
+
+.chief-payable-modal-shift-rate {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.chief-payable-modal-shift-rate em {
+    font-style: normal;
+    color: var(--muted-strong);
+}
+
+.chief-payable-modal-shift-value {
+    text-align: right;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+    .chief-payable-modal-shift-row {
+        grid-template-columns: 1fr 1fr;
+        grid-template-areas:
+            "date turn"
+            "target kind"
+            "rate value";
+        gap: 4px 8px;
+    }
+
+    .chief-payable-modal-shift-date { grid-area: date; }
+    .chief-payable-modal-shift-turn { grid-area: turn; justify-self: end; min-width: 36px; }
+    .chief-payable-modal-shift-target { grid-area: target; }
+    .chief-payable-modal-shift-kind { grid-area: kind; justify-self: end; }
+    .chief-payable-modal-shift-rate { grid-area: rate; text-align: left; }
+    .chief-payable-modal-shift-value { grid-area: value; }
+}
+
 @media (max-width: 1180px) {
 
     .hours-principles-grid,

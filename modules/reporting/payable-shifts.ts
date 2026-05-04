@@ -1,6 +1,7 @@
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
 import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
+import { isPremiumRateDate } from "@/modules/operational/holidays";
 
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const MIN_SEGMENT_MINUTES = 45;
@@ -189,9 +190,7 @@ function toOperationalDate(dateIso: string) {
 }
 
 function isWeekendOperationalDate(operationalDate: string) {
-    const reference = new Date(`${operationalDate}T12:00:00-03:00`);
-    const day = reference.getUTCDay();
-    return day === 0 || day === 6;
+    return isPremiumRateDate(operationalDate);
 }
 
 function asDoctorPaymentMetadata(value: unknown): DoctorPaymentMetadata {
@@ -448,6 +447,13 @@ export function buildDisabledTargetsFromBoards(params: {
             const disabledEntireShift = Boolean(row.disabledEntireShift ?? false);
             const disabledDuringShift = Boolean(row.disabledDuringShift ?? false);
             if (!disabledEntireShift && !disabledDuringShift) {
+                continue;
+            }
+
+            // Se há ocupação atribuída no slot, o alvo está efetivamente coberto:
+            // o intervalo de desativação registrado é uma residue (ex.: zero-duração
+            // do bot ou vazamento do slot vizinho) e não deve aparecer como desativada.
+            if (row.occupancyId) {
                 continue;
             }
 

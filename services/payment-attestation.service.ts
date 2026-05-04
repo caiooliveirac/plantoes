@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/db";
-import { doctors, interventionBaseDeactivations, interventionOccupancies, paymentAttestationSlotEntries, paymentAttestationSlots, regulationOccupancies, regulationPostDeactivations, users, type paymentAttestationSlotStatusEnum } from "@/db/schema";
+import { bankHoursEntries, doctors, interventionBaseDeactivations, interventionOccupancies, paymentAttestationSlotEntries, paymentAttestationSlots, regulationOccupancies, regulationPostDeactivations, users, type paymentAttestationSlotStatusEnum } from "@/db/schema";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { listDoctorSearchTerms } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
@@ -667,7 +667,69 @@ export async function applyManualPaymentAttestationCorrection(params: {
     const newOccupancyId = randomUUID();
     const newContinuityGroupId = randomUUID();
 
+    const manualDisableNotePrefix = `Desativacao manual via fechamento de pagamento (${targetCode} ${slot.shiftLabel} ${slot.operationalDate.slice(0, 10)})`;
+
     await db.transaction(async (tx) => {
+        // Apaga desativacoes manuais previas para o mesmo slot — o admin acabou de
+        // afirmar que ha um medico aqui, entao a desativacao foi um erro de fluxo.
+        // Apenas removemos os registros criados pela mesma UI (mesmo target+turno+data
+        // no notes). Outras fontes (telegram /desativar) sao preservadas.
+        if (targetId) {
+            if (params.domain === "regulation") {
+                await tx.delete(regulationPostDeactivations)
+                    .where(and(
+                        eq(regulationPostDeactivations.postId, targetId),
+                        ilike(regulationPostDeactivations.notes, `${manualDisableNotePrefix}%`),
+                    ));
+            } else {
+                await tx.delete(interventionBaseDeactivations)
+                    .where(and(
+                        eq(interventionBaseDeactivations.baseId, targetId),
+                        ilike(interventionBaseDeactivations.notes, `${manualDisableNotePrefix}%`),
+                    ));
+            }
+        }
+
+        // Idempotencia: cada manual_assign no fechamento eh autoritativo. Apaga
+        // qualquer ocupacao admin_correction/manual previa para o mesmo (target, slot)
+        // — independente do medico — antes de criar a nova. Sem isso, multiplos cliques
+        // (ou substituicao de medico) viram duplicatas no banco.
+        if (targetId) {
+            if (params.domain === "regulation") {
+                const priorRows = await tx.select({ id: regulationOccupancies.id })
+                    .from(regulationOccupancies)
+                    .where(and(
+                        eq(regulationOccupancies.postId, targetId),
+                        eq(regulationOccupancies.startedAt, shiftStart),
+                        eq(regulationOccupancies.shiftLabel, params.shiftLabel),
+                        inArray(regulationOccupancies.source, ["admin_correction", "manual"]),
+                    ));
+                const priorIds = priorRows.map((row: { id: string }) => row.id);
+                if (priorIds.length > 0) {
+                    await tx.delete(bankHoursEntries)
+                        .where(inArray(bankHoursEntries.regulationOccupancyId, priorIds));
+                    await tx.delete(regulationOccupancies)
+                        .where(inArray(regulationOccupancies.id, priorIds));
+                }
+            } else {
+                const priorRows = await tx.select({ id: interventionOccupancies.id })
+                    .from(interventionOccupancies)
+                    .where(and(
+                        eq(interventionOccupancies.baseId, targetId),
+                        eq(interventionOccupancies.startedAt, shiftStart),
+                        eq(interventionOccupancies.shiftLabel, params.shiftLabel),
+                        inArray(interventionOccupancies.source, ["admin_correction", "manual"]),
+                    ));
+                const priorIds = priorRows.map((row: { id: string }) => row.id);
+                if (priorIds.length > 0) {
+                    await tx.delete(bankHoursEntries)
+                        .where(inArray(bankHoursEntries.interventionOccupancyId, priorIds));
+                    await tx.delete(interventionOccupancies)
+                        .where(inArray(interventionOccupancies.id, priorIds));
+                }
+            }
+        }
+
         // Create a real occupancy record (backfill) so bank hours are computed correctly
         if (targetId) {
             if (params.domain === "regulation") {
@@ -856,23 +918,37 @@ export async function applyManualDisableCorrection(params: {
     const shiftEnd = new Date(board.endedAt);
 
     const now = new Date();
+    const manualDisableNotePrefix = `Desativacao manual via fechamento de pagamento (${targetCode} ${slot.shiftLabel} ${slot.operationalDate.slice(0, 10)})`;
     await db.transaction(async (tx) => {
         if (targetId) {
+            // Idempotencia: substitui qualquer desativacao manual previa para o mesmo
+            // (target, turno, data) por uma unica entrada nova. Multiplos cliques nao
+            // viram entradas duplicadas. Outras fontes (telegram /desativar) sao mantidas.
             if (params.domain === "regulation") {
+                await tx.delete(regulationPostDeactivations)
+                    .where(and(
+                        eq(regulationPostDeactivations.postId, targetId),
+                        ilike(regulationPostDeactivations.notes, `${manualDisableNotePrefix}%`),
+                    ));
                 await tx.insert(regulationPostDeactivations).values({
                     postId: targetId,
                     deactivatedAt: shiftStart,
                     reactivatedAt: shiftEnd,
-                    notes: `Desativacao manual via fechamento de pagamento (${targetCode} ${slot.shiftLabel} ${slot.operationalDate.slice(0, 10)}): ${reason}`,
+                    notes: `${manualDisableNotePrefix}: ${reason}`,
                     createdByUserId: params.actorUserId,
                     updatedByUserId: params.actorUserId,
                 });
             } else {
+                await tx.delete(interventionBaseDeactivations)
+                    .where(and(
+                        eq(interventionBaseDeactivations.baseId, targetId),
+                        ilike(interventionBaseDeactivations.notes, `${manualDisableNotePrefix}%`),
+                    ));
                 await tx.insert(interventionBaseDeactivations).values({
                     baseId: targetId,
                     deactivatedAt: shiftStart,
                     reactivatedAt: shiftEnd,
-                    notes: `Desativacao manual via fechamento de pagamento (${targetCode} ${slot.shiftLabel} ${slot.operationalDate.slice(0, 10)}): ${reason}`,
+                    notes: `${manualDisableNotePrefix}: ${reason}`,
                     createdByUserId: params.actorUserId,
                     updatedByUserId: params.actorUserId,
                 });
