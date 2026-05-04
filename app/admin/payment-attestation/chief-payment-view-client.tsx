@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
@@ -8,6 +9,22 @@ import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts"
 interface Props {
     board: ChiefPayableBoardModel;
 }
+
+interface FlashRecord {
+    kind: "assign" | "disable";
+    monthKey: string;
+    day: string;
+    shiftLabel: "SD" | "SN";
+    domain: "regulation" | "intervention";
+    targetCode: string;
+    targetLabel: string;
+    doctorName?: string;
+    reason?: string;
+    ts: number;
+}
+
+const FLASH_STORAGE_KEY = "payment-closing.lastApplied.v1";
+const FLASH_TTL_MS = 10 * 60 * 1000;
 
 type PaymentStatusFilter = "all" | "ready_for_payment" | "needs_review";
 type ShiftFilter = "all" | "SD" | "SN";
@@ -131,6 +148,7 @@ function cellAuditLink(monthKey: string, day: string, shift: "SD" | "SN") {
 }
 
 export function ChiefPaymentViewClient({ board }: Props) {
+    const router = useRouter();
     const [search, setSearch] = useState("");
     const [targetSearch, setTargetSearch] = useState("");
     const [status, setStatus] = useState<PaymentStatusFilter>("all");
@@ -139,6 +157,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
     const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("all");
     const [targetFilter, setTargetFilter] = useState("all");
     const [sortMode, setSortMode] = useState<SortMode>("name");
+    const [flash, setFlash] = useState<FlashRecord | null>(null);
+    const [highlightKey, setHighlightKey] = useState<string | null>(null);
+    const tableShellRef = useRef<HTMLDivElement | null>(null);
     const [manualDraft, setManualDraft] = useState<{
         domain: "regulation" | "intervention";
         targetCode: string;
@@ -452,6 +473,87 @@ export function ChiefPaymentViewClient({ board }: Props) {
         return sorted;
     }, [board.doctors, coverageFilter, doctorProfileOverrides, domainFilter, normalized, normalizedTarget, shiftFilter, sortMode, status, targetFilter]);
 
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        try {
+            const raw = window.sessionStorage.getItem(FLASH_STORAGE_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw) as FlashRecord;
+            if (Date.now() - parsed.ts > FLASH_TTL_MS) {
+                window.sessionStorage.removeItem(FLASH_STORAGE_KEY);
+                return;
+            }
+            if (parsed.monthKey !== board.monthKey) return;
+            setFlash(parsed);
+        } catch {
+            window.sessionStorage.removeItem(FLASH_STORAGE_KEY);
+        }
+    }, [board.monthKey]);
+
+    const persistFlash = useCallback((record: FlashRecord) => {
+        if (typeof window === "undefined") return;
+        try {
+            window.sessionStorage.setItem(FLASH_STORAGE_KEY, JSON.stringify(record));
+        } catch {}
+        setFlash(record);
+    }, []);
+
+    const dismissFlash = useCallback(() => {
+        if (typeof window !== "undefined") {
+            window.sessionStorage.removeItem(FLASH_STORAGE_KEY);
+        }
+        setFlash(null);
+        setHighlightKey(null);
+    }, []);
+
+    const locateFlashCell = useCallback(() => {
+        if (!flash) return false;
+        setStatus("all");
+        setShiftFilter("all");
+        setDomainFilter("all");
+        setCoverageFilter("all");
+        setTargetFilter("all");
+        setSearch("");
+        setTargetSearch("");
+
+        const selector = `[data-flash-key="${flash.kind}|${flash.domain}|${flash.targetCode}|${flash.day}|${flash.shiftLabel}"]`;
+        let attempts = 0;
+        const tryLocate = () => {
+            const root = tableShellRef.current ?? document;
+            const el = root.querySelector<HTMLElement>(selector);
+            if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+                setHighlightKey(`${flash.domain}|${flash.targetCode}|${flash.day}|${flash.shiftLabel}|${flash.kind}`);
+                window.setTimeout(() => setHighlightKey(null), 4500);
+                return true;
+            }
+            return false;
+        };
+        const schedule = () => {
+            if (tryLocate()) return;
+            attempts += 1;
+            if (attempts < 8) {
+                window.setTimeout(schedule, 120);
+            }
+        };
+        requestAnimationFrame(schedule);
+        return true;
+    }, [flash]);
+
+    const autoLocatedFlashRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!flash) {
+            autoLocatedFlashRef.current = null;
+            return;
+        }
+        const flashId = `${flash.ts}|${flash.kind}|${flash.domain}|${flash.targetCode}|${flash.day}|${flash.shiftLabel}`;
+        if (autoLocatedFlashRef.current === flashId) return;
+        if (Date.now() - flash.ts > 8000) return;
+        autoLocatedFlashRef.current = flashId;
+        const timer = window.setTimeout(() => locateFlashCell(), 160);
+        return () => window.clearTimeout(timer);
+    }, [flash, locateFlashCell]);
+
     async function submitManualCorrection() {
         if (!manualDraft) {
             return;
@@ -495,10 +597,21 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 throw new Error(body?.error ?? "Não foi possível aplicar a correção manual.");
             }
 
-            setManualFeedback("Correção salva. Atualizando fechamento mensal...");
+            persistFlash({
+                kind: "assign",
+                monthKey: board.monthKey,
+                day: manualDraft.day,
+                shiftLabel: manualDraft.shiftLabel,
+                domain: manualDraft.domain,
+                targetCode: manualDraft.targetCode,
+                targetLabel: manualDraft.targetLabel,
+                doctorName: selectedDoctor,
+                ts: Date.now(),
+            });
+            setManualFeedback(`Salvo: ${manualDraft.targetCode} ${manualDraft.shiftLabel} dia ${manualDraft.day} → ${selectedDoctor}.`);
             setManualDraft(null);
             setManualDoctorName("");
-            window.location.reload();
+            router.refresh();
         } catch (error) {
             setManualError(error instanceof Error ? error.message : "Falha ao salvar correção manual.");
         } finally {
@@ -543,10 +656,21 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 throw new Error(body?.error ?? "Não foi possível aplicar a desativação manual.");
             }
 
-            setManualFeedback("Desativação salva. Atualizando fechamento mensal...");
+            persistFlash({
+                kind: "disable",
+                monthKey: board.monthKey,
+                day: manualDraft.day,
+                shiftLabel: manualDraft.shiftLabel,
+                domain: manualDraft.domain,
+                targetCode: manualDraft.targetCode,
+                targetLabel: manualDraft.targetLabel,
+                reason: trimmedReason,
+                ts: Date.now(),
+            });
+            setManualFeedback(`Desativada: ${manualDraft.targetCode} ${manualDraft.shiftLabel} dia ${manualDraft.day}.`);
             setManualDraft(null);
             setManualDisableReason("");
-            window.location.reload();
+            router.refresh();
         } catch (error) {
             setManualError(error instanceof Error ? error.message : "Falha ao salvar desativação manual.");
         } finally {
@@ -836,6 +960,32 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 </section>
             ) : null}
 
+            {flash ? (
+                <section className="payment-flash-banner" role="status" aria-live="polite">
+                    <div className="payment-flash-banner-main">
+                        <span className="payment-flash-banner-icon" aria-hidden="true">✓</span>
+                        <div className="payment-flash-banner-text">
+                            <strong>
+                                {flash.kind === "assign" ? "Médico alocado" : "Unidade desativada"}
+                            </strong>
+                            <span>
+                                {flash.targetCode} {flash.shiftLabel} · dia {flash.day}/{flash.monthKey.slice(5, 7)}/{flash.monthKey.slice(0, 4)}
+                                {flash.kind === "assign" && flash.doctorName ? ` → ${flash.doctorName}` : ""}
+                                {flash.kind === "disable" && flash.reason ? ` · ${flash.reason}` : ""}
+                            </span>
+                        </div>
+                    </div>
+                    <div className="payment-flash-banner-actions">
+                        <button type="button" className="payment-button" onClick={() => locateFlashCell()}>
+                            Localizar na tabela
+                        </button>
+                        <button type="button" className="payment-button" onClick={dismissFlash} aria-label="Fechar aviso">
+                            ✕
+                        </button>
+                    </div>
+                </section>
+            ) : null}
+
             {manualDraft ? (
                 <section className="payment-detail-card">
                     <div className="payment-detail-card-header">
@@ -933,7 +1083,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 </section>
             ) : null}
 
-            <section className="chief-payable-table-shell">
+            <section className="chief-payable-table-shell" ref={tableShellRef}>
                 <div className="chief-payable-table-scroll">
                     <table className="chief-payable-table">
                         <thead>
@@ -972,7 +1122,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                     <button
                                                         type="button"
                                                         key={item.snapshotId}
-                                                        className={`chief-payable-tag disabled ${item.shiftLabel === "SD" ? "sd" : "sn"}`.trim()}
+                                                        data-flash-key={`disable|${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}`}
+                                                        className={`chief-payable-tag disabled ${item.shiftLabel === "SD" ? "sd" : "sn"} ${highlightKey === `${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}|disable` ? "flash" : ""}`.trim()}
                                                         title={`${item.targetCode} ${item.shiftLabel}${item.disabledReason ? ` · ${item.disabledReason}` : ""}`}
                                                         onClick={() => {
                                                             setManualDraft({
@@ -1108,11 +1259,14 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                         {doctor.cells.map((cell) => (
                                             <td key={`${doctor.doctorId}-${cell.day}`}>
                                                 <div className="chief-payable-cell-tags">
-                                                    {cell.shifts.map((shift) => (
+                                                    {cell.shifts.map((shift) => {
+                                                        const isFlashTarget = highlightKey === `${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}|assign`;
+                                                        return (
                                                         <motion.a
                                                             key={shift.payableShiftId}
                                                             href={cellAuditLink(board.monthKey, cell.day, shift.shiftLabel)}
-                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.paymentTag ? "half" : ""}`.trim()}
+                                                            data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
+                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
                                                             title={`${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
                                                             initial={{ opacity: 0, scale: 0.92 }}
                                                             animate={{ opacity: 1, scale: 1 }}
@@ -1120,7 +1274,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                         >
                                                             {shift.paymentTag ? `${shift.paymentTag} ${shift.tagCode}` : shift.tagCode}
                                                         </motion.a>
-                                                    ))}
+                                                        );
+                                                    })}
                                                 </div>
                                             </td>
                                         ))}
