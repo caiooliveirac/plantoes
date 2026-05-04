@@ -1923,7 +1923,11 @@ function rankPaymentAllocationCandidate(params: {
   }
 
   if (params.candidate.source === "manual" || params.candidate.source === "admin_correction") {
-    score -= 30;
+    if (params.candidate.logicalSlotStart === params.slotStartIso) {
+      score += 120;
+    } else {
+      score -= 30;
+    }
   }
 
   if (params.candidate.shiftLabel === "P" && params.candidate.logicalSlotStart !== params.slotStartIso) {
@@ -2335,7 +2339,25 @@ function resolvePaymentAllocationTargetChoices(params: {
   });
 
   const usedDoctorIds = new Set<string>();
-  const prioritizedChoices = [...choices].sort((left, right) => {
+
+  // Lock-in pass: explicit human attestations (admin_correction/manual) whose
+  // logical slot matches this slot are authoritative — allocate them first so
+  // the priority loop below cannot displace the doctor onto another target.
+  for (const choice of choices) {
+    if (choice.candidates.length === 0) continue;
+    const explicitCandidate = choice.candidates.find((candidate) => (
+      (candidate.source === "admin_correction" || candidate.source === "manual")
+      && candidate.logicalSlotStart === params.slotStartIso
+      && !usedDoctorIds.has(candidate.doctorId)
+    ));
+    if (explicitCandidate) {
+      choice.chosenCandidate = explicitCandidate;
+      usedDoctorIds.add(explicitCandidate.doctorId);
+    }
+  }
+
+  const remainingChoices = choices.filter((choice) => !choice.chosenCandidate);
+  const prioritizedChoices = [...remainingChoices].sort((left, right) => {
     const leftCandidate = left.candidates[0] ?? null;
     const rightCandidate = right.candidates[0] ?? null;
     if (!leftCandidate || !rightCandidate) {
@@ -2609,7 +2631,14 @@ function isEligiblePresenceCandidate(candidate: LogicalShiftCandidate) {
     return false;
   }
 
-  if (candidate.domain === "intervention" && !candidate.boardStartedAt && candidate.shiftLabel !== "P" && !candidate.isShadow) {
+  if (
+    candidate.domain === "intervention"
+    && !candidate.boardStartedAt
+    && candidate.shiftLabel !== "P"
+    && !candidate.isShadow
+    && candidate.source !== "admin_correction"
+    && candidate.source !== "manual"
+  ) {
     return false;
   }
 
