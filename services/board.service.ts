@@ -749,6 +749,15 @@ function resolveSuccessorStartMap(rows: PreviousOperationalRawRow[]) {
     for (let index = 0; index < sorted.length; index += 1) {
       const current = sorted[index] as PreviousOperationalRawRow;
       const currentStartedAt = new Date(current.startedAt).getTime();
+      // Explicit human attestations (admin_correction / manual) carry the
+      // authoritative time window — never shrink them via successor closure.
+      // Bot echoes that arrive seconds after the attestation, or telegram
+      // races where the next doctor's start aligns with a brief miscapture,
+      // would otherwise collapse the attestation to a few minutes.
+      if (current.source === "admin_correction" || current.source === "manual") {
+        successorByOccupancyId.set(current.occupancyId, null);
+        continue;
+      }
       // A handoff is by definition a different doctor taking the slot.
       // Two rows for the same doctor on the same target are duplicates
       // (telegram echo + admin_correction, etc.) — neither shrinks the other.
