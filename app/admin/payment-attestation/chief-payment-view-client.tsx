@@ -633,7 +633,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 {board.presetMonths.map((preset) => (
                     <a
                         key={preset.key}
-                        href={`/admin/payment-attestation?month=${preset.key}`}
+                        href={`/admin/payment-closing?month=${preset.key}`}
                         className={`reports-month-chip ${preset.key === board.monthKey ? "active" : ""}`.trim()}
                     >
                         {preset.label}

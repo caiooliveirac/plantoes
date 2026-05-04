@@ -119,7 +119,7 @@ function formatMonthLabel(date: Date) {
     return new Intl.DateTimeFormat("pt-BR", {
         month: "long",
         year: "numeric",
-        timeZone: "America/Sao_Paulo",
+        timeZone: "UTC",
     }).format(date);
 }
 
