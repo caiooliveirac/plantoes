@@ -178,6 +178,20 @@ export function ChiefPaymentViewClient({ board }: Props) {
     const [profileBusyDoctorId, setProfileBusyDoctorId] = useState<string | null>(null);
     const [doctorProfileOverrides, setDoctorProfileOverrides] = useState<Record<string, DoctorProfile>>({});
     const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
+    const [shiftActionDraft, setShiftActionDraft] = useState<{
+        payableShiftId: string;
+        occupancyId: string;
+        domain: "regulation" | "intervention";
+        targetCode: string;
+        targetLabel: string;
+        day: string;
+        shiftLabel: "SD" | "SN";
+        doctorName: string;
+        source: string | null;
+    } | null>(null);
+    const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(new Set());
+    const [shiftActionBusy, setShiftActionBusy] = useState(false);
+    const [shiftActionError, setShiftActionError] = useState<string | null>(null);
     const normalized = normalize(search);
     const normalizedTarget = normalize(targetSearch);
 
@@ -474,6 +488,27 @@ export function ChiefPaymentViewClient({ board }: Props) {
     }, [board.doctors, coverageFilter, doctorProfileOverrides, domainFilter, normalized, normalizedTarget, shiftFilter, sortMode, status, targetFilter]);
 
     useEffect(() => {
+        // Reconcile optimistic removals with server truth: if a payableShiftId
+        // is no longer present in the refreshed board, drop it from the set.
+        setPendingRemovals((prev) => {
+            if (prev.size === 0) return prev;
+            const present = new Set<string>();
+            for (const doctor of board.doctors) {
+                for (const cell of doctor.cells) {
+                    for (const shift of cell.shifts) {
+                        present.add(shift.payableShiftId);
+                    }
+                }
+            }
+            const next = new Set<string>();
+            for (const id of prev) {
+                if (present.has(id)) next.add(id);
+            }
+            return next.size === prev.size ? prev : next;
+        });
+    }, [board]);
+
+    useEffect(() => {
         if (typeof window === "undefined") return;
         try {
             const raw = window.sessionStorage.getItem(FLASH_STORAGE_KEY);
@@ -675,6 +710,64 @@ export function ChiefPaymentViewClient({ board }: Props) {
             setManualError(error instanceof Error ? error.message : "Falha ao salvar desativação manual.");
         } finally {
             setManualBusy(false);
+        }
+    }
+
+    async function submitShiftRemoval() {
+        if (!shiftActionDraft) return;
+        const draft = shiftActionDraft;
+        setShiftActionBusy(true);
+        setShiftActionError(null);
+
+        // Optimistic: hide the cell immediately
+        setPendingRemovals((prev) => {
+            const next = new Set(prev);
+            next.add(draft.payableShiftId);
+            return next;
+        });
+
+        try {
+            const response = await fetch("/api/admin/payment-attestation/slot", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "manual_remove",
+                    date: `${board.monthKey}-${draft.day}`,
+                    shift: draft.shiftLabel,
+                    domain: draft.domain,
+                    targetCode: draft.targetCode,
+                    occupancyId: draft.occupancyId,
+                }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível remover o plantão.");
+            }
+
+            persistFlash({
+                kind: "disable",
+                monthKey: board.monthKey,
+                day: draft.day,
+                shiftLabel: draft.shiftLabel,
+                domain: draft.domain,
+                targetCode: draft.targetCode,
+                targetLabel: draft.targetLabel,
+                reason: `Plantão de ${draft.doctorName} removido`,
+                ts: Date.now(),
+            });
+            setManualFeedback(`Removido: ${draft.targetCode} ${draft.shiftLabel} dia ${draft.day} (${draft.doctorName}).`);
+            setShiftActionDraft(null);
+            router.refresh();
+        } catch (error) {
+            // Rollback optimistic
+            setPendingRemovals((prev) => {
+                const next = new Set(prev);
+                next.delete(draft.payableShiftId);
+                return next;
+            });
+            setShiftActionError(error instanceof Error ? error.message : "Falha ao remover plantão.");
+        } finally {
+            setShiftActionBusy(false);
         }
     }
 
@@ -1260,20 +1353,35 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                             <td key={`${doctor.doctorId}-${cell.day}`}>
                                                 <div className="chief-payable-cell-tags">
                                                     {cell.shifts.map((shift) => {
+                                                        if (pendingRemovals.has(shift.payableShiftId)) return null;
                                                         const isFlashTarget = highlightKey === `${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}|assign`;
                                                         return (
-                                                        <motion.a
+                                                        <motion.button
                                                             key={shift.payableShiftId}
-                                                            href={cellAuditLink(board.monthKey, cell.day, shift.shiftLabel)}
+                                                            type="button"
                                                             data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
                                                             className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
                                                             title={`${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
                                                             initial={{ opacity: 0, scale: 0.92 }}
                                                             animate={{ opacity: 1, scale: 1 }}
                                                             transition={{ duration: 0.15 }}
+                                                            onClick={() => {
+                                                                setShiftActionError(null);
+                                                                setShiftActionDraft({
+                                                                    payableShiftId: shift.payableShiftId,
+                                                                    occupancyId: shift.occupancyId,
+                                                                    domain: shift.domain,
+                                                                    targetCode: shift.targetCode,
+                                                                    targetLabel: shift.targetLabel,
+                                                                    day: cell.day,
+                                                                    shiftLabel: shift.shiftLabel,
+                                                                    doctorName: doctor.doctorName,
+                                                                    source: shift.source,
+                                                                });
+                                                            }}
                                                         >
                                                             {shift.paymentTag ? `${shift.paymentTag} ${shift.tagCode}` : shift.tagCode}
-                                                        </motion.a>
+                                                        </motion.button>
                                                         );
                                                     })}
                                                 </div>
@@ -1307,6 +1415,58 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     </table>
                 </div>
             </section>
+
+            {shiftActionDraft ? (
+                <div className="chief-payable-modal-backdrop" role="presentation" onClick={() => !shiftActionBusy && setShiftActionDraft(null)}>
+                    <section className="chief-payable-action-popover" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+                        <header className="chief-payable-action-header">
+                            <span className="payment-eyebrow">Ações do plantão</span>
+                            <strong>
+                                {shiftActionDraft.targetCode} {shiftActionDraft.shiftLabel} · dia {shiftActionDraft.day}/{board.monthKey.slice(5,7)} · {shiftActionDraft.doctorName}
+                            </strong>
+                            {shiftActionDraft.source ? <small>Origem: {shiftActionDraft.source}</small> : null}
+                        </header>
+
+                        {shiftActionError ? (
+                            <div className="payment-inline-banner danger">
+                                <strong>Falha ao remover</strong>
+                                <span>{shiftActionError}</span>
+                            </div>
+                        ) : null}
+
+                        <div className="chief-payable-action-buttons">
+                            <button
+                                type="button"
+                                className="payment-button danger"
+                                onClick={() => void submitShiftRemoval()}
+                                disabled={shiftActionBusy}
+                            >
+                                {shiftActionBusy ? "Removendo..." : `Remover ${shiftActionDraft.doctorName} deste plantão`}
+                            </button>
+                            <a
+                                className="payment-button"
+                                href={cellAuditLink(board.monthKey, shiftActionDraft.day, shiftActionDraft.shiftLabel)}
+                            >
+                                Abrir auditoria detalhada
+                            </a>
+                            <button
+                                type="button"
+                                className="payment-button"
+                                onClick={() => setShiftActionDraft(null)}
+                                disabled={shiftActionBusy}
+                            >
+                                Cancelar
+                            </button>
+                        </div>
+
+                        <p className="chief-payable-action-hint">
+                            Remover {shiftActionDraft.source === "admin_correction" || shiftActionDraft.source === "manual"
+                                ? "apaga a correção manual deste plantão."
+                                : "encerra o plantão no início deste turno (recalcula banco de horas). Use quando o médico não estava de fato no plantão."}
+                        </p>
+                    </section>
+                </div>
+            ) : null}
 
             {selectedDoctor ? (
                 <div className="chief-payable-modal-backdrop" role="presentation" onClick={() => setSelectedDoctorId(null)}>

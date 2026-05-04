@@ -749,8 +749,12 @@ function resolveSuccessorStartMap(rows: PreviousOperationalRawRow[]) {
     for (let index = 0; index < sorted.length; index += 1) {
       const current = sorted[index] as PreviousOperationalRawRow;
       const currentStartedAt = new Date(current.startedAt).getTime();
+      // A handoff is by definition a different doctor taking the slot.
+      // Two rows for the same doctor on the same target are duplicates
+      // (telegram echo + admin_correction, etc.) — neither shrinks the other.
       const successor = successorCandidates.find((candidate) => (
         candidate.occupancyId !== current.occupancyId
+        && candidate.doctorId !== current.doctorId
         && new Date(candidate.startedAt).getTime() > currentStartedAt
       ));
 

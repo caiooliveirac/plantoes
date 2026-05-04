@@ -4342,6 +4342,51 @@ button.chief-payable-tag:focus-visible {
     flex-shrink: 0;
 }
 
+.chief-payable-action-popover {
+    max-width: 520px;
+    width: calc(100% - 32px);
+    padding: 22px;
+    border-radius: 22px;
+    border: 1px solid rgba(216, 225, 236, 0.18);
+    background: linear-gradient(180deg, rgba(11, 18, 28, 0.98), rgba(7, 12, 20, 0.98));
+    box-shadow: 0 36px 80px -42px rgba(0, 0, 0, 0.85);
+    display: grid;
+    gap: 14px;
+}
+
+.chief-payable-action-header {
+    display: grid;
+    gap: 4px;
+}
+
+.chief-payable-action-header strong {
+    font-size: 1rem;
+    color: var(--foreground, #f0f4fa);
+}
+
+.chief-payable-action-header small {
+    color: var(--muted-strong, #aab4c2);
+    font-size: 0.78rem;
+}
+
+.chief-payable-action-buttons {
+    display: grid;
+    gap: 8px;
+}
+
+.chief-payable-action-buttons .payment-button {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+}
+
+.chief-payable-action-hint {
+    color: var(--muted-strong, #aab4c2);
+    font-size: 0.78rem;
+    margin: 0;
+    line-height: 1.5;
+}
+
 .chief-payable-disabled-row td {
     background: rgba(29, 12, 18, 0.72);
 }

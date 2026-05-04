@@ -6,6 +6,7 @@ import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import {
     applyManualDisableCorrection,
     applyManualPaymentAttestationCorrection,
+    applyManualRemoveAssignment,
     approvePaymentAttestationSlot,
     getPaymentAttestationSlotView,
     refreshPaymentAttestationSlot,
@@ -16,13 +17,14 @@ import {
 const actionSchema = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     shift: z.enum(["SD", "SN"]).optional(),
-    action: z.enum(["refresh", "approve", "reopen", "manual_assign", "manual_disable", "set_doctor_payment_profile"]),
+    action: z.enum(["refresh", "approve", "reopen", "manual_assign", "manual_disable", "manual_remove", "set_doctor_payment_profile"]),
     domain: z.enum(["regulation", "intervention"]).optional(),
     targetCode: z.string().trim().min(1).max(32).optional(),
     doctorName: z.string().trim().min(3).max(255).optional(),
     disabledReason: z.string().trim().min(3).max(255).optional(),
     doctorId: z.string().uuid().optional(),
     isSpecialist: z.boolean().optional(),
+    occupancyId: z.string().uuid().optional(),
 });
 
 function getRequestParams(request: NextRequest) {
@@ -106,6 +108,12 @@ export async function POST(request: NextRequest) {
         }
     }
 
+    if (parsed.data.action === "manual_remove") {
+        if (!parsed.data.date || !parsed.data.shift || !parsed.data.domain || !parsed.data.targetCode) {
+            return NextResponse.json({ error: "Para remover plantão informe data, turno, domínio e alvo." }, { status: 400 });
+        }
+    }
+
     if (parsed.data.action === "set_doctor_payment_profile") {
         if (!parsed.data.doctorId || parsed.data.isSpecialist === undefined) {
             return NextResponse.json({ error: "Para atualizar perfil de pagamento informe medico e flag especialista." }, { status: 400 });
@@ -132,6 +140,25 @@ export async function POST(request: NextRequest) {
             });
 
             return NextResponse.json({ ok: true, doctor });
+        }
+
+        if (parsed.data.action === "manual_remove") {
+            const result = await applyManualRemoveAssignment({
+                operationalDate: parsed.data.date as string,
+                shiftLabel: parsed.data.shift as "SD" | "SN",
+                domain: parsed.data.domain as "regulation" | "intervention",
+                targetCode: parsed.data.targetCode as string,
+                occupancyId: parsed.data.occupancyId ?? null,
+                actorUserId: session.user.id,
+            });
+            await getDb().insert(auditLogs).values({
+                actorUserId: session.user.id,
+                action: "payment_attestation.manual_remove",
+                entityType: "payment_attestation_slot",
+                entityId: `${result.operationalDate}|${result.shiftLabel}|${result.domain}|${result.targetCode}`,
+                details: result,
+            });
+            return NextResponse.json({ ok: true, ...result });
         }
 
         const slot = parsed.data.action === "refresh"

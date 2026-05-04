@@ -960,6 +960,107 @@ export async function applyManualDisableCorrection(params: {
     return updated;
 }
 
+export async function applyManualRemoveAssignment(params: {
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+    domain: "regulation" | "intervention";
+    targetCode: string;
+    occupancyId?: string | null;
+    actorUserId: string;
+}) {
+    const date = params.operationalDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        throw new Error("Data operacional invalida.");
+    }
+
+    const targetCode = params.targetCode.trim().toUpperCase();
+    if (!targetCode) {
+        throw new Error("Target invalido para remocao.");
+    }
+
+    const board = await getPaymentAllocationBoard({
+        operationalDate: date,
+        shiftLabel: params.shiftLabel,
+    });
+    const boardRow = [...board.regulation, ...board.intervention].find(
+        (row) => row.domain === params.domain && row.targetCode === targetCode,
+    );
+    if (!boardRow || !boardRow.occupancyId) {
+        throw new Error(`Nenhuma alocação ativa para ${targetCode} ${params.shiftLabel} em ${date}.`);
+    }
+
+    const occupancyIdToRemove = params.occupancyId ?? boardRow.occupancyId;
+    if (params.occupancyId && params.occupancyId !== boardRow.occupancyId) {
+        // The board may have shifted between the user's click and this call; trust the
+        // boardRow as the current source of truth.
+    }
+
+    const slotStart = new Date(board.startedAt);
+    const db = getDb();
+
+    await db.transaction(async (tx) => {
+        if (params.domain === "regulation") {
+            const [existing] = await tx.select().from(regulationOccupancies)
+                .where(eq(regulationOccupancies.id, occupancyIdToRemove))
+                .limit(1);
+            if (!existing) {
+                throw new Error("Ocupação não encontrada para remoção.");
+            }
+            if (existing.source === "admin_correction" || existing.source === "manual") {
+                await tx.delete(regulationOccupancies)
+                    .where(eq(regulationOccupancies.id, existing.id));
+            } else {
+                const clampedEnd = slotStart.getTime() <= existing.startedAt.getTime()
+                    ? existing.startedAt
+                    : slotStart;
+                await tx.update(regulationOccupancies)
+                    .set({
+                        endedAt: clampedEnd,
+                        actualEndedAt: clampedEnd,
+                        notes: `${existing.notes ?? ""}\n[chefia] Remocao via fechamento de pagamento (${slotStart.toISOString()})`.trim(),
+                        updatedByUserId: params.actorUserId,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(regulationOccupancies.id, existing.id));
+                await syncRegulationBankHours(tx, existing.id);
+            }
+        } else {
+            const [existing] = await tx.select().from(interventionOccupancies)
+                .where(eq(interventionOccupancies.id, occupancyIdToRemove))
+                .limit(1);
+            if (!existing) {
+                throw new Error("Ocupação não encontrada para remoção.");
+            }
+            if (existing.source === "admin_correction" || existing.source === "manual") {
+                await tx.delete(interventionOccupancies)
+                    .where(eq(interventionOccupancies.id, existing.id));
+            } else {
+                const clampedEnd = slotStart.getTime() <= existing.startedAt.getTime()
+                    ? existing.startedAt
+                    : slotStart;
+                await tx.update(interventionOccupancies)
+                    .set({
+                        endedAt: clampedEnd,
+                        actualEndedAt: clampedEnd,
+                        notes: `${existing.notes ?? ""}\n[chefia] Remocao via fechamento de pagamento (${slotStart.toISOString()})`.trim(),
+                        updatedByUserId: params.actorUserId,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(interventionOccupancies.id, existing.id));
+                await syncInterventionBankHours(tx, existing.id);
+            }
+        }
+    });
+
+    return {
+        operationalDate: board.operationalDate,
+        shiftLabel: board.shiftLabel,
+        domain: params.domain,
+        targetCode,
+        removedOccupancyId: occupancyIdToRemove,
+    };
+}
+
 export async function setDoctorPaymentSpecialistProfile(params: {
     doctorId: string;
     isSpecialist: boolean;
