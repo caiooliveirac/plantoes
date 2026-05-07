@@ -1,0 +1,78 @@
+import { notFound } from "next/navigation";
+import { eq } from "drizzle-orm";
+import { getDb, hasDatabaseUrl } from "@/db";
+import { doctors } from "@/db/schema";
+import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
+import type { DadosFolhaPonto, Plantao, Turno } from "@/lib/folha-ponto/types";
+import { FolhaPontoClient } from "./FolhaPontoClient";
+
+export const dynamic = "force-dynamic";
+
+function dayFromOperationalDate(operationalDate: string): number {
+    const parts = operationalDate.split("-");
+    const day = Number(parts[2]);
+    return Number.isFinite(day) ? day : 0;
+}
+
+function baseNomeCurto(domain: "regulation" | "intervention"): string {
+    return domain === "regulation" ? "CRU" : "intervenção";
+}
+
+export default async function FolhaPontoPage({
+    params,
+}: {
+    params: Promise<{ medicoId: string; ano: string; mes: string }>;
+}) {
+    const { medicoId, ano: anoStr, mes: mesStr } = await params;
+
+    const ano = Number(anoStr);
+    const mes = Number(mesStr);
+    if (!Number.isInteger(ano) || ano < 2020 || ano > 2100) notFound();
+    if (!Number.isInteger(mes) || mes < 1 || mes > 12) notFound();
+
+    if (!hasDatabaseUrl()) notFound();
+
+    const db = getDb();
+    const [doctor] = await db
+        .select({
+            id: doctors.id,
+            fullName: doctors.fullName,
+            displayName: doctors.displayName,
+            metadata: doctors.metadata,
+        })
+        .from(doctors)
+        .where(eq(doctors.id, medicoId))
+        .limit(1);
+
+    if (!doctor) notFound();
+
+    const monthKey = `${anoStr.padStart(4, "0")}-${String(mes).padStart(2, "0")}`;
+    const board = await getChiefPayableShiftsBoard(monthKey);
+
+    const plantoes: Plantao[] = board.payableShifts
+        .filter((shift) => shift.doctorId === medicoId)
+        .map((shift) => ({
+            dia: dayFromOperationalDate(shift.operationalDate),
+            turno: shift.shiftLabel as Turno,
+            baseNomeCurto: baseNomeCurto(shift.domain),
+        }))
+        .filter((p) => p.dia >= 1 && p.dia <= 31);
+
+    const metadata = (doctor.metadata ?? {}) as Record<string, unknown>;
+    const cnpj = typeof metadata.cnpj === "string" ? metadata.cnpj : null;
+    const razaoSocial = typeof metadata.razaoSocial === "string" ? metadata.razaoSocial : null;
+
+    const data: DadosFolhaPonto = {
+        medico: {
+            id: doctor.id,
+            nome: doctor.displayName ?? doctor.fullName,
+            cnpj,
+            razaoSocial,
+        },
+        ano,
+        mes,
+        plantoes,
+    };
+
+    return <FolhaPontoClient data={data} />;
+}

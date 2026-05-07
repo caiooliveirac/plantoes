@@ -1508,7 +1508,17 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                 <h3>{selectedDoctor.doctorName}</h3>
                                 <p>{paymentProfileLabel(selectedDoctor.paymentProfile)} · {board.monthLabel}</p>
                             </div>
-                            <button type="button" className="payment-button" onClick={() => setSelectedDoctorId(null)}>Fechar</button>
+                            <div className="chief-payable-modal-header-actions">
+                                <a
+                                    className="payment-button"
+                                    href={`/folha-ponto/${selectedDoctor.doctorId}/${board.monthKey.slice(0, 4)}/${board.monthKey.slice(5, 7)}`}
+                                    target="_blank"
+                                    rel="noopener"
+                                >
+                                    Gerar folha de ponto
+                                </a>
+                                <button type="button" className="payment-button" onClick={() => setSelectedDoctorId(null)}>Fechar</button>
+                            </div>
                         </header>
 
                         <div className="chief-payable-modal-grid">
