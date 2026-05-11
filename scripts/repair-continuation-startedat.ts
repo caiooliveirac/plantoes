@@ -219,7 +219,7 @@ async function applyRepair(candidate: Candidate) {
         eventType: "continuation_startedat_repaired",
         actorLabel: "scripts/repair-continuation-startedat",
         occurredAt: new Date(),
-        payload: sql`${JSON.stringify({
+        payload: {
             previousStartedAt: oldStartedAt.toISOString(),
             newStartedAt: newStartedAt.toISOString(),
             boardStartedAt: candidate.boardStartedAt?.toISOString() ?? null,
@@ -230,7 +230,7 @@ async function applyRepair(candidate: Candidate) {
             continuityGroupId: candidate.continuityGroupId,
             backdateHours: candidate.backdateHours,
             note: "Saneamento do continuation bug — started_at movido para created_at (eventAt real). board_started_at intacto.",
-        })}::jsonb`,
+        },
     });
 
     if (candidate.continuityGroupId) {
