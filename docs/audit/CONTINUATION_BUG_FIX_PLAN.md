@@ -68,6 +68,37 @@ e as três queries SQL que produzem essas rows (`loadRawRows`,
 `getChiefPreviousOperationalShifts` e `loadPaymentAllocationSourceData`)
 foram atualizadas para projetar `created_at`.
 
+## Frente 3.5 — Saneamento de auto-close colateral (`scripts/repair-continuation-collateral.ts`)
+
+Descoberto durante a investigação do caso Gabriel Divino × 2034 SD do 03/05/2026:
+
+Quando o ghost com `started_at` retroativo era inserido, a lógica de auto-close em
+`modules/regulation/service.ts:478` e `modules/intervention/service.ts` (equivalente)
+fechava o ocupante anterior do mesmo target setando `actual_ended_at = ghost.started_at`.
+Resultado: o colega aparecia com plantão de 5-30 minutos em vez do plantão completo.
+
+A Frente 3 original só corrigia o `started_at` do ghost — não desfazia o fechamento
+retroativo aplicado ao colega. O script `repair-continuation-collateral.ts` faz isso
+em uma segunda passada:
+
+1. Lê os `shift_events` do tipo `continuation_startedat_repaired` (gerados na Frente 3).
+2. Para cada um, busca ocupantes do mesmo target cujo `actual_ended_at` bate com
+   `ghost.previousStartedAt` **e** cujo `updated_at` bate com `ghost.created_at`
+   dentro de 5 segundos (assinatura de mesma transação).
+3. Estende `ended_at` para o próximo handoff legítimo no target (próximo registro
+   começando depois do `ghost.previousStartedAt`); limpa `actual_ended_at` para
+   sinalizar que a saída real precisa ser revisada manualmente.
+4. Insere `shift_events` de auditoria (`continuation_collateral_repaired`) e
+   re-sincroniza banco de horas.
+
+**Por que estender em vez de NULLar:** existe constraint
+`*_one_active_board_per_*_idx` (UNIQUE WHERE ended_at IS NULL AND board_started_at IS NOT NULL).
+Reabrir vítimas antigas violaria a constraint contra o registro hoje ativo no mesmo target.
+
+Em produção (11/05/2026), 9 vítimas colaterais corrigidas. Caso de validação:
+Gabriel Divino 2034 SD 03/05 passou de 27 min (07:09-07:36) para 763 min (07:09-19:52),
+com ele agora aparecendo como `ready_for_payment` no snapshot 03/05 SD.
+
 ## Frente 3 — Saneamento dos registros existentes (`scripts/repair-continuation-startedat.ts`)
 
 **Por que script append-only-friendly:** o repo segue regra de não deletar
