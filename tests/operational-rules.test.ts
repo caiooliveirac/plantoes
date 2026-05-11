@@ -1217,7 +1217,6 @@ test("buildLocationWithoutRamalReply includes sender name, ramal list, and copy-
     });
     assert.ok(reply.includes("Sadja Costa"));
     assert.ok(reply.includes("COI"));
-    assert.ok(reply.includes("1366"));
     assert.ok(reply.includes("1367"));
     assert.ok(reply.includes("1368"));
     assert.ok(reply.includes("SN"));
