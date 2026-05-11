@@ -137,7 +137,8 @@ import {
     sendTelegramMealBreakMessages,
 } from "@/modules/telegram/meal-breaks";
 import { buildTelegramShiftReport } from "@/modules/telegram/shift-report";
-import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, isTelegramChatAllowed, isTelegramPrivateControlUserId } from "@/modules/telegram/config";
+import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, getTelegramRegulationAlertUserIds, isTelegramChatAllowed, isTelegramPrivateControlUserId } from "@/modules/telegram/config";
+import { buildChiefPrivateRegulationAlertPlan } from "@/modules/telegram/reminders";
 import {
     isTelegramAdminOnlyCommand,
     isTelegramDepartureCorrectionCommandText,
@@ -238,6 +239,10 @@ interface PendingBatchConfirmationData {
     originalMessageId: number;
 }
 
+interface PendingAlertaConfirmationData {
+    alertText: string;
+}
+
 interface TelegramBatchReviewIssue {
     lineNumber: number;
     rawLine: string;
@@ -328,6 +333,14 @@ function isPendingBatchConfirmationData(value: unknown): value is PendingBatchCo
     return Array.isArray(candidate.entries) && typeof candidate.originalText === "string";
 }
 
+function isPendingAlertaConfirmationData(value: unknown): value is PendingAlertaConfirmationData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    return typeof candidate.alertText === "string";
+}
+
 function isTelegramJustificationRequiredError(errorMessage: string) {
     return errorMessage.includes("Justificativa obrigatoria");
 }
@@ -367,6 +380,32 @@ async function findPendingBatchConfirmation(chatId: string, senderTelegramId: st
         ),
         orderBy: [desc(telegramIngestedMessages.createdAt)],
     });
+}
+
+async function findPendingAlertaConfirmation(chatId: string, senderTelegramId: string) {
+    const db = getDb();
+    return db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "pending_alerta_confirmation"),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+    });
+}
+
+async function queuePendingAlertaConfirmation(
+    logId: string,
+    message: TelegramUpdate["message"],
+    alertText: string,
+) {
+    await markTelegramProcessed(logId, {
+        status: "pending_alerta_confirmation",
+        parsedAction: "alerta_command",
+        resolutionData: { alertText },
+    });
+    const preview = `📋 *Prévia do alerta que será enviado à chefia:*\n\n${alertText}\n\nResponda *CONFIRMAR* para disparar ou *CANCELAR* para desistir.`;
+    await sendMessage(message!.chat.id, preview, message!.message_id, buildChoiceKeyboard([["✅ CONFIRMAR", "❌ CANCELAR"]]));
 }
 
 function isTelegramContinuationEntry(parsed: OperationalParsedEntry) {
@@ -621,7 +660,7 @@ function buildStructuredTelegramDepartureHint(params: {
 
 const CRU_COI_LOCATION_PATTERN = /\b(CRU|COI)\b/i;
 
-const COI_EXAMPLE_RAMAIS = ["1366", "1367", "1368"];
+const COI_EXAMPLE_RAMAIS = ["1367", "1368"];
 const CRU_EXAMPLE_RAMAIS = ["1321", "1361", "2031"];
 
 export function detectLocationWithoutRamal(text: string): { location: "CRU" | "COI" } | null {
@@ -1755,6 +1794,72 @@ async function queuePendingBatchConfirmation(
             originalMessageId: message?.message_id ?? 0,
         },
     });
+}
+
+async function tryHandlePendingAlertaConfirmation(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id) {
+        return null;
+    }
+
+    if (!canRunPrivateAdminSlotAudit(message)) {
+        return null;
+    }
+
+    const pending = await findPendingAlertaConfirmation(String(message.chat.id), String(message.from.id));
+    if (!pending || !isPendingAlertaConfirmationData(pending.resolutionData)) {
+        return null;
+    }
+
+    const pendingData = pending.resolutionData as PendingAlertaConfirmationData;
+    const normalizedText = message.text.trim();
+
+    if (isBatchCancelKeyword(normalizedText)) {
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: "alerta_confirmation_cancelled",
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "alerta_cancelled",
+        });
+        await sendMessage(message.chat.id, ":| Alerta cancelado.", message.message_id, REMOVE_KEYBOARD);
+        return { ok: true, ignored: true };
+    }
+
+    if (!isBatchConfirmationKeyword(normalizedText)) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedAction: "alerta_confirmation_pending",
+            errorMessage: "alerta_confirmation_pending",
+        });
+        await sendMessage(
+            message.chat.id,
+            ":| Alerta pronto para envio. Responda CONFIRMAR para disparar ou CANCELAR para desistir.",
+            message.message_id,
+            buildChoiceKeyboard([["✅ CONFIRMAR", "❌ CANCELAR"]]),
+        );
+        return { ok: true, ignored: true, pending: true };
+    }
+
+    const recipientIds = getTelegramRegulationAlertUserIds().length > 0
+        ? getTelegramRegulationAlertUserIds()
+        : getTelegramChiefUserIds();
+    const uniqueRecipients = [...new Set(recipientIds)];
+    await Promise.all(uniqueRecipients.map((recipientId) => sendMessage(Number(recipientId), pendingData.alertText)));
+
+    await markTelegramProcessed(pending.id, {
+        status: "accepted",
+        parsedAction: "alerta_command",
+        resolutionData: { alertSent: true, recipientCount: uniqueRecipients.length },
+    });
+    await markTelegramProcessed(logId, {
+        status: "accepted",
+        parsedAction: "alerta_confirmed",
+        resolutionData: { recipientCount: uniqueRecipients.length },
+    });
+    await sendMessage(message.chat.id, `✅ Alerta enviado para ${uniqueRecipients.length} destinatário(s).`, message.message_id, REMOVE_KEYBOARD);
+    return { ok: true, alerta: true };
 }
 
 async function tryHandlePendingBatchConfirmation(update: TelegramUpdate, logId: string) {
@@ -4619,6 +4724,35 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         return { ok: true, ignored: true, pending: true };
     }
 
+    const normalizedAlertaText = message.text.trim().split("@")[0].toLowerCase();
+    if (normalizedAlertaText === "/alerta") {
+        if (!canRunPrivateAdminSlotAudit(message)) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "alerta_command_forbidden",
+                parsedAction: "alerta_command",
+            });
+            await sendMessage(message.chat.id, ":/ O comando /alerta só roda no privado para o admin configurado do bot.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const alertBoard = await getOperationalBoard();
+        const alertPlan = buildChiefPrivateRegulationAlertPlan({ now: new Date(), board: alertBoard });
+
+        if (!alertPlan) {
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "alerta_command",
+                resolutionData: { alertSent: false, reason: "no_alert_needed" },
+            });
+            await sendMessage(message.chat.id, "✅ Tudo ok no momento, nenhum alerta necessário.", message.message_id);
+            return { ok: true, alerta: true };
+        }
+
+        await queuePendingAlertaConfirmation(logId, message, alertPlan.text);
+        return { ok: true, alerta: true, pending: true };
+    }
+
     const command = parseTelegramCommand(message.text);
     if (!command) {
         if (message.text.trim().startsWith("/")) {
@@ -7288,6 +7422,11 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             }
 
             if (message.from?.id) {
+                const pendingAlertaResult = await tryHandlePendingAlertaConfirmation(update, log.id);
+                if (pendingAlertaResult) {
+                    return pendingAlertaResult;
+                }
+
                 const pendingBatchResult = await tryHandlePendingBatchConfirmation(update, log.id);
                 if (pendingBatchResult) {
                     return pendingBatchResult;

@@ -9,9 +9,10 @@ import {
     resolveOperationalShiftWindow,
     shouldHighlightInterventionVerification,
 } from "@/modules/operational/board-rules";
+import { resolveForcedDayEventTime } from "@/modules/operational/rules";
 import { endRegulationOccupancy } from "@/modules/regulation/service";
 import { sendMessage } from "@/modules/telegram/api";
-import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramReminderChatIds } from "@/modules/telegram/config";
+import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, getTelegramRegulationAlertUserIds, getTelegramReminderChatIds } from "@/modules/telegram/config";
 import {
     getOperationalBoard,
     type InterventionBoardRow,
@@ -32,7 +33,7 @@ export interface ReminderBoardSnapshot {
 
 export interface ReminderPlan {
     noticeKey: string;
-    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "regulation_confirmation";
+    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "regulation_confirmation" | "regulation_confirmation_private";
     text: string;
     payload: Record<string, unknown>;
 }
@@ -206,6 +207,54 @@ function isNucleoRegulationCode(code: string) {
 
 function isPiamRegulationCode(code: string) {
     return normalizeOperationalCode(code) === "PIAM";
+}
+
+function hasOperationalCode(codes: string[], expectedCode: string) {
+    const normalizedExpectedCode = normalizeOperationalCode(expectedCode);
+    return codes.some((code) => normalizeOperationalCode(code) === normalizedExpectedCode);
+}
+
+function resolveRegulationConfirmationMetrics(params: ReminderPlanningParams) {
+    const parts = getSaoPauloParts(params.now);
+    const slot = resolveRegulationConfirmationSlot(parts);
+    if (!slot) {
+        return null;
+    }
+
+    const confirmedRegulation = sortTelegramRegulationRows(params.board.regulation.filter((row) => row.status === "active"));
+    const nonChiefRegulationCount = confirmedRegulation.filter((row) => {
+        const normalizedCode = normalizeOperationalCode(row.postCode);
+        return !isChiefRegulationCode(normalizedCode) && !isNucleoRegulationCode(normalizedCode) && !isPiamRegulationCode(normalizedCode);
+    }).length;
+
+    const activeIntervention = sortTelegramInterventionRows(params.board.intervention.filter((row) => row.status === "active"));
+    const waitingInterventionCodes = sortTelegramInterventionCodes(
+        params.board.intervention
+            .filter((row) => row.status === "waiting")
+            .map((row) => row.baseCode),
+    );
+    const waitingRegulationCodes = sortTelegramRegulationCodes(
+        params.board.regulation
+            .filter((row) => row.status === "waiting")
+            .map((row) => row.postCode),
+    );
+    const disabledInterventionCodes = sortTelegramInterventionCodes(
+        params.board.intervention
+            .filter((row) => row.status === "disabled")
+            .map((row) => row.baseCode),
+    );
+    const dateLabel = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+
+    return {
+        slot,
+        dateLabel,
+        nonChiefRegulationCount,
+        activeUsaCount: activeIntervention.length,
+        waitingUsaCount: waitingInterventionCodes.length,
+        waitingInterventionCodes,
+        waitingRegulationCodes,
+        disabledInterventionCodes,
+    };
 }
 
 function buildGroupedPendingLines(params: {
@@ -476,58 +525,87 @@ function resolveRegulationConfirmationSlot(parts: ReturnType<typeof getSaoPauloP
 }
 
 function buildRegulationConfirmationPlan(params: ReminderPlanningParams): ReminderPlan | null {
-    const parts = getSaoPauloParts(params.now);
-    const slot = resolveRegulationConfirmationSlot(parts);
-    if (!slot) {
+    const metrics = resolveRegulationConfirmationMetrics(params);
+    if (!metrics) {
         return null;
     }
 
-    const confirmedRegulation = sortTelegramRegulationRows(params.board.regulation.filter((row) => row.status === "active"));
-    const nonChiefRegulationCount = confirmedRegulation.filter((row) => {
-        const normalizedCode = normalizeOperationalCode(row.postCode);
-        return !isChiefRegulationCode(normalizedCode) && !isNucleoRegulationCode(normalizedCode) && !isPiamRegulationCode(normalizedCode);
-    }).length;
-
-    const activeIntervention = sortTelegramInterventionRows(params.board.intervention.filter((row) => row.status === "active"));
-    const waitingInterventionCodes = sortTelegramInterventionCodes(
-        params.board.intervention
-            .filter((row) => row.status === "waiting")
-            .map((row) => row.baseCode),
-    );
-    const disabledInterventionCodes = sortTelegramInterventionCodes(
-        params.board.intervention
-            .filter((row) => row.status === "disabled")
-            .map((row) => row.baseCode),
-    );
-    const dateLabel = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
-
     return {
-        noticeKey: `reg-confirm:${dateLabel}T${slot}`,
+        noticeKey: `reg-confirm:${metrics.dateLabel}T${metrics.slot}`,
         stage: "regulation_confirmation",
         payload: {
-            checkpointLabel: slot,
-            nonChiefRegulationCount,
-            activeUsaCount: activeIntervention.length,
-            waitingUsaCount: waitingInterventionCodes.length,
+            checkpointLabel: metrics.slot,
+            nonChiefRegulationCount: metrics.nonChiefRegulationCount,
+            activeUsaCount: metrics.activeUsaCount,
+            waitingUsaCount: metrics.waitingUsaCount,
         },
         text: [
-            `☎️🧭 Checagem da Regulação ${slot}`,
+            `☎️🧭 Checagem da Regulação ${metrics.slot}`,
             "",
-            `👥 Reguladores logados além da chefia: ${nonChiefRegulationCount}`,
+            `👥 Reguladores logados além da chefia: ${metrics.nonChiefRegulationCount}`,
             "ℹ️ Não conta 2031, NUCLEO nem PIAM.",
             "",
-            `🚑 USAs com médico: ${activeIntervention.length}`,
-            waitingInterventionCodes.length > 0
-                ? `🚨 USAs sem informação (${waitingInterventionCodes.length}): ${joinPendingCodes(waitingInterventionCodes)}`
+            `🚑 USAs com médico: ${metrics.activeUsaCount}`,
+            metrics.waitingInterventionCodes.length > 0
+                ? `🚨 USAs sem informação (${metrics.waitingInterventionCodes.length}): ${joinPendingCodes(metrics.waitingInterventionCodes)}`
                 : "✅ Nenhuma USA sem informação.",
-            disabledInterventionCodes.length > 0
-                ? `⚫ USAs desativadas (${disabledInterventionCodes.length}): ${joinPendingCodes(disabledInterventionCodes)}`
+            metrics.disabledInterventionCodes.length > 0
+                ? `⚫ USAs desativadas (${metrics.disabledInterventionCodes.length}): ${joinPendingCodes(metrics.disabledInterventionCodes)}`
                 : null,
             "",
             "👨‍✈️ Chefia, confirme se falta regulador para fechar a cobertura.",
             "🚨 Se faltou, avisem agora com nome + ramal + turno (SD/SN/P).",
         ].filter((line): line is string => Boolean(line)).join("\n"),
     };
+}
+
+export function buildChiefPrivateRegulationAlertPlan(params: ReminderPlanningParams): ReminderPlan | null {
+    const metrics = resolveRegulationConfirmationMetrics(params);
+    if (!metrics) {
+        return null;
+    }
+
+    const hasMissingPm04 = hasOperationalCode(metrics.waitingInterventionCodes, "PM04");
+    const hasMissingPiam = hasOperationalCode(metrics.waitingRegulationCodes, "PIAM");
+    const hasLowRegulationHeadcount = metrics.nonChiefRegulationCount <= 7;
+
+    if (!hasMissingPm04 && !hasMissingPiam && !hasLowRegulationHeadcount) {
+        return null;
+    }
+
+    const lines: string[] = [];
+    if (hasMissingPm04) {
+        lines.push("🚨 PM04 sem informação.");
+    }
+
+    if (hasMissingPiam) {
+        lines.push("🚨 PIAM sem informação.");
+    }
+
+    if (hasLowRegulationHeadcount) {
+        lines.push(`⚠️ MRs logados (sem 2031/NUCLEO/PIAM): ${metrics.nonChiefRegulationCount} (<= 7).`);
+    }
+
+    return {
+        noticeKey: `reg-confirm-private:${metrics.dateLabel}T${metrics.slot}`,
+        stage: "regulation_confirmation_private",
+        payload: {
+            checkpointLabel: metrics.slot,
+            nonChiefRegulationCount: metrics.nonChiefRegulationCount,
+            hasMissingPm04,
+            hasMissingPiam,
+        },
+        text: lines.join("\n"),
+    };
+}
+
+function resolveChiefPrivateAlertRecipients() {
+    const explicitRecipients = uniqueChatIds(getTelegramRegulationAlertUserIds());
+    if (explicitRecipients.length > 0) {
+        return explicitRecipients;
+    }
+
+    return uniqueChatIds(getTelegramChiefUserIds());
 }
 
 export function buildReminderPlans(params: ReminderPlanningParams) {
@@ -563,7 +641,9 @@ async function rollbackNotice(chatId: string, plan: ReminderPlan) {
 export async function sendTelegramReminderCycle(referenceDate = new Date()) {
     const reminderChatIds = resolveReminderChatIds();
     const adminChatIds = uniqueChatIds(getTelegramAdminUserIds());
-    if (reminderChatIds.length === 0 || !process.env.TELEGRAM_BOT_TOKEN?.trim()) {
+    const chiefPrivateAlertRecipients = resolveChiefPrivateAlertRecipients();
+
+    if ((reminderChatIds.length === 0 && chiefPrivateAlertRecipients.length === 0) || !process.env.TELEGRAM_BOT_TOKEN?.trim()) {
         return { sent: 0, evaluated: 0 };
     }
 
@@ -606,6 +686,30 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
         }
     }
 
+    const chiefPrivateAlertPlan = buildChiefPrivateRegulationAlertPlan({
+        now: referenceDate,
+        board,
+    });
+
+    if (chiefPrivateAlertPlan) {
+        evaluated += chiefPrivateAlertRecipients.length;
+
+        for (const chatId of chiefPrivateAlertRecipients) {
+            const inserted = await markNoticeSent(chiefPrivateAlertPlan, chatId);
+            if (!inserted) {
+                continue;
+            }
+
+            try {
+                await sendMessage(chatId, chiefPrivateAlertPlan.text);
+                sent += 1;
+            } catch (error) {
+                await rollbackNotice(chatId, chiefPrivateAlertPlan);
+                console.error(`telegram reminder failed for ${chatId} ${chiefPrivateAlertPlan.noticeKey}`, error);
+            }
+        }
+    }
+
     return { sent: sent + halfShiftAutoCheckoutSent, evaluated };
 }
 
@@ -635,30 +739,34 @@ async function runHalfShiftAutoCheckout(referenceDate: Date, board: ReminderBoar
         return 0;
     }
 
+    // Meio plantao SEMPRE encerra as 17:00 — é a regra que define o tipo.
+    // Não confiamos em row.scheduledEndAt aqui porque continuações/re-arrivals
+    // podem reescrever o fim para 19:15/05:00 mantendo a roleLabel MEIO_PLANTAO,
+    // o que esconderia a ocupação da auto-checkout. Já gateamos em nowMinutes >= 17:00,
+    // então qualquer half-shift ativa neste ponto deve sair.
     const dueRows = board.regulation.filter((row) => {
-        if (row.status !== "active" || !row.occupancyId || !isHalfShiftRoleLabel(row.roleLabel)) {
-            return false;
-        }
-
-        if (!row.scheduledEndAt) {
-            return true;
-        }
-
-        return new Date(row.scheduledEndAt).getTime() <= referenceDate.getTime();
+        return row.status === "active"
+            && Boolean(row.occupancyId)
+            && isHalfShiftRoleLabel(row.roleLabel);
     });
 
     if (dueRows.length === 0) {
         return 0;
     }
 
+    const halfShiftEndAt = resolveForcedDayEventTime(referenceDate, "17:00", 0);
+
     let sent = 0;
     for (const row of dueRows) {
-        const scheduledEndAt = row.scheduledEndAt ? new Date(row.scheduledEndAt) : referenceDate;
+        const scheduledEndAt = row.scheduledEndAt ? new Date(row.scheduledEndAt) : null;
+        const endedAt = scheduledEndAt && scheduledEndAt.getTime() < halfShiftEndAt.getTime()
+            ? scheduledEndAt
+            : halfShiftEndAt;
 
         try {
             await endRegulationOccupancy(row.occupancyId as string, {
-                endedAt: scheduledEndAt,
-                actualEndedAt: scheduledEndAt,
+                endedAt,
+                actualEndedAt: endedAt,
             });
         } catch (error) {
             console.error("telegram half-shift auto checkout failed", row.occupancyId, error);

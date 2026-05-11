@@ -5,6 +5,7 @@ import { doctors, interventionOccupancies, regulationOccupancies, regulationPost
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncRegulationBankHours } from "@/modules/bank-hours/service";
+import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
@@ -404,18 +405,26 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
 
                 const windowRef = keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                     ? keptBoardStartedAt : keptStartedAt;
+                const requestedRoleLabel = input.roleLabel !== undefined ? input.roleLabel : (existing.roleLabel ?? resolvedRoleLabel);
+                // Meio plantão tem fim canônico 17:00. Se o re-arrival mantém o role
+                // (mesmo doutor, mesma posição, ainda half-shift), preserva o
+                // scheduledEndAt original em vez de recalcular como SD/P (19:15).
+                const preserveHalfShiftEnd = isHalfShiftRoleLabel(requestedRoleLabel)
+                    && Boolean(input.scheduledEndAt ?? existing.scheduledEndAt);
                 const {
                     baseShiftLabel: recalcBaseShiftLabel,
                     scheduledStartAt: recalcStart,
-                    scheduledEndAt: recalcEnd,
+                    scheduledEndAt: recalcEndCandidate,
                 } = inferRegulationCoverageWindow({
                     startedAt: windowRef,
                     shiftLabel: input.shiftLabel ?? existing.shiftLabel,
                     postCode: targetPostCode,
                     explicitScheduledStartAt: null,
-                    explicitScheduledEndAt: null,
+                    explicitScheduledEndAt: preserveHalfShiftEnd
+                        ? (input.scheduledEndAt ?? existing.scheduledEndAt ?? null)
+                        : null,
                 });
-                const requestedRoleLabel = input.roleLabel !== undefined ? input.roleLabel : (existing.roleLabel ?? resolvedRoleLabel);
+                const recalcEnd = recalcEndCandidate;
                 const nextRoleLabel = resolveOperationalRoleLabel({
                     domain: "regulation",
                     code: targetPostCode,
@@ -729,13 +738,19 @@ export async function continueRegulationOccupancy(
             : resolveOperationalShiftWindow(existing.startedAt).shiftLabel;
         const inferredScheduledStartAt = existing.scheduledStartAt
             ?? inferOperationalScheduledStartAt(existing.startedAt, baseShiftLabel, null, postCode);
-        const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
-            existingStartedAt: existing.startedAt,
-            continuationAt,
-            postCode,
-            inferredScheduledStartAt,
-            explicitScheduledEndAt: explicitContinuationScheduledEndAt,
-        });
+        // Meio plantão é definido pelo fim 17:00. Continuação não estende um meio
+        // plantão para janela P (05:00 do dia seguinte) — preserva o scheduledEndAt
+        // original para a auto-checkout das 17h continuar funcionando.
+        const isHalfShiftContinuation = isHalfShiftRoleLabel(existing.roleLabel) && Boolean(existing.scheduledEndAt);
+        const nextScheduledEndAt = isHalfShiftContinuation
+            ? existing.scheduledEndAt
+            : resolveRegulationContinuationScheduledEndAt({
+                existingStartedAt: existing.startedAt,
+                continuationAt,
+                postCode,
+                inferredScheduledStartAt,
+                explicitScheduledEndAt: explicitContinuationScheduledEndAt,
+            });
         const nextBoardStartedAt = resolveRegulationContinuationBoardStartedAt({
             startedAt: existing.startedAt,
             boardStartedAt: existing.boardStartedAt,

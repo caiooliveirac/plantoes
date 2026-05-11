@@ -2162,6 +2162,23 @@ function resolveChosenCandidateDeactivationOutcome(params: {
     };
   }
 
+  // Lançamentos manuais no fechamento de pagamento (admin_correction/manual)
+  // são autoritativos: o admin acabou de atestar que houve médico no slot.
+  // Deactivations anteriores ("Remanejado", restos de turnos vizinhos, etc.)
+  // que vazaram pelo boundary não devem suprimir a coverage atestada.
+  if (params.chosenCandidate.source === "admin_correction"
+    || params.chosenCandidate.source === "manual") {
+    return {
+      shouldSuppressChosenCoverage: false,
+      clearedDisabledState: {
+        disabledAt: null,
+        disabledReason: null,
+        disabledDuringShift: false,
+        disabledEntireShift: false,
+      },
+    };
+  }
+
   const actualWindow = buildPaymentAllocationActualWindow({
     candidate: params.chosenCandidate,
     slotStartIso: params.slotStartIso,

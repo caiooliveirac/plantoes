@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildReminderPlans, resolveReminderRecipientsForPlan, type ReminderBoardSnapshot, type ReminderPlan } from "@/modules/telegram/reminders";
+import {
+    buildChiefPrivateRegulationAlertPlan,
+    buildReminderPlans,
+    resolveReminderRecipientsForPlan,
+    type ReminderBoardSnapshot,
+    type ReminderPlan,
+} from "@/modules/telegram/reminders";
 
 function makePlan(overrides: Partial<ReminderPlan>): ReminderPlan {
     return {
@@ -576,4 +582,171 @@ test("buildReminderPlans ignores chief, NUCLEO and PIAM in regulation confirmati
     const confirmation = plans.find((plan) => plan.stage === "regulation_confirmation");
     assert.ok(confirmation);
     assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 1/);
+});
+
+test("buildChiefPrivateRegulationAlertPlan warns on PM04/PIAM missing and MR headcount threshold", () => {
+    const board = makeBoard();
+    board.intervention = board.intervention.map((row) => {
+        if (row.baseCode === "PM04") {
+            return {
+                ...row,
+                occupancyId: null,
+                doctorId: null,
+                doctorName: null,
+                displayName: null,
+                startedAt: null,
+                boardStartedAt: null,
+                scheduledEndAt: null,
+                shiftLabel: null,
+                status: "waiting",
+                liveSource: "none",
+            };
+        }
+
+        return row;
+    });
+
+    board.regulation = [
+        ...board.regulation,
+        {
+            postId: 99,
+            occupancyId: null,
+            postCode: "PIAM",
+            postLabel: "PIAM",
+            defaultRole: "MR",
+            doctorId: null,
+            doctorName: null,
+            displayName: null,
+            startedAt: null,
+            boardStartedAt: null,
+            scheduledEndAt: null,
+            shiftLabel: null,
+            roleLabel: null,
+            ramalLabel: "PIAM",
+            status: "waiting",
+            liveSource: "none",
+            liveUpdatedAt: null,
+        },
+    ];
+
+    const plan = buildChiefPrivateRegulationAlertPlan({
+        now: new Date("2026-03-26T11:05:00-03:00"),
+        board,
+    });
+
+    assert.ok(plan);
+    assert.equal(plan?.stage, "regulation_confirmation_private");
+    assert.match(plan?.text ?? "", /PM04 sem informação/);
+    assert.match(plan?.text ?? "", /PIAM sem informação/);
+    assert.match(plan?.text ?? "", /MRs logados \(sem 2031\/NUCLEO\/PIAM\): 0 \(<= 7\)/);
+});
+
+test("buildChiefPrivateRegulationAlertPlan skips alert when all thresholds are healthy", () => {
+    const board: ReminderBoardSnapshot = {
+        generatedAt: "2026-03-26T11:00:00.000Z",
+        intervention: [
+            {
+                baseId: 1,
+                occupancyId: "int-pm04",
+                baseCode: "PM04",
+                baseLabel: "PM04",
+                doctorId: "doc-int-pm04",
+                doctorName: "PM04 Doctor",
+                displayName: "PM04",
+                startedAt: "2026-03-26T13:50:00.000Z",
+                boardStartedAt: "2026-03-26T13:50:00.000Z",
+                scheduledEndAt: "2026-03-26T22:00:00.000Z",
+                shiftLabel: "SD",
+                roleLabel: null,
+                status: "active",
+                liveSource: "operations_v2",
+                liveUpdatedAt: null,
+            },
+        ],
+        regulation: [
+            {
+                postId: 1,
+                occupancyId: "reg-2031",
+                postCode: "2031",
+                postLabel: "2031",
+                defaultRole: "MR",
+                doctorId: "doc-chief",
+                doctorName: "Chefe",
+                displayName: "Chefe",
+                startedAt: "2026-03-26T13:50:00.000Z",
+                boardStartedAt: "2026-03-26T13:50:00.000Z",
+                scheduledEndAt: "2026-03-26T22:15:00.000Z",
+                shiftLabel: "SD",
+                roleLabel: "MR",
+                ramalLabel: "2031",
+                status: "active",
+                liveSource: "operations_v2",
+                liveUpdatedAt: null,
+            },
+            {
+                postId: 2,
+                occupancyId: "reg-nucleo",
+                postCode: "NUCLEO",
+                postLabel: "NUCLEO",
+                defaultRole: "MR",
+                doctorId: "doc-nucleo",
+                doctorName: "Nucleo",
+                displayName: "Nucleo",
+                startedAt: "2026-03-26T13:50:00.000Z",
+                boardStartedAt: "2026-03-26T13:50:00.000Z",
+                scheduledEndAt: "2026-03-26T22:15:00.000Z",
+                shiftLabel: "SD",
+                roleLabel: "MR",
+                ramalLabel: "NUCLEO",
+                status: "active",
+                liveSource: "operations_v2",
+                liveUpdatedAt: null,
+            },
+            {
+                postId: 3,
+                occupancyId: "reg-piam",
+                postCode: "PIAM",
+                postLabel: "PIAM",
+                defaultRole: "MR",
+                doctorId: "doc-piam",
+                doctorName: "Piam",
+                displayName: "Piam",
+                startedAt: "2026-03-26T13:50:00.000Z",
+                boardStartedAt: "2026-03-26T13:50:00.000Z",
+                scheduledEndAt: "2026-03-26T22:15:00.000Z",
+                shiftLabel: "SD",
+                roleLabel: "MR",
+                ramalLabel: "PIAM",
+                status: "active",
+                liveSource: "operations_v2",
+                liveUpdatedAt: null,
+            },
+            ...Array.from({ length: 8 }, (_, index) => ({
+                postId: 100 + index,
+                occupancyId: `reg-${index}`,
+                postCode: `${1321 + index}`,
+                postLabel: `${1321 + index}`,
+                defaultRole: "MR",
+                doctorId: `doc-${index}`,
+                doctorName: `Reg ${index}`,
+                displayName: `Reg ${index}`,
+                startedAt: "2026-03-26T13:50:00.000Z",
+                boardStartedAt: "2026-03-26T13:50:00.000Z",
+                scheduledEndAt: "2026-03-26T22:15:00.000Z",
+                shiftLabel: "SD",
+                roleLabel: "MR",
+                ramalLabel: `${1321 + index}`,
+                status: "active" as const,
+                liveSource: "operations_v2" as const,
+                liveUpdatedAt: null,
+            })),
+        ],
+    };
+
+    const plan = buildChiefPrivateRegulationAlertPlan({
+        now: new Date("2026-03-26T11:05:00-03:00"),
+        board,
+    });
+
+    assert.equal(plan, null);
 });

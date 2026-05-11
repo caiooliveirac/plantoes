@@ -2,7 +2,8 @@ export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IE
 
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
 
-const COI_REGULATION_CODES = new Set(["1366", "1367", "1368"]);
+const COI_REGULATION_CODES = new Set(["1367", "1368"]);
+const RMT_DEFAULT_REGULATION_CODES = new Set(["1366"]);
 const MRV_REGULATION_CODES = new Set(["2032", "2151"]);
 const REMOTE_PRIORITY_REGULATION_CODES = new Set(["1321", "1322", "1323", "1325", "1361", "1362", "1363", "1364", "1365"]);
 
@@ -66,9 +67,13 @@ export function resolveOperationalRoleLabel(params: {
         shiftLabel: params.shiftLabel,
         roleLabel: params.defaultRole,
     });
+    const codeDefault = params.domain === "regulation" && RMT_DEFAULT_REGULATION_CODES.has(params.code)
+        ? "RMT"
+        : null;
     const resolved = resolveFixedOperationalRole(params)
         ?? explicitRole
         ?? defaultRole
+        ?? codeDefault
         ?? null;
 
     if (resolved === "MRV" && params.shiftLabel === "SN") {

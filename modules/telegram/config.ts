@@ -83,6 +83,10 @@ export function getTelegramChiefUserIds() {
     return parseTelegramUserIds(process.env.TELEGRAM_CHIEF_IDS);
 }
 
+export function getTelegramRegulationAlertUserIds() {
+    return parseTelegramUserIds(process.env.TELEGRAM_REGULATION_ALERT_USER_IDS);
+}
+
 export function getTelegramReminderPollMs() {
     const raw = process.env.TELEGRAM_REMINDER_POLL_MS?.trim();
     if (!raw) {

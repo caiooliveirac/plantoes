@@ -566,6 +566,62 @@ function isSharedPositionRole(roleLabel: string | null | undefined) {
     return normalizeOperationalRoleLabel(roleLabel) === "COI";
 }
 
+// Presencial = papel que precisa de presença física no SAMU à noite (cobre as bases).
+// Por convenção operacional: COI e RMT trabalham remoto; IES não atua à noite.
+// Tudo o mais (CP, MRV, RECIP, sem função declarada, etc.) é considerado presencial.
+function isPresentialRole(roleLabel: string | null | undefined) {
+    const normalized = normalizeOperationalRoleLabel(roleLabel);
+    return normalized !== "COI" && normalized !== "RMT" && normalized !== "IES";
+}
+
+function countPresenciaisInRoster(roster: MealBreakDoctor[]): number {
+    return roster.filter((doctor) => isPresentialRole(doctor.roleLabel)).length;
+}
+
+// Determina se uma escolha de slot pelo presencial deixaria o outro slot
+// completamente sem cobertura presencial. Retorna o slot descoberto (a sugestão
+// de redirecionamento) ou null se não há violação. Quando há só 1 presencial no
+// roster total, é impossível cobrir os 2 slots → retorna null (escolha livre).
+function presentialCoverageWouldBreak<T extends string>(
+    session: MealBreakSession,
+    choosingRamal: string,
+    chosenSlot: T,
+    assignments: Record<string, T>,
+    queue: string[],
+    slotPool: readonly T[],
+): T | null {
+    const chooser = session.roster.find((d) => d.ramal === choosingRamal);
+    if (!chooser || !isPresentialRole(chooser.roleLabel)) return null;
+
+    if (countPresenciaisInRoster(session.roster) < 2) return null;
+
+    const otherSlot = slotPool.find((s) => s !== chosenSlot);
+    if (!otherSlot) return null;
+
+    const otherSlotHasPresential = session.roster.some((d) =>
+        isPresentialRole(d.roleLabel)
+        && d.ramal !== choosingRamal
+        && assignments[d.ramal] === otherSlot,
+    );
+    if (otherSlotHasPresential) return null;
+
+    const futureQueue = queue.filter((r) => r !== choosingRamal);
+    const pendingPresential = futureQueue.some((r) => {
+        const d = session.roster.find((doc) => doc.ramal === r);
+        return Boolean(d && isPresentialRole(d.roleLabel));
+    });
+    if (pendingPresential) return null;
+
+    const chosenSlotHasPresential = session.roster.some((d) =>
+        isPresentialRole(d.roleLabel)
+        && d.ramal !== choosingRamal
+        && assignments[d.ramal] === chosenSlot,
+    );
+    if (!chosenSlotHasPresential) return null;
+
+    return otherSlot;
+}
+
 function resolveSharedPositionPeerSlots<T extends string>(session: MealBreakSession, ramal: string, assignments: Record<string, T>): Set<T> {
     const doctor = session.roster.find((d) => d.ramal === ramal);
     if (!doctor || !isSharedPositionRole(doctor.roleLabel)) {
@@ -802,11 +858,9 @@ function mapRegulationDoctor(row: OperationalBoard["regulation"][number], mode: 
         return null;
     }
 
-    if (mode === "day" && isPiamRegulationPost(row.postCode)) {
-        return null;
-    }
-
-    if (isNucleoRegulationPost(row.postCode)) {
+    // PIAM e NUCLEO nunca participam de divisao (almoco/jantar/descanso/trabalho noturno),
+    // em qualquer modo. Sao postos fora do esquema de prioridade ordenada.
+    if (isPiamRegulationPost(row.postCode) || isNucleoRegulationPost(row.postCode)) {
         return null;
     }
 
@@ -860,16 +914,12 @@ function isMealBreakSession(value: unknown): value is MealBreakSession {
         && candidate.version === 1;
 }
 
-function shouldExcludeRamalFromDayMealBreak(ramal: string) {
+function shouldExcludeRamalFromMealBreak(ramal: string) {
     return isPiamRegulationPost(ramal) || isNucleoRegulationPost(ramal);
 }
 
-function sanitizeMealBreakRosterForMode(roster: MealBreakDoctor[], mode: MealBreakMode) {
-    if (mode !== "day") {
-        return [...roster];
-    }
-
-    return roster.filter((doctor) => !shouldExcludeRamalFromDayMealBreak(doctor.ramal));
+function sanitizeMealBreakRosterForMode(roster: MealBreakDoctor[], _mode: MealBreakMode) {
+    return roster.filter((doctor) => !shouldExcludeRamalFromMealBreak(doctor.ramal));
 }
 
 function sanitizeMealBreakSessionState(session: MealBreakSession, mode: MealBreakMode): MealBreakSession {
@@ -1360,12 +1410,29 @@ function buildConfirmationPrompt(session: MealBreakSession) {
         : [];
     const restartCmd = mode === "night" ? "/jantar reiniciar" : "/almoco reiniciar";
 
+    const presentialNotice: string[] = [];
+    if (mode === "night") {
+        const presenciais = session.roster.filter((d) => isPresentialRole(d.roleLabel));
+        if (presenciais.length < 5) {
+            const presList = presenciais.length > 0
+                ? presenciais.map((d) => `• ${resolveDoctorCompactName(d)} · ${d.ramal}`).join("\n")
+                : "(nenhum identificado)";
+            presentialNotice.push(
+                "",
+                `🛡️ Cobertura presencial — ${presenciais.length} ${presenciais.length === 1 ? "presencial" : "presenciais"} (não COI, não RMT, não IES):`,
+                presList,
+                "Vou garantir pelo menos 1 presencial no trabalho 23:00 e 1 no 03:00, independente da ordem de chegada — se a escolha quebrar essa cobertura, eu redireciono automaticamente para o outro horário.",
+            );
+        }
+    }
+
     return [
         mode === "night" ? "🌙 DIVISAO DO JANTAR" : "☀️ DIVISAO DO ALMOCO",
         "",
         "Ordem de prioridade:",
         ...priority,
         ...isolated,
+        ...presentialNotice,
         "",
         `Confirme para iniciar a divisao de ${label}.`,
         `Se os horarios de chegada estao errados, ajuste pelo site e mande ${restartCmd}.`,
@@ -3055,6 +3122,30 @@ export function applyMealBreakReply(params: {
                     handled: true,
                     session: forcedSession,
                     messages: [`⚠️ Trabalho alocado em ${otherSlot} para garantir separacao dos COIs.`],
+                    status: "updated",
+                };
+            }
+
+            const presentialUncovered = presentialCoverageWouldBreak(
+                activeSession,
+                parsed.ramal!,
+                chosenSlot,
+                activeSession.nightWorkAssignments,
+                activeSession.nightWorkQueue,
+                NIGHT_WORK_SLOTS,
+            );
+            if (presentialUncovered && remaining[presentialUncovered] > 0) {
+                const sessionWithUndo = withUndoSnapshot(activeSession, `${renderDoctorCompactSummary(activeSession, parsed.ramal)} → trabalho ${presentialUncovered} (presencial reservado)`);
+                let forcedSession: MealBreakSession = syncNightSessionState(withEvent({
+                    ...sessionWithUndo,
+                    nightWorkAssignments: { ...activeSession.nightWorkAssignments, [parsed.ramal]: presentialUncovered },
+                    updatedAt: referenceAt.toISOString(),
+                }, { type: "night_work_selected", actorTelegramId: senderTelegramId, ramal: parsed.ramal, slot: presentialUncovered }, referenceAt));
+                forcedSession = autoAssignRemainingNightWorkIfSingleOption(forcedSession, referenceAt, senderTelegramId);
+                return {
+                    handled: true,
+                    session: forcedSession,
+                    messages: [`⚠️ Trabalho alocado em ${presentialUncovered} para garantir pelo menos 1 presencial em cada horario noturno.`],
                     status: "updated",
                 };
             }
