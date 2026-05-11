@@ -175,6 +175,7 @@ export interface PaymentAllocationRawRow {
   bankHoursExplanation: string | null;
   source: string | null;
   notes: string | null;
+  createdAt: string | null;
 }
 
 type PreviousOperationalRawRow = PaymentAllocationRawRow;
@@ -662,6 +663,7 @@ function mapPreviousOperationalRow(row: Record<string, unknown>): PreviousOperat
     bankHoursExplanation: (row.bankHoursExplanation ?? null) as string | null,
     source: (row.source ?? null) as string | null,
     notes: (row.notes ?? null) as string | null,
+    createdAt: (row.createdAt ?? null) as string | null,
   };
 }
 
@@ -731,6 +733,30 @@ function isPlausibleSuccessorStart(row: PreviousOperationalRawRow) {
   return true;
 }
 
+// A telegram-sourced record whose started_at sits more than this many minutes
+// before its created_at was almost certainly produced by the continuation bug
+// (cross-target arrival anchored to the previous post's startedAt). Such a
+// record cannot truncate other doctors' coverage as a "successor" — the doctor
+// did not actually arrive at this target when started_at claims.
+// Threshold matches the D1 criterion used in the May/2026 victims audit
+// (CONTINUATION_BUG_VICTIMS.md): created_at - started_at > 6h.
+const BACKDATED_SUCCESSOR_THRESHOLD_MINUTES = 6 * 60;
+
+function isBackdatedTelegramSuccessor(row: PreviousOperationalRawRow): boolean {
+  if (row.source !== "telegram") {
+    return false;
+  }
+  if (!row.createdAt) {
+    return false;
+  }
+  const createdAtMs = new Date(row.createdAt).getTime();
+  const startedAtMs = new Date(row.startedAt).getTime();
+  if (!Number.isFinite(createdAtMs) || !Number.isFinite(startedAtMs)) {
+    return false;
+  }
+  return createdAtMs - startedAtMs > BACKDATED_SUCCESSOR_THRESHOLD_MINUTES * 60 * 1000;
+}
+
 function resolveSuccessorStartMap(rows: PreviousOperationalRawRow[]) {
   const grouped = new Map<string, PreviousOperationalRawRow[]>();
 
@@ -761,10 +787,20 @@ function resolveSuccessorStartMap(rows: PreviousOperationalRawRow[]) {
       // A handoff is by definition a different doctor taking the slot.
       // Two rows for the same doctor on the same target are duplicates
       // (telegram echo + admin_correction, etc.) — neither shrinks the other.
+      // Records of the SAME continuity_group_id belong to one doctor's chain
+      // across targets and never represent a real handoff to a different doctor.
+      // Backdated telegram records (continuation-bug ghosts) likewise must not
+      // be treated as successors of unrelated doctors — see comment above.
       const successor = successorCandidates.find((candidate) => (
         candidate.occupancyId !== current.occupancyId
         && candidate.doctorId !== current.doctorId
         && new Date(candidate.startedAt).getTime() > currentStartedAt
+        && (
+          !current.continuityGroupId
+          || !candidate.continuityGroupId
+          || candidate.continuityGroupId !== current.continuityGroupId
+        )
+        && !isBackdatedTelegramSuccessor(candidate)
       ));
 
       successorByOccupancyId.set(current.occupancyId, successor?.startedAt ?? null);
@@ -1532,6 +1568,7 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
         coalesce(ro.ramal_label, rp.code) as "ramalLabel",
         ro.source as source,
         ro.notes as notes,
+        ro.created_at as "createdAt",
         bhe.arrival_delay_minutes as "arrivalDelayMinutes",
         bhe.overtime_minutes as "overtimeMinutes",
         bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
@@ -1565,6 +1602,7 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
         null::text as "ramalLabel",
         io.source as source,
         io.notes as notes,
+        io.created_at as "createdAt",
         bhe.arrival_delay_minutes as "arrivalDelayMinutes",
         bhe.overtime_minutes as "overtimeMinutes",
         bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
@@ -3049,7 +3087,8 @@ async function loadPaymentAllocationSourceData(
         bhe.rule_code as "ruleCode",
         bhe.explanation as "bankHoursExplanation",
         ro.source as source,
-        ro.notes as notes
+        ro.notes as notes,
+        ro.created_at as "createdAt"
       from operations_v2.regulation_occupancies ro
       inner join operations_v2.regulation_posts rp on rp.id = ro.post_id
       inner join operations_v2.doctors d on d.id = ro.doctor_id
@@ -3083,7 +3122,8 @@ async function loadPaymentAllocationSourceData(
         bhe.rule_code as "ruleCode",
         bhe.explanation as "bankHoursExplanation",
         io.source as source,
-        io.notes as notes
+        io.notes as notes,
+        io.created_at as "createdAt"
       from operations_v2.intervention_occupancies io
       inner join operations_v2.intervention_bases ib on ib.id = io.base_id
       inner join operations_v2.doctors d on d.id = io.doctor_id

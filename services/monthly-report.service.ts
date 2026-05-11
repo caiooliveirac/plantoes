@@ -63,6 +63,7 @@ function mapPaymentAllocationAuditRow(row: Record<string, unknown>): PaymentAllo
         bankHoursExplanation: (row.bankHoursExplanation ?? null) as string | null,
         source: (row.source ?? null) as string | null,
         notes: (row.notes ?? null) as string | null,
+        createdAt: (row.createdAt ?? null) as string | null,
     };
 }
 

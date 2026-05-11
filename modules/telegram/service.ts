@@ -6018,6 +6018,7 @@ async function applyParsedEntry(params: {
                     ),
                 );
 
+                let isCrossTargetContinuation = false;
                 if (shouldUseContinuityContext) {
                     await closeTelegramActiveContinuityOccupancies({
                         doctorId: resolvedDoctor.id,
@@ -6028,6 +6029,7 @@ async function applyParsedEntry(params: {
                     const sourceCode = activeOcc?.baseCode ?? await resolveTelegramContinuitySourceCode(continuityContext?.source);
                     if (sourceCode && sourceCode !== parsed.baseCode) {
                         continuationFrom = sourceCode;
+                        isCrossTargetContinuation = true;
                     }
                 }
 
@@ -6050,17 +6052,25 @@ async function applyParsedEntry(params: {
                     effectiveShiftType = "P";
                 }
 
-                // When the continuity anchor is from a previous P-shift window that has
-                // already expired (e.g. cross-domain CZ50 SN 21:53 → 2153 SD at 08:00),
-                // shouldKeepRegulationOccupancyVisible would hide the new occupancy immediately.
-                // In that case anchor startedAt to eventAt so the occupancy is visible.
-                // boardStartedAt keeps the historical anchor for priority ordering.
+                // CROSS-TARGET CONTINUATION FIX (continuation-bug audit, May/2026):
+                // When the doctor is moving from one post/base to another between shifts
+                // (e.g. 2153 SD → PR03 P), startedAt must reflect when they actually arrived
+                // at the NEW target (eventAt), not the original anchor of the previous
+                // post. boardStartedAt keeps the historical anchor so the panel still
+                // shows the early-morning arrival and bank hours sum the full continuity
+                // chain — but the projection sees the real arrival window at this target
+                // and stops truncating the displaced doctor as micro-coverage.
+                //
+                // The cross-shift expiry guard remains for same-target continuations whose
+                // anchor falls in an already-expired P window.
                 const crossShiftExpiry = shouldUseContinuityContext
                     ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
                     : null;
-                const effectiveContinuationStartedAt = crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
+                const effectiveContinuationStartedAt = isCrossTargetContinuation
                     ? eventAt
-                    : continuationStartedAt;
+                    : (crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
+                        ? eventAt
+                        : continuationStartedAt);
 
                 const regResult = await startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
@@ -6213,6 +6223,7 @@ async function applyParsedEntry(params: {
                     ),
                 );
 
+                let isCrossTargetContinuation = false;
                 if (shouldUseContinuityContext) {
                     await closeTelegramActiveContinuityOccupancies({
                         doctorId: resolvedDoctor.id,
@@ -6223,6 +6234,7 @@ async function applyParsedEntry(params: {
                     const sourceCode = activeOcc?.baseCode ?? await resolveTelegramContinuitySourceCode(continuityContext?.source);
                     if (sourceCode && sourceCode !== parsed.baseCode) {
                         continuationFrom = sourceCode;
+                        isCrossTargetContinuation = true;
                     }
                 }
 
@@ -6244,15 +6256,17 @@ async function applyParsedEntry(params: {
                     effectiveShiftType = "P";
                 }
 
-                // Same guard as the regulation branch: if the continuity anchor is from an
-                // already-expired P-shift window, anchor startedAt to eventAt so the occupancy
-                // is not treated as stale on arrival. boardStartedAt keeps the historical anchor.
+                // Cross-target continuation: same rationale as the regulation branch above.
+                // startedAt = eventAt (real arrival at this base); boardStartedAt holds the
+                // historical anchor for panel display, priority ordering and bank hours.
                 const crossShiftExpiryIntv = shouldUseContinuityContext
                     ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
                     : null;
-                const effectiveContinuationStartedAtIntv = crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
+                const effectiveContinuationStartedAtIntv = isCrossTargetContinuation
                     ? eventAt
-                    : continuationStartedAt;
+                    : (crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
+                        ? eventAt
+                        : continuationStartedAt);
 
                 const intResult = await startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,

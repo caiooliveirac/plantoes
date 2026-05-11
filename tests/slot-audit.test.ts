@@ -336,6 +336,7 @@ test("buildOperationalSlotPresenceBoardModel mantém a PM40 ativa com Leonardo P
                 bankHoursExplanation: null,
                 source: "telegram",
                 notes: "Titular PM40 07:00",
+                createdAt: null,
             },
             {
                 occupancyId: "occ-shadow",
@@ -363,6 +364,7 @@ test("buildOperationalSlotPresenceBoardModel mantém a PM40 ativa com Leonardo P
                 bankHoursExplanation: null,
                 source: "telegram",
                 notes: "[telegram sombra] Leonardo Prado Faben PM40 07:10 sombra",
+                createdAt: null,
             },
         ],
         operationalDate: "2026-04-28T12:00:00.000Z",
@@ -413,6 +415,7 @@ test("buildOperationalSlotPresenceBoardModel prioriza o titular do slot quando h
                 bankHoursExplanation: null,
                 source: "telegram",
                 notes: "P herdado do dia anterior",
+                createdAt: null,
             },
             {
                 occupancyId: "occ-carolina-sd",
@@ -440,6 +443,7 @@ test("buildOperationalSlotPresenceBoardModel prioriza o titular do slot quando h
                 bankHoursExplanation: null,
                 source: "telegram",
                 notes: "Titular do SD",
+                createdAt: null,
             },
         ],
         operationalDate: "2026-04-29T12:00:00.000Z",
