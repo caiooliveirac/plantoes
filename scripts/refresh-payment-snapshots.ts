@@ -17,9 +17,12 @@ async function resolveActorUserId(): Promise<string> {
     if (provided) return provided;
     const db = getDb();
     const result = await db.execute(sql`
-        select id from operations_v2.users
-        where 'admin' = any(roles)
-        order by created_at asc limit 1
+        select u.id
+        from operations_v2.users u
+        inner join operations_v2.user_roles ur on ur.user_id = u.id
+        where ur.role = 'admin'
+        order by u.created_at asc
+        limit 1
     `);
     const first = (result as any)[0];
     if (!first?.id) throw new Error("No admin user found; pass --actor=<userId>");
@@ -32,7 +35,7 @@ async function main() {
     const targets = datesArg.split(",").map((s) => s.trim()).filter(Boolean).map((token) => {
         const [date, shift] = token.split(":");
         if (!date || (shift !== "SD" && shift !== "SN")) throw new Error(`Bad token: ${token}`);
-        return { operationalDate: `${date}T12:00:00.000Z`, shiftLabel: shift as "SD" | "SN" };
+        return { operationalDate: date, shiftLabel: shift as "SD" | "SN" };
     });
 
     const actorUserId = await resolveActorUserId();
