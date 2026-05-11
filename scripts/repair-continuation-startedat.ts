@@ -83,16 +83,10 @@ async function loadCandidates(since: Date | null): Promise<Candidate[]> {
         db.query.regulationPosts.findMany(),
         db.query.interventionBases.findMany(),
         db.query.regulationOccupancies.findMany({
-            where: and(
-                eq(regulationOccupancies.source, "telegram"),
-                gte(regulationOccupancies.startedAt, sinceFilter),
-            ),
+            where: gte(regulationOccupancies.startedAt, sinceFilter),
         }),
         db.query.interventionOccupancies.findMany({
-            where: and(
-                eq(interventionOccupancies.source, "telegram"),
-                gte(interventionOccupancies.startedAt, sinceFilter),
-            ),
+            where: gte(interventionOccupancies.startedAt, sinceFilter),
         }),
     ]);
 
@@ -145,6 +139,12 @@ async function loadCandidates(since: Date | null): Promise<Candidate[]> {
 
     const candidates: Candidate[] = [];
     for (const occupancy of everyOccupancy) {
+        // Only telegram records are candidates to fix — admin_correction / manual
+        // records carry authoritative timestamps and must not be touched. We still
+        // load non-telegram records into `everyOccupancy` so they appear as group
+        // siblings, enabling cross-target detection when the chain includes a
+        // manual fix on the other side.
+        if (occupancy.source !== "telegram") continue;
         const backdateMs = occupancy.createdAt.getTime() - occupancy.startedAt.getTime();
         if (backdateMs <= BACKDATE_THRESHOLD_MS) continue;
         if (occupancy.shiftLabel !== "P") continue;
