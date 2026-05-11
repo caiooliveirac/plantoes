@@ -151,12 +151,21 @@ async function loadCandidates(since: Date | null): Promise<Candidate[]> {
         if (!occupancy.continuityGroupId) continue;
 
         const groupSiblings = byGroup.get(occupancy.continuityGroupId) ?? [];
-        const earlierSiblingAtDifferentTarget = groupSiblings.find((sibling) => (
-            sibling.occupancyId !== occupancy.occupancyId
-            && sibling.targetCode !== occupancy.targetCode
-            && sibling.startedAt.getTime() < occupancy.startedAt.getTime()
-        ));
-        if (!earlierSiblingAtDifferentTarget) continue;
+        // Cross-target signature: the bug ALWAYS leaves a sibling at a different
+        // target_code in the same continuity_group. We pick the sibling with the
+        // smallest backdate gap as the "original" arrival (or the earliest
+        // started_at as a tiebreaker) — that's what would have happened without
+        // the bug. The ghost is the current `occupancy`.
+        const siblingsAtDifferentTarget = groupSiblings
+            .filter((sibling) => (
+                sibling.occupancyId !== occupancy.occupancyId
+                && sibling.targetCode !== occupancy.targetCode
+            ));
+        if (siblingsAtDifferentTarget.length === 0) continue;
+
+        const earlierSiblingAtDifferentTarget = siblingsAtDifferentTarget
+            .slice()
+            .sort((left, right) => left.startedAt.getTime() - right.startedAt.getTime())[0]!;
 
         candidates.push({
             domain: occupancy.domain,
