@@ -91,6 +91,7 @@ function mapPaymentAllocationAuditRow(row: Record<string, unknown>): PaymentAllo
         bankHoursExplanation: (row.bankHoursExplanation ?? null) as string | null,
         source: (row.source ?? null) as string | null,
         notes: (row.notes ?? null) as string | null,
+        createdAt: (row.createdAt ?? null) as string | null,
     };
 }
 
@@ -283,6 +284,7 @@ async function loadRawRows(startIso: string, endIso: string) {
                 coalesce(ro.ramal_label, rp.code) as "ramalLabel",
                 ro.source as source,
                 ro.notes as notes,
+                ro.created_at as "createdAt",
                 bhe.arrival_delay_minutes as "arrivalDelayMinutes",
                 bhe.overtime_minutes as "overtimeMinutes",
                 bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
@@ -317,6 +319,7 @@ async function loadRawRows(startIso: string, endIso: string) {
                 null::text as "ramalLabel",
                 io.source as source,
                 io.notes as notes,
+                io.created_at as "createdAt",
                 bhe.arrival_delay_minutes as "arrivalDelayMinutes",
                 bhe.overtime_minutes as "overtimeMinutes",
                 bhe.credited_overtime_minutes as "creditedOvertimeMinutes",

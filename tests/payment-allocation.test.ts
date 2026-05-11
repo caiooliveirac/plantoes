@@ -45,6 +45,7 @@ function makeRow(overrides: Partial<PaymentAllocationRawRow> = {}): PaymentAlloc
         bankHoursExplanation: "ok",
         source: "telegram",
         notes: "PM04 Ana Souza 07:00",
+        createdAt: "2026-03-28T10:00:00.000Z",
         ...overrides,
     };
 }
@@ -861,4 +862,68 @@ test("buildPaymentAllocationBoardModel carries SN P-shift with no exit into the 
     assert.equal(board.intervention[0]?.doctorName, "Guilherme Rabelo");
     assert.equal(board.intervention[0]?.occupancyId, "occ-guilherme");
     assert.match(board.intervention[0]?.issues.join(" ") ?? "", /sem saida consolidada/i);
+});
+
+test("buildPaymentAllocationBoardModel does not let a backdated telegram ghost truncate the displaced doctor (continuation-bug defense)", () => {
+    // Reprodução do caso 26/04/2026 PR03: Taiane fez o SD legítimo (07:05-19:25).
+    // O bot, ao processar "Caio continua PR03" às 20:03, criou um registro P com
+    // started_at=07:10 (anchor da regulação 2153 do Caio), o que fazia o
+    // resolveSuccessorStartMap encurtar a Taiane a 5 minutos e filtrá-la como
+    // micro-cobertura. A defesa em profundidade (Frente 2) detecta a discrepância
+    // created_at - started_at > 6h em registros telegram e ignora esse "fantasma"
+    // como sucessor, preservando a duração real da Taiane.
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({ targetCode: "PR03", targetLabel: "PR03" })],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-taiane",
+                targetCode: "PR03",
+                targetLabel: "PR03",
+                doctorId: "doc-taiane",
+                doctorName: "Taiane Pinto",
+                displayName: "Taiane",
+                startedAt: "2026-04-26T10:05:00.000Z", // 07:05 SP
+                boardStartedAt: "2026-04-26T10:05:00.000Z",
+                endedAt: "2026-04-26T22:25:00.000Z",   // 19:25 SP
+                actualEndedAt: "2026-04-26T22:25:00.000Z",
+                scheduledStartAt: "2026-04-26T10:00:00.000Z",
+                scheduledEndAt: "2026-04-26T22:00:00.000Z",
+                shiftLabel: "SD",
+                source: "telegram",
+                createdAt: "2026-04-26T10:05:40.000Z",
+                notes: "Taiane Pinto pr03 sd",
+            }),
+            makeRow({
+                occupancyId: "occ-caio-ghost",
+                targetCode: "PR03",
+                targetLabel: "PR03",
+                doctorId: "doc-caio",
+                doctorName: "Caio Oliveira",
+                displayName: "Caio",
+                // Backdated: started_at claims 07:10 SP, mas o registro foi
+                // criado às 20:03 SP (gap > 6h → ghost telegram detectado).
+                startedAt: "2026-04-26T10:10:00.000Z",
+                boardStartedAt: "2026-04-26T10:10:00.000Z",
+                endedAt: null,
+                actualEndedAt: "2026-04-27T11:03:00.000Z",
+                scheduledStartAt: "2026-04-26T10:00:00.000Z",
+                scheduledEndAt: "2026-04-27T10:00:00.000Z",
+                shiftLabel: "P",
+                source: "telegram",
+                createdAt: "2026-04-26T23:03:21.000Z", // 20:03 SP — 12,9h após started_at
+                notes: "Caio continua PR03",
+            }),
+        ],
+        operationalDate: "2026-04-26T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-04-26T10:00:00.000Z",
+        endedAt: "2026-04-26T22:00:00.000Z",
+        generatedAt: "2026-04-27T00:00:00.000Z",
+    });
+
+    // Taiane deve sobreviver como candidata real do PR03 SD. Sem a defesa, ela
+    // seria filtrada como micro-cobertura (5 min) e o Caio ghost ganharia o slot.
+    const taianeRow = board.intervention.find((row) => row.doctorName === "Taiane Pinto")
+        ?? board.regulation.find((row) => row.doctorName === "Taiane Pinto");
+    assert.ok(taianeRow, "Taiane deveria continuar na alocação de pagamento do PR03 SD");
 });
