@@ -137,6 +137,10 @@ function resolveDoctorPaymentProfileFromMetadata(metadata: unknown) {
         return "psychiatry" as const;
     }
 
+    if (preferredRole === "PIAM") {
+        return "specialist" as const;
+    }
+
     if (normalized.paymentProfile?.isSpecialist === true) {
         return "specialist" as const;
     }

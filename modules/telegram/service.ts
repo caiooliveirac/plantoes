@@ -42,9 +42,14 @@ import {
     users,
 } from "@/db/schema";
 import { applyBankHoursBalanceOverride, syncBankHoursByContinuityGroup } from "@/modules/bank-hours/service";
-import { extractDoctorAliases, formatDoctorSurfaceName } from "@/modules/doctors/directory";
+import { extractDoctorAliases, extractDoctorPreferredOperationalRole, formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
-import { createDoctorDirectoryEntry, updateDoctorDirectoryEntry } from "@/modules/doctors/service";
+import {
+    createDoctorDirectoryEntry,
+    listDoctorsByPreferredOperationalRole,
+    setDoctorPreferredOperationalRole,
+    updateDoctorDirectoryEntry,
+} from "@/modules/doctors/service";
 import { continueInterventionOccupancy, deactivateInterventionBase, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, requiresOvertimeJustification, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
@@ -73,6 +78,11 @@ import {
     isTelegramUndoCommandText,
     parseTelegramUndoCommand,
 } from "@/modules/telegram/admin-commands";
+import {
+    isTelegramPiamCommandText,
+    parseTelegramPiamCommand,
+    TELEGRAM_PIAM_COMMAND_USAGE,
+} from "@/modules/telegram/piam-commands";
 import { getUndoableActions, undoAction, type UndoableEntry } from "@/modules/operational/undo";
 import {
     buildDeparturePriorityCommandUsageReply,
@@ -3733,6 +3743,139 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
     }
 
+    if (isTelegramPiamCommandText(message.text)) {
+        const actor = await resolveTelegramCommandActor(message);
+        if (!actor || !actor.roles.includes("admin")) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "piam_command_forbidden",
+                parsedAction: "piam_command",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, ":/ /piam fica restrito a admin.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const piamCommand = parseTelegramPiamCommand(message.text);
+        if (!piamCommand) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "piam_command_usage_invalid",
+                parsedAction: "piam_command",
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(message.chat.id, `:/ Uso: ${TELEGRAM_PIAM_COMMAND_USAGE}`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        try {
+            if (piamCommand.name === "piam_list") {
+                const piamDoctors = await listDoctorsByPreferredOperationalRole("PIAM");
+                await markTelegramProcessed(logId, {
+                    status: "accepted",
+                    parsedAction: piamCommand.name,
+                    resolutionData: { actorRoles: actor.roles, count: piamDoctors.length },
+                });
+                if (piamDoctors.length === 0) {
+                    await sendMessage(message.chat.id, "Nenhum cardiologista PIAM cadastrado. Use `/piam Nome` para marcar.", message.message_id);
+                } else {
+                    const lines = piamDoctors.map((doctor, index) =>
+                        `${index + 1}. ${doctor.displayName?.trim() || doctor.fullName}`,
+                    );
+                    await sendMessage(
+                        message.chat.id,
+                        [`🩺 Cardiologistas PIAM (${piamDoctors.length}):`, ...lines].join("\n"),
+                        message.message_id,
+                    );
+                }
+                return { ok: true };
+            }
+
+            const nextRole = piamCommand.name === "piam_assign" ? "PIAM" : null;
+            const result = await setDoctorPreferredOperationalRole({
+                lookup: piamCommand.lookup,
+                role: nextRole,
+            }, {
+                actorUserId: actor.userId,
+                source: "telegram_command",
+                details: {
+                    telegramActorId: actor.senderTelegramId,
+                    telegramActorName: actor.senderName,
+                    telegramCommand: message.text,
+                },
+            });
+
+            if (result.status === "not_found") {
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "piam_doctor_not_found",
+                    parsedAction: piamCommand.name,
+                    resolutionData: { actorRoles: actor.roles, lookup: piamCommand.lookup },
+                });
+                await sendMessage(message.chat.id, `:/ Nao achei medico com "${piamCommand.lookup}".`, message.message_id);
+                return { ok: true, ignored: true };
+            }
+
+            if (result.status === "ambiguous") {
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "piam_doctor_ambiguous",
+                    parsedAction: piamCommand.name,
+                    resolutionData: { actorRoles: actor.roles, lookup: piamCommand.lookup, matches: result.matches },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    [
+                        `:/ Achei mais de um medico para "${piamCommand.lookup}".`,
+                        ...result.matches.map((doctor, index) => `${index + 1}. ${doctor.fullName}`),
+                        "",
+                        "Use o nome completo.",
+                    ].join("\n"),
+                    message.message_id,
+                );
+                return { ok: true, ignored: true };
+            }
+
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: piamCommand.name,
+                parsedDoctorName: result.doctor.fullName,
+                resolutionData: {
+                    actorRoles: actor.roles,
+                    previousRole: result.previousRole,
+                    nextRole: result.nextRole,
+                },
+            });
+
+            if (result.status === "unchanged") {
+                const stateText = piamCommand.name === "piam_assign"
+                    ? `${result.doctor.fullName} ja estava marcado como PIAM.`
+                    : `${result.doctor.fullName} ja nao tinha role PIAM.`;
+                await sendMessage(message.chat.id, `:| ${stateText}`, message.message_id);
+                return { ok: true, doctorId: result.doctor.id };
+            }
+
+            const reply = piamCommand.name === "piam_assign"
+                ? `:) ${result.doctor.fullName} marcado como cardiologista PIAM. A partir de agora, ao avisar SD/SN/dia/noite, o bot aloca automaticamente no ramal PIAM (07:00 as 19:00 ou 19:00 as 07:00).`
+                : `:) ${result.doctor.fullName} desmarcado de PIAM. Volta a ser lancado normalmente.`;
+            await sendMessage(message.chat.id, reply, message.message_id);
+            return { ok: true, doctorId: result.doctor.id };
+        } catch (error) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: error instanceof Error ? error.message : "piam_command_failed",
+                parsedAction: piamCommand.name,
+                resolutionData: { rawCommand: message.text },
+            });
+            await sendMessage(
+                message.chat.id,
+                `:/ Nao consegui aplicar /piam. ${error instanceof Error ? error.message : "Falha inesperada."}`,
+                message.message_id,
+            );
+            return { ok: true, ignored: true };
+        }
+    }
+
     const paymentCommand = parseTelegramPaymentAdminCommand(message.text);
     if (paymentCommand || isTelegramPaymentAdminCommandText(message.text)) {
         const actor = await resolveTelegramCommandActor(message);
@@ -5728,9 +5871,11 @@ async function handleTelegramReassignment(params: {
         continuityGroupId: string | null;
         boardStartedAt: Date | null;
     } | null;
+    piamRouting?: { applied: boolean; originalCode: string | null };
 }) {
     const db = getDb();
     const { parsed, resolvedDoctor, eventAt, messageText } = params;
+    const piamRouting = params.piamRouting ?? { applied: false, originalCode: null };
 
     // Step 1: Find the doctor's current active occupancy (any domain)
     const activeOcc = params.activeOcc ?? await findActiveOccupancyByDoctorId(resolvedDoctor.id);
@@ -5818,6 +5963,8 @@ async function handleTelegramReassignment(params: {
         reassignedFrom: sourceCode,
         assumedHalfShift: false,
         continuationFrom: null as string | null,
+        piamAutoAllocated: piamRouting.applied,
+        piamOriginalCode: piamRouting.originalCode,
     };
 }
 
@@ -5830,6 +5977,25 @@ async function applyParsedEntry(params: {
 }) {
     const db = getDb();
     const { parsed, resolvedDoctor, eventAt, referenceAt, messageText } = params;
+
+    // PIAM auto-routing: doctors marked with preferredOperationalRole=PIAM are always
+    // allocated to the PIAM regulation slot on arrival, regardless of the code they typed.
+    // For PIAM, the bot also forces 07:00/19:00 bounds and closes the plantao immediately
+    // so payment closing already sees a finished, no-bank-hours shift.
+    const piamRouting = !parsed.isDeparture
+        ? await maybeApplyPiamRouting(parsed, resolvedDoctor.id)
+        : { applied: false, originalCode: null as string | null };
+
+    if (piamRouting.applied && !parsed.isDeparture && (parsed.shiftType === "SD" || parsed.shiftType === "SN")) {
+        return handlePiamAutoArrival({
+            parsed,
+            doctorId: resolvedDoctor.id,
+            shiftLabel: parsed.shiftType,
+            eventAt,
+            messageText,
+            originalCode: piamRouting.originalCode,
+        });
+    }
 
     const activeOcc = !parsed.isDeparture
         ? await findActiveOccupancyByDoctorId(resolvedDoctor.id)
@@ -5850,7 +6016,7 @@ async function applyParsedEntry(params: {
 
     // Handle reassignment as a special case (end source + start target)
     if (parsed.isReassignment || implicitReassignment) {
-        return handleTelegramReassignment({ parsed, resolvedDoctor, eventAt, messageText, activeOcc });
+        return handleTelegramReassignment({ parsed, resolvedDoctor, eventAt, messageText, activeOcc, piamRouting });
     }
 
     let occupancyId: string | null = null;
@@ -6311,7 +6477,133 @@ async function applyParsedEntry(params: {
         reassignedFrom: null as string | null,
         assumedHalfShift,
         continuationFrom,
+        piamAutoAllocated: piamRouting.applied,
+        piamOriginalCode: piamRouting.originalCode,
     };
+}
+
+export const TELEGRAM_PIAM_SHIFT_REQUIRED_ERROR = "telegram_piam_shift_required";
+
+export function isTelegramPiamShiftRequiredError(errorMessage: string | null | undefined) {
+    return errorMessage === TELEGRAM_PIAM_SHIFT_REQUIRED_ERROR;
+}
+
+export function resolvePiamShiftBounds(eventAt: Date, shiftLabel: "SD" | "SN") {
+    const window = resolveOperationalShiftWindow(eventAt);
+    if (window.shiftLabel === shiftLabel) {
+        return { scheduledStartAt: window.startedAt, scheduledEndAt: window.nextBoundaryAt };
+    }
+    const nextWindow = resolveOperationalShiftWindow(window.nextBoundaryAt);
+    return { scheduledStartAt: nextWindow.startedAt, scheduledEndAt: nextWindow.nextBoundaryAt };
+}
+
+async function isPiamPreferredDoctor(doctorId: string) {
+    const db = getDb();
+    const doctor = await db.query.doctors.findFirst({ where: eq(doctors.id, doctorId) });
+    if (!doctor) {
+        return false;
+    }
+    return extractDoctorPreferredOperationalRole(doctor.metadata) === "PIAM";
+}
+
+async function handlePiamAutoArrival(params: {
+    parsed: OperationalParsedEntry;
+    doctorId: string;
+    shiftLabel: "SD" | "SN";
+    eventAt: Date;
+    messageText: string;
+    originalCode: string | null;
+}) {
+    const db = getDb();
+    const bounds = resolvePiamShiftBounds(params.eventAt, params.shiftLabel);
+    const post = await db.query.regulationPosts.findFirst({
+        where: eq(regulationPosts.code, "PIAM"),
+    });
+    if (!post) {
+        throw new Error("Ramal PIAM nao cadastrado no sistema.");
+    }
+
+    const existingActive = await db.query.regulationOccupancies.findFirst({
+        where: and(
+            eq(regulationOccupancies.postId, post.id),
+            eq(regulationOccupancies.doctorId, params.doctorId),
+            isNull(regulationOccupancies.endedAt),
+        ),
+    });
+
+    let occupancyId: string;
+    if (existingActive) {
+        const closed = await endRegulationOccupancy(existingActive.id, {
+            endedAt: bounds.scheduledEndAt,
+            actualEndedAt: bounds.scheduledEndAt,
+        });
+        occupancyId = closed.id;
+    } else {
+        const reg = await startRegulationOccupancy({
+            doctorId: params.doctorId,
+            postId: post.id,
+            startedAt: bounds.scheduledStartAt,
+            boardStartedAt: bounds.scheduledStartAt,
+            scheduledStartAt: bounds.scheduledStartAt,
+            scheduledEndAt: bounds.scheduledEndAt,
+            shiftLabel: params.shiftLabel,
+            roleLabel: "PIAM",
+            ramalLabel: "PIAM",
+            source: "telegram",
+            notes: `[PIAM auto ${params.shiftLabel}] ${params.messageText}`.trim(),
+            createdByUserId: null,
+        });
+        const closed = await endRegulationOccupancy(reg.id, {
+            endedAt: bounds.scheduledEndAt,
+            actualEndedAt: bounds.scheduledEndAt,
+        });
+        occupancyId = closed.id;
+    }
+
+    // Reflect the forced PIAM placement on the parsed entry so downstream replies and
+    // logs show the final ramal/shift instead of whatever the doctor typed.
+    params.parsed.sector = "REGULATION";
+    params.parsed.baseCode = "PIAM";
+    params.parsed.shiftType = params.shiftLabel;
+    params.parsed.arrivalTime = params.shiftLabel === "SD" ? "07:00" : "19:00";
+
+    return {
+        occupancyId,
+        successKind: "standard" as const,
+        treatedAsContinuation: false,
+        replyTimeAt: bounds.scheduledStartAt,
+        autoReactivated: false,
+        effectiveShiftType: params.shiftLabel,
+        reassignedFrom: null as string | null,
+        assumedHalfShift: false,
+        continuationFrom: null as string | null,
+        piamAutoAllocated: true,
+        piamOriginalCode: params.originalCode,
+    };
+}
+
+async function maybeApplyPiamRouting(
+    parsed: OperationalParsedEntry,
+    doctorId: string,
+): Promise<{ applied: boolean; originalCode: string | null }> {
+    if (!(await isPiamPreferredDoctor(doctorId))) {
+        return { applied: false, originalCode: null };
+    }
+
+    if (parsed.shiftType !== "SD" && parsed.shiftType !== "SN") {
+        // PIAM doctors must declare SD/SN/dia/noite/diurno/noturno. Bot stops processing
+        // and asks for an explicit shift declaration.
+        throw new Error(TELEGRAM_PIAM_SHIFT_REQUIRED_ERROR);
+    }
+
+    if (parsed.sector === "REGULATION" && parsed.baseCode === "PIAM") {
+        return { applied: true, originalCode: null };
+    }
+
+    const originalCode = parsed.baseCode;
+    parsed.sector = "REGULATION";
+    parsed.baseCode = "PIAM";
+    return { applied: true, originalCode };
 }
 
 async function sendSuccessReply(
@@ -6330,6 +6622,8 @@ async function sendSuccessReply(
     reassignedFrom?: string | null,
     assumedHalfShift = false,
     continuationFrom?: string | null,
+    piamAutoAllocated = false,
+    piamOriginalCode?: string | null,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const replyKind = resolveTelegramSuccessReplyKind({
@@ -6414,7 +6708,21 @@ async function sendSuccessReply(
     const shadowHint = parsed.isShadow && !parsed.isDeparture
         ? "\n\n🫥 Cobertura marcada como *sombra*. Titular atual mantido no quadro."
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${continuationTargetHint}${timeContextHint}${shadowHint}${arrivalHint}`, replyToMessageId);
+    const piamHint = piamAutoAllocated
+        ? (() => {
+            const turnoLabel = (effectiveShiftType ?? parsed.shiftType) === "SN"
+                ? "noturno"
+                : (effectiveShiftType ?? parsed.shiftType) === "SD"
+                    ? "diurno"
+                    : null;
+            const turnoSuffix = turnoLabel ? ` do turno *${turnoLabel}*` : " do turno";
+            const overrideSuffix = piamOriginalCode && piamOriginalCode !== "PIAM"
+                ? ` (em vez de ${piamOriginalCode})`
+                : "";
+            return `\n\n🩺 Alocado como *PIAM*${turnoSuffix}${overrideSuffix}.`;
+        })()
+        : "";
+    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
@@ -6560,6 +6868,8 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             result.reassignedFrom,
             result.assumedHalfShift,
             result.continuationFrom,
+            result.piamAutoAllocated,
+            result.piamOriginalCode,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -7385,6 +7695,8 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
             result.reassignedFrom,
             result.assumedHalfShift,
             result.continuationFrom,
+            result.piamAutoAllocated,
+            result.piamOriginalCode,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -7632,6 +7944,8 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.reassignedFrom,
                                 result.assumedHalfShift,
                                 result.continuationFrom,
+                                result.piamAutoAllocated,
+                                result.piamOriginalCode,
                             );
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
@@ -8017,7 +8331,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), firstParsed.arrivalTime);
 
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom } = await applyParsedEntry({
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, piamAutoAllocated, piamOriginalCode } = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
@@ -8060,6 +8374,8 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     reassignedFrom,
                     assumedHalfShift,
                     continuationFrom,
+                    piamAutoAllocated,
+                    piamOriginalCode,
                 );
 
                 return { ok: true, occupancyId };
@@ -8076,6 +8392,23 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         originalText: message.text,
                     });
                     return { ok: true, ignored: true, pending: true };
+                }
+
+                if (isTelegramPiamShiftRequiredError(errorMessage)) {
+                    await markTelegramProcessed(log.id, {
+                        status: "ignored",
+                        parsedDomain: firstParsed.sector,
+                        parsedTargetCode: firstParsed.baseCode,
+                        parsedAction: resolveTelegramParsedAction(firstParsed),
+                        parsedDoctorName: resolvedDoctor.fullName,
+                        errorMessage,
+                    });
+                    await sendMessage(
+                        message.chat.id,
+                        `🩺 ${resolveTelegramDoctorSurfaceName(resolvedDoctor)} esta marcado como PIAM. Me confirma o turno: responde *SD* (ou *dia*) para 07:00-19:00, *SN* (ou *noite*) para 19:00-07:00.`,
+                        message.message_id,
+                    );
+                    return { ok: true, ignored: true };
                 }
 
                 await markTelegramProcessed(log.id, {

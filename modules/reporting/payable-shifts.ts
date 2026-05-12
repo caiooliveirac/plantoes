@@ -208,6 +208,10 @@ export function resolveDoctorPaymentProfile(metadata: unknown): DoctorPaymentPro
         return "psychiatry";
     }
 
+    if (preferredRole === "PIAM") {
+        return "specialist";
+    }
+
     const specialistFlag = typed.paymentProfile?.isSpecialist;
     if (specialistFlag === true) {
         return "specialist";

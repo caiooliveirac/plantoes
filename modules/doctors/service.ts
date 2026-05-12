@@ -1,9 +1,17 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "@/db";
 import { auditLogs, doctors } from "@/db/schema";
-import { extractDoctorAliases, listDoctorSearchTerms, mergeDoctorMetadataAliases, parseDoctorAliasesInput } from "@/modules/doctors/directory";
+import {
+    extractDoctorAliases,
+    extractDoctorPreferredOperationalRole,
+    listDoctorSearchTerms,
+    mergeDoctorDirectoryMetadata,
+    mergeDoctorMetadataAliases,
+    parseDoctorAliasesInput,
+} from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
+import { normalizeOperationalRoleLabel } from "@/modules/operational/roles";
 
 const doctorAliasesSchema = z.union([
     z.string(),
@@ -278,4 +286,78 @@ export async function updateDoctorDirectoryEntry(input: unknown, auditContext: D
             doctor,
         };
     });
+}
+
+export async function setDoctorPreferredOperationalRole(input: {
+    lookup: string;
+    role: string | null;
+}, auditContext: DoctorDirectoryAuditContext = {}) {
+    const db = getDb();
+    const normalizedRole = normalizeOperationalRoleLabel(input.role);
+    const matches = await findDoctorsByLookup(input.lookup);
+
+    if (matches.length === 0) {
+        return { status: "not_found" as const, matches: [] as Array<ReturnType<typeof buildDoctorDirectoryReplySummary>> };
+    }
+
+    if (matches.length > 1) {
+        return {
+            status: "ambiguous" as const,
+            matches: matches.slice(0, 5).map(buildDoctorDirectoryReplySummary),
+        };
+    }
+
+    const target = matches[0];
+    const previousRole = extractDoctorPreferredOperationalRole(target.metadata);
+
+    if (previousRole === normalizedRole) {
+        return { status: "unchanged" as const, doctor: target, previousRole, nextRole: normalizedRole };
+    }
+
+    return db.transaction(async (tx) => {
+        const [updated] = await tx
+            .update(doctors)
+            .set({
+                metadata: mergeDoctorDirectoryMetadata(target.metadata, { preferredOperationalRole: normalizedRole }),
+                updatedAt: new Date(),
+            })
+            .where(eq(doctors.id, target.id))
+            .returning();
+
+        await tx.insert(auditLogs).values({
+            actorUserId: auditContext.actorUserId ?? null,
+            action: "doctor.preferred_operational_role_updated",
+            entityType: "doctor",
+            entityId: updated.id,
+            details: {
+                source: auditContext.source ?? "manual",
+                lookup: input.lookup,
+                previousRole,
+                nextRole: normalizedRole,
+                ...auditContext.details,
+            },
+        });
+
+        return {
+            status: "updated" as const,
+            doctor: updated,
+            previousRole,
+            nextRole: normalizedRole,
+        };
+    });
+}
+
+export async function listDoctorsByPreferredOperationalRole(role: string) {
+    const db = getDb();
+    const normalizedRole = normalizeOperationalRoleLabel(role);
+    if (!normalizedRole) {
+        return [];
+    }
+
+    const rows = await db.query.doctors.findMany({
+        where: eq(doctors.isActive, true),
+        orderBy: [asc(doctors.fullName)],
+    });
+
+    return rows.filter((doctor) => extractDoctorPreferredOperationalRole(doctor.metadata) === normalizedRole);
 }

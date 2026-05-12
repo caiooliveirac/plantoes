@@ -1,4 +1,4 @@
-export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IES", "RMT", "PSIQ"] as const;
+export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IES", "RMT", "PSIQ", "PIAM"] as const;
 
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
 
@@ -118,6 +118,9 @@ export function getOperationalRoleTone(roleLabel: string | null | undefined) {
     }
     if (normalized === "PSIQ") {
         return "psiq" as const;
+    }
+    if (normalized === "PIAM") {
+        return "piam" as const;
     }
 
     return "neutral" as const;

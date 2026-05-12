@@ -94,11 +94,18 @@ export function normalizeDoctorName(value: string) {
 
 function stripPsychiatrySuffix(value: string | undefined) {
     const trimmed = value?.trim() ?? "";
-    return trimmed.replace(/\s*\((?:Psiquiatria|PSIQUIATRIA)\)\s*$/i, "").trim();
+    return trimmed
+        .replace(/\s*\((?:Psiquiatria|PSIQUIATRIA)\)\s*$/i, "")
+        .replace(/\s*\(PIAM\)\s*$/i, "")
+        .trim();
 }
 
 function hasPsychiatryTag(value: string | undefined) {
     return /\((?:Psiquiatria|PSIQUIATRIA)\)/i.test(value ?? "");
+}
+
+function hasPiamTag(value: string | undefined) {
+    return /\(PIAM\)/i.test(value ?? "");
 }
 
 function detectCsvDelimiter(headerLine: string) {
@@ -118,7 +125,9 @@ function normalizeImportRow(row: DoctorImportRow): NormalizedDoctorImportRow | n
     const aliases = parseDoctorAliasesInput(row.aliases);
     const preferredOperationalRole = hasPsychiatryTag(row.fullName) || hasPsychiatryTag(row.displayName)
         ? "PSIQ"
-        : null;
+        : hasPiamTag(row.fullName) || hasPiamTag(row.displayName)
+            ? "PIAM"
+            : null;
 
     return {
         externalCode: row.externalCode?.trim() || undefined,

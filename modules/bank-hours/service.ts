@@ -2,7 +2,8 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { BANK_HOURS_RULE_VERSION, applyAnomalyGuard, calculateBankHours } from "@/modules/bank-hours/calculator";
 import { buildContinuityBankHoursSpan } from "@/modules/bank-hours/continuity";
 import { getDb } from "@/db";
-import { bankHoursBalanceOverrides, bankHoursEntries, interventionOccupancies, regulationOccupancies } from "@/db/schema";
+import { bankHoursBalanceOverrides, bankHoursEntries, doctors, interventionOccupancies, regulationOccupancies } from "@/db/schema";
+import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 
 type Executor = any;
 
@@ -140,6 +141,14 @@ async function deleteContinuityGroupBankHours(db: Executor, occupancyIds: Array<
     }
 }
 
+async function isPiamPreferredDoctorBankHours(db: Executor, doctorId: string) {
+    const doctor = await db.query.doctors.findFirst({
+        where: eq(doctors.id, doctorId),
+        columns: { metadata: true },
+    });
+    return doctor ? extractDoctorPreferredOperationalRole(doctor.metadata) === "PIAM" : false;
+}
+
 export async function syncBankHoursByContinuityGroup(db: Executor, continuityGroupId: string) {
     const occupancies = await listContinuityGroupOccupancies(db, continuityGroupId);
     if (occupancies.length === 0) {
@@ -151,6 +160,18 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
         domain: occupancy.domain,
         occupancyId: occupancy.occupancyId,
     })));
+
+    // PIAM cardiologists are remunerated by closed-shift flat rate and explicitly do not
+    // accumulate banco de horas: delete any stale entry and skip recalculation.
+    const piamDoctorIds = new Set<string>();
+    for (const doctorId of new Set(occupancies.map((o) => o.doctorId))) {
+        if (await isPiamPreferredDoctorBankHours(db, doctorId)) {
+            piamDoctorIds.add(doctorId);
+        }
+    }
+    if (piamDoctorIds.size > 0 && occupancies.every((o) => piamDoctorIds.has(o.doctorId))) {
+        return null;
+    }
 
     // Filter out phantom zero-duration occupancies before calculating bank hours.
     // These are artifacts from the Telegram board-takeover pipeline — they carry no
