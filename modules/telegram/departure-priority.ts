@@ -36,7 +36,12 @@ export interface DeparturePriorityView {
     entries: DeparturePriorityEntry[];
     excludedContinuations: DeparturePriorityContinuationEntry[];
     activeNightWorkSlot: "23:00" | "03:00" | null;
+    /** Fechamento-alvo da janela horária ("19h" ou "07h"); null fora das janelas. */
+    departureBoundary: DeparturePriorityBoundary | null;
 }
+
+/** Fechamento operacional para o qual a saída está prevista. */
+type DeparturePriorityBoundary = "07h" | "19h";
 
 interface DeparturePriorityCandidate {
     domain: "regulation";
@@ -84,8 +89,50 @@ function formatSaoPauloHourMinute(referenceAt: Date) {
     return { hour, minute };
 }
 
-function resolveLateThresholdAt(referenceAt: Date) {
-    return resolveOperationalShiftWindow(referenceAt).startedAt.getTime() + (15 * 60 * 1000);
+// Início do turno cujo fechamento é o alvo (07h → turno SN; 19h → turno SD).
+function resolveShiftStartForBoundary(referenceAt: Date, departureBoundary: DeparturePriorityBoundary) {
+    const window = resolveOperationalShiftWindow(referenceAt);
+    if (departureBoundary === "07h") {
+        return window.shiftLabel === "SN" ? window.startedAt : window.previousBoundaryAt;
+    }
+    return window.shiftLabel === "SD" ? window.startedAt : window.previousBoundaryAt;
+}
+
+function resolveLateThresholdAt(referenceAt: Date, departureBoundary: DeparturePriorityBoundary | null) {
+    const shiftStartedAt = departureBoundary
+        ? resolveShiftStartForBoundary(referenceAt, departureBoundary)
+        : resolveOperationalShiftWindow(referenceAt).startedAt;
+    return shiftStartedAt.getTime() + (15 * 60 * 1000);
+}
+
+// Fechamento em que a ocupação realmente sai, derivado do horário previsto de
+// saída: SD e P invertido terminam às 19h; SN e P normal terminam às 07h.
+function resolveRowDepartureBoundary(row: OperationalBoard["regulation"][number]): DeparturePriorityBoundary | null {
+    if (row.scheduledEndAt) {
+        const { hour } = formatSaoPauloHourMinute(new Date(row.scheduledEndAt));
+        return hour < 13 ? "07h" : "19h";
+    }
+    if (row.shiftLabel === "SD") return "19h";
+    if (row.shiftLabel === "SN") return "07h";
+    return null;
+}
+
+// Janela horária do /prioridadesaida:
+//   16h-21h → fechamento das 19h (turno SD: SD + P invertido).
+//   02h-09h → fechamento das 07h (turno SN: SN + P normal).
+// Fora das janelas, mantém o comportamento legado (turno atual, sem alvo de fechamento).
+function resolveDeparturePriorityMode(referenceAt: Date): {
+    shiftLabel: "SD" | "SN";
+    departureBoundary: DeparturePriorityBoundary | null;
+} {
+    const { hour } = formatSaoPauloHourMinute(referenceAt);
+    if (hour >= 16 && hour < 21) {
+        return { shiftLabel: "SD", departureBoundary: "19h" };
+    }
+    if (hour >= 2 && hour < 9) {
+        return { shiftLabel: "SN", departureBoundary: "07h" };
+    }
+    return { shiftLabel: resolveOperationalShiftWindow(referenceAt).shiftLabel, departureBoundary: null };
 }
 
 function resolvePriorityStartedAt(startedAt: string, roleLabel: string | null, thresholdAtMs: number) {
@@ -156,6 +203,7 @@ function isExcludedDepartureRole(roleLabel: string | null) {
 function buildDeparturePriorityCandidates(params: {
     referenceAt: Date;
     shiftLabel: "SD" | "SN";
+    departureBoundary: DeparturePriorityBoundary | null;
     board: OperationalBoard;
     mealBreakSession: DeparturePriorityMealBreakSession | null;
 }) {
@@ -163,7 +211,7 @@ function buildDeparturePriorityCandidates(params: {
     const mrvRamals = new Set(params.mealBreakSession?.mrvRamals ?? []);
     const candidates: DeparturePriorityCandidate[] = [];
     const excludedContinuations: DeparturePriorityContinuationEntry[] = [];
-    const thresholdAtMs = resolveLateThresholdAt(params.referenceAt);
+    const thresholdAtMs = resolveLateThresholdAt(params.referenceAt, params.departureBoundary);
     const activeNightWorkSlot = resolveActiveNightWorkSlot({
         referenceAt: params.referenceAt,
         shiftLabel: params.shiftLabel,
@@ -182,21 +230,33 @@ function buildDeparturePriorityCandidates(params: {
             roleLabel: row.roleLabel,
             defaultRole: row.defaultRole,
         });
-        if (row.shiftLabel === "P") {
+        const rowStartedAt = row.startedAt;
+        const pushContinuation = () => excludedContinuations.push({
+            targetCode: row.postCode,
+            name: formatDoctorSurfaceName({
+                fullName: row.doctorName,
+                displayName: row.displayName,
+                fallback: row.postCode,
+            }),
+            roleLabel,
+            startedAt: rowStartedAt,
+        });
+
+        if (params.departureBoundary) {
+            // Modo janela: só rankeia quem realmente sai no fechamento-alvo.
+            // Quem sai no outro fechamento e está em P aparece como continuidade.
+            if (resolveRowDepartureBoundary(row) !== params.departureBoundary) {
+                if (row.shiftLabel === "P") {
+                    pushContinuation();
+                }
+                continue;
+            }
+        } else if (row.shiftLabel === "P") {
             // P iniciado dentro do plantão atual → continua para o próximo (excluir do ranking).
             // P iniciado num plantão anterior → está terminando agora; trata como saída regular.
             const startedDuringCurrentShift = !isBeforeCurrentOperationalShift(row.startedAt, params.referenceAt);
             if (startedDuringCurrentShift) {
-                excludedContinuations.push({
-                    targetCode: row.postCode,
-                    name: formatDoctorSurfaceName({
-                        fullName: row.doctorName,
-                        displayName: row.displayName,
-                        fallback: row.postCode,
-                    }),
-                    roleLabel,
-                    startedAt: row.startedAt,
-                });
+                pushContinuation();
                 continue;
             }
         } else {
@@ -284,6 +344,10 @@ export function buildDeparturePriorityReply(view: DeparturePriorityView) {
         header.push("Lista de reguladores no DIURNO que realmente saem no fechamento.");
     }
 
+    if (view.departureBoundary) {
+        header.push(`Janela atual: lista quem está previsto para sair às ${view.departureBoundary}.`);
+    }
+
     header.push("Fora da lista principal: CP, MRV, RECIP, PIAM, NUCLEO, MEIO, quem chegou ha menos de 4h e quem está em P/continua.");
 
     const lines: string[] = [];
@@ -311,7 +375,7 @@ export async function getCurrentDeparturePriorityView(params?: {
     mealBreakSession?: DeparturePriorityMealBreakSession | null;
 }) {
     const referenceAt = params?.referenceAt ?? new Date();
-    const shiftLabel = resolveOperationalShiftWindow(referenceAt).shiftLabel;
+    const { shiftLabel, departureBoundary } = resolveDeparturePriorityMode(referenceAt);
     const board = params?.board ?? await getOperationalBoard();
     const mealBreakSession = params?.mealBreakSession === undefined
         ? await getCurrentOperationalMealBreakSession(referenceAt)
@@ -319,6 +383,7 @@ export async function getCurrentDeparturePriorityView(params?: {
     const candidates = buildDeparturePriorityCandidates({
         referenceAt,
         shiftLabel,
+        departureBoundary,
         board,
         mealBreakSession,
     });
@@ -333,6 +398,7 @@ export async function getCurrentDeparturePriorityView(params?: {
         entries,
         excludedContinuations: candidates.excludedContinuations,
         activeNightWorkSlot: candidates.activeNightWorkSlot,
+        departureBoundary,
     } satisfies DeparturePriorityView;
 }
 

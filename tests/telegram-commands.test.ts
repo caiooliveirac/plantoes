@@ -783,6 +783,7 @@ test("getCurrentDeparturePriorityView no SN filtra por turma 23:00 antes de 03:0
                 displayName: "Ana",
                 startedAt: "2026-03-30T22:05:00.000Z",
                 boardStartedAt: "2026-03-30T22:05:00.000Z",
+                scheduledEndAt: "2026-03-31T10:15:00.000Z",
                 shiftLabel: "SN",
                 roleLabel: null,
             }),
@@ -794,6 +795,7 @@ test("getCurrentDeparturePriorityView no SN filtra por turma 23:00 antes de 03:0
                 displayName: "Bruno",
                 startedAt: "2026-03-30T22:06:00.000Z",
                 boardStartedAt: "2026-03-30T22:06:00.000Z",
+                scheduledEndAt: "2026-03-31T10:15:00.000Z",
                 shiftLabel: "SN",
                 roleLabel: null,
             }),
@@ -829,6 +831,146 @@ test("getCurrentDeparturePriorityView no SN filtra por turma 23:00 antes de 03:0
     assert.equal(afterThree.activeNightWorkSlot, "03:00");
     assert.deepEqual(afterThree.entries.map((entry) => entry.targetCode), ["2036"]);
     assert.match(buildDeparturePriorityReply(afterThree), /Janela ativa da divisao de jantar: 03:00\./);
+});
+
+test("getCurrentDeparturePriorityView na janela 16-21h lista saida das 19h (SD + P invertido)", async () => {
+    const view = await getCurrentDeparturePriorityView({
+        referenceAt: new Date("2026-03-30T18:00:00-03:00"),
+        board: {
+            generatedAt: "2026-03-30T21:00:00.000Z",
+            intervention: [makeInterventionPriorityRow()],
+            regulation: [
+                makeRegulationPriorityRow({
+                    postCode: "2035",
+                    postLabel: "2035",
+                    doctorName: "Ana SD",
+                    displayName: "Ana",
+                    startedAt: "2026-03-30T10:00:00.000Z", // 07:00 local
+                    boardStartedAt: "2026-03-30T10:00:00.000Z",
+                    scheduledEndAt: "2026-03-30T22:15:00.000Z", // 19:15 local
+                    shiftLabel: "SD",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 2,
+                    postCode: "2036",
+                    postLabel: "2036",
+                    doctorName: "Bruno P invertido",
+                    displayName: "Bruno",
+                    startedAt: "2026-03-30T10:05:00.000Z",
+                    boardStartedAt: "2026-03-29T22:00:00.000Z",
+                    scheduledEndAt: "2026-03-30T22:15:00.000Z", // sai 19:15 → P invertido
+                    shiftLabel: "P",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 3,
+                    postCode: "2154",
+                    postLabel: "2154",
+                    doctorName: "Emily P normal",
+                    displayName: "Emily",
+                    startedAt: "2026-03-30T10:13:00.000Z",
+                    boardStartedAt: "2026-03-30T10:13:00.000Z",
+                    scheduledEndAt: "2026-03-31T10:15:00.000Z", // sai 07:15 → P normal
+                    shiftLabel: "P",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 4,
+                    postCode: "2153",
+                    postLabel: "2153",
+                    doctorName: "Caroline SN",
+                    displayName: "Caroline",
+                    startedAt: "2026-03-30T21:40:00.000Z",
+                    boardStartedAt: "2026-03-30T21:40:00.000Z",
+                    scheduledEndAt: "2026-03-31T10:15:00.000Z",
+                    shiftLabel: "SN",
+                    roleLabel: null,
+                }),
+            ],
+        },
+        mealBreakSession: { recipRamal: null },
+    });
+
+    assert.equal(view.shiftLabel, "SD");
+    assert.equal(view.departureBoundary, "19h");
+    // SD e P invertido saem 19h → rankeados. Emily (P normal) sai 07h → continuacao. Caroline (SN) fora.
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035", "2036"]);
+    assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
+
+    const reply = buildDeparturePriorityReply(view);
+    assert.match(reply, /Janela atual: lista quem está previsto para sair às 19h\./);
+    assert.doesNotMatch(reply, /Caroline SN/);
+});
+
+test("getCurrentDeparturePriorityView na janela 02-09h lista saida das 07h (SN + P normal)", async () => {
+    const view = await getCurrentDeparturePriorityView({
+        referenceAt: new Date("2026-03-31T04:00:00-03:00"),
+        board: {
+            generatedAt: "2026-03-31T07:00:00.000Z",
+            intervention: [makeInterventionPriorityRow()],
+            regulation: [
+                makeRegulationPriorityRow({
+                    postCode: "2035",
+                    postLabel: "2035",
+                    doctorName: "Ana SN",
+                    displayName: "Ana",
+                    startedAt: "2026-03-30T22:05:00.000Z", // 19:05 local
+                    boardStartedAt: "2026-03-30T22:05:00.000Z",
+                    scheduledEndAt: "2026-03-31T10:15:00.000Z", // 07:15 local
+                    shiftLabel: "SN",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 2,
+                    postCode: "2036",
+                    postLabel: "2036",
+                    doctorName: "Bruno P normal",
+                    displayName: "Bruno",
+                    startedAt: "2026-03-30T22:10:00.000Z",
+                    boardStartedAt: "2026-03-30T10:00:00.000Z",
+                    scheduledEndAt: "2026-03-31T10:15:00.000Z", // sai 07:15 → P normal
+                    shiftLabel: "P",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 3,
+                    postCode: "2154",
+                    postLabel: "2154",
+                    doctorName: "Carla P invertido",
+                    displayName: "Carla",
+                    startedAt: "2026-03-31T10:05:00.000Z",
+                    boardStartedAt: "2026-03-30T22:00:00.000Z",
+                    scheduledEndAt: "2026-03-31T22:15:00.000Z", // sai 19:15 → P invertido
+                    shiftLabel: "P",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 4,
+                    postCode: "2153",
+                    postLabel: "2153",
+                    doctorName: "Diego SD",
+                    displayName: "Diego",
+                    startedAt: "2026-03-31T09:50:00.000Z",
+                    boardStartedAt: "2026-03-31T09:50:00.000Z",
+                    scheduledEndAt: "2026-03-31T22:15:00.000Z",
+                    shiftLabel: "SD",
+                    roleLabel: null,
+                }),
+            ],
+        },
+        mealBreakSession: { recipRamal: null },
+    });
+
+    assert.equal(view.shiftLabel, "SN");
+    assert.equal(view.departureBoundary, "07h");
+    // SN e P normal saem 07h → rankeados. Carla (P invertido) sai 19h → continuacao. Diego (SD) fora.
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035", "2036"]);
+    assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
+
+    const reply = buildDeparturePriorityReply(view);
+    assert.match(reply, /Janela atual: lista quem está previsto para sair às 07h\./);
+    assert.doesNotMatch(reply, /Diego SD/);
 });
 
 test("parseTelegramSummaryReportCommand accepts bare /resumo and optional agora", () => {
