@@ -365,6 +365,19 @@ test("parses 'João Marcos IT30 saída' as intervention departure", () => {
     assert.equal(parsed.baseCode, "IT30");
 });
 
+test("parses 'Gustavo Fernandes RETIRAR BR60' as intervention departure", () => {
+    const parsed = parseMessage("Gustavo Fernandes RETIRAR BR60");
+    assert.equal(parsed.isDeparture, true);
+    assert.equal(parsed.baseCode, "BR60");
+    assert.ok(parsed.extractedNames[0]?.toUpperCase().includes("GUSTAVO"));
+});
+
+test("parses 'Retirar 2152' as a regulation departure (no name)", () => {
+    const parsed = parseMessage("Retirar 2152");
+    assert.equal(parsed.isDeparture, true);
+    assert.equal(parsed.baseCode, "2152");
+});
+
 test("parses 'Samara saindo CC70 08:50 porque estava na ocorrência 0174' as departure", () => {
     const parsed = parseMessage("Samara saindo CC70 08:50 porque estava na ocorrência 0174");
     assert.equal(parsed.isDeparture, true);
