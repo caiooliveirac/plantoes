@@ -52,6 +52,7 @@ import {
     shouldTreatTelegramArrivalAsImplicitReassignment,
     buildTelegramContinuationSourceHint,
     buildPublicTelegramCommandHelpReply,
+    shouldRouteToDepartureJustification,
 } from "@/modules/telegram/service";
 import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
 
@@ -2110,6 +2111,47 @@ test("resolveTelegramSuccessReplyKind separates arrival, P arrival and continuat
         },
         forceHalfShift: true,
     }), "half_shift_assumed");
+});
+
+test("shouldRouteToDepartureJustification never treats a continuation warning as a departure", () => {
+    const justificationError = "Justificativa obrigatoria para liberar continuidade apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.";
+
+    // Caso Uemerson Alcantara (SM01): "continua" depois das 19:15 NUNCA pode
+    // cair no fluxo de saida tardia — continuar nao e sair.
+    assert.equal(shouldRouteToDepartureJustification(justificationError, {
+        sector: "INTERVENTION",
+        baseCode: "SM01",
+        arrivalTime: null,
+        shiftType: null,
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: true,
+        isReassignment: false,
+    }), false);
+
+    // Uma saida real com justificativa obrigatoria continua sendo roteada.
+    assert.equal(shouldRouteToDepartureJustification(justificationError, {
+        sector: "INTERVENTION",
+        baseCode: "SM01",
+        arrivalTime: "19:53",
+        shiftType: null,
+        roleFunction: null,
+        isDeparture: true,
+        isContinuation: false,
+        isReassignment: false,
+    }), true);
+
+    // Erro generico (nao justificativa) nunca abre o fluxo de saida tardia.
+    assert.equal(shouldRouteToDepartureJustification("Intervention base not found.", {
+        sector: "INTERVENTION",
+        baseCode: "SM01",
+        arrivalTime: null,
+        shiftType: null,
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: true,
+        isReassignment: false,
+    }), false);
 });
 
 test("shouldTreatTelegramArrivalAsContinuation infers rollover for intervention and explicit SD→SN regulation cross-shift", () => {

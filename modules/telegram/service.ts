@@ -51,7 +51,7 @@ import {
     updateDoctorDirectoryEntry,
 } from "@/modules/doctors/service";
 import { continueInterventionOccupancy, deactivateInterventionBase, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
-import { getSaoPauloParts, requiresOvertimeJustification, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
+import { getSaoPauloParts, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
@@ -424,6 +424,15 @@ function isTelegramContinuationEntry(parsed: OperationalParsedEntry) {
 
 function isTelegramContinuationIntent(parsed: OperationalParsedEntry) {
     return !parsed.isDeparture && (parsed.isContinuation || parsed.shiftType === "P");
+}
+
+// Um aviso de continuidade ("continua" e sinonimos: sigo, permaneco, vou ficar,
+// emendar, prosseguir...) NUNCA pode ser respondido como saida — continuar nao e
+// sair. Se um erro de "Justificativa obrigatoria" borbulhar para uma entrada de
+// continuidade, isso e uma inconsistencia interna: tratamos como erro generico
+// em vez de abrir o fluxo de "saida tardia" (caso Uemerson Alcantara, SM01).
+export function shouldRouteToDepartureJustification(errorMessage: string, parsed: OperationalParsedEntry) {
+    return isTelegramJustificationRequiredError(errorMessage) && !isTelegramContinuationEntry(parsed);
 }
 
 export function shouldTreatTelegramArrivalAsContinuation(params: {
@@ -6559,13 +6568,11 @@ async function applyParsedEntry(params: {
             });
 
             if (shouldContinueActiveOccupancy && activeOccupancy) {
-                if (
-                    requiresOvertimeJustification(activeOccupancy.startedAt, eventAt)
-                    && !hasTelegramOperationalJustification(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime, parsed.shiftType])
-                ) {
-                    throw new Error("Justificativa obrigatoria para liberar continuidade apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.");
-                }
-
+                // Continuidade genuina AVISADA ("continua") estende o plantao P sem
+                // exigir justificativa de saida tardia — paridade com a regulacao.
+                // O guard antigo de requiresOvertimeJustification fazia "continua"
+                // depois das 19:15 cair no fluxo de "saida tardia" e pedir motivo
+                // de ocorrencia/higienizacao (caso Uemerson Alcantara, SM01).
                 const continued = await continueInterventionOccupancy(activeOccupancy.id, {
                     notes: messageText,
                     continuedAt: eventAt.getTime() > referenceAt.getTime() ? referenceAt : eventAt,
@@ -7122,7 +7129,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
-        if (isTelegramJustificationRequiredError(errorMessage)) {
+        if (shouldRouteToDepartureJustification(errorMessage, pending.resolutionData.parsed)) {
             await markTelegramProcessed(pending.id, {
                 status: "superseded",
                 errorMessage: "pending_name_selection_resolved_to_departure_justification",
@@ -8200,7 +8207,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
                             const errorMsg = error instanceof Error ? error.message : "unknown_error";
-                            if (isTelegramJustificationRequiredError(errorMsg)) {
+                            if (shouldRouteToDepartureJustification(errorMsg, continuationResolved.parsed)) {
                                 await queuePendingDepartureJustification({
                                     logId: log.id,
                                     message,
@@ -8632,7 +8639,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 return { ok: true, occupancyId };
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
-                if (isTelegramJustificationRequiredError(errorMessage)) {
+                if (shouldRouteToDepartureJustification(errorMessage, firstParsed)) {
                     await queuePendingDepartureJustification({
                         logId: log.id,
                         message,
