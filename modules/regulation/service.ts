@@ -185,6 +185,15 @@ export function resolveRegulationContinuationScheduledEndAt(params: {
         return fromExisting;
     }
 
+    // Uma mensagem de continuidade DENTRO da janela ja coberta pelo plantao
+    // (ex.: medico de P desde 07h mandando "P" de novo as 19h apenas
+    // reforcando) e so um reforco — nao estende a cobertura. A extensao para
+    // 36h+ so acontece quando a continuidade ocorre no fim da janela ou
+    // depois: atraso/reforco nao significa um novo turno.
+    if (params.continuationAt.getTime() < fromExisting.getTime()) {
+        return fromExisting;
+    }
+
     return fromContinuation.getTime() > fromExisting.getTime()
         ? fromContinuation
         : fromExisting;

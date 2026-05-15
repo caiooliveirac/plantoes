@@ -14,7 +14,7 @@ import {
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationContinuationScheduledEndAt } from "@/modules/regulation/service";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
-import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveForcedDayEventTime, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
 
@@ -1178,7 +1178,9 @@ test("resolveRegulationContinuationExplicitScheduledEndAt drops expired carry-ov
     );
 });
 
-test("resolveRegulationContinuationScheduledEndAt extends to next-day 19:15 when continuation is confirmed at 19:00", () => {
+test("resolveRegulationContinuationScheduledEndAt does NOT extend when continuation lands inside the covered window (reforco de P)", () => {
+    // Medico de P desde ~07:00 mandando "P"/continua as 19:00 do MESMO dia esta
+    // apenas reforcando — ainda dentro da janela de 24h. Nao vira plantao de 36h.
     const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
         existingStartedAt: new Date("2026-04-27T06:48:00-03:00"),
         continuationAt: new Date("2026-04-27T19:00:58-03:00"),
@@ -1187,7 +1189,68 @@ test("resolveRegulationContinuationScheduledEndAt extends to next-day 19:15 when
         explicitScheduledEndAt: null,
     });
 
-    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-04-28T19:15:00-03:00").toISOString());
+    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-04-28T07:15:00-03:00").toISOString());
+});
+
+test("resolveRegulationContinuationScheduledEndAt extends to 36h only when continuation happens after the covered window ends", () => {
+    // Continuidade genuina: o medico avisa apos o fim da janela (manha seguinte),
+    // assumindo um terceiro turno. So aqui a cobertura se estende.
+    const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
+        existingStartedAt: new Date("2026-04-27T06:48:00-03:00"),
+        continuationAt: new Date("2026-04-28T07:40:00-03:00"),
+        postCode: "1367",
+        inferredScheduledStartAt: new Date("2026-04-27T07:00:00-03:00"),
+        explicitScheduledEndAt: null,
+    });
+
+    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-04-29T07:15:00-03:00").toISOString());
+});
+
+test("REGRESSAO Manuella Barreto: 'continua' dentro da janela P nao infla o plantao para 36h", () => {
+    // Caso real 2026-05-15: medica de P desde 07:00 recebe "Manuella continua" na
+    // virada de turno (19:00 do mesmo dia). Isso e apenas reforco — ainda dentro
+    // da janela de 24h ja coberta. O bot NAO pode estender para ~36h.
+    const existingStartedAt = new Date("2026-05-15T07:00:00-03:00");
+    const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
+        existingStartedAt,
+        continuationAt: new Date("2026-05-15T19:00:00-03:00"),
+        postCode: "1367",
+        inferredScheduledStartAt: existingStartedAt,
+        explicitScheduledEndAt: null,
+    });
+
+    // Cobertura permanece no bloco de 24h (07:15 da manha seguinte), nunca 36h.
+    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-05-16T07:15:00-03:00").toISOString());
+    const coverageHours = (nextScheduledEndAt!.getTime() - existingStartedAt.getTime()) / 3_600_000;
+    assert.ok(coverageHours <= 25, `cobertura inflada: ${coverageHours}h (esperado <= 25h)`);
+});
+
+test("resolveInterventionContinuationScheduledEndAt: continuidade dentro da janela so reforca (nao estende)", () => {
+    // P de intervencao desde 07:00, fim agendado 07:00 do dia seguinte. "continua"
+    // as 19:00 cai dentro da janela: a proxima virada coincide com o fim atual.
+    const nextScheduledEndAt = resolveInterventionContinuationScheduledEndAt({
+        existingScheduledEndAt: new Date("2026-05-16T07:00:00-03:00"),
+        continuationAt: new Date("2026-05-15T19:00:00-03:00"),
+    });
+    assert.equal(nextScheduledEndAt.toISOString(), new Date("2026-05-16T07:00:00-03:00").toISOString());
+});
+
+test("resolveInterventionContinuationScheduledEndAt: continuidade apos a janela emenda um unico bloco discreto", () => {
+    // Fim agendado 19:00; aviso as 19:30 (turno noturno) emenda ate a PROXIMA
+    // virada (07:00 do dia seguinte) — um bloco discreto, nunca alem.
+    const nextScheduledEndAt = resolveInterventionContinuationScheduledEndAt({
+        existingScheduledEndAt: new Date("2026-05-15T19:00:00-03:00"),
+        continuationAt: new Date("2026-05-15T19:30:00-03:00"),
+    });
+    assert.equal(nextScheduledEndAt.toISOString(), new Date("2026-05-16T07:00:00-03:00").toISOString());
+});
+
+test("resolveInterventionContinuationScheduledEndAt: nunca encurta um fim agendado mais distante", () => {
+    const nextScheduledEndAt = resolveInterventionContinuationScheduledEndAt({
+        existingScheduledEndAt: new Date("2026-05-17T07:00:00-03:00"),
+        continuationAt: new Date("2026-05-15T19:30:00-03:00"),
+    });
+    assert.equal(nextScheduledEndAt.toISOString(), new Date("2026-05-17T07:00:00-03:00").toISOString());
 });
 
 test("hasPlannedInterventionCoverageForCurrentShift suppresses next-boundary verification for explicit P", () => {

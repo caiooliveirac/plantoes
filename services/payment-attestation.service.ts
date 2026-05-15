@@ -1087,6 +1087,8 @@ export async function applyManualRemoveAssignment(params: {
                 throw new Error("Ocupação não encontrada para remoção.");
             }
             if (existing.source === "admin_correction" || existing.source === "manual") {
+                await tx.delete(bankHoursEntries)
+                    .where(eq(bankHoursEntries.regulationOccupancyId, existing.id));
                 await tx.delete(regulationOccupancies)
                     .where(eq(regulationOccupancies.id, existing.id));
             } else {
@@ -1112,6 +1114,8 @@ export async function applyManualRemoveAssignment(params: {
                 throw new Error("Ocupação não encontrada para remoção.");
             }
             if (existing.source === "admin_correction" || existing.source === "manual") {
+                await tx.delete(bankHoursEntries)
+                    .where(eq(bankHoursEntries.interventionOccupancyId, existing.id));
                 await tx.delete(interventionOccupancies)
                     .where(eq(interventionOccupancies.id, existing.id));
             } else {

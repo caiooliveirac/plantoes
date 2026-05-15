@@ -477,6 +477,18 @@ export function shouldTreatTelegramArrivalAsContinuation(params: {
     return params.activeShiftLabel === "P";
 }
 
+// Um plantao P normal cobre 24h (com ~15min de folga). Quando a continuidade
+// estende a cobertura bem alem disso, o medico esta de fato emendando um
+// terceiro turno (~36h+) — caso em que o bot alerta na resposta.
+const EXTENDED_LONG_SHIFT_THRESHOLD_MS = 25 * 60 * 60 * 1000;
+
+function isExtendedLongShift(boardStartedAt?: Date | null, scheduledEndAt?: Date | null) {
+    if (!boardStartedAt || !scheduledEndAt) {
+        return false;
+    }
+    return scheduledEndAt.getTime() - boardStartedAt.getTime() > EXTENDED_LONG_SHIFT_THRESHOLD_MS;
+}
+
 export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
     sector: "REGULATION" | "INTERVENTION";
     baseCode: string | null;
@@ -6063,6 +6075,7 @@ async function handleTelegramReassignment(params: {
         reassignedFrom: sourceCode,
         assumedHalfShift: false,
         continuationFrom: null as string | null,
+        extendedLongShift: false,
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
     };
@@ -6137,6 +6150,9 @@ async function applyParsedEntry(params: {
         effectiveShiftType = "P";
     }
     let continuationFrom: string | null = null;
+    // Marca quando uma continuidade estendeu a cobertura alem de 24h (plantao
+    // prolongado ~36h+). Usado so para alertar o medico na resposta.
+    let extendedLongShift = false;
     const isShadowArrival = resolveTelegramShadowFlag(parsed, messageText);
 
     // When no explicit shift is provided and the arrival time is near a shift boundary,
@@ -6251,13 +6267,15 @@ async function applyParsedEntry(params: {
             });
 
             if (shouldContinueActiveOccupancy && activeOccupancy) {
-                occupancyId = (await continueRegulationOccupancy(activeOccupancy.id, {
+                const continued = await continueRegulationOccupancy(activeOccupancy.id, {
                     notes: messageText,
                     continuedAt: eventAt.getTime() > referenceAt.getTime() ? referenceAt : eventAt,
-                }, null)).id;
+                }, null);
+                occupancyId = continued.id;
                 treatedAsContinuation = true;
                 replyTimeAt = activeOccupancy.startedAt;
                 effectiveShiftType = "P";
+                extendedLongShift = isExtendedLongShift(continued.boardStartedAt, continued.scheduledEndAt);
             } else {
                 const assumedHalfShift = shouldAssumeTelegramHalfShift({
                     parsed,
@@ -6462,13 +6480,15 @@ async function applyParsedEntry(params: {
                     throw new Error("Justificativa obrigatoria para liberar continuidade apos 07:15 ou 19:15. Inclua motivo por escrito na mensagem.");
                 }
 
-                occupancyId = (await continueInterventionOccupancy(activeOccupancy.id, {
+                const continued = await continueInterventionOccupancy(activeOccupancy.id, {
                     notes: messageText,
                     continuedAt: eventAt.getTime() > referenceAt.getTime() ? referenceAt : eventAt,
-                }, null)).id;
+                }, null);
+                occupancyId = continued.id;
                 treatedAsContinuation = true;
                 replyTimeAt = activeOccupancy.startedAt;
                 effectiveShiftType = "P";
+                extendedLongShift = isExtendedLongShift(continued.boardStartedAt, continued.scheduledEndAt);
             } else {
                 const continuityContext = parsed.isDeparture
                     ? null
@@ -6583,6 +6603,7 @@ async function applyParsedEntry(params: {
         reassignedFrom: null as string | null,
         assumedHalfShift,
         continuationFrom,
+        extendedLongShift,
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
     };
@@ -6683,6 +6704,7 @@ async function handlePiamAutoArrival(params: {
         reassignedFrom: null as string | null,
         assumedHalfShift: false,
         continuationFrom: null as string | null,
+        extendedLongShift: false,
         piamAutoAllocated: true,
         piamOriginalCode: params.originalCode,
     };
@@ -6749,6 +6771,7 @@ async function sendSuccessReply(
     continuationFrom?: string | null,
     piamAutoAllocated = false,
     piamOriginalCode?: string | null,
+    extendedLongShift = false,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const replyKind = resolveTelegramSuccessReplyKind({
@@ -6847,7 +6870,10 @@ async function sendSuccessReply(
             return `\n\n🩺 Alocado como *PIAM*${turnoSuffix}${overrideSuffix}.`;
         })()
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${arrivalHint}`, replyToMessageId);
+    const longShiftHint = extendedLongShift
+        ? "\n\n⏰ Entendi que você está *emendando mais um turno* — plantão prolongado (*~36h*), já que estava de plantão nos dois turnos anteriores. A cobertura segue estendida. Se não for o caso, avise para corrigir."
+        : "";
+    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
@@ -6995,6 +7021,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             result.continuationFrom,
             result.piamAutoAllocated,
             result.piamOriginalCode,
+            result.extendedLongShift,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -7822,6 +7849,7 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
             result.continuationFrom,
             result.piamAutoAllocated,
             result.piamOriginalCode,
+            result.extendedLongShift,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -8071,6 +8099,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.continuationFrom,
                                 result.piamAutoAllocated,
                                 result.piamOriginalCode,
+                                result.extendedLongShift,
                             );
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
@@ -8456,7 +8485,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), firstParsed.arrivalTime);
 
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, piamAutoAllocated, piamOriginalCode } = await applyParsedEntry({
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode } = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
@@ -8501,6 +8530,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     continuationFrom,
                     piamAutoAllocated,
                     piamOriginalCode,
+                    extendedLongShift,
                 );
 
                 return { ok: true, occupancyId };

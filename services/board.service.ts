@@ -1890,7 +1890,13 @@ function doesCandidateCoverPaymentSlot(candidate: LogicalShiftCandidate, slotSta
 
   const coverageEndAt = resolveCandidateCoverageEndAt(candidate);
   if (!coverageEndAt) return false;
-  const coverageEndMs = new Date(coverageEndAt).getTime();
+  // Um plantao P cobre automaticamente apenas seu intervalo logico de 24h
+  // (dois slots). Atraso na saida — actual_ended_at vazando minutos para o
+  // slot seguinte — nao pode fazer o P cobrir um terceiro slot de pagamento.
+  // 36h sao computadas apenas via ocupacao de continuidade explicita, que
+  // tem logicalSlotStart proprio e e avaliada como candidato separado.
+  const logicalSpanEndMs = new Date(candidate.logicalSlotStart).getTime() + 86400000;
+  const coverageEndMs = Math.min(new Date(coverageEndAt).getTime(), logicalSpanEndMs);
   if (coverageEndMs > slotStart) return true;
   // Boundary equality: resolveProlongedShiftExpiry returns exactly the next-slot start
   // (e.g. 07:00 next day for a SN P-shift). Accept only when slotStartIso is the

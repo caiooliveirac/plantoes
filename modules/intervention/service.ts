@@ -7,7 +7,7 @@ import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours } from "@/modules/bank-hours/service";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
 
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -827,10 +827,10 @@ export async function continueInterventionOccupancy(
         const inferredScheduledStartAt = existing.scheduledStartAt
             ?? inferOperationalScheduledStartAt(existing.startedAt, baseShiftLabel, null);
         const continuationAt = input?.continuedAt ?? new Date();
-        const continuationBoundary = resolveOperationalShiftWindow(continuationAt).nextBoundaryAt;
-        const nextScheduledEndAt = existing.scheduledEndAt && existing.scheduledEndAt.getTime() > continuationBoundary.getTime()
-            ? existing.scheduledEndAt
-            : continuationBoundary;
+        const nextScheduledEndAt = resolveInterventionContinuationScheduledEndAt({
+            existingScheduledEndAt: existing.scheduledEndAt,
+            continuationAt,
+        });
         const nextBoardStartedAt = resolveContinuationBoardStartedAt({
             startedAt: existing.startedAt,
             boardStartedAt: existing.boardStartedAt,
