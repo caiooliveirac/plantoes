@@ -2018,11 +2018,31 @@ async function logTelegramMessage(update: TelegramUpdate) {
     });
 }
 
+// Normaliza errorMessage antes de gravar: Drizzle embute o SQL+params no .message
+// quando uma UPDATE falha. Se gravarmos isso cru, na proxima tentativa o param
+// $errorMessage anterior aparece dentro do novo errorMessage e cresce recursivamente
+// (visto em audit 2026-05: linhas com 1KB+ poluindo o log).
+function sanitizeErrorMessage(value: unknown): string | null | undefined {
+    if (value === null || value === undefined) return value as null | undefined;
+    if (typeof value !== "string") return String(value).slice(0, 240);
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    // Drizzle prefixa erros de query com "Failed query: ..." e dump dos params na linha seguinte.
+    const firstLine = trimmed.split(/\r?\n/, 1)[0] ?? trimmed;
+    const cleaned = firstLine.startsWith("Failed query:")
+        ? "db_update_failed"
+        : firstLine;
+    return cleaned.slice(0, 240);
+}
+
 async function markTelegramProcessed(id: string, patch: Partial<typeof telegramIngestedMessages.$inferInsert>) {
     const db = getDb();
+    const normalizedPatch = Object.prototype.hasOwnProperty.call(patch, "errorMessage")
+        ? { ...patch, errorMessage: sanitizeErrorMessage(patch.errorMessage) }
+        : patch;
     await db.update(telegramIngestedMessages)
         .set({
-            ...patch,
+            ...normalizedPatch,
             processedAt: new Date(),
         })
         .where(eq(telegramIngestedMessages.id, id));
@@ -6582,11 +6602,30 @@ async function handlePiamAutoArrival(params: {
     };
 }
 
+function hasExplicitOperationalSignal(parsed: OperationalParsedEntry) {
+    // Sinais que indicam intencao operacional clara — somente nesses casos justifica
+    // forcar uma rota e pedir SD/SN ao medico PIAM. Mensagens vagas ("Leonardo Lopes",
+    // "2") nao devem disparar o erro PIAM_SHIFT_REQUIRED (audit 2026-05).
+    return Boolean(
+        parsed.baseCode
+        || parsed.isDeparture
+        || parsed.isReassignment
+        || parsed.isContinuation
+        || parsed.arrivalTime,
+    );
+}
+
 async function maybeApplyPiamRouting(
     parsed: OperationalParsedEntry,
     doctorId: string,
 ): Promise<{ applied: boolean; originalCode: string | null }> {
     if (!(await isPiamPreferredDoctor(doctorId))) {
+        return { applied: false, originalCode: null };
+    }
+
+    if (!hasExplicitOperationalSignal(parsed)) {
+        // Sem ramal, verbo ou horario: nao e uma tentativa de registro. Deixa o
+        // fluxo casual decidir (provavelmente cai em no_operational_match / smalltalk).
         return { applied: false, originalCode: null };
     }
 
