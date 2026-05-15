@@ -1619,12 +1619,19 @@ async function resolveDepartureWithoutBase(rawParsed: ParsedMessage, messageText
     }
 
     const doctorQuery = rawParsed.extractedNames[0] ?? null;
-    const lookupQuery = doctorQuery || (shouldUseTelegramSenderNameFallback(messageText, senderName) ? senderName : null);
+    const senderFallbackQuery = shouldUseTelegramSenderNameFallback(messageText, senderName) ? senderName : null;
+    const lookupQuery = doctorQuery || senderFallbackQuery;
     if (!lookupQuery) {
         return null;
     }
 
-    const resolved = await resolveDoctorWithFallback(lookupQuery);
+    let resolved = await resolveDoctorWithFallback(lookupQuery);
+    // Mensagens multi-linha como "Bom dia informo\nSaida da BR60" deixam
+    // resto-de-saudacao (informo, pessoal) como extractedNames[0]. Se essa
+    // query nao resolver, cair pro senderName antes de desistir (audit 2026-05).
+    if (!resolved.doctor && doctorQuery && senderFallbackQuery && doctorQuery !== senderFallbackQuery) {
+        resolved = await resolveDoctorWithFallback(senderFallbackQuery);
+    }
     if (!resolved.doctor) {
         return null;
     }

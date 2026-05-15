@@ -378,6 +378,21 @@ test("parses 'Retirar 2152' as a regulation departure (no name)", () => {
     assert.equal(parsed.baseCode, "2152");
 });
 
+test("multi-line 'Bom dia informo\\nSaida da BR 60' parses departure sem extrair 'informo' como nome", () => {
+    const parsed = parseMessage("Bom dia informo\nSaída da BR 60");
+    assert.equal(parsed.isDeparture, true);
+    assert.equal(parsed.baseCode, "BR60");
+    assert.equal(parsed.extractedNames.length, 0);
+});
+
+test("multi-line 'Ola pessoal,\\nGustavo saindo da BR60' extrai apenas 'Gustavo'", () => {
+    const parsed = parseMessage("Olá pessoal,\nGustavo saindo da BR60");
+    assert.equal(parsed.isDeparture, true);
+    assert.equal(parsed.baseCode, "BR60");
+    assert.equal(parsed.extractedNames.length, 1);
+    assert.ok(parsed.extractedNames[0]?.toUpperCase().includes("GUSTAVO"));
+});
+
 test("parses 'Samara saindo CC70 08:50 porque estava na ocorrência 0174' as departure", () => {
     const parsed = parseMessage("Samara saindo CC70 08:50 porque estava na ocorrência 0174");
     assert.equal(parsed.isDeparture, true);

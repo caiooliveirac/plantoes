@@ -111,6 +111,10 @@ const NAME_NOISE_TOKENS = new Set([
     "CORRIGIR", "CORRECAO", "MEDICO", "MEDICA", "MRV", "CHEFE",
     "EU", "MEU", "MINHA", "INTE", "CB", "COMUNICO", "ALMOCO",
     "RETIRAR", "RETIRADA", "RETIRADO", "RETIRANDO", "RETIRO", "RETIREI",
+    // Saudacoes/verbos discursivos em mensagens multi-linha (audit 2026-05):
+    // "Bom dia informo\nSaida da BR60" extraia "informo" como nome.
+    "INFORMO", "AVISO", "INFORMA", "AVISA", "PESSOAL", "GALERA", "GENTE",
+    "BOM", "BOA", "OLA", "OI", "DIA", "TARDE", "NOITE",
     ...STANDARD_OPERATIONAL_ROLE_CODES,
 ]);
 
