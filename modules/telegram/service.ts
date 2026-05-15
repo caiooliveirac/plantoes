@@ -489,6 +489,80 @@ function isExtendedLongShift(boardStartedAt?: Date | null, scheduledEndAt?: Date
     return scheduledEndAt.getTime() - boardStartedAt.getTime() > EXTENDED_LONG_SHIFT_THRESHOLD_MS;
 }
 
+export interface ContinuityInterpretation {
+    /**
+     * reinforcement      = só reforço do turno atual, cobertura não estendida.
+     * extended_next_block = emenda discreta para o próximo turno.
+     * extended_long_shift = plantão prolongado (~36h), médico emendando 3o turno.
+     */
+    classification: "reinforcement" | "extended_next_block" | "extended_long_shift";
+    /** Turno (SD/SN) em que o médico já estava antes do aviso de continuidade. */
+    anchorShiftLabel: string;
+    scheduledEndBeforeIso: string | null;
+    scheduledEndAfterIso: string | null;
+    /** Horas entre o início no quadro e o fim agendado após a continuidade. */
+    coverageHours: number;
+    /** Frase verbosa para o audit trail e para a resposta do bot. */
+    explanation: string;
+}
+
+function formatSaoPauloClock(value: Date | null | undefined): string {
+    if (!value) {
+        return "—";
+    }
+    return value.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
+}
+
+// Classifica uma continuidade JÁ aplicada, para o audit trail
+// (telegram_ingested_messages.resolution_data) e para a resposta verbosa do bot.
+// Trabalha só com os snapshots antes/depois da ocupação — não decide cobertura,
+// que continua centralizada em modules/operational/rules.ts.
+export function buildContinuityInterpretation(params: {
+    doctorSurfaceName: string;
+    anchorStartedAt: Date;
+    scheduledEndBefore: Date | null;
+    continuedBoardStartedAt: Date | null;
+    continuedScheduledEndAt: Date | null;
+    extendedLongShift: boolean;
+}): ContinuityInterpretation {
+    const anchorShiftLabel = resolveOperationalShiftWindow(params.anchorStartedAt).shiftLabel;
+    const before = params.scheduledEndBefore;
+    const after = params.continuedScheduledEndAt;
+    const didExtend = Boolean(after && before && after.getTime() > before.getTime());
+    const classification = !didExtend
+        ? "reinforcement" as const
+        : params.extendedLongShift
+            ? "extended_long_shift" as const
+            : "extended_next_block" as const;
+    const coverageHours = params.continuedBoardStartedAt && after
+        ? Math.round(((after.getTime() - params.continuedBoardStartedAt.getTime()) / 3_600_000) * 10) / 10
+        : 0;
+
+    const name = params.doctorSurfaceName;
+    const endBefore = formatSaoPauloClock(before);
+    const endAfter = formatSaoPauloClock(after);
+    let explanation: string;
+    if (classification === "reinforcement") {
+        explanation = `Interpretei a mensagem como reforço do plantão atual de ${name} (turno ${anchorShiftLabel}). `
+            + `A cobertura já estava registrada até ${endBefore} e não foi estendida — sem novo turno.`;
+    } else if (classification === "extended_next_block") {
+        explanation = `Interpretei como continuidade de ${name} do turno ${anchorShiftLabel} para o turno seguinte. `
+            + `Registrei o próximo turno como bloco discreto, com cobertura até ${endAfter}; o turno anterior não ficou aberto.`;
+    } else {
+        explanation = `Interpretei que ${name} está emendando mais um turno — plantão prolongado (~${coverageHours}h), `
+            + `pois já estava de plantão nos turnos anteriores. Cobertura estendida até ${endAfter}.`;
+    }
+
+    return {
+        classification,
+        anchorShiftLabel,
+        scheduledEndBeforeIso: before ? before.toISOString() : null,
+        scheduledEndAfterIso: after ? after.toISOString() : null,
+        coverageHours,
+        explanation,
+    };
+}
+
 export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
     sector: "REGULATION" | "INTERVENTION";
     baseCode: string | null;
@@ -6076,6 +6150,7 @@ async function handleTelegramReassignment(params: {
         assumedHalfShift: false,
         continuationFrom: null as string | null,
         extendedLongShift: false,
+        continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
     };
@@ -6153,6 +6228,9 @@ async function applyParsedEntry(params: {
     // Marca quando uma continuidade estendeu a cobertura alem de 24h (plantao
     // prolongado ~36h+). Usado so para alertar o medico na resposta.
     let extendedLongShift = false;
+    // Interpretacao auditavel da continuidade (classificacao + explicacao
+    // verbosa). Persistida em telegram_ingested_messages.resolution_data.
+    let continuityInterpretation: ContinuityInterpretation | null = null;
     const isShadowArrival = resolveTelegramShadowFlag(parsed, messageText);
 
     // When no explicit shift is provided and the arrival time is near a shift boundary,
@@ -6276,6 +6354,14 @@ async function applyParsedEntry(params: {
                 replyTimeAt = activeOccupancy.startedAt;
                 effectiveShiftType = "P";
                 extendedLongShift = isExtendedLongShift(continued.boardStartedAt, continued.scheduledEndAt);
+                continuityInterpretation = buildContinuityInterpretation({
+                    doctorSurfaceName: resolvedDoctor.displayName ?? resolvedDoctor.fullName,
+                    anchorStartedAt: activeOccupancy.startedAt,
+                    scheduledEndBefore: activeOccupancy.scheduledEndAt,
+                    continuedBoardStartedAt: continued.boardStartedAt,
+                    continuedScheduledEndAt: continued.scheduledEndAt,
+                    extendedLongShift,
+                });
             } else {
                 const assumedHalfShift = shouldAssumeTelegramHalfShift({
                     parsed,
@@ -6489,6 +6575,14 @@ async function applyParsedEntry(params: {
                 replyTimeAt = activeOccupancy.startedAt;
                 effectiveShiftType = "P";
                 extendedLongShift = isExtendedLongShift(continued.boardStartedAt, continued.scheduledEndAt);
+                continuityInterpretation = buildContinuityInterpretation({
+                    doctorSurfaceName: resolvedDoctor.displayName ?? resolvedDoctor.fullName,
+                    anchorStartedAt: activeOccupancy.startedAt,
+                    scheduledEndBefore: activeOccupancy.scheduledEndAt,
+                    continuedBoardStartedAt: continued.boardStartedAt,
+                    continuedScheduledEndAt: continued.scheduledEndAt,
+                    extendedLongShift,
+                });
             } else {
                 const continuityContext = parsed.isDeparture
                     ? null
@@ -6604,6 +6698,7 @@ async function applyParsedEntry(params: {
         assumedHalfShift,
         continuationFrom,
         extendedLongShift,
+        continuityInterpretation,
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
     };
@@ -6705,6 +6800,7 @@ async function handlePiamAutoArrival(params: {
         assumedHalfShift: false,
         continuationFrom: null as string | null,
         extendedLongShift: false,
+        continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: true,
         piamOriginalCode: params.originalCode,
     };
