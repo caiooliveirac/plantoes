@@ -385,6 +385,18 @@ test("multi-line 'Bom dia informo\\nSaida da BR 60' parses departure sem extrair
     assert.equal(parsed.extractedNames.length, 0);
 });
 
+test("parses primeira-pessoa 'MUDEI PARA 2151' como reassignment", () => {
+    const parsed = parseMessage("MUDEI PARA 2151");
+    assert.equal(parsed.isReassignment, true);
+    assert.equal(parsed.baseCode, "2151");
+});
+
+test("parses 'Mudei para PR03 SD' como reassignment", () => {
+    const parsed = parseMessage("Mudei para PR03 SD");
+    assert.equal(parsed.isReassignment, true);
+    assert.equal(parsed.baseCode, "PR03");
+});
+
 test("multi-line 'Ola pessoal,\\nGustavo saindo da BR60' extrai apenas 'Gustavo'", () => {
     const parsed = parseMessage("Olá pessoal,\nGustavo saindo da BR60");
     assert.equal(parsed.isDeparture, true);

@@ -76,7 +76,7 @@ function hasFuzzyDepartureSignal(normalized: string): boolean {
 }
 
 const REASSIGNMENT_SIGNALS = [
-    /\b(?:TROCANDO|TROCOU|MUDANDO|MUDOU)\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\b/i,
+    /\b(?:TROCANDO|TROCOU|TROQUEI|MUDANDO|MUDOU|MUDEI)\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\b/i,
     /\b(?:REMANEJAD[OA]|TRANSFERID[OA])\s+(?:PARA|P\/|PRO|PRA)\b/i,
 ];
 
@@ -95,7 +95,7 @@ const NAME_NOISE_TOKENS = new Set([
     "LIBERADO", "LIBERADA", "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU", "VOU", "VAI", "VAMOS",
     "CHEFIA", "SISTEMA", "TARDE", "TÔ", "TUDO", "BEM", "AGORA", "AI", "AÍ",
     // Tokens operacionais que contaminavam a query de nomes (audit 2026-04)
-    "MUDANDO", "MUDOU", "TROCANDO", "TROCOU", "LOGADA", "LOGADO", "LOGOU",
+    "MUDANDO", "MUDOU", "MUDEI", "TROCANDO", "TROCOU", "TROQUEI", "LOGADA", "LOGADO", "LOGOU",
     "REMANEJADO", "REMANEJADA", "TRANSFERIDO", "TRANSFERIDA",
     "APOS", "APÓS", "REDIGIR", "OCORRENCIA", "OCORRENCIAS", "OCORRÊNCIA", "OCORRÊNCIAS",
     "FUI", "PELA", "PELO", "PORQUE", "POIS", "RELATO", "PLANTAO", "PLANTÃO",
@@ -278,7 +278,7 @@ export function parseMessage(text: string): ParsedMessage {
     const isReassignment = REASSIGNMENT_SIGNALS.some((re) => re.test(normalized));
     let baseExtractionSource = normalized;
     if (isReassignment) {
-        const paraPattern = /\b(?:TROCANDO|TROCOU|MUDANDO|MUDOU|REMANEJAD[OA]|TRANSFERID[OA])\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\s+/i;
+        const paraPattern = /\b(?:TROCANDO|TROCOU|TROQUEI|MUDANDO|MUDOU|MUDEI|REMANEJAD[OA]|TRANSFERID[OA])\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\s+/i;
         const paraMatch = normalized.match(paraPattern);
         if (paraMatch && paraMatch.index !== undefined) {
             baseExtractionSource = normalized.slice(paraMatch.index + paraMatch[0].length);
