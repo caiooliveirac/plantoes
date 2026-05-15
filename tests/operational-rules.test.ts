@@ -14,7 +14,7 @@ import {
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationContinuationScheduledEndAt } from "@/modules/regulation/service";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
-import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveForcedDayEventTime, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveForcedDayEventTime, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
 
@@ -599,6 +599,43 @@ test("resolves Telegram explicit 07:00 to the next local day after the night-shi
     );
 
     assert.equal(result.toISOString(), new Date("2026-03-26T07:00:00-03:00").toISOString());
+});
+
+test("normalizeArrivalEventTime: back-correcao 'chegada 08h10' as 20:20 vai pro mesmo dia (Briang 2032 audit)", () => {
+    const referenceAt = new Date("2026-05-12T20:20:53-03:00");
+    const resolved = resolveTelegramEventTime(referenceAt, "08:10");
+    // Por desempate de 12h, resolveTelegramEventTime escolhe o dia seguinte.
+    assert.equal(resolved.toISOString(), new Date("2026-05-13T08:10:00-03:00").toISOString());
+
+    const normalized = normalizeArrivalEventTime(resolved, referenceAt);
+    assert.equal(normalized.toISOString(), new Date("2026-05-12T08:10:00-03:00").toISOString());
+});
+
+test("normalizeArrivalEventTime: 'na 1367 07:16' as 19:37 vai pro mesmo dia (Matheus 1367 audit)", () => {
+    const referenceAt = new Date("2026-05-11T19:37:47-03:00");
+    const resolved = resolveTelegramEventTime(referenceAt, "07:16");
+    assert.equal(resolved.toISOString(), new Date("2026-05-12T07:16:00-03:00").toISOString());
+
+    const normalized = normalizeArrivalEventTime(resolved, referenceAt);
+    assert.equal(normalized.toISOString(), new Date("2026-05-11T07:16:00-03:00").toISOString());
+});
+
+test("normalizeArrivalEventTime preserva pre-anuncio curto (<= 4h) sem deslocar", () => {
+    const referenceAt = new Date("2026-05-12T18:00:00-03:00");
+    const eventAt = new Date("2026-05-12T19:00:00-03:00"); // 1h ahead, SN preannounce
+    assert.equal(
+        normalizeArrivalEventTime(eventAt, referenceAt).toISOString(),
+        eventAt.toISOString(),
+    );
+});
+
+test("normalizeArrivalEventTime mantem chegadas no passado intactas", () => {
+    const referenceAt = new Date("2026-05-12T08:00:00-03:00");
+    const eventAt = new Date("2026-05-12T07:30:00-03:00"); // 30min ago
+    assert.equal(
+        normalizeArrivalEventTime(eventAt, referenceAt).toISOString(),
+        eventAt.toISOString(),
+    );
 });
 
 test("parses free-text regulation arrival", () => {

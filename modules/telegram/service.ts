@@ -56,7 +56,7 @@ import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole } from "@/modules/operational/roles";
-import { resolveTelegramEventTime, resolveForcedDayEventTime } from "@/modules/operational/rules";
+import { resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, endRegulationOccupancy, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
@@ -5996,7 +5996,13 @@ async function applyParsedEntry(params: {
     messageText: string;
 }) {
     const db = getDb();
-    const { parsed, resolvedDoctor, eventAt, referenceAt, messageText } = params;
+    const { parsed, resolvedDoctor, referenceAt, messageText } = params;
+    // Back-correction guard: HH:mm > 4h no futuro em chegadas vira HH:mm de
+    // ontem (ver normalizeArrivalEventTime). Saidas e continuacoes/reassignments
+    // mantem o evento como veio porque preannouncement de saida noturna e legitimo.
+    const eventAt = parsed.isDeparture || parsed.isContinuation || parsed.isReassignment
+        ? params.eventAt
+        : normalizeArrivalEventTime(params.eventAt, referenceAt);
 
     // PIAM auto-routing: doctors marked with preferredOperationalRole=PIAM are always
     // allocated to the PIAM regulation slot on arrival, regardless of the code they typed.

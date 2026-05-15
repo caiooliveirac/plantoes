@@ -224,6 +224,27 @@ export function resolveRegulationBoardEndAt(proposedEndAt: Date, scheduledEndAt?
     return proposedEndAt.getTime() <= scheduledEndAt.getTime() ? proposedEndAt : scheduledEndAt;
 }
 
+// Audit 2026-05: medicos digitando "chegada 08h10" as 20:20 ou "na 1367 07:16"
+// as 19:37 (back-correction de chegada no dia) caiam num empate de 12h em
+// resolveTelegramEventTime, onde o candidato FUTURO ficava cerca de 20 min
+// mais perto que o passado e ganhava por desempate. Resultado: chegada
+// registrada AMANHA HH:mm, e a saida real no dia seguinte falhava com
+// "Actual end cannot be before the recorded arrival" (Briang 2032, Matheus
+// 1367, Luiz Eduardo 2031, Viviane).
+//
+// Chegadas raramente sao pre-anunciadas: medicos avisam quando ja estao
+// no posto. Acima de 4h de futuro tratamos como back-correction (HH:mm de
+// hoje) em vez de pre-anuncio (HH:mm de amanha).
+const ARRIVAL_FUTURE_TOLERANCE_MS = 4 * 60 * 60 * 1000;
+
+export function normalizeArrivalEventTime(eventAt: Date, referenceAt: Date) {
+    const skewMs = eventAt.getTime() - referenceAt.getTime();
+    if (skewMs > ARRIVAL_FUTURE_TOLERANCE_MS) {
+        return new Date(eventAt.getTime() - 86400000);
+    }
+    return eventAt;
+}
+
 export function resolveTelegramEventTime(referenceDate: Date, hhmm?: string | null) {
     if (!hhmm) {
         return referenceDate;
