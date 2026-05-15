@@ -29,7 +29,7 @@
  *   - Departure corrections require justification if the event time exceeds scheduled shift end
  *   - Continuations preserve the original arrival time and create a new occupancy window
  */
-import { and, desc, eq, gte, inArray, isNull, lte, lt, ne } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, lt, ne } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
     doctors,
@@ -1415,6 +1415,74 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
     return null;
 }
 
+// Procura a ocupacao mais recentemente fechada do medico (regulation ou
+// intervention) ate `maxWindowMs` antes de `referenceAt`. Usado quando o
+// medico declara saida ja sem ocupacao ativa (auto-close pegou primeiro),
+// caso "Jose Marini saida 19:26" / "Stephane saida 19:00" do audit 2026-05:
+// occupancy fechou as 19:11/19:15 e a declaracao chegou ~15min depois.
+async function findRecentClosedOccupancyByDoctorId(doctorId: string, referenceAt: Date, maxWindowMs = 4 * 60 * 60 * 1000): Promise<{
+    sector: "REGULATION" | "INTERVENTION";
+    baseCode: string;
+    occupancyId: string;
+    startedAt: Date;
+    endedAt: Date;
+    shiftLabel: string | null;
+} | null> {
+    const db = getDb();
+    const cutoff = new Date(referenceAt.getTime() - maxWindowMs);
+
+    const regOcc = await db.query.regulationOccupancies.findFirst({
+        where: and(
+            eq(regulationOccupancies.doctorId, doctorId),
+            isNotNull(regulationOccupancies.endedAt),
+            gte(regulationOccupancies.endedAt, cutoff),
+            lte(regulationOccupancies.endedAt, referenceAt),
+        ),
+        orderBy: [desc(regulationOccupancies.endedAt)],
+    });
+
+    const intOcc = await db.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.doctorId, doctorId),
+            isNotNull(interventionOccupancies.endedAt),
+            gte(interventionOccupancies.endedAt, cutoff),
+            lte(interventionOccupancies.endedAt, referenceAt),
+        ),
+        orderBy: [desc(interventionOccupancies.endedAt)],
+    });
+
+    const pickRegulation = regOcc && (!intOcc || (regOcc.endedAt && intOcc.endedAt && regOcc.endedAt.getTime() >= intOcc.endedAt.getTime()));
+    if (pickRegulation && regOcc?.endedAt) {
+        const post = await db.query.regulationPosts.findFirst({ where: eq(regulationPosts.id, regOcc.postId) });
+        if (post) {
+            return {
+                sector: "REGULATION",
+                baseCode: post.code,
+                occupancyId: regOcc.id,
+                startedAt: regOcc.startedAt,
+                endedAt: regOcc.endedAt,
+                shiftLabel: regOcc.shiftLabel,
+            };
+        }
+    }
+
+    if (intOcc?.endedAt) {
+        const base = await db.query.interventionBases.findFirst({ where: eq(interventionBases.id, intOcc.baseId) });
+        if (base) {
+            return {
+                sector: "INTERVENTION",
+                baseCode: base.code,
+                occupancyId: intOcc.id,
+                startedAt: intOcc.startedAt,
+                endedAt: intOcc.endedAt,
+                shiftLabel: intOcc.shiftLabel,
+            };
+        }
+    }
+
+    return null;
+}
+
 async function resolveTelegramContinuitySourceCode(source: TelegramOperationalContinuityOccupancy | null | undefined) {
     if (!source) {
         return null;
@@ -1542,7 +1610,7 @@ async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageT
  * or "Leo Morais saindo do SN no COI as 07:22".
  * Looks up the doctor's active occupancy to fill in the missing base code.
  */
-async function resolveDepartureWithoutBase(rawParsed: ParsedMessage, messageText: string, senderName: string | null): Promise<{
+async function resolveDepartureWithoutBase(rawParsed: ParsedMessage, messageText: string, senderName: string | null, referenceAt?: Date): Promise<{
     parsed: OperationalParsedEntry;
     resolvedDoctor: ResolvedTelegramDoctorRef;
 } | null> {
@@ -1562,16 +1630,21 @@ async function resolveDepartureWithoutBase(rawParsed: ParsedMessage, messageText
     }
 
     const activeOcc = await findActiveOccupancyByDoctorId(resolved.doctor.id);
-    if (!activeOcc) {
+    // Fallback p/ ocupacoes recem-fechadas (audit 2026-05): medico declara
+    // saida apos o auto-close, ex.: Jose Marini saida 19:26 com auto-close
+    // 19:11. Sem este fallback caia em no_operational_match.
+    const fallbackOcc = activeOcc ? null : await findRecentClosedOccupancyByDoctorId(resolved.doctor.id, referenceAt ?? new Date());
+    const resolvedOcc = activeOcc ?? fallbackOcc;
+    if (!resolvedOcc) {
         return null;
     }
 
     return {
         parsed: {
-            sector: activeOcc.sector,
-            baseCode: activeOcc.baseCode,
+            sector: resolvedOcc.sector,
+            baseCode: resolvedOcc.baseCode,
             arrivalTime: rawParsed.arrivalTime,
-            shiftType: rawParsed.shiftType ?? (activeOcc.shiftLabel as ParsedMessage["shiftType"]),
+            shiftType: rawParsed.shiftType ?? (resolvedOcc.shiftLabel as ParsedMessage["shiftType"]),
             roleFunction: rawParsed.roleFunction,
             isDeparture: true,
             isContinuation: false,
@@ -8035,7 +8108,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 const rawParsedForDeparture = parseMessage(message.text);
                 if (rawParsedForDeparture.isDeparture && !rawParsedForDeparture.baseCode) {
                     const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
-                    const departureResolved = await resolveDepartureWithoutBase(rawParsedForDeparture, message.text, senderName);
+                    const departureResolved = await resolveDepartureWithoutBase(rawParsedForDeparture, message.text, senderName, new Date(message.date * 1000));
                     if (departureResolved) {
                         const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), departureResolved.parsed.arrivalTime);
                         try {
