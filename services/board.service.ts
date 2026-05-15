@@ -1389,9 +1389,28 @@ export async function listRegulationBoard() {
       lr.updated_at as "liveUpdatedAt"
     from operations_v2.regulation_posts rp
     left join operations_v2.regulation_occupancies ro
-      on ro.post_id = rp.id
-     and ro.board_started_at is not null
-     and ro.ended_at is null
+      on ro.id = (
+        select ro2.id
+        from operations_v2.regulation_occupancies ro2
+        where ro2.post_id = rp.id
+          and ro2.board_started_at is not null
+          and (
+            ro2.ended_at is null
+            or (
+              rp.code = 'PIAM'
+              and ro2.scheduled_start_at is not null
+              and ro2.scheduled_end_at is not null
+              and ro2.scheduled_start_at <= now()
+              and ro2.scheduled_end_at > now()
+            )
+          )
+        order by
+          (ro2.ended_at is null) desc,
+          ro2.scheduled_start_at desc nulls last,
+          ro2.started_at desc,
+          ro2.created_at desc
+        limit 1
+      )
     left join operations_v2.doctors d
       on d.id = ro.doctor_id
     left join legacy_regulation lr

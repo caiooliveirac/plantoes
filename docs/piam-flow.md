@@ -116,7 +116,7 @@ Quando um plantao PIAM nao aparecer correto no fechamento:
 ## Invariantes
 
 1. PIAM nunca gera entry em `bank_hours_entries`. Se aparecer, ou a doctor.metadata perdeu a role, ou alguem chamou `syncBankHoursByContinuityGroup` antes do guard.
-2. PIAM occupancy nasce ja fechada (`endedAt != null` desde o insert seguido do `endRegulationOccupancy`). O quadro operacional nao vai mostrar PIAM como "ativo" — isso e intencional.
+2. PIAM occupancy nasce ja fechada (`endedAt != null` desde o insert seguido do `endRegulationOccupancy`). Mesmo assim o quadro operacional mostra PIAM como "ativo" durante a janela `scheduled_start_at <= now() < scheduled_end_at` — o join em `services/board.service.ts` (`listRegulationBoard`) abre uma excecao so para `rp.code = 'PIAM'` e considera tambem occupancies fechadas que cobrem o instante atual. Fora da janela o card volta a "waiting".
 3. PIAM occupancy sempre tem `role_label = "PIAM"` e `ramal_label = "PIAM"`, independente do que o medico digitou.
 4. Sem turno explicito, o bot recusa — `eventAt` nao deve ser usado para inferir SD/SN no caso PIAM.
 5. Correcao manual (`/corrigir`, `/remover`, edicao no site) e permitida normalmente. O auto-close nao bloqueia ajuste posterior.
