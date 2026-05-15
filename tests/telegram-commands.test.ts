@@ -603,7 +603,7 @@ test("getCurrentDeparturePriorityView lista so regulacao SD elegivel e separa co
 
     const reply = buildDeparturePriorityReply(view);
     assert.match(reply, /Lista de reguladores no DIURNO/);
-    assert.match(reply, /Fora da lista principal: CP, MRV, RECIP, MEIO e quem est[aá] em P\/continua\./);
+    assert.match(reply, /Fora da lista principal: CP, MRV, RECIP, PIAM, NUCLEO, MEIO, quem chegou ha menos de 4h e quem est[aá] em P\/continua\./);
     assert.match(reply, /1\. Bruno \| 2035 \| 07:05/);
     assert.match(reply, /Fora por estarem em P \(continua\):/);
     assert.match(reply, /- Diego \| 2154 \| 06:45/);
@@ -615,9 +615,10 @@ test("getCurrentDeparturePriorityView lista so regulacao SD elegivel e separa co
 
 test("getCurrentDeparturePriorityView no SN aplica piso 19:15 para RMT e exclui continua SD", async () => {
     const view = await getCurrentDeparturePriorityView({
-        referenceAt: new Date("2026-03-30T20:20:00-03:00"),
+        // Fechamento do noturno: todos já passaram das 4h de plantão.
+        referenceAt: new Date("2026-03-31T00:00:00-03:00"),
         board: {
-            generatedAt: "2026-03-30T23:20:00.000Z",
+            generatedAt: "2026-03-31T03:00:00.000Z",
             intervention: [makeInterventionPriorityRow()],
             regulation: [
                 makeRegulationPriorityRow({
@@ -708,6 +709,66 @@ test("getCurrentDeparturePriorityView no SN aplica piso 19:15 para RMT e exclui 
     assert.match(reply, /3\. Erika \| 2032 \| 19:11/);
     assert.match(reply, /4\. Bruno \| 2036 \| 18:59/);
     assert.doesNotMatch(reply, /Carla Continua SD/);
+});
+
+test("getCurrentDeparturePriorityView exclui quem chegou ha menos de 4h e os postos PIAM/NUCLEO", async () => {
+    const view = await getCurrentDeparturePriorityView({
+        referenceAt: new Date("2026-03-30T15:00:00-03:00"),
+        board: {
+            generatedAt: "2026-03-30T18:00:00.000Z",
+            intervention: [makeInterventionPriorityRow()],
+            regulation: [
+                makeRegulationPriorityRow({
+                    postCode: "2035",
+                    postLabel: "2035",
+                    doctorName: "Ana Veterana",
+                    displayName: "Ana",
+                    startedAt: "2026-03-30T10:00:00.000Z", // 07:00 local, 8h de plantão
+                    boardStartedAt: "2026-03-30T10:00:00.000Z",
+                    shiftLabel: "SD",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 2,
+                    postCode: "2036",
+                    postLabel: "2036",
+                    doctorName: "Bruno Recem",
+                    displayName: "Bruno",
+                    startedAt: "2026-03-30T15:30:00.000Z", // 12:30 local, 2h30 de plantão
+                    boardStartedAt: "2026-03-30T15:30:00.000Z",
+                    shiftLabel: "SD",
+                    roleLabel: null,
+                }),
+                makeRegulationPriorityRow({
+                    postId: 3,
+                    postCode: "PIAM",
+                    postLabel: "PIAM",
+                    doctorName: "Carla PIAM",
+                    displayName: "Carla",
+                    startedAt: "2026-03-30T10:00:00.000Z",
+                    boardStartedAt: "2026-03-30T10:00:00.000Z",
+                    shiftLabel: "SD",
+                    roleLabel: "PIAM",
+                }),
+                makeRegulationPriorityRow({
+                    postId: 4,
+                    postCode: "NUCLEO",
+                    postLabel: "NUCLEO",
+                    doctorName: "Diego Nucleo",
+                    displayName: "Diego",
+                    startedAt: "2026-03-30T10:00:00.000Z",
+                    boardStartedAt: "2026-03-30T10:00:00.000Z",
+                    shiftLabel: "SD",
+                    roleLabel: null,
+                }),
+            ],
+        },
+        mealBreakSession: { recipRamal: null },
+    });
+
+    assert.equal(view.shiftLabel, "SD");
+    // Só Ana entra: Bruno tem menos de 4h, PIAM e NUCLEO nunca entram.
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035"]);
 });
 
 test("getCurrentDeparturePriorityView no SN filtra por turma 23:00 antes de 03:00 e por 03:00 depois", async () => {

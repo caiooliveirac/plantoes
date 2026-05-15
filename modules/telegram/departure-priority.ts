@@ -47,6 +47,13 @@ interface DeparturePriorityCandidate {
     priorityStartedAt: string;
 }
 
+// Tempo mínimo de plantão para entrar no ranking de saída: quem chegou há
+// menos de 4h ainda não é candidato a sair, então fica fora da lista.
+const MINIMUM_DEPARTURE_PRIORITY_MS = 4 * 60 * 60 * 1000;
+
+// Postos que nunca entram na lista de prioridade de saída.
+const EXCLUDED_DEPARTURE_POST_CODES = new Set(["PIAM", "NUCLEO"]);
+
 type DeparturePriorityMealBreakSession = {
     recipRamal: string | null;
     mrvRamals?: MealBreakSession["mrvRamals"];
@@ -141,6 +148,8 @@ function isExcludedDepartureRole(roleLabel: string | null) {
     return normalized === "CP"
         || normalized === "MRV"
         || normalized === "RECIP"
+        || normalized === "PIAM"
+        || normalized === "NUCLEO"
         || isHalfShiftRoleLabel(roleLabel);
 }
 
@@ -201,6 +210,7 @@ function buildDeparturePriorityCandidates(params: {
 
         if (
             isExcludedDepartureRole(roleLabel)
+            || EXCLUDED_DEPARTURE_POST_CODES.has(row.postCode.trim().toUpperCase())
             || row.postCode === recipRamal
             || mrvRamals.has(row.postCode)
         ) {
@@ -212,6 +222,12 @@ function buildDeparturePriorityCandidates(params: {
             if (assignedSlot !== activeNightWorkSlot) {
                 continue;
             }
+        }
+
+        // Chegou há pouco: sem 4h de plantão acumuladas, não entra no ranking de saída.
+        const tenureMs = params.referenceAt.getTime() - new Date(row.startedAt).getTime();
+        if (tenureMs < MINIMUM_DEPARTURE_PRIORITY_MS) {
+            continue;
         }
 
         const priorityStartedAt = new Date(resolvePriorityStartedAt(row.startedAt, roleLabel, thresholdAtMs)).toISOString();
@@ -268,7 +284,7 @@ export function buildDeparturePriorityReply(view: DeparturePriorityView) {
         header.push("Lista de reguladores no DIURNO que realmente saem no fechamento.");
     }
 
-    header.push("Fora da lista principal: CP, MRV, RECIP, MEIO e quem está em P/continua.");
+    header.push("Fora da lista principal: CP, MRV, RECIP, PIAM, NUCLEO, MEIO, quem chegou ha menos de 4h e quem está em P/continua.");
 
     const lines: string[] = [];
 
