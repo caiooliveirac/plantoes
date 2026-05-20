@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Deploy do plantoes no servidor magalu (runtime PM2, sem containers).
+#
+# Fluxo: git reset ao SHA validado → npm ci (só se o lockfile mudou) →
+# migrações (apenas com --run-migrations, com backup antes) → next build →
+# pm2 startOrRestart → healthcheck local.
+#
+# Segurança do fluxo: o build acontece ANTES do restart — se falhar, o
+# processo antigo continua no ar com o .next anterior. Rollback manual:
+#   bash scripts/deploy-magalu.sh <sha-anterior>
+#
+# Uso: bash deploy-magalu.sh <sha> [--run-migrations]
+set -euo pipefail
+
+SHA="${1:?uso: deploy-magalu.sh <sha> [--run-migrations]}"
+RUN_MIGRATIONS="${2:-}"
+APP_DIR=/home/ubuntu/plantoes
+ENV_FILE="$APP_DIR/.env.production"
+BACKUP_DIR=/home/ubuntu/backups/plantoes-predeploy
+
+cd "$APP_DIR"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "ERRO: $ENV_FILE ausente." >&2
+  exit 1
+fi
+
+PREV=$(git rev-parse HEAD)
+echo "=== git: ${PREV:0:7} -> ${SHA:0:7} ==="
+git fetch origin
+git reset --hard "$SHA"
+
+if git diff --quiet "$PREV" "$SHA" -- package-lock.json 2>/dev/null; then
+  echo "=== deps: lockfile inalterado, npm ci pulado ==="
+else
+  echo "=== deps: npm ci (lockfile mudou) ==="
+  npm ci
+fi
+
+# Env de produção para migrações e build (o Next também lê .env.production sozinho).
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+
+if [ "$RUN_MIGRATIONS" = "--run-migrations" ]; then
+  echo "=== backup do banco antes das migrações ==="
+  mkdir -p "$BACKUP_DIR"
+  ts=$(date +%Y%m%dT%H%M%S)
+  pg_dump "$DATABASE_URL" | gzip > "$BACKUP_DIR/db-$ts.sql.gz"
+  ls -t "$BACKUP_DIR"/db-*.sql.gz | tail -n +6 | xargs -r rm
+  echo "backup: db-$ts.sql.gz"
+  echo "=== npm run db:migrate ==="
+  npm run db:migrate
+fi
+
+echo "=== next build (nice, antes do restart — falha não derruba produção) ==="
+nice -n 10 npm run build
+
+echo "=== pm2 restart ==="
+export GIT_COMMIT_SHA="${SHA:0:7}"
+export GIT_COMMIT_SHA_LONG="$SHA"
+export GIT_WORKING_TREE_CLEAN="true"
+pm2 startOrRestart ecosystem.config.cjs --update-env
+pm2 save
+
+echo "=== healthcheck local (127.0.0.1:3004) ==="
+ok=0
+for i in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:3004/api/health >/dev/null 2>&1; then
+    ok=1
+    echo "producao OK em ${i}s"
+    break
+  fi
+  sleep 1
+done
+if [ "$ok" -eq 0 ]; then
+  echo "ERRO: produção não saudável após restart" >&2
+  pm2 logs plantoes --lines 40 --nostream || true
+  echo "Rollback manual: bash scripts/deploy-magalu.sh $PREV" >&2
+  exit 1
+fi
+
+echo "=== OK: plantoes ${SHA:0:7} no ar ==="
