@@ -1,4 +1,4 @@
-export const BANK_HOURS_RULE_VERSION = 6;
+export const BANK_HOURS_RULE_VERSION = 7;
 export const ARRIVAL_GRACE_MINUTES = 15;
 export const DEPARTURE_GRACE_MINUTES = 15;
 
@@ -15,6 +15,13 @@ export interface BankHoursCalculationInput {
     scheduledEndAt: Date | string;
     actualStartAt: Date | string;
     actualEndAt: Date | string;
+    /**
+     * When true, the occupancy was declared as COBERTURA (a doctor stepping in
+     * to cover a scale the original holder could not attend). The arrival delay
+     * is still recorded for audit, but it is NOT debited from the bank balance.
+     * Overtime credit follows the normal rules.
+     */
+    isCoverage?: boolean;
 }
 
 export interface BankHoursCalculationResult {
@@ -49,6 +56,27 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
     const rawOvertime = Math.max(0, diffMinutes(scheduledEndAt, actualEndAt));
     const arrivalDelayMinutes = rawArrivalDelay <= ARRIVAL_GRACE_MINUTES ? 0 : rawArrivalDelay;
     const overtimeMinutes = rawOvertime <= DEPARTURE_GRACE_MINUTES ? 0 : rawOvertime;
+
+    if (input.isCoverage) {
+        // COBERTURA: delay is recorded factually for the audit trail but is not
+        // debited from the bank balance. Overtime is credited at the simple
+        // rate (multiplier 1) because the doctor was not on-time on the
+        // scheduled window — they are covering it.
+        const overtimeMultiplier: 1 | 2 = 1;
+        const creditedOvertimeMinutes = overtimeMinutes * overtimeMultiplier;
+        const balanceMinutes = creditedOvertimeMinutes;
+        const explanation = `COBERTURA: chegou com ${arrivalDelayMinutes} min de atraso, mas o atraso nao foi descontado do banco porque a ocupacao foi marcada como cobertura.${overtimeMinutes > 0 ? ` Overtime de ${overtimeMinutes} min creditado em simples.` : ""}`;
+        return {
+            arrivalDelayMinutes,
+            overtimeMinutes,
+            overtimeMultiplier,
+            creditedOvertimeMinutes,
+            balanceMinutes,
+            ruleCode: "COVERAGE_LATE_FORGIVEN",
+            explanation,
+        };
+    }
+
     const overtimeMultiplier: 1 | 2 = arrivalDelayMinutes === 0 ? 2 : 1;
     const creditedOvertimeMinutes = overtimeMinutes * overtimeMultiplier;
     const balanceMinutes = creditedOvertimeMinutes - arrivalDelayMinutes;
@@ -87,6 +115,12 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
  * continuity chains, or any data integrity issue producing phantom 12h+ credits/debits.
  */
 export function applyAnomalyGuard(calculation: BankHoursCalculationResult): BankHoursCalculationResult {
+    // Coverage entries already model "long delay, no debit" deliberately —
+    // do not flip them to ANOMALY just because the delay is > 6h.
+    if (calculation.ruleCode === "COVERAGE_LATE_FORGIVEN") {
+        return calculation;
+    }
+
     const isAnomalousDelay = calculation.arrivalDelayMinutes > ANOMALY_THRESHOLD_MINUTES;
     const isAnomalousOvertime = calculation.overtimeMinutes > ANOMALY_THRESHOLD_MINUTES;
 

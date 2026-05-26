@@ -3,6 +3,7 @@
 import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { OperationalHistoryPanel } from "@/components/operational-history-panel";
+import { InterventionCoveragePanel } from "@/components/intervention-coverage-panel";
 import { buildOperationalRoleChoices, getOperationalRoleTone, resolveFixedOperationalRole, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
@@ -1415,7 +1416,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setIsContinuityEntry(false);
         const placeholder: BoardCard = domain === "regulation"
             ? { domain: "regulation", postId: 0, postCode: "", postLabel: "", defaultRole: null, doctorId: null, doctorName: null, displayName: null, startedAt: null, boardStartedAt: null, scheduledEndAt: null, shiftLabel: null, roleLabel: null, ramalLabel: null, occupancyId: null, status: "waiting", disabledAt: null, disabledReason: null, liveSource: "none", liveUpdatedAt: null }
-            : { domain: "intervention", baseId: 0, baseCode: "", baseLabel: "", doctorId: null, doctorName: null, displayName: null, startedAt: null, boardStartedAt: null, scheduledEndAt: null, shiftLabel: null, roleLabel: null, occupancyId: null, status: "waiting", liveSource: "none", liveUpdatedAt: null, disabledAt: null, disabledReason: null };
+            : { domain: "intervention", baseId: 0, baseCode: "", baseLabel: "", doctorId: null, doctorName: null, displayName: null, startedAt: null, scheduledStartAt: null, boardStartedAt: null, scheduledEndAt: null, shiftLabel: null, roleLabel: null, occupancyId: null, status: "waiting", liveSource: "none", liveUpdatedAt: null, disabledAt: null, disabledReason: null, coverageKind: null, coverageNote: null, coverageMarkedAt: null };
         setSelectedCard(placeholder);
         setActionMode("start");
         setFormState({
@@ -3253,6 +3254,20 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     <div className={`chief-flash ${errorMessage ? "error" : "success"}`}>
                                         {errorMessage || successMessage}
                                     </div>
+                                )}
+
+                                {selectedCard.domain === "intervention" && selectedCard.occupancyId && session?.canManage && (
+                                    <InterventionCoveragePanel
+                                        occupancyId={selectedCard.occupancyId}
+                                        baseCode={selectedCard.baseCode}
+                                        doctorLabel={displayDoctorName(selectedCard)}
+                                        scheduledStartAt={selectedCard.scheduledStartAt ?? null}
+                                        startedAt={selectedCard.startedAt}
+                                        coverageKind={selectedCard.coverageKind ?? null}
+                                        coverageNote={selectedCard.coverageNote ?? null}
+                                        coverageMarkedAt={selectedCard.coverageMarkedAt ?? null}
+                                        onSuccess={() => { startRefresh(() => { router.refresh(); }); }}
+                                    />
                                 )}
 
                                 {canContinueIntervention(selectedCard, generatedAt) && session?.canManage && (

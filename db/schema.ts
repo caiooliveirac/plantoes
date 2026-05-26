@@ -267,6 +267,10 @@ export const interventionOccupancies = operationsV2.table(
         updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
         updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+        coverageKind: varchar("coverage_kind", { length: 32 }),
+        coverageNote: text("coverage_note"),
+        coverageMarkedByUserId: uuid("coverage_marked_by_user_id").references(() => users.id),
+        coverageMarkedAt: timestamp("coverage_marked_at", { withTimezone: true }),
     },
     (table) => [
         index("intervention_occupancies_doctor_idx").on(table.doctorId),

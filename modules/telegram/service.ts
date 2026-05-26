@@ -154,6 +154,8 @@ import {
     isTelegramAdminOnlyCommand,
     isTelegramDepartureCorrectionCommandText,
     parseTelegramCommand,
+    parseTelegramCoverageCommand,
+    isTelegramCoverageCommandText,
     parseTelegramDepartureCorrectionCommand,
 } from "@/modules/telegram/commands";
 import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp, type TelegramRecentSenderMessage } from "@/modules/telegram/command-suggestions";
@@ -161,6 +163,8 @@ import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeMealBreakM
 import type { TelegramUpdate } from "@/modules/telegram/api";
 import { buildChoiceKeyboard, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
+import { buildCoverageAnnouncement, isCoverageReplyText, maybeSendInterventionCoveragePrompt, tryHandleCoveragePromptReply } from "@/modules/telegram/coverage-prompt";
+import { markInterventionAsCoverage } from "@/modules/bank-hours/coverage";
 import { buildCandidatePromptReply, buildGroupCorrectionAnnouncement, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 import { getOperationalBoard, getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
 import { getOperationalSlotAuditReport } from "@/services/slot-audit.service";
@@ -3679,6 +3683,13 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
     }
 
+    if (isTelegramCoverageCommandText(message.text)) {
+        const coverageResult = await runTelegramCoverageCommand(update, logId);
+        if (coverageResult) {
+            return coverageResult;
+        }
+    }
+
     const mealBreakCommand = parseTelegramMealBreakCommand(message.text);
     if (mealBreakCommand || isTelegramMealBreakCommandText(message.text)) {
         if (!mealBreakCommand) {
@@ -5612,6 +5623,164 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         time: "",
     }), message.message_id);
     return { ok: true, removed: true };
+}
+
+async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text) {
+        return null;
+    }
+
+    const senderTelegramId = message.from?.id ? String(message.from.id) : null;
+    const isAdmin = senderTelegramId !== null && getTelegramAdminUserIds().includes(senderTelegramId);
+    const isChief = senderTelegramId !== null && getTelegramChiefUserIds().includes(senderTelegramId);
+    if (!isAdmin && !isChief) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedAction: "coverage_command",
+            errorMessage: "coverage_command_forbidden",
+            resolutionData: { rawCommand: message.text },
+        });
+        await sendMessage(
+            message.chat.id,
+            "🛑 /cobertura e exclusivo para chefes e admin do bot.",
+            message.message_id,
+        );
+        return { ok: true, ignored: true };
+    }
+
+    const command = parseTelegramCoverageCommand(message.text);
+    if (!command || !command.baseCode) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedAction: "coverage_command",
+            errorMessage: "coverage_command_usage_invalid",
+            resolutionData: { rawCommand: message.text },
+        });
+        await sendMessage(
+            message.chat.id,
+            "Uso: `/cobertura <base> [HH:MM]` — exemplo `/cobertura SM01` (marca a ocupacao ativa atual) ou `/cobertura SM01 13:11` (marca a ocupacao iniciada nesse horario).",
+            message.message_id,
+        );
+        return { ok: true, ignored: true };
+    }
+
+    const db = getDb();
+    const baseRow = await db.query.interventionBases.findFirst({
+        where: eq(interventionBases.code, command.baseCode),
+    });
+    if (!baseRow) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedAction: "coverage_command",
+            errorMessage: "coverage_command_base_not_found",
+            resolutionData: { rawCommand: message.text, baseCode: command.baseCode },
+        });
+        await sendMessage(
+            message.chat.id,
+            `Nao encontrei a base intervencao *${command.baseCode}*. Confere o codigo (ex.: SM01, PM04, BR60).`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true };
+    }
+
+    let occupancyRow: typeof interventionOccupancies.$inferSelect | undefined;
+    if (command.time) {
+        // Look back 24h on this base and match by HH:MM in America/Bahia,
+        // tolerating ±5min on either side of the supplied time.
+        const referenceAt = new Date(message.date * 1000);
+        const lookbackStart = new Date(referenceAt.getTime() - 24 * 60 * 60 * 1000);
+        const candidates = await db.query.interventionOccupancies.findMany({
+            where: and(
+                eq(interventionOccupancies.baseId, baseRow.id),
+                gte(interventionOccupancies.startedAt, lookbackStart),
+            ),
+            orderBy: [desc(interventionOccupancies.startedAt)],
+        });
+        const [hh, mm] = command.time.split(":").map((value) => Number.parseInt(value, 10));
+        const formatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Bahia", hour: "2-digit", minute: "2-digit", hour12: false });
+        occupancyRow = candidates.find((candidate) => {
+            const parts = formatter.format(new Date(candidate.startedAt));
+            const [candHH, candMM] = parts.split(":").map((value) => Number.parseInt(value, 10));
+            const minutesDiff = Math.abs((candHH * 60 + candMM) - (hh * 60 + mm));
+            return minutesDiff <= 5;
+        });
+    } else {
+        occupancyRow = await db.query.interventionOccupancies.findFirst({
+            where: and(
+                eq(interventionOccupancies.baseId, baseRow.id),
+                isNull(interventionOccupancies.endedAt),
+            ),
+            orderBy: [desc(interventionOccupancies.startedAt)],
+        });
+    }
+
+    if (!occupancyRow) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedAction: "coverage_command",
+            errorMessage: "coverage_command_occupancy_not_found",
+            resolutionData: { rawCommand: message.text, baseCode: command.baseCode, time: command.time },
+        });
+        await sendMessage(
+            message.chat.id,
+            command.time
+                ? `Nao encontrei ocupacao em *${command.baseCode}* iniciando proximo de *${command.time}*.`
+                : `Nao tem ocupacao ativa agora em *${command.baseCode}*.`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true };
+    }
+
+    const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || "Usuario do Telegram";
+    const noteParts: string[] = [];
+    noteParts.push(`Marcada via /cobertura por ${senderName}${isAdmin ? " (admin)" : " (chefe)"}.`);
+    if (command.note) {
+        noteParts.push(`Motivo: ${command.note}.`);
+    }
+
+    const result = await markInterventionAsCoverage({
+        occupancyId: occupancyRow.id,
+        note: noteParts.join(" "),
+        actor: { userId: null, telegramId: senderTelegramId, label: senderName },
+    });
+
+    const doctorRow = await db.query.doctors.findFirst({
+        where: eq(doctors.id, occupancyRow.doctorId),
+    });
+    const doctorSurfaceName = doctorRow?.displayName ?? doctorRow?.fullName ?? "medico desconhecido";
+
+    await markTelegramProcessed(logId, {
+        status: "accepted",
+        parsedDomain: "INTERVENTION",
+        parsedTargetCode: command.baseCode,
+        parsedAction: "coverage_command",
+        parsedDoctorName: doctorRow?.fullName ?? null,
+        relatedOccupancyId: occupancyRow.id,
+        resolutionData: {
+            rawCommand: message.text,
+            baseCode: command.baseCode,
+            time: command.time,
+            delayMinutes: result.arrivalDelayMinutes,
+            actorTelegramId: senderTelegramId,
+            actorRole: isAdmin ? "admin" : "chief",
+        },
+    });
+
+    await sendMessage(
+        message.chat.id,
+        buildCoverageAnnouncement({
+            doctorName: doctorSurfaceName,
+            baseCode: command.baseCode,
+            delayMinutes: result.arrivalDelayMinutes,
+            markedByLabel: senderName,
+            markedByChefe: !isAdmin,
+            source: "telegram_command",
+        }),
+        message.message_id,
+    );
+
+    return { ok: true, coverageMarked: true };
 }
 
 async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
@@ -8007,6 +8176,31 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 return mealBreakReplyResult;
             }
 
+            // Coverage prompt reply: a "✅ É COBERTURA" / "❌ É chegada normal" tap on
+            // the ReplyKeyboard sent after a late intervention arrival.
+            if (message.text && isCoverageReplyText(message.text)) {
+                const coverageReplyResult = await tryHandleCoveragePromptReply({
+                    chatId: message.chat.id,
+                    text: message.text,
+                    senderTelegramId: message.from?.id ? String(message.from.id) : null,
+                    senderName: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null,
+                    replyToMessageId: message.message_id,
+                });
+                if (coverageReplyResult) {
+                    await markTelegramProcessed(log.id, {
+                        status: coverageReplyResult.status === "confirmed" || coverageReplyResult.status === "rejected"
+                            ? "accepted"
+                            : "ignored",
+                        parsedAction: "coverage_prompt_reply",
+                        errorMessage: coverageReplyResult.status === "confirmed" || coverageReplyResult.status === "rejected"
+                            ? null
+                            : `coverage_prompt_${coverageReplyResult.status}`,
+                        resolutionData: { coverageStatus: coverageReplyResult.status },
+                    });
+                    return { ok: true, coverage: true };
+                }
+            }
+
             if (message.from?.id) {
                 const pendingAlertaResult = await tryHandlePendingAlertaConfirmation(update, log.id);
                 if (pendingAlertaResult) {
@@ -8717,6 +8911,35 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     piamOriginalCode,
                     extendedLongShift,
                 );
+
+                // Coverage prompt: only for fresh intervention arrivals (not continuations,
+                // not regulation) where the arrival delay reached the threshold.
+                if (
+                    occupancyId
+                    && firstParsed.sector === "INTERVENTION"
+                    && !firstParsed.isDeparture
+                    && !treatedAsContinuation
+                    && !isTelegramContinuationEntry(firstParsed)
+                ) {
+                    const senderTelegramId = message.from?.id ? String(message.from.id) : null;
+                    const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
+                    const senderIsChefe =
+                        (senderTelegramId !== null && getTelegramChiefUserIds().includes(senderTelegramId))
+                        || (senderTelegramId !== null && getTelegramAdminUserIds().includes(senderTelegramId))
+                        || (senderName !== null && /\bCHEFE\b/i.test(senderName));
+                    try {
+                        await maybeSendInterventionCoveragePrompt({
+                            chatId: message.chat.id,
+                            occupancyId,
+                            senderTelegramId,
+                            senderName,
+                            senderIsChefe,
+                            replyToMessageId: message.message_id,
+                        });
+                    } catch (coverageError) {
+                        console.error("coverage_prompt_failed", coverageError);
+                    }
+                }
 
                 return { ok: true, occupancyId };
             } catch (error) {

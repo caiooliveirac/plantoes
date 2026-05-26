@@ -85,6 +85,10 @@ export interface InterventionBoardRow {
   disabledReason?: string | null;
   liveSource: "operations_v2" | "legacy_live" | "none";
   liveUpdatedAt: string | null;
+  scheduledStartAt?: string | null;
+  coverageKind?: string | null;
+  coverageNote?: string | null;
+  coverageMarkedAt?: string | null;
 }
 
 export type PreviousOperationalBucket = "P_INVERTIDO" | "P" | "SD" | "SN";
@@ -612,6 +616,7 @@ function mapInterventionRow(row: Record<string, unknown>): InterventionBoardRow 
     displayName: (row.displayName ?? row.display_name ?? null) as string | null,
     startedAt: (row.startedAt ?? row.started_at ?? null) as string | null,
     boardStartedAt: (row.boardStartedAt ?? row.board_started_at ?? null) as string | null,
+    scheduledStartAt: (row.scheduledStartAt ?? row.scheduled_start_at ?? null) as string | null,
     scheduledEndAt: (row.scheduledEndAt ?? row.scheduled_end_at ?? null) as string | null,
     shiftLabel: (row.shiftLabel ?? row.shift_label ?? null) as InterventionBoardRow["shiftLabel"],
     roleLabel: (row.roleLabel ?? row.role_label ?? null) as string | null,
@@ -620,6 +625,9 @@ function mapInterventionRow(row: Record<string, unknown>): InterventionBoardRow 
     disabledReason: (row.disabledReason ?? row.disabled_reason ?? null) as string | null,
     liveSource: (row.liveSource ?? row.live_source ?? "none") as InterventionBoardRow["liveSource"],
     liveUpdatedAt: (row.liveUpdatedAt ?? row.live_updated_at ?? null) as string | null,
+    coverageKind: (row.coverageKind ?? row.coverage_kind ?? null) as string | null,
+    coverageNote: (row.coverageNote ?? row.coverage_note ?? null) as string | null,
+    coverageMarkedAt: (row.coverageMarkedAt ?? row.coverage_marked_at ?? null) as string | null,
   };
 }
 
@@ -1494,12 +1502,16 @@ export async function listInterventionBoard() {
       case when io.id is not null or li.base_code is not null then coalesce(d.full_name, li.doctor_name) else null end as "doctorName",
       case when io.id is not null or li.base_code is not null then coalesce(d.display_name, li.display_name) else null end as "displayName",
       case when io.id is not null or li.base_code is not null then coalesce(io.started_at, li.started_at) else null end as "startedAt",
+      case when io.id is not null or li.base_code is not null then io.scheduled_start_at else null end as "scheduledStartAt",
       case when io.id is not null or li.base_code is not null then coalesce(io.board_started_at, li.board_started_at) else null end as "boardStartedAt",
       case when io.id is not null or li.base_code is not null then coalesce(io.scheduled_end_at, li.scheduled_end_at) else null end as "scheduledEndAt",
       case when io.id is not null or li.base_code is not null then io.shift_label else null end as "shiftLabel",
       case when io.id is not null or li.base_code is not null then coalesce(io.role_label, li.role_label) else null end as "roleLabel",
       ad.deactivated_at as "disabledAt",
       ad.notes as "disabledReason",
+      io.coverage_kind as "coverageKind",
+      io.coverage_note as "coverageNote",
+      io.coverage_marked_at as "coverageMarkedAt",
       case
         when io.id is not null or li.base_code is not null then 'active'
         when ad.base_id is not null then 'disabled'

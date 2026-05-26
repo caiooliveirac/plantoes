@@ -294,3 +294,72 @@ test("anomaly guard passes through delay at exactly 360 minutes", () => {
     const guarded = applyAnomalyGuard(raw);
     assert.deepEqual(guarded, raw);
 });
+
+// ================================================================
+// COBERTURA — late arrival on an intervention base where the doctor
+// is covering for the originally scheduled holder. The delay is
+// recorded for audit, but is NOT debited from the bank balance.
+// ================================================================
+
+test("coverage: records delay but does not debit from balance", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-05-26T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
+        actualStartAt: iso("2026-05-26T13:11:00-03:00"),
+        actualEndAt: iso("2026-05-26T19:00:00-03:00"),
+        isCoverage: true,
+    });
+
+    assert.equal(result.ruleCode, "COVERAGE_LATE_FORGIVEN");
+    assert.equal(result.arrivalDelayMinutes, 371);
+    assert.equal(result.overtimeMinutes, 0);
+    assert.equal(result.balanceMinutes, 0);
+});
+
+test("coverage: credits overtime at simple rate even with huge delay", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-05-26T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
+        actualStartAt: iso("2026-05-26T13:11:00-03:00"),
+        actualEndAt: iso("2026-05-26T20:00:00-03:00"),
+        isCoverage: true,
+    });
+
+    assert.equal(result.ruleCode, "COVERAGE_LATE_FORGIVEN");
+    assert.equal(result.arrivalDelayMinutes, 371);
+    assert.equal(result.overtimeMinutes, 60);
+    assert.equal(result.overtimeMultiplier, 1);
+    assert.equal(result.creditedOvertimeMinutes, 60);
+    assert.equal(result.balanceMinutes, 60);
+});
+
+test("coverage: anomaly guard does NOT flip COVERAGE_LATE_FORGIVEN with > 6h delay", () => {
+    const raw = calculateBankHours({
+        scheduledStartAt: iso("2026-05-26T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
+        actualStartAt: iso("2026-05-26T13:11:00-03:00"),
+        actualEndAt: iso("2026-05-26T19:00:00-03:00"),
+        isCoverage: true,
+    });
+
+    assert.equal(raw.arrivalDelayMinutes, 371);
+    const guarded = applyAnomalyGuard(raw);
+    assert.equal(guarded.ruleCode, "COVERAGE_LATE_FORGIVEN");
+    assert.equal(guarded.balanceMinutes, 0);
+});
+
+test("coverage: on-time arrival still uses coverage rule code (audit consistency)", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-05-26T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
+        actualStartAt: iso("2026-05-26T07:05:00-03:00"),
+        actualEndAt: iso("2026-05-26T19:30:00-03:00"),
+        isCoverage: true,
+    });
+
+    assert.equal(result.ruleCode, "COVERAGE_LATE_FORGIVEN");
+    assert.equal(result.arrivalDelayMinutes, 0);
+    assert.equal(result.overtimeMinutes, 30);
+    assert.equal(result.overtimeMultiplier, 1);
+    assert.equal(result.balanceMinutes, 30);
+});
