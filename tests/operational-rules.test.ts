@@ -59,6 +59,32 @@ test("keeps fixed MRV role on day continuity for 2032 and 2151 and blocks it onl
     }), null);
 });
 
+test("keeps explicit MEIO_PLANTAO even on fixed-role ramais", () => {
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2032",
+        shiftLabel: "SD",
+        roleLabel: "MEIO_PLANTAO",
+        defaultRole: null,
+    }), "MEIO_PLANTAO");
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2151",
+        shiftLabel: "SD",
+        roleLabel: "MEIO_PLANTAO",
+        defaultRole: null,
+    }), "MEIO_PLANTAO");
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "1367",
+        shiftLabel: "SD",
+        roleLabel: "MEIO_PLANTAO",
+        defaultRole: null,
+    }), "MEIO_PLANTAO");
+});
+
 test("falls back to post default role on non-fixed regulation ramal and keeps explicit overrides", () => {
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",

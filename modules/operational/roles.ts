@@ -63,6 +63,12 @@ export function resolveOperationalRoleLabel(params: {
         shiftLabel: params.shiftLabel,
         roleLabel: params.roleLabel,
     });
+
+    // Meio plantao precisa prevalecer mesmo em ramais com papel fixo (ex.: 2032/2151 MRV, 1367/1368 COI).
+    if (explicitRole === "MEIO_PLANTAO") {
+        return explicitRole;
+    }
+
     const defaultRole = applyOperationalRoleShiftPolicy({
         shiftLabel: params.shiftLabel,
         roleLabel: params.defaultRole,

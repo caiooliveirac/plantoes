@@ -718,11 +718,6 @@ function shouldAssumeTelegramHalfShift(params: {
         return false;
     }
 
-    const normalizedShift = (params.effectiveShiftType ?? "").toUpperCase();
-    if (normalizedShift && normalizedShift !== "SD") {
-        return false;
-    }
-
     const parts = getSaoPauloParts(params.eventAt);
     const minuteOfDay = (parts.hour * 60) + parts.minute;
     return minuteOfDay >= (10 * 60 + 30) && minuteOfDay < (17 * 60);
