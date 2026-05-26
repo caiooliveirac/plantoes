@@ -252,6 +252,27 @@ const REST_SLOTS: MealBreakRestSlot[] = ["14:30", "15:30", "16:30", "18:00"];
 const DINNER_SLOTS: MealBreakDinnerSlot[] = ["20:30", "21:00", "21:30", "22:00", "22:30"];
 const DINNER_CHOICE_SLOTS = ["20:30", "21:00", "21:30"] as const;
 const NIGHT_WORK_SLOTS: MealBreakNightWorkSlot[] = ["23:00", "03:00"];
+
+// All canonical slot strings produced by buildMealBreakStageKeyboard buttons.
+// Used to recognise a literal button payload "NNNN HH:MM" even when the chat's
+// session is already completed — protects against the button reply leaking
+// into the operational parser as a false arrival.
+const ALL_MEAL_BREAK_SLOTS: ReadonlySet<string> = new Set<string>([
+    ...LUNCH_SLOTS,
+    ...REST_SLOTS,
+    ...DINNER_SLOTS,
+    ...NIGHT_WORK_SLOTS,
+]);
+
+const MEAL_BREAK_BUTTON_PATTERN = /^\s*(\d{4})\s+(\d{1,2}:\d{2})\s*$/;
+
+export function looksLikeMealBreakButtonReply(text: string): boolean {
+    const match = MEAL_BREAK_BUTTON_PATTERN.exec(text);
+    if (!match) {
+        return false;
+    }
+    return ALL_MEAL_BREAK_SLOTS.has(match[2]);
+}
 const MEAL_BREAK_LATE_TOLERANCE_MS = 15 * 60 * 1000;
 const MEAL_BREAK_CONTINUITY_GAP_MS = 30 * 60 * 1000;
 const MEAL_BREAK_CONTINUITY_LOOKBACK_MS = 36 * 60 * 60 * 1000;

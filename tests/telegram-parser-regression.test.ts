@@ -18,10 +18,12 @@ import test from "node:test";
 import {
     isCasualTelegramMessage,
     looksLikeDepartureMessage,
+    looksLikeMealBreakMessage,
     parseMessage,
     parseMessageMulti,
     parseTelegramBatchLines,
 } from "@/modules/telegram/parser";
+import { looksLikeMealBreakButtonReply } from "@/modules/telegram/meal-breaks";
 import {
     pickConfidentDoctorCandidate,
     resolveDoctorCandidates,
@@ -888,6 +890,114 @@ test("noise token 'CB' is not extracted as name: 'CB 2035 SD 07:00'", () => {
     const parsed = parseMessage("CB 2035 SD 07:00");
     const names = parsed.extractedNames.join(" ").toUpperCase();
     assert.ok(!names.includes("CB"), `'CB' should be filtered as noise, got: ${parsed.extractedNames}`);
+});
+
+// ================================================================
+// F6: Meal-break safety — tolerant keyword detection + button payload
+// recognition. Real-world regression: Mariana (2026-05-26 11:41 -BA)
+// clicked the "1363 12:30" lunch button after the session was already
+// completed, and the bot turned it into a fake arrival for José Marini,
+// effectively kicking Alessandra Martinez out of 1363.
+// ================================================================
+
+test("looksLikeMealBreakMessage covers typo variants of almoço", () => {
+    const variants = [
+        "almoco",
+        "ALMOCO",
+        "alomoco",
+        "almço",
+        "almuço",
+        "almoçar",
+        "almoçando",
+        "almocei",
+        "almocarei",
+        "1368 ALMOÇO 12:30",
+        "MARIANA ALOMOÇO 1368",
+    ];
+    for (const text of variants) {
+        assert.ok(
+            looksLikeMealBreakMessage(text),
+            `expected '${text}' to be flagged as meal-break message`,
+        );
+    }
+});
+
+test("looksLikeMealBreakMessage covers janta/descanso/refeição variants", () => {
+    const variants = [
+        "vou jantar",
+        "jantando agora",
+        "JANTA 21:00",
+        "descanso 15:30",
+        "descansando",
+        "descansar agora",
+        "refeicao 12:30",
+        "refeição agora",
+    ];
+    for (const text of variants) {
+        assert.ok(
+            looksLikeMealBreakMessage(text),
+            `expected '${text}' to be flagged as meal-break message`,
+        );
+    }
+});
+
+test("looksLikeMealBreakMessage does not false-positive on innocent words", () => {
+    const safe = [
+        "ALMA SD",
+        "Almir 1363 SD 07:00",
+        "janela aberta",
+        "janeiro",
+    ];
+    for (const text of safe) {
+        assert.ok(
+            !looksLikeMealBreakMessage(text),
+            `'${text}' should NOT be flagged as meal-break message`,
+        );
+    }
+});
+
+test("looksLikeMealBreakButtonReply recognises canonical button payloads", () => {
+    const canonical = [
+        "1363 11:30",
+        "1363 12:30",
+        "1363 13:30",
+        "1363 14:30",
+        "1363 15:30",
+        "1363 16:30",
+        "1363 18:00",
+        "1368 20:30",
+        "1368 21:00",
+        "1368 21:30",
+        "1368 22:00",
+        "1368 22:30",
+        "1368 23:00",
+        "1368 03:00",
+        "  1363 12:30  ",
+    ];
+    for (const text of canonical) {
+        assert.ok(
+            looksLikeMealBreakButtonReply(text),
+            `'${text}' should be recognised as meal-break button reply`,
+        );
+    }
+});
+
+test("looksLikeMealBreakButtonReply rejects non-canonical or noisy payloads", () => {
+    const notButton = [
+        "1363 07:00",          // legit arrival time, not a meal slot
+        "1363 12:31",          // off by one minute
+        "1363",                // no time
+        "12:30",               // no ramal
+        "1363 12:30 SD",       // extra token
+        "Mariana 1363 12:30",  // name prefix
+        "1363  -  12:30",      // separator
+    ];
+    for (const text of notButton) {
+        assert.ok(
+            !looksLikeMealBreakButtonReply(text),
+            `'${text}' should NOT be recognised as meal-break button reply`,
+        );
+    }
 });
 
 // ================================================================

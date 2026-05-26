@@ -135,6 +135,7 @@ import {
     isTelegramMealBreakCommandText,
     isTelegramMealBreakExcludeCommandText,
     isTelegramMealBreakPriorityCommandText,
+    looksLikeMealBreakButtonReply,
     parseTelegramMealBreakCommand,
     parseTelegramMealBreakExcludeCommand,
     parseTelegramMealBreakPriorityCommand,
@@ -307,6 +308,8 @@ type TelegramReviewReason =
     | "location_without_ramal"
     | "low_confidence_no_name"
     | "meal_break_outside_flow"
+    | "meal_break_button_outside_flow"
+    | "arrival_missing_name_or_shift"
     | "no_operational_match"
     | "pending_name_selection";
 
@@ -848,6 +851,12 @@ function resolveTelegramReviewSummary(reason: TelegramReviewReason) {
             return "mensagem operacional não bateu no parser atual";
         case "pending_name_selection":
             return "mensagem operacional precisou confirmação manual do nome";
+        case "meal_break_outside_flow":
+            return "mensagem de almoço/descanso/jantar fora do fluxo /almoco";
+        case "meal_break_button_outside_flow":
+            return "botão de divisão de almoço acionado fora da sessão ativa";
+        case "arrival_missing_name_or_shift":
+            return "chegada sem nome do médico nem turno (SD/SN/P)";
         default:
             return "mensagem fora do padrão exato";
     }
@@ -8454,6 +8463,84 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             }
 
             const firstParsed = parsedEntries.find((entry) => entry.isDeparture) ?? parsedEntries[0];
+
+            // F6: Arrivals must carry both an explicit doctor name AND an explicit shift
+            // type (SD/SN/P). A bare "NNNN HH:MM" — the literal text emitted by
+            // buildMealBreakStageKeyboard buttons — must never be promoted to an
+            // operational arrival, even when the chat's meal-break session is already
+            // closed. Departures and continuations keep their own rules.
+            if (
+                message.chat.type !== "private"
+                && !firstParsed.isDeparture
+                && !isTelegramContinuationEntry(firstParsed)
+            ) {
+                const hasName = firstParsed.extractedNames.length > 0;
+                const hasShift = Boolean(firstParsed.shiftType);
+                const isBareButtonPayload = looksLikeMealBreakButtonReply(message.text);
+                if (isBareButtonPayload || !hasName || !hasShift) {
+                    const reason: TelegramReviewReason = isBareButtonPayload
+                        ? "meal_break_button_outside_flow"
+                        : "arrival_missing_name_or_shift";
+                    await markTelegramProcessed(log.id, {
+                        status: "ignored",
+                        parsedDomain: firstParsed.sector,
+                        parsedTargetCode: firstParsed.baseCode,
+                        parsedAction: "arrival",
+                        errorMessage: reason,
+                        resolutionData: buildTelegramReviewLogData({
+                            reason,
+                            parsed: firstParsed,
+                            trainingCandidate: !isBareButtonPayload,
+                        }),
+                    });
+
+                    const senderFullName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
+                    const guessedName = firstParsed.extractedNames[0] ?? senderFullName ?? "Vagner";
+                    const guessedTarget = firstParsed.baseCode ?? "1363";
+                    const guessedTime = firstParsed.arrivalTime ?? "07:00";
+                    const guessedShift = firstParsed.shiftType ?? "SD";
+                    const exampleArrival = `${guessedName} ${guessedTarget} ${guessedShift} ${guessedTime}`;
+
+                    const detected: string[] = [];
+                    if (firstParsed.baseCode) detected.push(`base/ramal *${firstParsed.baseCode}*`);
+                    if (firstParsed.arrivalTime) detected.push(`horário *${firstParsed.arrivalTime}*`);
+                    if (hasName) detected.push(`nome *${firstParsed.extractedNames[0]}*`);
+                    if (hasShift) detected.push(`turno *${firstParsed.shiftType}*`);
+
+                    const missing: string[] = [];
+                    if (!hasName) missing.push("*nome do médico*");
+                    if (!hasShift) missing.push("*turno* (SD, SN ou P)");
+
+                    let body: string;
+                    if (isBareButtonPayload) {
+                        body = [
+                            "👋 Esse formato `ramal HH:MM` é o botão da divisão de almoço — fora do fluxo do `/almoco` ele não pode virar chegada.",
+                            "",
+                            "Se a intenção era *registrar chegada* de alguém no ramal, mande o nome + ramal + turno + horário, por exemplo:",
+                            `  _${exampleArrival}_`,
+                            "",
+                            "Se a intenção era *escolher o horário de almoço*, peça pra chefia reabrir com `/almoco` — o botão só funciona enquanto a divisão está em curso.",
+                        ].join("\n");
+                    } else {
+                        const detectedLine = detected.length > 0
+                            ? `Entendi: ${detected.join(", ")}.`
+                            : "Não consegui montar a chegada com o que veio.";
+                        const missingLine = `Faltou: ${missing.join(" e ")}.`;
+                        body = [
+                            "👀 Quase lá — pra registrar a *chegada* eu preciso de *nome + ramal + turno (SD/SN/P) + horário*, todos na mesma mensagem.",
+                            "",
+                            detectedLine,
+                            missingLine,
+                            "",
+                            "Exemplo no seu caso:",
+                            `  _${exampleArrival}_`,
+                        ].join("\n");
+                    }
+
+                    await sendMessage(message.chat.id, body, message.message_id);
+                    return { ok: true, ignored: true };
+                }
+            }
 
             // F3 safety: reject low-confidence entries without extracted names in group chats.
             // These are typically casual messages that accidentally contain a base/ramal number.
