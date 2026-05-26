@@ -296,70 +296,94 @@ test("anomaly guard passes through delay at exactly 360 minutes", () => {
 });
 
 // ================================================================
-// COBERTURA — late arrival on an intervention base where the doctor
-// is covering for the originally scheduled holder. The delay is
-// recorded for audit, but is NOT debited from the bank balance.
+// LATE HALF-SHIFT RECOGNITION — SD intervention arrival after 9h gets
+// converted to half-shift (paid 13–19), with the time worked before
+// 13:00 credited to the bank as carryover. The caller passes the
+// half-shift window as scheduledStartAt/scheduledEndAt.
 // ================================================================
 
-test("coverage: records delay but does not debit from balance", () => {
+test("late half-shift: arrival 9h credits 4h carryover to bank", () => {
     const result = calculateBankHours({
-        scheduledStartAt: iso("2026-05-26T07:00:00-03:00"),
+        scheduledStartAt: iso("2026-05-26T13:00:00-03:00"),
         scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
-        actualStartAt: iso("2026-05-26T13:11:00-03:00"),
+        actualStartAt: iso("2026-05-26T09:00:00-03:00"),
         actualEndAt: iso("2026-05-26T19:00:00-03:00"),
-        isCoverage: true,
+        lateHalfShiftAcknowledged: true,
     });
 
-    assert.equal(result.ruleCode, "COVERAGE_LATE_FORGIVEN");
-    assert.equal(result.arrivalDelayMinutes, 371);
-    assert.equal(result.overtimeMinutes, 0);
-    assert.equal(result.balanceMinutes, 0);
+    assert.equal(result.ruleCode, "LATE_HALF_SHIFT_CARRYOVER");
+    assert.equal(result.arrivalDelayMinutes, 0);
+    assert.equal(result.balanceMinutes, 240);
 });
 
-test("coverage: credits overtime at simple rate even with huge delay", () => {
+test("late half-shift: arrival 10h credits 3h carryover", () => {
     const result = calculateBankHours({
-        scheduledStartAt: iso("2026-05-26T07:00:00-03:00"),
+        scheduledStartAt: iso("2026-05-26T13:00:00-03:00"),
         scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
-        actualStartAt: iso("2026-05-26T13:11:00-03:00"),
-        actualEndAt: iso("2026-05-26T20:00:00-03:00"),
-        isCoverage: true,
+        actualStartAt: iso("2026-05-26T10:00:00-03:00"),
+        actualEndAt: iso("2026-05-26T19:00:00-03:00"),
+        lateHalfShiftAcknowledged: true,
     });
+    assert.equal(result.balanceMinutes, 180);
+});
 
-    assert.equal(result.ruleCode, "COVERAGE_LATE_FORGIVEN");
-    assert.equal(result.arrivalDelayMinutes, 371);
-    assert.equal(result.overtimeMinutes, 60);
-    assert.equal(result.overtimeMultiplier, 1);
-    assert.equal(result.creditedOvertimeMinutes, 60);
+test("late half-shift: arrival 11h credits 2h carryover", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-05-26T13:00:00-03:00"),
+        scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
+        actualStartAt: iso("2026-05-26T11:00:00-03:00"),
+        actualEndAt: iso("2026-05-26T19:00:00-03:00"),
+        lateHalfShiftAcknowledged: true,
+    });
+    assert.equal(result.balanceMinutes, 120);
+});
+
+test("late half-shift: arrival 12h credits 1h carryover", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-05-26T13:00:00-03:00"),
+        scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
+        actualStartAt: iso("2026-05-26T12:00:00-03:00"),
+        actualEndAt: iso("2026-05-26T19:00:00-03:00"),
+        lateHalfShiftAcknowledged: true,
+    });
     assert.equal(result.balanceMinutes, 60);
 });
 
-test("coverage: anomaly guard does NOT flip COVERAGE_LATE_FORGIVEN with > 6h delay", () => {
-    const raw = calculateBankHours({
-        scheduledStartAt: iso("2026-05-26T07:00:00-03:00"),
+test("late half-shift: arrival 13:11 (after half-shift start) has no carryover, delay tolerated", () => {
+    const result = calculateBankHours({
+        scheduledStartAt: iso("2026-05-26T13:00:00-03:00"),
         scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
         actualStartAt: iso("2026-05-26T13:11:00-03:00"),
         actualEndAt: iso("2026-05-26T19:00:00-03:00"),
-        isCoverage: true,
+        lateHalfShiftAcknowledged: true,
     });
-
-    assert.equal(raw.arrivalDelayMinutes, 371);
-    const guarded = applyAnomalyGuard(raw);
-    assert.equal(guarded.ruleCode, "COVERAGE_LATE_FORGIVEN");
-    assert.equal(guarded.balanceMinutes, 0);
+    assert.equal(result.ruleCode, "LATE_HALF_SHIFT_CARRYOVER");
+    assert.equal(result.arrivalDelayMinutes, 0); // 11 min within 15 min tolerance
+    assert.equal(result.balanceMinutes, 0);
 });
 
-test("coverage: on-time arrival still uses coverage rule code (audit consistency)", () => {
+test("late half-shift: arrival 14h (1h after half-shift start) debits the delay", () => {
     const result = calculateBankHours({
-        scheduledStartAt: iso("2026-05-26T07:00:00-03:00"),
+        scheduledStartAt: iso("2026-05-26T13:00:00-03:00"),
         scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
-        actualStartAt: iso("2026-05-26T07:05:00-03:00"),
-        actualEndAt: iso("2026-05-26T19:30:00-03:00"),
-        isCoverage: true,
+        actualStartAt: iso("2026-05-26T14:00:00-03:00"),
+        actualEndAt: iso("2026-05-26T19:00:00-03:00"),
+        lateHalfShiftAcknowledged: true,
     });
+    assert.equal(result.ruleCode, "LATE_HALF_SHIFT_CARRYOVER");
+    assert.equal(result.arrivalDelayMinutes, 60);
+    assert.equal(result.balanceMinutes, -60);
+});
 
-    assert.equal(result.ruleCode, "COVERAGE_LATE_FORGIVEN");
-    assert.equal(result.arrivalDelayMinutes, 0);
-    assert.equal(result.overtimeMinutes, 30);
-    assert.equal(result.overtimeMultiplier, 1);
-    assert.equal(result.balanceMinutes, 30);
+test("late half-shift: anomaly guard preserves LATE_HALF_SHIFT_CARRYOVER", () => {
+    const raw = calculateBankHours({
+        scheduledStartAt: iso("2026-05-26T13:00:00-03:00"),
+        scheduledEndAt: iso("2026-05-26T19:00:00-03:00"),
+        actualStartAt: iso("2026-05-26T09:00:00-03:00"),
+        actualEndAt: iso("2026-05-26T19:00:00-03:00"),
+        lateHalfShiftAcknowledged: true,
+    });
+    const guarded = applyAnomalyGuard(raw);
+    assert.equal(guarded.ruleCode, "LATE_HALF_SHIFT_CARRYOVER");
+    assert.equal(guarded.balanceMinutes, 240);
 });

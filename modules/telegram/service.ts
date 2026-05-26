@@ -154,8 +154,8 @@ import {
     isTelegramAdminOnlyCommand,
     isTelegramDepartureCorrectionCommandText,
     parseTelegramCommand,
-    parseTelegramCoverageCommand,
-    isTelegramCoverageCommandText,
+    parseTelegramLateArrivalCommand,
+    isTelegramLateArrivalCommandText,
     parseTelegramDepartureCorrectionCommand,
 } from "@/modules/telegram/commands";
 import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp, type TelegramRecentSenderMessage } from "@/modules/telegram/command-suggestions";
@@ -163,8 +163,8 @@ import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeMealBreakM
 import type { TelegramUpdate } from "@/modules/telegram/api";
 import { buildChoiceKeyboard, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
-import { buildCoverageAnnouncement, isCoverageReplyText, maybeSendInterventionCoveragePrompt, tryHandleCoveragePromptReply } from "@/modules/telegram/coverage-prompt";
-import { markInterventionAsCoverage } from "@/modules/bank-hours/coverage";
+import { buildLateArrivalAcknowledgementAnnouncement, maybeSendInterventionLateArrivalOrientation } from "@/modules/telegram/late-arrival-prompt";
+import { acknowledgeInterventionLateArrival, LATE_HALF_SHIFT_CUTOFF_HOUR, resolveBahiaHour } from "@/modules/bank-hours/late-arrival";
 import { buildCandidatePromptReply, buildGroupCorrectionAnnouncement, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 import { getOperationalBoard, getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
 import { getOperationalSlotAuditReport } from "@/services/slot-audit.service";
@@ -314,6 +314,7 @@ type TelegramReviewReason =
     | "meal_break_outside_flow"
     | "meal_break_button_outside_flow"
     | "arrival_missing_name_or_shift"
+    | "late_arrival_acknowledgement_required"
     | "no_operational_match"
     | "pending_name_selection";
 
@@ -861,6 +862,8 @@ function resolveTelegramReviewSummary(reason: TelegramReviewReason) {
             return "botão de divisão de almoço acionado fora da sessão ativa";
         case "arrival_missing_name_or_shift":
             return "chegada sem nome do médico nem turno (SD/SN/P)";
+        case "late_arrival_acknowledgement_required":
+            return "chegada após 9h em intervenção SD aguardando reconhecimento de meio plantão";
         default:
             return "mensagem fora do padrão exato";
     }
@@ -3683,10 +3686,10 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
     }
 
-    if (isTelegramCoverageCommandText(message.text)) {
-        const coverageResult = await runTelegramCoverageCommand(update, logId);
-        if (coverageResult) {
-            return coverageResult;
+    if (isTelegramLateArrivalCommandText(message.text)) {
+        const lateArrivalResult = await runTelegramLateArrivalAcknowledgeCommand(update, logId);
+        if (lateArrivalResult) {
+            return lateArrivalResult;
         }
     }
 
@@ -5625,7 +5628,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     return { ok: true, removed: true };
 }
 
-async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string) {
+async function runTelegramLateArrivalAcknowledgeCommand(update: TelegramUpdate, logId: string) {
     const message = update.message;
     if (!message?.text) {
         return null;
@@ -5637,29 +5640,29 @@ async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string)
     if (!isAdmin && !isChief) {
         await markTelegramProcessed(logId, {
             status: "ignored",
-            parsedAction: "coverage_command",
-            errorMessage: "coverage_command_forbidden",
+            parsedAction: "late_arrival_command",
+            errorMessage: "late_arrival_command_forbidden",
             resolutionData: { rawCommand: message.text },
         });
         await sendMessage(
             message.chat.id,
-            "🛑 /cobertura e exclusivo para chefes e admin do bot.",
+            "🛑 /meioplantao e exclusivo para chefes e admin do bot.",
             message.message_id,
         );
         return { ok: true, ignored: true };
     }
 
-    const command = parseTelegramCoverageCommand(message.text);
+    const command = parseTelegramLateArrivalCommand(message.text);
     if (!command || !command.baseCode) {
         await markTelegramProcessed(logId, {
             status: "ignored",
-            parsedAction: "coverage_command",
-            errorMessage: "coverage_command_usage_invalid",
+            parsedAction: "late_arrival_command",
+            errorMessage: "late_arrival_command_usage_invalid",
             resolutionData: { rawCommand: message.text },
         });
         await sendMessage(
             message.chat.id,
-            "Uso: `/cobertura <base> [HH:MM]` — exemplo `/cobertura SM01` (marca a ocupacao ativa atual) ou `/cobertura SM01 13:11` (marca a ocupacao iniciada nesse horario).",
+            "Uso: `/meioplantao <base> [HH:MM]` — exemplo `/meioplantao SM01` (reconhece a ocupacao ativa atual) ou `/meioplantao SM01 13:11` (reconhece a ocupacao iniciada nesse horario).",
             message.message_id,
         );
         return { ok: true, ignored: true };
@@ -5672,8 +5675,8 @@ async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string)
     if (!baseRow) {
         await markTelegramProcessed(logId, {
             status: "ignored",
-            parsedAction: "coverage_command",
-            errorMessage: "coverage_command_base_not_found",
+            parsedAction: "late_arrival_command",
+            errorMessage: "late_arrival_command_base_not_found",
             resolutionData: { rawCommand: message.text, baseCode: command.baseCode },
         });
         await sendMessage(
@@ -5686,8 +5689,6 @@ async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string)
 
     let occupancyRow: typeof interventionOccupancies.$inferSelect | undefined;
     if (command.time) {
-        // Look back 24h on this base and match by HH:MM in America/Bahia,
-        // tolerating ±5min on either side of the supplied time.
         const referenceAt = new Date(message.date * 1000);
         const lookbackStart = new Date(referenceAt.getTime() - 24 * 60 * 60 * 1000);
         const candidates = await db.query.interventionOccupancies.findMany({
@@ -5718,8 +5719,8 @@ async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string)
     if (!occupancyRow) {
         await markTelegramProcessed(logId, {
             status: "ignored",
-            parsedAction: "coverage_command",
-            errorMessage: "coverage_command_occupancy_not_found",
+            parsedAction: "late_arrival_command",
+            errorMessage: "late_arrival_command_occupancy_not_found",
             resolutionData: { rawCommand: message.text, baseCode: command.baseCode, time: command.time },
         });
         await sendMessage(
@@ -5734,34 +5735,48 @@ async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string)
 
     const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || "Usuario do Telegram";
     const noteParts: string[] = [];
-    noteParts.push(`Marcada via /cobertura por ${senderName}${isAdmin ? " (admin)" : " (chefe)"}.`);
+    noteParts.push(`Reconhecido via /meioplantao por ${senderName}${isAdmin ? " (admin)" : " (chefe)"}.`);
     if (command.note) {
         noteParts.push(`Motivo: ${command.note}.`);
     }
 
-    const result = await markInterventionAsCoverage({
-        occupancyId: occupancyRow.id,
-        note: noteParts.join(" "),
-        actor: { userId: null, telegramId: senderTelegramId, label: senderName },
-    });
+    let result;
+    try {
+        result = await acknowledgeInterventionLateArrival({
+            occupancyId: occupancyRow.id,
+            note: noteParts.join(" "),
+            actor: { userId: null, telegramId: senderTelegramId, label: senderName },
+        });
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "late_arrival_ack_failed";
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedAction: "late_arrival_command",
+            errorMessage: errorMsg,
+            relatedOccupancyId: occupancyRow.id,
+        });
+        await sendMessage(message.chat.id, `❌ ${errorMsg}`, message.message_id);
+        return { ok: true, ignored: true };
+    }
 
     const doctorRow = await db.query.doctors.findFirst({
         where: eq(doctors.id, occupancyRow.doctorId),
     });
     const doctorSurfaceName = doctorRow?.displayName ?? doctorRow?.fullName ?? "medico desconhecido";
+    const actualStartLabel = new Date(result.actualStartAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Bahia" });
 
     await markTelegramProcessed(logId, {
         status: "accepted",
         parsedDomain: "INTERVENTION",
         parsedTargetCode: command.baseCode,
-        parsedAction: "coverage_command",
+        parsedAction: "late_arrival_command",
         parsedDoctorName: doctorRow?.fullName ?? null,
         relatedOccupancyId: occupancyRow.id,
         resolutionData: {
             rawCommand: message.text,
             baseCode: command.baseCode,
             time: command.time,
-            delayMinutes: result.arrivalDelayMinutes,
+            carryoverMinutes: result.carryoverMinutes,
             actorTelegramId: senderTelegramId,
             actorRole: isAdmin ? "admin" : "chief",
         },
@@ -5769,10 +5784,11 @@ async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string)
 
     await sendMessage(
         message.chat.id,
-        buildCoverageAnnouncement({
+        buildLateArrivalAcknowledgementAnnouncement({
             doctorName: doctorSurfaceName,
             baseCode: command.baseCode,
-            delayMinutes: result.arrivalDelayMinutes,
+            actualStartLabel,
+            carryoverMinutes: result.carryoverMinutes,
             markedByLabel: senderName,
             markedByChefe: !isAdmin,
             source: "telegram_command",
@@ -5780,7 +5796,7 @@ async function runTelegramCoverageCommand(update: TelegramUpdate, logId: string)
         message.message_id,
     );
 
-    return { ok: true, coverageMarked: true };
+    return { ok: true, lateArrivalAcknowledged: true };
 }
 
 async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
@@ -8176,30 +8192,6 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 return mealBreakReplyResult;
             }
 
-            // Coverage prompt reply: a "✅ É COBERTURA" / "❌ É chegada normal" tap on
-            // the ReplyKeyboard sent after a late intervention arrival.
-            if (message.text && isCoverageReplyText(message.text)) {
-                const coverageReplyResult = await tryHandleCoveragePromptReply({
-                    chatId: message.chat.id,
-                    text: message.text,
-                    senderTelegramId: message.from?.id ? String(message.from.id) : null,
-                    senderName: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null,
-                    replyToMessageId: message.message_id,
-                });
-                if (coverageReplyResult) {
-                    await markTelegramProcessed(log.id, {
-                        status: coverageReplyResult.status === "confirmed" || coverageReplyResult.status === "rejected"
-                            ? "accepted"
-                            : "ignored",
-                        parsedAction: "coverage_prompt_reply",
-                        errorMessage: coverageReplyResult.status === "confirmed" || coverageReplyResult.status === "rejected"
-                            ? null
-                            : `coverage_prompt_${coverageReplyResult.status}`,
-                        resolutionData: { coverageStatus: coverageReplyResult.status },
-                    });
-                    return { ok: true, coverage: true };
-                }
-            }
 
             if (message.from?.id) {
                 const pendingAlertaResult = await tryHandlePendingAlertaConfirmation(update, log.id);
@@ -8912,32 +8904,27 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     extendedLongShift,
                 );
 
-                // Coverage prompt: only for fresh intervention arrivals (not continuations,
-                // not regulation) where the arrival delay reached the threshold.
+                // Late half-shift orientation: when an intervention SD arrival lands
+                // at or after the 9h coordination cutoff (Bahia local), publish a
+                // one-shot informative message explaining the rule and that the
+                // chefe/admin must acknowledge the conversion. Purely orientative.
                 if (
                     occupancyId
                     && firstParsed.sector === "INTERVENTION"
                     && !firstParsed.isDeparture
                     && !treatedAsContinuation
                     && !isTelegramContinuationEntry(firstParsed)
+                    && resolveBahiaHour(eventAt) >= LATE_HALF_SHIFT_CUTOFF_HOUR
+                    && resolveBahiaHour(eventAt) < 18
                 ) {
-                    const senderTelegramId = message.from?.id ? String(message.from.id) : null;
-                    const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
-                    const senderIsChefe =
-                        (senderTelegramId !== null && getTelegramChiefUserIds().includes(senderTelegramId))
-                        || (senderTelegramId !== null && getTelegramAdminUserIds().includes(senderTelegramId))
-                        || (senderName !== null && /\bCHEFE\b/i.test(senderName));
                     try {
-                        await maybeSendInterventionCoveragePrompt({
+                        await maybeSendInterventionLateArrivalOrientation({
                             chatId: message.chat.id,
                             occupancyId,
-                            senderTelegramId,
-                            senderName,
-                            senderIsChefe,
                             replyToMessageId: message.message_id,
                         });
-                    } catch (coverageError) {
-                        console.error("coverage_prompt_failed", coverageError);
+                    } catch (lateArrivalError) {
+                        console.error("late_arrival_orientation_failed", lateArrivalError);
                     }
                 }
 

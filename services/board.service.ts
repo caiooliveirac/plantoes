@@ -86,9 +86,8 @@ export interface InterventionBoardRow {
   liveSource: "operations_v2" | "legacy_live" | "none";
   liveUpdatedAt: string | null;
   scheduledStartAt?: string | null;
-  coverageKind?: string | null;
-  coverageNote?: string | null;
-  coverageMarkedAt?: string | null;
+  lateArrivalAcknowledgedAt?: string | null;
+  lateArrivalAcknowledgedNote?: string | null;
 }
 
 export type PreviousOperationalBucket = "P_INVERTIDO" | "P" | "SD" | "SN";
@@ -625,9 +624,8 @@ function mapInterventionRow(row: Record<string, unknown>): InterventionBoardRow 
     disabledReason: (row.disabledReason ?? row.disabled_reason ?? null) as string | null,
     liveSource: (row.liveSource ?? row.live_source ?? "none") as InterventionBoardRow["liveSource"],
     liveUpdatedAt: (row.liveUpdatedAt ?? row.live_updated_at ?? null) as string | null,
-    coverageKind: (row.coverageKind ?? row.coverage_kind ?? null) as string | null,
-    coverageNote: (row.coverageNote ?? row.coverage_note ?? null) as string | null,
-    coverageMarkedAt: (row.coverageMarkedAt ?? row.coverage_marked_at ?? null) as string | null,
+    lateArrivalAcknowledgedAt: (row.lateArrivalAcknowledgedAt ?? row.late_arrival_acknowledged_at ?? null) as string | null,
+    lateArrivalAcknowledgedNote: (row.lateArrivalAcknowledgedNote ?? row.late_arrival_acknowledged_note ?? null) as string | null,
   };
 }
 
@@ -1509,9 +1507,8 @@ export async function listInterventionBoard() {
       case when io.id is not null or li.base_code is not null then coalesce(io.role_label, li.role_label) else null end as "roleLabel",
       ad.deactivated_at as "disabledAt",
       ad.notes as "disabledReason",
-      io.coverage_kind as "coverageKind",
-      io.coverage_note as "coverageNote",
-      io.coverage_marked_at as "coverageMarkedAt",
+      io.late_arrival_acknowledged_at as "lateArrivalAcknowledgedAt",
+      io.late_arrival_acknowledged_note as "lateArrivalAcknowledgedNote",
       case
         when io.id is not null or li.base_code is not null then 'active'
         when ad.base_id is not null then 'disabled'

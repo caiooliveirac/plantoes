@@ -120,7 +120,7 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
             scheduledStartAt: occupancy.scheduledStartAt,
             scheduledEndAt: occupancy.scheduledEndAt,
             shiftLabel: occupancy.shiftLabel,
-            coverageKind: occupancy.coverageKind,
+            lateArrivalAcknowledgedAt: occupancy.lateArrivalAcknowledgedAt,
         })),
     ];
 }
@@ -187,18 +187,18 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
         return null;
     }
 
-    // Coverage flag: when the continuity carrier is an intervention occupancy
-    // marked as COBERTURA, the whole bank-hours window is treated as coverage.
-    // Regulation occupancies do not carry coverage (out of scope for this feature).
-    const carrierIsCoverage = span.carrierDomain === "intervention"
-        && Boolean(meaningful.find((o) => o.domain === "intervention" && o.occupancyId === span.carrierOccupancyId)?.coverageKind);
+    // Late half-shift acknowledgement: when the continuity carrier is an
+    // intervention occupancy whose chefe/admin marked it as a late arrival
+    // converted to half-shift, the calculator applies the carryover branch.
+    const carrierLateHalfShift = span.carrierDomain === "intervention"
+        && Boolean(meaningful.find((o) => o.domain === "intervention" && o.occupancyId === span.carrierOccupancyId)?.lateArrivalAcknowledgedAt);
 
     const rawCalculation = calculateBankHours({
         scheduledStartAt: span.scheduledStartAt,
         scheduledEndAt: span.scheduledEndAt,
         actualStartAt: span.actualStartAt,
         actualEndAt: span.actualEndAt,
-        isCoverage: carrierIsCoverage,
+        lateHalfShiftAcknowledged: carrierLateHalfShift,
     });
     const calculation = applyAnomalyGuard(rawCalculation);
     const override = (await listBankHoursBalanceOverridesByContinuityGroupIds(db, [continuityGroupId])).get(continuityGroupId) ?? null;

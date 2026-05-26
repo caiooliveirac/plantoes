@@ -1,4 +1,4 @@
-export const BANK_HOURS_RULE_VERSION = 7;
+export const BANK_HOURS_RULE_VERSION = 8;
 export const ARRIVAL_GRACE_MINUTES = 15;
 export const DEPARTURE_GRACE_MINUTES = 15;
 
@@ -16,12 +16,14 @@ export interface BankHoursCalculationInput {
     actualStartAt: Date | string;
     actualEndAt: Date | string;
     /**
-     * When true, the occupancy was declared as COBERTURA (a doctor stepping in
-     * to cover a scale the original holder could not attend). The arrival delay
-     * is still recorded for audit, but it is NOT debited from the bank balance.
-     * Overtime credit follows the normal rules.
+     * When true, the occupancy was a SD intervention shift whose holder arrived
+     * after the coordination cutoff (≥ 9h) and the chefe/admin acknowledged the
+     * conversion to half-shift (13:00–19:00). The hours worked BEFORE the
+     * half-shift start (13:00) are credited to the bank as carryover; payment
+     * follows the half-shift rule. After 13:00, normal late-arrival debit rules
+     * apply on the half-shift window.
      */
-    isCoverage?: boolean;
+    lateHalfShiftAcknowledged?: boolean;
 }
 
 export interface BankHoursCalculationResult {
@@ -57,23 +59,42 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
     const arrivalDelayMinutes = rawArrivalDelay <= ARRIVAL_GRACE_MINUTES ? 0 : rawArrivalDelay;
     const overtimeMinutes = rawOvertime <= DEPARTURE_GRACE_MINUTES ? 0 : rawOvertime;
 
-    if (input.isCoverage) {
-        // COBERTURA: delay is recorded factually for the audit trail but is not
-        // debited from the bank balance. Overtime is credited at the simple
-        // rate (multiplier 1) because the doctor was not on-time on the
-        // scheduled window — they are covering it.
-        const overtimeMultiplier: 1 | 2 = 1;
+    if (input.lateHalfShiftAcknowledged) {
+        // SD intervention arrival after the coordination 9h cutoff: payment is
+        // the half-shift (13–19), but any time worked before 13:00 is credited
+        // to the bank. Anything after 13:00 follows normal half-shift debit
+        // rules (delay above 15 min tolerance debits).
+        //
+        // The caller passes scheduledStartAt = 13:00 and scheduledEndAt = 19:00
+        // (the half-shift window). `actualStartAt` is the real arrival time.
+        const carryoverMinutes = Math.max(0, diffMinutes(actualStartAt, scheduledStartAt));
+        const overtimeMultiplier: 1 | 2 = arrivalDelayMinutes === 0 ? 2 : 1;
         const creditedOvertimeMinutes = overtimeMinutes * overtimeMultiplier;
-        const balanceMinutes = creditedOvertimeMinutes;
-        const explanation = `COBERTURA: chegou com ${arrivalDelayMinutes} min de atraso, mas o atraso nao foi descontado do banco porque a ocupacao foi marcada como cobertura.${overtimeMinutes > 0 ? ` Overtime de ${overtimeMinutes} min creditado em simples.` : ""}`;
+        const balanceMinutes = carryoverMinutes + creditedOvertimeMinutes - arrivalDelayMinutes;
+
+        const explanationParts: string[] = [];
+        if (carryoverMinutes > 0) {
+            explanationParts.push(`Chegou ${carryoverMinutes} min antes das 13:00; esse tempo entra como CREDITO no banco (carryover do meio plantao).`);
+        }
+        if (arrivalDelayMinutes > 0) {
+            explanationParts.push(`Chegou ${arrivalDelayMinutes} min apos 13:00 (alem da tolerancia); esse atraso entra como debito normal sobre o meio plantao.`);
+        }
+        if (overtimeMinutes > 0) {
+            explanationParts.push(`Overtime de ${overtimeMinutes} min creditado em ${overtimeMultiplier === 2 ? "dobro" : "simples"}.`);
+        }
+        if (explanationParts.length === 0) {
+            explanationParts.push("Meio plantao reconhecido por atraso, sem credito nem debito adicional.");
+        }
+        explanationParts.unshift("MEIO PLANTAO RECONHECIDO (chegada apos 9h em intervencao SD): pagamento e o meio plantao 13-19.");
+
         return {
             arrivalDelayMinutes,
             overtimeMinutes,
             overtimeMultiplier,
-            creditedOvertimeMinutes,
+            creditedOvertimeMinutes: creditedOvertimeMinutes + carryoverMinutes,
             balanceMinutes,
-            ruleCode: "COVERAGE_LATE_FORGIVEN",
-            explanation,
+            ruleCode: "LATE_HALF_SHIFT_CARRYOVER",
+            explanation: explanationParts.join(" "),
         };
     }
 
@@ -115,9 +136,9 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
  * continuity chains, or any data integrity issue producing phantom 12h+ credits/debits.
  */
 export function applyAnomalyGuard(calculation: BankHoursCalculationResult): BankHoursCalculationResult {
-    // Coverage entries already model "long delay, no debit" deliberately —
-    // do not flip them to ANOMALY just because the delay is > 6h.
-    if (calculation.ruleCode === "COVERAGE_LATE_FORGIVEN") {
+    // Late-half-shift acknowledgements already model the "long original delay,
+    // converted window" deliberately — do not flip them to ANOMALY.
+    if (calculation.ruleCode === "LATE_HALF_SHIFT_CARRYOVER") {
         return calculation;
     }
 
