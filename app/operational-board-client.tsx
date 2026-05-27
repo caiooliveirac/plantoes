@@ -33,6 +33,7 @@ import type {
     RegulationBoardRow,
 } from "@/services/board.service";
 import { AuditRail } from "@/components/board/AuditRail";
+import { DepartureVerifier } from "@/components/board/DepartureVerifier";
 
 type UserRole = "admin" | "chief";
 type ActionMode = "correct" | "end" | "start";
@@ -2573,6 +2574,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <AuditRail
                     pendingDepartures={pendingDepartures}
                     onOpenVerifier={setVerifierTarget}
+                />
+            )}
+
+            {session?.canManage && (
+                <DepartureVerifier
+                    target={verifierTarget}
+                    onClose={() => setVerifierTarget(null)}
                 />
             )}
 
