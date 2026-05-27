@@ -1,12 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Shield } from "lucide-react";
-import { toast } from "sonner";
-import { useRouter } from "next/navigation";
 import { PendingDepartureCard } from "@/components/board/PendingDepartureCard";
 import { fadeRise, staggerList } from "@/lib/board/motion";
+import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
 
 export interface AuditRailProps {
@@ -23,8 +22,7 @@ export interface AuditRailProps {
  * Visibility: caller must already have gated on session.canManage.
  */
 export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps) {
-    const router = useRouter();
-    const [, startTransition] = useTransition();
+    const quickConfirm = useQuickConfirmDeparture();
     const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
     const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
     const seenIdsRef = useRef<Set<string>>(new Set());
@@ -68,39 +66,23 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
 
     const handleQuickConfirm = useCallback(async (pending: PendingDepartureConfirmation) => {
         setBusyIds((current) => new Set(current).add(pending.occupancyId));
-        // Optimistic removal — re-add on failure.
+        // Optimistic removal — re-add on failure so the chefe doesn't lose the card.
         setHiddenIds((current) => new Set(current).add(pending.occupancyId));
 
-        try {
-            const response = await fetch(`/api/${pending.domain}/occupancies/${pending.occupancyId}/confirm-departure`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({}),
-            });
-            if (!response.ok) {
-                const body = await response.json().catch(() => ({})) as { error?: string };
-                throw new Error(body.error || "Falha ao confirmar saída.");
-            }
-            toast.success(`Saída de ${pending.displayName ?? pending.doctorName} confirmada às ${new Date(pending.actualEndedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`);
-            startTransition(() => {
-                router.refresh();
-            });
-        } catch (error) {
-            // Rollback the optimistic hide.
+        const result = await quickConfirm(pending);
+        if (!result.ok) {
             setHiddenIds((current) => {
                 const next = new Set(current);
                 next.delete(pending.occupancyId);
                 return next;
             });
-            toast.error(error instanceof Error ? error.message : "Falha ao confirmar saída.");
-        } finally {
-            setBusyIds((current) => {
-                const next = new Set(current);
-                next.delete(pending.occupancyId);
-                return next;
-            });
         }
-    }, [router, startTransition]);
+        setBusyIds((current) => {
+            const next = new Set(current);
+            next.delete(pending.occupancyId);
+            return next;
+        });
+    }, [quickConfirm]);
 
     return (
         <motion.aside

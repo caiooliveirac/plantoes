@@ -34,6 +34,8 @@ import type {
 } from "@/services/board.service";
 import { AuditRail } from "@/components/board/AuditRail";
 import { DepartureVerifier } from "@/components/board/DepartureVerifier";
+import { CommandPalette } from "@/components/board/CommandPalette";
+import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
 
 type UserRole = "admin" | "chief";
 type ActionMode = "correct" | "end" | "start";
@@ -874,6 +876,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [authOpen, setAuthOpen] = useState(false);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
     const [verifierTarget, setVerifierTarget] = useState<PendingDepartureConfirmation | null>(null);
+    const quickConfirmDeparture = useQuickConfirmDeparture();
     const [priorityDrawerOpen, setPriorityDrawerOpen] = useState(false);
     const [authEmail, setAuthEmail] = useState("");
     const [authPassword, setAuthPassword] = useState("");
@@ -2581,6 +2584,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <DepartureVerifier
                     target={verifierTarget}
                     onClose={() => setVerifierTarget(null)}
+                />
+            )}
+
+            {session?.canManage && (
+                <CommandPalette
+                    pendingDepartures={pendingDepartures}
+                    onConfirm={quickConfirmDeparture}
+                    onOpenVerifier={setVerifierTarget}
                 />
             )}
 
