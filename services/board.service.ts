@@ -1999,6 +1999,13 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
       continue;
     }
 
+    // SN do dia anterior so entra no plantao avaliado quando combina com SD
+    // formando P invertido. Sem essa combinacao, pertence ao plantao anterior
+    // (segunda) e nao deve aparecer como standalone no fechamento de terca.
+    if (candidate.logicalSlotStart === previousSnSlotStart) {
+      continue;
+    }
+
     entries.push(buildStandalonePreviousEntry(candidate));
   }
 
