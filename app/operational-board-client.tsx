@@ -2634,7 +2634,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 setProfessionalDrawerOpen(false);
                                 setPriorityDrawerOpen(false);
                                 setTransferConfirmOpen(false);
-                                setPreviousShiftOpen((current) => !current);
+                                router.push("/historico/turno-anterior");
                             }}
                         >
                             <span className="ops-history-trigger-icon" aria-hidden="true">
