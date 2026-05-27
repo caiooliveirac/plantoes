@@ -1025,18 +1025,55 @@ function resolveNightWorkCapacities(totalDoctors: number) {
     } satisfies Record<MealBreakNightWorkSlot, number>;
 }
 
-function resolveDinnerChoiceCapacities(totalDoctors: number) {
-    const base = Math.floor(totalDoctors / DINNER_CHOICE_SLOTS.length);
-    const remainder = totalDoctors % DINNER_CHOICE_SLOTS.length;
+function resolveSPMinutesOfDay(isoString: string): number {
+    const parts = new Intl.DateTimeFormat("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Sao_Paulo",
+    }).formatToParts(new Date(isoString));
+    const hour = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
+    const minute = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+    return hour * 60 + minute;
+}
+
+function resolveUnavailableDinnerChoiceSlots(createdAt: string): Set<(typeof DINNER_CHOICE_SLOTS)[number]> {
+    const minutesOfDay = resolveSPMinutesOfDay(createdAt);
+    const unavailable = new Set<(typeof DINNER_CHOICE_SLOTS)[number]>();
+    if (minutesOfDay >= 20 * 60 + 15) {
+        unavailable.add("20:30");
+    }
+    if (minutesOfDay >= 20 * 60 + 45) {
+        unavailable.add("21:00");
+    }
+    return unavailable;
+}
+
+
+function resolveDinnerChoiceCapacities(totalDoctors: number, unavailableSlots: Set<(typeof DINNER_CHOICE_SLOTS)[number]> = new Set()) {
+    const availableSlots = DINNER_CHOICE_SLOTS.filter((s) => !unavailableSlots.has(s));
     const capacities = {
-        "20:30": base,
-        "21:00": base,
-        "21:30": base,
+        "20:30": 0,
+        "21:00": 0,
+        "21:30": 0,
     } satisfies Record<(typeof DINNER_CHOICE_SLOTS)[number], number>;
 
-    const priority = ["20:30", "21:30", "21:00"] as const;
+    if (availableSlots.length === 0) {
+        return capacities;
+    }
+
+    const base = Math.floor(totalDoctors / availableSlots.length);
+    const remainder = totalDoctors % availableSlots.length;
+    for (const slot of availableSlots) {
+        capacities[slot] = base;
+    }
+
+    const priority = (["20:30", "21:30", "21:00"] as const).filter((s) => !unavailableSlots.has(s));
     for (let index = 0; index < remainder; index += 1) {
-        capacities[priority[index]] += 1;
+        const slot = priority[index];
+        if (slot) {
+            capacities[slot] += 1;
+        }
     }
 
     return capacities;
@@ -1709,6 +1746,18 @@ function syncNightSessionState(session: MealBreakSession) {
     const work2300 = session.roster
         .map((doctor) => doctor.ramal)
         .filter((ramal) => nightWorkAssignments[ramal] === "23:00");
+
+    // Quando só 21:30 está disponível (sessão iniciada >= 20:45), auto-atribui 21:30 para
+    // todos os trabalhadores das 23:00 sem jantar atribuído.
+    const unavailableSlots = resolveUnavailableDinnerChoiceSlots(session.createdAt);
+    if (unavailableSlots.has("20:30") && unavailableSlots.has("21:00")) {
+        for (const ramal of work2300) {
+            if (!dinnerAssignments[ramal]) {
+                dinnerAssignments[ramal] = "21:30";
+            }
+        }
+    }
+
     const dinnerQueue = work2300
         .filter((ramal) => !dinnerAssignments[ramal])
         .sort((left, right) => compareNightQueue(session, left, right));
@@ -1719,7 +1768,7 @@ function syncNightSessionState(session: MealBreakSession) {
         nightWorkAssignments,
         dinnerAssignments,
         nightWorkCapacities: resolveNightWorkCapacities(session.roster.length),
-        dinnerChoiceCapacities: resolveDinnerChoiceCapacities(work2300.length),
+        dinnerChoiceCapacities: resolveDinnerChoiceCapacities(work2300.length, unavailableSlots),
         nightWorkQueue,
         dinnerQueue,
         stage: session.stage === "awaiting_confirmation"
