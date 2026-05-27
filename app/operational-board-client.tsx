@@ -35,6 +35,9 @@ import type {
 import { AuditRail } from "@/components/board/AuditRail";
 import { DepartureVerifier } from "@/components/board/DepartureVerifier";
 import { CommandPalette } from "@/components/board/CommandPalette";
+import { BoardHero } from "@/components/board/BoardHero";
+import { BoardQuickFilters, type BoardRoleFilter, type BoardStatusFilter } from "@/components/board/BoardQuickFilters";
+import { InlineTimeEditor } from "@/components/board/InlineTimeEditor";
 import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
 
 type UserRole = "admin" | "chief";
@@ -876,6 +879,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [authOpen, setAuthOpen] = useState(false);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
     const [verifierTarget, setVerifierTarget] = useState<PendingDepartureConfirmation | null>(null);
+    const [boardSearch, setBoardSearch] = useState("");
+    const [boardRoleFilter, setBoardRoleFilter] = useState<BoardRoleFilter>("all");
+    const [boardStatusFilter, setBoardStatusFilter] = useState<BoardStatusFilter>("all");
     const quickConfirmDeparture = useQuickConfirmDeparture();
     const [priorityDrawerOpen, setPriorityDrawerOpen] = useState(false);
     const [authEmail, setAuthEmail] = useState("");
@@ -1226,6 +1232,32 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const interventionActiveCount = visibleInterventionCards.length - interventionWaitingCount;
     const criticalCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "critical");
     const watchCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "high");
+    const regulationOccupiedCount = visibleRegulationCards.filter((card) => card.status === "active" && Boolean(card.occupancyId)).length;
+    const regulationFreeCount = visibleRegulationCards.filter((card) => card.status === "waiting").length;
+
+    const deferredBoardSearch = useDeferredValue(boardSearch);
+    const cardMatchesFilters = (card: BoardCard): boolean => {
+        const needle = deferredBoardSearch.trim().toLowerCase();
+        if (needle.length > 0) {
+            const haystack = `${displayDoctorName(card)} ${cardCode(card)} ${cardLabel(card)} ${card.roleLabel ?? ""}`.toLowerCase();
+            if (!haystack.includes(needle)) return false;
+        }
+        if (boardRoleFilter !== "all") {
+            const role = resolveCardRoleLabel(card);
+            if (role !== boardRoleFilter) return false;
+        }
+        if (boardStatusFilter !== "all") {
+            const priority = resolvePriority(card, generatedAt);
+            if (boardStatusFilter === "critical" && priority !== "critical") return false;
+            if (boardStatusFilter === "watch" && priority !== "high") return false;
+            if (boardStatusFilter === "waiting" && card.status !== "waiting") return false;
+        }
+        return true;
+    };
+    const filteredRegulationCards = visibleRegulationCards.filter(cardMatchesFilters);
+    const filteredInterventionCards = visibleInterventionCards.filter(cardMatchesFilters);
+    const filteredMatchedCount = filteredRegulationCards.length + filteredInterventionCards.length;
+    const totalBoardCount = visibleRegulationCards.length + visibleInterventionCards.length;
     const previousShiftSections = previousShift.sections.map((section) => ({
         ...section,
         entries: section.entries
@@ -2335,7 +2367,20 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 aria-label={clickable ? `Abrir ${displayDoctorName(card)} no ramal ${card.postCode}` : undefined}
             >
                 <div role="cell" className="ops-grid-cell column-time">
-                    <span className={`ops-time-pill ${isDisabledRegulation ? "disabled" : ""}`.trim()}><strong>{isDisabledRegulation ? formatBoardTime(card.disabledAt ?? null) : formatBoardTime(resolveOperationalArrival(card))}</strong></span>
+                    {clickable && card.status === "active" && card.occupancyId ? (
+                        <InlineTimeEditor
+                            domain="regulation"
+                            occupancyId={card.occupancyId}
+                            field="arrival"
+                            currentIso={resolveOperationalArrival(card)}
+                            doctorName={displayDoctorName(card)}
+                            targetCode={card.postCode}
+                        >
+                            {({ value }) => <span className="ops-time-pill"><strong>{value}</strong></span>}
+                        </InlineTimeEditor>
+                    ) : (
+                        <span className={`ops-time-pill ${isDisabledRegulation ? "disabled" : ""}`.trim()}><strong>{isDisabledRegulation ? formatBoardTime(card.disabledAt ?? null) : formatBoardTime(resolveOperationalArrival(card))}</strong></span>
+                    )}
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
@@ -2435,9 +2480,26 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 aria-label={isClickable ? `Abrir ${displayDoctorName(card)} na base ${card.baseCode}` : undefined}
             >
                 <div role="cell" className="ops-grid-cell column-time">
-                    <span className={`ops-time-pill ${isDisabledIntervention ? "disabled" : ""} ${isWaitingIntervention ? "waiting" : ""} ${isAwaitingNews ? "verification" : ""}`.trim()}>
-                        <strong>{isDisabledIntervention ? formatBoardTime(card.disabledAt ?? null) : isWaitingIntervention ? "Livre" : formatBoardTime(resolveOperationalArrival(card))}</strong>
-                    </span>
+                    {isClickable && card.status === "active" && card.occupancyId ? (
+                        <InlineTimeEditor
+                            domain="intervention"
+                            occupancyId={card.occupancyId}
+                            field="arrival"
+                            currentIso={resolveOperationalArrival(card)}
+                            doctorName={displayDoctorName(card)}
+                            targetCode={card.baseCode}
+                        >
+                            {({ value }) => (
+                                <span className={`ops-time-pill ${isAwaitingNews ? "verification" : ""}`.trim()}>
+                                    <strong>{value}</strong>
+                                </span>
+                            )}
+                        </InlineTimeEditor>
+                    ) : (
+                        <span className={`ops-time-pill ${isDisabledIntervention ? "disabled" : ""} ${isWaitingIntervention ? "waiting" : ""} ${isAwaitingNews ? "verification" : ""}`.trim()}>
+                            <strong>{isDisabledIntervention ? formatBoardTime(card.disabledAt ?? null) : isWaitingIntervention ? "Livre" : formatBoardTime(resolveOperationalArrival(card))}</strong>
+                        </span>
+                    )}
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
@@ -3024,6 +3086,32 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     />
                 ) : (
                     <section className="ops-command-center">
+                        <BoardHero
+                            shiftLabel={shiftLabel}
+                            generatedAt={generatedAt}
+                            regulationOccupied={regulationOccupiedCount}
+                            regulationFree={regulationFreeCount}
+                            interventionActive={interventionActiveCount}
+                            interventionWaiting={interventionWaitingCount}
+                            criticalCount={criticalCards.length}
+                            pendingDeparturesCount={pendingDepartures.length}
+                            canManage={Boolean(session?.canManage)}
+                            onOpenCriticalQueue={session?.canManage ? () => openDrawer() : undefined}
+                        />
+
+                        {session?.canManage && (
+                            <BoardQuickFilters
+                                roleFilter={boardRoleFilter}
+                                onRoleFilterChange={setBoardRoleFilter}
+                                statusFilter={boardStatusFilter}
+                                onStatusFilterChange={setBoardStatusFilter}
+                                search={boardSearch}
+                                onSearchChange={setBoardSearch}
+                                matchedCount={filteredMatchedCount}
+                                totalCount={totalBoardCount}
+                            />
+                        )}
+
                         <section className="ops-main-grid">
                             <section className="ops-operational-panel regulation">
                                 <header className="ops-panel-header regulation">
@@ -3052,8 +3140,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         </div>
 
                                         <div className="ops-grid-body" role="rowgroup">
-                                            {visibleRegulationCards.length > 0 ? visibleRegulationCards.map((card) => renderRegulationRow(card)) : (
-                                                <div className="ops-empty-row">Nenhum ramal ativo na regulação neste turno.</div>
+                                            {filteredRegulationCards.length > 0 ? filteredRegulationCards.map((card) => renderRegulationRow(card)) : (
+                                                <div className="ops-empty-row">{visibleRegulationCards.length === 0 ? "Nenhum ramal ativo na regulação neste turno." : "Nenhum ramal corresponde aos filtros atuais."}</div>
                                             )}
                                             {session?.canManage && hasAvailableRegulationPost && (
                                                 <div
@@ -3093,8 +3181,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         </div>
 
                                         <div className="ops-grid-body" role="rowgroup">
-                                            {visibleInterventionCards.length > 0 ? visibleInterventionCards.map((card) => renderInterventionRow(card)) : (
-                                                <div className="ops-empty-row">Nenhuma base ativa ou aguardando neste turno.</div>
+                                            {filteredInterventionCards.length > 0 ? filteredInterventionCards.map((card) => renderInterventionRow(card)) : (
+                                                <div className="ops-empty-row">{visibleInterventionCards.length === 0 ? "Nenhuma base ativa ou aguardando neste turno." : "Nenhuma base corresponde aos filtros atuais."}</div>
                                             )}
                                         </div>
                                     </div>

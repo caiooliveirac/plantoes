@@ -9057,3 +9057,277 @@ button.chief-payable-tag:focus-visible {
     .historico-grid-table { overflow-x: auto; }
     .historico-grid-row { min-width: 720px; }
 }
+
+/* ============================================================
+ * Board hero (main view): live stats with countdown
+ * ============================================================ */
+
+.board-hero {
+    display: grid;
+    grid-template-columns: minmax(220px, auto) 1fr auto;
+    gap: 20px;
+    align-items: center;
+    padding: 18px 22px;
+    margin-bottom: 14px;
+    border-radius: 20px;
+    background: var(--surface-glass-strong);
+    border: 1px solid var(--surface-elevated-border);
+    backdrop-filter: var(--blur-glass);
+    -webkit-backdrop-filter: var(--blur-glass);
+}
+
+.board-hero__shift {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.board-hero__chip {
+    font-family: var(--font-display), var(--font-sans);
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 10px 16px;
+    border-radius: 14px;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-elevated);
+    color: var(--text);
+    min-width: 60px;
+    text-align: center;
+}
+
+.board-hero__chip.tone-ice    { color: var(--ice);   border-color: color-mix(in oklab, var(--ice) 50%, var(--surface-elevated-border));    background: color-mix(in oklab, var(--ice) 14%, var(--surface-elevated)); }
+.board-hero__chip.tone-green  { color: var(--green); border-color: color-mix(in oklab, var(--green) 50%, var(--surface-elevated-border));  background: color-mix(in oklab, var(--green) 14%, var(--surface-elevated)); }
+.board-hero__chip.tone-gold   { color: var(--gold);  border-color: color-mix(in oklab, var(--gold) 50%, var(--surface-elevated-border));   background: color-mix(in oklab, var(--gold) 14%, var(--surface-elevated)); }
+.board-hero__chip.tone-amber  { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 50%, var(--surface-elevated-border));  background: color-mix(in oklab, var(--amber) 14%, var(--surface-elevated)); }
+
+.board-hero__shift h1 {
+    margin: 0;
+    font-family: var(--font-display), var(--font-sans);
+    font-size: 1.15rem;
+    letter-spacing: 0.01em;
+}
+
+.board-hero__shift p {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+    text-transform: capitalize;
+}
+
+.board-hero__stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+}
+
+.board-hero__stat {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--muted-strong);
+    font-size: 0.8rem;
+    min-width: 130px;
+    transition: border-color var(--dur-fast);
+}
+
+.board-hero__stat strong {
+    font-family: var(--font-display), var(--font-sans);
+    font-size: 1.3rem;
+    color: var(--text);
+    line-height: 1;
+}
+
+.board-hero__stat span {
+    flex: 1;
+    color: var(--muted);
+    font-size: 0.74rem;
+    line-height: 1.15;
+}
+
+.board-hero__stat.is-warn { border-color: color-mix(in oklab, var(--accent-warn) 60%, var(--surface-elevated-border)); }
+.board-hero__stat.is-warn strong { color: var(--accent-warn); }
+
+.board-hero__stat.is-critical {
+    border-color: var(--accent-fraud, var(--accent-warn));
+    background: color-mix(in oklab, var(--accent-fraud, var(--accent-warn)) 14%, var(--surface-elevated));
+}
+.board-hero__stat.is-critical strong { color: var(--accent-fraud, var(--accent-warn)); }
+
+.board-hero__stat--countdown {
+    background: color-mix(in oklab, var(--accent-confirm-soft) 60%, var(--surface-elevated));
+    border-color: color-mix(in oklab, var(--accent-confirm) 50%, var(--surface-elevated-border));
+}
+.board-hero__stat--countdown strong { color: var(--accent-confirm); }
+
+.board-hero__actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+}
+
+.board-hero__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+    appearance: none;
+    text-decoration: none;
+    padding: 9px 14px;
+    border-radius: 12px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--muted-strong);
+    font-weight: 600;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
+}
+
+.board-hero__action:hover {
+    color: var(--text);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+.board-hero__action.critical {
+    background: color-mix(in oklab, var(--accent-fraud, var(--accent-warn)) 18%, transparent);
+    border-color: var(--accent-fraud, var(--accent-warn));
+    color: var(--accent-fraud, var(--accent-warn));
+}
+.board-hero__action.critical:hover { background: color-mix(in oklab, var(--accent-fraud, var(--accent-warn)) 30%, transparent); }
+
+@media (max-width: 1080px) {
+    .board-hero {
+        grid-template-columns: 1fr;
+        gap: 14px;
+    }
+    .board-hero__stats { justify-content: flex-start; }
+    .board-hero__actions { flex-direction: row; }
+}
+
+/* ============================================================
+ * Board quick filters (chips + search)
+ * ============================================================ */
+
+.board-filters {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    border-radius: 16px;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+}
+
+.board-filters__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.board-filters__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 70px;
+    font-size: 0.7rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.board-filters__search {
+    flex: 1 1 280px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--muted-strong);
+}
+
+.board-filters__search input {
+    flex: 1;
+    appearance: none;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.board-filters__search input::placeholder { color: var(--muted); }
+
+.board-filters__clear {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border-radius: 6px;
+}
+.board-filters__clear:hover { color: var(--text); background: var(--surface-elevated-border); }
+
+.board-filters__match {
+    font-size: 0.74rem;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.board-filters__chip {
+    appearance: none;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-elevated);
+    color: var(--muted-strong);
+    padding: 5px 11px;
+    border-radius: 10px;
+    font-size: 0.76rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: border-color var(--dur-fast), color var(--dur-fast), background var(--dur-fast);
+}
+
+.board-filters__chip:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.18); }
+.board-filters__chip.active {
+    background: var(--accent-confirm-soft);
+    color: var(--accent-confirm);
+    border-color: var(--accent-confirm);
+}
+
+/* ============================================================
+ * Inline time editor trigger (used in both grid and main board)
+ * ============================================================ */
+
+.inline-time-trigger {
+    appearance: none;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    width: 100%;
+}
+
+.inline-time-trigger:hover .ops-time-pill,
+.inline-time-trigger:focus-visible .ops-time-pill {
+    outline: 1px solid var(--accent-confirm);
+    outline-offset: 2px;
+}

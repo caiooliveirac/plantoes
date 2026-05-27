@@ -1,11 +1,10 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import * as Popover from "@radix-ui/react-popover";
+import { useMemo, useTransition } from "react";
 import { motion } from "framer-motion";
-import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { fadeRise, staggerChild, staggerList } from "@/lib/board/motion";
+import { InlineTimeEditor } from "@/components/board/InlineTimeEditor";
 import type {
     PendingDepartureConfirmation,
     PreviousOperationalBucket,
@@ -82,159 +81,6 @@ function entryArrival(entry: PreviousOperationalEntry) {
 
 function entryEffectiveEnd(entry: PreviousOperationalEntry) {
     return entry.actualEndedAt ?? entry.endedAt;
-}
-
-function isoToLocalInputValue(iso: string | null): string {
-    if (!iso) return "";
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return "";
-    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-    return local.toISOString().slice(0, 16);
-}
-
-function localInputValueToIso(value: string): string {
-    return new Date(value).toISOString();
-}
-
-interface TimeEditorProps {
-    entry: PreviousOperationalEntry;
-    field: "arrival" | "departure";
-    currentIso: string | null;
-    onSaved: () => void;
-}
-
-function TimeEditor({ entry, field, currentIso, onSaved }: TimeEditorProps) {
-    const [open, setOpen] = useState(false);
-    const [value, setValue] = useState(() => isoToLocalInputValue(currentIso));
-    const [reason, setReason] = useState("");
-    const [submitting, setSubmitting] = useState(false);
-
-    const label = field === "arrival" ? "Chegada" : "Saída efetiva";
-    const displayValue = field === "arrival"
-        ? formatHourMinute(currentIso)
-        : currentIso ? formatHourMinute(currentIso) : "Em aberto";
-
-    const handleOpenChange = (next: boolean) => {
-        if (next) {
-            setValue(isoToLocalInputValue(currentIso));
-            setReason("");
-        }
-        setOpen(next);
-    };
-
-    const submit = async () => {
-        if (!value) {
-            toast.error("Informe o novo horário.");
-            return;
-        }
-        const trimmedReason = reason.trim();
-        const nextIso = localInputValueToIso(value);
-        const changed = !currentIso || new Date(currentIso).toISOString() !== nextIso;
-        if (changed && trimmedReason.length < 8) {
-            toast.error("Motivo obrigatório (≥ 8 caracteres) para corrigir horário.");
-            return;
-        }
-        setSubmitting(true);
-        try {
-            const endpoint = entry.domain === "regulation"
-                ? `/api/regulation/occupancies/${entry.occupancyId}`
-                : `/api/intervention/occupancies/${entry.occupancyId}`;
-
-            const payload: Record<string, unknown> = {
-                notes: trimmedReason || undefined,
-            };
-
-            if (field === "arrival") {
-                payload.startedAt = nextIso;
-                payload.boardStartedAt = nextIso;
-            } else {
-                payload.actualEndedAt = nextIso;
-            }
-
-            const response = await fetch(endpoint, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-            });
-
-            if (!response.ok) {
-                const body = await response.json().catch(() => ({})) as { error?: string };
-                throw new Error(body.error || "Falha ao salvar horário.");
-            }
-
-            toast.success(`${label} atualizada: ${entry.displayName ?? entry.doctorName}.`);
-            setOpen(false);
-            onSaved();
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : "Falha ao salvar horário.");
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
-    return (
-        <Popover.Root open={open} onOpenChange={handleOpenChange}>
-            <Popover.Trigger asChild>
-                <button
-                    type="button"
-                    className="historico-grid-time"
-                    aria-label={`Editar ${label.toLowerCase()} de ${entry.displayName ?? entry.doctorName}`}
-                    title={`Editar ${label.toLowerCase()}`}
-                >
-                    {displayValue}
-                </button>
-            </Popover.Trigger>
-            <Popover.Portal>
-                <Popover.Content
-                    sideOffset={6}
-                    collisionPadding={16}
-                    className="historico-list-popover"
-                >
-                    <header>
-                        <strong>Corrigir {label.toLowerCase()}</strong>
-                        <span>{entry.displayName ?? entry.doctorName} · {entry.targetCode}</span>
-                    </header>
-                    <label className="historico-list-popover__field">
-                        <span>Novo horário</span>
-                        <input
-                            type="datetime-local"
-                            value={value}
-                            onChange={(event) => setValue(event.target.value)}
-                            step={60}
-                        />
-                    </label>
-                    <label className="historico-list-popover__field">
-                        <span>Motivo (obrigatório)</span>
-                        <textarea
-                            value={reason}
-                            onChange={(event) => setReason(event.target.value)}
-                            rows={3}
-                            placeholder="Ex.: chegada confirmada por rádio às 07:08"
-                        />
-                    </label>
-                    <div className="historico-list-popover__actions">
-                        <button
-                            type="button"
-                            className="historico-list-popover__cancel"
-                            onClick={() => setOpen(false)}
-                            disabled={submitting}
-                        >
-                            Cancelar
-                        </button>
-                        <button
-                            type="button"
-                            className="historico-list-popover__save"
-                            onClick={submit}
-                            disabled={submitting}
-                        >
-                            {submitting ? "Salvando…" : "Salvar"}
-                        </button>
-                    </div>
-                    <Popover.Arrow className="historico-list-popover__arrow" />
-                </Popover.Content>
-            </Popover.Portal>
-        </Popover.Root>
-    );
 }
 
 export function PreviousShiftList({
@@ -337,20 +183,30 @@ export function PreviousShiftList({
                                         {entry.roleLabel && <span className="historico-grid-role">{entry.roleLabel}</span>}
                                     </div>
                                     <div role="cell" className="col-hora">
-                                        <TimeEditor
-                                            entry={entry}
+                                        <InlineTimeEditor
+                                            domain={entry.domain}
+                                            occupancyId={entry.occupancyId}
                                             field="arrival"
                                             currentIso={arrivalIso}
+                                            doctorName={entry.displayName ?? entry.doctorName}
+                                            targetCode={entry.targetCode}
                                             onSaved={handleSaved}
-                                        />
+                                        >
+                                            {({ value }) => value}
+                                        </InlineTimeEditor>
                                     </div>
                                     <div role="cell" className="col-hora">
-                                        <TimeEditor
-                                            entry={entry}
+                                        <InlineTimeEditor
+                                            domain={entry.domain}
+                                            occupancyId={entry.occupancyId}
                                             field="departure"
                                             currentIso={departureIso}
+                                            doctorName={entry.displayName ?? entry.doctorName}
+                                            targetCode={entry.targetCode}
                                             onSaved={handleSaved}
-                                        />
+                                        >
+                                            {({ value }) => value}
+                                        </InlineTimeEditor>
                                     </div>
                                     <div role="cell" className="col-saldo">
                                         <span className={`historico-grid-balance tone-${tone}`}>
