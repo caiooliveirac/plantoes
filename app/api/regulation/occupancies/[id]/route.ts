@@ -198,6 +198,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "roleLabel") ? { roleLabel: parsed.data.roleLabel ?? null } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "ramalLabel") ? { ramalLabel: parsed.data.ramalLabel ?? null } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "notes") ? { notes: parsed.data.notes ?? null } : {}),
+            chiefConfirmed: true,
         }, session.user.id);
 
         await getDb().insert(auditLogs).values({

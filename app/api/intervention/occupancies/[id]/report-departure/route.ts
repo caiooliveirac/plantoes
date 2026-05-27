@@ -51,6 +51,7 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
         const updated = await endInterventionOccupancy(id, {
             endedAt: new Date(parsed.data.endedAt),
             actualEndedAt: parsed.data.actualEndedAt ? new Date(parsed.data.actualEndedAt) : null,
+            chiefConfirmed: true,
         }, session.user.id);
 
         await getDb().insert(auditLogs).values({

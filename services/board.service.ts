@@ -1541,21 +1541,287 @@ export async function listInterventionBoard() {
   return (result as unknown as Record<string, unknown>[]).map(mapInterventionRow);
 }
 
-export async function getOperationalBoard() {
+export interface OperationalBoardSnapshot {
+  generatedAt: string;
+  regulation: RegulationBoardRow[];
+  intervention: InterventionBoardRow[];
+  /**
+   * Verbalized departures waiting for chefe/admin review. Optional so existing
+   * test fixtures that mock the board do not have to backfill the field; the
+   * live path always populates it. When absent, callers treat as empty.
+   */
+  pendingDepartures?: PendingDepartureConfirmation[];
+}
+
+export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
   await expireInterventionBaseDeactivations(new Date());
   await expireStaleShadowInterventionOccupancies(new Date());
   await expireStaleRegulationOccupancies(new Date());
 
-  const [regulation, intervention] = await Promise.all([
+  const [regulation, intervention, pendingDepartures] = await Promise.all([
     listRegulationBoard(),
     listInterventionBoard(),
+    listPendingDepartureConfirmations(),
   ]);
 
   return {
     generatedAt: new Date().toISOString(),
     regulation,
     intervention,
+    pendingDepartures,
   };
+}
+
+export interface PendingDepartureCorrelatedMessage {
+  ingestedMessageId: string;
+  createdAt: string;
+  parsedAction: string | null;
+  rawText: string;
+}
+
+export interface PendingDepartureRecentOccurrence {
+  occupancyId: string;
+  domain: "regulation" | "intervention";
+  endedAt: string;
+  reasonCode: TelegramLateDepartureReasonCode | null;
+}
+
+export interface PendingDepartureConfirmation {
+  occupancyId: string;
+  domain: "regulation" | "intervention";
+  targetCode: string;
+  targetLabel: string;
+  doctorId: string;
+  doctorName: string;
+  displayName: string | null;
+  shiftLabel: "SD" | "SN" | "P" | null;
+  roleLabel: string | null;
+  startedAt: string;
+  scheduledStartAt: string | null;
+  scheduledEndAt: string | null;
+  /** Verbalized real departure time — the value the chefe needs to validate. */
+  actualEndedAt: string;
+  /** Board-end (scheduled handoff). */
+  endedAt: string | null;
+  reasonCode: TelegramLateDepartureReasonCode | null;
+  /** Minutes between scheduledEndAt and actualEndedAt; positive = ran long. */
+  delayMinutes: number | null;
+  /** Last messages from the bot ingestion referencing this occupancy. */
+  recentMessages: PendingDepartureCorrelatedMessage[];
+  /** Same-reason departures by this doctor in the past 30 days (pattern signal). */
+  reasonOccurrenceCount30d: number;
+  /** When the verbalized departure was recorded. */
+  recordedAt: string;
+}
+
+export type TelegramLateDepartureReasonCode = "occurrence" | "hygienization" | "chief_release" | "handoff";
+
+const LATE_DEPARTURE_REASON_PATTERNS: Array<{ code: TelegramLateDepartureReasonCode; pattern: RegExp }> = [
+  { code: "occurrence", pattern: /\b(OCORR|ATEND|CHAMADO)/i },
+  { code: "hygienization", pattern: /\b(HIGIE|LIMP|LAVA|DESINF|DESCONTAMIN)/i },
+  { code: "chief_release", pattern: /\b(CHEFIA|CHEFE|LIBERAD|LIBEROU|AUTORIZ|DETERMIN)/i },
+  { code: "handoff", pattern: /\b(RENDIDO|RENDIDA|RENDIC|REDIC|TROCA|SUBSTITUI)/i },
+];
+
+function detectLateDepartureReasonCode(text: string | null | undefined): TelegramLateDepartureReasonCode | null {
+  if (!text) return null;
+  const normalized = text.toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  for (const { code, pattern } of LATE_DEPARTURE_REASON_PATTERNS) {
+    if (pattern.test(normalized)) return code;
+  }
+  return null;
+}
+
+export async function listPendingDepartureConfirmations(
+  options: { windowDays?: number; limit?: number } = {},
+): Promise<PendingDepartureConfirmation[]> {
+  const db = getDb();
+  const windowDays = options.windowDays ?? 7;
+  const limit = options.limit ?? 200;
+  const windowMs = windowDays * 24 * 60 * 60 * 1000;
+  const cutoffAt = new Date(Date.now() - windowMs).toISOString();
+
+  const rows = await db.execute<{
+    occupancyId: string;
+    domain: "regulation" | "intervention";
+    targetCode: string;
+    targetLabel: string;
+    doctorId: string;
+    doctorName: string;
+    displayName: string | null;
+    shiftLabel: "SD" | "SN" | "P" | null;
+    roleLabel: string | null;
+    startedAt: string;
+    scheduledStartAt: string | null;
+    scheduledEndAt: string | null;
+    actualEndedAt: string;
+    endedAt: string | null;
+    notes: string | null;
+    recordedAt: string;
+  }>(sql`
+    select
+      ro.id as "occupancyId",
+      'regulation'::text as "domain",
+      rp.code as "targetCode",
+      rp.label as "targetLabel",
+      ro.doctor_id as "doctorId",
+      d.full_name as "doctorName",
+      d.display_name as "displayName",
+      ro.shift_label as "shiftLabel",
+      ro.role_label as "roleLabel",
+      ro.started_at as "startedAt",
+      ro.scheduled_start_at as "scheduledStartAt",
+      ro.scheduled_end_at as "scheduledEndAt",
+      ro.actual_ended_at as "actualEndedAt",
+      ro.ended_at as "endedAt",
+      ro.notes as "notes",
+      ro.updated_at as "recordedAt"
+    from operations_v2.regulation_occupancies ro
+    inner join operations_v2.regulation_posts rp on rp.id = ro.post_id
+    inner join operations_v2.doctors d on d.id = ro.doctor_id
+    where ro.actual_ended_at is not null
+      and ro.departure_confirmed_at is null
+      and ro.actual_ended_at >= ${cutoffAt}
+
+    union all
+
+    select
+      io.id as "occupancyId",
+      'intervention'::text as "domain",
+      ib.code as "targetCode",
+      ib.label as "targetLabel",
+      io.doctor_id as "doctorId",
+      d.full_name as "doctorName",
+      d.display_name as "displayName",
+      io.shift_label as "shiftLabel",
+      io.role_label as "roleLabel",
+      io.started_at as "startedAt",
+      io.scheduled_start_at as "scheduledStartAt",
+      io.scheduled_end_at as "scheduledEndAt",
+      io.actual_ended_at as "actualEndedAt",
+      io.ended_at as "endedAt",
+      io.notes as "notes",
+      io.updated_at as "recordedAt"
+    from operations_v2.intervention_occupancies io
+    inner join operations_v2.intervention_bases ib on ib.id = io.base_id
+    inner join operations_v2.doctors d on d.id = io.doctor_id
+    where io.actual_ended_at is not null
+      and io.departure_confirmed_at is null
+      and io.actual_ended_at >= ${cutoffAt}
+
+    order by "actualEndedAt" desc
+    limit ${limit}
+  `);
+
+  const items = (rows as unknown as { rows: any[] }).rows ?? (rows as any);
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  const occupancyIds = items.map((row) => row.occupancyId);
+  const doctorIds = Array.from(new Set(items.map((row) => row.doctorId)));
+
+  const [messageRows, patternRows] = await Promise.all([
+    db.execute<{ occupancyId: string; ingestedMessageId: string; createdAt: string; parsedAction: string | null; rawText: string }>(sql`
+      select
+        related_occupancy_id::text as "occupancyId",
+        id::text as "ingestedMessageId",
+        created_at as "createdAt",
+        parsed_action as "parsedAction",
+        raw_text as "rawText"
+      from operations_v2.telegram_ingested_messages
+      where related_occupancy_id = any(${occupancyIds}::uuid[])
+      order by created_at desc
+      limit 600
+    `),
+    db.execute<{ doctorId: string; reasonText: string | null; actualEndedAt: string; occupancyId: string; domain: string }>(sql`
+      select
+        ro.doctor_id::text as "doctorId",
+        ro.notes as "reasonText",
+        ro.actual_ended_at as "actualEndedAt",
+        ro.id::text as "occupancyId",
+        'regulation'::text as "domain"
+      from operations_v2.regulation_occupancies ro
+      where ro.doctor_id = any(${doctorIds}::uuid[])
+        and ro.actual_ended_at is not null
+        and ro.actual_ended_at >= ${new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()}
+
+      union all
+
+      select
+        io.doctor_id::text as "doctorId",
+        io.notes as "reasonText",
+        io.actual_ended_at as "actualEndedAt",
+        io.id::text as "occupancyId",
+        'intervention'::text as "domain"
+      from operations_v2.intervention_occupancies io
+      where io.doctor_id = any(${doctorIds}::uuid[])
+        and io.actual_ended_at is not null
+        and io.actual_ended_at >= ${new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()}
+    `),
+  ]);
+
+  const messagesByOccupancy = new Map<string, PendingDepartureCorrelatedMessage[]>();
+  const messageItems = (messageRows as unknown as { rows: any[] }).rows ?? (messageRows as any);
+  for (const row of messageItems as any[]) {
+    const list = messagesByOccupancy.get(row.occupancyId) ?? [];
+    if (list.length < 5) {
+      list.push({
+        ingestedMessageId: row.ingestedMessageId,
+        createdAt: row.createdAt,
+        parsedAction: row.parsedAction ?? null,
+        rawText: row.rawText,
+      });
+      messagesByOccupancy.set(row.occupancyId, list);
+    }
+  }
+
+  const reasonCountsByDoctor = new Map<string, Map<TelegramLateDepartureReasonCode, number>>();
+  const patternItems = (patternRows as unknown as { rows: any[] }).rows ?? (patternRows as any);
+  for (const row of patternItems as any[]) {
+    const code = detectLateDepartureReasonCode(row.reasonText);
+    if (!code) continue;
+    const inner = reasonCountsByDoctor.get(row.doctorId) ?? new Map<TelegramLateDepartureReasonCode, number>();
+    inner.set(code, (inner.get(code) ?? 0) + 1);
+    reasonCountsByDoctor.set(row.doctorId, inner);
+  }
+
+  return items.map((row: any): PendingDepartureConfirmation => {
+    const recentMessages = messagesByOccupancy.get(row.occupancyId) ?? [];
+    const reasonFromMessages = recentMessages
+      .map((message) => detectLateDepartureReasonCode(message.rawText))
+      .find((code) => code !== null) ?? null;
+    const reasonFromNotes = detectLateDepartureReasonCode(row.notes);
+    const reasonCode = reasonFromMessages ?? reasonFromNotes;
+    const delayMinutes = row.scheduledEndAt
+      ? Math.round((new Date(row.actualEndedAt).getTime() - new Date(row.scheduledEndAt).getTime()) / 60000)
+      : null;
+    const reasonOccurrenceCount30d = reasonCode
+      ? (reasonCountsByDoctor.get(row.doctorId)?.get(reasonCode) ?? 0)
+      : 0;
+
+    return {
+      occupancyId: row.occupancyId,
+      domain: row.domain,
+      targetCode: row.targetCode,
+      targetLabel: row.targetLabel,
+      doctorId: row.doctorId,
+      doctorName: row.doctorName,
+      displayName: row.displayName,
+      shiftLabel: row.shiftLabel,
+      roleLabel: row.roleLabel,
+      startedAt: row.startedAt,
+      scheduledStartAt: row.scheduledStartAt,
+      scheduledEndAt: row.scheduledEndAt,
+      actualEndedAt: row.actualEndedAt,
+      endedAt: row.endedAt,
+      reasonCode,
+      delayMinutes,
+      recentMessages,
+      reasonOccurrenceCount30d,
+      recordedAt: row.recordedAt,
+    };
+  });
 }
 
 export async function getPreviousOperationalBoard(reference = new Date()): Promise<PreviousOperationalBoard> {

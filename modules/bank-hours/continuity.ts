@@ -9,6 +9,12 @@ export interface ContinuityRecord {
     startedAt: string | Date;
     endedAt?: string | Date | null;
     actualEndedAt?: string | Date | null;
+    /**
+     * When the chefe/admin confirmed the verbalized departure. If null while
+     * actualEndedAt is set, the occupancy is in "hold" — the closure is not
+     * authoritative yet and bank hours must NOT be credited until confirmed.
+     */
+    departureConfirmedAt?: string | Date | null;
 }
 
 export interface ContinuityOccupancy extends ContinuityRecord {
@@ -55,6 +61,29 @@ function asDate(value: string | Date | null | undefined) {
 
 export function resolveContinuityEffectiveEndedAt(record: Pick<ContinuityRecord, "endedAt" | "actualEndedAt">) {
     return asDate(record.actualEndedAt ?? record.endedAt ?? null);
+}
+
+/**
+ * A continuity member is "closure-authoritative" for bank hours when either:
+ *   - it was closed without a verbalized real end (endedAt only, no actualEndedAt
+ *     to question — typically system or chief direct closure), OR
+ *   - actualEndedAt is set AND departureConfirmedAt is set (chief confirmed).
+ *
+ * If actualEndedAt is set but departureConfirmedAt is null, the closure is in
+ * "hold" — chief still needs to review the verbalized departure. Bank hours
+ * must wait. We treat this as "not closed yet" for span purposes so that
+ * syncBankHoursByContinuityGroup short-circuits.
+ */
+export function isDepartureClosureAuthoritative(
+    record: Pick<ContinuityRecord, "endedAt" | "actualEndedAt" | "departureConfirmedAt">,
+) {
+    if (!record.endedAt && !record.actualEndedAt) {
+        return false;
+    }
+    if (!record.actualEndedAt) {
+        return true;
+    }
+    return Boolean(record.departureConfirmedAt);
 }
 
 function compareContinuityMembers<T extends ContinuityRecord>(left: T, right: T) {
@@ -139,6 +168,6 @@ export function buildContinuityBankHoursSpan(records: ContinuityOccupancy[]) {
         scheduledEndAt: tailWindow.scheduledEndAt,
         actualStartAt: asDate(group.carrier.startedAt)!,
         actualEndAt: resolveContinuityEffectiveEndedAt(group.tail),
-        isClosed: group.members.every((member) => Boolean(resolveContinuityEffectiveEndedAt(member))),
+        isClosed: group.members.every((member) => isDepartureClosureAuthoritative(member)),
     } satisfies ContinuityBankHoursSpan;
 }

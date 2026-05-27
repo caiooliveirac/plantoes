@@ -764,9 +764,12 @@ async function runHalfShiftAutoCheckout(referenceDate: Date, board: ReminderBoar
             : halfShiftEndAt;
 
         try {
+            // Half-shift auto-checkout: system-initiated at the scheduled
+            // boundary, not a verbalized late departure.
             await endRegulationOccupancy(row.occupancyId as string, {
                 endedAt,
                 actualEndedAt: endedAt,
+                chiefConfirmed: true,
             });
         } catch (error) {
             console.error("telegram half-shift auto checkout failed", row.occupancyId, error);

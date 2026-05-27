@@ -713,7 +713,7 @@ export async function deactivateInterventionBase(input: DeactivateInterventionBa
 
 export async function endInterventionOccupancy(
     id: string,
-    input: { endedAt: Date; actualEndedAt?: Date | null },
+    input: { endedAt: Date; actualEndedAt?: Date | null; chiefConfirmed?: boolean },
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
@@ -731,13 +731,21 @@ export async function endInterventionOccupancy(
             throw new Error("Actual end cannot be before the recorded arrival.");
         }
 
+        const now = new Date();
+        const departureConfirmedAt = input.chiefConfirmed ? now : existing.departureConfirmedAt;
+        const departureConfirmedByUserId = input.chiefConfirmed
+            ? (updatedByUserId ?? null)
+            : existing.departureConfirmedByUserId;
+
         const [updated] = await tx
             .update(interventionOccupancies)
             .set({
                 endedAt: input.endedAt,
                 actualEndedAt,
                 updatedByUserId: updatedByUserId ?? null,
-                updatedAt: new Date(),
+                updatedAt: now,
+                departureConfirmedAt,
+                departureConfirmedByUserId,
             })
             .where(eq(interventionOccupancies.id, id))
             .returning();
@@ -789,9 +797,13 @@ export async function expireStaleShadowInterventionOccupancies(referenceAt: Date
             continue;
         }
 
+        // Stale shadow cleanup is system-initiated; no verbalized late departure
+        // to audit. Auto-confirm so credit flows without a chief review queue
+        // backlogged with stale entries.
         await endInterventionOccupancy(occupancy.id, {
             endedAt,
             actualEndedAt: endedAt,
+            chiefConfirmed: true,
         }, updatedByUserId ?? null);
         expiredCount += 1;
     }

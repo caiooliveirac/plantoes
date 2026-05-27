@@ -236,6 +236,9 @@ export const regulationOccupancies = operationsV2.table(
         updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
         updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+        departureConfirmedAt: timestamp("departure_confirmed_at", { withTimezone: true }),
+        departureConfirmedByUserId: uuid("departure_confirmed_by_user_id").references(() => users.id),
+        departureConfirmedNote: text("departure_confirmed_note"),
     },
     (table) => [
         index("regulation_occupancies_doctor_idx").on(table.doctorId),
@@ -270,6 +273,9 @@ export const interventionOccupancies = operationsV2.table(
         lateArrivalAcknowledgedAt: timestamp("late_arrival_acknowledged_at", { withTimezone: true }),
         lateArrivalAcknowledgedByUserId: uuid("late_arrival_acknowledged_by_user_id").references(() => users.id),
         lateArrivalAcknowledgedNote: text("late_arrival_acknowledged_note"),
+        departureConfirmedAt: timestamp("departure_confirmed_at", { withTimezone: true }),
+        departureConfirmedByUserId: uuid("departure_confirmed_by_user_id").references(() => users.id),
+        departureConfirmedNote: text("departure_confirmed_note"),
     },
     (table) => [
         index("intervention_occupancies_doctor_idx").on(table.doctorId),

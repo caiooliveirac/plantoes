@@ -98,6 +98,7 @@ export interface RegulationOccupancyCorrectionInput {
     roleLabel?: string | null;
     ramalLabel?: string | null;
     notes?: string | null;
+    chiefConfirmed?: boolean;
 }
 
 export interface InterventionOccupancyCorrectionInput {
@@ -109,6 +110,48 @@ export interface InterventionOccupancyCorrectionInput {
     shiftLabel?: string | null;
     roleLabel?: string | null;
     notes?: string | null;
+    chiefConfirmed?: boolean;
+}
+
+// Departure confirmation policy for corrections:
+//   - chiefConfirmed: true   → mark as freshly confirmed now
+//   - chiefConfirmed: false  → revert to unconfirmed (pending chief review)
+//   - chiefConfirmed: undef, actualEndedAt changed → revert (any silent time edit
+//                              invalidates the prior confirmation)
+//   - chiefConfirmed: undef, actualEndedAt unchanged → preserve existing
+function resolveDepartureConfirmationOnCorrection(params: {
+    chiefConfirmed: boolean | undefined;
+    actualEndedAtChanged: boolean;
+    existingConfirmedAt: Date | null;
+}): Date | null {
+    if (params.chiefConfirmed === true) {
+        return new Date();
+    }
+    if (params.chiefConfirmed === false) {
+        return null;
+    }
+    if (params.actualEndedAtChanged) {
+        return null;
+    }
+    return params.existingConfirmedAt;
+}
+
+function resolveDepartureConfirmationByOnCorrection(params: {
+    chiefConfirmed: boolean | undefined;
+    actualEndedAtChanged: boolean;
+    existingConfirmedBy: string | null;
+    updatedByUserId: string | null;
+}): string | null {
+    if (params.chiefConfirmed === true) {
+        return params.updatedByUserId;
+    }
+    if (params.chiefConfirmed === false) {
+        return null;
+    }
+    if (params.actualEndedAtChanged) {
+        return null;
+    }
+    return params.existingConfirmedBy;
 }
 
 function sameTarget(left: OperationalTransferTargetInput, right: OperationalTransferTargetInput) {
@@ -611,6 +654,20 @@ export async function correctRegulationOccupancy(
             roleLabel: requestedRoleLabel,
         });
 
+        const actualEndedAtTimeChanged = actualEndedAtChanged
+            && (actualEndedAt?.getTime() ?? null) !== (existing.actualEndedAt?.getTime() ?? null);
+        const departureConfirmedAtNext = resolveDepartureConfirmationOnCorrection({
+            chiefConfirmed: input.chiefConfirmed,
+            actualEndedAtChanged: actualEndedAtTimeChanged,
+            existingConfirmedAt: existing.departureConfirmedAt,
+        });
+        const departureConfirmedByNext = resolveDepartureConfirmationByOnCorrection({
+            chiefConfirmed: input.chiefConfirmed,
+            actualEndedAtChanged: actualEndedAtTimeChanged,
+            existingConfirmedBy: existing.departureConfirmedByUserId,
+            updatedByUserId: updatedByUserId ?? null,
+        });
+
         const [updated] = await tx.update(regulationOccupancies)
             .set({
                 postId,
@@ -630,6 +687,8 @@ export async function correctRegulationOccupancy(
                 notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),
+                departureConfirmedAt: departureConfirmedAtNext,
+                departureConfirmedByUserId: departureConfirmedByNext,
             })
             .where(eq(regulationOccupancies.id, id))
             .returning();
@@ -698,6 +757,20 @@ export async function correctInterventionOccupancy(
             roleLabel: requestedRoleLabel,
         });
 
+        const actualEndedAtTimeChanged = actualEndedAtChanged
+            && (actualEndedAt?.getTime() ?? null) !== (existing.actualEndedAt?.getTime() ?? null);
+        const departureConfirmedAtNext = resolveDepartureConfirmationOnCorrection({
+            chiefConfirmed: input.chiefConfirmed,
+            actualEndedAtChanged: actualEndedAtTimeChanged,
+            existingConfirmedAt: existing.departureConfirmedAt,
+        });
+        const departureConfirmedByNext = resolveDepartureConfirmationByOnCorrection({
+            chiefConfirmed: input.chiefConfirmed,
+            actualEndedAtChanged: actualEndedAtTimeChanged,
+            existingConfirmedBy: existing.departureConfirmedByUserId,
+            updatedByUserId: updatedByUserId ?? null,
+        });
+
         const [updated] = await tx.update(interventionOccupancies)
             .set({
                 doctorId: hasOwn(input, "doctorId") ? input.doctorId ?? existing.doctorId : existing.doctorId,
@@ -712,6 +785,8 @@ export async function correctInterventionOccupancy(
                 notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),
+                departureConfirmedAt: departureConfirmedAtNext,
+                departureConfirmedByUserId: departureConfirmedByNext,
             })
             .where(eq(interventionOccupancies.id, id))
             .returning();

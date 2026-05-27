@@ -73,6 +73,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/in
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "shiftLabel") ? { shiftLabel: parsed.data.shiftLabel ?? null } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "roleLabel") ? { roleLabel: parsed.data.roleLabel ?? null } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "notes") ? { notes: parsed.data.notes ?? null } : {}),
+            chiefConfirmed: true,
         }, session.user.id);
 
         await getDb().insert(auditLogs).values({

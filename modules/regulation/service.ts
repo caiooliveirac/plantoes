@@ -789,7 +789,7 @@ export async function continueRegulationOccupancy(
 
 export async function endRegulationOccupancy(
     id: string,
-    input: { endedAt: Date; actualEndedAt?: Date | null },
+    input: { endedAt: Date; actualEndedAt?: Date | null; chiefConfirmed?: boolean },
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
@@ -808,13 +808,21 @@ export async function endRegulationOccupancy(
             throw new Error("Actual end cannot be before the recorded arrival.");
         }
 
+        const now = new Date();
+        const departureConfirmedAt = input.chiefConfirmed ? now : existing.departureConfirmedAt;
+        const departureConfirmedByUserId = input.chiefConfirmed
+            ? (updatedByUserId ?? null)
+            : existing.departureConfirmedByUserId;
+
         const [updated] = await tx
             .update(regulationOccupancies)
             .set({
                 endedAt: boardEndedAt,
                 actualEndedAt,
                 updatedByUserId: updatedByUserId ?? null,
-                updatedAt: new Date(),
+                updatedAt: now,
+                departureConfirmedAt,
+                departureConfirmedByUserId,
             })
             .where(eq(regulationOccupancies.id, id))
             .returning();

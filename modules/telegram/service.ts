@@ -5585,8 +5585,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
 
         const updated = command.sector === "REGULATION"
-            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null))
-            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null));
+            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefConfirmed: true }, resolveCommandAuditUserId(null))
+            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefConfirmed: true }, resolveCommandAuditUserId(null));
         const doctorName = doctor.fullName;
 
         await markTelegramProcessed(logId, {
@@ -6951,9 +6951,12 @@ async function handlePiamAutoArrival(params: {
 
     let occupancyId: string;
     if (existingActive) {
+        // PIAM closes at the scheduled boundary — system-driven, not a verbalized
+        // late departure. Auto-confirm so bank hours flow without chief review.
         const closed = await endRegulationOccupancy(existingActive.id, {
             endedAt: bounds.scheduledEndAt,
             actualEndedAt: bounds.scheduledEndAt,
+            chiefConfirmed: true,
         });
         occupancyId = closed.id;
     } else {
@@ -6974,6 +6977,7 @@ async function handlePiamAutoArrival(params: {
         const closed = await endRegulationOccupancy(reg.id, {
             endedAt: bounds.scheduledEndAt,
             actualEndedAt: bounds.scheduledEndAt,
+            chiefConfirmed: true,
         });
         occupancyId = closed.id;
     }

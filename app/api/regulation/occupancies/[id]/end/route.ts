@@ -39,6 +39,7 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/reg
         const updated = await endRegulationOccupancy(id, {
             endedAt,
             actualEndedAt: parsed.data.actualEndedAt ? new Date(parsed.data.actualEndedAt) : null,
+            chiefConfirmed: true,
         }, session.user.id);
         await db.insert(auditLogs).values({
             actorUserId: session.user.id,
