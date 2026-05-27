@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowLeft, Filter, Search } from "lucide-react";
-import { PreviousShiftGantt } from "@/components/board/PreviousShiftGantt";
+import { PreviousShiftList } from "@/components/board/PreviousShiftList";
 import { DepartureVerifier } from "@/components/board/DepartureVerifier";
 import { fadeRise } from "@/lib/board/motion";
 import type {
@@ -77,7 +77,7 @@ export function PreviousShiftGanttPage({
                         <ArrowLeft size={14} strokeWidth={2.2} /> Voltar ao quadro
                     </Link>
                     <h1>Plantão anterior · {formatOperationalDateLabel(board.operationalDate)}</h1>
-                    <p>Auditoria temporal das saídas e chegadas. Cada barra é uma ocupação fechada; clique para revisar.</p>
+                    <p>Auditoria do fechamento. Clique em chegada ou saída para corrigir — um motivo é exigido.</p>
                 </div>
                 <div className="historico-gantt-hero__stats">
                     <div>
@@ -128,15 +128,10 @@ export function PreviousShiftGanttPage({
                 </div>
             </section>
 
-            <PreviousShiftGantt
+            <PreviousShiftList
                 entries={filteredEntries}
                 pendingByOccupancyId={pendingByOccupancyId}
-                onEntryClick={(entry) => {
-                    const pending = pendingByOccupancyId.get(entry.occupancyId);
-                    if (pending) {
-                        setVerifierTarget(pending);
-                    }
-                }}
+                onPendingClick={(_entry, pending) => setVerifierTarget(pending)}
             />
 
             <DepartureVerifier
