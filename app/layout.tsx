@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Manrope, Space_Grotesk } from "next/font/google";
 import painelOgImage from "@/components/Painel.png";
+import { Toaster } from "@/components/board/Toaster";
 import "./globals.css";
 
 const metadataBase = new URL(process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br");
@@ -40,7 +41,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
     return (
         <html lang="pt-BR">
-            <body className={`${manrope.variable} ${spaceGrotesk.variable}`}>{children}</body>
+            <body className={`${manrope.variable} ${spaceGrotesk.variable}`}>
+                {children}
+                <Toaster />
+            </body>
         </html>
     );
 }
