@@ -2356,11 +2356,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const showKickButton = clickable && !isDisabledRegulation && card.status === "active" && card.occupancyId && kickContext.shouldShow;
         const isKickConfirming = kickConfirmCardKey === cardKey;
 
+        const cardPriority = resolvePriority(card, generatedAt);
         return (
             <div
                 key={cardKey}
                 role="row"
-                className={`ops-grid-row regulation ${emphasisClass} ${clickable ? "clickable" : ""}`.trim()}
+                className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${clickable ? "clickable" : ""}`.trim()}
                 onClick={clickable ? () => { setKickConfirmCardKey(null); openProfessionalDrawer(card); } : undefined}
                 onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={clickable ? 0 : undefined}
@@ -2469,11 +2470,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             && card.status === "active" && card.occupancyId && kickContext.shouldShow && !hasPlannedCoverage;
         const isKickConfirming = kickConfirmCardKey === intCardKey;
 
+        const intCardPriority = resolvePriority(card, generatedAt);
         return (
             <div
                 key={intCardKey}
                 role="row"
-                className={`ops-grid-row intervention ${emphasisClass} ${isClickable ? "clickable" : ""}`.trim()}
+                className={`ops-grid-row intervention ${emphasisClass} priority-${intCardPriority} ${isClickable ? "clickable" : ""}`.trim()}
                 onClick={isClickable ? () => { setKickConfirmCardKey(null); openProfessionalDrawer(card); } : undefined}
                 onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={isClickable ? 0 : undefined}
