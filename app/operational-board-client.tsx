@@ -20,6 +20,7 @@ import {
     hasPlannedInterventionCoverageForCurrentShift,
     requiresOvertimeJustification,
     resolveContinuationBadgeLabel,
+    resolveOperationalShiftWindow,
     shouldHighlightInterventionVerification,
 } from "@/modules/operational/board-rules";
 import type {
@@ -715,6 +716,18 @@ function compareRegulationCards(left: RegulationCard, right: RegulationCard, shi
     return compareRootBoardRegulationCodes(left.postCode, right.postCode, shiftLabel);
 }
 
+function resolveShiftEndKickContext(generatedAt: string): { shouldShow: boolean; shiftEndIso: string } {
+    const parts = getSaoPauloParts(generatedAt);
+    const window = resolveOperationalShiftWindow(generatedAt);
+    if (window.shiftLabel === "SD" && parts.hour >= 18) {
+        return { shouldShow: true, shiftEndIso: window.nextBoundaryAt.toISOString() };
+    }
+    if (window.shiftLabel === "SN" && parts.hour >= 6 && parts.hour < 7) {
+        return { shouldShow: true, shiftEndIso: window.nextBoundaryAt.toISOString() };
+    }
+    return { shouldShow: false, shiftEndIso: window.nextBoundaryAt.toISOString() };
+}
+
 function isInterventionAwaitingNews(card: BoardCard, generatedAt: string) {
     const hasPlannedCoverage = card.domain === "intervention"
         && hasPlannedInterventionCoverageForCurrentShift({
@@ -910,6 +923,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [lunchSlotInput, setLunchSlotInput] = useState<string>("");
     const [restSlotInput, setRestSlotInput] = useState<string>("");
     const [isRefreshing, startRefresh] = useTransition();
+    const [kickConfirmCardKey, setKickConfirmCardKey] = useState<string | null>(null);
     const latestGeneratedAtRef = useRef(generatedAt);
 
     useEffect(() => {
@@ -1986,6 +2000,38 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
     }
 
+    async function handleKickShiftEnd(card: BoardCard, shiftEndIso: string) {
+        if (!session?.canManage || !card.occupancyId) return;
+        setKickConfirmCardKey(null);
+        try {
+            setIsSubmitting(true);
+            setErrorMessage(null);
+            setSuccessMessage(null);
+            const endpoint = card.domain === "regulation"
+                ? `/api/regulation/occupancies/${card.occupancyId}/end`
+                : `/api/intervention/occupancies/${card.occupancyId}/end`;
+            const response = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    endedAt: shiftEndIso,
+                    actualEndedAt: shiftEndIso,
+                    notes: "Saída por encerramento de turno (retirada pelo chefe)",
+                    chiefKick: true,
+                }),
+            });
+            const responseBody = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) throw new Error(responseBody?.error || "Falha ao retirar plantonista.");
+            setSuccessMessage("Plantonista retirado. Banco de horas e quadro atualizados.");
+            if (session?.canManage) void fetchLatestUndoableAction();
+            startRefresh(() => { router.refresh(); });
+        } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : "Falha operacional inesperada.");
+        } finally {
+            setIsSubmitting(false);
+        }
+    }
+
     async function handleCardState(card: BoardCard, action: "deactivate" | "reactivate") {
         if (!session?.canManage) {
             setErrorMessage(`Entre com perfil chief ou admin para atualizar o estado d${card.domain === "regulation" ? "o" : "a"} ${cardStateSubject(card)}.`);
@@ -2265,13 +2311,17 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             || (!mealBreakSession && mealBreakDisplayMode === "day" && mealBreakEligibility.restExcludedRamals.includes(card.postCode));
         const dinnerDuration = mealBreakDisplayMode === "night" ? resolveDinnerDuration(mealBreakSession, card.postCode) : null;
         const clickable = Boolean(session?.canManage);
+        const kickContext = resolveShiftEndKickContext(generatedAt);
+        const cardKey = `${card.domain}-${card.postCode}`;
+        const showKickButton = clickable && !isDisabledRegulation && card.status === "active" && card.occupancyId && kickContext.shouldShow;
+        const isKickConfirming = kickConfirmCardKey === cardKey;
 
         return (
             <div
-                key={`${card.domain}-${card.postCode}`}
+                key={cardKey}
                 role="row"
                 className={`ops-grid-row regulation ${emphasisClass} ${clickable ? "clickable" : ""}`.trim()}
-                onClick={clickable ? () => openProfessionalDrawer(card) : undefined}
+                onClick={clickable ? () => { setKickConfirmCardKey(null); openProfessionalDrawer(card); } : undefined}
                 onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={clickable ? 0 : undefined}
                 aria-label={clickable ? `Abrir ${displayDoctorName(card)} no ramal ${card.postCode}` : undefined}
@@ -2295,6 +2345,28 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
                                 {card.disabledReason && <span className="ops-doctor-note continuation">{card.disabledReason}</span>}
+                            </div>
+                        ) : showKickButton ? (
+                            <div className="ops-inline-flags subtle">
+                                {isKickConfirming ? (
+                                    <button
+                                        type="button"
+                                        className="ops-kick-confirm-button"
+                                        onClick={(e) => { e.stopPropagation(); void handleKickShiftEnd(card, kickContext.shiftEndIso); }}
+                                        disabled={isSubmitting || isRefreshing}
+                                    >
+                                        Confirmar retirada
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="ops-kick-button"
+                                        onClick={(e) => { e.stopPropagation(); setKickConfirmCardKey(cardKey); }}
+                                        disabled={isSubmitting || isRefreshing}
+                                    >
+                                        Retirar
+                                    </button>
+                                )}
                             </div>
                         ) : null}
                     </div>
@@ -2338,13 +2410,18 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         });
         const isSaoPauloNightShift = getSaoPauloParts(generatedAt).hour >= 19 || getSaoPauloParts(generatedAt).hour < 7;
         const showSecondaryFlags = isAwaitingNews || (!hasPlannedCoverage && continuationLabel);
+        const kickContext = resolveShiftEndKickContext(generatedAt);
+        const intCardKey = `${card.domain}-${card.baseCode}`;
+        const showKickButton = isClickable && !isDisabledIntervention && !isWaitingIntervention
+            && card.status === "active" && card.occupancyId && kickContext.shouldShow && !hasPlannedCoverage;
+        const isKickConfirming = kickConfirmCardKey === intCardKey;
 
         return (
             <div
-                key={`${card.domain}-${card.baseCode}`}
+                key={intCardKey}
                 role="row"
                 className={`ops-grid-row intervention ${emphasisClass} ${isClickable ? "clickable" : ""}`.trim()}
-                onClick={isClickable ? () => openProfessionalDrawer(card) : undefined}
+                onClick={isClickable ? () => { setKickConfirmCardKey(null); openProfessionalDrawer(card); } : undefined}
                 onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={isClickable ? 0 : undefined}
                 aria-label={isClickable ? `Abrir ${displayDoctorName(card)} na base ${card.baseCode}` : undefined}
@@ -2370,6 +2447,30 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
                                 {card.disabledReason && <span className="ops-doctor-note continuation">{card.disabledReason}</span>}
+                            </div>
+                        ) : showKickButton ? (
+                            <div className="ops-inline-flags subtle">
+                                {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
+                                {!hasPlannedCoverage && continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
+                                {isKickConfirming ? (
+                                    <button
+                                        type="button"
+                                        className="ops-kick-confirm-button"
+                                        onClick={(e) => { e.stopPropagation(); void handleKickShiftEnd(card, kickContext.shiftEndIso); }}
+                                        disabled={isSubmitting || isRefreshing}
+                                    >
+                                        Confirmar retirada
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="ops-kick-button"
+                                        onClick={(e) => { e.stopPropagation(); setKickConfirmCardKey(intCardKey); }}
+                                        disabled={isSubmitting || isRefreshing}
+                                    >
+                                        Retirar
+                                    </button>
+                                )}
                             </div>
                         ) : showSecondaryFlags ? (
                             <div className="ops-inline-flags subtle">

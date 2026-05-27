@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import { hasDatabaseUrl, getDb } from "@/db";
-import { auditLogs } from "@/db/schema";
+import { auditLogs, interventionBases, interventionOccupancies } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { endInterventionOccupancy } from "@/modules/intervention/service";
+import { announceChiefKickDeparture } from "@/modules/telegram/chief-kick";
 
 const schema = z.object({
     endedAt: z.string().datetime(),
     actualEndedAt: z.string().datetime().optional().nullable(),
+    notes: z.string().optional().nullable(),
+    chiefKick: z.boolean().optional(),
 });
 
 export async function POST(request: NextRequest, context: RouteContext<"/api/intervention/occupancies/[id]/end">) {
@@ -30,17 +34,28 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
 
     const { id } = await context.params;
     try {
+        const db = getDb();
+        const endedAt = new Date(parsed.data.endedAt);
         const updated = await endInterventionOccupancy(id, {
-            endedAt: new Date(parsed.data.endedAt),
+            endedAt,
             actualEndedAt: parsed.data.actualEndedAt ? new Date(parsed.data.actualEndedAt) : null,
         }, session.user.id);
-        await getDb().insert(auditLogs).values({
+        await db.insert(auditLogs).values({
             actorUserId: session.user.id,
             action: "intervention_occupancy.ended",
             entityType: "intervention_occupancy",
             entityId: updated.id,
-            details: { endedAt: updated.endedAt, actualEndedAt: updated.actualEndedAt },
+            details: { endedAt: updated.endedAt, actualEndedAt: updated.actualEndedAt, notes: parsed.data.notes ?? null },
         });
+        if (parsed.data.chiefKick) {
+            const base = await db.query.interventionBases.findFirst({ where: eq(interventionBases.id, updated.baseId) });
+            void announceChiefKickDeparture({
+                seed: updated.id,
+                doctorId: updated.doctorId,
+                targetCode: base?.code ?? String(updated.baseId),
+                endedAt,
+            });
+        }
         return NextResponse.json({ occupancy: updated });
     } catch (error) {
         return NextResponse.json(

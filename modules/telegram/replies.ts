@@ -290,6 +290,22 @@ const GROUP_CORRECTION_ANNOUNCEMENTS = [
     "🔵🛠️\nAcerto silencioso, quadro certo.\n{name} em {target} desde {time}.",
 ];
 
+const CHIEF_KICK_ANNOUNCEMENTS = [
+    "🔴👤\nSaída declarada pelo chefe de plantão.\n{name} saiu de {target} às {time}.",
+    "🔴👤\nChefe de plantão registrou a saída.\n{name} encerrou em {target} às {time}.",
+    "🔴👤\nSaída confirmada pela chefia.\n{name} deixou {target} às {time}.",
+    "🔴👤\nRegistro de saída pela chefia.\n{name} saiu de {target} às {time}.",
+    "🔴👤\nChefia declarou encerramento.\n{name} encerrou {target} às {time}.",
+];
+
+export function buildChiefKickAnnouncement(seed: string | number, params: { name: string; target: string; time: string }) {
+    const numericSeed = String(seed)
+        .split("")
+        .reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const template = CHIEF_KICK_ANNOUNCEMENTS[numericSeed % CHIEF_KICK_ANNOUNCEMENTS.length];
+    return interpolate(template, params);
+}
+
 function interpolate(template: string, params: Record<string, string>) {
     return template.replace(/\{(\w+)\}/g, (_, key: string) => params[key] ?? "");
 }
