@@ -1720,6 +1720,8 @@ export async function listPendingDepartureConfirmations(
 
   const occupancyIds = items.map((row) => row.occupancyId);
   const doctorIds = Array.from(new Set(items.map((row) => row.doctorId)));
+  const occupancyIdList = sql.join(occupancyIds.map((id) => sql`${id}::uuid`), sql`, `);
+  const doctorIdList = sql.join(doctorIds.map((id) => sql`${id}::uuid`), sql`, `);
 
   const [messageRows, patternRows] = await Promise.all([
     db.execute<{ occupancyId: string; ingestedMessageId: string; createdAt: string; parsedAction: string | null; rawText: string }>(sql`
@@ -1730,7 +1732,7 @@ export async function listPendingDepartureConfirmations(
         parsed_action as "parsedAction",
         raw_text as "rawText"
       from operations_v2.telegram_ingested_messages
-      where related_occupancy_id = any(${occupancyIds}::uuid[])
+      where related_occupancy_id in (${occupancyIdList})
       order by created_at desc
       limit 600
     `),
@@ -1742,7 +1744,7 @@ export async function listPendingDepartureConfirmations(
         ro.id::text as "occupancyId",
         'regulation'::text as "domain"
       from operations_v2.regulation_occupancies ro
-      where ro.doctor_id = any(${doctorIds}::uuid[])
+      where ro.doctor_id in (${doctorIdList})
         and ro.actual_ended_at is not null
         and ro.actual_ended_at >= ${new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()}
 
@@ -1755,7 +1757,7 @@ export async function listPendingDepartureConfirmations(
         io.id::text as "occupancyId",
         'intervention'::text as "domain"
       from operations_v2.intervention_occupancies io
-      where io.doctor_id = any(${doctorIds}::uuid[])
+      where io.doctor_id in (${doctorIdList})
         and io.actual_ended_at is not null
         and io.actual_ended_at >= ${new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()}
     `),
