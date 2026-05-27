@@ -9470,16 +9470,17 @@ button.chief-payable-tag:focus-visible {
     appearance: none;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 7px 12px;
-    border-radius: 10px;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 8px;
     background: var(--surface-elevated);
     border: 1px solid var(--surface-elevated-border);
     color: var(--muted-strong);
     font-weight: 600;
-    font-size: 0.8rem;
+    font-size: 0.74rem;
     cursor: pointer;
     transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
+    white-space: nowrap;
 }
 
 .row-action:hover {
@@ -9491,12 +9492,24 @@ button.chief-payable-tag:focus-visible {
 
 .row-action.warn {
     color: var(--accent-warn);
-    border-color: color-mix(in oklab, var(--accent-warn) 40%, var(--surface-elevated-border));
-    background: color-mix(in oklab, var(--accent-warn) 10%, var(--surface-elevated));
+    border-color: color-mix(in oklab, var(--accent-warn) 35%, var(--surface-elevated-border));
+    background: color-mix(in oklab, var(--accent-warn) 8%, var(--surface-elevated));
 }
 .row-action.warn:hover {
-    background: color-mix(in oklab, var(--accent-warn) 22%, var(--surface-elevated));
+    background: color-mix(in oklab, var(--accent-warn) 20%, var(--surface-elevated));
     box-shadow: 0 4px 14px -8px color-mix(in oklab, var(--accent-warn) 55%, transparent);
+}
+
+.row-action.danger {
+    color: var(--accent-fraud, #ff4d57);
+    border-color: color-mix(in oklab, var(--accent-fraud, #ff4d57) 45%, var(--surface-elevated-border));
+    background: color-mix(in oklab, var(--accent-fraud, #ff4d57) 10%, var(--surface-elevated));
+}
+.row-action.danger:hover {
+    background: color-mix(in oklab, var(--accent-fraud, #ff4d57) 22%, var(--surface-elevated));
+    box-shadow: 0 4px 14px -8px color-mix(in oklab, var(--accent-fraud, #ff4d57) 60%, transparent);
+    color: #fff;
+    border-color: var(--accent-fraud, #ff4d57);
 }
 
 .row-action.info {
@@ -9643,6 +9656,11 @@ button.chief-payable-tag:focus-visible {
     border-color: var(--accent-confirm);
     color: var(--accent-confirm);
 }
+.board-modal-icon.danger {
+    background: color-mix(in oklab, var(--accent-fraud, #ff4d57) 16%, var(--surface-elevated));
+    border-color: var(--accent-fraud, #ff4d57);
+    color: var(--accent-fraud, #ff4d57);
+}
 
 .board-modal-header h2 {
     margin: 0;
@@ -9675,6 +9693,12 @@ button.chief-payable-tag:focus-visible {
     margin-bottom: 4px;
 }
 .board-modal-warning p { margin: 0; }
+
+.board-modal-warning.danger {
+    background: color-mix(in oklab, var(--accent-fraud, #ff4d57) 14%, transparent);
+    border-color: color-mix(in oklab, var(--accent-fraud, #ff4d57) 45%, var(--surface-elevated-border));
+}
+.board-modal-warning.danger strong { color: var(--accent-fraud, #ff4d57); }
 
 .board-modal-fields {
     display: flex;
@@ -9748,4 +9772,13 @@ button.chief-payable-tag:focus-visible {
 }
 .board-modal-confirm.warn:hover { background: var(--accent-warn); color: #1a130a; }
 .board-modal-confirm.info { /* default = info already */ }
+.board-modal-confirm.danger {
+    border-color: var(--accent-fraud, #ff4d57);
+    background: color-mix(in oklab, var(--accent-fraud, #ff4d57) 16%, transparent);
+    color: var(--accent-fraud, #ff4d57);
+}
+.board-modal-confirm.danger:hover {
+    background: var(--accent-fraud, #ff4d57);
+    color: #fff;
+}
 .board-modal-confirm:disabled { opacity: 0.6; cursor: not-allowed; }

@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronRight, Power, Repeat2, UserCog } from "lucide-react";
+import { ChevronRight, LogOut, Power, Repeat2, UserCog } from "lucide-react";
 import { DeactivateDialog } from "@/components/board/DeactivateDialog";
+import { DepartureDialog } from "@/components/board/DepartureDialog";
 import { RolePicker } from "@/components/board/RolePicker";
 
 interface RowActionsProps {
@@ -30,6 +31,7 @@ export function RowActions({
     onOpenAdvanced,
 }: RowActionsProps) {
     const [deactivateOpen, setDeactivateOpen] = useState(false);
+    const [departureOpen, setDepartureOpen] = useState(false);
 
     return (
         <motion.div
@@ -49,18 +51,31 @@ export function RowActions({
                         doctorName={doctorName}
                         targetCode={targetCode}
                     >
-                        <UserCog size={14} strokeWidth={2.2} />
-                        <span>Função{currentRole ? ` · ${currentRole}` : ""}</span>
+                        <UserCog size={13} strokeWidth={2.2} />
+                        <span>{currentRole ?? "Função"}</span>
                     </RolePicker>
+                )}
+
+                {occupancyId && !isDisabled && (
+                    <button
+                        type="button"
+                        className="row-action danger"
+                        onClick={(event) => { event.stopPropagation(); setDepartureOpen(true); }}
+                        title={`Declarar saída de ${doctorName}`}
+                    >
+                        <LogOut size={13} strokeWidth={2.2} />
+                        <span>Declarar saída</span>
+                    </button>
                 )}
 
                 <button
                     type="button"
                     className={`row-action ${isDisabled ? "info" : "warn"}`.trim()}
                     onClick={(event) => { event.stopPropagation(); setDeactivateOpen(true); }}
+                    title={isDisabled ? `Reativar ${domain === "regulation" ? "ramal" : "USA"}` : `Desativar ${domain === "regulation" ? "ramal" : "USA"}`}
                 >
-                    <Power size={14} strokeWidth={2.2} />
-                    <span>{isDisabled ? `Reativar ${domain === "regulation" ? "ramal" : "USA"}` : `Desativar ${domain === "regulation" ? "ramal" : "USA"}`}</span>
+                    <Power size={13} strokeWidth={2.2} />
+                    <span>{isDisabled ? "Reativar" : "Desativar"}</span>
                 </button>
 
                 {onOpenAdvanced && (
@@ -68,11 +83,11 @@ export function RowActions({
                         type="button"
                         className="row-action ghost"
                         onClick={(event) => { event.stopPropagation(); onOpenAdvanced(); }}
-                        title="Remanejar, transferir, encerrar ou continuar cobertura"
+                        title="Remanejar, transferir, encerrar com justificativa"
                     >
-                        <Repeat2 size={14} strokeWidth={2.2} />
-                        <span>Mais opções</span>
-                        <ChevronRight size={12} strokeWidth={2.2} />
+                        <Repeat2 size={13} strokeWidth={2.2} />
+                        <span>Mais</span>
+                        <ChevronRight size={11} strokeWidth={2.2} />
                     </button>
                 )}
             </div>
@@ -87,6 +102,17 @@ export function RowActions({
                 occupantName={isDisabled ? null : doctorName}
                 isReactivate={isDisabled}
             />
+
+            {occupancyId && (
+                <DepartureDialog
+                    open={departureOpen}
+                    onOpenChange={setDepartureOpen}
+                    domain={domain}
+                    occupancyId={occupancyId}
+                    targetCode={targetCode}
+                    doctorName={doctorName}
+                />
+            )}
         </motion.div>
     );
 }
