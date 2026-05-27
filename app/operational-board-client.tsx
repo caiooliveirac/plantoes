@@ -25,12 +25,14 @@ import {
 } from "@/modules/operational/board-rules";
 import type {
     InterventionBoardRow,
+    PendingDepartureConfirmation,
     PreviousOperationalBoard,
     PreviousOperationalBucket,
     PreviousOperationalEntry,
     PreviousOperationalSection,
     RegulationBoardRow,
 } from "@/services/board.service";
+import { AuditRail } from "@/components/board/AuditRail";
 
 type UserRole = "admin" | "chief";
 type ActionMode = "correct" | "end" | "start";
@@ -77,6 +79,7 @@ interface OperationalBoardClientProps {
     doctors: DoctorOption[];
     session: SessionSummary | null;
     initialViewMode?: ViewMode;
+    pendingDepartures?: PendingDepartureConfirmation[];
 }
 
 interface FormState {
@@ -864,11 +867,12 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live" } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [] } = props;
     const router = useRouter();
     const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
     const [authOpen, setAuthOpen] = useState(false);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
+    const [verifierTarget, setVerifierTarget] = useState<PendingDepartureConfirmation | null>(null);
     const [priorityDrawerOpen, setPriorityDrawerOpen] = useState(false);
     const [authEmail, setAuthEmail] = useState("");
     const [authPassword, setAuthPassword] = useState("");
@@ -2565,6 +2569,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
     return (
         <>
+            {viewMode === "live" && session?.canManage && pendingDepartures.length > 0 && (
+                <AuditRail
+                    pendingDepartures={pendingDepartures}
+                    onOpenVerifier={setVerifierTarget}
+                />
+            )}
+
             {viewMode === "live" && (
                 <div className={`ops-auth-dock ${authOpen ? "open" : ""}`.trim()}>
                     {session?.canManage && (
