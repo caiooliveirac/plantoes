@@ -10,10 +10,13 @@ import { fadeRise } from "@/lib/board/motion";
 import type {
     PendingDepartureConfirmation,
     PreviousOperationalBoard,
+    PreviousOperationalBucket,
     PreviousOperationalEntry,
 } from "@/services/board.service";
 
-type FilterMode = "all" | "with-delta" | "pending" | "suspect";
+type StatusFilter = "all" | "with-delta" | "pending" | "suspect";
+type DomainFilter = "all" | "regulation" | "intervention";
+type BucketFilter = "all" | PreviousOperationalBucket;
 
 export function PreviousShiftGanttPage({
     board,
@@ -22,7 +25,9 @@ export function PreviousShiftGanttPage({
     board: PreviousOperationalBoard;
     pending: PendingDepartureConfirmation[];
 }) {
-    const [filter, setFilter] = useState<FilterMode>("all");
+    const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+    const [domainFilter, setDomainFilter] = useState<DomainFilter>("all");
+    const [bucketFilter, setBucketFilter] = useState<BucketFilter>("all");
     const [search, setSearch] = useState("");
     const [verifierTarget, setVerifierTarget] = useState<PendingDepartureConfirmation | null>(null);
 
@@ -38,6 +43,8 @@ export function PreviousShiftGanttPage({
         const allEntries: PreviousOperationalEntry[] = board.sections.flatMap((section) => section.entries);
         const needle = search.trim().toLowerCase();
         return allEntries.filter((entry) => {
+            if (domainFilter !== "all" && entry.domain !== domainFilter) return false;
+            if (bucketFilter !== "all" && entry.bucket !== bucketFilter) return false;
             if (needle.length > 0) {
                 const haystack = `${entry.displayName ?? ""} ${entry.doctorName} ${entry.targetCode} ${entry.targetLabel} ${entry.roleLabel ?? ""}`.toLowerCase();
                 if (!haystack.includes(needle)) return false;
@@ -45,7 +52,7 @@ export function PreviousShiftGanttPage({
             const delta = entry.balanceMinutes ?? 0;
             const isPending = pendingByOccupancyId.has(entry.occupancyId);
             const suspect = isPending && (pendingByOccupancyId.get(entry.occupancyId)!.delayMinutes ?? 0) >= 60;
-            switch (filter) {
+            switch (statusFilter) {
                 case "with-delta":
                     return Math.abs(delta) >= 5;
                 case "pending":
@@ -56,7 +63,7 @@ export function PreviousShiftGanttPage({
                     return true;
             }
         });
-    }, [board.sections, filter, search, pendingByOccupancyId]);
+    }, [board.sections, statusFilter, domainFilter, bucketFilter, search, pendingByOccupancyId]);
 
     const stats = useMemo(() => ({
         total: board.totalEntries,
@@ -106,8 +113,55 @@ export function PreviousShiftGanttPage({
                         aria-label="Buscar no plantão anterior"
                     />
                 </label>
-                <div className="historico-gantt-filters" role="tablist" aria-label="Filtros">
-                    <Filter size={14} strokeWidth={2.2} style={{ color: "var(--muted)", marginRight: 4 }} />
+            </section>
+
+            <section className="historico-filter-rows">
+                <div className="historico-filter-row" role="tablist" aria-label="Filtrar por domínio">
+                    <span className="historico-filter-row__label">
+                        <Filter size={12} strokeWidth={2.2} /> Setor
+                    </span>
+                    {([
+                        { key: "all", label: "Todos" },
+                        { key: "regulation", label: "Regulação" },
+                        { key: "intervention", label: "Intervenção" },
+                    ] as const).map((option) => (
+                        <button
+                            key={option.key}
+                            type="button"
+                            role="tab"
+                            aria-selected={domainFilter === option.key}
+                            className={`historico-gantt-filter-pill ${domainFilter === option.key ? "active" : ""}`.trim()}
+                            onClick={() => setDomainFilter(option.key)}
+                        >
+                            {option.label}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="historico-filter-row" role="tablist" aria-label="Filtrar por turno">
+                    <span className="historico-filter-row__label">Turno</span>
+                    {([
+                        { key: "all", label: "Todos" },
+                        { key: "SD", label: "SD" },
+                        { key: "SN", label: "SN" },
+                        { key: "P", label: "P" },
+                        { key: "P_INVERTIDO", label: "P invertido" },
+                    ] as const).map((option) => (
+                        <button
+                            key={option.key}
+                            type="button"
+                            role="tab"
+                            aria-selected={bucketFilter === option.key}
+                            className={`historico-gantt-filter-pill ${bucketFilter === option.key ? "active" : ""}`.trim()}
+                            onClick={() => setBucketFilter(option.key)}
+                        >
+                            {option.label}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="historico-filter-row" role="tablist" aria-label="Filtrar por situação">
+                    <span className="historico-filter-row__label">Situação</span>
                     {([
                         { key: "all", label: "Todos" },
                         { key: "with-delta", label: "Com diferença" },
@@ -118,9 +172,9 @@ export function PreviousShiftGanttPage({
                             key={option.key}
                             type="button"
                             role="tab"
-                            aria-selected={filter === option.key}
-                            className={`historico-gantt-filter-pill ${filter === option.key ? "active" : ""}`.trim()}
-                            onClick={() => setFilter(option.key)}
+                            aria-selected={statusFilter === option.key}
+                            className={`historico-gantt-filter-pill ${statusFilter === option.key ? "active" : ""}`.trim()}
+                            onClick={() => setStatusFilter(option.key)}
                         >
                             {option.label}
                         </button>

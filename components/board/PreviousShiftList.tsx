@@ -12,28 +12,42 @@ import type {
     PreviousOperationalEntry,
 } from "@/services/board.service";
 
-const BUCKET_META: Record<PreviousOperationalBucket, { label: string; tone: "ice" | "gold" | "green" | "amber"; description: string }> = {
-    P_INVERTIDO: {
-        label: "Plantão invertido",
-        tone: "amber",
-        description: "Assumiu no SN e entregou no SD.",
-    },
-    P: {
-        label: "Plantão P",
-        tone: "gold",
-        description: "Responsáveis que atravessaram SD e SN.",
-    },
-    SD: {
-        label: "Diurno (SD)",
-        tone: "ice",
-        description: "Responsáveis pelo turno diurno.",
-    },
-    SN: {
-        label: "Noturno (SN)",
-        tone: "green",
-        description: "Responsáveis pelo turno noturno.",
-    },
+const BUCKET_META: Record<PreviousOperationalBucket, { label: string; tone: "ice" | "gold" | "green" | "amber" }> = {
+    P_INVERTIDO: { label: "P invertido", tone: "amber" },
+    P: { label: "Plantão P", tone: "gold" },
+    SD: { label: "SD", tone: "ice" },
+    SN: { label: "SN", tone: "green" },
 };
+
+const REGULATION_PRIORITY = ["2031", "2032", "2033", "2034", "2035", "2151"];
+
+function regulationOrderRank(code: string): [number, number] {
+    const trimmed = code.trim();
+    const priorityIndex = REGULATION_PRIORITY.indexOf(trimmed);
+    if (priorityIndex !== -1) return [0, priorityIndex];
+    const numeric = Number.parseInt(trimmed, 10);
+    return [1, Number.isFinite(numeric) ? numeric : Number.MAX_SAFE_INTEGER];
+}
+
+function interventionOrderRank(code: string): number {
+    const match = code.match(/(\d+)/);
+    if (!match) return Number.MAX_SAFE_INTEGER;
+    return Number.parseInt(match[1], 10);
+}
+
+function compareEntries(a: PreviousOperationalEntry, b: PreviousOperationalEntry): number {
+    if (a.domain === "regulation") {
+        const [ag, an] = regulationOrderRank(a.targetCode);
+        const [bg, bn] = regulationOrderRank(b.targetCode);
+        if (ag !== bg) return ag - bg;
+        if (an !== bn) return an - bn;
+    } else {
+        const an = interventionOrderRank(a.targetCode);
+        const bn = interventionOrderRank(b.targetCode);
+        if (an !== bn) return an - bn;
+    }
+    return a.targetCode.localeCompare(b.targetCode, "pt-BR");
+}
 
 function formatHourMinute(value: string | null | undefined) {
     if (!value) return "—";
@@ -238,19 +252,20 @@ export function PreviousShiftList({
     const [, startTransition] = useTransition();
 
     const grouped = useMemo(() => {
-        const byBucket = new Map<PreviousOperationalBucket, PreviousOperationalEntry[]>();
+        const byDomain = new Map<"regulation" | "intervention", PreviousOperationalEntry[]>();
         for (const entry of entries) {
-            const list = byBucket.get(entry.bucket) ?? [];
+            const list = byDomain.get(entry.domain) ?? [];
             list.push(entry);
-            byBucket.set(entry.bucket, list);
+            byDomain.set(entry.domain, list);
         }
-        const order: PreviousOperationalBucket[] = ["P_INVERTIDO", "P", "SD", "SN"];
+        const order: Array<{ domain: "regulation" | "intervention"; label: string; description: string }> = [
+            { domain: "regulation", label: "Regulação", description: "Mesas operacionais — 2031–2035, 2151 e 13xx ocupados no plantão." },
+            { domain: "intervention", label: "Intervenção", description: "Bases USA na ordem do numeral." },
+        ];
         return order
-            .map((bucket) => ({
-                bucket,
-                entries: (byBucket.get(bucket) ?? []).sort(
-                    (a, b) => new Date(entryArrival(a)).getTime() - new Date(entryArrival(b)).getTime(),
-                ),
+            .map((section) => ({
+                ...section,
+                entries: (byDomain.get(section.domain) ?? []).sort(compareEntries),
             }))
             .filter((section) => section.entries.length > 0);
     }, [entries]);
@@ -278,15 +293,15 @@ export function PreviousShiftList({
         >
             {grouped.map((section) => (
                 <motion.section
-                    key={section.bucket}
+                    key={section.domain}
                     className="historico-list-section"
                     variants={fadeRise}
                 >
                     <header className="historico-list-section__header">
-                        <span className={`historico-list-section__tone tone-${BUCKET_META[section.bucket].tone}`} />
+                        <span className={`historico-list-section__tone tone-${section.domain === "regulation" ? "ice" : "green"}`} />
                         <div>
-                            <h2>{BUCKET_META[section.bucket].label}</h2>
-                            <p>{BUCKET_META[section.bucket].description}</p>
+                            <h2>{section.label}</h2>
+                            <p>{section.description}</p>
                         </div>
                         <span className="historico-list-section__count">{section.entries.length} ocupações</span>
                     </header>
@@ -311,9 +326,11 @@ export function PreviousShiftList({
                                 >
                                     <header className="historico-list-card__header">
                                         <div className="historico-list-card__title">
-                                            <span className={`historico-list-card__domain ${entry.domain}`}>
-                                                {entry.domain === "regulation" ? "Regulação" : "Intervenção"}
-                                            </span>
+                                            <div className="historico-list-card__tags">
+                                                <span className={`historico-list-card__bucket tone-${BUCKET_META[entry.bucket].tone}`}>
+                                                    {BUCKET_META[entry.bucket].label}
+                                                </span>
+                                            </div>
                                             <strong>{entry.targetCode}</strong>
                                             <span className="historico-list-card__target">{entry.targetLabel}</span>
                                         </div>

@@ -8713,6 +8713,30 @@ button.chief-payable-tag:focus-visible {
     align-items: center;
 }
 
+.historico-filter-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.historico-filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.historico-filter-row__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 70px;
+    font-size: 0.7rem;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
 .historico-gantt-filter-pill {
     appearance: none;
     border: 1px solid var(--surface-elevated-border);
@@ -8829,7 +8853,13 @@ button.chief-payable-tag:focus-visible {
     min-width: 0;
 }
 
-.historico-list-card__domain {
+.historico-list-card__tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.historico-list-card__bucket {
     align-self: flex-start;
     font-size: 0.66rem;
     letter-spacing: 0.06em;
@@ -8837,11 +8867,14 @@ button.chief-payable-tag:focus-visible {
     padding: 2px 8px;
     border-radius: 999px;
     color: var(--muted-strong);
+    background: var(--surface-elevated);
     border: 1px solid var(--surface-elevated-border);
 }
 
-.historico-list-card__domain.regulation { color: var(--ice); border-color: color-mix(in oklab, var(--ice) 50%, var(--surface-elevated-border)); }
-.historico-list-card__domain.intervention { color: var(--green); border-color: color-mix(in oklab, var(--green) 50%, var(--surface-elevated-border)); }
+.historico-list-card__bucket.tone-ice    { color: var(--ice);   border-color: color-mix(in oklab, var(--ice) 50%, var(--surface-elevated-border));    background: color-mix(in oklab, var(--ice) 14%, var(--surface-elevated)); }
+.historico-list-card__bucket.tone-gold   { color: var(--gold);  border-color: color-mix(in oklab, var(--gold) 50%, var(--surface-elevated-border));   background: color-mix(in oklab, var(--gold) 14%, var(--surface-elevated)); }
+.historico-list-card__bucket.tone-green  { color: var(--green); border-color: color-mix(in oklab, var(--green) 50%, var(--surface-elevated-border));  background: color-mix(in oklab, var(--green) 14%, var(--surface-elevated)); }
+.historico-list-card__bucket.tone-amber  { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 50%, var(--surface-elevated-border));  background: color-mix(in oklab, var(--amber) 14%, var(--surface-elevated)); }
 
 .historico-list-card__title strong {
     font-family: var(--font-display), var(--font-sans);
