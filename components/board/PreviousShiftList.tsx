@@ -13,8 +13,8 @@ import type {
 } from "@/services/board.service";
 
 const BUCKET_META: Record<PreviousOperationalBucket, { label: string; tone: "ice" | "gold" | "green" | "amber" }> = {
-    P_INVERTIDO: { label: "P invertido", tone: "amber" },
-    P: { label: "Plantão P", tone: "gold" },
+    P_INVERTIDO: { label: "P inv", tone: "amber" },
+    P: { label: "P", tone: "gold" },
     SD: { label: "SD", tone: "ice" },
     SN: { label: "SN", tone: "green" },
 };
@@ -60,15 +60,15 @@ function formatHourMinute(value: string | null | undefined) {
 }
 
 function formatSignedMinutes(minutes: number | null): string {
-    if (minutes === null) return "Sem banco";
-    if (minutes === 0) return "0min";
+    if (minutes === null) return "—";
+    if (minutes === 0) return "0";
     const sign = minutes > 0 ? "+" : "−";
     const abs = Math.abs(minutes);
     const hours = Math.floor(abs / 60);
     const mins = abs % 60;
     if (hours > 0 && mins > 0) return `${sign}${hours}h${String(mins).padStart(2, "0")}`;
     if (hours > 0) return `${sign}${hours}h`;
-    return `${sign}${mins}min`;
+    return `${sign}${mins}m`;
 }
 
 function balanceTone(value: number | null): "neutral" | "positive" | "negative" {
@@ -84,7 +84,6 @@ function entryEffectiveEnd(entry: PreviousOperationalEntry) {
     return entry.actualEndedAt ?? entry.endedAt;
 }
 
-/** Convert ISO to <input type="datetime-local"> value preserving Sao_Paulo wall-clock. */
 function isoToLocalInputValue(iso: string | null): string {
     if (!iso) return "";
     const date = new Date(iso);
@@ -178,17 +177,16 @@ function TimeEditor({ entry, field, currentIso, onSaved }: TimeEditorProps) {
             <Popover.Trigger asChild>
                 <button
                     type="button"
-                    className="historico-list-time"
+                    className="historico-grid-time"
                     aria-label={`Editar ${label.toLowerCase()} de ${entry.displayName ?? entry.doctorName}`}
+                    title={`Editar ${label.toLowerCase()}`}
                 >
-                    <span className="historico-list-time__label">{label}</span>
-                    <strong>{displayValue}</strong>
-                    <span className="historico-list-time__edit">editar</span>
+                    {displayValue}
                 </button>
             </Popover.Trigger>
             <Popover.Portal>
                 <Popover.Content
-                    sideOffset={8}
+                    sideOffset={6}
                     collisionPadding={16}
                     className="historico-list-popover"
                 >
@@ -258,9 +256,9 @@ export function PreviousShiftList({
             list.push(entry);
             byDomain.set(entry.domain, list);
         }
-        const order: Array<{ domain: "regulation" | "intervention"; label: string; description: string }> = [
-            { domain: "regulation", label: "Regulação", description: "Mesas operacionais — 2031–2035, 2151 e 13xx ocupados no plantão." },
-            { domain: "intervention", label: "Intervenção", description: "Bases USA na ordem do numeral." },
+        const order: Array<{ domain: "regulation" | "intervention"; label: string }> = [
+            { domain: "regulation", label: "Regulação" },
+            { domain: "intervention", label: "Intervenção" },
         ];
         return order
             .map((section) => ({
@@ -286,7 +284,7 @@ export function PreviousShiftList({
 
     return (
         <motion.div
-            className="historico-list"
+            className="historico-grid"
             variants={staggerList}
             initial="initial"
             animate="animate"
@@ -294,24 +292,25 @@ export function PreviousShiftList({
             {grouped.map((section) => (
                 <motion.section
                     key={section.domain}
-                    className="historico-list-section"
+                    className="historico-grid-section"
                     variants={fadeRise}
                 >
-                    <header className="historico-list-section__header">
-                        <span className={`historico-list-section__tone tone-${section.domain === "regulation" ? "ice" : "green"}`} />
-                        <div>
-                            <h2>{section.label}</h2>
-                            <p>{section.description}</p>
-                        </div>
-                        <span className="historico-list-section__count">{section.entries.length} ocupações</span>
+                    <header className="historico-grid-section__header">
+                        <h2>{section.label}</h2>
+                        <span>{section.entries.length} ocupações</span>
                     </header>
 
-                    <motion.div
-                        className="historico-list-cards"
-                        variants={staggerList}
-                        initial="initial"
-                        animate="animate"
-                    >
+                    <div className="historico-grid-table" role="table" aria-label={`Ocupações de ${section.label}`}>
+                        <div className="historico-grid-row historico-grid-row--head" role="row">
+                            <div role="columnheader" className="col-turno">Turno</div>
+                            <div role="columnheader" className="col-codigo">{section.domain === "regulation" ? "Ramal" : "Base"}</div>
+                            <div role="columnheader" className="col-medico">Médico</div>
+                            <div role="columnheader" className="col-hora">Chegada</div>
+                            <div role="columnheader" className="col-hora">Saída</div>
+                            <div role="columnheader" className="col-saldo">Saldo</div>
+                            <div role="columnheader" className="col-extra">Observações</div>
+                        </div>
+
                         {section.entries.map((entry) => {
                             const pending = pendingByOccupancyId.get(entry.occupancyId);
                             const balance = entry.balanceMinutes;
@@ -319,38 +318,33 @@ export function PreviousShiftList({
                             const arrivalIso = entryArrival(entry);
                             const departureIso = entryEffectiveEnd(entry);
                             return (
-                                <motion.article
+                                <motion.div
                                     key={`${entry.domain}-${entry.occupancyId}`}
-                                    className={`historico-list-card ${pending ? "pending" : ""}`.trim()}
+                                    role="row"
+                                    className={`historico-grid-row ${pending ? "is-pending" : ""}`.trim()}
                                     variants={staggerChild}
                                 >
-                                    <header className="historico-list-card__header">
-                                        <div className="historico-list-card__title">
-                                            <div className="historico-list-card__tags">
-                                                <span className={`historico-list-card__bucket tone-${BUCKET_META[entry.bucket].tone}`}>
-                                                    {BUCKET_META[entry.bucket].label}
-                                                </span>
-                                            </div>
-                                            <strong>{entry.targetCode}</strong>
-                                            <span className="historico-list-card__target">{entry.targetLabel}</span>
-                                        </div>
-                                        <span className={`historico-list-card__balance tone-${tone}`}>
-                                            {formatSignedMinutes(balance)}
+                                    <div role="cell" className="col-turno">
+                                        <span className={`historico-grid-bucket tone-${BUCKET_META[entry.bucket].tone}`}>
+                                            {BUCKET_META[entry.bucket].label}
                                         </span>
-                                    </header>
-
-                                    <div className="historico-list-card__doctor">
-                                        <strong>{entry.displayName || entry.doctorName}</strong>
-                                        {entry.roleLabel && <span>{entry.roleLabel}</span>}
                                     </div>
-
-                                    <div className="historico-list-card__times">
+                                    <div role="cell" className="col-codigo">
+                                        <strong>{entry.targetCode}</strong>
+                                    </div>
+                                    <div role="cell" className="col-medico">
+                                        <span className="historico-grid-medico">{entry.displayName || entry.doctorName}</span>
+                                        {entry.roleLabel && <span className="historico-grid-role">{entry.roleLabel}</span>}
+                                    </div>
+                                    <div role="cell" className="col-hora">
                                         <TimeEditor
                                             entry={entry}
                                             field="arrival"
                                             currentIso={arrivalIso}
                                             onSaved={handleSaved}
                                         />
+                                    </div>
+                                    <div role="cell" className="col-hora">
                                         <TimeEditor
                                             entry={entry}
                                             field="departure"
@@ -358,34 +352,32 @@ export function PreviousShiftList({
                                             onSaved={handleSaved}
                                         />
                                     </div>
-
-                                    <footer className="historico-list-card__footer">
-                                        <span>
-                                            Janela banco: {entry.scheduledStartAt && entry.scheduledEndAt
-                                                ? `${formatHourMinute(entry.scheduledStartAt)} — ${formatHourMinute(entry.scheduledEndAt)}`
-                                                : "—"}
+                                    <div role="cell" className="col-saldo">
+                                        <span className={`historico-grid-balance tone-${tone}`}>
+                                            {formatSignedMinutes(balance)}
                                         </span>
-                                        <span>{entry.status === "open" ? "Em aberto" : "Encerrado"}</span>
-                                        {entry.ruleCode && <span className="historico-list-card__rule">{entry.ruleCode}</span>}
-                                    </footer>
-
-                                    {pending && (
-                                        <button
-                                            type="button"
-                                            className="historico-list-card__pending"
-                                            onClick={() => onPendingClick(entry, pending)}
-                                        >
-                                            Saída verbalizada às {formatHourMinute(pending.actualEndedAt)} — abrir verificador →
-                                        </button>
-                                    )}
-
-                                    {entry.bankHoursExplanation && (
-                                        <p className="historico-list-card__explanation">{entry.bankHoursExplanation}</p>
-                                    )}
-                                </motion.article>
+                                    </div>
+                                    <div role="cell" className="col-extra">
+                                        {pending && (
+                                            <button
+                                                type="button"
+                                                className="historico-grid-pending"
+                                                onClick={() => onPendingClick(entry, pending)}
+                                            >
+                                                Verbalizada {formatHourMinute(pending.actualEndedAt)} →
+                                            </button>
+                                        )}
+                                        {!pending && entry.ruleCode && (
+                                            <span className="historico-grid-rule">{entry.ruleCode}</span>
+                                        )}
+                                        {!pending && !entry.ruleCode && entry.status === "open" && (
+                                            <span className="historico-grid-open">Em aberto</span>
+                                        )}
+                                    </div>
+                                </motion.div>
                             );
                         })}
-                    </motion.div>
+                    </div>
                 </motion.section>
             ))}
         </motion.div>

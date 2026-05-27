@@ -18,6 +18,16 @@ type StatusFilter = "all" | "with-delta" | "pending" | "suspect";
 type DomainFilter = "all" | "regulation" | "intervention";
 type BucketFilter = "all" | PreviousOperationalBucket;
 
+/** Filtros de turno englobam P: quem cobriu P invertido ou P estava no SD E no SN.
+ *  Clicar SD revela todos que estavam no SD do plantão (inclui P e P invertido). */
+function bucketMatchesFilter(filter: BucketFilter, bucket: PreviousOperationalBucket): boolean {
+    if (filter === "all") return true;
+    if (filter === bucket) return true;
+    if (filter === "SD" && (bucket === "P" || bucket === "P_INVERTIDO")) return true;
+    if (filter === "SN" && (bucket === "P" || bucket === "P_INVERTIDO")) return true;
+    return false;
+}
+
 export function PreviousShiftGanttPage({
     board,
     pending,
@@ -44,7 +54,7 @@ export function PreviousShiftGanttPage({
         const needle = search.trim().toLowerCase();
         return allEntries.filter((entry) => {
             if (domainFilter !== "all" && entry.domain !== domainFilter) return false;
-            if (bucketFilter !== "all" && entry.bucket !== bucketFilter) return false;
+            if (!bucketMatchesFilter(bucketFilter, entry.bucket)) return false;
             if (needle.length > 0) {
                 const haystack = `${entry.displayName ?? ""} ${entry.doctorName} ${entry.targetCode} ${entry.targetLabel} ${entry.roleLabel ?? ""}`.toLowerCase();
                 if (!haystack.includes(needle)) return false;
@@ -141,17 +151,18 @@ export function PreviousShiftGanttPage({
                 <div className="historico-filter-row" role="tablist" aria-label="Filtrar por turno">
                     <span className="historico-filter-row__label">Turno</span>
                     {([
-                        { key: "all", label: "Todos" },
-                        { key: "SD", label: "SD" },
-                        { key: "SN", label: "SN" },
-                        { key: "P", label: "P" },
-                        { key: "P_INVERTIDO", label: "P invertido" },
+                        { key: "all", label: "Todos", title: "Todos os turnos" },
+                        { key: "SD", label: "SD", title: "Quem cobriu o SD (inclui P e P invertido)" },
+                        { key: "SN", label: "SN", title: "Quem cobriu o SN (inclui P e P invertido)" },
+                        { key: "P", label: "P", title: "Quem atravessou SD e SN" },
+                        { key: "P_INVERTIDO", label: "P inv", title: "Quem atravessou SN e SD seguinte" },
                     ] as const).map((option) => (
                         <button
                             key={option.key}
                             type="button"
                             role="tab"
                             aria-selected={bucketFilter === option.key}
+                            title={option.title}
                             className={`historico-gantt-filter-pill ${bucketFilter === option.key ? "active" : ""}`.trim()}
                             onClick={() => setBucketFilter(option.key)}
                         >
