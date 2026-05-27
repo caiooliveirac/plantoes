@@ -38,6 +38,9 @@ import { CommandPalette } from "@/components/board/CommandPalette";
 import { BoardHero } from "@/components/board/BoardHero";
 import { BoardQuickFilters, type BoardRoleFilter, type BoardStatusFilter } from "@/components/board/BoardQuickFilters";
 import { InlineTimeEditor } from "@/components/board/InlineTimeEditor";
+import { RowActions } from "@/components/board/RowActions";
+import { MealSlotPicker, type MealKind } from "@/components/board/MealSlotPicker";
+import { AnimatePresence } from "framer-motion";
 import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
 
 type UserRole = "admin" | "chief";
@@ -882,6 +885,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [boardSearch, setBoardSearch] = useState("");
     const [boardRoleFilter, setBoardRoleFilter] = useState<BoardRoleFilter>("all");
     const [boardStatusFilter, setBoardStatusFilter] = useState<BoardStatusFilter>("all");
+    const [expandedCardKey, setExpandedCardKey] = useState<string | null>(null);
     const quickConfirmDeparture = useQuickConfirmDeparture();
     const [priorityDrawerOpen, setPriorityDrawerOpen] = useState(false);
     const [authEmail, setAuthEmail] = useState("");
@@ -2357,15 +2361,17 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const isKickConfirming = kickConfirmCardKey === cardKey;
 
         const cardPriority = resolvePriority(card, generatedAt);
+        const isExpanded = expandedCardKey === cardKey;
         return (
+            <div key={cardKey} className={`ops-grid-row-group ${isExpanded ? "is-expanded" : ""}`.trim()}>
             <div
-                key={cardKey}
                 role="row"
-                className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${clickable ? "clickable" : ""}`.trim()}
-                onClick={clickable ? () => { setKickConfirmCardKey(null); openProfessionalDrawer(card); } : undefined}
+                className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${clickable ? "clickable" : ""} ${isExpanded ? "is-expanded" : ""}`.trim()}
+                onClick={clickable ? () => { setKickConfirmCardKey(null); setExpandedCardKey((prev) => prev === cardKey ? null : cardKey); } : undefined}
                 onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={clickable ? 0 : undefined}
-                aria-label={clickable ? `Abrir ${displayDoctorName(card)} no ramal ${card.postCode}` : undefined}
+                aria-expanded={clickable ? isExpanded : undefined}
+                aria-label={clickable ? `Expandir ações de ${displayDoctorName(card)} no ramal ${card.postCode}` : undefined}
             >
                 <div role="cell" className="ops-grid-cell column-time">
                     {clickable && card.status === "active" && card.occupancyId ? (
@@ -2426,7 +2432,22 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     </div>
                 </div>
                 <div role="cell" className="ops-grid-cell column-lunch">
-                    {renderScheduleChip({
+                    {clickable && !lunchExcluded && !isDisabledRegulation ? (
+                        <MealSlotPicker
+                            ramal={card.postCode}
+                            kind={(mealBreakDisplayMode === "night" ? "dinner" : "lunch") as MealKind}
+                            currentSlot={lunchSlot ?? null}
+                            doctorName={displayDoctorName(card)}
+                        >
+                            {renderScheduleChip({
+                                slot: lunchSlot,
+                                kind: mealBreakDisplayMode === "night" ? "dinner" : "lunch",
+                                pending: !lunchSlot,
+                                duration: dinnerDuration,
+                                excluded: lunchExcluded,
+                            })}
+                        </MealSlotPicker>
+                    ) : renderScheduleChip({
                         slot: lunchSlot,
                         kind: mealBreakDisplayMode === "night" ? "dinner" : "lunch",
                         pending: !lunchSlot,
@@ -2435,13 +2456,43 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     })}
                 </div>
                 <div role="cell" className="ops-grid-cell column-rest">
-                    {renderScheduleChip({
+                    {clickable && !restExcluded && !isDisabledRegulation ? (
+                        <MealSlotPicker
+                            ramal={card.postCode}
+                            kind={(mealBreakDisplayMode === "night" ? "work" : "rest") as MealKind}
+                            currentSlot={restSlot ?? null}
+                            doctorName={displayDoctorName(card)}
+                        >
+                            {renderScheduleChip({
+                                slot: restSlot,
+                                kind: mealBreakDisplayMode === "night" ? "work" : "rest",
+                                pending: !restSlot,
+                                excluded: restExcluded,
+                            })}
+                        </MealSlotPicker>
+                    ) : renderScheduleChip({
                         slot: restSlot,
                         kind: mealBreakDisplayMode === "night" ? "work" : "rest",
                         pending: !restSlot,
                         excluded: restExcluded,
                     })}
                 </div>
+            </div>
+            <AnimatePresence initial={false}>
+                {isExpanded && clickable && (
+                    <RowActions
+                        domain="regulation"
+                        targetId={card.postId}
+                        targetCode={card.postCode}
+                        targetLabel={card.postLabel}
+                        occupancyId={card.occupancyId ?? null}
+                        doctorName={displayDoctorName(card)}
+                        currentRole={card.roleLabel ?? null}
+                        isDisabled={isDisabledRegulation}
+                        onOpenAdvanced={() => { setExpandedCardKey(null); openProfessionalDrawer(card); }}
+                    />
+                )}
+            </AnimatePresence>
             </div>
         );
     }
@@ -2471,15 +2522,17 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const isKickConfirming = kickConfirmCardKey === intCardKey;
 
         const intCardPriority = resolvePriority(card, generatedAt);
+        const isIntExpanded = expandedCardKey === intCardKey;
         return (
+            <div key={intCardKey} className={`ops-grid-row-group ${isIntExpanded ? "is-expanded" : ""}`.trim()}>
             <div
-                key={intCardKey}
                 role="row"
-                className={`ops-grid-row intervention ${emphasisClass} priority-${intCardPriority} ${isClickable ? "clickable" : ""}`.trim()}
-                onClick={isClickable ? () => { setKickConfirmCardKey(null); openProfessionalDrawer(card); } : undefined}
+                className={`ops-grid-row intervention ${emphasisClass} priority-${intCardPriority} ${isClickable ? "clickable" : ""} ${isIntExpanded ? "is-expanded" : ""}`.trim()}
+                onClick={isClickable ? () => { setKickConfirmCardKey(null); setExpandedCardKey((prev) => prev === intCardKey ? null : intCardKey); } : undefined}
                 onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={isClickable ? 0 : undefined}
-                aria-label={isClickable ? `Abrir ${displayDoctorName(card)} na base ${card.baseCode}` : undefined}
+                aria-expanded={isClickable ? isIntExpanded : undefined}
+                aria-label={isClickable ? `Expandir ações de ${displayDoctorName(card)} na base ${card.baseCode}` : undefined}
             >
                 <div role="cell" className="ops-grid-cell column-time">
                     {isClickable && card.status === "active" && card.occupancyId ? (
@@ -2552,6 +2605,22 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         ) : null}
                     </div>
                 </div>
+            </div>
+            <AnimatePresence initial={false}>
+                {isIntExpanded && isClickable && !isWaitingIntervention && (
+                    <RowActions
+                        domain="intervention"
+                        targetId={card.baseId}
+                        targetCode={card.baseCode}
+                        targetLabel={card.baseLabel}
+                        occupancyId={card.occupancyId ?? null}
+                        doctorName={displayDoctorName(card)}
+                        currentRole={card.roleLabel ?? null}
+                        isDisabled={isDisabledIntervention}
+                        onOpenAdvanced={() => { setExpandedCardKey(null); openProfessionalDrawer(card); }}
+                    />
+                )}
+            </AnimatePresence>
             </div>
         );
     }
