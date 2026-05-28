@@ -224,7 +224,9 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
     exit 1
 fi
 
-npm run build
+rm -rf .next
+NODE_OPTIONS="--max-old-space-size=2048" npm run build
+[[ -f .next/BUILD_ID ]] || fail "Build incompleto: .next/BUILD_ID nao gerado."
 
 pm2 delete plantoes >/dev/null 2>&1 || true
 pm2 delete plantoes-telegram-worker >/dev/null 2>&1 || true
