@@ -19,6 +19,7 @@ import {
     resolveMealBreakContinuityStartedAt,
     resolveMealBreakLunchCapacities,
     reconcileNightMealBreakSessionWithBoard,
+    resolveMealBreakTurnNudgeAction,
     shouldPreferMealBreakReplyForSession,
     syncDaySessionState,
 } from "@/modules/telegram/meal-breaks";
@@ -3181,4 +3182,50 @@ test("COI noturno: nao-COI redirecionado no trabalho quando escolha bloquearia s
         assert.notEqual(result.status, "invalid", "Deve redirecionar, nao rejeitar");
         assert.equal(result.session.nightWorkAssignments[lastNonCoi!], "03:00", "Nao-COI deve ser desviado para 03:00");
     }
+});
+const TWO_MIN = 2 * 60 * 1000;
+const BASE_ISO = "2026-03-29T12:00:00.000Z";
+const baseMs = new Date(BASE_ISO).getTime();
+
+test("resolveMealBreakTurnNudgeAction nao cutuca em estagio sem fila ou sem alguem na vez", () => {
+    assert.deepEqual(
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_confirmation", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + TWO_MIN * 5 }),
+        { send: false },
+    );
+    assert.deepEqual(
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: null, sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + TWO_MIN * 5 }),
+        { send: false },
+    );
+});
+
+test("resolveMealBreakTurnNudgeAction cutuca quem virou a vez so depois de 2 min", () => {
+    assert.deepEqual(
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + 60_000 }),
+        { send: false },
+    );
+    assert.deepEqual(
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + TWO_MIN }),
+        { send: true, count: 1 },
+    );
+});
+
+test("resolveMealBreakTurnNudgeAction espaca cutucoes do mesmo da vez em 2 min e incrementa contagem", () => {
+    const previous = { ramal: "2036", at: BASE_ISO, count: 1 };
+    assert.deepEqual(
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: "2026-03-29T11:50:00.000Z", previous, nowMs: baseMs + 90_000 }),
+        { send: false },
+    );
+    assert.deepEqual(
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: "2026-03-29T11:50:00.000Z", previous, nowMs: baseMs + TWO_MIN }),
+        { send: true, count: 2 },
+    );
+});
+
+test("resolveMealBreakTurnNudgeAction reinicia a contagem quando a vez passa para outro ramal", () => {
+    const previous = { ramal: "2035", at: "2026-03-29T11:59:30.000Z", count: 3 };
+    // novo da vez (2036) virou a vez em sessionUpdatedAt; conta a partir dali, nao do cutucao antigo
+    assert.deepEqual(
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous, nowMs: baseMs + TWO_MIN }),
+        { send: true, count: 1 },
+    );
 });

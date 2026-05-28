@@ -245,7 +245,17 @@ const SESSION_KIND = "telegram_meal_break_session";
 const PRIORITY_KIND = "telegram_meal_break_priority_overrides";
 const ELIGIBILITY_KIND = "telegram_meal_break_eligibility_overrides";
 const ELIGIBILITY_NOTICE_STAGE = "meal_break_eligibility";
+const TURN_NUDGE_NOTICE_STAGE = "meal_break_turn_nudge";
 const PRIORITY_NOTICE_CHAT_ID = "operational";
+// Intervalo entre os "cutucoes" da vez: o bot chama de novo quem esta segurando
+// a fila a cada 2 minutos, ate a pessoa responder.
+const MEAL_BREAK_TURN_NUDGE_INTERVAL_MS = 2 * 60 * 1000;
+const MEAL_BREAK_NUDGEABLE_STAGES: ReadonlySet<MealBreakStage> = new Set<MealBreakStage>([
+    "awaiting_lunch_choice",
+    "awaiting_rest_choice",
+    "awaiting_night_work_choice",
+    "awaiting_dinner_choice",
+]);
 const CHIEF_RAMAL = "2031";
 const LUNCH_SLOTS: MealBreakLunchSlot[] = ["11:30", "12:30", "13:30"];
 const REST_SLOTS: MealBreakRestSlot[] = ["14:30", "15:30", "16:30", "18:00"];
@@ -352,6 +362,10 @@ function resolveLegacySessionNoticeKey(chatId: string) {
 
 function resolveAutoNoticeKey(chatId: string, operationalDate: string, mode: MealBreakMode) {
     return `${chatId}:meal_break:auto:${operationalDate}:${mode === "day" ? "09:00" : "20:00"}`;
+}
+
+function resolveTurnNudgeNoticeKey(chatId: string, operationalDate: string, mode: MealBreakMode) {
+    return `${chatId}:meal_break:turn_nudge:${operationalDate}:${mode}`;
 }
 
 function resolvePriorityNoticeKey(operationalDate: string, mode: MealBreakMode) {
@@ -1374,6 +1388,83 @@ function buildDayStartPrompt() {
     return "Primeiro, informem o RAMAL ou nome do medico RECIP.";
 }
 
+// Frases bem-humoradas para deixar claro de quem e a vez. Variam de forma
+// deterministica (pela posicao na fila) para nao deixar os testes flaky.
+const MEAL_BREAK_TURN_QUIPS = [
+    "bora que a fila ta voando! 😄",
+    "todo mundo de olho em voce 👀",
+    "rufem os tambores... 🥁",
+    "a galera ta com fome, hein 😅",
+    "sem estresse, so caprichar na escolha 😎",
+    "e rapidinho, prometo 🤙",
+];
+
+function pickMealBreakQuip(seed: number) {
+    const size = MEAL_BREAK_TURN_QUIPS.length;
+    const index = ((seed % size) + size) % size;
+    return MEAL_BREAK_TURN_QUIPS[index];
+}
+
+// Chamadas de reforco quando a pessoa da vez nao respondeu e o bot precisa
+// cutucar de novo. Variam pela contagem de cutucoes ja enviados.
+const MEAL_BREAK_NUDGE_LEADS = [
+    "⏰ Ó, ainda tô te esperando, hein!",
+    "📣 Repetindo porque ninguém respondeu ainda…",
+    "🐢 Tá devagar pra escolher, a fila parou! Bora?",
+    "🙋 Alô, alô! Cadê a resposta?",
+    "🍽️ A galera com fome cobrando aqui, viu?",
+];
+
+function pickMealBreakNudgeLead(count: number) {
+    const size = MEAL_BREAK_NUDGE_LEADS.length;
+    const index = ((Math.max(1, count) - 1) % size + size) % size;
+    return MEAL_BREAK_NUDGE_LEADS[index];
+}
+
+function buildMealBreakTurnNudgeMessage(session: MealBreakSession, count: number) {
+    return `${pickMealBreakNudgeLead(count)}\n${buildCurrentPrompt(session)}`;
+}
+
+// Anuncio padrao "e a vez de FULANO do ramal X escolher", com horarios livres,
+// exemplo de resposta e quantos faltam na fila.
+function buildTurnAnnouncement(params: {
+    ramal: string;
+    name: string;
+    actionLabel: string;
+    afterAction?: string;
+    emoji: string;
+    available: string;
+    exampleSlot: string | null;
+    remainingInQueue: number;
+}) {
+    const { ramal, name, actionLabel, afterAction, emoji, available, exampleSlot, remainingInQueue } = params;
+    const lines = [
+        `${emoji} É a vez de ${name} · ramal ${ramal} escolher o ${actionLabel}${afterAction ?? ""}!`,
+        `🔔 ${name}, ${pickMealBreakQuip(remainingInQueue)}`,
+    ];
+    if (available) {
+        lines.push(`🕐 Horarios livres: ${available}`);
+    }
+    if (exampleSlot) {
+        lines.push(`👉 Responda assim: ${ramal} ${exampleSlot}`);
+    }
+    lines.push(remainingInQueue > 1 ? `⏭️ Ainda faltam ${remainingInQueue} na fila.` : "🎉 Voce e o ultimo da fila!");
+    return lines.join("\n");
+}
+
+// Mensagem amigavel para quem mandou a escolha fora da vez. Mantem a frase
+// "chamado atual e para o ramal X" e deixa explicito de quem e a vez agora.
+function buildWaitYourTurnMessage(session: MealBreakSession, currentRamal: string | null) {
+    if (!currentRamal) {
+        return "Calma! A divisao esta sendo finalizada, ja te aviso. 🙂";
+    }
+    const name = resolveDoctorCompactName(findDoctor(session, currentRamal) ?? { name: currentRamal });
+    return [
+        `⏳ Opa, ainda nao e a sua vez! Agora e a vez de ${name} · ramal ${currentRamal} escolher. 🙂`,
+        `O chamado atual e para o ramal ${currentRamal}. Aguarde sua vez.`,
+    ].join("\n");
+}
+
 function buildNightWorkQueuePrompt(session: MealBreakSession) {
     const currentRamal = session.nightWorkQueue[0] ?? null;
     if (!currentRamal) {
@@ -1382,7 +1473,17 @@ function buildNightWorkQueuePrompt(session: MealBreakSession) {
 
     const doctor = findDoctor(session, currentRamal);
     const name = resolveDoctorCompactName(doctor ?? { name: currentRamal });
-    return `${currentRamal} - ${name}\n\n🔔 Sua vez`;
+    const remaining = resolveRemainingNightWorkSlots(session);
+    const exampleSlot = NIGHT_WORK_SLOTS.find((slot) => remaining[slot] > 0) ?? null;
+    return buildTurnAnnouncement({
+        ramal: currentRamal,
+        name,
+        actionLabel: "TRABALHO NOTURNO",
+        emoji: "🌙",
+        available: buildAvailableNightWorkText(session),
+        exampleSlot,
+        remainingInQueue: session.nightWorkQueue.length,
+    });
 }
 
 function buildNightDinnerQueuePrompt(session: MealBreakSession) {
@@ -1394,7 +1495,18 @@ function buildNightDinnerQueuePrompt(session: MealBreakSession) {
     const doctor = findDoctor(session, currentRamal);
     const name = resolveDoctorCompactName(doctor ?? { name: currentRamal });
     const duration = session.dinnerDurationAssignments[currentRamal] === "one_hour" ? "1h" : "30min";
-    return `${currentRamal} - ${name} (${duration})\n\n🔔 Sua vez`;
+    const remaining = resolveRemainingDinnerChoiceSlots(session);
+    const exampleSlot = DINNER_CHOICE_SLOTS.find((slot) => remaining[slot] > 0) ?? null;
+    return buildTurnAnnouncement({
+        ramal: currentRamal,
+        name,
+        actionLabel: "JANTAR",
+        afterAction: ` (${duration})`,
+        emoji: "🍽️",
+        available: buildAvailableDinnerText(session),
+        exampleSlot,
+        remainingInQueue: session.dinnerQueue.length,
+    });
 }
 
 function buildNightStartPrompt(session: MealBreakSession) {
@@ -1418,7 +1530,17 @@ function buildLunchQueuePrompt(session: MealBreakSession) {
 
     const doctor = findDoctor(session, currentRamal);
     const name = resolveDoctorCompactName(doctor ?? { name: currentRamal });
-    return `${currentRamal} - ${name}\n\n🔔 Sua vez`;
+    const remaining = resolveRemainingLunchSlots(session);
+    const exampleSlot = LUNCH_SLOTS.find((slot) => remaining[slot] > 0) ?? null;
+    return buildTurnAnnouncement({
+        ramal: currentRamal,
+        name,
+        actionLabel: "ALMOÇO",
+        emoji: "🍽️",
+        available: buildAvailableLunchText(session),
+        exampleSlot,
+        remainingInQueue: session.lunchQueue.length,
+    });
 }
 
 function buildRestQueuePrompt(session: MealBreakSession) {
@@ -1429,7 +1551,17 @@ function buildRestQueuePrompt(session: MealBreakSession) {
 
     const doctor = findDoctor(session, currentRamal);
     const name = resolveDoctorCompactName(doctor ?? { name: currentRamal });
-    return `${currentRamal} - ${name}\n\n🔔 Sua vez`;
+    const remaining = resolveRemainingRestChoiceSlots(session);
+    const exampleSlot = (["15:30", "16:30"] as const).find((slot) => remaining[slot] > 0) ?? null;
+    return buildTurnAnnouncement({
+        ramal: currentRamal,
+        name,
+        actionLabel: "DESCANSO",
+        emoji: "😴",
+        available: buildAvailableRestText(session),
+        exampleSlot,
+        remainingInQueue: session.restQueue.length,
+    });
 }
 
 function buildExistingSessionReply(session: MealBreakSession) {
@@ -2664,6 +2796,25 @@ function isSessionQueueChoice(params: {
     return false;
 }
 
+// Fila pendente do estagio atual (qualquer posicao, nao so a vez). Usada para
+// reconhecer escolhas fora da vez e responder "aguarde sua vez" em vez de
+// deixar a mensagem vazar para o parser de chegada.
+function resolveStageChoiceQueue(session: MealBreakSession): string[] {
+    if (session.stage === "awaiting_lunch_choice") {
+        return session.lunchQueue;
+    }
+    if (session.stage === "awaiting_rest_choice") {
+        return session.restQueue;
+    }
+    if (session.stage === "awaiting_night_work_choice") {
+        return session.nightWorkQueue;
+    }
+    if (session.stage === "awaiting_dinner_choice") {
+        return session.dinnerQueue;
+    }
+    return [];
+}
+
 const MEAL_BREAK_AMBIGUOUS_ARRIVAL_CUES = /\b(?:CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMI|ASSUMINDO|SD|SN|\bP\b)\b/i;
 const MEAL_BREAK_AMBIGUOUS_DEPARTURE_CUES = /\b(?:SAIDA|SAÍDA|SAINDO|SAIU|ENCERREI|FINALIZEI|LIBERADO|LIBERADA)\b/i;
 
@@ -2740,12 +2891,27 @@ export function shouldPreferMealBreakReplyForSession(session: MealBreakSession, 
 
     const strictChoice = parseStrictChoiceReply(text);
     if (strictChoice.valid && strictChoice.ramal && strictChoice.slot) {
-        return resolveArrivalLunchAmbiguity({
+        if (resolveArrivalLunchAmbiguity({
             session,
             text,
             ramal: strictChoice.ramal,
             slot: strictChoice.slot,
-        });
+        })) {
+            return true;
+        }
+        // "RAMAL HH:MM" puro (sem nome, sem turno) e claramente uma tentativa de
+        // escolha da divisao. Se o ramal esta na fila ativa mas ainda nao e a vez
+        // dele, interceptamos mesmo assim para o handler responder "aguarde sua
+        // vez" — em vez de deixar vazar para o parser de chegada e o robo
+        // responder outra coisa no meio do almoco/jantar.
+        if (
+            !MEAL_BREAK_AMBIGUOUS_ARRIVAL_CUES.test(text)
+            && !MEAL_BREAK_AMBIGUOUS_DEPARTURE_CUES.test(text)
+            && resolveStageChoiceQueue(session).includes(strictChoice.ramal)
+        ) {
+            return true;
+        }
+        return false;
     }
 
     // During an active meal-break queue, messages often come as
@@ -3101,11 +3267,14 @@ export function applyMealBreakReply(params: {
                 "",
                 buildNightStartPrompt(confirmed),
             ].join("\n")
+            // Quando o RECIP ja vem definido no quadro (roleLabel "RECIP"), a
+            // sessao pula direto para a etapa do MRV. Usamos buildCurrentPrompt
+            // para anunciar a etapa real em vez de pedir o RECIP de novo.
             : [
                 `✅ Confirmado!`,
                 `Reiniciar: ${restartCmd}`,
                 "",
-                buildDayStartPrompt(),
+                buildCurrentPrompt(confirmed),
             ].join("\n");
 
         return {
@@ -3135,7 +3304,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [`O chamado atual e para o ramal ${currentRamal ?? "-"}. Aguarde sua vez.`],
+                    messages: [buildWaitYourTurnMessage(session, currentRamal)],
                     status: "invalid",
                 };
             }
@@ -3294,7 +3463,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [`O chamado atual e para o ramal ${currentRamal ?? "-"}. Aguarde sua vez.`],
+                    messages: [buildWaitYourTurnMessage(session, currentRamal)],
                     status: "invalid",
                 };
             }
@@ -3660,7 +3829,7 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session,
-                messages: [`O chamado atual e para o ramal ${currentRamal ?? "-"}. Aguarde sua vez.`],
+                messages: [buildWaitYourTurnMessage(session, currentRamal)],
                 status: "invalid",
             };
         }
@@ -3802,7 +3971,7 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session,
-                messages: [`O chamado atual e para o ramal ${currentRamal ?? "-"}. Aguarde sua vez.`],
+                messages: [buildWaitYourTurnMessage(session, currentRamal)],
                 status: "invalid",
             };
         }
@@ -4617,6 +4786,123 @@ export async function sendTelegramMealBreakCycle(referenceDate = new Date()) {
 
     return { sent, evaluated };
     /* eslint-enable no-unreachable */
+}
+
+export interface MealBreakTurnNudgeRecord {
+    ramal: string;
+    at: string;
+    count: number;
+}
+
+// Decisao pura: dado o estagio, quem esta na vez, quando ele virou a vez e o
+// ultimo cutucao registrado, diz se e hora de cutucar de novo e qual a contagem.
+// Extraida para ser testavel sem banco/rede.
+export function resolveMealBreakTurnNudgeAction(params: {
+    stage: MealBreakStage;
+    queueHead: string | null;
+    sessionUpdatedAt: string;
+    previous: MealBreakTurnNudgeRecord | null;
+    nowMs: number;
+    intervalMs?: number;
+}): { send: false } | { send: true; count: number } {
+    const interval = params.intervalMs ?? MEAL_BREAK_TURN_NUDGE_INTERVAL_MS;
+    if (!MEAL_BREAK_NUDGEABLE_STAGES.has(params.stage) || !params.queueHead) {
+        return { send: false };
+    }
+    const sameHead = params.previous?.ramal === params.queueHead;
+    const baseMs = new Date(sameHead && params.previous ? params.previous.at : params.sessionUpdatedAt).getTime();
+    if (params.nowMs - baseMs < interval) {
+        return { send: false };
+    }
+    return { send: true, count: sameHead && params.previous ? params.previous.count + 1 : 1 };
+}
+
+function isMealBreakTurnNudgeRecord(value: unknown): value is MealBreakTurnNudgeRecord {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    return typeof candidate.ramal === "string"
+        && typeof candidate.at === "string"
+        && typeof candidate.count === "number";
+}
+
+async function loadMealBreakTurnNudgeRecord(chatId: string, operationalDate: string, mode: MealBreakMode) {
+    const db = getDb();
+    const row = await db.query.telegramBotNotices.findFirst({
+        where: eq(telegramBotNotices.noticeKey, resolveTurnNudgeNoticeKey(chatId, operationalDate, mode)),
+    });
+    return row && isMealBreakTurnNudgeRecord(row.payload) ? row.payload : null;
+}
+
+async function saveMealBreakTurnNudgeRecord(chatId: string, operationalDate: string, mode: MealBreakMode, record: MealBreakTurnNudgeRecord) {
+    const db = getDb();
+    await db.insert(telegramBotNotices)
+        .values({
+            noticeKey: resolveTurnNudgeNoticeKey(chatId, operationalDate, mode),
+            chatId,
+            stage: TURN_NUDGE_NOTICE_STAGE,
+            payload: record,
+        })
+        .onConflictDoUpdate({
+            target: telegramBotNotices.noticeKey,
+            set: { stage: TURN_NUDGE_NOTICE_STAGE, payload: record },
+        });
+}
+
+// Reenvia o anuncio "e a vez de fulano" a cada MEAL_BREAK_TURN_NUDGE_INTERVAL_MS
+// enquanto a fila estiver parada esperando a escolha de quem esta na vez.
+// Chamado pelo worker de lembretes a cada poll.
+export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()) {
+    if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) {
+        return { sent: 0, evaluated: 0 };
+    }
+
+    const mode = resolveMealBreakModeFromReference(referenceDate);
+    const operationalDate = formatOperationalDate(referenceDate);
+    const chatIds = getMealBreakVisibleChatIds();
+    let sent = 0;
+    let evaluated = 0;
+
+    for (const chatId of chatIds) {
+        const session = await loadMealBreakSession(chatId, operationalDate, mode);
+        if (!session || !MEAL_BREAK_NUDGEABLE_STAGES.has(session.stage)) {
+            continue;
+        }
+
+        const head = resolveStageChoiceQueue(session)[0] ?? null;
+        if (!head) {
+            continue;
+        }
+
+        evaluated += 1;
+
+        const previous = await loadMealBreakTurnNudgeRecord(chatId, operationalDate, mode);
+        const action = resolveMealBreakTurnNudgeAction({
+            stage: session.stage,
+            queueHead: head,
+            sessionUpdatedAt: session.updatedAt,
+            previous,
+            nowMs: referenceDate.getTime(),
+        });
+        if (!action.send) {
+            continue;
+        }
+
+        try {
+            await sendMessage(chatId, buildMealBreakTurnNudgeMessage(session, action.count));
+            await saveMealBreakTurnNudgeRecord(chatId, operationalDate, mode, {
+                ramal: head,
+                at: referenceDate.toISOString(),
+                count: action.count,
+            });
+            sent += 1;
+        } catch (error) {
+            console.error(`telegram meal break turn nudge failed for ${chatId} ${operationalDate}`, error);
+        }
+    }
+
+    return { sent, evaluated };
 }
 
 export async function sendTelegramMealBreakMessages(params: {
