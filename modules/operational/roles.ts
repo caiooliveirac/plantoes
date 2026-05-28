@@ -86,12 +86,6 @@ export function resolveOperationalRoleLabel(params: {
         return null;
     }
 
-    // "MR" (médico regulador) é o papel genérico padrão: não é função especial,
-    // então normalizamos para null para não vazar como rótulo nem ganhar tratamento de papel.
-    if (resolved === "MR") {
-        return null;
-    }
-
     return resolved;
 }
 

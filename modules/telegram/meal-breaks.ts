@@ -589,6 +589,14 @@ function isRestExcluded(session: MealBreakSession, ramal: string) {
     return session.restExcludedRamals.includes(ramal);
 }
 
+// "MR" (médico regulador) é o papel genérico padrão: no roster do almoço não é
+// função especial, então o tratamos como null (sem rótulo). O contrato global de
+// resolveOperationalRoleLabel continua devolvendo "MR" — esta normalização é só
+// para a fila de almoço, coerente com o badges code que já ignora "MR".
+function nullifyGenericRegulatorRole(roleLabel: string | null) {
+    return normalizeOperationalRoleLabel(roleLabel) === "MR" ? null : roleLabel;
+}
+
 function isMealBreakIsolatedRole(roleLabel: string | null | undefined) {
     return normalizeOperationalRoleLabel(roleLabel) === "PSIQ";
 }
@@ -926,13 +934,13 @@ function mapRegulationDoctor(row: OperationalBoard["regulation"][number], mode: 
         arrivalStartedAt: row.startedAt,
         startedAt: row.boardStartedAt ?? row.startedAt,
         shiftLabel: effectiveShiftLabel,
-        roleLabel: resolveOperationalRoleLabel({
+        roleLabel: nullifyGenericRegulatorRole(resolveOperationalRoleLabel({
             domain: "regulation",
             code: normalizeRamal(row.postCode),
             shiftLabel: effectiveShiftLabel,
             roleLabel: row.roleLabel,
             defaultRole: row.defaultRole,
-        }),
+        })),
     };
 }
 
