@@ -117,6 +117,8 @@ export interface PreviousOperationalEntry {
   balanceMinutes: number | null;
   ruleCode: string | null;
   bankHoursExplanation: string | null;
+  /** Define se a entry aceita correcao inline (chegada/saida). false em back-sn para tudo que nao seja SN. */
+  editable: boolean;
 }
 
 export interface PreviousOperationalSection {
@@ -134,6 +136,10 @@ export interface PreviousOperationalBoard {
   endedAt: string;
   totalEntries: number;
   sections: PreviousOperationalSection[];
+  /** Modo aplicado para montar a board (define janela + edicao). */
+  mode: PreviousOperationalMode;
+  /** Turno operacional corrente no momento da consulta — usado para decidir se "Voltar 1 dia" aparece. */
+  currentShiftLabel: "SD" | "SN";
 }
 
 export type PaymentAllocationStatus = "ready_for_payment" | "needs_review";
@@ -576,6 +582,72 @@ function resolvePreviousOperationalDate(reference = new Date()) {
   };
 }
 
+/**
+ * Anchor + modo de exibicao do Plantao Anterior.
+ *
+ * - "full-prev": SD + SN do dia operacional D-1, tudo editavel.
+ *   Default legado, usado pelo dashboard home e pelo turno SD na pagina dedicada.
+ * - "sd-only-current": somente SD do dia operacional D (o que acabou de fechar)
+ *   + P invertido associado. SN em curso e P (SD+SN em curso) sao suprimidos.
+ *   Usado pelo turno SN na pagina dedicada.
+ * - "back-sn": SD + SN de D-1 (mesma janela do full-prev) mas com edicao
+ *   restrita ao SN. Usado quando o chefe SN clica "Voltar 1 dia".
+ */
+export type PreviousOperationalMode = "full-prev" | "sd-only-current" | "back-sn";
+
+function resolvePreviousBoardLayout(reference: Date, mode: PreviousOperationalMode) {
+  const currentShiftStartedAt = mode === "sd-only-current"
+    || mode === "back-sn"
+    ? (toOperationalLocalClock(reference).getUTCHours() >= 19
+      ? reference // SN noite: turno corrente comecou hoje 19h
+      : new Date(reference.getTime() - 12 * 60 * 60 * 1000)) // SN madrugada: turno corrente comecou ontem 19h
+    : reference;
+
+  const currentOpDateParts = getOperationalLocalDateParts(currentShiftStartedAt);
+
+  // Para SD shift (full-prev): anchor = ontem operacional.
+  // Para SN auto (sd-only-current): anchor = dia operacional corrente (o SD que fechou).
+  // Para SN back (back-sn): anchor = dia operacional anterior ao corrente.
+  const anchorParts = mode === "sd-only-current"
+    ? currentOpDateParts
+    : addOperationalLocalDays(currentOpDateParts, -1);
+
+  const previousNightParts = addOperationalLocalDays(anchorParts, -1);
+  const nextDayParts = addOperationalLocalDays(anchorParts, 1);
+
+  const previousSnSlotStart = fromOperationalLocalClockParts(previousNightParts.year, previousNightParts.month, previousNightParts.day, 19, 0).toISOString();
+  const sdSlotStart = fromOperationalLocalClockParts(anchorParts.year, anchorParts.month, anchorParts.day, 7, 0).toISOString();
+  const snSlotStart = fromOperationalLocalClockParts(anchorParts.year, anchorParts.month, anchorParts.day, 19, 0).toISOString();
+
+  // sd-only-current omite o slot SN do dia (em curso); demais modos veem tudo.
+  const includeAnchorSn = mode !== "sd-only-current";
+  const relevantSlotStarts = new Set(
+    includeAnchorSn
+      ? [previousSnSlotStart, sdSlotStart, snSlotStart]
+      : [previousSnSlotStart, sdSlotStart],
+  );
+
+  return {
+    anchorParts,
+    previousNightParts,
+    nextDayParts,
+    previousSnSlotStart,
+    sdSlotStart,
+    snSlotStart,
+    relevantSlotStarts,
+    includeAnchorSn,
+  };
+}
+
+function resolveEditableScope(mode: PreviousOperationalMode, bucket: PreviousOperationalBucket): boolean {
+  // back-sn: so o SN standalone pode ser editado (o usuario voltou um dia para
+  // corrigir o SN que ele assumiu apos; SD, P e P invertido sao contexto).
+  if (mode === "back-sn") {
+    return bucket === "SN";
+  }
+  return true;
+}
+
 function mapRegulationRow(row: Record<string, unknown>): RegulationBoardRow {
   const rawStatus = String(row.status ?? "waiting");
 
@@ -851,6 +923,14 @@ function resolveCandidateEffectiveEndedAt(candidate: LogicalShiftCandidate, succ
 
     if (hasDepartureEvidence(candidate.notes)) {
       return explicitEndAt;
+    }
+
+    // actual_ended_at gravado explicitamente (bot /saiu, edicao manual,
+    // confirmacao do chefe) ja constitui evidencia de saida — nao clampar
+    // para o limite canonico do turno, senao Plantao Anterior mostra 07:00
+    // enquanto Banco de Horas (que le actualEndedAt direto) mostra 07:51.
+    if (candidate.actualEndedAt) {
+      return candidate.actualEndedAt;
     }
 
     return implicitExpiry;
@@ -1251,6 +1331,7 @@ function buildStandalonePreviousEntry(candidate: LogicalShiftCandidate): Previou
     balanceMinutes: syntheticBankHours.balanceMinutes,
     ruleCode: syntheticBankHours.ruleCode,
     bankHoursExplanation: syntheticBankHours.bankHoursExplanation,
+    editable: true,
   };
 }
 
@@ -1297,6 +1378,7 @@ function buildCombinedPreviousEntry(bucket: PreviousOperationalBucket, first: Lo
     balanceMinutes: syntheticBankHours.balanceMinutes,
     ruleCode: syntheticBankHours.ruleCode,
     bankHoursExplanation: syntheticBankHours.bankHoursExplanation,
+    editable: true,
   };
 }
 
@@ -1826,22 +1908,30 @@ export async function listPendingDepartureConfirmations(
   });
 }
 
-export async function getPreviousOperationalBoard(reference = new Date()): Promise<PreviousOperationalBoard> {
+export async function getPreviousOperationalBoard(
+  reference: Date = new Date(),
+  options: { mode?: PreviousOperationalMode } = {},
+): Promise<PreviousOperationalBoard> {
   const db = getDb();
-  const previousDate = resolvePreviousOperationalDate(reference);
-  const previousDayParts = previousDate.parts;
-  const previousNightParts = addOperationalLocalDays(previousDayParts, -1);
-  const nextDayParts = addOperationalLocalDays(previousDayParts, 1);
+  // Resolve modo: o caller pode forcar (back-sn da pagina dedicada). Sem
+  // override, deduz pelo turno corrente — SD => full-prev (auditar ontem),
+  // SN => sd-only-current (auditar o SD que acabou de fechar).
+  const currentShiftLabel: "SD" | "SN" = toOperationalLocalClock(reference).getUTCHours() >= 7
+    && toOperationalLocalClock(reference).getUTCHours() < 19
+    ? "SD"
+    : "SN";
+  const mode: PreviousOperationalMode = options.mode
+    ?? (currentShiftLabel === "SN" ? "sd-only-current" : "full-prev");
+
+  const layout = resolvePreviousBoardLayout(reference, mode);
+  const { anchorParts, previousNightParts, nextDayParts, previousSnSlotStart, sdSlotStart, snSlotStart, relevantSlotStarts, includeAnchorSn } = layout;
+
   const queryStart = fromOperationalLocalClockParts(previousNightParts.year, previousNightParts.month, previousNightParts.day, 0, 0).toISOString();
-  const queryEnd = fromOperationalLocalClockParts(addOperationalLocalDays(previousDayParts, 2).year, addOperationalLocalDays(previousDayParts, 2).month, addOperationalLocalDays(previousDayParts, 2).day, 0, 0).toISOString();
-  const previousStartedAtIso = fromOperationalLocalClockParts(previousDayParts.year, previousDayParts.month, previousDayParts.day, 7, 0).toISOString();
+  const queryEnd = fromOperationalLocalClockParts(addOperationalLocalDays(anchorParts, 2).year, addOperationalLocalDays(anchorParts, 2).month, addOperationalLocalDays(anchorParts, 2).day, 0, 0).toISOString();
+  const previousStartedAtIso = fromOperationalLocalClockParts(anchorParts.year, anchorParts.month, anchorParts.day, 7, 0).toISOString();
   const previousEndedAtIso = fromOperationalLocalClockParts(nextDayParts.year, nextDayParts.month, nextDayParts.day, 7, 0).toISOString();
   const previousShiftLabel = "SN" as const;
-  const relevantSlotStarts = new Set([
-    fromOperationalLocalClockParts(previousNightParts.year, previousNightParts.month, previousNightParts.day, 19, 0).toISOString(),
-    fromOperationalLocalClockParts(previousDayParts.year, previousDayParts.month, previousDayParts.day, 7, 0).toISOString(),
-    fromOperationalLocalClockParts(previousDayParts.year, previousDayParts.month, previousDayParts.day, 19, 0).toISOString(),
-  ]);
+  const operationalDateIso = fromOperationalLocalClockParts(anchorParts.year, anchorParts.month, anchorParts.day, 12, 0).toISOString();
 
   const result = await db.execute(sql`
     with previous_regulation as (
@@ -1939,14 +2029,11 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
 
   const consumedOccupancyIds = new Set<string>();
   const entries: PreviousOperationalEntry[] = [];
-  const previousSnSlotStart = fromOperationalLocalClockParts(previousNightParts.year, previousNightParts.month, previousNightParts.day, 19, 0).toISOString();
-  const sdSlotStart = fromOperationalLocalClockParts(previousDayParts.year, previousDayParts.month, previousDayParts.day, 7, 0).toISOString();
-  const snSlotStart = fromOperationalLocalClockParts(previousDayParts.year, previousDayParts.month, previousDayParts.day, 19, 0).toISOString();
 
   for (const slotMap of candidatesByDoctorTarget.values()) {
     const previousSn = slotMap.get(previousSnSlotStart);
     const sd = slotMap.get(sdSlotStart);
-    const sn = slotMap.get(snSlotStart);
+    const sn = includeAnchorSn ? slotMap.get(snSlotStart) : undefined;
 
     if (previousSn && sd) {
       entries.push(buildCombinedPreviousEntry("P_INVERTIDO", previousSn, sd));
@@ -2011,7 +2098,13 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
     entries.push(buildStandalonePreviousEntry(candidate));
   }
 
-  const sortedEntries = entries.sort(comparePreviousEntries);
+  // Aplica editavel por bucket conforme o modo (back-sn restringe a SN).
+  const scopedEntries = entries.map((entry) => ({
+    ...entry,
+    editable: resolveEditableScope(mode, entry.bucket),
+  }));
+
+  const sortedEntries = scopedEntries.sort(comparePreviousEntries);
 
   const sectionOrder: PreviousOperationalBucket[] = ["P_INVERTIDO", "P", "SD", "SN"];
   const sections = sectionOrder.map((bucket) => ({
@@ -2023,12 +2116,14 @@ export async function getPreviousOperationalBoard(reference = new Date()): Promi
 
   return {
     generatedAt: new Date().toISOString(),
-    operationalDate: previousDate.operationalDate.toISOString(),
+    operationalDate: operationalDateIso,
     shiftLabel: previousShiftLabel,
     startedAt: previousStartedAtIso,
     endedAt: previousEndedAtIso,
     totalEntries: sortedEntries.length,
     sections,
+    mode,
+    currentShiftLabel,
   };
 }
 

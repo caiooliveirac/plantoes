@@ -40,7 +40,10 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
     );
     const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility] = await Promise.all([
         getOperationalBoard(),
-        getPreviousOperationalBoard(),
+        // Dashboard mantem a visao legada (dia operacional anterior completo,
+        // tudo editavel) independente do turno corrente. A pivotagem shift-aware
+        // vive na pagina /historico/turno-anterior dedicada.
+        getPreviousOperationalBoard(new Date(), { mode: "full-prev" }),
         canManage ? listDoctorsForChiefInvite() : Promise.resolve([]),
         getCurrentOperationalMealBreakSession(),
         getCurrentMealBreakEligibilityOverrides(),

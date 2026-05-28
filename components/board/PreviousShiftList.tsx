@@ -183,30 +183,42 @@ export function PreviousShiftList({
                                         {entry.roleLabel && <span className="historico-grid-role">{entry.roleLabel}</span>}
                                     </div>
                                     <div role="cell" className="col-hora">
-                                        <InlineTimeEditor
-                                            domain={entry.domain}
-                                            occupancyId={entry.occupancyId}
-                                            field="arrival"
-                                            currentIso={arrivalIso}
-                                            doctorName={entry.displayName ?? entry.doctorName}
-                                            targetCode={entry.targetCode}
-                                            onSaved={handleSaved}
-                                        >
-                                            {({ value }) => value}
-                                        </InlineTimeEditor>
+                                        {entry.editable ? (
+                                            <InlineTimeEditor
+                                                domain={entry.domain}
+                                                occupancyId={entry.occupancyId}
+                                                field="arrival"
+                                                currentIso={arrivalIso}
+                                                doctorName={entry.displayName ?? entry.doctorName}
+                                                targetCode={entry.targetCode}
+                                                onSaved={handleSaved}
+                                            >
+                                                {({ value }) => value}
+                                            </InlineTimeEditor>
+                                        ) : (
+                                            <span className="historico-grid-time historico-grid-time--readonly" title="Somente leitura — fora do escopo do turno corrente">
+                                                {formatHourMinute(arrivalIso)}
+                                            </span>
+                                        )}
                                     </div>
                                     <div role="cell" className="col-hora">
-                                        <InlineTimeEditor
-                                            domain={entry.domain}
-                                            occupancyId={entry.occupancyId}
-                                            field="departure"
-                                            currentIso={departureIso}
-                                            doctorName={entry.displayName ?? entry.doctorName}
-                                            targetCode={entry.targetCode}
-                                            onSaved={handleSaved}
-                                        >
-                                            {({ value }) => value}
-                                        </InlineTimeEditor>
+                                        {entry.editable ? (
+                                            <InlineTimeEditor
+                                                domain={entry.domain}
+                                                occupancyId={entry.occupancyId}
+                                                field="departure"
+                                                currentIso={departureIso}
+                                                doctorName={entry.displayName ?? entry.doctorName}
+                                                targetCode={entry.targetCode}
+                                                onSaved={handleSaved}
+                                            >
+                                                {({ value }) => value}
+                                            </InlineTimeEditor>
+                                        ) : (
+                                            <span className="historico-grid-time historico-grid-time--readonly" title="Somente leitura — fora do escopo do turno corrente">
+                                                {departureIso ? formatHourMinute(departureIso) : "Em aberto"}
+                                            </span>
+                                        )}
                                     </div>
                                     <div role="cell" className="col-saldo">
                                         <span className={`historico-grid-balance tone-${tone}`}>

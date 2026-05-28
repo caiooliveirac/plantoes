@@ -8955,6 +8955,37 @@ button.chief-payable-tag:focus-visible {
     outline: none;
 }
 
+.historico-grid-time--readonly {
+    cursor: default;
+    color: var(--muted);
+    border-color: transparent;
+}
+.historico-grid-time--readonly:hover,
+.historico-grid-time--readonly:focus-visible {
+    border-color: transparent;
+    background: transparent;
+}
+
+.historico-gantt-nav-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-elevated);
+    color: var(--muted);
+    font-size: 0.76rem;
+    letter-spacing: 0.04em;
+    text-decoration: none;
+    transition: color var(--dur-fast), border-color var(--dur-fast);
+}
+.historico-gantt-nav-pill:hover {
+    color: var(--text);
+    border-color: rgba(255, 255, 255, 0.22);
+}
+
 .historico-grid-balance {
     font-family: var(--font-display), var(--font-sans);
     font-size: 0.82rem;

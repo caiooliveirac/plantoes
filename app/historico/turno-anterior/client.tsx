@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowLeft, Filter, Search } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 import { PreviousShiftList } from "@/components/board/PreviousShiftList";
 import { DepartureVerifier } from "@/components/board/DepartureVerifier";
 import { fadeRise } from "@/lib/board/motion";
@@ -94,7 +94,18 @@ export function PreviousShiftGanttPage({
                         <ArrowLeft size={14} strokeWidth={2.2} /> Voltar ao quadro
                     </Link>
                     <h1>Plantão anterior · {formatOperationalDateLabel(board.operationalDate)}</h1>
-                    <p>Auditoria do fechamento. Clique em chegada ou saída para corrigir — um motivo é exigido.</p>
+                    <p>{resolveContextCopy(board)}</p>
+                    {board.currentShiftLabel === "SN" && (
+                        board.mode === "back-sn" ? (
+                            <Link href="/historico/turno-anterior" className="historico-gantt-nav-pill">
+                                <ChevronRight size={14} strokeWidth={2.2} /> Voltar para o SD recém-fechado
+                            </Link>
+                        ) : (
+                            <Link href="/historico/turno-anterior?back=1" className="historico-gantt-nav-pill">
+                                <ChevronLeft size={14} strokeWidth={2.2} /> Voltar 1 dia (SN editável)
+                            </Link>
+                        )
+                    )}
                 </div>
                 <div className="historico-gantt-hero__stats">
                     <div>
@@ -212,4 +223,14 @@ function formatOperationalDateLabel(operationalDate: string) {
     if (!match) return operationalDate;
     const [, year, month, day] = match;
     return `${day}/${month}/${year}`;
+}
+
+function resolveContextCopy(board: PreviousOperationalBoard) {
+    if (board.mode === "sd-only-current") {
+        return "SN em curso — auditando o SD que acabou de fechar. Clique em chegada ou saída para corrigir (motivo obrigatório).";
+    }
+    if (board.mode === "back-sn") {
+        return "Revendo o dia anterior. Apenas o SN aceita edição — SD, P e P invertido são contexto somente-leitura.";
+    }
+    return "Auditoria do fechamento. Clique em chegada ou saída para corrigir — um motivo é exigido.";
 }
