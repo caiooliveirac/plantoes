@@ -42,18 +42,42 @@ export interface TelegramReplyKeyboardRemove {
 export type TelegramReplyMarkup = TelegramReplyKeyboardMarkup | TelegramReplyKeyboardRemove;
 
 async function callApi<T>(method: string, body: Record<string, unknown>) {
-    const response = await fetch(`${getBaseUrl()}/${method}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-    });
+    const maxAttempts = 3;
+    let lastError: unknown;
 
-    const data = await response.json();
-    if (!data.ok) {
-        throw new Error(`Telegram API ${method}: ${data.description ?? "request failed"}`);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const response = await fetch(`${getBaseUrl()}/${method}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(10_000),
+            });
+
+            const data = await response.json();
+            if (!data.ok) {
+                // Erro de aplicacao do Telegram (chat invalido, bloqueado...) nao e
+                // transitorio: lanca e NAO retenta.
+                throw new Error(`Telegram API ${method}: ${data.description ?? "request failed"}`);
+            }
+
+            return data.result as T;
+        } catch (error) {
+            lastError = error;
+            // So retenta falha de transporte (fetch failed / timeout). Erro de aplicacao
+            // ("Telegram API ...") cai aqui mas nao e transitorio -> relanca na hora.
+            const transient = error instanceof Error
+                && (error.name === "TimeoutError"
+                    || error.message === "fetch failed"
+                    || error.message.toLowerCase().includes("network"));
+            if (!transient || attempt === maxAttempts) {
+                throw error;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+        }
     }
 
-    return data.result as T;
+    throw lastError;
 }
 
 export function sendMessage(

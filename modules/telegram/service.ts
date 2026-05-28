@@ -2221,17 +2221,61 @@ function sanitizeErrorMessage(value: unknown): string | null | undefined {
     return cleaned.slice(0, 240);
 }
 
+// Erros transitorios de conexao/contencao do Postgres (pool max:1 sob rajada na virada
+// de plantao). Como a UPDATE de markTelegramProcessed e idempotente (por id, SET fixo),
+// retentamos com seguranca em vez de marcar a mensagem como "db_update_failed".
+const TRANSIENT_DB_ERROR_CODES = new Set([
+    // postgres-js, nivel de conexao
+    "CONNECTION_CLOSED", "CONNECTION_DESTROYED", "CONNECTION_ENDED", "CONNECT_TIMEOUT",
+    "ECONNRESET", "ETIMEDOUT", "EPIPE",
+    // PostgreSQL: connection exception (classe 08)
+    "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
+    // operator intervention / shutdown (classe 57)
+    "57P01", "57P02", "57P03", "57014",
+    "53300", // too_many_connections
+    "40001", "40P01", // serialization_failure / deadlock_detected
+    "55P03", // lock_not_available
+]);
+
+function isTransientDbError(error: unknown): boolean {
+    for (const candidate of [error, (error as { cause?: unknown } | null)?.cause]) {
+        if (!candidate || typeof candidate !== "object") continue;
+        const code = (candidate as { code?: unknown }).code;
+        if (typeof code === "string" && TRANSIENT_DB_ERROR_CODES.has(code)) {
+            return true;
+        }
+        const message = (candidate as { message?: unknown }).message;
+        if (typeof message === "string"
+            && /\b(econnreset|etimedout|epipe|connection (terminated|closed|reset|ended)|connection_|timeout)\b/i.test(message)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 async function markTelegramProcessed(id: string, patch: Partial<typeof telegramIngestedMessages.$inferInsert>) {
     const db = getDb();
     const normalizedPatch = Object.prototype.hasOwnProperty.call(patch, "errorMessage")
         ? { ...patch, errorMessage: sanitizeErrorMessage(patch.errorMessage) }
         : patch;
-    await db.update(telegramIngestedMessages)
-        .set({
-            ...normalizedPatch,
-            processedAt: new Date(),
-        })
-        .where(eq(telegramIngestedMessages.id, id));
+
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await db.update(telegramIngestedMessages)
+                .set({
+                    ...normalizedPatch,
+                    processedAt: new Date(),
+                })
+                .where(eq(telegramIngestedMessages.id, id));
+            return;
+        } catch (error) {
+            if (!isTransientDbError(error) || attempt === maxAttempts) {
+                throw error;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+        }
+    }
 }
 
 function buildResolutionData(current: unknown, patch: Record<string, unknown>) {
@@ -6107,16 +6151,24 @@ async function queuePendingDepartureJustification(params: {
         },
     });
 
-    await sendMessage(
-        params.message!.chat.id,
-        pickTelegramReply("departure_justification_required", params.message!.message_id, {
-            name: resolveTelegramDoctorSurfaceName(params.resolvedDoctor),
-            target: params.parsed.baseCode ?? "plantao",
-            time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
-            example: departureExample,
-        }),
-        params.message!.message_id,
-    );
+    // O pendente ja foi persistido acima. Se o aviso ao Telegram falhar (blip de rede),
+    // NAO deixamos a excecao subir pro catch externo e reverter o pendente pra "error":
+    // o prompt e best-effort; o fluxo de justificativa segue valido no banco e a proxima
+    // resposta do medico ("liberada pela chefia") vai achar o pendente normalmente.
+    try {
+        await sendMessage(
+            params.message!.chat.id,
+            pickTelegramReply("departure_justification_required", params.message!.message_id, {
+                name: resolveTelegramDoctorSurfaceName(params.resolvedDoctor),
+                target: params.parsed.baseCode ?? "plantao",
+                time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
+                example: departureExample,
+            }),
+            params.message!.message_id,
+        );
+    } catch (notifyError) {
+        console.error("departure_justification_prompt_send_failed", notifyError);
+    }
 }
 
 async function queuePendingDepartureCorrection(params: {
