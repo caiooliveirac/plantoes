@@ -20,6 +20,49 @@ info() {
     echo "[deploy][INFO] $*"
 }
 
+ensure_memory_headroom() {
+    # 'next build' pode usar ~2GB de heap. Nesta maquina compartilhada, abortar
+    # cedo com mensagem clara e' muito melhor do que travar o host em swap/OOM
+    # (que ja' rebootou a instancia e derrubou tudo junto). Ajustavel via env.
+    local min_mb="${DEPLOY_MIN_HEADROOM_MB:-3000}"
+    local avail_mb swap_free_mb headroom_mb
+    avail_mb="$(free -m | awk '/^Mem:/{print $7}')"
+    swap_free_mb="$(free -m | awk '/^Swap:/{print $4}')"
+    headroom_mb="$(( avail_mb + swap_free_mb ))"
+    info "Memoria para build: ${avail_mb}MB RAM livre + ${swap_free_mb}MB swap = ${headroom_mb}MB (minimo ${min_mb}MB)"
+    if [[ "${headroom_mb}" -lt "${min_mb}" ]]; then
+        fail "Memoria insuficiente para build seguro (${headroom_mb}MB < ${min_mb}MB). Libere RAM/aumente o swap antes do deploy (ajuste DEPLOY_MIN_HEADROOM_MB se necessario)."
+    fi
+}
+
+build_with_rollback() {
+    # Build atomico: preserva o ultimo build bom e so' o descarta apos sucesso.
+    # Se o build falhar/for interrompido (OOM, reboot, erro), restaura o build
+    # anterior para que a producao NUNCA fique sem '.next' — evita o loop
+    # 'production-start-no-build-id' que ja' deixou o app fora do ar.
+    rm -rf .next.prev
+    if [[ -d .next && -f .next/BUILD_ID ]]; then
+        mv .next .next.prev
+        info "Build anterior preservado em .next.prev (rollback disponivel)."
+    else
+        rm -rf .next
+    fi
+
+    if NODE_OPTIONS="--max-old-space-size=2048" npm run build && [[ -f .next/BUILD_ID ]]; then
+        rm -rf .next.prev
+        info "Build concluido (BUILD_ID=$(cat .next/BUILD_ID))."
+        return 0
+    fi
+
+    warn "Build falhou ou ficou incompleto."
+    rm -rf .next
+    if [[ -d .next.prev ]]; then
+        mv .next.prev .next
+        warn "Rollback aplicado: build anterior restaurado. Producao mantem a versao antiga (sem downtime)."
+    fi
+    fail "Build incompleto: .next/BUILD_ID nao gerado. Deploy abortado."
+}
+
 pm2_meta_value() {
     local process_name="$1"
     local field="$2"
@@ -224,9 +267,8 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
     exit 1
 fi
 
-rm -rf .next
-NODE_OPTIONS="--max-old-space-size=2048" npm run build
-[[ -f .next/BUILD_ID ]] || fail "Build incompleto: .next/BUILD_ID nao gerado."
+ensure_memory_headroom
+build_with_rollback
 
 pm2 delete plantoes >/dev/null 2>&1 || true
 pm2 delete plantoes-telegram-worker >/dev/null 2>&1 || true
