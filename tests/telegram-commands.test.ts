@@ -53,6 +53,10 @@ import {
     buildTelegramContinuationSourceHint,
     buildPublicTelegramCommandHelpReply,
     shouldRouteToDepartureJustification,
+    shouldForceTelegramTakeoverOnContinuationConflict,
+    resolveTelegramForcedTakeoverAt,
+    buildTelegramArrivalConflictMessage,
+    buildForcedTakeoverHint,
 } from "@/modules/telegram/service";
 import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
 
@@ -2154,6 +2158,68 @@ test("shouldRouteToDepartureJustification never treats a continuation warning as
     }), false);
 });
 
+test("shouldForceTelegramTakeoverOnContinuationConflict só libera takeover em continuidade com conflito de ocupação", () => {
+    assert.equal(shouldForceTelegramTakeoverOnContinuationConflict({
+        parsed: {
+            sector: "INTERVENTION",
+            baseCode: "PM04",
+            arrivalTime: null,
+            shiftType: "SN",
+            roleFunction: null,
+            isDeparture: false,
+            isContinuation: true,
+            isReassignment: false,
+        },
+        errorMessage: "arrival_conflicts_with_active_occupancy",
+    }), true);
+
+    assert.equal(shouldForceTelegramTakeoverOnContinuationConflict({
+        parsed: {
+            sector: "INTERVENTION",
+            baseCode: "PM04",
+            arrivalTime: null,
+            shiftType: "SN",
+            roleFunction: null,
+            isDeparture: false,
+            isContinuation: false,
+            isReassignment: false,
+        },
+        errorMessage: "arrival_conflicts_with_active_occupancy",
+    }), false);
+
+    assert.equal(shouldForceTelegramTakeoverOnContinuationConflict({
+        parsed: {
+            sector: "INTERVENTION",
+            baseCode: "PM04",
+            arrivalTime: null,
+            shiftType: "SN",
+            roleFunction: null,
+            isDeparture: false,
+            isContinuation: true,
+            isReassignment: false,
+        },
+        errorMessage: "Intervention base not found.",
+    }), false);
+});
+
+test("resolveTelegramForcedTakeoverAt respeita duração mínima do ocupante atual", () => {
+    assert.equal(
+        resolveTelegramForcedTakeoverAt({
+            eventAt: new Date("2026-05-01T19:00:00.000Z"),
+            conflictedStartedAt: new Date("2026-05-01T19:00:30.000Z"),
+        }).toISOString(),
+        "2026-05-01T19:01:30.000Z",
+    );
+
+    assert.equal(
+        resolveTelegramForcedTakeoverAt({
+            eventAt: new Date("2026-05-01T19:10:00.000Z"),
+            conflictedStartedAt: new Date("2026-05-01T19:00:00.000Z"),
+        }).toISOString(),
+        "2026-05-01T19:10:00.000Z",
+    );
+});
+
 test("shouldTreatTelegramArrivalAsContinuation infers rollover for intervention and explicit SD→SN regulation cross-shift", () => {
     assert.equal(
         shouldTreatTelegramArrivalAsContinuation({
@@ -3136,4 +3202,85 @@ test("isBatchCancelKeyword aceita variantes de cancelamento", () => {
     assert.equal(isBatchCancelKeyword("Cancela"), true);
     assert.equal(isBatchCancelKeyword("Descartar lote"), true);
     assert.equal(isBatchCancelKeyword("Fechar"), false);
+});
+
+// ─── Regressão: substituto automático em continuidade ────────────────
+// Cenário real: médico manda "continuando PM04 SN" mas outra pessoa
+// está ativa na base. Bot deve retirar o ocupante anterior, registrar
+// o novo e exibir aviso claro no reply — para o pagamento fechar certo.
+
+test("buildTelegramArrivalConflictMessage dá instrução de retry para conflito de continuidade (não /retirar)", () => {
+    const msg = buildTelegramArrivalConflictMessage({
+        parsed: {
+            baseCode: "PM04",
+            isDeparture: false,
+            isContinuation: true,
+        },
+        errorMessage: "arrival_conflicts_with_active_occupancy",
+    });
+
+    // Deve NÃO pedir /retirar — esse caminho é para admins, não para médicos
+    assert.ok(!msg.includes("/retirar"), "mensagem NÃO deve pedir /retirar em continuidade");
+    // Deve pedir para reenviar para que a troca automática complete
+    assert.ok(msg.includes("Reenvie"), "mensagem deve orientar a reenviar para tentar a troca automática");
+    assert.ok(msg.includes("PM04"), "mensagem deve citar a base conflitante");
+});
+
+test("buildTelegramArrivalConflictMessage mantém instrução /retirar para chegada normal com conflito", () => {
+    const msg = buildTelegramArrivalConflictMessage({
+        parsed: {
+            baseCode: "CC70",
+            isDeparture: false,
+            isContinuation: false,
+        },
+        errorMessage: "arrival_conflicts_with_active_occupancy",
+    });
+
+    assert.ok(msg.includes("/retirar"), "chegada normal conflitante deve pedir /retirar");
+    assert.ok(msg.includes("CC70"), "mensagem deve citar a base conflitante");
+});
+
+test("buildTelegramArrivalConflictMessage cobre erros genéricos sem alterar o texto base", () => {
+    const msg = buildTelegramArrivalConflictMessage({
+        parsed: {
+            baseCode: "PM04",
+            isDeparture: false,
+            isContinuation: true,
+        },
+        errorMessage: "Intervention base not found.",
+    });
+
+    assert.ok(msg.includes("Intervention base not found."), "erro genérico deve aparecer na mensagem");
+    assert.ok(!msg.includes("/retirar"), "erro genérico não deve ter instrução /retirar");
+});
+
+test("buildForcedTakeoverHint retorna aviso 🚨 com nome do médico deslocado", () => {
+    const hint = buildForcedTakeoverHint({
+        displacedDoctorName: "João Silva",
+        baseCode: "PM04",
+    });
+
+    assert.ok(hint.includes("🚨"), "hint deve ter emoji de alerta");
+    assert.ok(hint.includes("João Silva"), "hint deve citar o médico que foi retirado");
+    assert.ok(hint.includes("PM04"), "hint deve citar a base");
+    assert.ok(hint.includes("automaticamente"), "hint deve deixar claro que a retirada foi automática");
+    assert.ok(hint.includes("ATENÇÃO"), "hint deve ter ATENÇÃO visível");
+});
+
+test("buildForcedTakeoverHint retorna string vazia quando nenhum médico foi deslocado", () => {
+    const hint = buildForcedTakeoverHint({
+        displacedDoctorName: null,
+        baseCode: "PM04",
+    });
+
+    assert.equal(hint, "", "sem deslocamento não deve haver hint");
+});
+
+test("buildForcedTakeoverHint retorna string vazia para string vazia de nome", () => {
+    const hint = buildForcedTakeoverHint({
+        displacedDoctorName: "",
+        baseCode: "PM04",
+    });
+
+    assert.equal(hint, "", "nome vazio também não deve gerar hint");
 });

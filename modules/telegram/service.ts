@@ -294,6 +294,7 @@ interface TelegramOperationalContinuityOccupancy {
 
 const TELEGRAM_CONTINUITY_LINK_WINDOW_MS = 18 * 60 * 60 * 1000;
 const TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS = 2 * 60 * 60 * 1000;
+const TELEGRAM_FORCED_TAKEOVER_MIN_DURATION_MS = 60 * 1000;
 const TELEGRAM_HALF_SHIFT_AUTO_END_HHMM = "17:00";
 const TELEGRAM_HALF_SHIFT_ALREADY_CLOSED_ERROR = "half_shift_already_closed";
 
@@ -1434,15 +1435,61 @@ async function sendTelegramArrivalFailureReply(params: {
         return;
     }
 
-    const userMessage = params.errorMessage === "arrival_conflicts_with_active_occupancy"
-        ? `⚠️ Já há alguém ativo em *${params.parsed.baseCode}* com horário igual ou posterior. Use /retirar ${params.parsed.baseCode} antes de registrar nova chegada.`
-        : `⚠️ Não consegui registrar essa chegada. ${params.errorMessage}`;
+    const userMessage = buildTelegramArrivalConflictMessage({
+        parsed: params.parsed,
+        errorMessage: params.errorMessage,
+    });
 
     await sendMessage(
         params.chatId,
         userMessage,
         params.replyToMessageId,
     );
+}
+
+/** Constrói o texto de erro para chegada conflitante. Função pura — testável sem I/O. */
+export function buildTelegramArrivalConflictMessage(params: {
+    parsed: Pick<OperationalParsedEntry, "baseCode" | "isDeparture" | "isContinuation">;
+    errorMessage: string;
+}): string {
+    if (params.errorMessage !== "arrival_conflicts_with_active_occupancy") {
+        return `⚠️ Não consegui registrar essa chegada. ${params.errorMessage}`;
+    }
+    const isContinuationConflict = shouldForceTelegramTakeoverOnContinuationConflict({
+        parsed: params.parsed,
+        errorMessage: params.errorMessage,
+    });
+    return isContinuationConflict
+        ? `⚠️ Sua continuidade em *${params.parsed.baseCode}* entrou em conflito de horário e não consegui concluir a troca automática agora. Reenvie a mensagem em instantes para eu retirar o ocupante atual e te colocar no posto.`
+        : `⚠️ Já há alguém ativo em *${params.parsed.baseCode}* com horário igual ou posterior. Use /retirar ${params.parsed.baseCode} antes de registrar nova chegada.`;
+}
+
+/** Constrói o aviso de substituição forçada para inserção no reply de sucesso. Função pura — testável sem I/O. */
+export function buildForcedTakeoverHint(params: {
+    displacedDoctorName: string | null;
+    baseCode: string;
+}): string {
+    if (!params.displacedDoctorName) return "";
+    return `\n\n🚨 *ATENÇÃO*: ${params.displacedDoctorName} estava em *${params.baseCode}* e foi retirado automaticamente para você assumir este posto.`;
+}
+
+export function shouldForceTelegramTakeoverOnContinuationConflict(params: {
+    parsed: OperationalParsedEntry;
+    errorMessage: string;
+}) {
+    return params.errorMessage === "arrival_conflicts_with_active_occupancy"
+        && !params.parsed.isDeparture
+        && params.parsed.isContinuation;
+}
+
+export function resolveTelegramForcedTakeoverAt(params: {
+    eventAt: Date;
+    conflictedStartedAt: Date;
+}) {
+    return new Date(Math.max(
+        params.eventAt.getTime(),
+        params.conflictedStartedAt.getTime() + TELEGRAM_FORCED_TAKEOVER_MIN_DURATION_MS,
+    ));
 }
 
 function isOperationalParsedEntry(entry: ParsedMessage): entry is ParsedMessage & OperationalParsedEntry {
@@ -2221,61 +2268,17 @@ function sanitizeErrorMessage(value: unknown): string | null | undefined {
     return cleaned.slice(0, 240);
 }
 
-// Erros transitorios de conexao/contencao do Postgres (pool max:1 sob rajada na virada
-// de plantao). Como a UPDATE de markTelegramProcessed e idempotente (por id, SET fixo),
-// retentamos com seguranca em vez de marcar a mensagem como "db_update_failed".
-const TRANSIENT_DB_ERROR_CODES = new Set([
-    // postgres-js, nivel de conexao
-    "CONNECTION_CLOSED", "CONNECTION_DESTROYED", "CONNECTION_ENDED", "CONNECT_TIMEOUT",
-    "ECONNRESET", "ETIMEDOUT", "EPIPE",
-    // PostgreSQL: connection exception (classe 08)
-    "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
-    // operator intervention / shutdown (classe 57)
-    "57P01", "57P02", "57P03", "57014",
-    "53300", // too_many_connections
-    "40001", "40P01", // serialization_failure / deadlock_detected
-    "55P03", // lock_not_available
-]);
-
-function isTransientDbError(error: unknown): boolean {
-    for (const candidate of [error, (error as { cause?: unknown } | null)?.cause]) {
-        if (!candidate || typeof candidate !== "object") continue;
-        const code = (candidate as { code?: unknown }).code;
-        if (typeof code === "string" && TRANSIENT_DB_ERROR_CODES.has(code)) {
-            return true;
-        }
-        const message = (candidate as { message?: unknown }).message;
-        if (typeof message === "string"
-            && /\b(econnreset|etimedout|epipe|connection (terminated|closed|reset|ended)|connection_|timeout)\b/i.test(message)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 async function markTelegramProcessed(id: string, patch: Partial<typeof telegramIngestedMessages.$inferInsert>) {
     const db = getDb();
     const normalizedPatch = Object.prototype.hasOwnProperty.call(patch, "errorMessage")
         ? { ...patch, errorMessage: sanitizeErrorMessage(patch.errorMessage) }
         : patch;
-
-    const maxAttempts = 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            await db.update(telegramIngestedMessages)
-                .set({
-                    ...normalizedPatch,
-                    processedAt: new Date(),
-                })
-                .where(eq(telegramIngestedMessages.id, id));
-            return;
-        } catch (error) {
-            if (!isTransientDbError(error) || attempt === maxAttempts) {
-                throw error;
-            }
-            await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
-        }
-    }
+    await db.update(telegramIngestedMessages)
+        .set({
+            ...normalizedPatch,
+            processedAt: new Date(),
+        })
+        .where(eq(telegramIngestedMessages.id, id));
 }
 
 function buildResolutionData(current: unknown, patch: Record<string, unknown>) {
@@ -5629,8 +5632,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
 
         const updated = command.sector === "REGULATION"
-            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefConfirmed: true }, resolveCommandAuditUserId(null))
-            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefConfirmed: true }, resolveCommandAuditUserId(null));
+            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null))
+            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null));
         const doctorName = doctor.fullName;
 
         await markTelegramProcessed(logId, {
@@ -6151,24 +6154,16 @@ async function queuePendingDepartureJustification(params: {
         },
     });
 
-    // O pendente ja foi persistido acima. Se o aviso ao Telegram falhar (blip de rede),
-    // NAO deixamos a excecao subir pro catch externo e reverter o pendente pra "error":
-    // o prompt e best-effort; o fluxo de justificativa segue valido no banco e a proxima
-    // resposta do medico ("liberada pela chefia") vai achar o pendente normalmente.
-    try {
-        await sendMessage(
-            params.message!.chat.id,
-            pickTelegramReply("departure_justification_required", params.message!.message_id, {
-                name: resolveTelegramDoctorSurfaceName(params.resolvedDoctor),
-                target: params.parsed.baseCode ?? "plantao",
-                time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
-                example: departureExample,
-            }),
-            params.message!.message_id,
-        );
-    } catch (notifyError) {
-        console.error("departure_justification_prompt_send_failed", notifyError);
-    }
+    await sendMessage(
+        params.message!.chat.id,
+        pickTelegramReply("departure_justification_required", params.message!.message_id, {
+            name: resolveTelegramDoctorSurfaceName(params.resolvedDoctor),
+            target: params.parsed.baseCode ?? "plantao",
+            time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
+            example: departureExample,
+        }),
+        params.message!.message_id,
+    );
 }
 
 async function queuePendingDepartureCorrection(params: {
@@ -6399,6 +6394,7 @@ async function handleTelegramReassignment(params: {
         reassignedFrom: sourceCode,
         assumedHalfShift: false,
         continuationFrom: null as string | null,
+        displacedDoctorName: null as string | null,
         extendedLongShift: false,
         continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: piamRouting.applied,
@@ -6475,6 +6471,7 @@ async function applyParsedEntry(params: {
         effectiveShiftType = "P";
     }
     let continuationFrom: string | null = null;
+    let displacedDoctorName: string | null = null;
     // Marca quando uma continuidade estendeu a cobertura alem de 24h (plantao
     // prolongado ~36h+). Usado so para alertar o medico na resposta.
     let extendedLongShift = false;
@@ -6698,11 +6695,11 @@ async function applyParsedEntry(params: {
                         ? eventAt
                         : continuationStartedAt);
 
-                const regResult = await startRegulationOccupancy({
+                const createRegulationArrival = (startedAtOverride?: Date) => startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
                     postId: post.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
-                    startedAt: effectiveContinuationStartedAt,
+                    startedAt: startedAtOverride ?? effectiveContinuationStartedAt,
                     boardStartedAt: continuationBoardStartedAt,
                     scheduledStartAt: assumedHalfShift ? eventAt : undefined,
                     scheduledEndAt: halfShiftScheduledEndAt ?? undefined,
@@ -6713,6 +6710,45 @@ async function applyParsedEntry(params: {
                     notes: messageText,
                     createdByUserId: null,
                 });
+
+                let regResult: Awaited<ReturnType<typeof startRegulationOccupancy>>;
+                try {
+                    regResult = await createRegulationArrival();
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+                    if (!shouldForceTelegramTakeoverOnContinuationConflict({ parsed, errorMessage })) {
+                        throw error;
+                    }
+
+                    const conflictingOccupancy = await db.query.regulationOccupancies.findFirst({
+                        where: and(
+                            eq(regulationOccupancies.postId, post.id),
+                            isNull(regulationOccupancies.endedAt),
+                            ne(regulationOccupancies.doctorId, resolvedDoctor.id),
+                        ),
+                        orderBy: [desc(regulationOccupancies.boardStartedAt), desc(regulationOccupancies.startedAt)],
+                    });
+
+                    if (!conflictingOccupancy) {
+                        throw error;
+                    }
+
+                    const takeoverAt = resolveTelegramForcedTakeoverAt({
+                        eventAt,
+                        conflictedStartedAt: conflictingOccupancy.startedAt,
+                    });
+                    const displacedDoctor = await db.query.doctors.findFirst({
+                        where: eq(doctors.id, conflictingOccupancy.doctorId),
+                    });
+
+                    await endRegulationOccupancy(conflictingOccupancy.id, {
+                        endedAt: takeoverAt,
+                        actualEndedAt: takeoverAt,
+                    });
+
+                    regResult = await createRegulationArrival(takeoverAt);
+                    displacedDoctorName = resolveTelegramDoctorSurfaceName(displacedDoctor);
+                }
                 occupancyId = regResult.id;
                 if (regResult.autoReactivated) autoReactivated = true;
 
@@ -6902,11 +6938,11 @@ async function applyParsedEntry(params: {
                         ? eventAt
                         : continuationStartedAt);
 
-                const intResult = await startInterventionOccupancy({
+                const createInterventionArrival = (startedAtOverride?: Date) => startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,
                     baseId: base.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
-                    startedAt: effectiveContinuationStartedAtIntv,
+                    startedAt: startedAtOverride ?? effectiveContinuationStartedAtIntv,
                     boardStartedAt: continuationBoardStartedAtIntv,
                     shiftLabel: effectiveShiftType,
                     roleLabel: parsed.roleFunction,
@@ -6917,6 +6953,45 @@ async function applyParsedEntry(params: {
                         : messageText,
                     createdByUserId: null,
                 });
+
+                let intResult: Awaited<ReturnType<typeof startInterventionOccupancy>>;
+                try {
+                    intResult = await createInterventionArrival();
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+                    if (!shouldForceTelegramTakeoverOnContinuationConflict({ parsed, errorMessage })) {
+                        throw error;
+                    }
+
+                    const conflictingOccupancy = await db.query.interventionOccupancies.findFirst({
+                        where: and(
+                            eq(interventionOccupancies.baseId, base.id),
+                            isNull(interventionOccupancies.endedAt),
+                            ne(interventionOccupancies.doctorId, resolvedDoctor.id),
+                        ),
+                        orderBy: [desc(interventionOccupancies.boardStartedAt), desc(interventionOccupancies.startedAt)],
+                    });
+
+                    if (!conflictingOccupancy) {
+                        throw error;
+                    }
+
+                    const takeoverAt = resolveTelegramForcedTakeoverAt({
+                        eventAt,
+                        conflictedStartedAt: conflictingOccupancy.startedAt,
+                    });
+                    const displacedDoctor = await db.query.doctors.findFirst({
+                        where: eq(doctors.id, conflictingOccupancy.doctorId),
+                    });
+
+                    await endInterventionOccupancy(conflictingOccupancy.id, {
+                        endedAt: takeoverAt,
+                        actualEndedAt: takeoverAt,
+                    });
+
+                    intResult = await createInterventionArrival(takeoverAt);
+                    displacedDoctorName = resolveTelegramDoctorSurfaceName(displacedDoctor);
+                }
                 occupancyId = intResult.id;
                 if (intResult.autoReactivated) autoReactivated = true;
 
@@ -6945,6 +7020,7 @@ async function applyParsedEntry(params: {
         reassignedFrom: null as string | null,
         assumedHalfShift,
         continuationFrom,
+        displacedDoctorName,
         extendedLongShift,
         continuityInterpretation,
         piamAutoAllocated: piamRouting.applied,
@@ -7003,12 +7079,9 @@ async function handlePiamAutoArrival(params: {
 
     let occupancyId: string;
     if (existingActive) {
-        // PIAM closes at the scheduled boundary — system-driven, not a verbalized
-        // late departure. Auto-confirm so bank hours flow without chief review.
         const closed = await endRegulationOccupancy(existingActive.id, {
             endedAt: bounds.scheduledEndAt,
             actualEndedAt: bounds.scheduledEndAt,
-            chiefConfirmed: true,
         });
         occupancyId = closed.id;
     } else {
@@ -7029,7 +7102,6 @@ async function handlePiamAutoArrival(params: {
         const closed = await endRegulationOccupancy(reg.id, {
             endedAt: bounds.scheduledEndAt,
             actualEndedAt: bounds.scheduledEndAt,
-            chiefConfirmed: true,
         });
         occupancyId = closed.id;
     }
@@ -7051,6 +7123,7 @@ async function handlePiamAutoArrival(params: {
         reassignedFrom: null as string | null,
         assumedHalfShift: false,
         continuationFrom: null as string | null,
+        displacedDoctorName: null as string | null,
         extendedLongShift: false,
         continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: true,
@@ -7120,6 +7193,7 @@ async function sendSuccessReply(
     piamAutoAllocated = false,
     piamOriginalCode?: string | null,
     extendedLongShift = false,
+    displacedDoctorName?: string | null,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const replyKind = resolveTelegramSuccessReplyKind({
@@ -7191,6 +7265,10 @@ async function sendSuccessReply(
     const reassignmentHint = reassignedFrom
         ? `\n\n🔀 Remanejado de *${reassignedFrom}* para *${parsed.baseCode}*. Ocupação anterior encerrada.`
         : "";
+    const forcedTakeoverHint = buildForcedTakeoverHint({
+        displacedDoctorName,
+        baseCode: parsed.baseCode,
+    });
 
     const continuationTargetHint = buildTelegramContinuationSourceHint({
         continuationFrom,
@@ -7221,7 +7299,7 @@ async function sendSuccessReply(
     const longShiftHint = extendedLongShift
         ? "\n\n⏰ Entendi que você está *emendando mais um turno* — plantão prolongado (*~36h*), já que estava de plantão nos dois turnos anteriores. A cobertura segue estendida. Se não for o caso, avise para corrigir."
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}`, replyToMessageId);
+    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
@@ -7370,6 +7448,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             result.piamAutoAllocated,
             result.piamOriginalCode,
             result.extendedLongShift,
+            result.displacedDoctorName,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -8198,6 +8277,7 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
             result.piamAutoAllocated,
             result.piamOriginalCode,
             result.extendedLongShift,
+            result.displacedDoctorName,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -8449,6 +8529,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.piamAutoAllocated,
                                 result.piamOriginalCode,
                                 result.extendedLongShift,
+                                result.displacedDoctorName,
                             );
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
@@ -8912,7 +8993,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), firstParsed.arrivalTime);
 
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode } = await applyParsedEntry({
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName } = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
@@ -8958,6 +9039,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     piamAutoAllocated,
                     piamOriginalCode,
                     extendedLongShift,
+                    displacedDoctorName,
                 );
 
                 // Late half-shift orientation: when an intervention SD arrival lands
