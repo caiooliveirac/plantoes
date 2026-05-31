@@ -25,14 +25,14 @@ test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-26T06:59:00-03:00")), "SN");
 });
 
-test("keeps fixed MRV role on day continuity for 2032 and 2151 and blocks it only on SN", () => {
+test("does not force MRV on 2032/2151 and respects explicit role assignment policy", () => {
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
         code: "2151",
         shiftLabel: "P",
         roleLabel: null,
         defaultRole: null,
-    }), "MRV");
+    }), null);
 
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
@@ -40,7 +40,7 @@ test("keeps fixed MRV role on day continuity for 2032 and 2151 and blocks it onl
         shiftLabel: "P",
         roleLabel: null,
         defaultRole: null,
-    }), "MRV");
+    }), null);
 
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
@@ -48,7 +48,7 @@ test("keeps fixed MRV role on day continuity for 2032 and 2151 and blocks it onl
         shiftLabel: "SD",
         roleLabel: null,
         defaultRole: null,
-    }), "MRV");
+    }), null);
 
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
@@ -57,6 +57,14 @@ test("keeps fixed MRV role on day continuity for 2032 and 2151 and blocks it onl
         roleLabel: null,
         defaultRole: null,
     }), null);
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2032",
+        shiftLabel: "SD",
+        roleLabel: "MRV",
+        defaultRole: null,
+    }), "MRV");
 });
 
 test("keeps explicit MEIO_PLANTAO even on fixed-role ramais", () => {

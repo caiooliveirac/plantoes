@@ -1459,7 +1459,11 @@ export async function listRegulationBoard() {
       case when ro.id is not null or lr.post_code is not null then coalesce(ro.board_started_at, lr.board_started_at) else null end as "boardStartedAt",
       case when ro.id is not null or lr.post_code is not null then coalesce(ro.scheduled_end_at, lr.scheduled_end_at) else null end as "scheduledEndAt",
       case when ro.id is not null or lr.post_code is not null then ro.shift_label else null end as "shiftLabel",
-      case when ro.id is not null or lr.post_code is not null then coalesce(ro.role_label, lr.role_label) else null end as "roleLabel",
+      case
+        when ro.id is not null then ro.role_label
+        when lr.post_code is not null then lr.role_label
+        else null
+      end as "roleLabel",
       case when ro.id is not null or lr.post_code is not null then coalesce(ro.ramal_label, lr.ramal_label, rp.code) else rp.code end as "ramalLabel",
       ad.deactivated_at as "disabledAt",
       ad.notes as "disabledReason",
@@ -1586,7 +1590,11 @@ export async function listInterventionBoard() {
       case when io.id is not null or li.base_code is not null then coalesce(io.board_started_at, li.board_started_at) else null end as "boardStartedAt",
       case when io.id is not null or li.base_code is not null then coalesce(io.scheduled_end_at, li.scheduled_end_at) else null end as "scheduledEndAt",
       case when io.id is not null or li.base_code is not null then io.shift_label else null end as "shiftLabel",
-      case when io.id is not null or li.base_code is not null then coalesce(io.role_label, li.role_label) else null end as "roleLabel",
+      case
+        when io.id is not null then io.role_label
+        when li.base_code is not null then li.role_label
+        else null
+      end as "roleLabel",
       ad.deactivated_at as "disabledAt",
       ad.notes as "disabledReason",
       io.late_arrival_acknowledged_at as "lateArrivalAcknowledgedAt",

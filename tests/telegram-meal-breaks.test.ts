@@ -2310,7 +2310,7 @@ test("createMealBreakSession auto-detecta RECIP do roster quando roleLabel ja es
     assert.notEqual(confirmed.session.stage, "awaiting_recip");
 });
 
-test("createMealBreakSession nao auto-detecta RECIP se ramal e MRV", () => {
+test("createMealBreakSession auto-detecta RECIP quando 2032/2151 recebem RECIP explicitamente", () => {
     const referenceAt = new Date("2026-03-29T09:05:00-03:00");
     const board = makeBoard();
     board.regulation[1]!.roleLabel = "RECIP";
@@ -2326,7 +2326,7 @@ test("createMealBreakSession nao auto-detecta RECIP se ramal e MRV", () => {
         actorTelegramId: "100",
     });
 
-    assert.equal(session.recipRamal, null);
+    assert.equal(session.recipRamal, "2032");
 });
 
 test("createMealBreakSession respeita lunchExcluded ao auto-detectar RECIP", () => {

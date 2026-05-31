@@ -4,7 +4,6 @@ export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODE
 
 const COI_REGULATION_CODES = new Set(["1367", "1368"]);
 const RMT_DEFAULT_REGULATION_CODES = new Set(["1366"]);
-const MRV_REGULATION_CODES = new Set(["2032", "2151"]);
 const REMOTE_PRIORITY_REGULATION_CODES = new Set(["1321", "1322", "1323", "1325", "1361", "1362", "1363", "1364", "1365"]);
 
 export function normalizeOperationalRoleLabel(value: string | null | undefined) {
@@ -45,10 +44,6 @@ export function resolveFixedOperationalRole(params: {
         return "COI";
     }
 
-    if (params.domain === "regulation" && params.shiftLabel !== "SN" && MRV_REGULATION_CODES.has(params.code)) {
-        return "MRV";
-    }
-
     return null;
 }
 
@@ -64,7 +59,7 @@ export function resolveOperationalRoleLabel(params: {
         roleLabel: params.roleLabel,
     });
 
-    // Meio plantao precisa prevalecer mesmo em ramais com papel fixo (ex.: 2032/2151 MRV, 1367/1368 COI).
+    // Meio plantao precisa prevalecer mesmo em ramais com papel fixo (ex.: 1367/1368 COI).
     if (explicitRole === "MEIO_PLANTAO") {
         return explicitRole;
     }
