@@ -10026,3 +10026,23 @@ button.chief-payable-tag:focus-visible {
     color: #fff;
 }
 .board-modal-confirm:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.board-modal-actions.spread { justify-content: space-between; align-items: center; }
+.board-modal-actions-group { display: flex; gap: 8px; }
+.board-modal-deactivate {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 10px;
+    padding: 9px 14px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    border: 1px solid var(--accent-warn);
+    background: color-mix(in oklab, var(--accent-warn) 12%, transparent);
+    color: var(--accent-warn);
+    transition: background var(--dur-fast);
+}
+.board-modal-deactivate:hover { background: var(--accent-warn); color: #1a130a; }
+.board-modal-deactivate:disabled { opacity: 0.6; cursor: not-allowed; }

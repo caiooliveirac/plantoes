@@ -34,6 +34,8 @@ import type {
 import { AuditRail } from "@/components/board/AuditRail";
 import { RecentHandoffsRail } from "@/components/board/RecentHandoffsRail";
 import { DepartureDialog } from "@/components/board/DepartureDialog";
+import { StartCoverageDialog } from "@/components/board/StartCoverageDialog";
+import { DeactivateDialog } from "@/components/board/DeactivateDialog";
 import { DepartureVerifier } from "@/components/board/DepartureVerifier";
 import { CommandPalette } from "@/components/board/CommandPalette";
 import { BoardHero } from "@/components/board/BoardHero";
@@ -940,6 +942,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [restSlotInput, setRestSlotInput] = useState<string>("");
     const [isRefreshing, startRefresh] = useTransition();
     const [kickModalCard, setKickModalCard] = useState<BoardCard | null>(null);
+    const [startModalCard, setStartModalCard] = useState<BoardCard | null>(null);
+    const [deactivateModalCard, setDeactivateModalCard] = useState<BoardCard | null>(null);
     const latestGeneratedAtRef = useRef(generatedAt);
 
     useEffect(() => {
@@ -2305,10 +2309,20 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         return items.length > 0 ? <span className="ops-name-tag-row">{items}</span> : null;
     }
 
-    function handleBoardRowKeyDown(event: React.KeyboardEvent<HTMLDivElement>, card: BoardCard) {
+    // Clique numa posição livre vai direto para o modal de lançar médico.
+    // Posições ocupadas/desativadas continuam abrindo as ações inline (expandir).
+    function activateBoardRow(card: BoardCard, cardKey: string) {
+        if (card.status === "waiting") {
+            setStartModalCard(card);
+            return;
+        }
+        setExpandedCardKey((prev) => (prev === cardKey ? null : cardKey));
+    }
+
+    function handleBoardRowKeyDown(event: React.KeyboardEvent<HTMLDivElement>, card: BoardCard, cardKey: string) {
         if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            openProfessionalDrawer(card);
+            activateBoardRow(card, cardKey);
         }
     }
 
@@ -2350,8 +2364,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             <div
                 role="row"
                 className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${isLeaving ? "is-leaving" : ""} ${clickable ? "clickable" : ""} ${isExpanded ? "is-expanded" : ""}`.trim()}
-                onClick={clickable ? () => { setExpandedCardKey((prev) => prev === cardKey ? null : cardKey); } : undefined}
-                onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
+                onClick={clickable ? () => { activateBoardRow(card, cardKey); } : undefined}
+                onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card, cardKey) : undefined}
                 tabIndex={clickable ? 0 : undefined}
                 aria-expanded={clickable ? isExpanded : undefined}
                 aria-label={clickable ? `Expandir ações de ${displayDoctorName(card)} no ramal ${card.postCode}` : undefined}
@@ -2500,8 +2514,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             <div
                 role="row"
                 className={`ops-grid-row intervention ${emphasisClass} priority-${intCardPriority} ${isLeaving ? "is-leaving" : ""} ${isClickable ? "clickable" : ""} ${isIntExpanded ? "is-expanded" : ""}`.trim()}
-                onClick={isClickable ? () => { setExpandedCardKey((prev) => prev === intCardKey ? null : intCardKey); } : undefined}
-                onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
+                onClick={isClickable ? () => { activateBoardRow(card, intCardKey); } : undefined}
+                onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card, intCardKey) : undefined}
                 tabIndex={isClickable ? 0 : undefined}
                 aria-expanded={isClickable ? isIntExpanded : undefined}
                 aria-label={isClickable ? `Expandir ações de ${displayDoctorName(card)} na base ${card.baseCode}` : undefined}
@@ -2694,6 +2708,39 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     targetCode={cardCode(kickModalCard)}
                     doctorName={kickModalCard.displayName || kickModalCard.doctorName || "Plantonista"}
                     chiefKick
+                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
+                />
+            )}
+
+            {session?.canManage && startModalCard && (
+                <StartCoverageDialog
+                    open={Boolean(startModalCard)}
+                    onOpenChange={(open) => { if (!open) setStartModalCard(null); }}
+                    domain={startModalCard.domain}
+                    targetId={startModalCard.domain === "regulation" ? startModalCard.postId : startModalCard.baseId}
+                    targetCode={cardCode(startModalCard)}
+                    targetLabel={cardLabel(startModalCard)}
+                    shiftLabel={shiftLabel}
+                    doctors={doctors}
+                    onDeactivate={() => {
+                        const card = startModalCard;
+                        setStartModalCard(null);
+                        setDeactivateModalCard(card);
+                    }}
+                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
+                />
+            )}
+
+            {session?.canManage && deactivateModalCard && (
+                <DeactivateDialog
+                    open={Boolean(deactivateModalCard)}
+                    onOpenChange={(open) => { if (!open) setDeactivateModalCard(null); }}
+                    domain={deactivateModalCard.domain}
+                    targetId={deactivateModalCard.domain === "regulation" ? deactivateModalCard.postId : deactivateModalCard.baseId}
+                    targetCode={cardCode(deactivateModalCard)}
+                    targetLabel={cardLabel(deactivateModalCard)}
+                    occupantName={null}
+                    isReactivate={deactivateModalCard.status === "disabled"}
                     onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
                 />
             )}
