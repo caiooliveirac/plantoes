@@ -68,6 +68,9 @@ jobs:
     needs: test_smoke
     runs-on: self-hosted
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+      pull-requests: read
 
     steps:
       - name: Checkout
