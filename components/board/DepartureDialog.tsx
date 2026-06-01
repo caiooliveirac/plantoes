@@ -16,7 +16,16 @@ interface DepartureDialogProps {
     targetCode: string;
     doctorName: string;
     onSaved?: () => void;
+    /**
+     * When true, this is a chief "Retirar" (kick): the departure is announced to
+     * the Telegram group and a default note is applied if none is given. The time
+     * still defaults to "now" and stays editable — the chosen time is what goes to
+     * the bank AND to the group alert.
+     */
+    chiefKick?: boolean;
 }
+
+const CHIEF_KICK_DEFAULT_NOTE = "Saída por encerramento de turno (retirada pelo chefe)";
 
 function isoNowLocal(): string {
     const date = new Date();
@@ -36,6 +45,7 @@ export function DepartureDialog({
     targetCode,
     doctorName,
     onSaved,
+    chiefKick = false,
 }: DepartureDialogProps) {
     const router = useRouter();
     const [endedAt, setEndedAt] = useState(isoNowLocal());
@@ -66,14 +76,17 @@ export function DepartureDialog({
                 body: JSON.stringify({
                     endedAt: iso,
                     actualEndedAt: iso,
-                    notes: reason.trim() || null,
+                    notes: reason.trim() || (chiefKick ? CHIEF_KICK_DEFAULT_NOTE : null),
+                    ...(chiefKick ? { chiefKick: true } : {}),
                 }),
             });
             const body = await response.json().catch(() => null) as { error?: string } | null;
             if (!response.ok) {
-                throw new Error(body?.error || "Falha ao registrar saída.");
+                throw new Error(body?.error || (chiefKick ? "Falha ao retirar plantonista." : "Falha ao registrar saída."));
             }
-            toast.success(`Saída registrada: ${doctorName} às ${endedAt.slice(11, 16)}.`);
+            toast.success(chiefKick
+                ? `Plantonista retirado: ${doctorName} às ${endedAt.slice(11, 16)}. Grupo notificado.`
+                : `Saída registrada: ${doctorName} às ${endedAt.slice(11, 16)}.`);
             onOpenChange(false);
             onSaved?.();
             router.refresh();
@@ -112,7 +125,7 @@ export function DepartureDialog({
                                     </div>
                                     <div>
                                         <Dialog.Title asChild>
-                                            <h2>Declarar saída</h2>
+                                            <h2>{chiefKick ? "Retirar plantonista" : "Declarar saída"}</h2>
                                         </Dialog.Title>
                                         <Dialog.Description asChild>
                                             <p>{doctorName} · {targetCode}</p>
@@ -121,10 +134,11 @@ export function DepartureDialog({
                                 </header>
 
                                 <div className="board-modal-warning danger">
-                                    <strong>Hora vai para o banco</strong>
+                                    <strong>Hora vai para o banco{chiefKick ? " e para o grupo" : ""}</strong>
                                     <p>
-                                        Essa hora é a que vai contar para o banco de horas de {doctorName}.
-                                        Confirme com cuidado antes de salvar.
+                                        {chiefKick
+                                            ? `Essa hora conta para o banco de horas de ${doctorName} e é a que o grupo do Telegram vai ver no aviso de retirada. Confirme com cuidado.`
+                                            : `Essa hora é a que vai contar para o banco de horas de ${doctorName}. Confirme com cuidado antes de salvar.`}
                                     </p>
                                 </div>
 
@@ -161,7 +175,9 @@ export function DepartureDialog({
                                         onClick={submit}
                                         disabled={submitting}
                                     >
-                                        {submitting ? "Registrando…" : "Registrar saída"}
+                                        {submitting
+                                            ? (chiefKick ? "Retirando…" : "Registrando…")
+                                            : (chiefKick ? "Retirar" : "Registrar saída")}
                                     </button>
                                 </footer>
                             </motion.div>

@@ -33,6 +33,7 @@ import type {
 } from "@/services/board.service";
 import { AuditRail } from "@/components/board/AuditRail";
 import { RecentHandoffsRail } from "@/components/board/RecentHandoffsRail";
+import { DepartureDialog } from "@/components/board/DepartureDialog";
 import { DepartureVerifier } from "@/components/board/DepartureVerifier";
 import { CommandPalette } from "@/components/board/CommandPalette";
 import { BoardHero } from "@/components/board/BoardHero";
@@ -938,7 +939,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [lunchSlotInput, setLunchSlotInput] = useState<string>("");
     const [restSlotInput, setRestSlotInput] = useState<string>("");
     const [isRefreshing, startRefresh] = useTransition();
-    const [kickConfirmCardKey, setKickConfirmCardKey] = useState<string | null>(null);
+    const [kickModalCard, setKickModalCard] = useState<BoardCard | null>(null);
     const latestGeneratedAtRef = useRef(generatedAt);
 
     useEffect(() => {
@@ -2042,37 +2043,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
     }
 
-    async function handleKickShiftEnd(card: BoardCard, shiftEndIso: string) {
-        if (!session?.canManage || !card.occupancyId) return;
-        setKickConfirmCardKey(null);
-        try {
-            setIsSubmitting(true);
-            setErrorMessage(null);
-            setSuccessMessage(null);
-            const endpoint = card.domain === "regulation"
-                ? `/api/regulation/occupancies/${card.occupancyId}/end`
-                : `/api/intervention/occupancies/${card.occupancyId}/end`;
-            const response = await fetch(endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    endedAt: shiftEndIso,
-                    actualEndedAt: shiftEndIso,
-                    notes: "Saída por encerramento de turno (retirada pelo chefe)",
-                    chiefKick: true,
-                }),
-            });
-            const responseBody = await response.json().catch(() => null) as { error?: string } | null;
-            if (!response.ok) throw new Error(responseBody?.error || "Falha ao retirar plantonista.");
-            setSuccessMessage("Plantonista retirado. Banco de horas e quadro atualizados.");
-            if (session?.canManage) void fetchLatestUndoableAction();
-            startRefresh(() => { router.refresh(); });
-        } catch (error) {
-            setErrorMessage(error instanceof Error ? error.message : "Falha operacional inesperada.");
-        } finally {
-            setIsSubmitting(false);
-        }
-    }
+    // "Retirar" opens a modal (DepartureDialog in chiefKick mode) pre-filled with the
+    // current time. The chosen time is what goes to the bank AND to the Telegram group
+    // alert. See kickModalCard state + the DepartureDialog render below.
 
     async function handleCardState(card: BoardCard, action: "deactivate" | "reactivate") {
         if (!session?.canManage) {
@@ -2369,7 +2342,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const isLeaving = direction.status === "saindo";
         const cardKey = `${card.domain}-${card.postCode}`;
         const showKickButton = clickable && !isDisabledRegulation && card.status === "active" && card.occupancyId && isLeaving;
-        const isKickConfirming = kickConfirmCardKey === cardKey;
 
         const cardPriority = resolvePriority(card, generatedAt);
         const isExpanded = expandedCardKey === cardKey;
@@ -2378,7 +2350,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             <div
                 role="row"
                 className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${isLeaving ? "is-leaving" : ""} ${clickable ? "clickable" : ""} ${isExpanded ? "is-expanded" : ""}`.trim()}
-                onClick={clickable ? () => { setKickConfirmCardKey(null); setExpandedCardKey((prev) => prev === cardKey ? null : cardKey); } : undefined}
+                onClick={clickable ? () => { setExpandedCardKey((prev) => prev === cardKey ? null : cardKey); } : undefined}
                 onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={clickable ? 0 : undefined}
                 aria-expanded={clickable ? isExpanded : undefined}
@@ -2419,25 +2391,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             </div>
                         ) : showKickButton ? (
                             <div className="ops-inline-flags subtle">
-                                {isKickConfirming ? (
-                                    <button
-                                        type="button"
-                                        className="ops-kick-confirm-button"
-                                        onClick={(e) => { e.stopPropagation(); void handleKickShiftEnd(card, direction.shiftEndAt); }}
-                                        disabled={isSubmitting || isRefreshing}
-                                    >
-                                        Confirmar retirada
-                                    </button>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        className="ops-kick-button"
-                                        onClick={(e) => { e.stopPropagation(); setKickConfirmCardKey(cardKey); }}
-                                        disabled={isSubmitting || isRefreshing}
-                                    >
-                                        Retirar
-                                    </button>
-                                )}
+                                <button
+                                    type="button"
+                                    className="ops-kick-button"
+                                    onClick={(e) => { e.stopPropagation(); setKickModalCard(card); }}
+                                    disabled={isSubmitting || isRefreshing}
+                                >
+                                    Retirar
+                                </button>
                             </div>
                         ) : null}
                     </div>
@@ -2521,7 +2482,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             reference: generatedAt,
         });
         const isLeaving = lineState.kind === "saindo";
-        const kickShiftEndAt = lineState.kind === "saindo" ? lineState.shiftEndAt : null;
         // "VERIFICAR" e o realce de saida andam juntos com o botao "Retirar",
         // uniforme para todo o grupo que esta saindo.
         const isAwaitingNews = isLeaving;
@@ -2532,7 +2492,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const intCardKey = `${card.domain}-${card.baseCode}`;
         const showKickButton = isClickable && !isDisabledIntervention && !isWaitingIntervention
             && card.status === "active" && card.occupancyId && isLeaving;
-        const isKickConfirming = kickConfirmCardKey === intCardKey;
 
         const intCardPriority = resolvePriority(card, generatedAt);
         const isIntExpanded = expandedCardKey === intCardKey;
@@ -2541,7 +2500,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             <div
                 role="row"
                 className={`ops-grid-row intervention ${emphasisClass} priority-${intCardPriority} ${isLeaving ? "is-leaving" : ""} ${isClickable ? "clickable" : ""} ${isIntExpanded ? "is-expanded" : ""}`.trim()}
-                onClick={isClickable ? () => { setKickConfirmCardKey(null); setExpandedCardKey((prev) => prev === intCardKey ? null : intCardKey); } : undefined}
+                onClick={isClickable ? () => { setExpandedCardKey((prev) => prev === intCardKey ? null : intCardKey); } : undefined}
                 onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={isClickable ? 0 : undefined}
                 aria-expanded={isClickable ? isIntExpanded : undefined}
@@ -2590,25 +2549,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             <div className="ops-inline-flags subtle">
                                 {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
                                 {continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
-                                {isKickConfirming ? (
-                                    <button
-                                        type="button"
-                                        className="ops-kick-confirm-button"
-                                        onClick={(e) => { e.stopPropagation(); if (kickShiftEndAt) void handleKickShiftEnd(card, kickShiftEndAt); }}
-                                        disabled={isSubmitting || isRefreshing}
-                                    >
-                                        Confirmar retirada
-                                    </button>
-                                ) : (
-                                    <button
-                                        type="button"
-                                        className="ops-kick-button"
-                                        onClick={(e) => { e.stopPropagation(); setKickConfirmCardKey(intCardKey); }}
-                                        disabled={isSubmitting || isRefreshing}
-                                    >
-                                        Retirar
-                                    </button>
-                                )}
+                                <button
+                                    type="button"
+                                    className="ops-kick-button"
+                                    onClick={(e) => { e.stopPropagation(); setKickModalCard(card); }}
+                                    disabled={isSubmitting || isRefreshing}
+                                >
+                                    Retirar
+                                </button>
                             </div>
                         ) : showSecondaryFlags ? (
                             <div className="ops-inline-flags subtle">
@@ -2734,6 +2682,19 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <DepartureVerifier
                     target={verifierTarget}
                     onClose={() => setVerifierTarget(null)}
+                />
+            )}
+
+            {session?.canManage && kickModalCard?.occupancyId && (
+                <DepartureDialog
+                    open={Boolean(kickModalCard)}
+                    onOpenChange={(open) => { if (!open) setKickModalCard(null); }}
+                    domain={kickModalCard.domain}
+                    occupancyId={kickModalCard.occupancyId}
+                    targetCode={cardCode(kickModalCard)}
+                    doctorName={kickModalCard.displayName || kickModalCard.doctorName || "Plantonista"}
+                    chiefKick
+                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
                 />
             )}
 
