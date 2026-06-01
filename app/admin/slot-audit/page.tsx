@@ -1,7 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
-import { getOperationalSlotAuditReport } from "@/services/slot-audit.service";
+import { getSlotAuditReport, type SlotAuditPanel, type SlotAuditPosition } from "@/services/slot-audit.service";
 
 export const dynamic = "force-dynamic";
 
@@ -17,28 +17,123 @@ function SlotAuditUnavailable({ title, copy }: { title: string; copy: string }) 
     );
 }
 
-function formatDateInput(value: string) {
-    return value.slice(0, 10);
-}
-
 function formatDateLabel(value: string) {
     return new Intl.DateTimeFormat("pt-BR", {
         dateStyle: "full",
-        timeZone: "America/Sao_Paulo",
+        timeZone: "America/Bahia",
     }).format(new Date(`${value}T12:00:00.000Z`));
 }
 
-function domainLabel(domain: "regulation" | "intervention") {
-    return domain === "regulation" ? "Regulação" : "Intervenção";
+function formatClock(value: string | null) {
+    if (!value) {
+        return "--:--";
+    }
+
+    return new Intl.DateTimeFormat("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Bahia",
+    }).format(new Date(value));
+}
+
+const STATE_LABELS: Record<SlotAuditPosition["state"], string> = {
+    occupied: "OCUPADO",
+    pending: "PENDENTE",
+    empty: "VAGO",
+    disabled: "DESATIVADO",
+};
+
+function formatBalance(minutes: number | null) {
+    if (minutes === null || minutes === undefined) {
+        return null;
+    }
+
+    const sign = minutes > 0 ? "+" : minutes < 0 ? "-" : "";
+    const absolute = Math.abs(minutes);
+    const hours = Math.floor(absolute / 60);
+    const remainder = absolute % 60;
+    const body = hours > 0 ? `${hours}h${String(remainder).padStart(2, "0")}` : `${remainder}min`;
+    return `${sign}${body}`;
+}
+
+function balanceTone(minutes: number | null) {
+    if (minutes === null || minutes === undefined) {
+        return "neutral";
+    }
+
+    if (minutes > 0) {
+        return "positive";
+    }
+
+    if (minutes < 0) {
+        return "negative";
+    }
+
+    return "neutral";
+}
+
+function PositionPanel({ panel }: { panel: SlotAuditPanel }) {
+    return (
+        <section className="slot-audit-panel">
+            <header className="slot-audit-panel-header">
+                <strong>{panel.title}</strong>
+                <span className="payment-status-pill ready">{panel.activeCount} ativos</span>
+            </header>
+
+            <div className="slot-audit-table-head" aria-hidden="true">
+                <span>Chegada</span>
+                <span>Posição</span>
+                <span>Vai receber</span>
+                <span>Saída</span>
+            </div>
+
+            <ul className="slot-audit-position-list">
+                {panel.positions.length === 0 && (
+                    <li className="slot-audit-position empty-state">Sem posições para este turno.</li>
+                )}
+
+                {panel.positions.map((position) => {
+                    const balance = formatBalance(position.balanceMinutes);
+                    return (
+                        <li
+                            key={`${position.domain}:${position.targetCode}`}
+                            className={`slot-audit-position ${position.state}${position.isInactiveTarget ? " inactive-target" : ""}`}
+                        >
+                            <span className="slot-audit-cell clock arrival">{formatClock(position.arrivalAt)}</span>
+
+                            <span className="slot-audit-cell code">
+                                {position.targetCode}
+                                {position.isInactiveTarget && <em className="slot-audit-inactive-flag">desativada</em>}
+                            </span>
+
+                            <span className="slot-audit-cell occupant">
+                                <span className="slot-audit-name">{position.doctorLabel}</span>
+                                <span className={`slot-audit-state ${position.state}`}>{STATE_LABELS[position.state]}</span>
+                            </span>
+
+                            <span className="slot-audit-cell clock departure">{formatClock(position.departureAt)}</span>
+
+                            {balance !== null && (
+                                <span className={`slot-audit-balance ${balanceTone(position.balanceMinutes)}`} title="Saldo de banco de horas deste plantão">
+                                    {balance}
+                                </span>
+                            )}
+                        </li>
+                    );
+                })}
+            </ul>
+        </section>
+    );
 }
 
 export default async function AdminSlotAuditPage({
     searchParams,
 }: {
-    searchParams: Promise<{ start?: string; end?: string; shift?: string }>;
+    searchParams: Promise<{ date?: string; shift?: string }>;
 }) {
     if (!hasDatabaseUrl()) {
-        return <SlotAuditUnavailable title="Banco indisponível" copy="Sem DATABASE_URL não existe base para auditar os slots anteriores." />;
+        return <SlotAuditUnavailable title="Banco indisponível" copy="Sem DATABASE_URL não existe base para auditar o fechamento por posição." />;
     }
 
     try {
@@ -56,129 +151,92 @@ export default async function AdminSlotAuditPage({
         throw error;
     }
 
-    const { start, end, shift } = await searchParams;
+    const { date, shift } = await searchParams;
     let loadError: string | null = null;
     let report;
 
     try {
-        report = await getOperationalSlotAuditReport({
-            startDate: start ?? null,
-            endDate: end ?? null,
+        report = await getSlotAuditReport({
+            date: date ?? null,
             shiftLabel: shift === "SD" || shift === "SN" ? shift : null,
         });
     } catch (error) {
-        loadError = error instanceof Error ? error.message : "Nao foi possivel montar a auditoria.";
-        report = await getOperationalSlotAuditReport();
+        loadError = error instanceof Error ? error.message : "Não foi possível montar a auditoria.";
+        report = await getSlotAuditReport();
     }
 
     return (
         <main className="payment-shell slot-audit-shell">
             <section className="payment-hero slot-audit-hero">
                 <div>
-                    <p className="payment-eyebrow">Auditoria operacional</p>
-                    <h1>Slots retrospectivos para cruzar vazios, nomes e posto por turno.</h1>
+                    <p className="payment-eyebrow">Auditoria de fechamento por posição</p>
+                    <h1>Quem ficou em cada ramal e base — e quem vai receber por isso.</h1>
                     <p className="payment-subtitle">
-                        Esta leitura usa o mesmo board consolidado do fechamento, então o privado do Telegram e a tela admin
-                        enxergam o mesmo retrato de SD e SN. O foco aqui é detectar onde o posto ficou vazio e quem estava em cada alvo nos dias anteriores.
+                        Cada linha é uma POSIÇÃO. O nome exibido é exatamente quem o fechamento de pagamento (payment-closing)
+                        aponta como pagável naquele ramal/base no turno. A TAG mostra o saldo de banco de horas do plantão,
+                        igual à tela de banco de horas. Use para conferir, numa olhada, se o plantão fechou certo.
                     </p>
 
                     <div className="payment-summary-grid">
                         <article className="payment-summary-card ready">
-                            <span>Turnos no recorte</span>
-                            <strong>{report.summary.slotCount}</strong>
+                            <span>Posições pagáveis</span>
+                            <strong>{report.summary.payableCount}</strong>
                         </article>
-                        <article className="payment-summary-card ready">
-                            <span>Postos ocupados</span>
-                            <strong>{report.summary.occupiedCount}</strong>
+                        <article className="payment-summary-card review">
+                            <span>Pendentes</span>
+                            <strong>{report.summary.pendingCount}</strong>
                         </article>
                         <article className="payment-summary-card empty">
-                            <span>Slots vazios</span>
+                            <span>Vagas</span>
                             <strong>{report.summary.emptyCount}</strong>
                         </article>
                         <article className="payment-summary-card review">
-                            <span>Bases desativadas</span>
+                            <span>Desativadas</span>
                             <strong>{report.summary.disabledCount}</strong>
                         </article>
                     </div>
                 </div>
 
                 <div className="slot-audit-hero-meta">
-                    <span className="payment-status-pill large ready">{report.dayCount} dia(s)</span>
-                    <span className="slot-audit-range-label">{formatDateLabel(report.startDate)} até {formatDateLabel(report.endDate)}</span>
+                    <span className={`payment-status-pill large ${report.isClosed ? "ready" : "review"}`}>
+                        {report.shiftLabel} · {report.isClosed ? "encerrado" : "em andamento"}
+                    </span>
+                    <span className="slot-audit-range-label">{formatDateLabel(report.operationalDate)}</span>
+                    <span className="slot-audit-range-label">{formatClock(report.slotStartedAt)} às {formatClock(report.slotEndedAt)}</span>
                     <AdminGlobalNavigationLinks current="slot-audit" containerClassName="payment-hero-actions" />
                 </div>
             </section>
 
             <form className="payment-filter-bar" method="get">
                 <label className="payment-filter-field compact">
-                    <span>Data inicial</span>
-                    <input type="date" name="start" defaultValue={formatDateInput(report.startDate)} />
-                </label>
-
-                <label className="payment-filter-field compact">
-                    <span>Data final</span>
-                    <input type="date" name="end" defaultValue={formatDateInput(report.endDate)} />
+                    <span>Data do plantão</span>
+                    <input type="date" name="date" defaultValue={report.operationalDate} />
                 </label>
 
                 <label className="payment-filter-field compact">
                     <span>Turno</span>
-                    <select name="shift" defaultValue={report.shiftLabel ?? ""}>
-                        <option value="">SD + SN</option>
-                        <option value="SD">Somente SD</option>
-                        <option value="SN">Somente SN</option>
+                    <select name="shift" defaultValue={report.shiftLabel}>
+                        <option value="SD">SD (07h–19h)</option>
+                        <option value="SN">SN (19h–07h)</option>
                     </select>
                 </label>
 
                 <div className="payment-filter-actions">
-                    <button type="submit" className="payment-button primary">Aplicar recorte</button>
-                    <a className="payment-button" href="/admin/slot-audit">Ultimos 7 dias</a>
+                    <button type="submit" className="payment-button primary">Auditar plantão</button>
+                    <a className="payment-button" href="/admin/slot-audit">Plantão mais recente</a>
                 </div>
             </form>
 
             {loadError && (
                 <div className="payment-inline-banner danger">
-                    <strong>Filtro ajustado para o padrao</strong>
+                    <strong>Filtro ajustado para o padrão</strong>
                     <span>{loadError}</span>
                 </div>
             )}
 
-            <section className="slot-audit-grid">
-                {report.slots.map((slot) => (
-                    <article key={`${slot.operationalDate}:${slot.shiftLabel}`} className="slot-audit-slot-card">
-                        <header className="slot-audit-slot-header">
-                            <div>
-                                <p className="payment-eyebrow">{formatDateLabel(slot.operationalDate)}</p>
-                                <h2>{slot.shiftLabel}</h2>
-                            </div>
-
-                            <div className="slot-audit-slot-kpis">
-                                <span className="payment-status-pill ready">{slot.occupiedCount} ocupados</span>
-                                <span className="payment-status-pill empty">{slot.emptyCount} vazios</span>
-                                <span className="payment-status-pill disabled">{slot.disabledCount} desativadas</span>
-                            </div>
-                        </header>
-
-                        <div className="slot-audit-columns">
-                            {[slot.regulation, slot.intervention].map((entries) => (
-                                <section key={`${slot.operationalDate}:${slot.shiftLabel}:${entries[0]?.domain ?? "none"}`} className="slot-audit-domain-card">
-                                    <div className="slot-audit-domain-header">
-                                        <strong>{domainLabel(entries[0]?.domain ?? "regulation")}</strong>
-                                        <span>{entries.length} alvo(s)</span>
-                                    </div>
-
-                                    <ul className="slot-audit-entry-list">
-                                        {entries.map((entry) => (
-                                            <li key={`${entry.domain}:${entry.targetCode}`} className={`slot-audit-entry ${entry.status}`.trim()}>
-                                                <span className="slot-audit-entry-code">{entry.targetCode}</span>
-                                                <span className="slot-audit-entry-name">{entry.doctorLabel}</span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </section>
-                            ))}
-                        </div>
-                    </article>
-                ))}
+            <section className="slot-audit-board">
+                <PositionPanel panel={report.regulation} />
+                <PositionPanel panel={report.intervention} />
             </section>
         </main>
     );
