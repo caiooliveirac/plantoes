@@ -376,6 +376,52 @@ function buildBoardsForRange(params: {
     return boards;
 }
 
+export interface PayableAllocationRangeResult {
+    /** Os mesmos PaymentAllocationBoard que alimentam o fechamento mensal (um por slot de 12h). */
+    boards: PaymentAllocationBoard[];
+    /** occupancyId -> continuityGroupId, para casar a posição paga com o saldo de banco de horas. */
+    continuityGroupByOccupancyId: Map<string, string>;
+}
+
+/**
+ * Monta os PaymentAllocationBoard para um intervalo arbitrário usando exatamente
+ * os mesmos loaders e o mesmo núcleo (buildBoardsForRange -> buildPaymentAllocationBoardModel)
+ * que o fechamento mensal. É o ponto de reúso para auditorias por posição (slot-audit):
+ * garante que "quem vai receber" cada posição seja idêntico ao payment-closing.
+ *
+ * NÃO altera o caminho do getChiefPayableShiftsBoard — apenas reaproveita as mesmas peças.
+ */
+export async function getPayableAllocationBoardsForRange(
+    rangeStart: Date,
+    rangeEnd: Date,
+): Promise<PayableAllocationRangeResult> {
+    const rawStartIso = new Date(rangeStart.getTime() - 86400000).toISOString();
+    const rawEndIso = new Date(rangeEnd.getTime() + 86400000).toISOString();
+    const [targets, targetDeactivationIntervals, rawResultRows] = await Promise.all([
+        loadTargets(rawStartIso, rawEndIso),
+        loadTargetDeactivationIntervals(rawStartIso, rawEndIso),
+        loadRawRows(rawStartIso, rawEndIso),
+    ]);
+
+    const rawRows = rawResultRows.map(mapPaymentAllocationAuditRow);
+    const boards = buildBoardsForRange({
+        rangeStart,
+        rangeEnd,
+        targets,
+        targetDeactivationIntervals,
+        rawRows,
+    });
+
+    const continuityGroupByOccupancyId = new Map<string, string>();
+    for (const row of rawRows) {
+        if (row.continuityGroupId) {
+            continuityGroupByOccupancyId.set(row.occupancyId, row.continuityGroupId);
+        }
+    }
+
+    return { boards, continuityGroupByOccupancyId };
+}
+
 export async function getChiefPayableShiftsBoard(monthKey?: string | null): Promise<ChiefPayableBoardModel> {
     const range = resolveMonthlyReportRange(monthKey);
     const rawStartIso = new Date(range.start.getTime() - 86400000).toISOString();
