@@ -34,3 +34,25 @@ Sempre que houver deploy/restart para publicar mudancas:
 - Informar no resumo final se o deploy foi executado
 - Informar status de verificacao no dominio publico
 - Nao afirmar "pronto" sem evidencia minima de validacao no host publico
+
+## Comandos PROIBIDOS em `ssh samu` (producao) sem confirmacao humana explicita
+
+Estes comandos podem destruir trabalho em progresso, derrubar o servico ou apagar
+estado nao versionado. NUNCA execute sem que o humano peca textualmente, no turno
+atual, citando o comando exato. Nao basta autorizacao implicita ou de turnos
+anteriores. Em duvida, pergunte.
+
+- `git reset --hard`, `git checkout -- .`, `git checkout <commit> -- .`, `git clean -fd`, `git stash drop/clear`
+- `git push --force`, `git push -f`, `git push --force-with-lease` em `main`
+- `rm -rf` em `~/plantoes`, `~/plantoes/.next`, `~/plantoes/.env*`, `/var/`, `/etc/`
+- `pm2 kill`, `pm2 delete all`, `pm2 flush` (use `npm run deploy:production`)
+- `docker rm -f`, `docker volume rm`, `docker system prune`
+- `dropdb`, `DROP DATABASE`, `DROP SCHEMA`, `TRUNCATE` em DB de producao
+- `psql ... -c "DELETE FROM ..."` sem `WHERE` ou sem `BEGIN/ROLLBACK` de teste
+- Qualquer edicao direta de `.env.production` (use commit + redeploy)
+- `sudo` em qualquer comando que altere estado fora de `~/plantoes`
+
+O workflow correto e: editar local, commitar em branch, abrir PR, mergear em `main`,
+deixar o CI rodar `npm run deploy:production`. O deploy script ja faz reconcile
+seguro do working tree de prod para o commit do CI (e falha loud se sujo).
+

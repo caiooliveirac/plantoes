@@ -164,6 +164,49 @@ ensure_delivery_mode_consistent() {
     fi
 }
 
+require_clean_tree() {
+    # Producao nao pode ter mudancas nao commitadas. Build de tree sujo dificulta
+    # rastrear o que esta no ar e abre porta para um deploy futuro descartar
+    # codigo nao versionado por acidente (git reset/checkout).
+    local dirty
+    dirty="$(git status --porcelain 2>/dev/null || true)"
+    if [[ -z "${dirty}" ]]; then
+        return
+    fi
+    if [[ "${ALLOW_DIRTY_TREE:-}" == "1" ]]; then
+        warn "Working tree sujo, mas ALLOW_DIRTY_TREE=1 — prosseguindo. USE SOMENTE EM EMERGENCIA."
+        warn "Arquivos modificados:"
+        printf '%s\n' "${dirty}" >&2
+        return
+    fi
+    echo "[deploy][ERROR] Working tree sujo em $(pwd). Commite/stashe antes do deploy ou rode com ALLOW_DIRTY_TREE=1." >&2
+    echo "--- git status --porcelain ---" >&2
+    printf '%s\n' "${dirty}" >&2
+    exit 1
+}
+
+reconcile_to_expected_commit() {
+    # Se o CI passou um commit esperado, garante que /home/ubuntu/plantoes esta
+    # nele antes de buildar. Sem este passo, o deploy buildava o tree local
+    # (que podia divergir da main do GitHub) e o healthcheck nao detectava.
+    local expected="${EXPECTED_GIT_COMMIT_SHA:-}"
+    if [[ -z "${expected}" ]]; then
+        return
+    fi
+    local current_long
+    current_long="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+    if [[ "${current_long}" == "${expected}" ]]; then
+        info "Working tree ja esta no commit esperado (${expected})."
+        return
+    fi
+    require_clean_tree
+    info "Reconciliando working tree para EXPECTED_GIT_COMMIT_SHA=${expected} (atual=${current_long})"
+    git fetch --quiet origin
+    git checkout --quiet "${expected}" || fail "Falha ao checkout do commit esperado ${expected}. O commit existe em origin?"
+    current_long="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+    [[ "${current_long}" == "${expected}" ]] || fail "Apos checkout, HEAD=${current_long} ainda diverge de ${expected}."
+}
+
 ensure_port_not_ambiguous() {
     local app_pid
     app_pid="$(pm2 pid ${OFFICIAL_APP_NAME} 2>/dev/null || true)"
@@ -198,6 +241,8 @@ predeploy_checks() {
     command -v pm2 >/dev/null 2>&1 || fail "pm2 não encontrado no PATH."
     command -v docker >/dev/null 2>&1 || fail "docker não encontrado no PATH."
 
+    reconcile_to_expected_commit
+    require_clean_tree
     ensure_no_legacy_runtime
     ensure_pm2_singletons
     ensure_delivery_mode_consistent
@@ -255,12 +300,19 @@ set -a
 source .env.production
 set +a
 
+predeploy_checks
+
+# Capturar git state APOS o reconcile dentro do predeploy_checks.
 GIT_COMMIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
-export GIT_COMMIT_SHA
+GIT_COMMIT_SHA_LONG="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+if [[ -z "$(git status --porcelain 2>/dev/null || true)" ]]; then
+    GIT_WORKING_TREE_CLEAN="true"
+else
+    GIT_WORKING_TREE_CLEAN="false"
+fi
+export GIT_COMMIT_SHA GIT_COMMIT_SHA_LONG GIT_WORKING_TREE_CLEAN
 export RUNTIME_SOURCE_OF_TRUTH="${OFFICIAL_RUNTIME_SOURCE}"
 export TELEGRAM_DELIVERY_MODE="webhook"
-
-predeploy_checks
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
     echo "DATABASE_URL is required in .env.production." >&2

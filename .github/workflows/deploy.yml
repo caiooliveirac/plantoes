@@ -79,9 +79,10 @@ jobs:
       - name: Deploy (PM2 restart with env reload)
         run: npm run deploy:production
         env:
-          # Expose the commit SHA so ecosystem.config.cjs can forward it
-          # to PM2 and health endpoint shows it.
-          GIT_COMMIT_SHA: ${{ github.sha }}
+          # EXPECTED_GIT_COMMIT_SHA faz o deploy script reconciliar
+          # /home/ubuntu/plantoes para este commit (fetch + checkout).
+          # Falha loud se o tree estiver sujo (ALLOW_DIRTY_TREE=1 para override).
+          EXPECTED_GIT_COMMIT_SHA: ${{ github.sha }}
 
       - name: Validate — local upstream
         run: |

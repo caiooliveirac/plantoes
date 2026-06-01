@@ -12,6 +12,8 @@ module.exports = {
                 RUNTIME_SOURCE_OF_TRUTH: "pm2",
                 TELEGRAM_DELIVERY_MODE: "webhook",
                 GIT_COMMIT_SHA: process.env.GIT_COMMIT_SHA || "unknown",
+                GIT_COMMIT_SHA_LONG: process.env.GIT_COMMIT_SHA_LONG || "unknown",
+                GIT_WORKING_TREE_CLEAN: process.env.GIT_WORKING_TREE_CLEAN || "unknown",
             },
         },
         {
@@ -25,6 +27,8 @@ module.exports = {
                 RUNTIME_SOURCE_OF_TRUTH: "pm2",
                 TELEGRAM_DELIVERY_MODE: "webhook",
                 GIT_COMMIT_SHA: process.env.GIT_COMMIT_SHA || "unknown",
+                GIT_COMMIT_SHA_LONG: process.env.GIT_COMMIT_SHA_LONG || "unknown",
+                GIT_WORKING_TREE_CLEAN: process.env.GIT_WORKING_TREE_CLEAN || "unknown",
             },
         },
     ],
