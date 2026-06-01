@@ -184,7 +184,7 @@ export function resolveOccupancyDirection(params: {
 }
 
 export type InterventionLineState =
-    | { kind: "continua"; scheduledEndAt: string }
+    | { kind: "continua" }
     | { kind: "saindo"; shiftEndAt: string }
     | { kind: "none" };
 
@@ -192,19 +192,19 @@ export type InterventionLineState =
  * Máquina de estados única (compartilhada) para cada linha ATIVA da coluna INTERVENÇÃO.
  * Avalia nesta ordem (fuso UTC−3 fixo deste módulo; `reference` = "agora"):
  *
- *  1. "continua" — shiftLabel "P" cujo fim agendado AINDA está no futuro
- *     (`scheduledEndAt > agora`): a pessoa comprometeu cobertura até um horário
- *     que ainda não chegou → badge "CONTINUA AS HH:MM" (HH:MM = scheduledEndAt).
- *  2. "saindo"  — pertence a um turno que já encerrou
- *     (`isBeforeCurrentOperationalShift`), sem continuidade futura válida →
- *     recebe "VERIFICAR" + "Retirar". `shiftEndAt` = fronteira que acabou de
- *     passar (= início do turno atual), o `endedAt` correto na retirada.
- *  3. "none"    — chegou para o turno atual (entrando) → sem ação.
+ *  PRÉ-REQUISITO — só quem COMEÇOU ANTES do turno atual
+ *  (`isBeforeCurrentOperationalShift`, tolerância de 60 min) pode "continuar" ou
+ *  "sair". Quem chegou DENTRO do turno corrente apenas chegou: não tem nada a
+ *  continuar, por mais distante que seja seu `scheduledEndAt` → "none".
  *
- * Corrige a expiração da continuidade: o estado compara o `scheduledEndAt`
- * DECLARADO contra "agora", em vez de fabricar uma fronteira a partir do turno
- * corrente — defeito que fazia "CONTINUA AS HH:MM" nunca expirar e que deixava
- * o "VERIFICAR" parcial (ver [[resolveInterventionVerificationBoundary]]).
+ *  1. "continua" — começou num turno anterior E atravessou a virada permanecendo
+ *     (cobertura "P" que se estende ao turno atual, via
+ *     `hasPlannedInterventionCoverageForCurrentShift`). É um carry-over → badge
+ *     "Continua" (sem horário: a hora não agrega e confunde).
+ *  2. "saindo"  — começou num turno anterior, sem cobertura válida para o atual →
+ *     "VERIFICAR" + "Retirar". `shiftEndAt` = fronteira que acabou de passar
+ *     (= início do turno atual), o `endedAt` correto na retirada.
+ *  3. "none"    — chegou para o turno atual → sem ação.
  */
 export function resolveInterventionLineState(params: {
     startedAt: string | Date | null;
@@ -214,18 +214,17 @@ export function resolveInterventionLineState(params: {
     reference: string | Date;
 }): InterventionLineState {
     const { startedAt, boardStartedAt = null, scheduledEndAt = null, shiftLabel, reference } = params;
-    const now = new Date(reference).getTime();
-
-    if (shiftLabel === "P" && scheduledEndAt != null && new Date(scheduledEndAt).getTime() > now) {
-        return { kind: "continua", scheduledEndAt: new Date(scheduledEndAt).toISOString() };
-    }
-
     const anchor = boardStartedAt ?? startedAt;
-    if (anchor != null && isBeforeCurrentOperationalShift(anchor, reference)) {
-        return { kind: "saindo", shiftEndAt: resolveOperationalShiftWindow(reference).startedAt.toISOString() };
+
+    if (anchor == null || !isBeforeCurrentOperationalShift(anchor, reference)) {
+        return { kind: "none" };
     }
 
-    return { kind: "none" };
+    if (hasPlannedInterventionCoverageForCurrentShift({ shiftLabel, scheduledEndAt, reference })) {
+        return { kind: "continua" };
+    }
+
+    return { kind: "saindo", shiftEndAt: resolveOperationalShiftWindow(reference).startedAt.toISOString() };
 }
 
 export function resolveFirstVerificationBoundary(startedAt: string | Date | null) {

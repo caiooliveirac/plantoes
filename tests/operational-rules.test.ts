@@ -58,17 +58,36 @@ test("resolveOccupancyDirection: classifica saindo vs entrando na virada das 19h
     }).status, "entrando");
 });
 
-test("resolveInterventionLineState: continuidade com fim agendado futuro mostra CONTINUA", () => {
-    // Plantonista noturno que declarou continuar ate 07:00; agora sao 23:00 (ainda dentro).
-    const state = resolveInterventionLineState({
-        startedAt: "2026-03-25T19:00:00-03:00",
-        boardStartedAt: "2026-03-25T19:00:00-03:00",
-        scheduledEndAt: "2026-03-26T07:00:00-03:00",
+test("resolveInterventionLineState: CONTINUA so para quem comecou em turno anterior e atravessou a virada", () => {
+    // Cenario Leo Morais: chegou ontem 19:01 (SN), continuou para o SD de hoje
+    // (scheduledEndAt = hoje 19:00). Agora 08:13 (SD): atravessou a virada -> CONTINUA.
+    assert.equal(resolveInterventionLineState({
+        startedAt: "2026-05-31T19:01:00-03:00",
+        boardStartedAt: "2026-05-31T19:01:00-03:00",
+        scheduledEndAt: "2026-06-01T19:00:00-03:00",
         shiftLabel: "P",
-        reference: "2026-03-25T23:00:00-03:00",
-    });
-    assert.equal(state.kind, "continua");
-    assert.equal(state.kind === "continua" && state.scheduledEndAt, new Date("2026-03-26T07:00:00-03:00").toISOString());
+        reference: "2026-06-01T08:13:00-03:00",
+    }).kind, "continua");
+});
+
+test("resolveInterventionLineState: quem chegou no turno atual NAO mostra CONTINUA mesmo com P e fim futuro", () => {
+    // Cenario PR03/CN10/IT30/BR60: chegou hoje 07:00, marcado P com fim amanha 07:00.
+    // Comecou DENTRO do turno atual -> so chegou -> none (nao continua nada).
+    assert.equal(resolveInterventionLineState({
+        startedAt: "2026-06-01T07:00:00-03:00",
+        boardStartedAt: "2026-06-01T07:00:00-03:00",
+        scheduledEndAt: "2026-06-02T07:00:00-03:00",
+        shiftLabel: "P",
+        reference: "2026-06-01T08:13:00-03:00",
+    }).kind, "none");
+    // Chegada adiantada (06:56), dentro da tolerancia de 60 min do turno atual: tambem none.
+    assert.equal(resolveInterventionLineState({
+        startedAt: "2026-06-01T06:56:00-03:00",
+        boardStartedAt: "2026-06-01T06:56:00-03:00",
+        scheduledEndAt: "2026-06-02T07:00:00-03:00",
+        shiftLabel: "P",
+        reference: "2026-06-01T08:13:00-03:00",
+    }).kind, "none");
 });
 
 test("resolveInterventionLineState: BUG 1 - continuidade expirada (P, scheduledEndAt no passado) vira saindo", () => {
