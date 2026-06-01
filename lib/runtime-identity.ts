@@ -3,6 +3,8 @@ import os from "node:os";
 
 export interface RuntimeIdentity {
     commitSha: string;
+    commitShaLong: string;
+    workingTreeClean: boolean | "unknown";
     runtimeSourceOfTruth: "pm2" | "docker" | "unknown";
     telegramDeliveryMode: "webhook" | "polling" | "unknown";
     port: string;
@@ -39,6 +41,28 @@ function resolveCommitSha() {
     }
 }
 
+function resolveCommitShaLong() {
+    const fromEnv = process.env.GIT_COMMIT_SHA_LONG?.trim();
+    if (fromEnv) {
+        return fromEnv;
+    }
+    try {
+        return execSync("git rev-parse HEAD", {
+            cwd: process.cwd(),
+            stdio: ["ignore", "pipe", "ignore"],
+        }).toString().trim() || "unknown";
+    } catch {
+        return "unknown";
+    }
+}
+
+function resolveWorkingTreeClean(): boolean | "unknown" {
+    const fromEnv = process.env.GIT_WORKING_TREE_CLEAN?.trim().toLowerCase();
+    if (fromEnv === "true") return true;
+    if (fromEnv === "false") return false;
+    return "unknown";
+}
+
 function resolveRuntimeSourceOfTruth() {
     const value = process.env.RUNTIME_SOURCE_OF_TRUTH?.trim().toLowerCase();
     if (value === "pm2" || value === "docker") {
@@ -69,6 +93,8 @@ export function getRuntimeIdentity(now = new Date()): RuntimeIdentity {
     const authUrl = process.env.AUTH_URL?.trim() ?? "";
     return {
         commitSha: resolveCommitSha(),
+        commitShaLong: resolveCommitShaLong(),
+        workingTreeClean: resolveWorkingTreeClean(),
         runtimeSourceOfTruth: resolveRuntimeSourceOfTruth(),
         telegramDeliveryMode: resolveTelegramDeliveryMode(),
         port: process.env.PORT?.trim() || "",
