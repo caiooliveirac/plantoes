@@ -424,6 +424,35 @@ body > * { position: relative; z-index: 1; }
     50% { opacity: 0.55; }
 }
 
+/* Saindo: barra lateral ambar continua, visivel a distancia (painel de parede).
+ * Marca quem esta encerrando o turno, em ambas as colunas de forma identica.
+ * Nao usa vermelho para nao competir com o botao "Retirar" (acao). */
+.ops-grid-row.is-leaving::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    background: var(--amber, #ff922b);
+    box-shadow: 0 0 16px -2px color-mix(in oklab, var(--amber, #ff922b) 65%, transparent);
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* Reforco sutil de agrupamento, sem apagar o gradiente de papel/estado da linha. */
+.ops-grid-row.is-leaving {
+    background:
+        linear-gradient(90deg, rgba(255, 146, 43, 0.1) 0%, rgba(255, 146, 43, 0.035) 38%, transparent 70%),
+        rgba(255, 255, 255, 0.012);
+}
+
+/* A barra de prioridade critica/alta continua por cima da barra de saida. */
+.ops-grid-row.is-leaving.priority-high::before,
+.ops-grid-row.is-leaving.priority-critical::before {
+    z-index: 1;
+}
+
 .ops-grid-row-header::before { display: none; }
 
 .ops-grid-row-header {
