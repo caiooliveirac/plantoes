@@ -160,12 +160,16 @@ export interface MealBreakPriorityJustification {
     updatedAt: string;
 }
 
-interface MealBreakPriorityOverrideRecord {
+export interface MealBreakPriorityOverrideRecord {
     kind: "telegram_meal_break_priority_overrides";
-    version: 1;
+    // v2: prioridade e justificativas indexadas por doctorId (segue o medico em
+    // remanejamentos). v1 (legado): indexadas por ramal — ainda lidas e traduzidas
+    // ramal->doctorId pelo roster vivo, nunca mais gravadas.
+    version: 1 | 2;
     mode: MealBreakMode;
     operationalDate: string;
-    orderedRamals: string[];
+    orderedDoctorIds?: string[];
+    orderedRamals?: string[];
     justifications: Record<string, MealBreakPriorityJustification>;
     updatedAt: string;
 }
@@ -180,7 +184,7 @@ interface MealBreakEligibilityOverrideRecord {
     updatedAt: string;
 }
 
-interface MealBreakPriorityContextEntry {
+export interface MealBreakPriorityContextEntry {
     rank: number;
     automaticRank: number;
     doctor: MealBreakDoctor;
@@ -423,11 +427,12 @@ function isMealBreakPriorityOverrideRecord(value: unknown): value is MealBreakPr
     }
 
     const candidate = value as Record<string, unknown>;
+    const isV2 = candidate.version === 2 && Array.isArray(candidate.orderedDoctorIds);
+    const isV1 = candidate.version === 1 && Array.isArray(candidate.orderedRamals);
     return candidate.kind === PRIORITY_KIND
-        && candidate.version === 1
+        && (isV2 || isV1)
         && typeof candidate.operationalDate === "string"
         && typeof candidate.updatedAt === "string"
-        && Array.isArray(candidate.orderedRamals)
         && typeof candidate.justifications === "object";
 }
 
@@ -2297,17 +2302,50 @@ function buildMealBreakPriorityEntries(params: {
     });
 }
 
-function applyMealBreakPriorityOverrides(params: {
+// A prioridade manual e armazenada por doctorId (v2). Registros legados (v1) sao
+// traduzidos ramal->doctorId usando o roster vivo, para que a posicao siga o medico
+// mesmo quando ele troca de ramal (remanejamento).
+export function resolvePriorityOverridesByDoctorId(
+    overrides: MealBreakPriorityOverrideRecord | null,
+    entries: MealBreakPriorityContextEntry[],
+): { orderedDoctorIds: string[]; justifications: Record<string, MealBreakPriorityJustification> } {
+    if (!overrides) {
+        return { orderedDoctorIds: [], justifications: {} };
+    }
+
+    if (overrides.version === 2 || Array.isArray(overrides.orderedDoctorIds)) {
+        return {
+            orderedDoctorIds: overrides.orderedDoctorIds ?? [],
+            justifications: overrides.justifications ?? {},
+        };
+    }
+
+    const doctorIdByRamal = new Map(entries.map((entry) => [entry.doctor.ramal, entry.doctor.doctorId]));
+    const orderedDoctorIds = (overrides.orderedRamals ?? [])
+        .map((ramal) => doctorIdByRamal.get(ramal))
+        .filter((doctorId): doctorId is string => Boolean(doctorId));
+    const justifications: Record<string, MealBreakPriorityJustification> = {};
+    for (const [ramal, justification] of Object.entries(overrides.justifications ?? {})) {
+        const doctorId = doctorIdByRamal.get(ramal);
+        if (doctorId) {
+            justifications[doctorId] = justification;
+        }
+    }
+    return { orderedDoctorIds, justifications };
+}
+
+export function applyMealBreakPriorityOverrides(params: {
     entries: MealBreakPriorityContextEntry[];
     overrides: MealBreakPriorityOverrideRecord | null;
 }) {
-    const orderIndex = new Map((params.overrides?.orderedRamals ?? []).map((ramal, index) => [ramal, index]));
-    const automaticIndex = new Map(params.entries.map((entry, index) => [entry.doctor.ramal, index]));
+    const { orderedDoctorIds, justifications } = resolvePriorityOverridesByDoctorId(params.overrides, params.entries);
+    const orderIndex = new Map(orderedDoctorIds.map((doctorId, index) => [doctorId, index]));
+    const automaticIndex = new Map(params.entries.map((entry, index) => [entry.doctor.doctorId, index]));
 
     return [...params.entries]
         .sort((left, right) => {
-            const leftOverrideIndex = orderIndex.get(left.doctor.ramal);
-            const rightOverrideIndex = orderIndex.get(right.doctor.ramal);
+            const leftOverrideIndex = orderIndex.get(left.doctor.doctorId);
+            const rightOverrideIndex = orderIndex.get(right.doctor.doctorId);
             if (leftOverrideIndex !== undefined || rightOverrideIndex !== undefined) {
                 if (leftOverrideIndex === undefined) {
                     return 1;
@@ -2320,12 +2358,12 @@ function applyMealBreakPriorityOverrides(params: {
                 }
             }
 
-            return (automaticIndex.get(left.doctor.ramal) ?? 0) - (automaticIndex.get(right.doctor.ramal) ?? 0);
+            return (automaticIndex.get(left.doctor.doctorId) ?? 0) - (automaticIndex.get(right.doctor.doctorId) ?? 0);
         })
         .map((entry, index) => ({
             ...entry,
             rank: index + 1,
-            manualJustification: params.overrides?.justifications[entry.doctor.ramal] ?? null,
+            manualJustification: justifications[entry.doctor.doctorId] ?? null,
         } satisfies MealBreakPriorityContextEntry));
 }
 
@@ -2441,21 +2479,23 @@ export async function updateMealBreakPriorityOrder(params: {
         throw new Error("Posicao de prioridade invalida para a fila atual.");
     }
 
-    const orderedRamals = context.entries.map((entry) => entry.doctor.ramal);
-    const [moved] = orderedRamals.splice(currentIndex, 1);
-    orderedRamals.splice(params.targetIndex, 0, moved ?? normalizeRamal(params.ramal));
+    const movingDoctorId = context.entries[currentIndex].doctor.doctorId;
+    const orderedDoctorIds = context.entries.map((entry) => entry.doctor.doctorId);
+    const [moved] = orderedDoctorIds.splice(currentIndex, 1);
+    orderedDoctorIds.splice(params.targetIndex, 0, moved ?? movingDoctorId);
 
     const referenceIso = params.referenceAt.toISOString();
     const previous = await loadMealBreakPriorityOverrides(context.operationalDate, context.mode);
+    const previousByDoctorId = resolvePriorityOverridesByDoctorId(previous, context.entries);
     const overrides: MealBreakPriorityOverrideRecord = {
         kind: PRIORITY_KIND,
-        version: 1,
+        version: 2,
         mode: context.mode,
         operationalDate: context.operationalDate,
-        orderedRamals,
+        orderedDoctorIds,
         justifications: {
-            ...(previous?.justifications ?? {}),
-            [normalizeRamal(params.ramal)]: {
+            ...previousByDoctorId.justifications,
+            [movingDoctorId]: {
                 notes,
                 actorUserId: params.actorUserId,
                 updatedAt: referenceIso,
@@ -2470,10 +2510,7 @@ export async function updateMealBreakPriorityOrder(params: {
         ...context,
         updatedAt: referenceIso,
         entries: applyMealBreakPriorityOverrides({
-            entries: context.entries.map((entry) => ({
-                ...entry,
-                manualJustification: overrides.justifications[entry.doctor.ramal] ?? null,
-            })),
+            entries: context.entries,
             overrides,
         }),
     });

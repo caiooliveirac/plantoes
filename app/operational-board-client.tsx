@@ -4,7 +4,7 @@ import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTrans
 import { useRouter } from "next/navigation";
 import { OperationalHistoryPanel } from "@/components/operational-history-panel";
 import { InterventionLateArrivalPanel } from "@/components/intervention-late-arrival-panel";
-import { buildOperationalRoleChoices, dedupeOperationalIdentityLabels, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
+import { buildOperationalRoleChoices, dedupeOperationalIdentityLabels, describeFixedRoleTransferImpact, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
     MealBreakDinnerDuration,
@@ -924,6 +924,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [priorityErrorMessage, setPriorityErrorMessage] = useState<string | null>(null);
     const [prioritySuccessMessage, setPrioritySuccessMessage] = useState<string | null>(null);
     const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
+    const [fixedRoleAck, setFixedRoleAck] = useState(false);
     const [transferConflictStrategy, setTransferConflictStrategy] = useState<TransferConflictStrategy>("remove_destination");
     const [transferRelocationKey, setTransferRelocationKey] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1311,6 +1312,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     );
     const selectedTransferConflict = isTransferAction && selectedTransferTarget && selectedTransferTarget.occupancyId && selectedTransferTarget.occupancyId !== selectedCard?.occupancyId
         ? selectedTransferTarget
+        : null;
+    const transferFixedRoleImpact = isTransferAction && selectedCard && selectedTransferTarget
+        ? describeFixedRoleTransferImpact({
+            targetDomain: selectedTransferTarget.domain,
+            targetCode: selectedTransferTarget.code,
+            shiftLabel: selectedCard.shiftLabel,
+            currentRole: resolveCardRoleLabel(selectedCard),
+        })
         : null;
     const relocationTargetOptions = transferTargetOptions.filter((option) => option.key !== selectedTransferTarget?.key);
     const selectedRelocationTarget = relocationTargetOptions.find((option) => option.key === transferRelocationKey) ?? null;
@@ -1749,6 +1758,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             }
 
             if (!options?.confirmedTransfer) {
+                setFixedRoleAck(false);
                 setTransferConfirmOpen(true);
                 return;
             }
@@ -3877,7 +3887,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                             <select
                                                                 className="chief-input chief-select"
                                                                 value={formState.targetKey}
-                                                                onChange={(event) => setFormState((current) => ({ ...current, targetKey: event.target.value }))}
+                                                                onChange={(event) => {
+                                                                    setFixedRoleAck(false);
+                                                                    setFormState((current) => ({ ...current, targetKey: event.target.value }));
+                                                                }}
                                                             >
                                                                 <optgroup label="Regulacao">
                                                                     {transferTargetOptions
@@ -3907,6 +3920,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                             {selectedTransferConflict && (
                                                                 <div className="chief-inline-help chief-transfer-inline-note warning">
                                                                     {selectedTransferTarget?.code} ja esta ocupado por {selectedTransferConflict.occupantName}. Ao continuar, a chefia precisara retirar ou remanejar quem esta nesse destino.
+                                                                </div>
+                                                            )}
+                                                            {transferFixedRoleImpact && (
+                                                                <div className="chief-inline-help chief-transfer-inline-note warning">
+                                                                    O ramal {selectedTransferTarget?.code} tem funcao fixa {transferFixedRoleImpact.forcedRole} no sistema: quem for lotado nele passa a contar como {transferFixedRoleImpact.forcedRole}, independente da funcao atual de {displayDoctorName(selectedCard)}.
+                                                                    {transferFixedRoleImpact.leavesPresentialMealQueue ? ` Como ${transferFixedRoleImpact.forcedRole} cobre remoto, ele sai da fila de refeicao presencial.` : ""}
                                                                 </div>
                                                             )}
                                                         </label>
@@ -4371,6 +4390,26 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     </div>
                                 )}
 
+                                {transferFixedRoleImpact && (
+                                    <div className="chief-transfer-resolution-block">
+                                        <div className="chief-transfer-warning-card">
+                                            <strong>Funcao fixa do destino: {transferFixedRoleImpact.forcedRole}</strong>
+                                            <span>
+                                                O ramal {selectedTransferTarget.code} sempre conta como {transferFixedRoleImpact.forcedRole} no sistema. {displayDoctorName(selectedCard)} passara a ser tratado como {transferFixedRoleImpact.forcedRole}, mesmo que a funcao atual seja outra.
+                                                {transferFixedRoleImpact.leavesPresentialMealQueue ? ` Como ${transferFixedRoleImpact.forcedRole} cobre remoto, ele deixa de ser presencial e sai da fila de refeicao.` : ""}
+                                            </span>
+                                        </div>
+                                        <label className="chief-transfer-choice active">
+                                            <input
+                                                type="checkbox"
+                                                checked={fixedRoleAck}
+                                                onChange={(event) => setFixedRoleAck(event.target.checked)}
+                                            />
+                                            <span>Entendi que este remanejamento muda a funcao para {transferFixedRoleImpact.forcedRole}.</span>
+                                        </label>
+                                    </div>
+                                )}
+
                                 <div className="chief-form-actions full-width">
                                     <button type="button" className="chief-secondary-button" onClick={() => setTransferConfirmOpen(false)}>
                                         Revisar drawer
@@ -4378,7 +4417,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     <button
                                         type="button"
                                         className="chief-primary-button"
-                                        disabled={isSubmitting || isRefreshing || (transferConflictStrategy === "move_destination" && (!selectedRelocationTarget || Boolean(relocationTargetConflict)))}
+                                        disabled={isSubmitting || isRefreshing || (transferConflictStrategy === "move_destination" && (!selectedRelocationTarget || Boolean(relocationTargetConflict))) || (Boolean(transferFixedRoleImpact) && !fixedRoleAck)}
                                         onClick={() => void submitOperationalAction({ confirmedTransfer: true })}
                                     >
                                         {isSubmitting || isRefreshing ? "Aplicando..." : "Confirmar remanejamento"}

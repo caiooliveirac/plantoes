@@ -60,6 +60,39 @@ export function resolveFixedOperationalRole(params: {
     return null;
 }
 
+// Papeis que cobrem remotamente (nao presencial) e por isso saem da fila de
+// refeicao presencial. Mantido alinhado com isPresentialRole em meal-breaks.ts.
+const REMOTE_MEAL_COVERAGE_ROLES = new Set(["COI", "RMT", "IES"]);
+
+// Descreve o impacto de remanejar um medico para um ramal de papel fixo
+// (ex.: 1367/1368 -> COI, 2031 -> CP). Retorna null quando o destino nao forca
+// papel ou quando o papel forcado e o mesmo que o medico ja tem — nesses casos
+// nao ha surpresa a sinalizar. Helper puro para alimentar o aviso da UI e testes.
+export function describeFixedRoleTransferImpact(params: {
+    targetDomain: "regulation" | "intervention";
+    targetCode: string;
+    shiftLabel: "SD" | "SN" | "P" | null;
+    currentRole: string | null | undefined;
+}): { forcedRole: string; leavesPresentialMealQueue: boolean } | null {
+    const forcedRole = resolveFixedOperationalRole({
+        domain: params.targetDomain,
+        code: params.targetCode,
+        shiftLabel: params.shiftLabel,
+    });
+    if (!forcedRole) {
+        return null;
+    }
+
+    if (normalizeOperationalRoleLabel(params.currentRole) === forcedRole) {
+        return null;
+    }
+
+    return {
+        forcedRole,
+        leavesPresentialMealQueue: REMOTE_MEAL_COVERAGE_ROLES.has(forcedRole),
+    };
+}
+
 export function resolveOperationalRoleLabel(params: {
     domain: "regulation" | "intervention";
     code: string;
