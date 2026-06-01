@@ -860,8 +860,8 @@ function buildTelegramArrivalExample(params: {
     target?: string | null;
     time?: string | null;
 }) {
-    const compactName = params.doctorName?.trim() || "Vagner";
-    const target = params.target?.trim() || "USB-01";
+    const compactName = params.doctorName?.trim() || "Vagner Costa";
+    const target = params.target?.trim() || "PM04";
     const time = params.time?.trim() || "07:00";
     return `${compactName} ${target} ${time}`;
 }
@@ -871,7 +871,7 @@ function buildTelegramDepartureExample(params: {
     target?: string | null;
     time?: string | null;
 }) {
-    const compactName = params.doctorName?.trim() || "Vagner";
+    const compactName = params.doctorName?.trim() || "Vagner Costa";
     const target = params.target?.trim() || "PR03";
     const time = params.time?.trim() || "19:20";
     return `${compactName} saindo ${target} ${time} porque fui liberado pela chefia`;
@@ -5146,20 +5146,42 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         const helpLines = [
             "📋 *Guia rápido do bot*",
             "",
-            "▸ *CHEGADA* — avise no grupo:",
-            `  _${buildTelegramArrivalExample({})}_`,
-            `  _Vagner USB-01 07:00 P_  (se for plantão P)`,
+            "Registre numa *única mensagem*:",
+            "*NOME e sobrenome + LOCAL + HORÁRIO*",
             "",
-            "▸ *SAÍDA* — avise no grupo:",
+            "▸ *CHEGADA:*",
+            `  _${buildTelegramArrivalExample({})}_`,
+            "  _Vagner Costa 1363 07:00 SD_  (ramal de regulação)",
+            "  _Vagner Costa PM04 07:00 P_  (plantão de 24h)",
+            "",
+            "▸ *SAÍDA:*",
             `  _${buildTelegramDepartureExample({})}_`,
             "",
-            "▸ *CONTINUAÇÃO* — se emenda o próximo turno:",
-            "  _Vagner continuo USB-01_",
+            "▸ *CONTINUAÇÃO* (emenda o próximo turno):",
+            "  _Vagner Costa continuo PM04_",
             "",
-            "▸ *TROCA de ramal/base* — mande nova chegada:",
-            "  _Vagner USB-03 08:30_",
+            "▸ *TROCA de base/ramal* — mande nova chegada:",
+            "  _Vagner Costa PR03 08:30_",
+            "",
+            "▸ *ALMOÇO / JANTAR:* use /almoco ou /jantar",
+            "  (não mande \"ramal HH:MM\" solto)",
             "",
             "━━━━━━━━━━━━━━━━━━",
+            "📍 *Bases de intervenção:*",
+            "  SM01 · CB02 · PR03 · PM04 · BR05 · CN10",
+            "  PP20 · IT30 · PM40 · CZ50 · BR60 · CC70",
+            "",
+            "📞 *Ramais de regulação:*",
+            "  1321–1329 · 1361–1368 · 1476",
+            "  2031–2035 · 2151–2154 · 2377 · NUCLEO · PIAM",
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "⚠️ *O que trava o registro:*",
+            "• só o primeiro nome → mande nome *e* sobrenome",
+            "• \"bom dia\" sem dados → saudação não registra",
+            "• \"24h\" como hora → significa plantão P, não meia-noite",
+            "• nome e local em mensagens separadas → junte tudo",
+            "",
             "📌 Para ver *todos* os comandos com exemplos:",
             "  /comandos",
         ];
@@ -5206,16 +5228,35 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "",
             "▸ Chegada:",
             `  _${buildTelegramArrivalExample({})}_`,
-            "  _Vagner USB-01 07:00 P_ (plantão P)",
+            "  _Vagner Costa 1363 07:00 SD_ (ramal de regulação)",
+            "  _Vagner Costa PM04 07:00 P_ (plantão P)",
             "",
             "▸ Saída:",
             `  _${buildTelegramDepartureExample({})}_`,
             "",
             "▸ Continuação (emenda turno):",
-            "  _Vagner continuo USB-01_",
+            "  _Vagner Costa continuo PM04_",
             "",
             "▸ Troca de base/ramal:",
-            "  _Vagner USB-03 08:30_ (nova msg de chegada)",
+            "  _Vagner Costa PR03 08:30_ (nova msg de chegada)",
+            "",
+            "⚠️ Sempre nome *e* sobrenome + local + horário na mesma mensagem.",
+        );
+
+        sections.push(
+            "",
+            "━━━━━━━━━━━━━━━━━━",
+            "📍 *BASES E RAMAIS VÁLIDOS*",
+            "",
+            "▸ Bases de intervenção:",
+            "  SM01 · CB02 · PR03 · PM04 · BR05 · CN10",
+            "  PP20 · IT30 · PM40 · CZ50 · BR60 · CC70",
+            "",
+            "▸ Ramais de regulação:",
+            "  1321–1329 · 1361–1368 · 1476",
+            "  2031–2035 · 2151–2154 · 2377 · NUCLEO · PIAM",
+            "",
+            "ℹ️ 2031 entra como CP; 1367/1368 entram como COI (função automática).",
         );
 
         sections.push(
