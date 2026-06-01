@@ -17,11 +17,9 @@ import type {
 } from "@/modules/telegram/meal-breaks";
 import {
     getSaoPauloParts,
-    hasPlannedInterventionCoverageForCurrentShift,
     requiresOvertimeJustification,
-    resolveContinuationBadgeLabel,
-    resolveOperationalShiftWindow,
-    shouldHighlightInterventionVerification,
+    resolveInterventionLineState,
+    resolveOccupancyDirection,
 } from "@/modules/operational/board-rules";
 import type {
     InterventionBoardRow,
@@ -738,30 +736,16 @@ function compareRegulationCards(left: RegulationCard, right: RegulationCard, shi
     return compareRootBoardRegulationCodes(left.postCode, right.postCode, shiftLabel);
 }
 
-function resolveShiftEndKickContext(generatedAt: string): { shouldShow: boolean; shiftEndIso: string } {
-    const parts = getSaoPauloParts(generatedAt);
-    const window = resolveOperationalShiftWindow(generatedAt);
-    if (window.shiftLabel === "SD" && parts.hour >= 18) {
-        return { shouldShow: true, shiftEndIso: window.nextBoundaryAt.toISOString() };
-    }
-    if (window.shiftLabel === "SN" && parts.hour >= 6 && parts.hour < 7) {
-        return { shouldShow: true, shiftEndIso: window.nextBoundaryAt.toISOString() };
-    }
-    return { shouldShow: false, shiftEndIso: window.nextBoundaryAt.toISOString() };
-}
-
 function isInterventionAwaitingNews(card: BoardCard, generatedAt: string) {
-    const hasPlannedCoverage = card.domain === "intervention"
-        && hasPlannedInterventionCoverageForCurrentShift({
-            shiftLabel: card.shiftLabel,
-            scheduledEndAt: card.scheduledEndAt,
-            reference: generatedAt,
-        });
-
     return card.domain === "intervention"
         && card.status === "active"
-        && !hasPlannedCoverage
-        && shouldHighlightInterventionVerification(card.boardStartedAt ?? card.startedAt, generatedAt, card.shiftLabel);
+        && resolveInterventionLineState({
+            startedAt: card.startedAt,
+            boardStartedAt: card.boardStartedAt,
+            scheduledEndAt: card.scheduledEndAt,
+            shiftLabel: card.shiftLabel,
+            reference: generatedAt,
+        }).kind === "saindo";
 }
 
 function canContinueIntervention(card: BoardCard, generatedAt: string) {
@@ -2373,9 +2357,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             || (!mealBreakSession && mealBreakDisplayMode === "day" && mealBreakEligibility.restExcludedRamals.includes(card.postCode));
         const dinnerDuration = mealBreakDisplayMode === "night" ? resolveDinnerDuration(mealBreakSession, card.postCode) : null;
         const clickable = Boolean(session?.canManage);
-        const kickContext = resolveShiftEndKickContext(generatedAt);
+        const direction = resolveOccupancyDirection({
+            startedAt: card.startedAt,
+            scheduledEndAt: card.scheduledEndAt,
+            shiftLabel: card.shiftLabel,
+            reference: generatedAt,
+        });
+        const isLeaving = direction.status === "saindo";
         const cardKey = `${card.domain}-${card.postCode}`;
-        const showKickButton = clickable && !isDisabledRegulation && card.status === "active" && card.occupancyId && kickContext.shouldShow;
+        const showKickButton = clickable && !isDisabledRegulation && card.status === "active" && card.occupancyId && isLeaving;
         const isKickConfirming = kickConfirmCardKey === cardKey;
 
         const cardPriority = resolvePriority(card, generatedAt);
@@ -2384,7 +2374,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             <div key={cardKey} className={`ops-grid-row-group ${isExpanded ? "is-expanded" : ""}`.trim()}>
             <div
                 role="row"
-                className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${clickable ? "clickable" : ""} ${isExpanded ? "is-expanded" : ""}`.trim()}
+                className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${isLeaving ? "is-leaving" : ""} ${clickable ? "clickable" : ""} ${isExpanded ? "is-expanded" : ""}`.trim()}
                 onClick={clickable ? () => { setKickConfirmCardKey(null); setExpandedCardKey((prev) => prev === cardKey ? null : cardKey); } : undefined}
                 onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={clickable ? 0 : undefined}
@@ -2430,7 +2420,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     <button
                                         type="button"
                                         className="ops-kick-confirm-button"
-                                        onClick={(e) => { e.stopPropagation(); void handleKickShiftEnd(card, kickContext.shiftEndIso); }}
+                                        onClick={(e) => { e.stopPropagation(); void handleKickShiftEnd(card, direction.shiftEndAt); }}
                                         disabled={isSubmitting || isRefreshing}
                                     >
                                         Confirmar retirada
@@ -2520,23 +2510,31 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const isClickable = Boolean(session?.canManage);
         const isDisabledIntervention = card.status === "disabled";
         const isWaitingIntervention = card.status === "waiting";
-        const isAwaitingNews = isInterventionAwaitingNews(card, generatedAt);
-        const hasPlannedCoverage = hasPlannedInterventionCoverageForCurrentShift({
-            shiftLabel: card.shiftLabel,
+        const lineState = resolveInterventionLineState({
+            startedAt: card.startedAt,
+            boardStartedAt: card.boardStartedAt,
             scheduledEndAt: card.scheduledEndAt,
-            reference: generatedAt,
-        });
-        const continuationLabel = resolveContinuationBadgeLabel({
-            startedAt: card.boardStartedAt ?? card.startedAt,
             shiftLabel: card.shiftLabel,
             reference: generatedAt,
         });
+        const isLeaving = lineState.kind === "saindo";
+        const kickShiftEndAt = lineState.kind === "saindo" ? lineState.shiftEndAt : null;
+        // "VERIFICAR" e o realce de saida andam juntos com o botao "Retirar",
+        // uniforme para todo o grupo que esta saindo.
+        const isAwaitingNews = isLeaving;
+        const continuationLabel = lineState.kind === "continua"
+            ? `Continua as ${new Date(lineState.scheduledEndAt).toLocaleTimeString("pt-BR", {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+                timeZone: "America/Sao_Paulo",
+            })}`
+            : null;
         const isSaoPauloNightShift = getSaoPauloParts(generatedAt).hour >= 19 || getSaoPauloParts(generatedAt).hour < 7;
-        const showSecondaryFlags = isAwaitingNews || (!hasPlannedCoverage && continuationLabel);
-        const kickContext = resolveShiftEndKickContext(generatedAt);
+        const showSecondaryFlags = isAwaitingNews || Boolean(continuationLabel);
         const intCardKey = `${card.domain}-${card.baseCode}`;
         const showKickButton = isClickable && !isDisabledIntervention && !isWaitingIntervention
-            && card.status === "active" && card.occupancyId && kickContext.shouldShow && !hasPlannedCoverage;
+            && card.status === "active" && card.occupancyId && isLeaving;
         const isKickConfirming = kickConfirmCardKey === intCardKey;
 
         const intCardPriority = resolvePriority(card, generatedAt);
@@ -2545,7 +2543,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             <div key={intCardKey} className={`ops-grid-row-group ${isIntExpanded ? "is-expanded" : ""}`.trim()}>
             <div
                 role="row"
-                className={`ops-grid-row intervention ${emphasisClass} priority-${intCardPriority} ${isClickable ? "clickable" : ""} ${isIntExpanded ? "is-expanded" : ""}`.trim()}
+                className={`ops-grid-row intervention ${emphasisClass} priority-${intCardPriority} ${isLeaving ? "is-leaving" : ""} ${isClickable ? "clickable" : ""} ${isIntExpanded ? "is-expanded" : ""}`.trim()}
                 onClick={isClickable ? () => { setKickConfirmCardKey(null); setExpandedCardKey((prev) => prev === intCardKey ? null : intCardKey); } : undefined}
                 onKeyDown={isClickable ? (event) => handleBoardRowKeyDown(event, card) : undefined}
                 tabIndex={isClickable ? 0 : undefined}
@@ -2594,12 +2592,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         ) : showKickButton ? (
                             <div className="ops-inline-flags subtle">
                                 {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
-                                {!hasPlannedCoverage && continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
+                                {continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
                                 {isKickConfirming ? (
                                     <button
                                         type="button"
                                         className="ops-kick-confirm-button"
-                                        onClick={(e) => { e.stopPropagation(); void handleKickShiftEnd(card, kickContext.shiftEndIso); }}
+                                        onClick={(e) => { e.stopPropagation(); if (kickShiftEndAt) void handleKickShiftEnd(card, kickShiftEndAt); }}
                                         disabled={isSubmitting || isRefreshing}
                                     >
                                         Confirmar retirada
@@ -2618,7 +2616,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         ) : showSecondaryFlags ? (
                             <div className="ops-inline-flags subtle">
                                 {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
-                                {!hasPlannedCoverage && continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
+                                {continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
                             </div>
                         ) : null}
                     </div>

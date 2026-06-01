@@ -6,6 +6,8 @@ import {
     resolveArrivalShiftLabel,
     resolveContinuationBadgeLabel,
     resolveImplicitOccupancyExpiry,
+    resolveInterventionLineState,
+    resolveOccupancyDirection,
     resolveOvertimeJustificationThreshold,
     resolveOperationalShiftLabel,
     shouldHighlightInterventionVerification,
@@ -23,6 +25,106 @@ test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T18:59:00-03:00")), "SD");
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T19:00:00-03:00")), "SN");
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-26T06:59:00-03:00")), "SN");
+});
+
+test("resolveOccupancyDirection: classifica saindo vs entrando na virada das 19h (UTC-3)", () => {
+    // "agora" = 19:05, ja na SN: turno do dia (SD) encerrou as 19:00.
+    const reference = "2026-03-25T19:05:00-03:00";
+
+    // Quem chegou de manha (SD) esta SAINDO; shiftEndAt = inicio do turno atual (19:00).
+    const saindoManha = resolveOccupancyDirection({
+        startedAt: "2026-03-25T06:50:00-03:00",
+        scheduledEndAt: null,
+        shiftLabel: "SD",
+        reference,
+    });
+    assert.equal(saindoManha.status, "saindo");
+    assert.equal(saindoManha.shiftEndAt, new Date("2026-03-25T19:00:00-03:00").toISOString());
+
+    // Quem acabou de chegar (19:04) esta ENTRANDO no plantao da noite.
+    assert.equal(resolveOccupancyDirection({
+        startedAt: "2026-03-25T19:04:00-03:00",
+        scheduledEndAt: null,
+        shiftLabel: "SN",
+        reference,
+    }).status, "entrando");
+
+    // Chegada adiantada (18:53), dentro da tolerancia de 60 min, conta como ENTRANDO.
+    assert.equal(resolveOccupancyDirection({
+        startedAt: "2026-03-25T18:53:00-03:00",
+        scheduledEndAt: null,
+        shiftLabel: "SN",
+        reference,
+    }).status, "entrando");
+});
+
+test("resolveInterventionLineState: continuidade com fim agendado futuro mostra CONTINUA", () => {
+    // Plantonista noturno que declarou continuar ate 07:00; agora sao 23:00 (ainda dentro).
+    const state = resolveInterventionLineState({
+        startedAt: "2026-03-25T19:00:00-03:00",
+        boardStartedAt: "2026-03-25T19:00:00-03:00",
+        scheduledEndAt: "2026-03-26T07:00:00-03:00",
+        shiftLabel: "P",
+        reference: "2026-03-25T23:00:00-03:00",
+    });
+    assert.equal(state.kind, "continua");
+    assert.equal(state.kind === "continua" && state.scheduledEndAt, new Date("2026-03-26T07:00:00-03:00").toISOString());
+});
+
+test("resolveInterventionLineState: BUG 1 - continuidade expirada (P, scheduledEndAt no passado) vira saindo", () => {
+    // Chegou ONTEM de manha, continuou para a noite de ontem (scheduledEndAt = ontem 19:00).
+    // Hoje de manha (07:05) a continuidade ja se resolveu: deve sair, nao mostrar CONTINUA.
+    const state = resolveInterventionLineState({
+        startedAt: "2026-03-24T06:59:00-03:00",
+        boardStartedAt: "2026-03-24T06:59:00-03:00",
+        scheduledEndAt: "2026-03-24T19:00:00-03:00",
+        shiftLabel: "P",
+        reference: "2026-03-25T07:05:00-03:00",
+    });
+    assert.equal(state.kind, "saindo");
+    assert.equal(state.kind === "saindo" && state.shiftEndAt, new Date("2026-03-25T07:00:00-03:00").toISOString());
+});
+
+test("resolveInterventionLineState: BUG 2 - turno anterior recebe saindo de forma uniforme (P ou nao-P)", () => {
+    const reference = "2026-03-25T07:05:00-03:00"; // manha seguinte, ja na SD
+    // Pessoa do turno noturno que NUNCA continuou (shiftLabel SN).
+    assert.equal(resolveInterventionLineState({
+        startedAt: "2026-03-24T19:01:00-03:00",
+        boardStartedAt: "2026-03-24T19:01:00-03:00",
+        scheduledEndAt: null,
+        shiftLabel: "SN",
+        reference,
+    }).kind, "saindo");
+    // Pessoa do turno noturno marcada como P mas com continuidade ja expirada: mesmo tratamento.
+    assert.equal(resolveInterventionLineState({
+        startedAt: "2026-03-24T19:01:00-03:00",
+        boardStartedAt: "2026-03-24T19:01:00-03:00",
+        scheduledEndAt: "2026-03-25T07:00:00-03:00",
+        shiftLabel: "P",
+        reference,
+    }).kind, "saindo");
+});
+
+test("resolveInterventionLineState: chegada do turno atual nao recebe acao (entrando)", () => {
+    // Chegou as 19:02, agora sao 19:10 do mesmo dia: turno atual, sem acao.
+    assert.equal(resolveInterventionLineState({
+        startedAt: "2026-03-25T19:02:00-03:00",
+        boardStartedAt: "2026-03-25T19:02:00-03:00",
+        scheduledEndAt: null,
+        shiftLabel: "SN",
+        reference: "2026-03-25T19:10:00-03:00",
+    }).kind, "none");
+});
+
+test("resolveOccupancyDirection: cobertura planejada (P) que cobre o turno atual nao e tratada como saindo", () => {
+    const reference = "2026-03-25T19:05:00-03:00";
+    // Plantonista prolongado que comprometeu cobertura ate depois da virada: esta permanecendo.
+    assert.equal(resolveOccupancyDirection({
+        startedAt: "2026-03-25T07:00:00-03:00",
+        scheduledEndAt: "2026-03-26T07:00:00-03:00",
+        shiftLabel: "P",
+        reference,
+    }).status, "entrando");
 });
 
 test("keeps basal MRV on 2032/2151 only on SD and allows explicit override", () => {

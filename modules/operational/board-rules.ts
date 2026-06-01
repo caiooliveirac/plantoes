@@ -146,6 +146,88 @@ export function hasPlannedInterventionCoverageForCurrentShift(params: {
     return new Date(params.scheduledEndAt).getTime() > currentShiftStart.getTime();
 }
 
+export type OccupancyDirection = "entrando" | "saindo";
+
+/**
+ * Fonte de verdade única (compartilhada pelas duas colunas do quadro) para decidir
+ * se uma ocupação está ENTRANDO (chegou para o turno atual/entrante) ou SAINDO
+ * (pertence ao turno que já encerrou e ainda aparece no quadro).
+ *
+ * Critério temporal (relativo a `reference` = "agora", no fuso UTC−3 fixo deste módulo):
+ *  - SAINDO ⟺ o início da ocupação é anterior ao turno atual
+ *    (`isBeforeCurrentOperationalShift`, que tolera adiantamentos de até 60 min)
+ *    E a pessoa não tem cobertura planejada para o turno atual
+ *    (`hasPlannedInterventionCoverageForCurrentShift`, que indica permanência por shiftLabel "P").
+ *  - ENTRANDO ⟺ todo o resto.
+ *
+ * `shiftEndAt` é o instante em que o turno da pessoa que está saindo encerrou —
+ * ou seja, a fronteira de turno que acabou de passar (= início do turno atual).
+ * É esse o `endedAt` correto ao retirar alguém por encerramento de turno.
+ */
+export function resolveOccupancyDirection(params: {
+    startedAt: string | Date | null;
+    scheduledEndAt?: string | Date | null;
+    shiftLabel: OccupancyShiftLabel;
+    reference: string | Date;
+}): { status: OccupancyDirection; shiftEndAt: string } {
+    const { startedAt, scheduledEndAt = null, shiftLabel, reference } = params;
+    const window = resolveOperationalShiftWindow(reference);
+
+    const leaving = startedAt != null
+        && isBeforeCurrentOperationalShift(startedAt, reference)
+        && !hasPlannedInterventionCoverageForCurrentShift({ shiftLabel, scheduledEndAt, reference });
+
+    return {
+        status: leaving ? "saindo" : "entrando",
+        shiftEndAt: window.startedAt.toISOString(),
+    };
+}
+
+export type InterventionLineState =
+    | { kind: "continua"; scheduledEndAt: string }
+    | { kind: "saindo"; shiftEndAt: string }
+    | { kind: "none" };
+
+/**
+ * Máquina de estados única (compartilhada) para cada linha ATIVA da coluna INTERVENÇÃO.
+ * Avalia nesta ordem (fuso UTC−3 fixo deste módulo; `reference` = "agora"):
+ *
+ *  1. "continua" — shiftLabel "P" cujo fim agendado AINDA está no futuro
+ *     (`scheduledEndAt > agora`): a pessoa comprometeu cobertura até um horário
+ *     que ainda não chegou → badge "CONTINUA AS HH:MM" (HH:MM = scheduledEndAt).
+ *  2. "saindo"  — pertence a um turno que já encerrou
+ *     (`isBeforeCurrentOperationalShift`), sem continuidade futura válida →
+ *     recebe "VERIFICAR" + "Retirar". `shiftEndAt` = fronteira que acabou de
+ *     passar (= início do turno atual), o `endedAt` correto na retirada.
+ *  3. "none"    — chegou para o turno atual (entrando) → sem ação.
+ *
+ * Corrige a expiração da continuidade: o estado compara o `scheduledEndAt`
+ * DECLARADO contra "agora", em vez de fabricar uma fronteira a partir do turno
+ * corrente — defeito que fazia "CONTINUA AS HH:MM" nunca expirar e que deixava
+ * o "VERIFICAR" parcial (ver [[resolveInterventionVerificationBoundary]]).
+ */
+export function resolveInterventionLineState(params: {
+    startedAt: string | Date | null;
+    boardStartedAt?: string | Date | null;
+    scheduledEndAt?: string | Date | null;
+    shiftLabel: OccupancyShiftLabel;
+    reference: string | Date;
+}): InterventionLineState {
+    const { startedAt, boardStartedAt = null, scheduledEndAt = null, shiftLabel, reference } = params;
+    const now = new Date(reference).getTime();
+
+    if (shiftLabel === "P" && scheduledEndAt != null && new Date(scheduledEndAt).getTime() > now) {
+        return { kind: "continua", scheduledEndAt: new Date(scheduledEndAt).toISOString() };
+    }
+
+    const anchor = boardStartedAt ?? startedAt;
+    if (anchor != null && isBeforeCurrentOperationalShift(anchor, reference)) {
+        return { kind: "saindo", shiftEndAt: resolveOperationalShiftWindow(reference).startedAt.toISOString() };
+    }
+
+    return { kind: "none" };
+}
+
 export function resolveFirstVerificationBoundary(startedAt: string | Date | null) {
     if (!startedAt) {
         return null;
