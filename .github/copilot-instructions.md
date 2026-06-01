@@ -56,3 +56,18 @@ O workflow correto e: editar local, commitar em branch, abrir PR, mergear em `ma
 deixar o CI rodar `npm run deploy:production`. O deploy script ja faz reconcile
 seguro do working tree de prod para o commit do CI (e falha loud se sujo).
 
+## Protecao de `main` em camadas (sem branch protection paga)
+
+Repo privado em conta free nao tem branch protection. Substituimos por:
+
+1. Hook `pre-push` em `.githooks/pre-push` (ativar com `git config core.hooksPath .githooks`).
+2. Job `deploy` no CI recusa commits que nao venham de PR mergeado.
+3. `scripts/deploy-production.sh` recusa working tree sujo e reconcilia para `EXPECTED_GIT_COMMIT_SHA`.
+
+Agentes NAO devem:
+- usar `PRE_PUSH_ALLOW_DIRECT_MAIN=1` para pular o hook
+- usar `ALLOW_DIRTY_TREE=1` no deploy
+- usar `workflow_dispatch` para pular o guard de PR
+sem pedido humano explicito no turno atual.
+
+

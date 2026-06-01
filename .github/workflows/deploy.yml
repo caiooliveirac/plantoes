@@ -73,6 +73,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Guard — commit must come from a merged PR (substitui branch protection paga)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Permite override explicito em workflow_dispatch (hotfix manual auditavel).
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "::notice::workflow_dispatch — pulando guard de PR (acao manual auditavel via Actions log)."
+            exit 0
+          fi
+          # Procura PR mergeado associado ao SHA pushado para main.
+          PR_COUNT=$(gh api "repos/${{ github.repository }}/commits/${COMMIT_SHA}/pulls" \
+            --jq '[.[] | select(.merged_at != null and .base.ref == "main")] | length')
+          if [[ "${PR_COUNT}" -lt 1 ]]; then
+            echo "::error::Commit ${COMMIT_SHA} nao veio de um PR mergeado em main. Push direto bloqueado. Abra um PR."
+            exit 1
+          fi
+          echo "::notice::Commit veio de PR mergeado — OK."
+
       - name: Install dependencies
         run: npm ci --prefer-offline
 
