@@ -2522,14 +2522,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         // "VERIFICAR" e o realce de saida andam juntos com o botao "Retirar",
         // uniforme para todo o grupo que esta saindo.
         const isAwaitingNews = isLeaving;
-        const continuationLabel = lineState.kind === "continua"
-            ? `Continua as ${new Date(lineState.scheduledEndAt).toLocaleTimeString("pt-BR", {
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: false,
-                timeZone: "America/Sao_Paulo",
-            })}`
-            : null;
+        // Carry-over de turno anterior: so a palavra "Continua" (sem horario).
+        const continuationLabel = lineState.kind === "continua" ? "Continua" : null;
         const isSaoPauloNightShift = getSaoPauloParts(generatedAt).hour >= 19 || getSaoPauloParts(generatedAt).hour < 7;
         const showSecondaryFlags = isAwaitingNews || Boolean(continuationLabel);
         const intCardKey = `${card.domain}-${card.baseCode}`;
