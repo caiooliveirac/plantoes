@@ -1,9 +1,11 @@
 export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IES", "RMT", "PSIQ", "PIAM"] as const;
+export const OPERATIONAL_ROLE_REMOVED_SENTINEL = "SEM_FUNCAO";
 
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
 
 const COI_REGULATION_CODES = new Set(["1367", "1368"]);
 const RMT_DEFAULT_REGULATION_CODES = new Set(["1366"]);
+const DAY_MRV_BASAL_REGULATION_CODES = new Set(["2032", "2151"]);
 const REMOTE_PRIORITY_REGULATION_CODES = new Set(["1321", "1322", "1323", "1325", "1361", "1362", "1363", "1364", "1365"]);
 
 export function normalizeOperationalRoleLabel(value: string | null | undefined) {
@@ -11,11 +13,22 @@ export function normalizeOperationalRoleLabel(value: string | null | undefined) 
     return normalized.length > 0 ? normalized : null;
 }
 
+export function isOperationalRoleRemovalSentinel(value: string | null | undefined) {
+    return normalizeOperationalRoleLabel(value) === OPERATIONAL_ROLE_REMOVED_SENTINEL;
+}
+
+export function resolveRoleLabelForExplicitRemoval(value: string | null | undefined) {
+    return value ?? OPERATIONAL_ROLE_REMOVED_SENTINEL;
+}
+
 export function applyOperationalRoleShiftPolicy(params: {
     shiftLabel: "SD" | "SN" | "P" | null;
     roleLabel: string | null | undefined;
 }) {
     const normalizedRole = normalizeOperationalRoleLabel(params.roleLabel);
+    if (normalizedRole === OPERATIONAL_ROLE_REMOVED_SENTINEL) {
+        return OPERATIONAL_ROLE_REMOVED_SENTINEL;
+    }
     if (normalizedRole === "MRV" && params.shiftLabel === "SN") {
         return null;
     }
@@ -59,6 +72,10 @@ export function resolveOperationalRoleLabel(params: {
         roleLabel: params.roleLabel,
     });
 
+    if (explicitRole === OPERATIONAL_ROLE_REMOVED_SENTINEL) {
+        return null;
+    }
+
     // Meio plantao precisa prevalecer mesmo em ramais com papel fixo (ex.: 1367/1368 COI).
     if (explicitRole === "MEIO_PLANTAO") {
         return explicitRole;
@@ -68,11 +85,17 @@ export function resolveOperationalRoleLabel(params: {
         shiftLabel: params.shiftLabel,
         roleLabel: params.defaultRole,
     });
+    const basalDayRole = params.domain === "regulation"
+        && params.shiftLabel === "SD"
+        && DAY_MRV_BASAL_REGULATION_CODES.has(params.code)
+        ? "MRV"
+        : null;
     const codeDefault = params.domain === "regulation" && RMT_DEFAULT_REGULATION_CODES.has(params.code)
         ? "RMT"
         : null;
     const resolved = resolveFixedOperationalRole(params)
         ?? explicitRole
+        ?? basalDayRole
         ?? defaultRole
         ?? codeDefault
         ?? null;
@@ -91,10 +114,26 @@ export function isRemoteOperationalRole(roleLabel: string | null | undefined) {
 export function buildOperationalRoleChoices(values: Array<string | null | undefined>) {
     const normalizedValues = values
         .map((value) => normalizeOperationalRoleLabel(value))
-        .filter((value): value is string => Boolean(value));
+        .filter((value): value is string => Boolean(value) && value !== OPERATIONAL_ROLE_REMOVED_SENTINEL);
     const extraValues = normalizedValues.filter((value) => !isStandardOperationalRoleCode(value));
 
     return [...new Set([...normalizedValues, ...STANDARD_OPERATIONAL_ROLE_CODES, ...extraValues])];
+}
+
+export function dedupeOperationalIdentityLabels(values: Array<string | null | undefined>) {
+    const labels: string[] = [];
+    const seen = new Set<string>();
+
+    for (const value of values) {
+        const normalized = normalizeOperationalRoleLabel(value);
+        if (!normalized || seen.has(normalized)) {
+            continue;
+        }
+        seen.add(normalized);
+        labels.push(normalized);
+    }
+
+    return labels;
 }
 
 export function getOperationalRoleTone(roleLabel: string | null | undefined) {

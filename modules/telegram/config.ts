@@ -100,3 +100,36 @@ export function getTelegramReminderPollMs() {
 
     return parsed;
 }
+
+// Cutoff que separa a FASE 1 (registra o horário declarado pelo plantonista, mas
+// avisa que a regra vai mudar) da FASE 2 (passa a registrar apenas o timestamp da
+// mensagem do Telegram, ignorando o horário declarado). Configurável via env
+// ARRIVAL_TIME_CUTOFF, com instante ISO no fuso de Salvador/BR (UTC-3), por exemplo
+// "2026-06-01T00:00:00-03:00". Ausente ou inválido => null => FASE 1 (fail-safe:
+// preserva o comportamento atual de aceitar o horário declarado).
+export function getArrivalTimeCutoff(): Date | null {
+    const raw = process.env.ARRIVAL_TIME_CUTOFF?.trim();
+    if (!raw) {
+        return null;
+    }
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+        return null;
+    }
+
+    return parsed;
+}
+
+// Resolve em qual fase a chegada cai, comparando o timestamp da mensagem (a primeira
+// mensagem daquele aviso) contra o cutoff. Compara sempre contra o referenceAt da
+// mensagem — nunca contra o relógio do servidor — para que reprocessamentos e testes
+// sejam determinísticos.
+export function resolveArrivalPhase(referenceAt: Date): "phase1" | "phase2" {
+    const cutoff = getArrivalTimeCutoff();
+    if (!cutoff) {
+        return "phase1";
+    }
+
+    return referenceAt.getTime() >= cutoff.getTime() ? "phase2" : "phase1";
+}

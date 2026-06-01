@@ -25,7 +25,7 @@ const ACCOUNTS = [
     {
         name: "Dora",
         email: "dora@samu.local",
-        roles: ["chief"] as const,
+        roles: ["admin", "chief"] as const,
         doctorName: null,
     },
     {

@@ -55,7 +55,7 @@ import { getSaoPauloParts, resolveImplicitOccupancyExpiry, resolveOperationalShi
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
-import { normalizeOperationalRoleLabel, resolveFixedOperationalRole } from "@/modules/operational/roles";
+import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, endRegulationOccupancy, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
@@ -148,7 +148,7 @@ import {
     sendTelegramMealBreakMessages,
 } from "@/modules/telegram/meal-breaks";
 import { buildTelegramShiftReport } from "@/modules/telegram/shift-report";
-import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, getTelegramRegulationAlertUserIds, isTelegramChatAllowed, isTelegramPrivateControlUserId } from "@/modules/telegram/config";
+import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, getTelegramRegulationAlertUserIds, isTelegramChatAllowed, isTelegramPrivateControlUserId, resolveArrivalPhase } from "@/modules/telegram/config";
 import { buildChiefPrivateRegulationAlertPlan } from "@/modules/telegram/reminders";
 import {
     isTelegramAdminOnlyCommand,
@@ -716,6 +716,26 @@ export function resolveTelegramShadowFlag(parsed: Pick<OperationalParsedEntry, "
 
 function resolveHalfShiftScheduledEndAt(referenceAt: Date) {
     return resolveForcedDayEventTime(referenceAt, TELEGRAM_HALF_SHIFT_AUTO_END_HHMM, 0);
+}
+
+// Gate de chegada (F6): um meio plantão explícito ("meio plantão", "tarde",
+// "meio turno", "MP/MT") conta como *turno* informado, evitando o aviso de
+// "faltou turno". Só liberamos quando o aviso será de fato honrado como meia
+// jornada da tarde a jusante (regulação, sem turno explícito, dentro da janela
+// 10:30–17:00 pela hora declarada). Fora disso seguimos pedindo turno/horário,
+// para nunca registrar uma chegada sem turno. Ver shouldAssumeTelegramHalfShift.
+function arrivalHalfShiftSatisfiesShiftGate(parsed: Pick<ParsedMessage, "sector" | "shiftType" | "roleFunction" | "isDeparture" | "isContinuation" | "arrivalTime">): boolean {
+    if (parsed.sector !== "REGULATION") return false;
+    if (parsed.isDeparture || parsed.isContinuation) return false;
+    if (parsed.shiftType) return false;
+    if (!isHalfShiftRoleLabel(parsed.roleFunction)) return false;
+    if (!parsed.arrivalTime) return false;
+    const match = /^(\d{1,2}):(\d{2})$/.exec(parsed.arrivalTime.trim());
+    if (!match) return false;
+    // Mesma janela usada por shouldAssumeTelegramHalfShift: 10:30 (inclusive) até
+    // 17:00 (exclusive). A hora declarada já está no relógio local de Salvador.
+    const minuteOfDay = (Number(match[1]) * 60) + Number(match[2]);
+    return minuteOfDay >= (10 * 60 + 30) && minuteOfDay < (17 * 60);
 }
 
 function shouldAssumeTelegramHalfShift(params: {
@@ -1466,7 +1486,7 @@ export function buildTelegramArrivalConflictMessage(params: {
 
 /** Constrói o aviso de substituição forçada para inserção no reply de sucesso. Função pura — testável sem I/O. */
 export function buildForcedTakeoverHint(params: {
-    displacedDoctorName: string | null;
+    displacedDoctorName: string | null | undefined;
     baseCode: string;
 }): string {
     if (!params.displacedDoctorName) return "";
@@ -1474,7 +1494,7 @@ export function buildForcedTakeoverHint(params: {
 }
 
 export function shouldForceTelegramTakeoverOnContinuationConflict(params: {
-    parsed: OperationalParsedEntry;
+    parsed: Pick<OperationalParsedEntry, "isDeparture" | "isContinuation">;
     errorMessage: string;
 }) {
     return params.errorMessage === "arrival_conflicts_with_active_occupancy"
@@ -5540,7 +5560,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 ? active.occupancy.shiftLabel
                 : null,
         });
-        const nextRoleLabel = normalizeOperationalRoleLabel(command.roleLabel);
+        const nextRoleLabel = normalizeOperationalRoleLabel(resolveRoleLabelForExplicitRemoval(command.roleLabel));
         if (fixedRole) {
             await markTelegramProcessed(logId, {
                 status: "ignored",
@@ -7194,6 +7214,10 @@ async function sendSuccessReply(
     piamOriginalCode?: string | null,
     extendedLongShift = false,
     displacedDoctorName?: string | null,
+    // Regra de chegada por timestamp (FASE 1/FASE 2): quando informados, a confirmação
+    // de chegada genuína (não-PIAM) usa o texto fixo que avisa/aplica a hora do aviso.
+    messageReferenceAt?: Date,
+    declaredArrivalTime?: string | null,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const replyKind = resolveTelegramSuccessReplyKind({
@@ -7203,22 +7227,35 @@ async function sendSuccessReply(
         forceReassignment: Boolean(reassignedFrom),
         forceHalfShift: assumedHalfShift,
     });
-    const text = pickTelegramReply(
-        replyKind,
-        seed,
-        {
+    // PIAM mantém o fluxo/copy próprio (07:00/19:00 forçado). A regra nova de chegada
+    // só substitui o texto das chegadas comuns (arrival_recorded / arrival_p_recorded).
+    const useArrivalRuleCopy = Boolean(messageReferenceAt)
+        && !piamAutoAllocated
+        && (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded");
+    const text = useArrivalRuleCopy
+        ? buildArrivalRuleReply({
             name: doctorName,
-            target: parsed.baseCode ?? "plantao",
-            time,
-        },
-    );
+            base: parsed.baseCode ?? "plantao",
+            messageReferenceAt: messageReferenceAt as Date,
+            declaredArrivalTime,
+            isPcoverage: replyKind === "arrival_p_recorded",
+        })
+        : pickTelegramReply(
+            replyKind,
+            seed,
+            {
+                name: doctorName,
+                target: parsed.baseCode ?? "plantao",
+                time,
+            },
+        );
 
     let timeContextHint = "";
     if (reassignedFrom) {
         timeContextHint = `\n\n⏱ Mantido o horário original de chegada em *${time}* para banco de horas e prioridades.`;
     } else if (replyKind === "continuation_recorded" || forceContinuation) {
         timeContextHint = `\n\n🔗 Continuação detectada — computado desde *${time}* (turno anterior), sem atraso.`;
-    } else if (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") {
+    } else if ((replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !useArrivalRuleCopy) {
         // Resolve the TARGET shift, not the clock-based current shift.
         // Pre-shift windows: 05:00–06:59 → target SD; 17:00–18:59 → target SN.
         // Explicit shiftType from the parser always overrides clock inference.
@@ -7276,7 +7313,7 @@ async function sendSuccessReply(
         isContinuationReply: replyKind === "continuation_recorded" || forceContinuation,
     });
 
-    const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint && !autoReactivated
+    const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint && !autoReactivated && !useArrivalRuleCopy
         ? "\n\n💡 Se for o mesmo médico mudando de ramal/base, pode mandar só o novo destino que registro como remanejamento sem mexer na chegada original."
         : "";
     const shadowHint = parsed.isShadow && !parsed.isDeparture
@@ -7309,6 +7346,60 @@ function formatTelegramReplyTime(value: Date) {
         hour12: false,
         timeZone: "America/Sao_Paulo",
     });
+}
+
+// FASE 2 da regra de chegada: para chegadas genuínas (não saída/continuação/
+// remanejamento), ignora a hora declarada pelo plantonista e registra o timestamp
+// da mensagem (referenceAt = primeira mensagem daquele aviso). Na FASE 1 mantém o
+// comportamento atual (resolve a hora declarada). PIAM não passa por aqui: continua
+// sendo forçado para 07:00/19:00 em handlePiamAutoArrival, independente do aviso.
+export function resolveArrivalEventTimeForPhase(
+    referenceAt: Date,
+    declaredArrivalTime: string | null | undefined,
+    isGenuineArrival: boolean,
+) {
+    if (isGenuineArrival && resolveArrivalPhase(referenceAt) === "phase2") {
+        return resolveTelegramEventTime(referenceAt, null);
+    }
+    return resolveTelegramEventTime(referenceAt, declaredArrivalTime);
+}
+
+// Monta a confirmação de chegada com texto fixo (FASE 1 avisa que a regra muda;
+// FASE 2 deixa explícito que só vale a hora do aviso). Mensagens curtas e diretas.
+export function buildArrivalRuleReply(params: {
+    name: string;
+    base: string;
+    messageReferenceAt: Date;
+    declaredArrivalTime: string | null | undefined;
+    isPcoverage: boolean;
+}) {
+    const msgTime = formatTelegramReplyTime(params.messageReferenceAt);
+    const phase = resolveArrivalPhase(params.messageReferenceAt);
+    const declared = params.declaredArrivalTime?.trim() || null;
+    const hasDeclared = Boolean(declared) && declared !== msgTime;
+    const pNote = params.isPcoverage
+        ? "\n🔁 Cobertura P: vale para este plantão e o próximo."
+        : "";
+
+    if (phase === "phase1") {
+        if (hasDeclared) {
+            return `Oi, ${params.name} 👋\n`
+                + `Anotei sua chegada na ${params.base}.\n`
+                + `⚠️ A partir de amanhã vamos considerar a HORA DO AVISO, não a hora que você diz.\n`
+                + `Ficou: ${params.name} na ${params.base} desde ${declared} (sua msg foi ${msgTime})${pNote}`;
+        }
+        return `Oi, ${params.name} 👋\n`
+            + `Anotei sua chegada na ${params.base} desde ${msgTime}.\n`
+            + `⚠️ A partir de amanhã vamos considerar a HORA DO AVISO, não a hora que você diz.${pNote}`;
+    }
+
+    // FASE 2
+    const ignoredNote = hasDeclared
+        ? `\n(você avisou ${declared}, mas considerei a hora do aviso)`
+        : "";
+    return `Oi, ${params.name} 👋\n`
+        + `✅ ${params.name} na ${params.base} desde ${msgTime}\n`
+        + `❗ Não aceitamos mais aviso de chegada anterior. Vale a hora do aviso.${ignoredNote}${pNote}`;
 }
 
 export function hasTelegramOperationalJustification(text: string, fragments: Array<string | null | undefined>) {
@@ -7400,12 +7491,21 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
         return { ok: true, ignored: true };
     }
 
+    const nameSelectionFirstMsgAt = new Date(pending.resolutionData.originalReferenceAt ?? pending.resolutionData.originalEventAt);
+    const nameSelectionIsArrival = !pending.resolutionData.parsed.isDeparture
+        && !pending.resolutionData.parsed.isContinuation
+        && !pending.resolutionData.parsed.isReassignment;
+    const nameSelectionEventAt = resolveArrivalEventTimeForPhase(
+        nameSelectionFirstMsgAt,
+        pending.resolutionData.parsed.arrivalTime,
+        nameSelectionIsArrival,
+    );
     try {
         const result = await applyParsedEntry({
             parsed: pending.resolutionData.parsed,
             resolvedDoctor: { id: selected.id, fullName: selected.fullName, displayName: selected.displayName ?? null },
-            eventAt: new Date(pending.resolutionData.originalEventAt),
-            referenceAt: new Date(pending.resolutionData.originalReferenceAt ?? pending.resolutionData.originalEventAt),
+            eventAt: nameSelectionEventAt,
+            referenceAt: nameSelectionFirstMsgAt,
             messageText: pending.resolutionData.originalText,
         });
 
@@ -7435,7 +7535,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             message.message_id,
             pending.resolutionData.parsed,
             resolveTelegramDoctorSurfaceName(selected),
-            new Date(pending.resolutionData.originalEventAt),
+            nameSelectionEventAt,
             result.successKind,
             "",
             result.treatedAsContinuation,
@@ -7449,6 +7549,8 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             result.piamOriginalCode,
             result.extendedLongShift,
             result.displacedDoctorName,
+            nameSelectionFirstMsgAt,
+            pending.resolutionData.parsed.arrivalTime,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -8195,8 +8297,9 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
         referenceAt: new Date(message.date * 1000),
     });
 
-    const originalEventAt = new Date(pending.resolutionData.originalEventAt);
-    const eventAt = resolveTelegramEventTime(originalEventAt, parsedEntry.arrivalTime);
+    const originalEventAt = new Date(pending.resolutionData.originalReferenceAt ?? pending.resolutionData.originalEventAt);
+    const ramalIsArrival = !parsedEntry.isDeparture && !parsedEntry.isContinuation && !parsedEntry.isReassignment;
+    const eventAt = resolveArrivalEventTimeForPhase(originalEventAt, parsedEntry.arrivalTime, ramalIsArrival);
 
     if (!resolvedDoctor) {
         if (candidates.length > 0) {
@@ -8278,6 +8381,8 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
             result.piamOriginalCode,
             result.extendedLongShift,
             result.displacedDoctorName,
+            originalEventAt,
+            parsedEntry.arrivalTime,
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
@@ -8798,7 +8903,8 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 && !isTelegramContinuationEntry(firstParsed)
             ) {
                 const hasName = firstParsed.extractedNames.length > 0;
-                const hasShift = Boolean(firstParsed.shiftType);
+                const hasShift = Boolean(firstParsed.shiftType)
+                    || arrivalHalfShiftSatisfiesShiftGate(firstParsed);
                 const isBareButtonPayload = looksLikeMealBreakButtonReply(message.text);
                 if (isBareButtonPayload || !hasName || !hasShift) {
                     const reason: TelegramReviewReason = isBareButtonPayload
@@ -8832,7 +8938,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
 
                     const missing: string[] = [];
                     if (!hasName) missing.push("*nome do médico*");
-                    if (!hasShift) missing.push("*turno* (SD, SN ou P)");
+                    if (!hasShift) missing.push("*turno* (SD, SN, P — ou *meio plantão* / *tarde* / *meio turno*)");
 
                     let body: string;
                     if (isBareButtonPayload) {
@@ -8850,7 +8956,8 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                             : "Não consegui montar a chegada com o que veio.";
                         const missingLine = `Faltou: ${missing.join(" e ")}.`;
                         body = [
-                            "👀 Quase lá — pra registrar a *chegada* eu preciso de *nome + ramal + turno (SD/SN/P) + horário*, todos na mesma mensagem.",
+                            "👀 Quase lá — pra registrar a *chegada* eu preciso de *nome + ramal + turno + horário*, todos na mesma mensagem.",
+                            "O turno pode ser *SD*, *SN*, *P* — ou *meio plantão* (também vale dizer *tarde* ou *meio turno*).",
                             "",
                             detectedLine,
                             missingLine,
@@ -8990,7 +9097,9 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 return { ok: true, ignored: true };
             }
 
-            const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), firstParsed.arrivalTime);
+            const messageReferenceAt = new Date(message.date * 1000);
+            const isGenuineArrival = !firstParsed.isDeparture && !firstParsed.isContinuation && !firstParsed.isReassignment;
+            const eventAt = resolveArrivalEventTimeForPhase(messageReferenceAt, firstParsed.arrivalTime, isGenuineArrival);
 
             try {
                 const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName } = await applyParsedEntry({
@@ -9040,6 +9149,8 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     piamOriginalCode,
                     extendedLongShift,
                     displacedDoctorName,
+                    messageReferenceAt,
+                    firstParsed.arrivalTime,
                 );
 
                 // Late half-shift orientation: when an intervention SD arrival lands
