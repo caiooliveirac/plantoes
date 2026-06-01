@@ -61,6 +61,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
             doctors={doctors}
             initialViewMode={initialViewMode}
             pendingDepartures={board.pendingDepartures ?? []}
+            recentHandoffs={board.recentHandoffs ?? []}
             session={session ? {
                 email: session.user.email,
                 roles: session.user.roles,

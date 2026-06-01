@@ -713,7 +713,7 @@ export async function deactivateInterventionBase(input: DeactivateInterventionBa
 
 export async function endInterventionOccupancy(
     id: string,
-    input: { endedAt: Date; actualEndedAt?: Date | null; chiefConfirmed?: boolean },
+    input: { endedAt: Date; actualEndedAt?: Date | null; chiefConfirmed?: boolean; handoffClosure?: boolean },
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
@@ -726,8 +726,11 @@ export async function endInterventionOccupancy(
             throw new Error("Intervention occupancy not found.");
         }
 
-        const actualEndedAt = input.actualEndedAt ?? input.endedAt;
-        if (actualEndedAt.getTime() < existing.startedAt.getTime()) {
+        // Fechamento por rendição: grava só endedAt e deixa actualEndedAt nulo, para que o banco
+        // feche autoritativamente no horário do handoff sem cair na fila de confirmação do chefe.
+        // Um aviso de saída tardia posterior (ocorrência) preenche actualEndedAt e aí sim exige confirmação.
+        const actualEndedAt = input.handoffClosure ? null : (input.actualEndedAt ?? input.endedAt);
+        if (actualEndedAt && actualEndedAt.getTime() < existing.startedAt.getTime()) {
             throw new Error("Actual end cannot be before the recorded arrival.");
         }
 

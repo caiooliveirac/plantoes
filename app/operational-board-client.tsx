@@ -28,9 +28,11 @@ import type {
     PreviousOperationalBucket,
     PreviousOperationalEntry,
     PreviousOperationalSection,
+    RecentHandoff,
     RegulationBoardRow,
 } from "@/services/board.service";
 import { AuditRail } from "@/components/board/AuditRail";
+import { RecentHandoffsRail } from "@/components/board/RecentHandoffsRail";
 import { DepartureVerifier } from "@/components/board/DepartureVerifier";
 import { CommandPalette } from "@/components/board/CommandPalette";
 import { BoardHero } from "@/components/board/BoardHero";
@@ -87,6 +89,7 @@ interface OperationalBoardClientProps {
     session: SessionSummary | null;
     initialViewMode?: ViewMode;
     pendingDepartures?: PendingDepartureConfirmation[];
+    recentHandoffs?: RecentHandoff[];
 }
 
 interface FormState {
@@ -870,7 +873,7 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [] } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [] } = props;
     const router = useRouter();
     const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
     const [authOpen, setAuthOpen] = useState(false);
@@ -2721,6 +2724,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     pendingDepartures={pendingDepartures}
                     onOpenVerifier={setVerifierTarget}
                 />
+            )}
+
+            {viewMode === "live" && session?.canManage && recentHandoffs.length > 0 && (
+                <RecentHandoffsRail recentHandoffs={recentHandoffs} />
             )}
 
             {session?.canManage && (

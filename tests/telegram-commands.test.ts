@@ -55,6 +55,7 @@ import {
     shouldRouteToDepartureJustification,
     shouldForceTelegramTakeoverOnContinuationConflict,
     resolveTelegramForcedTakeoverAt,
+    shouldCloseAsHandoff,
     buildTelegramArrivalConflictMessage,
     buildForcedTakeoverHint,
 } from "@/modules/telegram/service";
@@ -2200,6 +2201,11 @@ test("shouldForceTelegramTakeoverOnContinuationConflict só libera takeover em c
         },
         errorMessage: "Intervention base not found.",
     }), false);
+});
+
+test("shouldCloseAsHandoff trata como rendição apenas quando há sucessor no posto/base", () => {
+    assert.equal(shouldCloseAsHandoff({ hasSuccessor: true }), true);
+    assert.equal(shouldCloseAsHandoff({ hasSuccessor: false }), false);
 });
 
 test("resolveTelegramForcedTakeoverAt respeita duração mínima do ocupante atual", () => {

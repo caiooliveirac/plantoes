@@ -1641,6 +1641,13 @@ export interface OperationalBoardSnapshot {
    * live path always populates it. When absent, callers treat as empty.
    */
   pendingDepartures?: PendingDepartureConfirmation[];
+  /**
+   * Recent handoffs (rendições): predecessor closed at the handoff time with no
+   * verbalized departure, where a successor took over the same target. Purely
+   * informational for the chefe — NO confirm/finalize affordance. Optional for
+   * the same fixture-compatibility reason as pendingDepartures.
+   */
+  recentHandoffs?: RecentHandoff[];
 }
 
 export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
@@ -1648,10 +1655,11 @@ export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
   await expireStaleShadowInterventionOccupancies(new Date());
   await expireStaleRegulationOccupancies(new Date());
 
-  const [regulation, intervention, pendingDepartures] = await Promise.all([
+  const [regulation, intervention, pendingDepartures, recentHandoffs] = await Promise.all([
     listRegulationBoard(),
     listInterventionBoard(),
     listPendingDepartureConfirmations(),
+    listRecentHandoffs(),
   ]);
 
   return {
@@ -1659,7 +1667,119 @@ export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
     regulation,
     intervention,
     pendingDepartures,
+    recentHandoffs,
   };
+}
+
+export interface RecentHandoff {
+  /** Predecessor occupancy id (the doctor who was relieved). */
+  occupancyId: string;
+  domain: "regulation" | "intervention";
+  targetCode: string;
+  targetLabel: string;
+  /** Doctor who was relieved (left at the handoff). */
+  predecessorName: string;
+  predecessorDisplayName: string | null;
+  /** Doctor who took over. */
+  successorName: string;
+  successorDisplayName: string | null;
+  /** Instant of the handoff (predecessor.ended_at == successor.started_at, approx). */
+  handoffAt: string;
+}
+
+/**
+ * Recent renditions for the chefe's awareness. A predecessor closed as handoff has
+ * `ended_at` set and `actual_ended_at` null; the discriminator from any other
+ * actual_ended_at-null closure is the EXISTENCE OF A SUCCESSOR (different doctor) who
+ * took over the same target around the handoff instant. Read-only and non-finalizable.
+ */
+export async function listRecentHandoffs(
+  options: { windowHours?: number; toleranceMinutes?: number; limit?: number } = {},
+): Promise<RecentHandoff[]> {
+  const db = getDb();
+  const windowHours = options.windowHours ?? 12;
+  const toleranceMinutes = options.toleranceMinutes ?? 90;
+  const limit = options.limit ?? 100;
+  const cutoffAt = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+
+  const rows = await db.execute<{
+    occupancyId: string;
+    domain: "regulation" | "intervention";
+    targetCode: string;
+    targetLabel: string;
+    predecessorName: string;
+    predecessorDisplayName: string | null;
+    successorName: string;
+    successorDisplayName: string | null;
+    handoffAt: string;
+  }>(sql`
+    select
+      ro.id as "occupancyId",
+      'regulation'::text as "domain",
+      rp.code as "targetCode",
+      rp.label as "targetLabel",
+      pd.full_name as "predecessorName",
+      pd.display_name as "predecessorDisplayName",
+      sd.full_name as "successorName",
+      sd.display_name as "successorDisplayName",
+      ro.ended_at as "handoffAt"
+    from operations_v2.regulation_occupancies ro
+    inner join operations_v2.regulation_posts rp on rp.id = ro.post_id
+    inner join operations_v2.doctors pd on pd.id = ro.doctor_id
+    inner join lateral (
+      select so.doctor_id, so.started_at
+      from operations_v2.regulation_occupancies so
+      where so.post_id = ro.post_id
+        and so.doctor_id <> ro.doctor_id
+        and so.id <> ro.id
+        and so.started_at >= ro.ended_at - ${sql.raw(`interval '${toleranceMinutes} minutes'`)}
+      order by abs(extract(epoch from (so.started_at - ro.ended_at)))
+      limit 1
+    ) succ on true
+    inner join operations_v2.doctors sd on sd.id = succ.doctor_id
+    where ro.ended_at is not null
+      and ro.actual_ended_at is null
+      and ro.ended_at >= ${cutoffAt}
+
+    union all
+
+    select
+      io.id as "occupancyId",
+      'intervention'::text as "domain",
+      ib.code as "targetCode",
+      ib.label as "targetLabel",
+      pd.full_name as "predecessorName",
+      pd.display_name as "predecessorDisplayName",
+      sd.full_name as "successorName",
+      sd.display_name as "successorDisplayName",
+      io.ended_at as "handoffAt"
+    from operations_v2.intervention_occupancies io
+    inner join operations_v2.intervention_bases ib on ib.id = io.base_id
+    inner join operations_v2.doctors pd on pd.id = io.doctor_id
+    inner join lateral (
+      select so.doctor_id, so.started_at
+      from operations_v2.intervention_occupancies so
+      where so.base_id = io.base_id
+        and so.doctor_id <> io.doctor_id
+        and so.id <> io.id
+        and so.started_at >= io.ended_at - ${sql.raw(`interval '${toleranceMinutes} minutes'`)}
+      order by abs(extract(epoch from (so.started_at - io.ended_at)))
+      limit 1
+    ) succ on true
+    inner join operations_v2.doctors sd on sd.id = succ.doctor_id
+    where io.ended_at is not null
+      and io.actual_ended_at is null
+      and io.ended_at >= ${cutoffAt}
+
+    order by "handoffAt" desc
+    limit ${limit}
+  `);
+
+  const items = (rows as unknown as { rows: any[] }).rows ?? (rows as any);
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items as RecentHandoff[];
 }
 
 export interface PendingDepartureCorrelatedMessage {

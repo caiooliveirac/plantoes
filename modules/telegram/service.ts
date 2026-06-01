@@ -1512,6 +1512,17 @@ export function resolveTelegramForcedTakeoverAt(params: {
     ));
 }
 
+/**
+ * Decide se o fechamento de uma ocupação deve ser tratado como RENDIÇÃO (handoff).
+ * Rendição = já existe um sucessor (outro médico) ocupando o mesmo posto/base. Nesse caso
+ * fechamos só com `endedAt` (sem `actualEndedAt`), o que mantém o médico anterior fora da fila
+ * de confirmação finalizadora e fecha o banco no horário do handoff. Saída solo (sem sucessor)
+ * continua gravando `actualEndedAt` e exigindo verificação do chefe.
+ */
+export function shouldCloseAsHandoff(params: { hasSuccessor: boolean }) {
+    return params.hasSuccessor;
+}
+
 function isOperationalParsedEntry(entry: ParsedMessage): entry is ParsedMessage & OperationalParsedEntry {
     return Boolean(entry.baseCode && entry.sector);
 }
@@ -6531,10 +6542,20 @@ async function applyParsedEntry(params: {
                 ),
             });
             if (occupancy) {
-                occupancyId = (await endRegulationOccupancy(occupancy.id, {
-                    endedAt: eventAt,
-                    actualEndedAt: eventAt,
-                })).id;
+                // Se já há um sucessor (outro médico) com ocupação aberta no mesmo posto, A foi rendido:
+                // fecha como handoff (só endedAt) para não cair na fila finalizadora do chefe.
+                const openSuccessor = await db.query.regulationOccupancies.findFirst({
+                    where: and(
+                        eq(regulationOccupancies.postId, post.id),
+                        isNull(regulationOccupancies.endedAt),
+                        ne(regulationOccupancies.id, occupancy.id),
+                        ne(regulationOccupancies.doctorId, resolvedDoctor.id),
+                    ),
+                });
+                const handoffClosure = shouldCloseAsHandoff({ hasSuccessor: Boolean(openSuccessor) });
+                occupancyId = (await endRegulationOccupancy(occupancy.id, handoffClosure
+                    ? { endedAt: eventAt, handoffClosure: true }
+                    : { endedAt: eventAt, actualEndedAt: eventAt })).id;
             } else {
                 const recentClosed = await findRecentClosedRegulationOccupancy({
                     postId: post.id,
@@ -6761,9 +6782,12 @@ async function applyParsedEntry(params: {
                         where: eq(doctors.id, conflictingOccupancy.doctorId),
                     });
 
+                    // Rendição: B assume o posto de A. Fecha A só com endedAt (handoffClosure),
+                    // sem actualEndedAt, para não gerar clique finalizador na fila do chefe e
+                    // deixar o banco fechar no horário do handoff. A pode avisar ocorrência depois.
                     await endRegulationOccupancy(conflictingOccupancy.id, {
                         endedAt: takeoverAt,
-                        actualEndedAt: takeoverAt,
+                        handoffClosure: true,
                     });
 
                     regResult = await createRegulationArrival(takeoverAt);
@@ -6796,10 +6820,20 @@ async function applyParsedEntry(params: {
                 ),
             });
             if (occupancy) {
-                occupancyId = (await endInterventionOccupancy(occupancy.id, {
-                    endedAt: eventAt,
-                    actualEndedAt: eventAt,
-                })).id;
+                // Se já há um sucessor (outro médico) com ocupação aberta na mesma base, A foi rendido:
+                // fecha como handoff (só endedAt) para não cair na fila finalizadora do chefe.
+                const openSuccessor = await db.query.interventionOccupancies.findFirst({
+                    where: and(
+                        eq(interventionOccupancies.baseId, base.id),
+                        isNull(interventionOccupancies.endedAt),
+                        ne(interventionOccupancies.id, occupancy.id),
+                        ne(interventionOccupancies.doctorId, resolvedDoctor.id),
+                    ),
+                });
+                const handoffClosure = shouldCloseAsHandoff({ hasSuccessor: Boolean(openSuccessor) });
+                occupancyId = (await endInterventionOccupancy(occupancy.id, handoffClosure
+                    ? { endedAt: eventAt, handoffClosure: true }
+                    : { endedAt: eventAt, actualEndedAt: eventAt })).id;
             } else {
                 const recentClosed = await findRecentClosedInterventionOccupancy({
                     baseId: base.id,
@@ -7004,9 +7038,12 @@ async function applyParsedEntry(params: {
                         where: eq(doctors.id, conflictingOccupancy.doctorId),
                     });
 
+                    // Rendição: B assume a base de A. Fecha A só com endedAt (handoffClosure),
+                    // sem actualEndedAt, para não gerar clique finalizador na fila do chefe e
+                    // deixar o banco fechar no horário do handoff. A pode avisar ocorrência depois.
                     await endInterventionOccupancy(conflictingOccupancy.id, {
                         endedAt: takeoverAt,
-                        actualEndedAt: takeoverAt,
+                        handoffClosure: true,
                     });
 
                     intResult = await createInterventionArrival(takeoverAt);

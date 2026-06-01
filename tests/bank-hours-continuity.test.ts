@@ -1,6 +1,63 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildContinuityBankHoursSpan, buildContinuityCarrierLookup } from "@/modules/bank-hours/continuity";
+import {
+    buildContinuityBankHoursSpan,
+    buildContinuityCarrierLookup,
+    isDepartureClosureAuthoritative,
+    resolveContinuityEffectiveEndedAt,
+} from "@/modules/bank-hours/continuity";
+
+test("rendição (endedAt sem actualEndedAt) fecha o banco autoritativamente, sem precisar de confirmação", () => {
+    // Handoff closure: predecessor closed at the handoff time with no verbalized departure.
+    assert.equal(
+        isDepartureClosureAuthoritative({
+            endedAt: new Date("2026-03-25T07:20:00-03:00"),
+            actualEndedAt: null,
+            departureConfirmedAt: null,
+        }),
+        true,
+    );
+    // Verbalized departure still in hold until the chefe confirms.
+    assert.equal(
+        isDepartureClosureAuthoritative({
+            endedAt: new Date("2026-03-25T07:20:00-03:00"),
+            actualEndedAt: new Date("2026-03-25T07:20:00-03:00"),
+            departureConfirmedAt: null,
+        }),
+        false,
+    );
+});
+
+test("resolveContinuityEffectiveEndedAt cai no endedAt quando o handoff não gravou actualEndedAt", () => {
+    assert.equal(
+        resolveContinuityEffectiveEndedAt({
+            endedAt: new Date("2026-03-25T07:20:00-03:00"),
+            actualEndedAt: null,
+        })?.toISOString(),
+        new Date("2026-03-25T07:20:00-03:00").toISOString(),
+    );
+});
+
+test("buildContinuityBankHoursSpan fecha um grupo rendido (actualEndedAt null) no horário do handoff", () => {
+    const span = buildContinuityBankHoursSpan([
+        {
+            occupancyId: "occ-1",
+            domain: "intervention",
+            doctorId: "doc-1",
+            continuityGroupId: "cg-1",
+            startedAt: new Date("2026-03-25T19:00:00-03:00"),
+            endedAt: new Date("2026-03-26T07:20:00-03:00"),
+            actualEndedAt: null,
+            departureConfirmedAt: null,
+            scheduledStartAt: null,
+            scheduledEndAt: null,
+            shiftLabel: "SN",
+        },
+    ]);
+
+    assert.equal(span.isClosed, true);
+    assert.equal(span.actualEndAt?.toISOString(), new Date("2026-03-26T07:20:00-03:00").toISOString());
+});
 
 test("buildContinuityBankHoursSpan preserves first arrival and final exit across a domain switch", () => {
     const span = buildContinuityBankHoursSpan([
