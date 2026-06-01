@@ -584,27 +584,61 @@ test("buildReminderPlans ignores chief, NUCLEO and PIAM in regulation confirmati
     assert.match(confirmation?.text ?? "", /Reguladores logados além da chefia: 1/);
 });
 
-test("buildChiefPrivateRegulationAlertPlan warns on PM04/PIAM missing and MR headcount threshold", () => {
+test("buildChiefPrivateRegulationAlertPlan warns on missing USAs and low MR headcount", () => {
     const board = makeBoard();
-    board.intervention = board.intervention.map((row) => {
-        if (row.baseCode === "PM04") {
-            return {
-                ...row,
-                occupancyId: null,
-                doctorId: null,
-                doctorName: null,
-                displayName: null,
-                startedAt: null,
-                boardStartedAt: null,
-                scheduledEndAt: null,
-                shiftLabel: null,
-                status: "waiting",
-                liveSource: "none",
-            };
-        }
-
-        return row;
-    });
+    board.intervention = [
+        {
+            baseId: 1,
+            occupancyId: null,
+            baseCode: "SM01",
+            baseLabel: "SM01",
+            doctorId: null,
+            doctorName: null,
+            displayName: null,
+            startedAt: null,
+            boardStartedAt: null,
+            scheduledEndAt: null,
+            shiftLabel: null,
+            roleLabel: null,
+            status: "waiting",
+            liveSource: "none",
+            liveUpdatedAt: null,
+        },
+        {
+            baseId: 2,
+            occupancyId: null,
+            baseCode: "PM40",
+            baseLabel: "PM40",
+            doctorId: null,
+            doctorName: null,
+            displayName: null,
+            startedAt: null,
+            boardStartedAt: null,
+            scheduledEndAt: null,
+            shiftLabel: null,
+            roleLabel: null,
+            status: "waiting",
+            liveSource: "none",
+            liveUpdatedAt: null,
+        },
+        {
+            baseId: 3,
+            occupancyId: null,
+            baseCode: "CZ50",
+            baseLabel: "CZ50",
+            doctorId: null,
+            doctorName: null,
+            displayName: null,
+            startedAt: null,
+            boardStartedAt: null,
+            scheduledEndAt: null,
+            shiftLabel: null,
+            roleLabel: null,
+            status: "waiting",
+            liveSource: "none",
+            liveUpdatedAt: null,
+        },
+    ];
 
     board.regulation = [
         ...board.regulation,
@@ -627,6 +661,25 @@ test("buildChiefPrivateRegulationAlertPlan warns on PM04/PIAM missing and MR hea
             liveSource: "none",
             liveUpdatedAt: null,
         },
+        ...Array.from({ length: 8 }, (_, index) => ({
+            postId: 200 + index,
+            occupancyId: `reg-extra-${index}`,
+            postCode: `${1361 + index}`,
+            postLabel: `${1361 + index}`,
+            defaultRole: "MR",
+            doctorId: `doc-extra-${index}`,
+            doctorName: `Reg ${index}`,
+            displayName: `Reg ${index}`,
+            startedAt: "2026-03-26T13:50:00.000Z",
+            boardStartedAt: "2026-03-26T13:50:00.000Z",
+            scheduledEndAt: "2026-03-26T22:15:00.000Z",
+            shiftLabel: "SD",
+            roleLabel: "MR",
+            ramalLabel: `${1361 + index}`,
+            status: "active" as const,
+            liveSource: "operations_v2" as const,
+            liveUpdatedAt: null,
+        })),
     ];
 
     const plan = buildChiefPrivateRegulationAlertPlan({
@@ -636,9 +689,8 @@ test("buildChiefPrivateRegulationAlertPlan warns on PM04/PIAM missing and MR hea
 
     assert.ok(plan);
     assert.equal(plan?.stage, "regulation_confirmation_private");
-    assert.match(plan?.text ?? "", /PM04 sem informação/);
-    assert.match(plan?.text ?? "", /PIAM sem informação/);
-    assert.match(plan?.text ?? "", /MRs logados \(sem 2031\/NUCLEO\/PIAM\): 0 \(<= 7\)/);
+    assert.match(plan?.text ?? "", /SM01, PM40 e CZ50 ESTÃO SEM MÉDICO PARA PAGAMENTO\. ATENÇÃO\./);
+    assert.match(plan?.text ?? "", /SÓ TEM 8 MRs LOGADOS ALÉM DA CHEFIA\. É ISSO MESMO\?/);
 });
 
 test("buildChiefPrivateRegulationAlertPlan skips alert when all thresholds are healthy", () => {
@@ -721,7 +773,7 @@ test("buildChiefPrivateRegulationAlertPlan skips alert when all thresholds are h
                 liveSource: "operations_v2",
                 liveUpdatedAt: null,
             },
-            ...Array.from({ length: 8 }, (_, index) => ({
+            ...Array.from({ length: 9 }, (_, index) => ({
                 postId: 100 + index,
                 occupancyId: `reg-${index}`,
                 postCode: `${1321 + index}`,

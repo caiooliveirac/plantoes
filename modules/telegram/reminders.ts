@@ -193,6 +193,18 @@ function joinPendingCodes(values: string[]) {
     return values.join(", ");
 }
 
+function joinAlertCodes(values: string[]) {
+    if (values.length <= 1) {
+        return values.join("");
+    }
+
+    if (values.length === 2) {
+        return values.join(" e ");
+    }
+
+    return `${values.slice(0, -1).join(", ")} e ${values[values.length - 1]}`;
+}
+
 function normalizeOperationalCode(value: string) {
     return value.trim().toUpperCase();
 }
@@ -207,11 +219,6 @@ function isNucleoRegulationCode(code: string) {
 
 function isPiamRegulationCode(code: string) {
     return normalizeOperationalCode(code) === "PIAM";
-}
-
-function hasOperationalCode(codes: string[], expectedCode: string) {
-    const normalizedExpectedCode = normalizeOperationalCode(expectedCode);
-    return codes.some((code) => normalizeOperationalCode(code) === normalizedExpectedCode);
 }
 
 function resolveRegulationConfirmationMetrics(params: ReminderPlanningParams) {
@@ -565,25 +572,24 @@ export function buildChiefPrivateRegulationAlertPlan(params: ReminderPlanningPar
         return null;
     }
 
-    const hasMissingPm04 = hasOperationalCode(metrics.waitingInterventionCodes, "PM04");
-    const hasMissingPiam = hasOperationalCode(metrics.waitingRegulationCodes, "PIAM");
-    const hasLowRegulationHeadcount = metrics.nonChiefRegulationCount <= 7;
+    const hasLowRegulationHeadcount = metrics.nonChiefRegulationCount <= 8;
+    const hasMissingCoverage = metrics.waitingInterventionCodes.length > 0 || metrics.waitingRegulationCodes.length > 0;
 
-    if (!hasMissingPm04 && !hasMissingPiam && !hasLowRegulationHeadcount) {
+    if (!hasMissingCoverage && !hasLowRegulationHeadcount) {
         return null;
     }
 
     const lines: string[] = [];
-    if (hasMissingPm04) {
-        lines.push("🚨 PM04 sem informação.");
+    if (metrics.waitingInterventionCodes.length > 0) {
+        lines.push(`${joinAlertCodes(metrics.waitingInterventionCodes)} ESTÃO SEM MÉDICO PARA PAGAMENTO. ATENÇÃO.`);
     }
 
-    if (hasMissingPiam) {
-        lines.push("🚨 PIAM sem informação.");
+    if (metrics.waitingRegulationCodes.length > 0) {
+        lines.push(`${joinAlertCodes(metrics.waitingRegulationCodes)} ESTÃO SEM MÉDICO NA REGULAÇÃO. ATENÇÃO.`);
     }
 
     if (hasLowRegulationHeadcount) {
-        lines.push(`⚠️ MRs logados (sem 2031/NUCLEO/PIAM): ${metrics.nonChiefRegulationCount} (<= 7).`);
+        lines.push(`SÓ TEM ${metrics.nonChiefRegulationCount} MRs LOGADOS ALÉM DA CHEFIA. É ISSO MESMO?`);
     }
 
     return {
@@ -592,8 +598,9 @@ export function buildChiefPrivateRegulationAlertPlan(params: ReminderPlanningPar
         payload: {
             checkpointLabel: metrics.slot,
             nonChiefRegulationCount: metrics.nonChiefRegulationCount,
-            hasMissingPm04,
-            hasMissingPiam,
+            waitingInterventionCodes: metrics.waitingInterventionCodes,
+            waitingRegulationCodes: metrics.waitingRegulationCodes,
+            hasLowRegulationHeadcount,
         },
         text: lines.join("\n"),
     };

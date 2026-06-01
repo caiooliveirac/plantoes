@@ -13,7 +13,7 @@ import {
 } from "@/modules/operational/board-rules";
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationContinuationScheduledEndAt } from "@/modules/regulation/service";
-import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
+import { dedupeOperationalIdentityLabels, isOperationalRoleRemovalSentinel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
@@ -25,27 +25,27 @@ test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-26T06:59:00-03:00")), "SN");
 });
 
-test("does not force MRV on 2032/2151 and respects explicit role assignment policy", () => {
+test("keeps basal MRV on 2032/2151 only on SD and allows explicit override", () => {
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
         code: "2151",
-        shiftLabel: "P",
+        shiftLabel: "SD",
         roleLabel: null,
         defaultRole: null,
-    }), null);
-
-    assert.equal(resolveOperationalRoleLabel({
-        domain: "regulation",
-        code: "2032",
-        shiftLabel: "P",
-        roleLabel: null,
-        defaultRole: null,
-    }), null);
+    }), "MRV");
 
     assert.equal(resolveOperationalRoleLabel({
         domain: "regulation",
         code: "2032",
         shiftLabel: "SD",
+        roleLabel: null,
+        defaultRole: null,
+    }), "MRV");
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2032",
+        shiftLabel: "P",
         roleLabel: null,
         defaultRole: null,
     }), null);
@@ -55,6 +55,14 @@ test("does not force MRV on 2032/2151 and respects explicit role assignment poli
         code: "2151",
         shiftLabel: "SN",
         roleLabel: null,
+        defaultRole: null,
+    }), null);
+
+    assert.equal(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: "2032",
+        shiftLabel: "SD",
+        roleLabel: "SEM_FUNCAO",
         defaultRole: null,
     }), null);
 
@@ -91,6 +99,20 @@ test("keeps explicit MEIO_PLANTAO even on fixed-role ramais", () => {
         roleLabel: "MEIO_PLANTAO",
         defaultRole: null,
     }), "MEIO_PLANTAO");
+});
+
+test("dedupeOperationalIdentityLabels never duplicates MRV/RECIP tags", () => {
+    assert.deepEqual(
+        dedupeOperationalIdentityLabels(["MRV", "mrv", "RECIP", "RECIP", null, ""]),
+        ["MRV", "RECIP"],
+    );
+});
+
+test("isOperationalRoleRemovalSentinel detects explicit 'Nenhuma' override", () => {
+    assert.equal(isOperationalRoleRemovalSentinel("SEM_FUNCAO"), true);
+    assert.equal(isOperationalRoleRemovalSentinel("sem_funcao"), true);
+    assert.equal(isOperationalRoleRemovalSentinel("MRV"), false);
+    assert.equal(isOperationalRoleRemovalSentinel(null), false);
 });
 
 test("falls back to post default role on non-fixed regulation ramal and keeps explicit overrides", () => {

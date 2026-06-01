@@ -4,7 +4,7 @@ import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTrans
 import { useRouter } from "next/navigation";
 import { OperationalHistoryPanel } from "@/components/operational-history-panel";
 import { InterventionLateArrivalPanel } from "@/components/intervention-late-arrival-panel";
-import { buildOperationalRoleChoices, getOperationalRoleTone, resolveFixedOperationalRole, resolveOperationalRoleLabel } from "@/modules/operational/roles";
+import { buildOperationalRoleChoices, dedupeOperationalIdentityLabels, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
     MealBreakDinnerDuration,
@@ -158,6 +158,16 @@ function isDayMealBreakEligible(session: MealBreakSession | null, ramal: string)
 }
 
 const CHIEF_RAMAL = "2031";
+
+function shouldExcludeFromRegulationHeaderCounter(card: RegulationCard) {
+    const normalizedCode = card.postCode.trim().toUpperCase();
+    if (normalizedCode === CHIEF_RAMAL || isNucleoRegulationPost(normalizedCode) || isPiamRegulationPost(normalizedCode)) {
+        return true;
+    }
+
+    const normalizedRoleLabel = normalizeOperationalRoleLabel(card.roleLabel);
+    return normalizedRoleLabel === "CP" || normalizedRoleLabel === "PSIQ";
+}
 
 function resolveMealBreakExclusionHint(ramal: string, mode: "day" | "night") {
     if (ramal === CHIEF_RAMAL) {
@@ -1236,8 +1246,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const interventionActiveCount = visibleInterventionCards.length - interventionWaitingCount;
     const criticalCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "critical");
     const watchCards = allCards.filter((card) => resolvePriority(card, generatedAt) === "high");
-    const regulationOccupiedCount = visibleRegulationCards.filter((card) => card.status === "active" && Boolean(card.occupancyId)).length;
-    const regulationFreeCount = visibleRegulationCards.filter((card) => card.status === "waiting").length;
+    const regulationCardsForHeader = visibleRegulationCards.filter((card) => !shouldExcludeFromRegulationHeaderCounter(card));
+    const regulationOccupiedCount = regulationCardsForHeader.filter((card) => card.status === "active" && Boolean(card.occupancyId)).length;
+    const regulationFreeCount = regulationCardsForHeader.filter((card) => card.status === "waiting").length;
 
     const deferredBoardSearch = useDeferredValue(boardSearch);
     const cardMatchesFilters = (card: BoardCard): boolean => {
@@ -1784,7 +1795,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             domain: selectedTransferTarget.domain,
                             targetId: selectedTransferTarget.targetId,
                         },
-                        roleLabel: trimToNull(formState.roleLabel),
+                        roleLabel: resolveRoleLabelForExplicitRemoval(trimToNull(formState.roleLabel)),
                         notes: normalizedNotes,
                         ...(selectedTransferConflict
                             ? {
@@ -1822,7 +1833,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         boardStartedAt: startedAtChanged
                             ? nextStartedAtIso
                             : (selectedCard.boardStartedAt ? new Date(selectedCard.boardStartedAt).toISOString() : nextStartedAtIso),
-                        roleLabel: trimToNull(formState.roleLabel),
+                        roleLabel: resolveRoleLabelForExplicitRemoval(trimToNull(formState.roleLabel)),
                         notes: normalizedNotes,
                     };
                 }
@@ -2306,21 +2317,28 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     }
 
     function renderCardIdentityTags(card: BoardCard) {
+        if (card.domain === "regulation" && isOperationalRoleRemovalSentinel(card.roleLabel)) {
+            return null;
+        }
+
         const items: React.ReactNode[] = [];
         const roleLabel = resolveCardRoleLabel(card);
         const sessionRecip = card.domain === "regulation" && isRecipRamal(mealBreakSession, card.postCode);
+        const seenLabels = new Set<string>(dedupeOperationalIdentityLabels([roleLabel]));
 
         if (roleLabel && !(roleLabel === "RECIP" && sessionRecip)) {
             items.push(<span key={`role-${cardCode(card)}`} className={`ops-role-badge ${getOperationalRoleTone(roleLabel)}`.trim()}>{roleLabel}</span>);
         }
 
         if (card.domain === "regulation") {
-            if (isMrvRamal(mealBreakSession, card.postCode) && mealBreakDisplayMode !== "night") {
+            if (isMrvRamal(mealBreakSession, card.postCode) && mealBreakDisplayMode !== "night" && !seenLabels.has("MRV")) {
                 items.push(<span key={`mrv-${card.postCode}`} className="ops-inline-flag mrv">MRV</span>);
+                seenLabels.add("MRV");
             }
 
-            if (sessionRecip) {
+            if (sessionRecip && !seenLabels.has("RECIP")) {
                 items.push(<span key={`recip-${card.postCode}`} className="ops-inline-flag recip">RECIP</span>);
+                seenLabels.add("RECIP");
             }
         }
 
@@ -2487,7 +2505,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         targetLabel={card.postLabel}
                         occupancyId={card.occupancyId ?? null}
                         doctorName={displayDoctorName(card)}
-                        currentRole={card.roleLabel ?? null}
+                        currentRole={resolveCardRoleLabel(card)}
                         isDisabled={isDisabledRegulation}
                         onOpenAdvanced={() => { setExpandedCardKey(null); openProfessionalDrawer(card); }}
                     />
@@ -2615,7 +2633,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         targetLabel={card.baseLabel}
                         occupancyId={card.occupancyId ?? null}
                         doctorName={displayDoctorName(card)}
-                        currentRole={card.roleLabel ?? null}
+                        currentRole={resolveCardRoleLabel(card)}
                         isDisabled={isDisabledIntervention}
                         onOpenAdvanced={() => { setExpandedCardKey(null); openProfessionalDrawer(card); }}
                     />
@@ -3829,7 +3847,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                             className="chief-input chief-select"
                                                             value={formState.roleLabel}
                                                             onChange={(event) => setFormState((current) => ({ ...current, roleLabel: event.target.value }))}
-                                                            disabled={Boolean(resolveCardFixedRole(selectedCard)) && !(resolveCardFixedRole(selectedCard) === "MRV" && mealBreakDisplayMode === "night")}
+                                                            disabled={Boolean(resolveCardFixedRole(selectedCard))}
                                                         >
                                                             <option value="">Sem função</option>
                                                             {buildOperationalRoleChoices([
@@ -3839,9 +3857,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                                 <option key={role} value={role}>{role}</option>
                                                             ))}
                                                         </select>
-                                                        {resolveCardFixedRole(selectedCard) === "MRV" && mealBreakDisplayMode === "night" ? (
-                                                            <small className="chief-field-hint">Função MRV não se aplica à noite. Deixe em branco para retirar.</small>
-                                                        ) : resolveCardFixedRole(selectedCard) ? (
+                                                        {resolveCardFixedRole(selectedCard) ? (
                                                             <small className="chief-field-hint">Função travada por regra operacional deste posto neste turno.</small>
                                                         ) : (
                                                             <small className="chief-field-hint">Deixe em branco para remover a função sem mexer no plantão, na chegada ou no meal break. PSIQ fica fora da divisão automática do almoço.</small>

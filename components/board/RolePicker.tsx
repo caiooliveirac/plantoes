@@ -4,7 +4,7 @@ import { useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { STANDARD_OPERATIONAL_ROLE_CODES } from "@/modules/operational/roles";
+import { resolveRoleLabelForExplicitRemoval, STANDARD_OPERATIONAL_ROLE_CODES } from "@/modules/operational/roles";
 
 interface RolePickerProps {
     domain: "regulation" | "intervention";
@@ -33,7 +33,7 @@ export function RolePicker({ domain, occupancyId, currentRole, doctorName, targe
             const response = await fetch(endpoint, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ roleLabel: next }),
+                body: JSON.stringify({ roleLabel: resolveRoleLabelForExplicitRemoval(next) }),
             });
             if (!response.ok) {
                 const body = await response.json().catch(() => ({})) as { error?: string };

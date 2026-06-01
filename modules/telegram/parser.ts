@@ -1,3 +1,4 @@
+import { HALF_SHIFT_ROLE_LABEL } from "@/modules/operational/half-shift";
 import { STANDARD_OPERATIONAL_ROLE_CODES } from "@/modules/operational/roles";
 import { computeLevenshteinDistance } from "@/modules/telegram/departure-flow";
 
@@ -36,6 +37,25 @@ const ARRIVAL_SIGNALS = [
     /\b(?:CONTINUO|CONTINUA|SEGUINDO|SIGO)\b/i,
     /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i,
 ];
+
+// Plantonista se declarando como MEIO plantão / meio turno (pago como MEIO).
+// Reconhecido para que uma chegada tardia tipo "meio turno as 11:30" não seja
+// rejeitada por faltar SD/SN/P. Só é honrado mais adiante dentro da janela de
+// meio plantão (ver shouldAssumeTelegramHalfShift), quando o turno já não está
+// mais sendo oferecido inteiro. "BOA TARDE" é saudação, não sinal.
+const HALF_SHIFT_SIGNALS = [
+    /\bMEIO\s*[-_]?\s*(?:PLANTAO|TURNO)\b/,
+    /\bMEIO\b/,
+    /\bM[PT]\b/,
+    /\b(?:PLANTAO|TURNO)\s+(?:DA\s+)?TARDE\b/,
+];
+
+function hasHalfShiftSignal(normalized: string) {
+    if (HALF_SHIFT_SIGNALS.some((re) => re.test(normalized))) {
+        return true;
+    }
+    return /\bTARDE\b/.test(normalized) && !/\bBOA\s+TARDE\b/.test(normalized);
+}
 
 const CONTINUATION_SIGNALS = [
     /\b(?:CONT\.?|CONTINHA|CONTINUO|CONTINUA|CONTINUANDO|CONTINUEI|CONTINUAREI|CONTINUAR)\b/i,
@@ -110,6 +130,8 @@ const NAME_NOISE_TOKENS = new Set([
     "PLANTA", "PLANTAR", "REALOCADO", "REALOCADA", "REALOCANDO",
     "CORRIGIR", "CORRECAO", "MEDICO", "MEDICA", "MRV", "CHEFE",
     "EU", "MEU", "MINHA", "INTE", "CB", "COMUNICO", "ALMOCO",
+    // Sinais de meio plantão não devem contaminar o nome do médico (audit 2026-05).
+    "MEIO", "MP", "MT",
     "RETIRAR", "RETIRADA", "RETIRADO", "RETIRANDO", "RETIRO", "RETIREI",
     // Saudacoes/verbos discursivos em mensagens multi-linha (audit 2026-05):
     // "Bom dia informo\nSaida da BR60" extraia "informo" como nome.
@@ -354,6 +376,13 @@ export function parseMessage(text: string): ParsedMessage {
     const roleMatch = normalizedForRole.match(new RegExp(`\\b(${STANDARD_OPERATIONAL_ROLE_CODES.join("|")})\\b`));
     if (roleMatch?.[1]) {
         roleFunction = roleMatch[1];
+    }
+
+    // Meio plantão / meio turno declarado sem SD/SN/P explícito: marca o papel
+    // como MEIO para sobreviver ao gate de chegada. Quando o médico já informou
+    // um turno explícito, esse é respeitado e "tarde" fica sendo só hora do dia.
+    if (!shiftType && !roleFunction && hasHalfShiftSignal(normalized)) {
+        roleFunction = HALF_SHIFT_ROLE_LABEL;
     }
 
     const isShadow = /\b(?:SOMBRA|SHADOW)\b/i.test(normalized);
