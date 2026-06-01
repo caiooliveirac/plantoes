@@ -55,6 +55,24 @@ test("buildBankHoursProof explains when rendição overrides a later physical ex
     assert.match(proof.items.join(" "), /cálculo travou na rendição/i);
 });
 
+test("rendição fechada como handoff (sem actualEndedAt) não vira override de saída física", () => {
+    // Novo modelo: a rendição grava só o endedAt do handoff, sem saída física verbalizada.
+    // O cálculo fecha limpo no horário do handoff e não há "saída física retida" a sinalizar.
+    const overrides = {
+        actualEndedAt: null,
+        effectiveEndedAt: "2026-03-25T22:20:00.000Z",
+        bankActualEndAt: "2026-03-25T22:20:00.000Z",
+    } as const;
+
+    const proof = buildBankHoursProof(makeShift(overrides));
+    assert.notEqual(proof.mode, "handoff");
+
+    const shift = buildBankHoursHistoryModel([makeShift(overrides)]).doctors[0]?.shifts[0];
+    assert.ok(shift);
+    assert.equal(shift.flags.hasHandoffOverride, false);
+    assert.equal(shift.countedEndAt, "2026-03-25T22:20:00.000Z");
+});
+
 test("buildBankHoursProof explains doubled overtime when entry stayed on time", () => {
     const proof = buildBankHoursProof(makeShift({
         actualEndedAt: "2026-03-25T22:35:00.000Z",

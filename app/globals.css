@@ -8076,6 +8076,108 @@ button.chief-payable-tag:focus-visible {
     border: 1px dashed var(--surface-elevated-border);
 }
 
+.board-handoff-rail {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 39;
+    width: min(340px, calc(100vw - 48px));
+    max-height: calc(50vh - 48px);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 16px;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+    backdrop-filter: var(--blur-glass);
+    -webkit-backdrop-filter: var(--blur-glass);
+    box-shadow: var(--shadow-elevated);
+    overflow: hidden;
+}
+
+.board-handoff-rail__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--surface-elevated-border);
+}
+
+.board-handoff-rail__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-strong);
+}
+
+.board-handoff-rail__count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 11px;
+    background: var(--surface-elevated);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 0.7rem;
+}
+
+.board-handoff-rail__list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin: 0;
+    list-style: none;
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface-elevated-border) transparent;
+}
+
+.board-handoff-rail__item {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+}
+
+.board-handoff-rail__line {
+    font-size: 0.86rem;
+    color: var(--foreground);
+    line-height: 1.4;
+}
+
+.board-handoff-rail__meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+    font-size: 0.74rem;
+    color: var(--muted);
+}
+
+.board-handoff-rail__ack {
+    border: none;
+    background: transparent;
+    color: var(--muted-strong);
+    font-size: 0.74rem;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 8px;
+}
+
+.board-handoff-rail__ack:hover {
+    background: var(--surface-glass);
+    color: var(--foreground);
+}
+
 .pending-departure-card {
     position: relative;
     padding: 14px 14px 12px;
