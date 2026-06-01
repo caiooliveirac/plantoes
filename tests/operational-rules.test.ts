@@ -15,10 +15,66 @@ import {
 } from "@/modules/operational/board-rules";
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationContinuationScheduledEndAt } from "@/modules/regulation/service";
-import { dedupeOperationalIdentityLabels, isOperationalRoleRemovalSentinel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
+import { dedupeOperationalIdentityLabels, describeFixedRoleTransferImpact, isOperationalRoleRemovalSentinel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
+
+test("describeFixedRoleTransferImpact: remanejar nao-COI para 1368 sinaliza COI remoto", () => {
+    const impact = describeFixedRoleTransferImpact({
+        targetDomain: "regulation",
+        targetCode: "1368",
+        shiftLabel: "SD",
+        currentRole: "MRV",
+    });
+    assert.equal(impact?.forcedRole, "COI");
+    assert.equal(impact?.leavesPresentialMealQueue, true);
+});
+
+test("describeFixedRoleTransferImpact: quem ja e COI movido entre 1367/1368 nao gera aviso", () => {
+    assert.equal(
+        describeFixedRoleTransferImpact({
+            targetDomain: "regulation",
+            targetCode: "1368",
+            shiftLabel: "SD",
+            currentRole: "COI",
+        }),
+        null,
+    );
+});
+
+test("describeFixedRoleTransferImpact: destino sem papel fixo nao gera aviso", () => {
+    assert.equal(
+        describeFixedRoleTransferImpact({
+            targetDomain: "regulation",
+            targetCode: "2035",
+            shiftLabel: "SD",
+            currentRole: "MRV",
+        }),
+        null,
+    );
+    // Intervencao nunca forca papel fixo, mesmo com code que casaria em regulacao.
+    assert.equal(
+        describeFixedRoleTransferImpact({
+            targetDomain: "intervention",
+            targetCode: "1368",
+            shiftLabel: "SD",
+            currentRole: "MRV",
+        }),
+        null,
+    );
+});
+
+test("describeFixedRoleTransferImpact: 2031 (CP) e fixo mas nao e remoto", () => {
+    const impact = describeFixedRoleTransferImpact({
+        targetDomain: "regulation",
+        targetCode: "2031",
+        shiftLabel: "SD",
+        currentRole: "MRV",
+    });
+    assert.equal(impact?.forcedRole, "CP");
+    assert.equal(impact?.leavesPresentialMealQueue, false);
+});
 
 test("resolves operational shift label at 07h and 19h Sao Paulo", () => {
     assert.equal(resolveOperationalShiftLabel(new Date("2026-03-25T07:00:00-03:00")), "SD");
