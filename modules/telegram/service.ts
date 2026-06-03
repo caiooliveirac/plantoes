@@ -296,7 +296,21 @@ const TELEGRAM_CONTINUITY_LINK_WINDOW_MS = 18 * 60 * 60 * 1000;
 const TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS = 2 * 60 * 60 * 1000;
 const TELEGRAM_FORCED_TAKEOVER_MIN_DURATION_MS = 60 * 1000;
 const TELEGRAM_HALF_SHIFT_AUTO_END_HHMM = "17:00";
+// Hora esperada de chegada do meio plantão da tarde. É o piso a partir do qual o
+// banco de horas mede atraso — chegar/avisar antes disso não gera crédito nem
+// débito; avisar depois (além da tolerância de 15 min) debita o atraso.
+const TELEGRAM_HALF_SHIFT_EXPECTED_START_HHMM = "11:30";
+// Janela em que um aviso de meio plantão da tarde ("meio plantão", "meio turno",
+// "tarde", "MP/MT") é honrado como meia jornada — pela hora declarada, ou, na
+// ausência dela, pela hora da própria mensagem. 10:30 (inclusive) até 17:00.
+const TELEGRAM_HALF_SHIFT_WINDOW_START_MINUTE = 10 * 60 + 30;
+const TELEGRAM_HALF_SHIFT_WINDOW_END_MINUTE = 17 * 60;
 const TELEGRAM_HALF_SHIFT_ALREADY_CLOSED_ERROR = "half_shift_already_closed";
+
+function isWithinTelegramHalfShiftWindow(minuteOfDay: number) {
+    return minuteOfDay >= TELEGRAM_HALF_SHIFT_WINDOW_START_MINUTE
+        && minuteOfDay < TELEGRAM_HALF_SHIFT_WINDOW_END_MINUTE;
+}
 
 interface TelegramCommandActor {
     userId: string | null;
@@ -718,28 +732,45 @@ function resolveHalfShiftScheduledEndAt(referenceAt: Date) {
     return resolveForcedDayEventTime(referenceAt, TELEGRAM_HALF_SHIFT_AUTO_END_HHMM, 0);
 }
 
+// Início agendado (esperado) do meio plantão da tarde. Fixo às 11:30 no relógio
+// local, independente de quando o médico avisou. É o que o banco de horas usa
+// como baseline de atraso. Ver TELEGRAM_HALF_SHIFT_EXPECTED_START_HHMM.
+function resolveHalfShiftScheduledStartAt(referenceAt: Date) {
+    return resolveForcedDayEventTime(referenceAt, TELEGRAM_HALF_SHIFT_EXPECTED_START_HHMM, 0);
+}
+
 // Gate de chegada (F6): um meio plantão explícito ("meio plantão", "tarde",
 // "meio turno", "MP/MT") conta como *turno* informado, evitando o aviso de
 // "faltou turno". Só liberamos quando o aviso será de fato honrado como meia
 // jornada da tarde a jusante (regulação, sem turno explícito, dentro da janela
-// 10:30–17:00 pela hora declarada). Fora disso seguimos pedindo turno/horário,
-// para nunca registrar uma chegada sem turno. Ver shouldAssumeTelegramHalfShift.
-function arrivalHalfShiftSatisfiesShiftGate(parsed: Pick<ParsedMessage, "sector" | "shiftType" | "roleFunction" | "isDeparture" | "isContinuation" | "arrivalTime">): boolean {
+// 10:30–17:00). O médico NÃO precisa informar horário: se não declarar uma hora,
+// usamos o relógio da própria mensagem (referenceAt) para a janela — o mesmo
+// instante que shouldAssumeTelegramHalfShift consome como eventAt a jusante.
+export function arrivalHalfShiftSatisfiesShiftGate(
+    parsed: Pick<ParsedMessage, "sector" | "shiftType" | "roleFunction" | "isDeparture" | "isContinuation" | "arrivalTime">,
+    referenceAt: Date,
+): boolean {
     if (parsed.sector !== "REGULATION") return false;
     if (parsed.isDeparture || parsed.isContinuation) return false;
     if (parsed.shiftType) return false;
     if (!isHalfShiftRoleLabel(parsed.roleFunction)) return false;
-    if (!parsed.arrivalTime) return false;
-    const match = /^(\d{1,2}):(\d{2})$/.exec(parsed.arrivalTime.trim());
-    if (!match) return false;
-    // Mesma janela usada por shouldAssumeTelegramHalfShift: 10:30 (inclusive) até
-    // 17:00 (exclusive). A hora declarada já está no relógio local de Salvador.
-    const minuteOfDay = (Number(match[1]) * 60) + Number(match[2]);
-    return minuteOfDay >= (10 * 60 + 30) && minuteOfDay < (17 * 60);
+
+    if (parsed.arrivalTime) {
+        const match = /^(\d{1,2}):(\d{2})$/.exec(parsed.arrivalTime.trim());
+        if (!match) return false;
+        // A hora declarada já está no relógio local de Salvador.
+        const minuteOfDay = (Number(match[1]) * 60) + Number(match[2]);
+        return isWithinTelegramHalfShiftWindow(minuteOfDay);
+    }
+
+    // Sem hora declarada: cai para o relógio da mensagem (igual ao eventAt usado
+    // por shouldAssumeTelegramHalfShift), para que aviso sem horário seja aceito.
+    const parts = getSaoPauloParts(referenceAt);
+    return isWithinTelegramHalfShiftWindow((parts.hour * 60) + parts.minute);
 }
 
-function shouldAssumeTelegramHalfShift(params: {
-    parsed: OperationalParsedEntry;
+export function shouldAssumeTelegramHalfShift(params: {
+    parsed: Pick<ParsedMessage, "sector" | "isDeparture" | "isContinuation">;
     eventAt: Date;
     effectiveShiftType: string | null;
 }) {
@@ -748,8 +779,7 @@ function shouldAssumeTelegramHalfShift(params: {
     }
 
     const parts = getSaoPauloParts(params.eventAt);
-    const minuteOfDay = (parts.hour * 60) + parts.minute;
-    return minuteOfDay >= (10 * 60 + 30) && minuteOfDay < (17 * 60);
+    return isWithinTelegramHalfShiftWindow((parts.hour * 60) + parts.minute);
 }
 
 function appendTelegramOperationalNote(existingNotes: string | null | undefined, marker: string, messageText: string) {
@@ -6657,6 +6687,11 @@ async function applyParsedEntry(params: {
                     effectiveShiftType,
                 });
                 const halfShiftScheduledEndAt = assumedHalfShift ? resolveHalfShiftScheduledEndAt(eventAt) : null;
+                // O início agendado do meio plantão é SEMPRE a hora esperada (11:30),
+                // não o instante em que o médico avisou. Assim o banco de horas mede
+                // atraso a partir das 11:30 (com a mesma tolerância de 15 min) em vez
+                // de tratar todo aviso como pontual.
+                const halfShiftScheduledStartAt = assumedHalfShift ? resolveHalfShiftScheduledStartAt(eventAt) : null;
                 const continuityContext = parsed.isDeparture
                     ? null
                     : await findTelegramContinuityContext({ doctorId: resolvedDoctor.id, eventAt });
@@ -6742,7 +6777,7 @@ async function applyParsedEntry(params: {
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: startedAtOverride ?? effectiveContinuationStartedAt,
                     boardStartedAt: continuationBoardStartedAt,
-                    scheduledStartAt: assumedHalfShift ? eventAt : undefined,
+                    scheduledStartAt: assumedHalfShift ? (halfShiftScheduledStartAt ?? undefined) : undefined,
                     scheduledEndAt: halfShiftScheduledEndAt ?? undefined,
                     shiftLabel: effectiveShiftType,
                     roleLabel: assumedHalfShift ? HALF_SHIFT_ROLE_LABEL : parsed.roleFunction,
@@ -8941,7 +8976,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             ) {
                 const hasName = firstParsed.extractedNames.length > 0;
                 const hasShift = Boolean(firstParsed.shiftType)
-                    || arrivalHalfShiftSatisfiesShiftGate(firstParsed);
+                    || arrivalHalfShiftSatisfiesShiftGate(firstParsed, new Date(message.date * 1000));
                 const isBareButtonPayload = looksLikeMealBreakButtonReply(message.text);
                 if (isBareButtonPayload || !hasName || !hasShift) {
                     const reason: TelegramReviewReason = isBareButtonPayload
