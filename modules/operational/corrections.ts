@@ -81,6 +81,12 @@ export interface TransferOperationalOccupancyInput {
     destination: OperationalTransferTargetInput;
     roleLabel?: string | null;
     notes?: string | null;
+    // Define explicitamente se o ocupante no DESTINO é sombra:
+    //   true  → sombra (coexiste; board nulo; marcador nas notas)
+    //   false → titular/médico (board setado; marcador removido das notas)
+    //   undefined → preserva o estado de origem (transfer "neutro")
+    // Cobre os 4 casos: sombra→médica, médico→sombra, sombra→sombra, médico→médico.
+    asShadow?: boolean | null;
     conflictResolution?: {
         strategy: "remove_destination" | "move_destination";
         relocationTarget?: OperationalTransferTargetInput | null;
@@ -485,13 +491,52 @@ async function deleteInterventionOccupancyTx(tx: Executor, occupancy: typeof int
     return deleted;
 }
 
+const ADMIN_SHADOW_MARKER = "[sombra]";
+
+function operationalNotesIndicateShadow(notes: string | null | undefined) {
+    const normalized = (notes ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase();
+    return normalized.includes("[TELEGRAM SOMBRA]") || /\bSOMBRA\b/.test(normalized);
+}
+
+// Ajusta as notas para refletir o status de sombra desejado, de forma idempotente.
+// asShadow=true  garante um marcador de sombra; asShadow=false remove marcadores e
+// o token "sombra"/"shadow" solto (a detecção em todo o sistema é por notas).
+export function applyShadowMarkerToOccupancyNotes(notes: string | null | undefined, asShadow: boolean): string | null {
+    const base = (notes ?? "").trim();
+    if (asShadow) {
+        return operationalNotesIndicateShadow(base) ? (base || null) : `${ADMIN_SHADOW_MARKER} ${base}`.trim();
+    }
+    const cleaned = base
+        .replace(/\[telegram sombra\]/gi, "")
+        .replace(/\[sombra\]/gi, "")
+        .replace(/\bsombras?\b/gi, "")
+        .replace(/\bshadow\b/gi, "")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/^[\s\-–—]+|[\s\-–—]+$/g, "")
+        .trim();
+    return cleaned.length > 0 ? cleaned : null;
+}
+
 async function cloneOccupancyIntoTarget(tx: Executor, params: {
     source: OccupancySnapshot;
     destination: TargetMetadata;
     roleLabel?: string | null;
     notes?: string | null;
+    asShadow?: boolean | null;
     updatedByUserId?: string | null;
 }) {
+    // Resolve notas e board conforme o status de sombra desejado no destino.
+    const resolvedNotes = (params.asShadow === true || params.asShadow === false)
+        ? applyShadowMarkerToOccupancyNotes(params.notes, params.asShadow)
+        : (params.notes ?? null);
+    // Sombra coexiste com board nulo (fica fora do índice one-active-board-per-target);
+    // titular/neutro recebe o board (setado a partir da origem ou da chegada).
+    const resolvedBoardStartedAt = params.asShadow === true
+        ? null
+        : (params.source.boardStartedAt ?? params.source.startedAt);
     if (params.destination.domain === "regulation") {
         const [created] = await tx.insert(regulationOccupancies)
             .values({
@@ -501,7 +546,7 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
                 scheduledStartAt: params.source.scheduledStartAt,
                 scheduledEndAt: params.source.scheduledEndAt,
                 startedAt: params.source.startedAt,
-                boardStartedAt: params.source.boardStartedAt ?? params.source.startedAt,
+                boardStartedAt: resolvedBoardStartedAt,
                 shiftLabel: params.source.shiftLabel,
                 roleLabel: applyOperationalRoleShiftPolicy({
                     shiftLabel: params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
@@ -511,7 +556,7 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
                 }),
                 ramalLabel: params.destination.code,
                 source: "admin_correction",
-                notes: params.notes ?? null,
+                notes: resolvedNotes,
                 createdByUserId: params.updatedByUserId ?? null,
                 updatedByUserId: params.updatedByUserId ?? null,
                 updatedAt: new Date(),
@@ -534,7 +579,7 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
             scheduledStartAt: params.source.scheduledStartAt,
             scheduledEndAt: params.source.scheduledEndAt,
             startedAt: params.source.startedAt,
-            boardStartedAt: params.source.boardStartedAt ?? params.source.startedAt,
+            boardStartedAt: resolvedBoardStartedAt,
             shiftLabel: params.source.shiftLabel,
             roleLabel: applyOperationalRoleShiftPolicy({
                 shiftLabel: params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
@@ -543,7 +588,7 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
                 roleLabel: params.roleLabel ?? params.source.roleLabel,
             }),
             source: "admin_correction",
-            notes: params.notes ?? null,
+            notes: resolvedNotes,
             createdByUserId: params.updatedByUserId ?? null,
             updatedByUserId: params.updatedByUserId ?? null,
             updatedAt: new Date(),
@@ -1000,6 +1045,7 @@ export async function transferOperationalOccupancy(
             source,
             destination: destinationTarget,
             roleLabel: input.roleLabel ?? source.roleLabel,
+            asShadow: input.asShadow ?? undefined,
             notes: mergeOperationalNotes(
                 source.notes,
                 transferNoteLine({
