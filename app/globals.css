@@ -776,6 +776,14 @@ body > * { position: relative; z-index: 1; }
     color: #cdbcff;
 }
 
+/* Hora da sombra inline, na mesma linha do nome (sem virar tag/pílula própria,
+   para não ocupar espaço vertical extra). */
+.ops-doctor-line.shadow .ops-shadow-time {
+    font-size: 0.62rem;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.7;
+}
+
 .ops-kick-button,
 .ops-kick-confirm-button {
     display: inline-flex;
