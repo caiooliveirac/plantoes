@@ -288,7 +288,7 @@ function renderShadowOccupantLines(shadowOccupants: BoardShadowOccupant[] | unde
                     <span key={shadow.occupancyId} className="ops-doctor-line shadow">
                         <span className="ops-inline-flag shadow">sombra</span>
                         <span className="ops-shadow-name" title={name}>{name}</span>
-                        <span className="ops-doctor-note continuation">desde {arrival}</span>
+                        <span className="ops-shadow-time">{arrival}</span>
                     </span>
                 );
             })}
