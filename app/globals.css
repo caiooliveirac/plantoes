@@ -751,6 +751,31 @@ body > * { position: relative; z-index: 1; }
     color: #e2ebf5;
 }
 
+/* Sombra: médico que acompanha o titular no mesmo ramal sem ocupá-lo.
+   Arte própria (violeta, borda tracejada, nome em itálico) para distinguir
+   visualmente da linha do titular, que permanece normal. */
+.ops-inline-flag.shadow {
+    background: rgba(150, 120, 220, 0.18);
+    border-color: rgba(150, 120, 220, 0.34);
+    color: #e6dbff;
+}
+
+.ops-doctor-line.shadow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    padding-left: 8px;
+    border-left: 2px dashed rgba(150, 120, 220, 0.45);
+    opacity: 0.88;
+}
+
+.ops-doctor-line.shadow .ops-shadow-name {
+    font-style: italic;
+    font-weight: 600;
+    color: #cdbcff;
+}
+
 .ops-kick-button,
 .ops-kick-confirm-button {
     display: inline-flex;

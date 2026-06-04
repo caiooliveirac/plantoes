@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, isNull, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
 import { doctors, interventionOccupancies, regulationOccupancies, regulationPostDeactivations, regulationPosts } from "@/db/schema";
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
@@ -26,6 +26,7 @@ export interface StartRegulationOccupancyInput {
     ramalLabel?: string | null;
     source: "manual" | "telegram" | "import" | "admin_correction";
     notes?: string | null;
+    isShadow?: boolean | null;
     createdByUserId?: string | null;
 }
 
@@ -111,13 +112,62 @@ async function findActiveRegulationPostDeactivation(tx: Executor, params: {
 
 function resolveRegulationContinuationBoardStartedAt(params: {
     startedAt: Date;
-    boardStartedAt: Date;
+    boardStartedAt: Date | null;
     continuedAt: Date;
 }) {
     // Always preserve the earliest boardStartedAt. When a doctor continues across
     // shifts (SD→SN, P→SN), the board must reflect their original arrival time so
     // that operational priority correctly shows who has been present longer.
     return params.boardStartedAt;
+}
+
+function normalizeRegulationOperationalNotes(value: string | null | undefined) {
+    return (value ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase();
+}
+
+export function isRegulationShadowOccupancyNotes(notes: string | null | undefined) {
+    const normalized = normalizeRegulationOperationalNotes(notes);
+    return normalized.includes("[TELEGRAM SOMBRA]") || /\bSOMBRA\b/.test(normalized);
+}
+
+// A "sombra" (shadow) doctor observes/accompanies the active titular on the same
+// ramal without owning it. A shadow arrival must NEVER displace the active doctor,
+// and a real arrival must NEVER displace a shadow — the two coexist on the ramal.
+// Mirrors the intervention-domain rule (shouldCloseInterventionBoardCarrierOnArrival).
+export function shouldCloseRegulationOccupantOnArrival(params: {
+    currentOccupantDoctorId: string;
+    arrivingDoctorId: string;
+    arrivingIsShadow: boolean;
+    currentOccupantNotes: string | null | undefined;
+}) {
+    if (params.currentOccupantDoctorId === params.arrivingDoctorId) {
+        return false;
+    }
+
+    if (params.arrivingIsShadow) {
+        return false;
+    }
+
+    return !isRegulationShadowOccupancyNotes(params.currentOccupantNotes);
+}
+
+// Whether an arrival should take the board immediately. A shadow takes the board
+// ONLY when no titular currently holds it (lone arrival); when a titular is present
+// the shadow coexists with board_started_at = NULL, staying outside the
+// one-active-board-per-post unique index. Mirrors the intervention rule
+// (resolveInterventionArrivalBoardPolicy).
+export function resolveRegulationArrivalBoardPolicy(params: {
+    source: StartRegulationOccupancyInput["source"];
+    isShadow?: boolean | null;
+    hasCurrentBoardCarrier: boolean;
+}) {
+    return {
+        shouldTakeBoardImmediately: params.source !== "import"
+            && (!params.isShadow || !params.hasCurrentBoardCarrier),
+    };
 }
 
 export function shouldReuseImplicitRegulationContinuitySource(referenceAt: Date, sourceEndedAt?: Date | null) {
@@ -351,13 +401,38 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             return duplicated;
         }
 
-        const existing = await tx.query.regulationOccupancies.findFirst({
+        const arrivingIsShadow = Boolean(input.isShadow ?? isRegulationShadowOccupancyNotes(input.notes));
+
+        // The arriving doctor's own open occupancy on this post, if any (re-arrival →
+        // update in place). Looked up explicitly by doctor so that a coexisting shadow
+        // sitting "on top" of the post (most recent startedAt) can't shadow-hide the
+        // titular's own record and cause a duplicate insert.
+        const sameDoctorActive = await tx.query.regulationOccupancies.findFirst({
             where: and(
                 eq(regulationOccupancies.postId, input.postId),
+                eq(regulationOccupancies.doctorId, input.doctorId),
                 isNull(regulationOccupancies.endedAt),
             ),
             orderBy: [desc(regulationOccupancies.startedAt)],
         });
+
+        // Active occupants held by OTHER doctors on this post. With shadow coexistence
+        // there can be more than one open at once (titular + sombra). Prefer the real
+        // titular as the takeover target so a substitute hands over from the titular,
+        // never from a shadow.
+        const otherActiveOccupancies = await tx.query.regulationOccupancies.findMany({
+            where: and(
+                eq(regulationOccupancies.postId, input.postId),
+                ne(regulationOccupancies.doctorId, input.doctorId),
+                isNull(regulationOccupancies.endedAt),
+            ),
+            orderBy: [desc(regulationOccupancies.startedAt)],
+        });
+        const takeoverTarget = otherActiveOccupancies.find(
+            (occupancy) => !isRegulationShadowOccupancyNotes(occupancy.notes),
+        ) ?? otherActiveOccupancies[0] ?? null;
+
+        const existing = sameDoctorActive ?? takeoverTarget;
 
         let reopenedFromStaleSameDoctor = false;
 
@@ -369,7 +444,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             // current shift start), carrying it forward would make the occupancy invisible on the board.
             const shouldReopenStale = shouldReopenStaleSameDoctorRegulationOccupancy({
                 existingStartedAt: existing.startedAt,
-                existingBoardStartedAt: existing.boardStartedAt,
+                existingBoardStartedAt: existing.boardStartedAt ?? existing.startedAt,
                 incomingStartedAt: input.startedAt,
             });
 
@@ -398,10 +473,16 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             if (!shouldReopenStale) {
                 const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
                 const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
-                const existingAnchorIsStale = existing.boardStartedAt.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
-                const keptBoardStartedAt = (existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existing.boardStartedAt.getTime())
-                    ? effectiveBoardStartedAt
-                    : existing.boardStartedAt;
+                const existingBoardStartedAt = existing.boardStartedAt;
+                // A shadow re-arrival (board anchor null) must stay board-null so it
+                // keeps coexisting without entering the one-active-board-per-post index.
+                const existingAnchorIsStale = existingBoardStartedAt !== null
+                    && existingBoardStartedAt.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
+                const keptBoardStartedAt = existingBoardStartedAt === null
+                    ? null
+                    : ((existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existingBoardStartedAt.getTime())
+                        ? effectiveBoardStartedAt
+                        : existingBoardStartedAt);
 
                 const keptContinuityGroupId = resolvedContinuityGroupId ?? existing.continuityGroupId;
 
@@ -412,7 +493,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                     ? input.startedAt
                     : existing.startedAt;
 
-                const windowRef = keptBoardStartedAt.getTime() > keptStartedAt.getTime()
+                const windowRef = keptBoardStartedAt !== null && keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                     ? keptBoardStartedAt : keptStartedAt;
                 const requestedRoleLabel = input.roleLabel !== undefined ? input.roleLabel : (existing.roleLabel ?? resolvedRoleLabel);
                 // Meio plantão tem fim canônico 17:00. Se o re-arrival mantém o role
@@ -473,7 +554,17 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             && input.startedAt.getTime() < existing.startedAt.getTime(),
         );
 
-        if (existing && !reopenedFromStaleSameDoctor && !shouldPreserveCurrentTargetOccupancy) {
+        const shouldCloseExistingOnTakeover = Boolean(
+            existing
+            && shouldCloseRegulationOccupantOnArrival({
+                currentOccupantDoctorId: existing.doctorId,
+                arrivingDoctorId: input.doctorId,
+                arrivingIsShadow,
+                currentOccupantNotes: existing.notes,
+            }),
+        );
+
+        if (existing && !reopenedFromStaleSameDoctor && !shouldPreserveCurrentTargetOccupancy && shouldCloseExistingOnTakeover) {
             const closeAt = input.startedAt.getTime() >= existing.startedAt.getTime()
                 ? resolveRegulationBoardEndAt(input.startedAt, existing.scheduledEndAt)
                 : existing.startedAt;
@@ -540,6 +631,20 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             }
         }
 
+        // A coexisting shadow (titular already holds the board) is stored without a
+        // board anchor so it stays outside the one-active-board-per-post unique index
+        // and never displaces the titular. A lone arrival (no current carrier) takes
+        // the board normally — including a shadow that arrives to an empty post.
+        const hasCurrentBoardCarrier = otherActiveOccupancies.some(
+            (occupancy) => occupancy.boardStartedAt !== null,
+        );
+        const { shouldTakeBoardImmediately } = resolveRegulationArrivalBoardPolicy({
+            source: input.source,
+            isShadow: arrivingIsShadow,
+            hasCurrentBoardCarrier,
+        });
+        const insertBoardStartedAt = shouldTakeBoardImmediately ? effectiveBoardStartedAt : null;
+
         const [created] = await tx.insert(regulationOccupancies).values({
             doctorId: input.doctorId,
             postId: input.postId,
@@ -547,7 +652,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             scheduledStartAt: inferredScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
-            boardStartedAt: effectiveBoardStartedAt,
+            boardStartedAt: insertBoardStartedAt,
             shiftLabel: input.shiftLabel ?? null,
             roleLabel: resolvedRoleLabel,
             ramalLabel: normalizeRegulationRamalLabel({
@@ -561,6 +666,22 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             createdByUserId: input.createdByUserId ?? null,
             updatedByUserId: input.createdByUserId ?? null,
         }).returning();
+
+        // When this arrival takes the board, it must be the only board carrier on
+        // the post (one-active-board-per-post unique index). A real handoff already
+        // closed the predecessor, but a coexisting shadow that previously held the
+        // board (e.g. a shadow that had arrived to an empty post) is NOT closed —
+        // demote its board anchor to NULL so it keeps coexisting without conflicting.
+        if (shouldTakeBoardImmediately && !historicalCorrectionEndAt) {
+            await tx.update(regulationOccupancies)
+                .set({ boardStartedAt: null, updatedAt: new Date() })
+                .where(and(
+                    eq(regulationOccupancies.postId, input.postId),
+                    isNull(regulationOccupancies.endedAt),
+                    isNotNull(regulationOccupancies.boardStartedAt),
+                    ne(regulationOccupancies.id, created.id),
+                ));
+        }
 
         if (historicalCorrectionEndAt) {
             await syncRegulationBankHours(tx, created.id);

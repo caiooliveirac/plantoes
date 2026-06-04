@@ -224,7 +224,10 @@ export const regulationOccupancies = operationsV2.table(
         scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }),
         scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }),
         startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
-        boardStartedAt: timestamp("board_started_at", { withTimezone: true }).notNull(),
+        // Nullable so a coexisting "sombra" can be stored without a board anchor
+        // (mirrors intervention) and stays outside the one-active-board-per-post
+        // unique index. A titular / lone arrival always carries a board_started_at.
+        boardStartedAt: timestamp("board_started_at", { withTimezone: true }),
         endedAt: timestamp("ended_at", { withTimezone: true }),
         actualEndedAt: timestamp("actual_ended_at", { withTimezone: true }),
         shiftLabel: varchar("shift_label", { length: 100 }),
