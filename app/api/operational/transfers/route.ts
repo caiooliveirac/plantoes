@@ -54,6 +54,7 @@ const schema = z.object({
     destination: targetSchema,
     roleLabel: z.union([z.string().trim().max(100), z.null()]).optional(),
     notes: z.string().trim().min(8).max(2000),
+    asShadow: z.boolean().optional().nullable(),
     conflictResolution: z.object({
         strategy: z.enum(["remove_destination", "move_destination"]),
         relocationTarget: targetSchema.optional().nullable(),
@@ -91,6 +92,7 @@ export async function POST(request: NextRequest) {
             destination: parsed.data.destination,
             roleLabel: parsed.data.roleLabel ?? null,
             notes: parsed.data.notes,
+            asShadow: parsed.data.asShadow ?? undefined,
             conflictResolution: parsed.data.conflictResolution
                 ? {
                     strategy: parsed.data.conflictResolution.strategy,
