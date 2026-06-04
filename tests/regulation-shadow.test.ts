@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
     isRegulationShadowOccupancyNotes,
+    resolveRegulationArrivalBoardPolicy,
     shouldCloseRegulationOccupantOnArrival,
 } from "@/modules/regulation/service";
 import { buildOperationalSlotPresenceBoardModel } from "@/services/board.service";
@@ -68,6 +69,27 @@ test("shouldCloseRegulationOccupantOnArrival: mesma médica re-enviando não fec
     );
 });
 
+test("resolveRegulationArrivalBoardPolicy: sombra com titular presente NÃO toma o board (coexiste com board nulo)", () => {
+    assert.deepEqual(
+        resolveRegulationArrivalBoardPolicy({ source: "telegram", isShadow: true, hasCurrentBoardCarrier: true }),
+        { shouldTakeBoardImmediately: false },
+    );
+});
+
+test("resolveRegulationArrivalBoardPolicy: sombra em posto vazio toma o board (vira o ocupante visível)", () => {
+    assert.deepEqual(
+        resolveRegulationArrivalBoardPolicy({ source: "telegram", isShadow: true, hasCurrentBoardCarrier: false }),
+        { shouldTakeBoardImmediately: true },
+    );
+});
+
+test("resolveRegulationArrivalBoardPolicy: titular real sempre toma o board", () => {
+    assert.deepEqual(
+        resolveRegulationArrivalBoardPolicy({ source: "telegram", isShadow: false, hasCurrentBoardCarrier: true }),
+        { shouldTakeBoardImmediately: true },
+    );
+});
+
 test("buildOperationalSlotPresenceBoardModel mantém a 2152 com Indira titular e Yngra como sombra", () => {
     const board = buildOperationalSlotPresenceBoardModel({
         targets: [{
@@ -116,7 +138,7 @@ test("buildOperationalSlotPresenceBoardModel mantém a 2152 com Indira titular e
                 doctorName: "Yngra",
                 displayName: null,
                 startedAt: "2026-04-28T10:10:00.000Z",
-                boardStartedAt: "2026-04-28T10:10:00.000Z",
+                boardStartedAt: null,
                 endedAt: null,
                 actualEndedAt: null,
                 scheduledStartAt: "2026-04-28T10:00:00.000Z",
