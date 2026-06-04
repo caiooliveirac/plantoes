@@ -26,6 +26,7 @@ export interface StartRegulationOccupancyInput {
     ramalLabel?: string | null;
     source: "manual" | "telegram" | "import" | "admin_correction";
     notes?: string | null;
+    isShadow?: boolean | null;
     createdByUserId?: string | null;
 }
 
@@ -118,6 +119,39 @@ function resolveRegulationContinuationBoardStartedAt(params: {
     // shifts (SD→SN, P→SN), the board must reflect their original arrival time so
     // that operational priority correctly shows who has been present longer.
     return params.boardStartedAt;
+}
+
+function normalizeRegulationOperationalNotes(value: string | null | undefined) {
+    return (value ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase();
+}
+
+export function isRegulationShadowOccupancyNotes(notes: string | null | undefined) {
+    const normalized = normalizeRegulationOperationalNotes(notes);
+    return normalized.includes("[TELEGRAM SOMBRA]") || /\bSOMBRA\b/.test(normalized);
+}
+
+// A "sombra" (shadow) doctor observes/accompanies the active titular on the same
+// ramal without owning it. A shadow arrival must NEVER displace the active doctor,
+// and a real arrival must NEVER displace a shadow — the two coexist on the ramal.
+// Mirrors the intervention-domain rule (shouldCloseInterventionBoardCarrierOnArrival).
+export function shouldCloseRegulationOccupantOnArrival(params: {
+    currentOccupantDoctorId: string;
+    arrivingDoctorId: string;
+    arrivingIsShadow: boolean;
+    currentOccupantNotes: string | null | undefined;
+}) {
+    if (params.currentOccupantDoctorId === params.arrivingDoctorId) {
+        return false;
+    }
+
+    if (params.arrivingIsShadow) {
+        return false;
+    }
+
+    return !isRegulationShadowOccupancyNotes(params.currentOccupantNotes);
 }
 
 export function shouldReuseImplicitRegulationContinuitySource(referenceAt: Date, sourceEndedAt?: Date | null) {
@@ -351,13 +385,38 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             return duplicated;
         }
 
-        const existing = await tx.query.regulationOccupancies.findFirst({
+        const arrivingIsShadow = Boolean(input.isShadow ?? isRegulationShadowOccupancyNotes(input.notes));
+
+        // The arriving doctor's own open occupancy on this post, if any (re-arrival →
+        // update in place). Looked up explicitly by doctor so that a coexisting shadow
+        // sitting "on top" of the post (most recent startedAt) can't shadow-hide the
+        // titular's own record and cause a duplicate insert.
+        const sameDoctorActive = await tx.query.regulationOccupancies.findFirst({
             where: and(
                 eq(regulationOccupancies.postId, input.postId),
+                eq(regulationOccupancies.doctorId, input.doctorId),
                 isNull(regulationOccupancies.endedAt),
             ),
             orderBy: [desc(regulationOccupancies.startedAt)],
         });
+
+        // Active occupants held by OTHER doctors on this post. With shadow coexistence
+        // there can be more than one open at once (titular + sombra). Prefer the real
+        // titular as the takeover target so a substitute hands over from the titular,
+        // never from a shadow.
+        const otherActiveOccupancies = await tx.query.regulationOccupancies.findMany({
+            where: and(
+                eq(regulationOccupancies.postId, input.postId),
+                ne(regulationOccupancies.doctorId, input.doctorId),
+                isNull(regulationOccupancies.endedAt),
+            ),
+            orderBy: [desc(regulationOccupancies.startedAt)],
+        });
+        const takeoverTarget = otherActiveOccupancies.find(
+            (occupancy) => !isRegulationShadowOccupancyNotes(occupancy.notes),
+        ) ?? otherActiveOccupancies[0] ?? null;
+
+        const existing = sameDoctorActive ?? takeoverTarget;
 
         let reopenedFromStaleSameDoctor = false;
 
@@ -473,7 +532,17 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             && input.startedAt.getTime() < existing.startedAt.getTime(),
         );
 
-        if (existing && !reopenedFromStaleSameDoctor && !shouldPreserveCurrentTargetOccupancy) {
+        const shouldCloseExistingOnTakeover = Boolean(
+            existing
+            && shouldCloseRegulationOccupantOnArrival({
+                currentOccupantDoctorId: existing.doctorId,
+                arrivingDoctorId: input.doctorId,
+                arrivingIsShadow,
+                currentOccupantNotes: existing.notes,
+            }),
+        );
+
+        if (existing && !reopenedFromStaleSameDoctor && !shouldPreserveCurrentTargetOccupancy && shouldCloseExistingOnTakeover) {
             const closeAt = input.startedAt.getTime() >= existing.startedAt.getTime()
                 ? resolveRegulationBoardEndAt(input.startedAt, existing.scheduledEndAt)
                 : existing.startedAt;

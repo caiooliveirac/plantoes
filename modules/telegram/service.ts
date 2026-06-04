@@ -6782,8 +6782,11 @@ async function applyParsedEntry(params: {
                     shiftLabel: effectiveShiftType,
                     roleLabel: assumedHalfShift ? HALF_SHIFT_ROLE_LABEL : parsed.roleFunction,
                     ramalLabel: parsed.baseCode,
+                    isShadow: isShadowArrival,
                     source: "telegram",
-                    notes: messageText,
+                    notes: isShadowArrival
+                        ? appendTelegramOperationalNote(null, "telegram sombra", messageText)
+                        : messageText,
                     createdByUserId: null,
                 });
 

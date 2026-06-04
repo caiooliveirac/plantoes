@@ -22,6 +22,7 @@ import {
     resolveOccupancyDirection,
 } from "@/modules/operational/board-rules";
 import type {
+    BoardShadowOccupant,
     InterventionBoardRow,
     PendingDepartureConfirmation,
     PreviousOperationalBoard,
@@ -268,6 +269,31 @@ function formatBoardTime(value: string | null) {
         hour12: false,
         timeZone: "America/Sao_Paulo",
     });
+}
+
+// Sub-linhas de "sombra": médicos que acompanham o titular no mesmo ramal/base.
+// Renderizadas com arte própria (classe .shadow), abaixo da linha do titular,
+// nunca no lugar dele.
+function renderShadowOccupantLines(shadowOccupants: BoardShadowOccupant[] | undefined) {
+    if (!shadowOccupants || shadowOccupants.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="ops-inline-flags subtle">
+            {shadowOccupants.map((shadow) => {
+                const name = shadow.displayName?.trim() || shadow.doctorName;
+                const arrival = formatBoardTime(shadow.boardStartedAt ?? shadow.startedAt);
+                return (
+                    <span key={shadow.occupancyId} className="ops-doctor-line shadow">
+                        <span className="ops-inline-flag shadow">sombra</span>
+                        <span className="ops-shadow-name" title={name}>{name}</span>
+                        <span className="ops-doctor-note continuation">desde {arrival}</span>
+                    </span>
+                );
+            })}
+        </div>
+    );
 }
 
 function formatDateTimeDetail(value: string | null) {
@@ -2408,6 +2434,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             {renderCardIdentityTags(card)}
                             {isDisabledRegulation && <span className="ops-inline-flag disabled">Desativado</span>}
                         </div>
+                        {renderShadowOccupantLines(card.shadowOccupants)}
                         {isDisabledRegulation ? (
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
@@ -2564,6 +2591,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             {renderCardIdentityTags(card)}
                             {isDisabledIntervention && <span className="ops-inline-flag disabled">Desativada</span>}
                         </div>
+                        {renderShadowOccupantLines(card.shadowOccupants)}
                         {isDisabledIntervention ? (
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}

@@ -45,6 +45,18 @@ import {
 import { expireInterventionBaseDeactivations, expireStaleShadowInterventionOccupancies } from "@/modules/intervention/service";
 import { expireStaleRegulationOccupancies } from "@/modules/regulation/service";
 
+// A "sombra" (shadow) doctor coexisting on the same ramal/base as the titular.
+// Shown on the live board as a distinct sub-line under the active occupant, never
+// in its place.
+export interface BoardShadowOccupant {
+  occupancyId: string;
+  doctorId: string;
+  doctorName: string;
+  displayName: string | null;
+  startedAt: string | null;
+  boardStartedAt: string | null;
+}
+
 export interface RegulationBoardRow {
   postId: number;
   occupancyId: string | null;
@@ -65,6 +77,7 @@ export interface RegulationBoardRow {
   disabledReason?: string | null;
   liveSource: "operations_v2" | "legacy_live" | "none";
   liveUpdatedAt: string | null;
+  shadowOccupants?: BoardShadowOccupant[];
 }
 
 export interface InterventionBoardRow {
@@ -88,6 +101,7 @@ export interface InterventionBoardRow {
   scheduledStartAt?: string | null;
   lateArrivalAcknowledgedAt?: string | null;
   lateArrivalAcknowledgedNote?: string | null;
+  shadowOccupants?: BoardShadowOccupant[];
 }
 
 export type PreviousOperationalBucket = "P_INVERTIDO" | "P" | "SD" | "SN";
@@ -701,6 +715,59 @@ function mapInterventionRow(row: Record<string, unknown>): InterventionBoardRow 
   };
 }
 
+function groupShadowOccupantsByTarget(
+  result: unknown,
+  targetKey: "postId" | "baseId",
+): Map<number, BoardShadowOccupant[]> {
+  const map = new Map<number, BoardShadowOccupant[]>();
+  for (const raw of result as unknown as Record<string, unknown>[]) {
+    const targetId = Number(raw[targetKey]);
+    if (!Number.isFinite(targetId)) {
+      continue;
+    }
+    const list = map.get(targetId) ?? [];
+    list.push({
+      occupancyId: String(raw.occupancyId),
+      doctorId: String(raw.doctorId),
+      doctorName: String(raw.doctorName ?? ""),
+      displayName: (raw.displayName ?? null) as string | null,
+      startedAt: (raw.startedAt ?? null) as string | null,
+      boardStartedAt: (raw.boardStartedAt ?? null) as string | null,
+    });
+    map.set(targetId, list);
+  }
+  return map;
+}
+
+// Open "sombra" occupancies coexisting with the titular, keyed by post/base. The
+// shadow is detected by the operational note marker ("[telegram sombra]" / SOMBRA),
+// the same signal used everywhere else for shadow recognition.
+async function listOpenRegulationShadowOccupantsByPost(): Promise<Map<number, BoardShadowOccupant[]>> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    select ro.id as "occupancyId", ro.post_id as "postId", ro.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           ro.started_at as "startedAt", ro.board_started_at as "boardStartedAt"
+    from operations_v2.regulation_occupancies ro
+    join operations_v2.doctors d on d.id = ro.doctor_id
+    where ro.ended_at is null and coalesce(ro.notes, '') ~* 'SOMBRA'
+  `);
+  return groupShadowOccupantsByTarget(result, "postId");
+}
+
+async function listOpenInterventionShadowOccupantsByBase(): Promise<Map<number, BoardShadowOccupant[]>> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    select io.id as "occupancyId", io.base_id as "baseId", io.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           io.started_at as "startedAt", io.board_started_at as "boardStartedAt"
+    from operations_v2.intervention_occupancies io
+    join operations_v2.doctors d on d.id = io.doctor_id
+    where io.ended_at is null and coalesce(io.notes, '') ~* 'SOMBRA'
+  `);
+  return groupShadowOccupantsByTarget(result, "baseId");
+}
+
 function normalizeShiftLabel(value: string | null | undefined): "SD" | "SN" | "P" | null {
   if (!value) {
     return null;
@@ -791,6 +858,16 @@ function mapLogicalShiftCandidate(row: PreviousOperationalRawRow): LogicalShiftC
 
 function isPlausibleSuccessorStart(row: PreviousOperationalRawRow) {
   if (isBotGeneratedNoise(row.notes)) {
+    return false;
+  }
+
+  // A "sombra" (shadow) doctor coexists with the titular on the ramal — she never
+  // takes the slot over. Treating a shadow arrival as a successor would truncate the
+  // active doctor's coverage to a few minutes and drop it as micro-coverage (this is
+  // how Yngra's shadow arrival made Indira vanish from the 2152 records). Intervention
+  // shadows already dodge this via the boardStartedAt-null check below; regulation
+  // shadows carry a boardStartedAt, so they need this explicit guard.
+  if (/SOMBRA/.test(normalizeFreeText(row.notes))) {
     return false;
   }
 
@@ -1498,6 +1575,11 @@ export async function listRegulationBoard() {
           )
         order by
           (ro2.ended_at is null) desc,
+          -- Prefer the titular over a coexisting "sombra": a shadow occupies the same
+          -- ramal as the active doctor but must never be shown in its place. Without
+          -- this, the shadow (which usually arrives later) would win started_at desc
+          -- and hide the titular on the live board.
+          (coalesce(ro2.notes, '') ~* 'SOMBRA') asc,
           ro2.scheduled_start_at desc nulls last,
           ro2.started_at desc,
           ro2.created_at desc
@@ -1517,19 +1599,22 @@ export async function listRegulationBoard() {
 
   const rows = (result as unknown as Record<string, unknown>[]).map(mapRegulationRow);
   const reference = new Date();
+  const shadowByPost = await listOpenRegulationShadowOccupantsByPost();
 
   return rows.map((row) => {
-    if (row.status !== "active" || !row.doctorId) {
-      return row;
-    }
+    const visible = (row.status !== "active" || !row.doctorId)
+      ? row
+      : (shouldKeepRegulationOccupancyVisible({
+          startedAt: row.startedAt,
+          boardStartedAt: row.boardStartedAt,
+          scheduledEndAt: row.scheduledEndAt,
+          shiftLabel: row.shiftLabel,
+          reference,
+        }) ? row : demoteRegulationRowToWaiting(row));
 
-    return shouldKeepRegulationOccupancyVisible({
-      startedAt: row.startedAt,
-      boardStartedAt: row.boardStartedAt,
-      scheduledEndAt: row.scheduledEndAt,
-      shiftLabel: row.shiftLabel,
-      reference,
-    }) ? row : demoteRegulationRowToWaiting(row);
+    const shadows = (shadowByPost.get(visible.postId) ?? [])
+      .filter((shadow) => shadow.occupancyId !== visible.occupancyId);
+    return shadows.length > 0 ? { ...visible, shadowOccupants: shadows } : visible;
   });
 }
 
@@ -1628,7 +1713,13 @@ export async function listInterventionBoard() {
     order by ib.sort_order asc, ib.code asc
   `);
 
-  return (result as unknown as Record<string, unknown>[]).map(mapInterventionRow);
+  const shadowByBase = await listOpenInterventionShadowOccupantsByBase();
+
+  return (result as unknown as Record<string, unknown>[]).map(mapInterventionRow).map((row) => {
+    const shadows = (shadowByBase.get(row.baseId) ?? [])
+      .filter((shadow) => shadow.occupancyId !== row.occupancyId);
+    return shadows.length > 0 ? { ...row, shadowOccupants: shadows } : row;
+  });
 }
 
 export interface OperationalBoardSnapshot {
