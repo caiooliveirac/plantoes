@@ -168,9 +168,25 @@ async function main() {
         console.log(`\n[titular] vou reabrir ${victim.id} (fechada em ${fmt(victim.endedAt)}):`);
         console.log(`   endedAt: ${fmt(victim.endedAt)} -> null`);
         console.log(`   actualEndedAt: ${fmt(victim.actualEndedAt)} -> null`);
+        // Se a titular recebeu uma "saída confirmada" / edição de fim de janela como
+        // workaround para o bug (ex.: actual_ended editado para o fim pago e
+        // departure_confirmed setado), limpamos também esses campos — senão ela fica
+        // ativa porém marcada como já partida (estado inconsistente). Volta a ser uma
+        // ocupação ativa pura; o ciclo normal a fecha no fim do turno.
+        if (victim.departureConfirmedAt) {
+            console.log(`   departureConfirmedAt: ${fmt(victim.departureConfirmedAt)} -> null`);
+            console.log(`   departureConfirmedNote: ${JSON.stringify(victim.departureConfirmedNote)} -> null`);
+        }
         steps.push(async (tx) => {
             await tx.update(regulationOccupancies)
-                .set({ endedAt: null, actualEndedAt: null, updatedAt: new Date() })
+                .set({
+                    endedAt: null,
+                    actualEndedAt: null,
+                    departureConfirmedAt: null,
+                    departureConfirmedByUserId: null,
+                    departureConfirmedNote: null,
+                    updatedAt: new Date(),
+                })
                 .where(eq(regulationOccupancies.id, victim.id));
             await syncRegulationBankHours(tx, victim.id);
         });
