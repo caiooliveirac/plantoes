@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronRight, LogOut, Power, Repeat2, UserCog } from "lucide-react";
+import { ArrowLeftRight, ChevronRight, LogOut, Power, Repeat2, UserCog } from "lucide-react";
 import { DeactivateDialog } from "@/components/board/DeactivateDialog";
 import { DepartureDialog } from "@/components/board/DepartureDialog";
 import { RolePicker } from "@/components/board/RolePicker";
@@ -78,12 +78,24 @@ export function RowActions({
                     <span>{isDisabled ? "Reativar" : "Desativar"}</span>
                 </button>
 
+                {occupancyId && !isDisabled && onOpenAdvanced && (
+                    <button
+                        type="button"
+                        className="row-action"
+                        onClick={(event) => { event.stopPropagation(); onOpenAdvanced(); }}
+                        title={`Remanejar ${doctorName} para outro ramal/base (com justificativa interna)`}
+                    >
+                        <ArrowLeftRight size={13} strokeWidth={2.2} />
+                        <span>Remanejar</span>
+                    </button>
+                )}
+
                 {onOpenAdvanced && (
                     <button
                         type="button"
                         className="row-action ghost"
                         onClick={(event) => { event.stopPropagation(); onOpenAdvanced(); }}
-                        title="Remanejar, transferir, encerrar com justificativa"
+                        title="Mais acoes: corrigir horario, encerrar com justificativa"
                     >
                         <Repeat2 size={13} strokeWidth={2.2} />
                         <span>Mais</span>

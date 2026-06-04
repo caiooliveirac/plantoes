@@ -73,10 +73,14 @@ interface SessionSummary {
 
 interface RegulationCard extends RegulationBoardRow {
     domain: "regulation";
+    // Marcado quando o card representa uma SOMBRA (sub-linha) sendo acionada, para
+    // o drawer de remanejamento inicializar o toggle "entrar como sombra".
+    isShadow?: boolean;
 }
 
 interface InterventionCard extends InterventionBoardRow {
     domain: "intervention";
+    isShadow?: boolean;
 }
 
 type BoardCard = RegulationCard | InterventionCard;
@@ -274,7 +278,10 @@ function formatBoardTime(value: string | null) {
 // Sub-linhas de "sombra": médicos que acompanham o titular no mesmo ramal/base.
 // Renderizadas com arte própria (classe .shadow), abaixo da linha do titular,
 // nunca no lugar dele.
-function renderShadowOccupantLines(shadowOccupants: BoardShadowOccupant[] | undefined) {
+function renderShadowOccupantLines(
+    shadowOccupants: BoardShadowOccupant[] | undefined,
+    onRemanejar?: (shadow: BoardShadowOccupant) => void,
+) {
     if (!shadowOccupants || shadowOccupants.length === 0) {
         return null;
     }
@@ -284,12 +291,28 @@ function renderShadowOccupantLines(shadowOccupants: BoardShadowOccupant[] | unde
             {shadowOccupants.map((shadow) => {
                 const name = shadow.displayName?.trim() || shadow.doctorName;
                 const arrival = formatBoardTime(shadow.boardStartedAt ?? shadow.startedAt);
-                return (
-                    <span key={shadow.occupancyId} className="ops-doctor-line shadow">
+                const content = (
+                    <>
                         <span className="ops-inline-flag shadow">sombra</span>
                         <span className="ops-shadow-name" title={name}>{name}</span>
                         <span className="ops-shadow-time">{arrival}</span>
-                    </span>
+                    </>
+                );
+                if (!onRemanejar) {
+                    return (
+                        <span key={shadow.occupancyId} className="ops-doctor-line shadow">{content}</span>
+                    );
+                }
+                return (
+                    <button
+                        key={shadow.occupancyId}
+                        type="button"
+                        className="ops-doctor-line shadow clickable"
+                        onClick={(event) => { event.stopPropagation(); onRemanejar(shadow); }}
+                        title={`Remanejar ${name} (sombra) para outro ramal/base`}
+                    >
+                        {content}
+                    </button>
                 );
             })}
         </div>
@@ -953,6 +976,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [fixedRoleAck, setFixedRoleAck] = useState(false);
     const [transferConflictStrategy, setTransferConflictStrategy] = useState<TransferConflictStrategy>("remove_destination");
     const [transferRelocationKey, setTransferRelocationKey] = useState("");
+    // Toggle do remanejamento: o ocupante chega ao destino como sombra (acompanha o
+    // titular, não ocupa a vaga) ou como médico/titular. Espelha o estado de origem.
+    const [transferAsShadow, setTransferAsShadow] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isMealBreakSaving, setIsMealBreakSaving] = useState(false);
     const [isPriorityLoading, setIsPriorityLoading] = useState(false);
@@ -1451,6 +1477,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setTransferConfirmOpen(false);
         setTransferConflictStrategy("remove_destination");
         setTransferRelocationKey("");
+        setTransferAsShadow(false);
     }
 
     function syncSelectedDoctorLabel(doctorId: string | null | undefined) {
@@ -1469,6 +1496,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setDrawerOpen(false);
         setProfessionalDrawerOpen(true);
         setSelectedCard(card);
+        setTransferAsShadow(Boolean(card.isShadow));
         setIsContinuityEntry(false);
         setActionMode(card.status === "waiting" ? "start" : canEditActiveCard(card) ? "correct" : null);
         if (card.status === "waiting" || canEditActiveCard(card)) {
@@ -1825,6 +1853,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         },
                         roleLabel: resolveRoleLabelForExplicitRemoval(trimToNull(formState.roleLabel)),
                         notes: normalizedNotes,
+                        asShadow: transferAsShadow,
                         ...(selectedTransferConflict
                             ? {
                                 conflictResolution: {
@@ -2434,7 +2463,20 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             {renderCardIdentityTags(card)}
                             {isDisabledRegulation && <span className="ops-inline-flag disabled">Desativado</span>}
                         </div>
-                        {renderShadowOccupantLines(card.shadowOccupants)}
+                        {renderShadowOccupantLines(card.shadowOccupants, (shadow) => {
+                            openProfessionalDrawer({
+                                ...card,
+                                occupancyId: shadow.occupancyId,
+                                doctorId: shadow.doctorId,
+                                doctorName: shadow.doctorName,
+                                displayName: shadow.displayName,
+                                startedAt: shadow.startedAt,
+                                boardStartedAt: shadow.boardStartedAt,
+                                status: "active",
+                                shadowOccupants: undefined,
+                                isShadow: true,
+                            });
+                        })}
                         {isDisabledRegulation ? (
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
@@ -2591,7 +2633,20 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             {renderCardIdentityTags(card)}
                             {isDisabledIntervention && <span className="ops-inline-flag disabled">Desativada</span>}
                         </div>
-                        {renderShadowOccupantLines(card.shadowOccupants)}
+                        {renderShadowOccupantLines(card.shadowOccupants, (shadow) => {
+                            openProfessionalDrawer({
+                                ...card,
+                                occupancyId: shadow.occupancyId,
+                                doctorId: shadow.doctorId,
+                                doctorName: shadow.doctorName,
+                                displayName: shadow.displayName,
+                                startedAt: shadow.startedAt,
+                                boardStartedAt: shadow.boardStartedAt,
+                                status: "active",
+                                shadowOccupants: undefined,
+                                isShadow: true,
+                            });
+                        })}
                         {isDisabledIntervention ? (
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
@@ -3956,6 +4011,26 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                                     {transferFixedRoleImpact.leavesPresentialMealQueue ? ` Como ${transferFixedRoleImpact.forcedRole} cobre remoto, ele sai da fila de refeicao presencial.` : ""}
                                                                 </div>
                                                             )}
+                                                        </label>
+                                                    )}
+
+                                                    {isTransferAction && (
+                                                        <label className="chief-field chief-shadow-toggle">
+                                                            <span className="chief-shadow-toggle__control">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={transferAsShadow}
+                                                                    onChange={(event) => setTransferAsShadow(event.target.checked)}
+                                                                />
+                                                                <span className="chief-shadow-toggle__label">
+                                                                    Entrar como <strong>sombra</strong> no destino
+                                                                </span>
+                                                            </span>
+                                                            <small className="chief-field-hint">
+                                                                {transferAsShadow
+                                                                    ? "Acompanha o titular do destino sem ocupar a vaga (coexiste) e nao toma o board."
+                                                                    : "Entra como medico/titular no destino (ocupa a vaga normalmente)."}
+                                                            </small>
                                                         </label>
                                                     )}
                                                 </>

@@ -784,6 +784,41 @@ body > * { position: relative; z-index: 1; }
     opacity: 0.7;
 }
 
+/* Sub-linha de sombra clicável (vira <button> para abrir o remanejamento). Reseta
+   o estilo nativo do botão preservando a arte de sombra (borda tracejada à esquerda). */
+button.ops-doctor-line.shadow {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-left: 2px dashed rgba(150, 120, 220, 0.45);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+
+button.ops-doctor-line.shadow.clickable {
+    cursor: pointer;
+    border-radius: 0 6px 6px 0;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+button.ops-doctor-line.shadow.clickable:hover {
+    opacity: 1;
+    background: rgba(150, 120, 220, 0.12);
+}
+
+/* Toggle "entrar como sombra" no drawer de remanejamento. */
+.chief-shadow-toggle .chief-shadow-toggle__control {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.chief-shadow-toggle .chief-shadow-toggle__label strong {
+    color: #cdbcff;
+}
+
 .ops-kick-button,
 .ops-kick-confirm-button {
     display: inline-flex;
