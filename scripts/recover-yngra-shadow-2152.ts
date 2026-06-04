@@ -129,20 +129,34 @@ async function main() {
     )) ?? activeOccupancies.find((occ) => occ.endedAt !== null) ?? null;
 
     // --- Plano ---
-    const plan: Array<() => Promise<void>> = [];
+    // Passos rodam dentro de UMA transação (tudo ou nada). Ordem importa: a sombra
+    // precisa virar coexistente (board NULL + marcador) ANTES de reabrir a titular,
+    // senão duas ocupações ativas COM board no mesmo posto violam o índice único
+    // regulation_occupancies_one_active_board_per_post_idx.
+    // tx is the drizzle transaction executor; typed loosely like the app's own
+    // services (type Executor = any) to avoid PgTransaction/PgDatabase mismatch.
+    const steps: Array<(tx: any) => Promise<void>> = [];
 
     const shadowAlreadyMarked = isRegulationShadowOccupancyNotes(shadowOcc.notes);
-    if (shadowAlreadyMarked) {
-        console.log(`\n[sombra] já marcada como sombra — nada a fazer.`);
+    const shadowBoardSet = shadowOcc.boardStartedAt !== null;
+    if (shadowAlreadyMarked && !shadowBoardSet) {
+        console.log(`\n[sombra] já é sombra coexistente (marcada + board nulo) — nada a fazer.`);
     } else {
-        const newNotes = `[telegram sombra] ${shadowOcc.notes ?? ""}`.trim();
-        console.log(`\n[sombra] vou marcar como sombra:`);
-        console.log(`   notes: ${JSON.stringify(shadowOcc.notes)} -> ${JSON.stringify(newNotes)}`);
-        plan.push(async () => {
-            await db.update(regulationOccupancies)
-                .set({ notes: newNotes, updatedAt: new Date() })
+        const newNotes = shadowAlreadyMarked
+            ? (shadowOcc.notes ?? "")
+            : `[telegram sombra] ${shadowOcc.notes ?? ""}`.trim();
+        console.log(`\n[sombra] vou normalizar como sombra coexistente:`);
+        if (!shadowAlreadyMarked) {
+            console.log(`   notes: ${JSON.stringify(shadowOcc.notes)} -> ${JSON.stringify(newNotes)}`);
+        }
+        if (shadowBoardSet) {
+            console.log(`   boardStartedAt: ${fmt(shadowOcc.boardStartedAt)} -> null (sai do índice de 1-ativo-com-board)`);
+        }
+        steps.push(async (tx) => {
+            await tx.update(regulationOccupancies)
+                .set({ notes: newNotes, boardStartedAt: null, updatedAt: new Date() })
                 .where(eq(regulationOccupancies.id, shadowOcc.id));
-            await syncRegulationBankHours(db, shadowOcc.id);
+            await syncRegulationBankHours(tx, shadowOcc.id);
         });
     }
 
@@ -154,30 +168,32 @@ async function main() {
         console.log(`\n[titular] vou reabrir ${victim.id} (fechada em ${fmt(victim.endedAt)}):`);
         console.log(`   endedAt: ${fmt(victim.endedAt)} -> null`);
         console.log(`   actualEndedAt: ${fmt(victim.actualEndedAt)} -> null`);
-        plan.push(async () => {
-            await db.update(regulationOccupancies)
+        steps.push(async (tx) => {
+            await tx.update(regulationOccupancies)
                 .set({ endedAt: null, actualEndedAt: null, updatedAt: new Date() })
                 .where(eq(regulationOccupancies.id, victim.id));
-            await syncRegulationBankHours(db, victim.id);
+            await syncRegulationBankHours(tx, victim.id);
         });
     }
 
-    if (plan.length === 0) {
+    if (steps.length === 0) {
         console.log(`\nNada a aplicar. Estado já consistente.`);
         await closeDb();
         return;
     }
 
     if (!APPLY) {
-        console.log(`\nDRY-RUN: ${plan.length} alteração(ões) planejada(s). Rode com --apply para escrever.`);
+        console.log(`\nDRY-RUN: ${steps.length} alteração(ões) planejada(s). Rode com --apply para escrever.`);
         await closeDb();
         return;
     }
 
-    for (const step of plan) {
-        await step();
-    }
-    console.log(`\nAplicado: ${plan.length} alteração(ões). Banco de horas recalculado.`);
+    await db.transaction(async (tx) => {
+        for (const step of steps) {
+            await step(tx);
+        }
+    });
+    console.log(`\nAplicado (transação): ${steps.length} alteração(ões). Banco de horas recalculado.`);
     await closeDb();
 }
 
