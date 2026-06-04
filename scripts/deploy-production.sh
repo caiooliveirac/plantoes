@@ -48,6 +48,17 @@ build_with_rollback() {
         rm -rf .next
     fi
 
+    # Aquece o cache de build do Next a partir do build anterior. 'next build'
+    # reaproveita .next/cache (compilacao incremental) e fica MUITO mais rapido;
+    # sem isto cada deploy faz um build "frio". Copiamos (nao movemos) para nao
+    # comprometer o rollback preservado em .next.prev.
+    if [[ -d .next.prev/cache ]]; then
+        mkdir -p .next
+        cp -a .next.prev/cache .next/cache 2>/dev/null \
+            && info "Cache de build do Next reaproveitado (.next/cache)." \
+            || warn "Nao foi possivel reaproveitar .next/cache (segue com build frio)."
+    fi
+
     if NODE_OPTIONS="--max-old-space-size=2048" npm run build && [[ -f .next/BUILD_ID ]]; then
         rm -rf .next.prev
         info "Build concluido (BUILD_ID=$(cat .next/BUILD_ID))."
