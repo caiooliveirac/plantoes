@@ -116,22 +116,28 @@ import {
 } from "@/modules/telegram/slot-audit-commands";
 import {
     isTelegramPaymentAdminCommandText,
+    isTelegramResetCodinomeCommandText,
     parseTelegramPaymentAdminCommand,
     parseTelegramPaymentCodenameAdminCommand,
     parseTelegramPaymentDigestCommand,
+    parseTelegramPaymentListCommand,
     parseTelegramPaymentResetAllCommand,
     parseTelegramPaymentSelfServiceCommand,
+    parseTelegramResetCodinomeCommand,
     TELEGRAM_PAYMENT_CODENAME_USAGE,
     TELEGRAM_PAYMENT_CORRECTION_USAGE,
     TELEGRAM_PAYMENT_DIGEST_USAGE,
     TELEGRAM_PAYMENT_REPORT_USAGE,
+    TELEGRAM_RESET_CODINOME_USAGE,
 } from "@/modules/telegram/payment-commands";
 import { buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
 import {
     checkAttemptLock,
     clearAttempts,
+    listDoctorCodenames,
     registerFailedAttempt,
     resetAllDoctorCodenames,
+    resetDoctorCodename,
     resolveDoctorIdByCodename,
     upsertDoctorCodename,
 } from "@/modules/telegram/payment-access";
@@ -4288,6 +4294,72 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
     }
 
+    if (isTelegramResetCodinomeCommandText(message.text)) {
+        if (message.chat.type !== "private") {
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "reset_codinome_private_only", parsedAction: "reset_codinome" });
+            await sendMessage(message.chat.id, ":/ /resetcodinome fica no privado do bot.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+        const actor = await resolveTelegramCommandActor(message);
+        if (!actor || !actor.roles.some((role) => role === "admin" || role === "chief")) {
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "reset_codinome_forbidden", parsedAction: "reset_codinome" });
+            await sendMessage(message.chat.id, ":/ /resetcodinome e exclusivo de admin/chefia.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+        const resetCmd = parseTelegramResetCodinomeCommand(message.text);
+        if (!resetCmd) {
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "reset_codinome_usage", parsedAction: "reset_codinome" });
+            await sendMessage(message.chat.id, `:/ Use: ${TELEGRAM_RESET_CODINOME_USAGE}`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+        try {
+            // Resolve por codinome atual primeiro; se não achar, por nome completo.
+            let doctorId = await resolveDoctorIdByCodename(resetCmd.query);
+            if (!doctorId) {
+                const { doctor, candidates } = await resolveDoctorWithFallback(resetCmd.query);
+                if (!doctor) {
+                    await markTelegramProcessed(logId, {
+                        status: "ignored",
+                        errorMessage: "reset_codinome_not_resolved",
+                        parsedAction: "reset_codinome",
+                        resolutionData: { query: resetCmd.query, candidates: candidates.slice(0, 3) },
+                    });
+                    await sendMessage(message.chat.id, buildNameUnresolvedReply(message.message_id, candidates), message.message_id);
+                    return { ok: true, ignored: true };
+                }
+                doctorId = doctor.id;
+            }
+            const result = await resetDoctorCodename(doctorId);
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "reset_codinome",
+                parsedDoctorName: result.fullName,
+                resolutionData: { actorRoles: actor.roles, doctorId },
+            });
+            const lines = [
+                "✅ Codinome resetado",
+                `👤 Médico: ${result.fullName}`,
+                `🔑 Novo codinome: ${result.codename}`,
+                result.previous
+                    ? `↩️ O anterior (${result.previous}) não funciona mais.`
+                    : "↩️ O codinome anterior não funciona mais.",
+                "",
+                `Como o médico consulta: /pagamento ${result.codename}`,
+                "📝 Anote no seu controle.",
+            ];
+            await sendMessage(message.chat.id, lines.join("\n"), message.message_id);
+            return { ok: true, reported: true };
+        } catch (error) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: error instanceof Error ? error.message : "reset_codinome_failed",
+                parsedAction: "reset_codinome",
+            });
+            await sendMessage(message.chat.id, `:/ Nao consegui resetar o codinome. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+    }
+
     const paymentCommand = parseTelegramPaymentAdminCommand(message.text);
     if (paymentCommand || isTelegramPaymentAdminCommandText(message.text)) {
         if (message.chat.type !== "private") {
@@ -4368,6 +4440,29 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: "payment_self",
                 });
                 await sendMessage(message.chat.id, `:/ Nao consegui montar o seu pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                return { ok: true, ignored: true };
+            }
+        }
+
+        if (parseTelegramPaymentListCommand(message.text)) {
+            if (!actor.roles.includes("admin")) {
+                await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_list_forbidden", parsedAction: "payment_list" });
+                await sendMessage(message.chat.id, ":/ /pagamento listar e exclusivo de admin.", message.message_id);
+                return { ok: true, ignored: true };
+            }
+            try {
+                const all = await listDoctorCodenames();
+                await markTelegramProcessed(logId, { status: "accepted", parsedAction: "payment_list", resolutionData: { count: all.length } });
+                const header = `🗒️ Codinomes (${all.length} médicos). Os "(sem registro)" foram gerados antes e estão só no seu txt.`;
+                const lines = all.map((r) => `${r.fullName} — ${r.codename ?? "(sem registro)"}`);
+                const messages = chunkTelegramLines(header, lines);
+                for (const [index, text] of messages.entries()) {
+                    await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
+                }
+                return { ok: true, reported: true };
+            } catch (error) {
+                await markTelegramProcessed(logId, { status: "error", errorMessage: error instanceof Error ? error.message : "payment_list_failed", parsedAction: "payment_list" });
+                await sendMessage(message.chat.id, `:/ Nao consegui listar os codinomes. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -5027,12 +5122,14 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         if (helpIsChief) {
             helpLines.push(
                 "",
-                "🔑 *Chefia (privado):* /pagamento · /pagamento conferir · /pagamento corrigir · /pagamento codinome <Nome>",
+                "🔑 *Chefia (privado):* /pagamento · /pagamento conferir · /pagamento corrigir",
+                "   /resetcodinome <Nome ou codinome> — reseta o codinome de um médico",
             );
         }
         if (helpIsAdmin) {
             helpLines.push(
                 "👑 *Admin (privado):* /desfazer · /slots · /medico · /piam · /banco",
+                "   /pagamento listar — lista nome → codinome",
                 "   ⚠️ /pagamento resetar-todos CONFIRMO — reset GERAL dos codinomes",
             );
         }
@@ -5192,8 +5289,9 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 "▸ /pagamento corrigir — corrige pagamento:",
                 "  _/pagamento corrigir PM04 | Karen | 2026-04-07 | SD | motivo_",
                 "",
-                "▸ /pagamento codinome — gera/reseta o codinome de UM médico (autoatendimento):",
-                "  _/pagamento codinome João Silva_ → entregue no particular; ele consulta com _/pagamento <codinome>_",
+                "▸ /resetcodinome — gera/reseta o codinome de UM médico (por nome OU codinome):",
+                "  _/resetcodinome João Silva_  ou  _/resetcodinome tigre-azul-958_",
+                "  → responde com o codinome novo p/ você entregar no particular.",
                 "",
                 "▸ Você também pode puxar a folha de um médico pelo codinome:",
                 "  _/pagamento tigre-azul-958_ ou _/pagamento tigre-azul-958 05_",
@@ -5226,6 +5324,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 "",
                 "▸ /banco — ajusta banco de horas:",
                 "  _/banco Nome Completo SD 0_",
+                "",
+                "▸ /pagamento listar — exporta a lista atual nome → codinome",
                 "",
                 "▸ /pagamento resetar-todos — ⚠️ reset GERAL dos codinomes (todos de uma vez):",
                 "  _/pagamento resetar-todos_ (pede confirmação) → _/pagamento resetar-todos CONFIRMO_",
