@@ -3417,6 +3417,25 @@ function chunkTelegramLines(header: string, lines: string[], maxChars = 3500): s
     return chunks.map((chunk, index) => `(${index + 1}/${total})\n${chunk}`);
 }
 
+// Tutorial curto de autoatendimento (médico comum no privado): só o que ele pode
+// fazer. Usado como resposta a /ajuda e a qualquer mensagem fora do esperado.
+function buildPaymentSelfServiceTutorial() {
+    return [
+        "👋 Aqui você consulta o SEU pagamento.",
+        "",
+        "Envie o seu codinome assim:",
+        "   /pagamento SEU-CODINOME",
+        "",
+        "Exemplos:",
+        "   /pagamento falcao-jade-734       → mês atual",
+        "   /pagamento falcao-jade-734 05    → mês 05 (ou: maio)",
+        "",
+        "Você recebe seus plantões, o total em R$ e o link da folha de ponto. 📄",
+        "",
+        "🔑 Não tem o codinome? Peça à coordenação.",
+    ].join("\n");
+}
+
 function buildPaymentCommandUsageReply(isAdmin: boolean) {
     const lines = [
         ":/ Não entendi esse /pagamento. Formas de usar (no privado):",
@@ -4302,17 +4321,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             const selfCommand = parseTelegramPaymentSelfServiceCommand(message.text);
             if (!selfCommand || !selfCommand.codename) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_identify", parsedAction: "payment_self" });
-                await sendMessage(message.chat.id, [
-                    "👋 Para ver o seu pagamento, mande o seu codinome:",
-                    "",
-                    "   /pagamento SEU-CODINOME",
-                    "",
-                    "Exemplos:",
-                    "   /pagamento falcao-jade-734          (mês atual)",
-                    "   /pagamento falcao-jade-734 05       (ou: maio)",
-                    "",
-                    "Não tem o codinome? Peça ao coordenador.",
-                ].join("\n"), message.message_id);
+                await sendMessage(message.chat.id, buildPaymentSelfServiceTutorial(), message.message_id);
                 return { ok: true, ignored: true };
             }
 
@@ -8836,6 +8845,12 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
     if (!(await isTelegramMessageAllowed(message))) {
         if (log) {
             await markTelegramProcessed(log.id, { status: "ignored", errorMessage: "chat_not_allowed" });
+        }
+        // No privado, um não-controlador (ex.: médico) que mandar /ajuda ou qualquer
+        // coisa fora do esperado recebe o tutorial curto de autoatendimento — não fica
+        // no silêncio. (Em grupos não respondemos para não poluir.)
+        if (message?.chat.type === "private") {
+            await sendMessage(message.chat.id, buildPaymentSelfServiceTutorial(), message.message_id);
         }
         return { ok: true, ignored: true };
     }
