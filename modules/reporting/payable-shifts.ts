@@ -224,7 +224,7 @@ export function resolveDoctorPaymentProfile(metadata: unknown): DoctorPaymentPro
     return "generalist";
 }
 
-function resolveShiftDueAmount(params: {
+export function resolveShiftDueAmount(params: {
     profile: DoctorPaymentProfile;
     operationalDate: string;
     paymentUnit: number;

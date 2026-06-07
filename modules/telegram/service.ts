@@ -117,12 +117,24 @@ import {
 import {
     isTelegramPaymentAdminCommandText,
     parseTelegramPaymentAdminCommand,
+    parseTelegramPaymentCodenameAdminCommand,
     parseTelegramPaymentDigestCommand,
+    parseTelegramPaymentSelfServiceCommand,
+    TELEGRAM_PAYMENT_CODENAME_USAGE,
     TELEGRAM_PAYMENT_CORRECTION_USAGE,
     TELEGRAM_PAYMENT_DIGEST_USAGE,
     TELEGRAM_PAYMENT_REPORT_USAGE,
+    TELEGRAM_PAYMENT_SELF_SERVICE_USAGE,
 } from "@/modules/telegram/payment-commands";
-import { buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
+import { buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
+import {
+    checkAttemptLock,
+    clearAttempts,
+    registerFailedAttempt,
+    resolveDoctorIdByCodename,
+    upsertDoctorCodename,
+} from "@/modules/telegram/payment-access";
+import { createFolhaToken } from "@/lib/folha-ponto/token";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 import { buildTelegramDepartureReport, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
 import { buildTelegramSlotAuditMessages } from "@/modules/telegram/slot-audit-report";
@@ -3375,7 +3387,7 @@ function buildDoctorDirectorySummary(doctor: {
 }
 
 function buildPaymentCommandUsageReply() {
-    return `:/ Use ${TELEGRAM_PAYMENT_DIGEST_USAGE} para o relatório mensal por médico, ${TELEGRAM_PAYMENT_REPORT_USAGE} para conferir o turno e ${TELEGRAM_PAYMENT_CORRECTION_USAGE} para corrigir o médico escolhido para pagamento.`;
+    return `:/ Use ${TELEGRAM_PAYMENT_DIGEST_USAGE} para o relatório mensal por médico, ${TELEGRAM_PAYMENT_REPORT_USAGE} para conferir o turno, ${TELEGRAM_PAYMENT_CORRECTION_USAGE} para corrigir o médico e ${TELEGRAM_PAYMENT_CODENAME_USAGE} para gerar/resetar o codinome de autoatendimento do médico.`;
 }
 
 function buildDepartureReportCommandUsageReply() {
@@ -4203,18 +4215,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
     const paymentCommand = parseTelegramPaymentAdminCommand(message.text);
     if (paymentCommand || isTelegramPaymentAdminCommandText(message.text)) {
-        const actor = await resolveTelegramCommandActor(message);
-        if (!actor || !actor.roles.some((role) => role === "admin" || role === "chief")) {
-            await markTelegramProcessed(logId, {
-                status: "ignored",
-                errorMessage: "payment_command_forbidden",
-                parsedAction: paymentCommand?.name ?? "payment_command",
-                resolutionData: { rawCommand: message.text },
-            });
-            await sendMessage(message.chat.id, pickTelegramReply("command_forbidden", message.message_id, {}), message.message_id);
-            return { ok: true, ignored: true };
-        }
-
         if (message.chat.type !== "private") {
             await markTelegramProcessed(logId, {
                 status: "ignored",
@@ -4222,8 +4222,118 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: paymentCommand?.name ?? "payment_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ Conferencia e correcao de pagamento ficam no privado do bot, para nao poluir o grupo operacional.", message.message_id);
+            await sendMessage(message.chat.id, ":/ Conferencia de pagamento fica no privado do bot, para nao poluir o grupo operacional.", message.message_id);
             return { ok: true, ignored: true };
+        }
+
+        const actor = await resolveTelegramCommandActor(message);
+        if (!actor || !actor.roles.some((role) => role === "admin" || role === "chief")) {
+            // Médico comum: autoatendimento por codinome (consulta o próprio pagamento).
+            const fromId = message.from?.id ? String(message.from.id) : null;
+            if (!fromId) {
+                await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_no_sender", parsedAction: "payment_self" });
+                await sendMessage(message.chat.id, ":/ Nao consegui identificar sua conta de Telegram.", message.message_id);
+                return { ok: true, ignored: true };
+            }
+
+            const lock = await checkAttemptLock(fromId);
+            if (lock.locked) {
+                await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_locked", parsedAction: "payment_self" });
+                await sendMessage(message.chat.id, ":/ Muitas tentativas com codinome incorreto. Aguarde um pouco e tente de novo, ou peca um novo codinome ao coordenador.", message.message_id);
+                return { ok: true, ignored: true };
+            }
+
+            const selfCommand = parseTelegramPaymentSelfServiceCommand(message.text);
+            if (!selfCommand || !selfCommand.codename) {
+                await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_identify", parsedAction: "payment_self" });
+                await sendMessage(message.chat.id, `Para ver o seu pagamento, envie: ${TELEGRAM_PAYMENT_SELF_SERVICE_USAGE}\nPeca o seu codinome ao coordenador. Ex.: /pagamento falcao-jade-734 (mes atual) ou /pagamento falcao-jade-734 05.`, message.message_id);
+                return { ok: true, ignored: true };
+            }
+
+            const selfDoctorId = await resolveDoctorIdByCodename(selfCommand.codename);
+            if (!selfDoctorId) {
+                const next = await registerFailedAttempt(fromId);
+                await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_codename_invalid", parsedAction: "payment_self" });
+                const suffix = next.locked ? " Voce excedeu as tentativas; aguarde antes de tentar de novo." : "";
+                await sendMessage(message.chat.id, `:/ Codinome nao confere.${suffix}`, message.message_id);
+                return { ok: true, ignored: true };
+            }
+
+            try {
+                await clearAttempts(fromId);
+                const board = await getChiefPayableShiftsBoard(selfCommand.monthKey);
+                const [yearStr, monthStr] = board.monthKey.split("-");
+                const year = Number(yearStr);
+                const month = Number(monthStr);
+                const appUrl = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
+                const folhaToken = createFolhaToken({ medicoId: selfDoctorId, ano: year, mes: month });
+                const folhaUrl = `${appUrl}/folha-ponto/${selfDoctorId}/${year}/${String(month).padStart(2, "0")}?t=${folhaToken}`;
+
+                await markTelegramProcessed(logId, {
+                    status: "accepted",
+                    parsedAction: "payment_self",
+                    resolutionData: { doctorId: selfDoctorId, monthKey: board.monthKey },
+                });
+
+                const row = board.doctors.find((doctor) => doctor.doctorId === selfDoctorId);
+                if (!row) {
+                    await sendMessage(message.chat.id, `💰 Seu pagamento — ${board.monthLabel}: nenhum plantão registrado neste mês ainda.\n📄 Folha de ponto: ${folhaUrl}`, message.message_id);
+                    return { ok: true, reported: true };
+                }
+
+                const messages = buildDoctorPayrollMessages(row, board, folhaUrl);
+                for (const [index, text] of messages.entries()) {
+                    await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
+                }
+                return { ok: true, reported: true };
+            } catch (error) {
+                await markTelegramProcessed(logId, {
+                    status: "error",
+                    errorMessage: error instanceof Error ? error.message : "payment_self_failed",
+                    parsedAction: "payment_self",
+                });
+                await sendMessage(message.chat.id, `:/ Nao consegui montar o seu pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                return { ok: true, ignored: true };
+            }
+        }
+
+        const codenameCommand = parseTelegramPaymentCodenameAdminCommand(message.text);
+        if (codenameCommand) {
+            try {
+                const { doctor, candidates } = await resolveDoctorWithFallback(codenameCommand.doctorName);
+                if (!doctor) {
+                    await markTelegramProcessed(logId, {
+                        status: "ignored",
+                        errorMessage: "payment_codename_doctor_not_resolved",
+                        parsedAction: codenameCommand.name,
+                        resolutionData: { doctorQuery: codenameCommand.doctorName, candidates: candidates.slice(0, 3) },
+                    });
+                    await sendMessage(message.chat.id, buildNameUnresolvedReply(message.message_id, candidates), message.message_id);
+                    return { ok: true, ignored: true };
+                }
+                const codename = await upsertDoctorCodename(doctor.id);
+                await markTelegramProcessed(logId, {
+                    status: "accepted",
+                    parsedAction: codenameCommand.name,
+                    parsedDoctorName: doctor.fullName,
+                    resolutionData: { actorRoles: actor.roles, doctorId: doctor.id },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    `:) Codinome de ${resolveTelegramDoctorSurfaceName(doctor)}: ${codename}\nEntregue no particular. Ele consulta enviando /pagamento ${codename}. Gerar de novo reseta o anterior.`,
+                    message.message_id,
+                );
+                return { ok: true, reported: true };
+            } catch (error) {
+                await markTelegramProcessed(logId, {
+                    status: "error",
+                    errorMessage: error instanceof Error ? error.message : "payment_codename_failed",
+                    parsedAction: codenameCommand.name,
+                    resolutionData: { rawCommand: message.text },
+                });
+                await sendMessage(message.chat.id, `:/ Nao consegui gerar o codinome. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                return { ok: true, ignored: true };
+            }
         }
 
         if (!paymentCommand) {
@@ -4908,6 +5018,9 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "",
             "▸ /pagamento corrigir — corrige pagamento:",
             "  _/pagamento corrigir PM04 | Karen | 2026-04-07 | SD | motivo_",
+            "",
+            "▸ /pagamento codinome — gera/reseta o codinome do médico (autoatendimento):",
+            "  _/pagamento codinome João Silva_ → entregue no particular; ele consulta com _/pagamento <codinome>_",
             "",
             `ℹ️ Requer chat privado + chefia (agora: ${isPrivate ? "privado" : "grupo"}).`,
         );
