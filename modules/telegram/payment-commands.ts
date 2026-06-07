@@ -50,6 +50,86 @@ function normalizeDateToken(value: string | null | undefined, reference = new Da
 
 export const TELEGRAM_PAYMENT_REPORT_USAGE = "/pagamento conferir [YYYY-MM-DD] [SD|SN]";
 export const TELEGRAM_PAYMENT_CORRECTION_USAGE = "/pagamento corrigir alvo | Nome Completo | [YYYY-MM-DD] | [SD|SN] | [motivo]";
+export const TELEGRAM_PAYMENT_DIGEST_USAGE = "/pagamento [mês] (ex.: /pagamento, /pagamento 05, /pagamento maio)";
+
+const MONTH_NAMES_PT: Record<string, number> = {
+    janeiro: 1, jan: 1,
+    fevereiro: 2, fev: 2,
+    marco: 3, mar: 3,
+    abril: 4, abr: 4,
+    maio: 5, mai: 5,
+    junho: 6, jun: 6,
+    julho: 7, jul: 7,
+    agosto: 8, ago: 8,
+    setembro: 9, set: 9,
+    outubro: 10, out: 10,
+    novembro: 11, nov: 11,
+    dezembro: 12, dez: 12,
+};
+
+function stripAccents(value: string) {
+    return value.normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+// Converte um token de mês (vazio, "05", "5", "maio", "março", "2026-05") em
+// monthKey "YYYY-MM". Vazio → null (mês atual). Sem ano, escolhe a ocorrência mais
+// recente daquele mês (este ano se já passou, senão ano anterior).
+export function resolveMonthKeyToken(token: string | null | undefined, reference = new Date()): string | null {
+    const normalized = stripAccents((token ?? "").trim().toLowerCase());
+    if (!normalized) {
+        return null;
+    }
+
+    const local = new Date(reference.getTime() - (3 * 60 * 60000));
+    const currentYear = local.getUTCFullYear();
+    const currentMonth = local.getUTCMonth() + 1;
+
+    const ymMatch = normalized.match(/^(\d{4})-(\d{2})$/);
+    if (ymMatch) {
+        const month = Number(ymMatch[2]);
+        return month >= 1 && month <= 12 ? `${ymMatch[1]}-${ymMatch[2]}` : null;
+    }
+
+    const month = /^\d{1,2}$/.test(normalized) ? Number(normalized) : MONTH_NAMES_PT[normalized] ?? null;
+    if (!month || month < 1 || month > 12) {
+        return null;
+    }
+
+    const year = month <= currentMonth ? currentYear : currentYear - 1;
+    return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+export type TelegramPaymentDigestCommand = {
+    name: "payment_digest";
+    monthKey: string | null;
+    rawBody: string;
+};
+
+// Reconhece "/pagamento" sozinho ou "/pagamento <mês>" (sem os subcomandos
+// conferir/corrigir, que continuam tratados por parseTelegramPaymentAdminCommand).
+export function parseTelegramPaymentDigestCommand(text: string, reference = new Date()): TelegramPaymentDigestCommand | null {
+    const match = text.trim().match(/^\/pagamento(?:@\w+)?\s*([\s\S]*)$/i);
+    if (!match) {
+        return null;
+    }
+
+    const body = match[1]?.trim() ?? "";
+    if (!body) {
+        return { name: "payment_digest", monthKey: null, rawBody: "" };
+    }
+
+    const tokens = body.split(/\s+/).filter(Boolean);
+    if (tokens.length !== 1) {
+        return null;
+    }
+
+    const monthKey = resolveMonthKeyToken(tokens[0], reference);
+    if (!monthKey) {
+        return null;
+    }
+
+    return { name: "payment_digest", monthKey, rawBody: body };
+}
 
 export type TelegramPaymentAdminCommand =
     | {

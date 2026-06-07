@@ -117,9 +117,13 @@ import {
 import {
     isTelegramPaymentAdminCommandText,
     parseTelegramPaymentAdminCommand,
+    parseTelegramPaymentDigestCommand,
     TELEGRAM_PAYMENT_CORRECTION_USAGE,
+    TELEGRAM_PAYMENT_DIGEST_USAGE,
     TELEGRAM_PAYMENT_REPORT_USAGE,
 } from "@/modules/telegram/payment-commands";
+import { buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
+import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 import { buildTelegramDepartureReport, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
 import { buildTelegramSlotAuditMessages } from "@/modules/telegram/slot-audit-report";
 import { buildTelegramSummaryReport } from "@/modules/telegram/summary-report";
@@ -3371,7 +3375,7 @@ function buildDoctorDirectorySummary(doctor: {
 }
 
 function buildPaymentCommandUsageReply() {
-    return `:/ Use ${TELEGRAM_PAYMENT_REPORT_USAGE} para conferir e ${TELEGRAM_PAYMENT_CORRECTION_USAGE} para corrigir o médico escolhido para pagamento.`;
+    return `:/ Use ${TELEGRAM_PAYMENT_DIGEST_USAGE} para o relatório mensal por médico, ${TELEGRAM_PAYMENT_REPORT_USAGE} para conferir o turno e ${TELEGRAM_PAYMENT_CORRECTION_USAGE} para corrigir o médico escolhido para pagamento.`;
 }
 
 function buildDepartureReportCommandUsageReply() {
@@ -4223,6 +4227,44 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
 
         if (!paymentCommand) {
+            const digestCommand = parseTelegramPaymentDigestCommand(message.text);
+            if (digestCommand) {
+                try {
+                    const board = await getChiefPayableShiftsBoard(digestCommand.monthKey);
+                    const messages = buildPaymentDigestMessages(board, new Date());
+
+                    await markTelegramProcessed(logId, {
+                        status: "accepted",
+                        parsedAction: "payment_digest",
+                        resolutionData: {
+                            actorRoles: actor.roles,
+                            monthKey: board.monthKey,
+                            doctorCount: board.summary.doctorCount,
+                            messageCount: messages.length,
+                        },
+                    });
+
+                    if (messages.length === 0) {
+                        await sendMessage(message.chat.id, `:) Nenhum plantão registrado em ${board.monthLabel} ainda.`, message.message_id);
+                        return { ok: true, reported: true };
+                    }
+
+                    for (const [index, text] of messages.entries()) {
+                        await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
+                    }
+                    return { ok: true, reported: true };
+                } catch (error) {
+                    await markTelegramProcessed(logId, {
+                        status: "error",
+                        errorMessage: error instanceof Error ? error.message : "payment_digest_failed",
+                        parsedAction: "payment_digest",
+                        resolutionData: { rawCommand: message.text },
+                    });
+                    await sendMessage(message.chat.id, `:/ Nao consegui montar o relatorio mensal. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                    return { ok: true, ignored: true };
+                }
+            }
+
             await markTelegramProcessed(logId, {
                 status: "ignored",
                 errorMessage: "payment_command_usage_invalid",
@@ -4855,6 +4897,10 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "",
             "━━━━━━━━━━━━━━━━━━",
             "🔑 *CHEFIA (privado do bot)*",
+            "",
+            "▸ /pagamento — relatório do mês por médico (plantão a plantão):",
+            "  _/pagamento_ (mês atual)",
+            "  _/pagamento 05_ ou _/pagamento maio_ (mês escolhido)",
             "",
             "▸ /pagamento conferir — confere alocação de pagamento:",
             "  _/pagamento conferir_ (turno atual)",
