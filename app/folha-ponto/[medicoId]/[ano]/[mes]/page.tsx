@@ -20,6 +20,19 @@ function baseNomeCurto(domain: "regulation" | "intervention"): string {
     return domain === "regulation" ? "CRU" : "intervenção";
 }
 
+// "HH:MM" no fuso de operação (America/Sao_Paulo) a partir de um ISO; undefined se vazio.
+function horaSaoPaulo(iso: string | null | undefined): string | undefined {
+    if (!iso) {
+        return undefined;
+    }
+    return new Intl.DateTimeFormat("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Sao_Paulo",
+    }).format(new Date(iso));
+}
+
 export default async function FolhaPontoPage({
     params,
     searchParams,
@@ -61,11 +74,20 @@ export default async function FolhaPontoPage({
 
     const plantoes: Plantao[] = board.payableShifts
         .filter((shift) => shift.doctorId === medicoId)
-        .map((shift) => ({
-            dia: dayFromOperationalDate(shift.operationalDate),
-            turno: shift.shiftLabel as Turno,
-            baseNomeCurto: baseNomeCurto(shift.domain),
-        }))
+        .map((shift) => {
+            // Plantão cheio usa o horário padrão do turno (07–19 / 19–07). Meio
+            // plantão (paymentUnit < 1) precisa do horário REAL trabalhado, senão a
+            // folha sai 07–19 errado em vez de, ex., 11–17.
+            const horaEntrada = horaSaoPaulo(shift.startedAt);
+            const horaSaida = horaSaoPaulo(shift.endedAt);
+            const meioPlantao = shift.paymentUnit < 1 && Boolean(horaEntrada) && Boolean(horaSaida);
+            return {
+                dia: dayFromOperationalDate(shift.operationalDate),
+                turno: shift.shiftLabel as Turno,
+                baseNomeCurto: baseNomeCurto(shift.domain),
+                ...(meioPlantao ? { horaEntrada, horaSaida } : {}),
+            };
+        })
         .filter((p) => p.dia >= 1 && p.dia <= 31);
 
     const metadata = (doctor.metadata ?? {}) as Record<string, unknown>;
