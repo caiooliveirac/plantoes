@@ -469,6 +469,37 @@ export const telegramBotNotices = operationsV2.table(
     ],
 );
 
+// Codinome de autoatendimento: o médico consulta o próprio pagamento no privado do
+// bot enviando /pagamento <codinome>. Guardamos só o HMAC do codinome (nunca em claro).
+// 1 codinome ativo por médico; regenerar (reset) sobrescreve o hash anterior.
+export const doctorPaymentAccess = operationsV2.table(
+    "doctor_payment_access",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
+        codenameHmac: text("codename_hmac").notNull(),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("doctor_payment_access_doctor_idx").on(table.doctorId),
+        uniqueIndex("doctor_payment_access_codename_idx").on(table.codenameHmac),
+    ],
+);
+
+// Anti-força-bruta por conta de Telegram: conta tentativas de codinome erradas numa
+// janela e trava temporariamente após o limite.
+export const telegramPaymentAccessAttempts = operationsV2.table(
+    "telegram_payment_access_attempts",
+    {
+        telegramUserId: varchar("telegram_user_id", { length: 32 }).primaryKey(),
+        failedCount: integer("failed_count").notNull().default(0),
+        windowStartedAt: timestamp("window_started_at", { withTimezone: true }),
+        lockedUntil: timestamp("locked_until", { withTimezone: true }),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+);
+
 export const auditLogs = operationsV2.table(
     "audit_logs",
     {

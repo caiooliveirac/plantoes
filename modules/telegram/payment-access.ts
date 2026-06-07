@@ -1,0 +1,168 @@
+import { createHmac, randomInt } from "node:crypto";
+
+import { eq } from "drizzle-orm";
+
+import { getDb } from "@/db";
+import { doctorPaymentAccess, telegramPaymentAccessAttempts } from "@/db/schema";
+
+// Cooldown anti-força-bruta por conta de Telegram.
+export const ATTEMPT_LIMIT = 5;
+export const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+export const ATTEMPT_LOCK_MS = 60 * 60 * 1000;
+
+export interface AttemptRecord {
+    failedCount: number;
+    windowStartedAt: Date | null;
+    lockedUntil: Date | null;
+}
+
+// Lógica pura: dado o estado anterior e "agora", calcula o próximo estado após uma
+// tentativa errada. Reinicia a contagem quando a janela expira; trava ao atingir o
+// limite. Extraída para ser testável sem banco.
+export function computeNextAttempt(prev: { failedCount: number; windowStartedAt: Date | null } | null, now: Date): AttemptRecord {
+    const windowOpen = prev?.windowStartedAt
+        && (now.getTime() - prev.windowStartedAt.getTime()) < ATTEMPT_WINDOW_MS;
+    const failedCount = (windowOpen ? prev!.failedCount : 0) + 1;
+    const windowStartedAt = windowOpen ? prev!.windowStartedAt! : now;
+    const lockedUntil = failedCount >= ATTEMPT_LIMIT ? new Date(now.getTime() + ATTEMPT_LOCK_MS) : null;
+    return { failedCount, windowStartedAt, lockedUntil };
+}
+
+export function isAttemptLocked(lockedUntil: Date | null | undefined, now: Date) {
+    return Boolean(lockedUntil && lockedUntil.getTime() > now.getTime());
+}
+
+// Listas curadas: sem acento e sem caracteres ambíguos, fáceis de ditar no telefone.
+const CODENAME_ADJECTIVES = [
+    "agil", "azul", "bravo", "calmo", "claro", "denso", "doce", "firme",
+    "forte", "frio", "guapo", "jade", "leve", "livre", "lucido", "macio",
+    "nobre", "novo", "puro", "rapido", "raro", "sabio", "sereno", "vivo",
+] as const;
+
+const CODENAME_NOUNS = [
+    "falcao", "tigre", "lobo", "aguia", "puma", "garca", "corvo", "raposa",
+    "onca", "gaviao", "tucano", "javali", "lince", "bisao", "condor", "veado",
+    "tatu", "quati", "sabia", "urubu", "pelicano", "cervo", "lontra", "suricato",
+] as const;
+
+function getPepper() {
+    const secret = process.env.AUTH_SECRET?.trim();
+    if (!secret) {
+        throw new Error("AUTH_SECRET is required for payment-access codenames.");
+    }
+    return secret;
+}
+
+// Normaliza para casar variações de digitação: minúsculas, sem acento, espaços/
+// separadores viram hífen único, remove o resto.
+export function normalizeCodename(value: string) {
+    return value
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+}
+
+export function hashCodename(code: string) {
+    return createHmac("sha256", getPepper()).update(normalizeCodename(code)).digest("hex");
+}
+
+function pick<T>(items: readonly T[]) {
+    return items[randomInt(items.length)];
+}
+
+// Ex.: "falcao-jade-734". ~24 bits de entropia; combinado com o cooldown, resistente
+// a adivinhação.
+export function generateCodename() {
+    const number = String(randomInt(100, 1000));
+    return `${pick(CODENAME_NOUNS)}-${pick(CODENAME_ADJECTIVES)}-${number}`;
+}
+
+// Gera (ou regenera = reset) o codinome de um médico e devolve o valor em claro para
+// o admin repassar. Em colisão improvável do hash, tenta de novo algumas vezes.
+export async function upsertDoctorCodename(doctorId: string) {
+    const db = getDb();
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const codename = generateCodename();
+        const codenameHmac = hashCodename(codename);
+        try {
+            await db.insert(doctorPaymentAccess)
+                .values({ doctorId, codenameHmac })
+                .onConflictDoUpdate({
+                    target: doctorPaymentAccess.doctorId,
+                    set: { codenameHmac, updatedAt: new Date() },
+                });
+            return codename;
+        } catch (error) {
+            // Colisão no índice único de codename_hmac → tenta outro valor.
+            if (attempt === 4) {
+                throw error;
+            }
+        }
+    }
+    throw new Error("could not generate a unique codename");
+}
+
+export async function resolveDoctorIdByCodename(code: string): Promise<string | null> {
+    const normalized = normalizeCodename(code);
+    if (!normalized) {
+        return null;
+    }
+    const db = getDb();
+    const [row] = await db
+        .select({ doctorId: doctorPaymentAccess.doctorId })
+        .from(doctorPaymentAccess)
+        .where(eq(doctorPaymentAccess.codenameHmac, hashCodename(normalized)))
+        .limit(1);
+    return row?.doctorId ?? null;
+}
+
+export interface AttemptLockState {
+    locked: boolean;
+    lockedUntil: Date | null;
+}
+
+export async function checkAttemptLock(telegramUserId: string, now = new Date()): Promise<AttemptLockState> {
+    const db = getDb();
+    const [row] = await db
+        .select({ lockedUntil: telegramPaymentAccessAttempts.lockedUntil })
+        .from(telegramPaymentAccessAttempts)
+        .where(eq(telegramPaymentAccessAttempts.telegramUserId, telegramUserId))
+        .limit(1);
+    if (isAttemptLocked(row?.lockedUntil, now)) {
+        return { locked: true, lockedUntil: row!.lockedUntil };
+    }
+    return { locked: false, lockedUntil: null };
+}
+
+// Registra uma tentativa errada; trava ao atingir o limite dentro da janela.
+export async function registerFailedAttempt(telegramUserId: string, now = new Date()): Promise<AttemptLockState> {
+    const db = getDb();
+    const [existing] = await db
+        .select({
+            failedCount: telegramPaymentAccessAttempts.failedCount,
+            windowStartedAt: telegramPaymentAccessAttempts.windowStartedAt,
+        })
+        .from(telegramPaymentAccessAttempts)
+        .where(eq(telegramPaymentAccessAttempts.telegramUserId, telegramUserId))
+        .limit(1);
+
+    const { failedCount, windowStartedAt, lockedUntil } = computeNextAttempt(existing ?? null, now);
+
+    await db.insert(telegramPaymentAccessAttempts)
+        .values({ telegramUserId, failedCount, windowStartedAt, lockedUntil, updatedAt: now })
+        .onConflictDoUpdate({
+            target: telegramPaymentAccessAttempts.telegramUserId,
+            set: { failedCount, windowStartedAt, lockedUntil, updatedAt: now },
+        });
+
+    return { locked: Boolean(lockedUntil), lockedUntil };
+}
+
+export async function clearAttempts(telegramUserId: string) {
+    const db = getDb();
+    await db.delete(telegramPaymentAccessAttempts)
+        .where(eq(telegramPaymentAccessAttempts.telegramUserId, telegramUserId));
+}

@@ -3,6 +3,8 @@ import { eq } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
+import { requireAuthenticatedSession } from "@/lib/auth/server";
+import { isValidFolhaToken } from "@/lib/folha-ponto/token";
 import type { DadosFolhaPonto, Plantao, Turno } from "@/lib/folha-ponto/types";
 import { FolhaPontoClient } from "./FolhaPontoClient";
 
@@ -20,15 +22,23 @@ function baseNomeCurto(domain: "regulation" | "intervention"): string {
 
 export default async function FolhaPontoPage({
     params,
+    searchParams,
 }: {
     params: Promise<{ medicoId: string; ano: string; mes: string }>;
+    searchParams: Promise<{ t?: string }>;
 }) {
     const { medicoId, ano: anoStr, mes: mesStr } = await params;
+    const { t } = await searchParams;
 
     const ano = Number(anoStr);
     const mes = Number(mesStr);
     if (!Number.isInteger(ano) || ano < 2020 || ano > 2100) notFound();
     if (!Number.isInteger(mes) || mes < 1 || mes > 12) notFound();
+
+    // Acesso: link assinado (médico, via bot) OU sessão admin (botão do site).
+    if (!isValidFolhaToken(t, { medicoId, ano, mes })) {
+        await requireAuthenticatedSession(["admin"]);
+    }
 
     if (!hasDatabaseUrl()) notFound();
 
