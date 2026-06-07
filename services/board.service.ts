@@ -3136,6 +3136,71 @@ function buildAdditionalShadowPaymentAllocationRows(params: {
   return rows;
 }
 
+const PAYMENT_SLOT_DURATION_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Médicos que já têm um SD elegível no MESMO dia operacional da noite (o SD
+ * imediatamente antes do SN), para o slot SD que está sendo montado.
+ *
+ * Um SD anchorado no dia anterior fica em `slotStartIso - 24h` (o SN dessa noite
+ * fica em `slotStartIso - 12h`). Só é relevante quando o board é SD, porque é o
+ * único caso em que um P noturno carregaria para frente.
+ */
+function buildDoctorsWithSdOnSnDay(
+  candidates: LogicalShiftCandidate[],
+  slotStartIso: string,
+  boardShiftLabel: "SD" | "SN",
+) {
+  const doctors = new Set<string>();
+  if (boardShiftLabel !== "SD") {
+    return doctors;
+  }
+
+  const sameDaySdStartIso = new Date(new Date(slotStartIso).getTime() - (2 * PAYMENT_SLOT_DURATION_MS)).toISOString();
+  for (const candidate of candidates) {
+    if (candidate.logicalSlot !== "SD" || candidate.logicalSlotStart !== sameDaySdStartIso) {
+      continue;
+    }
+    if (!isEligiblePresenceCandidate(candidate) || isMicroCoverage(candidate)) {
+      continue;
+    }
+    doctors.add(candidate.doctorId);
+  }
+
+  return doctors;
+}
+
+/**
+ * Um "P" declarado à noite (SN) que carregaria para o SD do dia seguinte deve
+ * ser suprimido quando o médico JÁ tem um SD no mesmo dia: nesse caso o P é a
+ * continuidade do dia que ele já trabalhou (fecha às 07h), não um novo plantão
+ * que avança até as 19h de amanhã. Sem isso, surge um SD fantasma no dia
+ * seguinte (caso Reinaldo: SD@1368 + SN(P)@2033 virava SD@2033 fantasma) que
+ * ainda pode deslocar o SD real via dedup por doctorId.
+ *
+ * Quem avisa P à noite SEM ter SD no dia (chegada noturna fresca) não entra em
+ * `doctorsWithSdOnSnDay` e segue cobrindo o SD seguinte normalmente.
+ */
+function isSuppressedBackwardContinuityCarry(
+  candidate: LogicalShiftCandidate,
+  slotStartIso: string,
+  boardShiftLabel: "SD" | "SN",
+  doctorsWithSdOnSnDay: Set<string>,
+) {
+  if (boardShiftLabel !== "SD") {
+    return false;
+  }
+  if (candidate.shiftLabel !== "P" || candidate.logicalSlot !== "SN") {
+    return false;
+  }
+  // Só carregamentos (o SN começou no slot anterior); um candidato in-slot não é carry.
+  if (candidate.logicalSlotStart === slotStartIso) {
+    return false;
+  }
+
+  return doctorsWithSdOnSnDay.has(candidate.doctorId);
+}
+
 export function buildPaymentAllocationBoardModel(params: {
   targets: PaymentAllocationTargetDefinition[];
   rawRows: PaymentAllocationRawRow[];
@@ -3150,10 +3215,15 @@ export function buildPaymentAllocationBoardModel(params: {
   const successorStartMap = resolveSuccessorStartMap(cleanRows);
   const continuitySourceSummaryByOccupancyId = buildContinuitySourceSummaryMap(cleanRows);
   const eligibleTargets = params.targets.filter((target) => shouldIncludePaymentAllocationTarget(target, params.shiftLabel));
-  const logicalCandidates = collapseLogicalShiftCandidates(cleanRows
+  const mappedCandidates = cleanRows
     .map(mapLogicalShiftCandidate)
-    .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null))
+    .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null));
+  // Calculado ANTES do filtro de cobertura: o SD do dia anterior não cobre este
+  // slot SD, então some do pipeline — mas precisamos saber que ele existe.
+  const doctorsWithSdOnSnDay = buildDoctorsWithSdOnSnDay(mappedCandidates, params.startedAt, params.shiftLabel);
+  const logicalCandidates = collapseLogicalShiftCandidates(mappedCandidates
     .filter((candidate) => doesCandidateCoverPaymentSlot(candidate, params.startedAt))
+    .filter((candidate) => !isSuppressedBackwardContinuityCarry(candidate, params.startedAt, params.shiftLabel, doctorsWithSdOnSnDay))
   ).filter((candidate) => isEligiblePresenceCandidate(candidate))
     .filter((candidate) => !isMicroCoverage(candidate))
     .filter((candidate, _, all) => !shouldIgnoreDuplicateRestart(candidate, all));

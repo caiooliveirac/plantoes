@@ -927,3 +927,174 @@ test("buildPaymentAllocationBoardModel does not let a backdated telegram ghost t
         ?? board.regulation.find((row) => row.doctorName === "Taiane Pinto");
     assert.ok(taianeRow, "Taiane deveria continuar na alocação de pagamento do PR03 SD");
 });
+// ---------------------------------------------------------------------------
+// P noturno (continuidade) NÃO pode virar SD fantasma no dia seguinte quando o
+// médico já tem um SD no mesmo dia. Caso real: Reinaldo SD@1368 + SN(P)@2033 na
+// segunda gerava um SD@2033 fantasma na terça que deslocava o SD@1368 legítimo.
+// ---------------------------------------------------------------------------
+
+function makeRegRow(overrides: Partial<PaymentAllocationRawRow> = {}): PaymentAllocationRawRow {
+    return makeRow({
+        domain: "regulation",
+        targetCode: "1368",
+        targetLabel: "1368",
+        ramalLabel: "1368",
+        ...overrides,
+    });
+}
+
+test("um P noturno NÃO cria SD fantasma no dia seguinte quando o médico já tem SD no mesmo dia", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [
+            makeTarget({ domain: "regulation", targetCode: "1368", targetLabel: "1368", sortOrder: 1, defaultRole: "COI" }),
+            makeTarget({ domain: "regulation", targetCode: "2033", targetLabel: "2033", sortOrder: 33 }),
+        ],
+        rawRows: [
+            // SD da segunda na 1368 (bem registrado).
+            makeRegRow({
+                occupancyId: "occ-sd-1368",
+                targetCode: "1368", targetLabel: "1368", ramalLabel: "1368",
+                doctorId: "doc-reinaldo", doctorName: "Reinaldo Lima", displayName: "Reinaldo",
+                startedAt: "2026-03-28T10:00:00.000Z",
+                boardStartedAt: "2026-03-28T10:00:00.000Z",
+                endedAt: "2026-03-28T22:00:00.000Z",
+                actualEndedAt: "2026-03-28T22:00:00.000Z",
+                scheduledStartAt: "2026-03-28T10:00:00.000Z",
+                scheduledEndAt: "2026-03-28T22:00:00.000Z",
+                shiftLabel: "SD",
+                continuityGroupId: "cg-rei-sd",
+                notes: "Reinaldo 1368 SD",
+            }),
+            // SN da segunda na 2033, avisada como continuidade (P), sem saída.
+            makeRegRow({
+                occupancyId: "occ-sn-2033",
+                targetCode: "2033", targetLabel: "2033", ramalLabel: "2033",
+                doctorId: "doc-reinaldo", doctorName: "Reinaldo Lima", displayName: "Reinaldo",
+                startedAt: "2026-03-28T22:00:00.000Z",
+                boardStartedAt: "2026-03-28T22:00:00.000Z",
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-03-28T22:00:00.000Z",
+                scheduledEndAt: "2026-03-29T10:00:00.000Z",
+                shiftLabel: "P",
+                continuityGroupId: "cg-rei-sn",
+                notes: "Reinaldo continua 2033",
+            }),
+        ],
+        // Board do SD de TERÇA (dia seguinte).
+        operationalDate: "2026-03-29T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-29T10:00:00.000Z",
+        endedAt: "2026-03-29T22:00:00.000Z",
+        generatedAt: "2026-03-29T23:00:00.000Z",
+    });
+
+    const reinaldoRows = board.regulation.filter((row) => row.doctorName === "Reinaldo Lima");
+    assert.equal(
+        reinaldoRows.length,
+        0,
+        "Reinaldo não deveria aparecer no SD de terça (P da segunda à noite é continuidade do dia que já trabalhou)",
+    );
+});
+
+test("um P noturno SEM SD no mesmo dia continua cobrindo o SD seguinte (forward legítimo)", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [
+            makeTarget({ domain: "regulation", targetCode: "2033", targetLabel: "2033", sortOrder: 33 }),
+        ],
+        rawRows: [
+            // Apenas a chegada noturna em P, sem nenhum SD na segunda.
+            makeRegRow({
+                occupancyId: "occ-sn-2033",
+                targetCode: "2033", targetLabel: "2033", ramalLabel: "2033",
+                doctorId: "doc-fresh", doctorName: "Carla Nunes", displayName: "Carla",
+                startedAt: "2026-03-28T22:00:00.000Z",
+                boardStartedAt: "2026-03-28T22:00:00.000Z",
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-03-28T22:00:00.000Z",
+                scheduledEndAt: "2026-03-29T10:00:00.000Z",
+                shiftLabel: "P",
+                continuityGroupId: "cg-carla",
+                notes: "Carla P 2033",
+            }),
+        ],
+        operationalDate: "2026-03-29T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-29T10:00:00.000Z",
+        endedAt: "2026-03-29T22:00:00.000Z",
+        generatedAt: "2026-03-29T23:00:00.000Z",
+    });
+
+    const carlaRow = board.regulation.find((row) => row.doctorName === "Carla Nunes");
+    assert.ok(carlaRow, "Carla deveria continuar cobrindo o SD seguinte: P noturno sem SD no dia é forward legítimo");
+    assert.equal(carlaRow?.targetCode, "2033");
+});
+
+test("o P noturno suprimido não desloca o SD real do médico em outro ramal", () => {
+    // SD de terça: Reinaldo tem um SD real na 1368 (terça) e o resíduo do P da
+    // segunda na 2033. O fantasma não pode roubar o doctorId e derrubar a 1368.
+    const board = buildPaymentAllocationBoardModel({
+        targets: [
+            makeTarget({ domain: "regulation", targetCode: "1368", targetLabel: "1368", sortOrder: 1, defaultRole: "COI" }),
+            makeTarget({ domain: "regulation", targetCode: "2033", targetLabel: "2033", sortOrder: 33 }),
+        ],
+        rawRows: [
+            // SD da SEGUNDA na 1368 (gera o "tem SD no mesmo dia" para o P da segunda à noite).
+            makeRegRow({
+                occupancyId: "occ-sd-seg-1368",
+                targetCode: "1368", targetLabel: "1368", ramalLabel: "1368",
+                doctorId: "doc-reinaldo", doctorName: "Reinaldo Lima", displayName: "Reinaldo",
+                startedAt: "2026-03-28T10:00:00.000Z",
+                boardStartedAt: "2026-03-28T10:00:00.000Z",
+                endedAt: "2026-03-28T22:00:00.000Z",
+                actualEndedAt: "2026-03-28T22:00:00.000Z",
+                scheduledStartAt: "2026-03-28T10:00:00.000Z",
+                scheduledEndAt: "2026-03-28T22:00:00.000Z",
+                shiftLabel: "SD",
+                continuityGroupId: "cg-rei-seg-sd",
+                notes: "Reinaldo 1368 SD segunda",
+            }),
+            // P da segunda à noite na 2033 (residual que carregaria para terça).
+            makeRegRow({
+                occupancyId: "occ-sn-seg-2033",
+                targetCode: "2033", targetLabel: "2033", ramalLabel: "2033",
+                doctorId: "doc-reinaldo", doctorName: "Reinaldo Lima", displayName: "Reinaldo",
+                startedAt: "2026-03-28T22:00:00.000Z",
+                boardStartedAt: "2026-03-28T22:00:00.000Z",
+                endedAt: null,
+                actualEndedAt: null,
+                scheduledStartAt: "2026-03-28T22:00:00.000Z",
+                scheduledEndAt: "2026-03-29T10:00:00.000Z",
+                shiftLabel: "P",
+                continuityGroupId: "cg-rei-seg-sn",
+                notes: "Reinaldo continua 2033",
+            }),
+            // SD real de TERÇA na 1368.
+            makeRegRow({
+                occupancyId: "occ-sd-ter-1368",
+                targetCode: "1368", targetLabel: "1368", ramalLabel: "1368",
+                doctorId: "doc-reinaldo", doctorName: "Reinaldo Lima", displayName: "Reinaldo",
+                startedAt: "2026-03-29T10:00:00.000Z",
+                boardStartedAt: "2026-03-29T10:00:00.000Z",
+                endedAt: "2026-03-29T22:00:00.000Z",
+                actualEndedAt: "2026-03-29T22:00:00.000Z",
+                scheduledStartAt: "2026-03-29T10:00:00.000Z",
+                scheduledEndAt: "2026-03-29T22:00:00.000Z",
+                shiftLabel: "SD",
+                continuityGroupId: "cg-rei-ter-sd",
+                notes: "Reinaldo 1368 SD terça",
+            }),
+        ],
+        operationalDate: "2026-03-29T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-29T10:00:00.000Z",
+        endedAt: "2026-03-29T22:00:00.000Z",
+        generatedAt: "2026-03-29T23:00:00.000Z",
+    });
+
+    const row1368 = board.regulation.find((row) => row.targetCode === "1368");
+    const row2033 = board.regulation.find((row) => row.targetCode === "2033");
+    assert.equal(row1368?.doctorName, "Reinaldo Lima", "o SD real de terça na 1368 deve ser pago");
+    assert.notEqual(row2033?.doctorName, "Reinaldo Lima", "a 2033 não deve receber o fantasma de terça");
+});
