@@ -76,6 +76,7 @@ export async function POST(request: NextRequest) {
 
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
+        console.error("[operational/transfers] invalid payload", parsed.error.flatten());
         return NextResponse.json({ error: "Payload invalido para remanejamento operacional." }, { status: 400 });
     }
 
@@ -131,6 +132,7 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({ transfer });
     } catch (error) {
+        console.error("[operational/transfers] transfer failed", error);
         return NextResponse.json(
             { error: error instanceof Error ? error.message : "Nao foi possivel remanejar a ocupacao operacional." },
             { status: 400 },

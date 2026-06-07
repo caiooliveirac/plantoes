@@ -17,6 +17,7 @@ interface RowActionsProps {
     currentRole: string | null;
     isDisabled: boolean;
     onOpenAdvanced?: () => void;
+    onRemanejar?: () => void;
 }
 
 export function RowActions({
@@ -29,6 +30,7 @@ export function RowActions({
     currentRole,
     isDisabled,
     onOpenAdvanced,
+    onRemanejar,
 }: RowActionsProps) {
     const [deactivateOpen, setDeactivateOpen] = useState(false);
     const [departureOpen, setDepartureOpen] = useState(false);
@@ -78,11 +80,11 @@ export function RowActions({
                     <span>{isDisabled ? "Reativar" : "Desativar"}</span>
                 </button>
 
-                {occupancyId && !isDisabled && onOpenAdvanced && (
+                {occupancyId && !isDisabled && onRemanejar && (
                     <button
                         type="button"
                         className="row-action"
-                        onClick={(event) => { event.stopPropagation(); onOpenAdvanced(); }}
+                        onClick={(event) => { event.stopPropagation(); onRemanejar(); }}
                         title={`Remanejar ${doctorName} para outro ramal/base (com justificativa interna)`}
                     >
                         <ArrowLeftRight size={13} strokeWidth={2.2} />
