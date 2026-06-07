@@ -1388,6 +1388,19 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const transferNotesValue = formState.notes.trim();
     const transferNotesTooShort = transferNotesValue.length > 0 && transferNotesValue.length < 8;
     const transferNotesValid = transferNotesValue.length >= 8;
+    // Por que o botao "Confirmar remanejamento" esta bloqueado (null = liberado).
+    // Surface o motivo no modal em vez de um botao mudo com cursor de proibido.
+    const remanejarBlockReason: string | null = (!isTransferAction || !selectedTransferTarget)
+        ? "Selecione um posto/base diferente da lotacao atual para remanejar."
+        : !transferNotesValid
+            ? `Escreva o motivo com pelo menos 8 caracteres (faltam ${Math.max(0, 8 - transferNotesValue.length)}).`
+            : (transferConflictStrategy === "move_destination" && !selectedRelocationTarget)
+                ? "Escolha para onde vai o profissional que ja ocupa o destino."
+                : (transferConflictStrategy === "move_destination" && Boolean(relocationTargetConflict))
+                    ? "O destino alternativo escolhido tambem esta ocupado. Escolha outro."
+                    : (Boolean(transferFixedRoleImpact) && !fixedRoleAck)
+                        ? "Marque o reconhecimento da funcao fixa do destino para continuar."
+                        : null;
     const mealBreakDisplayMode = resolveMealBreakDisplayMode(shiftLabel, mealBreakSession);
     const selectedRegulationRamal = selectedCard?.domain === "regulation" ? selectedCard.postCode : null;
     const selectedNightWorkCurrent = selectedRegulationRamal
@@ -4572,6 +4585,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     </div>
                                 )}
 
+                                {remanejarBlockReason && (
+                                    <p className="chief-field-hint chief-remanejar-block">{remanejarBlockReason}</p>
+                                )}
+
                                 <div className="chief-form-actions full-width">
                                     <button type="button" className="chief-secondary-button" onClick={closeRemanejarModal}>
                                         Cancelar
@@ -4579,7 +4596,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     <button
                                         type="button"
                                         className="chief-primary-button"
-                                        disabled={isSubmitting || isRefreshing || !isTransferAction || !selectedTransferTarget || !transferNotesValid || (transferConflictStrategy === "move_destination" && (!selectedRelocationTarget || Boolean(relocationTargetConflict))) || (Boolean(transferFixedRoleImpact) && !fixedRoleAck)}
+                                        disabled={isSubmitting || isRefreshing || Boolean(remanejarBlockReason)}
                                         onClick={() => void submitOperationalAction({ confirmedTransfer: true })}
                                     >
                                         {isSubmitting || isRefreshing ? "Aplicando..." : "Confirmar remanejamento"}
