@@ -22,9 +22,18 @@ export interface TelegramMessage {
     text?: string;
 }
 
+export interface TelegramCallbackQuery {
+    id: string;
+    from: TelegramUser;
+    message?: TelegramMessage;
+    chat_instance?: string;
+    data?: string;
+}
+
 export interface TelegramUpdate {
     update_id: number;
     message?: TelegramMessage;
+    callback_query?: TelegramCallbackQuery;
 }
 
 export interface TelegramReplyKeyboardMarkup {
@@ -39,7 +48,19 @@ export interface TelegramReplyKeyboardRemove {
     selective?: boolean;
 }
 
-export type TelegramReplyMarkup = TelegramReplyKeyboardMarkup | TelegramReplyKeyboardRemove;
+export interface TelegramInlineKeyboardButton {
+    text: string;
+    callback_data: string;
+}
+
+export interface TelegramInlineKeyboardMarkup {
+    inline_keyboard: TelegramInlineKeyboardButton[][];
+}
+
+export type TelegramReplyMarkup =
+    | TelegramReplyKeyboardMarkup
+    | TelegramReplyKeyboardRemove
+    | TelegramInlineKeyboardMarkup;
 
 async function callApi<T>(method: string, body: Record<string, unknown>) {
     const maxAttempts = 3;
@@ -103,3 +124,31 @@ export function buildChoiceKeyboard(rows: string[][]): TelegramReplyKeyboardMark
 }
 
 export const REMOVE_KEYBOARD: TelegramReplyKeyboardRemove = { remove_keyboard: true };
+
+export function buildInlineKeyboard(rows: TelegramInlineKeyboardButton[][]): TelegramInlineKeyboardMarkup {
+    return { inline_keyboard: rows };
+}
+
+/** Responde ao toque do botão inline (fecha o "loading" do cliente Telegram). */
+export function answerCallbackQuery(callbackQueryId: string, text?: string, showAlert = false) {
+    return callApi<boolean>("answerCallbackQuery", {
+        callback_query_id: callbackQueryId,
+        ...(text ? { text } : {}),
+        ...(showAlert ? { show_alert: true } : {}),
+    });
+}
+
+/** Edita o texto de uma mensagem já enviada (e remove o teclado inline por padrão). */
+export function editMessageText(
+    chatId: string | number,
+    messageId: number,
+    text: string,
+    replyMarkup?: TelegramInlineKeyboardMarkup,
+) {
+    return callApi<TelegramMessage | boolean>("editMessageText", {
+        chat_id: Number(chatId),
+        message_id: messageId,
+        text,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : { reply_markup: { inline_keyboard: [] } }),
+    });
+}

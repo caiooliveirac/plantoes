@@ -176,8 +176,17 @@ import {
 } from "@/modules/telegram/commands";
 import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp, type TelegramRecentSenderMessage } from "@/modules/telegram/command-suggestions";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeMealBreakMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines, type ParsedMessage } from "@/modules/telegram/parser";
-import type { TelegramUpdate } from "@/modules/telegram/api";
-import { buildChoiceKeyboard, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
+import type { TelegramCallbackQuery, TelegramUpdate } from "@/modules/telegram/api";
+import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
+import {
+    buildContinuityRevertCallbackData,
+    type ContinuityRevertDomain,
+    evaluateContinuityRevert,
+    parseContinuityRevertCallbackData,
+} from "@/modules/telegram/continuity-revert";
+
+/** Botão "Foi só esta noite" para reverter um P forward noturno. Null = sem botão. */
+type ForwardContinuityPrompt = { occupancyId: string; domain: ContinuityRevertDomain } | null;
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
 import { buildLateArrivalAcknowledgementAnnouncement, maybeSendInterventionLateArrivalOrientation } from "@/modules/telegram/late-arrival-prompt";
 import { acknowledgeInterventionLateArrival, LATE_HALF_SHIFT_CUTOFF_HOUR, resolveBahiaHour } from "@/modules/bank-hours/late-arrival";
@@ -6619,6 +6628,7 @@ async function handleTelegramReassignment(params: {
         continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
+        forwardContinuityPrompt: null as ForwardContinuityPrompt,
     };
 }
 
@@ -7264,6 +7274,19 @@ async function applyParsedEntry(params: {
         effectiveShiftType,
     }) && parsed.sector === "REGULATION" && !parsed.isDeparture;
 
+    // "P forward": chegada NOTURNA registrada como P que vai cobrir também o SD de
+    // amanhã. Só oferecemos o botão de reverter quando NÃO é continuidade do dia
+    // (treatedAsContinuation) — espelha a regra do pagamento: quem tem SD no dia
+    // fecha às 07h e não avança (ver board.service.ts). Backward não ganha botão.
+    const isNightForwardP = effectiveShiftType === "P"
+        && !parsed.isDeparture
+        && !treatedAsContinuation
+        && occupancyId !== null
+        && resolveOperationalShiftWindow(eventAt).shiftLabel === "SN";
+    const forwardContinuityPrompt: ForwardContinuityPrompt = isNightForwardP && occupancyId
+        ? { occupancyId, domain: parsed.sector === "REGULATION" ? "regulation" : "intervention" }
+        : null;
+
     return {
         occupancyId,
         successKind,
@@ -7279,6 +7302,7 @@ async function applyParsedEntry(params: {
         continuityInterpretation,
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
+        forwardContinuityPrompt,
     };
 }
 
@@ -7382,6 +7406,7 @@ async function handlePiamAutoArrival(params: {
         continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: true,
         piamOriginalCode: params.originalCode,
+        forwardContinuityPrompt: null as ForwardContinuityPrompt,
     };
 }
 
@@ -7426,6 +7451,27 @@ async function maybeApplyPiamRouting(
     parsed.sector = "REGULATION";
     parsed.baseCode = "PIAM";
     return { applied: true, originalCode };
+}
+
+async function maybeSendContinuityForwardPrompt(
+    chatId: number,
+    replyToMessageId: number,
+    prompt: ForwardContinuityPrompt,
+) {
+    if (!prompt) {
+        return;
+    }
+
+    await sendMessage(
+        chatId,
+        "📋 Entendi como *P* (plantão 24h) — cobre até as *19h de amanhã*."
+        + "\nSe foi só esta noite, toque abaixo nos próximos 2 min.",
+        replyToMessageId,
+        buildInlineKeyboard([[{
+            text: "Foi só esta noite (SN)",
+            callback_data: buildContinuityRevertCallbackData(prompt.domain, prompt.occupancyId),
+        }]]),
+    );
 }
 
 async function sendSuccessReply(
@@ -7786,6 +7832,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             nameSelectionFirstMsgAt,
             pending.resolutionData.parsed.arrivalTime,
         );
+        await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
@@ -8618,6 +8665,7 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
             originalEventAt,
             parsedEntry.arrivalTime,
         );
+        await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "cru_coi_ramal_apply_failed";
@@ -8639,7 +8687,72 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
     }
 }
 
+async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery) {
+    const parsed = parseContinuityRevertCallbackData(callbackQuery.data);
+    if (!parsed) {
+        // Callback desconhecido: encerra o "loading" do cliente e ignora.
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+
+    const chat = callbackQuery.message?.chat;
+    const messageId = callbackQuery.message?.message_id;
+    const allowed = chat
+        ? await isTelegramMessageAllowed({
+            message_id: messageId ?? 0,
+            chat,
+            from: callbackQuery.from,
+            date: 0,
+        } as TelegramUpdate["message"])
+        : false;
+    if (!allowed) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+
+    const db = getDb();
+    const occupancy = parsed.domain === "regulation"
+        ? await db.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, parsed.occupancyId) })
+        : await db.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, parsed.occupancyId) });
+
+    const outcome = evaluateContinuityRevert({
+        occupancy: occupancy ? { shiftLabel: occupancy.shiftLabel, createdAt: occupancy.createdAt } : null,
+        now: new Date(),
+    });
+
+    if (outcome !== "ok") {
+        const text = outcome === "expired"
+            ? "Tempo esgotado: a janela de 2 min para reverter já passou. Se precisar, avise a chefia."
+            : outcome === "already_changed"
+                ? "Já estava ajustado — nada a reverter."
+                : "Não encontrei esse registro para reverter.";
+        await answerCallbackQuery(callbackQuery.id, text, true);
+        return { ok: true, reverted: false, outcome };
+    }
+
+    // Rebaixa P -> SN: correctXxxOccupancy recalcula a janela agendada (só a noite).
+    if (parsed.domain === "regulation") {
+        await correctRegulationOccupancy(parsed.occupancyId, { shiftLabel: "SN" }, null);
+    } else {
+        await correctInterventionOccupancy(parsed.occupancyId, { shiftLabel: "SN" }, null);
+    }
+
+    await answerCallbackQuery(callbackQuery.id, "Pronto! Marquei como SN — cobre só esta noite.");
+    if (chat && messageId) {
+        await editMessageText(
+            chat.id,
+            messageId,
+            "✅ Corrigido para *SN (noturno)* — cobre só esta noite, sem o dia de amanhã.",
+        );
+    }
+    return { ok: true, reverted: true };
+}
+
 export async function processTelegramUpdate(update: TelegramUpdate) {
+    if (update.callback_query) {
+        return handleTelegramCallbackQuery(update.callback_query);
+    }
+
     const message = update.message;
     if (!message?.text) {
         return { ok: true, ignored: true };
@@ -8870,6 +8983,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.extendedLongShift,
                                 result.displacedDoctorName,
                             );
+                            await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
                             const errorMsg = error instanceof Error ? error.message : "unknown_error";
@@ -8958,6 +9072,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.effectiveShiftType,
                                 result.reassignedFrom,
                             );
+                            await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
                             const errorMsg = error instanceof Error ? error.message : "unknown_error";
@@ -9336,7 +9451,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveArrivalEventTimeForPhase(messageReferenceAt, firstParsed.arrivalTime, isGenuineArrival);
 
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName } = await applyParsedEntry({
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName, forwardContinuityPrompt } = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
@@ -9386,6 +9501,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     messageReferenceAt,
                     firstParsed.arrivalTime,
                 );
+                await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, forwardContinuityPrompt);
 
                 // Late half-shift orientation: when an intervention SD arrival lands
                 // at or after the 9h coordination cutoff (Bahia local), publish a
