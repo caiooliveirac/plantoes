@@ -12,6 +12,7 @@ import type {
     ChiefPayableDoctorRow,
     PayableShift,
 } from "@/modules/reporting/payable-shifts";
+import { resolveShiftDueAmount } from "@/modules/reporting/payable-shifts";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 
 const WEEKDAY_LABELS_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"] as const;
@@ -130,6 +131,64 @@ export function buildPaymentDigestMessages(board: ChiefPayableBoardModel, refere
         + `Gerado ${stamp} · confira com cada plantonista antes de subir p/ pagamento`;
 
     return packMessages(header, blocks);
+}
+
+const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+
+function formatBRL(value: number | null | undefined) {
+    return BRL.format(Number.isFinite(value) ? Number(value) : 0);
+}
+
+function doctorShiftDue(row: ChiefPayableDoctorRow, shift: PayableShift) {
+    return resolveShiftDueAmount({
+        profile: row.paymentProfile ?? "generalist",
+        operationalDate: shift.operationalDate,
+        paymentUnit: shift.paymentUnit,
+    });
+}
+
+// Mensagem de autoatendimento do médico: linhas com R$, total do mês e link assinado
+// para a folha de ponto. Quebra por linhas se passar do limite, mantendo o rodapé
+// (total + link) na última mensagem.
+export function buildDoctorPayrollMessages(row: ChiefPayableDoctorRow, board: ChiefPayableBoardModel, folhaUrl: string): string[] {
+    const shifts = row.cells.flatMap((cell) => cell.shifts);
+    const header = `💰 Seu pagamento — ${board.monthLabel} (prévia, sujeita a conferência)`;
+
+    if (shifts.length === 0) {
+        return [`${header}\n\nNenhum plantão registrado neste mês ainda.`];
+    }
+
+    const lines = shifts.map((shift) => `${formatShiftLine(shift)} · ${formatBRL(doctorShiftDue(row, shift))}`);
+    const total = row.totalDue ?? shifts.reduce((sum, shift) => sum + doctorShiftDue(row, shift), 0);
+    const footer = `Total: ${formatBRL(total)}\n📄 Folha de ponto: ${folhaUrl}`;
+
+    // Caminho comum: cabe tudo numa mensagem.
+    const full = [header, "", ...lines, "", footer].join("\n");
+    if (full.length <= MAX_MESSAGE_CHARS) {
+        return [full];
+    }
+
+    // Volume alto: empacota as linhas em várias mensagens; rodapé entra na última.
+    const chunks: string[] = [];
+    let current = header;
+    for (const line of lines) {
+        const candidate = `${current}\n${line}`;
+        if (candidate.length <= MAX_MESSAGE_CHARS) {
+            current = candidate;
+            continue;
+        }
+        chunks.push(current);
+        current = line;
+    }
+    const footerBlock = `\n\n${footer}`;
+    if (current.length + footerBlock.length <= MAX_MESSAGE_CHARS) {
+        current += footerBlock;
+        chunks.push(current);
+    } else {
+        chunks.push(current, footer);
+    }
+    const total2 = chunks.length;
+    return chunks.map((chunk, index) => `(${index + 1}/${total2})\n${chunk}`);
 }
 
 export function shouldSendPaymentDigest(referenceDate: Date) {

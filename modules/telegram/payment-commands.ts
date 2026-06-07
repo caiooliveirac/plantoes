@@ -131,6 +131,50 @@ export function parseTelegramPaymentDigestCommand(text: string, reference = new 
     return { name: "payment_digest", monthKey, rawBody: body };
 }
 
+export const TELEGRAM_PAYMENT_CODENAME_USAGE = "/pagamento codinome Nome Completo";
+export const TELEGRAM_PAYMENT_SELF_SERVICE_USAGE = "/pagamento <seu codinome> [mês]";
+
+export type TelegramPaymentCodenameAdminCommand = {
+    name: "payment_codename";
+    doctorName: string;
+    rawBody: string;
+};
+
+// Admin: "/pagamento codinome <Nome Completo>" gera/reseta o codinome do médico.
+export function parseTelegramPaymentCodenameAdminCommand(text: string): TelegramPaymentCodenameAdminCommand | null {
+    const match = text.trim().match(/^\/pagamento(?:@\w+)?\s+codinome\b\s*([\s\S]*)$/i);
+    if (!match) {
+        return null;
+    }
+    const doctorName = match[1]?.trim() ?? "";
+    if (!doctorName) {
+        return null;
+    }
+    return { name: "payment_codename", doctorName, rawBody: doctorName };
+}
+
+export type TelegramPaymentSelfServiceCommand = {
+    name: "payment_self";
+    codename: string | null;
+    monthKey: string | null;
+};
+
+// Médico (não admin): "/pagamento <codinome> [mês]". Primeiro token é o codinome;
+// segundo (opcional) é o mês. Sem token → codename null (pedir identificação).
+export function parseTelegramPaymentSelfServiceCommand(text: string, reference = new Date()): TelegramPaymentSelfServiceCommand | null {
+    const match = text.trim().match(/^\/pagamento(?:@\w+)?\s*([\s\S]*)$/i);
+    if (!match) {
+        return null;
+    }
+    const body = match[1]?.trim() ?? "";
+    if (!body) {
+        return { name: "payment_self", codename: null, monthKey: null };
+    }
+    const tokens = body.split(/\s+/).filter(Boolean);
+    const monthKey = tokens.length >= 2 ? resolveMonthKeyToken(tokens[1], reference) : null;
+    return { name: "payment_self", codename: tokens[0] ?? null, monthKey };
+}
+
 export type TelegramPaymentAdminCommand =
     | {
         name: "payment_report";
