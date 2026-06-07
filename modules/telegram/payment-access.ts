@@ -1,9 +1,9 @@
 import { createHmac, randomInt } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 
 import { getDb } from "@/db";
-import { doctorPaymentAccess, telegramPaymentAccessAttempts } from "@/db/schema";
+import { doctorPaymentAccess, doctors, telegramPaymentAccessAttempts } from "@/db/schema";
 
 // Cooldown anti-força-bruta por conta de Telegram.
 export const ATTEMPT_LIMIT = 5;
@@ -103,6 +103,24 @@ export async function upsertDoctorCodename(doctorId: string) {
         }
     }
     throw new Error("could not generate a unique codename");
+}
+
+// Reset em massa: gera um codinome novo para cada médico ativo (invalida o anterior)
+// e devolve a lista para entregar. Usado pelo comando admin /pagamento resetar-todos.
+export async function resetAllDoctorCodenames(): Promise<Array<{ fullName: string; codename: string }>> {
+    const db = getDb();
+    const rows = await db
+        .select({ id: doctors.id, fullName: doctors.fullName })
+        .from(doctors)
+        .where(eq(doctors.isActive, true))
+        .orderBy(asc(doctors.normalizedName));
+
+    const out: Array<{ fullName: string; codename: string }> = [];
+    for (const row of rows) {
+        const codename = await upsertDoctorCodename(row.id);
+        out.push({ fullName: row.fullName, codename });
+    }
+    return out;
 }
 
 export async function resolveDoctorIdByCodename(code: string): Promise<string | null> {

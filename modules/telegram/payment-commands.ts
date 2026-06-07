@@ -133,6 +133,23 @@ export function parseTelegramPaymentDigestCommand(text: string, reference = new 
 
 export const TELEGRAM_PAYMENT_CODENAME_USAGE = "/pagamento codinome Nome Completo";
 export const TELEGRAM_PAYMENT_SELF_SERVICE_USAGE = "/pagamento <seu codinome> [mês]";
+export const TELEGRAM_PAYMENT_RESET_ALL_USAGE = "/pagamento resetar-todos CONFIRMO";
+
+export type TelegramPaymentResetAllCommand = {
+    name: "payment_reset_all";
+    confirmed: boolean;
+};
+
+// Admin: "/pagamento resetar-todos" (pede confirmação) e "/pagamento resetar-todos
+// CONFIRMO" (executa o reset geral). "codinome" não casa aqui (resetar-todos != codinome).
+export function parseTelegramPaymentResetAllCommand(text: string): TelegramPaymentResetAllCommand | null {
+    const match = text.trim().match(/^\/pagamento(?:@\w+)?\s+resetar-todos\b\s*([\s\S]*)$/i);
+    if (!match) {
+        return null;
+    }
+    const rest = (match[1] ?? "").trim().toUpperCase();
+    return { name: "payment_reset_all", confirmed: rest === "CONFIRMO" };
+}
 
 export type TelegramPaymentCodenameAdminCommand = {
     name: "payment_codename";
