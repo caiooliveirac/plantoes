@@ -119,18 +119,19 @@ import {
     parseTelegramPaymentAdminCommand,
     parseTelegramPaymentCodenameAdminCommand,
     parseTelegramPaymentDigestCommand,
+    parseTelegramPaymentResetAllCommand,
     parseTelegramPaymentSelfServiceCommand,
     TELEGRAM_PAYMENT_CODENAME_USAGE,
     TELEGRAM_PAYMENT_CORRECTION_USAGE,
     TELEGRAM_PAYMENT_DIGEST_USAGE,
     TELEGRAM_PAYMENT_REPORT_USAGE,
-    TELEGRAM_PAYMENT_SELF_SERVICE_USAGE,
 } from "@/modules/telegram/payment-commands";
 import { buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
 import {
     checkAttemptLock,
     clearAttempts,
     registerFailedAttempt,
+    resetAllDoctorCodenames,
     resolveDoctorIdByCodename,
     upsertDoctorCodename,
 } from "@/modules/telegram/payment-access";
@@ -2515,6 +2516,14 @@ async function isTelegramMessageAllowed(message: TelegramUpdate["message"]) {
         return true;
     }
 
+    // Autoatendimento de pagamento: qualquer médico pode consultar o PRÓPRIO
+    // pagamento no privado com /pagamento <codinome>. Liberamos só este comando
+    // para não-controladores; handleTelegramCommand valida codinome + cooldown e
+    // não expõe os subcomandos de admin (conferir/corrigir/codinome/resetar-todos).
+    if (isTelegramPaymentAdminCommandText(message.text ?? "")) {
+        return true;
+    }
+
     const actor = await resolveTelegramCommandActor(message);
     return Boolean(actor && actor.roles.some((role) => role === "admin" || role === "chief"));
 }
@@ -3386,8 +3395,55 @@ function buildDoctorDirectorySummary(doctor: {
     return details.length > 0 ? ` (${details.join(", ")})` : "";
 }
 
-function buildPaymentCommandUsageReply() {
-    return `:/ Use ${TELEGRAM_PAYMENT_DIGEST_USAGE} para o relatório mensal por médico, ${TELEGRAM_PAYMENT_REPORT_USAGE} para conferir o turno, ${TELEGRAM_PAYMENT_CORRECTION_USAGE} para corrigir o médico e ${TELEGRAM_PAYMENT_CODENAME_USAGE} para gerar/resetar o codinome de autoatendimento do médico.`;
+// Empacota um cabeçalho + várias linhas em mensagens do Telegram sob o limite,
+// numerando quando há mais de uma.
+function chunkTelegramLines(header: string, lines: string[], maxChars = 3500): string[] {
+    const chunks: string[] = [];
+    let current = header;
+    for (const line of lines) {
+        const candidate = `${current}\n${line}`;
+        if (candidate.length <= maxChars) {
+            current = candidate;
+            continue;
+        }
+        chunks.push(current);
+        current = line;
+    }
+    chunks.push(current);
+    if (chunks.length <= 1) {
+        return chunks;
+    }
+    const total = chunks.length;
+    return chunks.map((chunk, index) => `(${index + 1}/${total})\n${chunk}`);
+}
+
+function buildPaymentCommandUsageReply(isAdmin: boolean) {
+    const lines = [
+        ":/ Não entendi esse /pagamento. Formas de usar (no privado):",
+        "",
+        "📊 Relatório do mês por médico",
+        "   /pagamento",
+        "   /pagamento 05   (ou: /pagamento maio)",
+        "",
+        "🔎 Conferir um turno",
+        "   /pagamento conferir",
+        "   /pagamento conferir 2026-04-07 SD",
+        "",
+        "✏️ Corrigir o médico de um plantão",
+        "   /pagamento corrigir PM04 | Karen | 2026-04-07 | SD | motivo",
+        "",
+        "🪪 Codinome de UM médico (autoatendimento)",
+        "   /pagamento codinome João Silva",
+    ];
+    if (isAdmin) {
+        lines.push(
+            "",
+            "🔐 Resetar TODOS os codinomes (admin)",
+            "   /pagamento resetar-todos",
+            "   depois: /pagamento resetar-todos CONFIRMO",
+        );
+    }
+    return lines.join("\n");
 }
 
 function buildDepartureReportCommandUsageReply() {
@@ -4246,7 +4302,17 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             const selfCommand = parseTelegramPaymentSelfServiceCommand(message.text);
             if (!selfCommand || !selfCommand.codename) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_identify", parsedAction: "payment_self" });
-                await sendMessage(message.chat.id, `Para ver o seu pagamento, envie: ${TELEGRAM_PAYMENT_SELF_SERVICE_USAGE}\nPeca o seu codinome ao coordenador. Ex.: /pagamento falcao-jade-734 (mes atual) ou /pagamento falcao-jade-734 05.`, message.message_id);
+                await sendMessage(message.chat.id, [
+                    "👋 Para ver o seu pagamento, mande o seu codinome:",
+                    "",
+                    "   /pagamento SEU-CODINOME",
+                    "",
+                    "Exemplos:",
+                    "   /pagamento falcao-jade-734          (mês atual)",
+                    "   /pagamento falcao-jade-734 05       (ou: maio)",
+                    "",
+                    "Não tem o codinome? Peça ao coordenador.",
+                ].join("\n"), message.message_id);
                 return { ok: true, ignored: true };
             }
 
@@ -4293,6 +4359,43 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: "payment_self",
                 });
                 await sendMessage(message.chat.id, `:/ Nao consegui montar o seu pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                return { ok: true, ignored: true };
+            }
+        }
+
+        const resetAllCommand = parseTelegramPaymentResetAllCommand(message.text);
+        if (resetAllCommand) {
+            if (!actor.roles.includes("admin")) {
+                await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_reset_all_forbidden", parsedAction: "payment_reset_all" });
+                await sendMessage(message.chat.id, ":/ /pagamento resetar-todos e exclusivo de admin do bot.", message.message_id);
+                return { ok: true, ignored: true };
+            }
+            if (!resetAllCommand.confirmed) {
+                await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_reset_all_unconfirmed", parsedAction: "payment_reset_all" });
+                await sendMessage(message.chat.id, "⚠️ Isso gera codinomes NOVOS para TODOS os médicos ativos e invalida os atuais de uma vez.\nPara confirmar, envie: /pagamento resetar-todos CONFIRMO", message.message_id);
+                return { ok: true, ignored: true };
+            }
+            try {
+                const results = await resetAllDoctorCodenames();
+                await markTelegramProcessed(logId, {
+                    status: "accepted",
+                    parsedAction: "payment_reset_all",
+                    resolutionData: { actorRoles: actor.roles, count: results.length },
+                });
+                const header = `🔐 Codinomes resetados — ${results.length} médicos. Os anteriores não valem mais.`;
+                const lines = results.map((r) => `${r.fullName} — ${r.codename}`);
+                const messages = chunkTelegramLines(header, lines);
+                for (const [index, text] of messages.entries()) {
+                    await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
+                }
+                return { ok: true, reported: true };
+            } catch (error) {
+                await markTelegramProcessed(logId, {
+                    status: "error",
+                    errorMessage: error instanceof Error ? error.message : "payment_reset_all_failed",
+                    parsedAction: "payment_reset_all",
+                });
+                await sendMessage(message.chat.id, `:/ Nao consegui resetar os codinomes. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4375,13 +4478,54 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 }
             }
 
+            // Admin/chefe também pode puxar a folha de um médico pelo codinome
+            // (útil para suporte/teste). Ex.: /pagamento tigre-azul-958 [mês].
+            const adminSelfCommand = parseTelegramPaymentSelfServiceCommand(message.text);
+            if (adminSelfCommand?.codename) {
+                const adminDoctorId = await resolveDoctorIdByCodename(adminSelfCommand.codename);
+                if (adminDoctorId) {
+                    try {
+                        const board = await getChiefPayableShiftsBoard(adminSelfCommand.monthKey);
+                        const [yearStr, monthStr] = board.monthKey.split("-");
+                        const year = Number(yearStr);
+                        const month = Number(monthStr);
+                        const appUrl = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
+                        const folhaToken = createFolhaToken({ medicoId: adminDoctorId, ano: year, mes: month });
+                        const folhaUrl = `${appUrl}/folha-ponto/${adminDoctorId}/${year}/${String(month).padStart(2, "0")}?t=${folhaToken}`;
+                        await markTelegramProcessed(logId, {
+                            status: "accepted",
+                            parsedAction: "payment_self_admin",
+                            resolutionData: { actorRoles: actor.roles, doctorId: adminDoctorId, monthKey: board.monthKey },
+                        });
+                        const row = board.doctors.find((doctor) => doctor.doctorId === adminDoctorId);
+                        if (!row) {
+                            await sendMessage(message.chat.id, `💰 Pagamento — ${board.monthLabel}: nenhum plantão registrado neste mês ainda.\n📄 Folha de ponto: ${folhaUrl}`, message.message_id);
+                            return { ok: true, reported: true };
+                        }
+                        const messages = buildDoctorPayrollMessages(row, board, folhaUrl);
+                        for (const [index, text] of messages.entries()) {
+                            await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
+                        }
+                        return { ok: true, reported: true };
+                    } catch (error) {
+                        await markTelegramProcessed(logId, {
+                            status: "error",
+                            errorMessage: error instanceof Error ? error.message : "payment_self_admin_failed",
+                            parsedAction: "payment_self_admin",
+                        });
+                        await sendMessage(message.chat.id, `:/ Nao consegui montar o pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                        return { ok: true, ignored: true };
+                    }
+                }
+            }
+
             await markTelegramProcessed(logId, {
                 status: "ignored",
                 errorMessage: "payment_command_usage_invalid",
                 parsedAction: "payment_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, buildPaymentCommandUsageReply(), message.message_id);
+            await sendMessage(message.chat.id, buildPaymentCommandUsageReply(actor.roles.includes("admin")), message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4846,7 +4990,11 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
     const normalizedText = message.text.trim().toLowerCase();
     if (normalizedText === "/ajuda" || normalizedText === "/help") {
-        const helpText = [
+        const helpActor = await resolveTelegramCommandActor(message);
+        const helpIsAdmin = helpActor?.roles.includes("admin") ?? false;
+        const helpIsChief = helpActor?.roles.some((r) => r === "admin" || r === "chief") ?? false;
+
+        const helpLines = [
             "📋 *Guia rápido do bot*",
             "",
             "▸ *CHEGADA* — avise no grupo:",
@@ -4865,9 +5013,23 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "━━━━━━━━━━━━━━━━━━",
             "📌 Para ver *todos* os comandos com exemplos:",
             "  /comandos",
-            "",
-            "💡 Em caso de dúvida, mande /ajuda novamente.",
-        ].join("\n");
+        ];
+
+        if (helpIsChief) {
+            helpLines.push(
+                "",
+                "🔑 *Chefia (privado):* /pagamento · /pagamento conferir · /pagamento corrigir · /pagamento codinome <Nome>",
+            );
+        }
+        if (helpIsAdmin) {
+            helpLines.push(
+                "👑 *Admin (privado):* /desfazer · /slots · /medico · /piam · /banco",
+                "   ⚠️ /pagamento resetar-todos CONFIRMO — reset GERAL dos codinomes",
+            );
+        }
+
+        helpLines.push("", "💡 Em caso de dúvida, mande /ajuda novamente.");
+        const helpText = helpLines.join("\n");
 
         await markTelegramProcessed(logId, {
             status: "accepted",
@@ -4982,72 +5144,94 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "▸ /ajuda — guia rápido",
         );
 
-        sections.push(
-            "",
-            "━━━━━━━━━━━━━━━━━━",
-            "🔐 *CHEFIA (grupo)*",
-            "",
-            "▸ /remover — apaga plantão (⚠️ só admin):",
-            "  _/remover PM04_",
-            "  _/remover Nome PM04 SD_",
-            "",
-            "▸ /ativar — reativa base/ramal:",
-            "  _/ativar PM40_",
-            "  _/ativar PM40 19:10_",
-            "  _/ativar 2031_ (regulação)",
-            "",
-            "▸ /desativar — desativa base/ramal:",
-            "  _/desativar PM40_",
-            "  _/desativar 2031 19:00_",
-            "",
-            `ℹ️ Acesso atual: ${isChief ? "chefia" : "usuário comum"}.`,
-        );
+        if (isChief) {
+            sections.push(
+                "",
+                "━━━━━━━━━━━━━━━━━━",
+                "🔐 *CHEFIA (grupo)*",
+                "",
+                "▸ /remover — apaga plantão (⚠️ só admin):",
+                "  _/remover PM04_",
+                "  _/remover Nome PM04 SD_",
+                "",
+                "▸ /ativar — reativa base/ramal:",
+                "  _/ativar PM40_",
+                "  _/ativar PM40 19:10_",
+                "  _/ativar 2031_ (regulação)",
+                "",
+                "▸ /desativar — desativa base/ramal:",
+                "  _/desativar PM40_",
+                "  _/desativar 2031 19:00_",
+                "",
+                "▸ /meioplantao — registra chegada de meio plantão (chefe/admin):",
+                "  _/meioplantao SM01_ (ocupação ativa) ou _/meioplantao SM01 13:11_",
+            );
 
-        sections.push(
-            "",
-            "━━━━━━━━━━━━━━━━━━",
-            "🔑 *CHEFIA (privado do bot)*",
-            "",
-            "▸ /pagamento — relatório do mês por médico (plantão a plantão):",
-            "  _/pagamento_ (mês atual)",
-            "  _/pagamento 05_ ou _/pagamento maio_ (mês escolhido)",
-            "",
-            "▸ /pagamento conferir — confere alocação de pagamento:",
-            "  _/pagamento conferir_ (turno atual)",
-            "  _/pagamento conferir 2026-04-07 SD_",
-            "",
-            "▸ /pagamento corrigir — corrige pagamento:",
-            "  _/pagamento corrigir PM04 | Karen | 2026-04-07 | SD | motivo_",
-            "",
-            "▸ /pagamento codinome — gera/reseta o codinome do médico (autoatendimento):",
-            "  _/pagamento codinome João Silva_ → entregue no particular; ele consulta com _/pagamento <codinome>_",
-            "",
-            `ℹ️ Requer chat privado + chefia (agora: ${isPrivate ? "privado" : "grupo"}).`,
-        );
+            sections.push(
+                "",
+                "━━━━━━━━━━━━━━━━━━",
+                "🔑 *CHEFIA (privado do bot)*",
+                "",
+                "▸ /pagamento — relatório do mês por médico (plantão a plantão):",
+                "  _/pagamento_ (mês atual)",
+                "  _/pagamento 05_ ou _/pagamento maio_ (mês escolhido)",
+                "",
+                "▸ /pagamento conferir — confere alocação de pagamento:",
+                "  _/pagamento conferir_ (turno atual)",
+                "  _/pagamento conferir 2026-04-07 SD_",
+                "",
+                "▸ /pagamento corrigir — corrige pagamento:",
+                "  _/pagamento corrigir PM04 | Karen | 2026-04-07 | SD | motivo_",
+                "",
+                "▸ /pagamento codinome — gera/reseta o codinome de UM médico (autoatendimento):",
+                "  _/pagamento codinome João Silva_ → entregue no particular; ele consulta com _/pagamento <codinome>_",
+                "",
+                "▸ Você também pode puxar a folha de um médico pelo codinome:",
+                "  _/pagamento tigre-azul-958_ ou _/pagamento tigre-azul-958 05_",
+                "",
+                `ℹ️ Requer chat privado + chefia (agora: ${isPrivate ? "privado" : "grupo"}).`,
+            );
+        }
 
-        sections.push(
-            "",
-            "━━━━━━━━━━━━━━━━━━",
-            "👑 *ADMIN (privado do bot)*",
-            "",
-            "▸ /desfazer — lista e desfaz ações (12h):",
-            "  _/desfazer_ (listar)",
-            "  _/desfazer 1_ (confirma undo #1)",
-            "",
-            "▸ /slots — auditoria de ocupação:",
-            "  _/slots_ (turno atual)",
-            "  _/slots 2026-04-07 SD_",
-            "  _/slots 2026-04-01 2026-04-07 SN_",
-            "",
-            "▸ /medico — cadastro/edição de médico:",
-            "  _/medico cadastrar Nome | Exibição | código | alias1, alias2_",
-            "  _/medico atualizar Busca | Novo Nome_",
-            "",
-            "▸ /banco — ajusta banco de horas:",
-            "  _/banco Nome Completo SD 0_",
-            "",
-            `ℹ️ Requer chat privado + admin (agora: ${isAdmin ? "admin" : "não admin"}; ${isPrivate ? "privado" : "grupo"}).`,
-        );
+        if (isAdmin) {
+            sections.push(
+                "",
+                "━━━━━━━━━━━━━━━━━━",
+                "👑 *ADMIN (privado do bot)*",
+                "",
+                "▸ /desfazer — lista e desfaz ações (12h):",
+                "  _/desfazer_ (listar)",
+                "  _/desfazer 1_ (confirma undo #1)",
+                "",
+                "▸ /slots — auditoria de ocupação:",
+                "  _/slots_ (turno atual)",
+                "  _/slots 2026-04-07 SD_",
+                "  _/slots 2026-04-01 2026-04-07 SN_",
+                "",
+                "▸ /medico — cadastro/edição de médico:",
+                "  _/medico cadastrar Nome | Exibição | código | alias1, alias2_",
+                "  _/medico atualizar Busca | Novo Nome_",
+                "",
+                "▸ /piam — atribui/remove médico do PIAM:",
+                "  _/piam Nome_ · _/piam remover Nome_ · _/piam listar_",
+                "",
+                "▸ /banco — ajusta banco de horas:",
+                "  _/banco Nome Completo SD 0_",
+                "",
+                "▸ /pagamento resetar-todos — ⚠️ reset GERAL dos codinomes (todos de uma vez):",
+                "  _/pagamento resetar-todos_ (pede confirmação) → _/pagamento resetar-todos CONFIRMO_",
+                "",
+                "ℹ️ Requer chat privado + admin de verdade.",
+            );
+        }
+
+        if (!isChief) {
+            sections.push(
+                "",
+                "━━━━━━━━━━━━━━━━━━",
+                "🔒 Comandos de chefia/admin aparecem aqui quando você tiver acesso.",
+            );
+        }
 
         sections.push(
             "",

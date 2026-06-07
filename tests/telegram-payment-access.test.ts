@@ -19,6 +19,7 @@ import {
 } from "@/lib/folha-ponto/token";
 import {
     parseTelegramPaymentCodenameAdminCommand,
+    parseTelegramPaymentResetAllCommand,
     parseTelegramPaymentSelfServiceCommand,
 } from "@/modules/telegram/payment-commands";
 import { buildDoctorPayrollMessages } from "@/modules/telegram/payment-digest";
@@ -122,6 +123,15 @@ test("parseTelegramPaymentSelfServiceCommand: codinome e mês opcional", () => {
     assert.deepEqual(parseTelegramPaymentSelfServiceCommand("/pagamento falcao-jade-734", ref), { name: "payment_self", codename: "falcao-jade-734", monthKey: null });
     assert.deepEqual(parseTelegramPaymentSelfServiceCommand("/pagamento falcao-jade-734 05", ref), { name: "payment_self", codename: "falcao-jade-734", monthKey: "2026-05" });
     assert.deepEqual(parseTelegramPaymentSelfServiceCommand("/pagamento", ref), { name: "payment_self", codename: null, monthKey: null });
+});
+
+test("parseTelegramPaymentResetAllCommand: pede confirmação e reconhece CONFIRMO", () => {
+    assert.deepEqual(parseTelegramPaymentResetAllCommand("/pagamento resetar-todos"), { name: "payment_reset_all", confirmed: false });
+    assert.deepEqual(parseTelegramPaymentResetAllCommand("/pagamento resetar-todos CONFIRMO"), { name: "payment_reset_all", confirmed: true });
+    assert.deepEqual(parseTelegramPaymentResetAllCommand("/pagamento resetar-todos confirmo"), { name: "payment_reset_all", confirmed: true });
+    assert.equal(parseTelegramPaymentResetAllCommand("/pagamento codinome João"), null);
+    assert.equal(parseTelegramPaymentResetAllCommand("/pagamento maio"), null);
+    assert.equal(parseTelegramPaymentResetAllCommand("/pagamento"), null);
 });
 
 // ---------- relatório do médico (com R$ + link) ----------
