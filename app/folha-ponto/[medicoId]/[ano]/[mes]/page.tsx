@@ -20,18 +20,10 @@ function baseNomeCurto(domain: "regulation" | "intervention"): string {
     return domain === "regulation" ? "CRU" : "intervenção";
 }
 
-// "HH:MM" no fuso de operação (America/Sao_Paulo) a partir de um ISO; undefined se vazio.
-function horaSaoPaulo(iso: string | null | undefined): string | undefined {
-    if (!iso) {
-        return undefined;
-    }
-    return new Intl.DateTimeFormat("pt-BR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-        timeZone: "America/Sao_Paulo",
-    }).format(new Date(iso));
-}
+// Meio plantão entra na folha com horário fixo padronizado (cravado), não com o
+// horário real de chegada.
+const MEIO_PLANTAO_ENTRADA = "11:00";
+const MEIO_PLANTAO_SAIDA = "17:00";
 
 export default async function FolhaPontoPage({
     params,
@@ -76,16 +68,14 @@ export default async function FolhaPontoPage({
         .filter((shift) => shift.doctorId === medicoId)
         .map((shift) => {
             // Plantão cheio usa o horário padrão do turno (07–19 / 19–07). Meio
-            // plantão (paymentUnit < 1) precisa do horário REAL trabalhado, senão a
-            // folha sai 07–19 errado em vez de, ex., 11–17.
-            const horaEntrada = horaSaoPaulo(shift.startedAt);
-            const horaSaida = horaSaoPaulo(shift.endedAt);
-            const meioPlantao = shift.paymentUnit < 1 && Boolean(horaEntrada) && Boolean(horaSaida);
+            // plantão (paymentUnit < 1) entra com horário FIXO cravado 11:00–17:00,
+            // independentemente do horário real de chegada.
+            const meioPlantao = shift.paymentUnit < 1;
             return {
                 dia: dayFromOperationalDate(shift.operationalDate),
                 turno: shift.shiftLabel as Turno,
                 baseNomeCurto: baseNomeCurto(shift.domain),
-                ...(meioPlantao ? { horaEntrada, horaSaida } : {}),
+                ...(meioPlantao ? { horaEntrada: MEIO_PLANTAO_ENTRADA, horaSaida: MEIO_PLANTAO_SAIDA } : {}),
             };
         })
         .filter((p) => p.dia >= 1 && p.dia <= 31);
