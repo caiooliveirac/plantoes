@@ -973,6 +973,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [priorityErrorMessage, setPriorityErrorMessage] = useState<string | null>(null);
     const [prioritySuccessMessage, setPrioritySuccessMessage] = useState<string | null>(null);
     const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
+    // Surface focado do remanejamento: abre direto num modal (sem o drawer lateral
+    // genérico) e concentra destino + sombra + motivo + conflito + erro num só lugar.
+    const [remanejarOpen, setRemanejarOpen] = useState(false);
     const [fixedRoleAck, setFixedRoleAck] = useState(false);
     const [transferConflictStrategy, setTransferConflictStrategy] = useState<TransferConflictStrategy>("remove_destination");
     const [transferRelocationKey, setTransferRelocationKey] = useState("");
@@ -1019,6 +1022,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         if (!nextSelected) {
             setSelectedCard(null);
             setActionMode(null);
+            setRemanejarOpen(false);
             return;
         }
 
@@ -1070,6 +1074,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setDrawerOpen(false);
         setProfessionalDrawerOpen(false);
         setTransferConfirmOpen(false);
+        setRemanejarOpen(false);
         setAuthOpen(false);
     }, [viewMode]);
 
@@ -1097,7 +1102,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             return;
         }
 
-        if (drawerOpen || professionalDrawerOpen || priorityDrawerOpen || isSubmitting || isRefreshing) {
+        if (drawerOpen || professionalDrawerOpen || priorityDrawerOpen || remanejarOpen || isSubmitting || isRefreshing) {
             return;
         }
 
@@ -1378,6 +1383,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const relocationTargetConflict = selectedRelocationTarget && selectedRelocationTarget.occupancyId && selectedRelocationTarget.occupancyId !== selectedCard?.occupancyId
         ? selectedRelocationTarget
         : null;
+    // Motivo do remanejamento: o servidor exige mínimo de 8 caracteres
+    // (z.string().trim().min(8) em app/api/operational/transfers/route.ts).
+    const transferNotesValue = formState.notes.trim();
+    const transferNotesTooShort = transferNotesValue.length > 0 && transferNotesValue.length < 8;
+    const transferNotesValid = transferNotesValue.length >= 8;
     const mealBreakDisplayMode = resolveMealBreakDisplayMode(shiftLabel, mealBreakSession);
     const selectedRegulationRamal = selectedCard?.domain === "regulation" ? selectedCard.postCode : null;
     const selectedNightWorkCurrent = selectedRegulationRamal
@@ -1507,6 +1517,31 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setQuickExitReason("");
         setBaseStateAt(toLocalDateTimeValue(card.disabledAt ?? null));
         setBaseStateReason("");
+        resetDrawerFeedback();
+    }
+
+    // Abre o modal focado de remanejamento direto (sem o drawer lateral genérico).
+    // Mantém actionMode="correct" para reaproveitar isTransferAction e o ramo de
+    // payload de transfer em submitOperationalAction.
+    function openRemanejarModal(card: BoardCard) {
+        resetTransferFlow();
+        setDrawerOpen(false);
+        setProfessionalDrawerOpen(false);
+        setIsContinuityEntry(false);
+        setSelectedCard(card);
+        setActionMode("correct");
+        setFormState(buildInitialForm(card));
+        syncSelectedDoctorLabel(card.doctorId ?? null);
+        setTransferAsShadow(Boolean(card.isShadow));
+        setRemanejarOpen(true);
+        resetDrawerFeedback();
+    }
+
+    function closeRemanejarModal() {
+        setRemanejarOpen(false);
+        resetTransferFlow();
+        setActionMode(null);
+        setSelectedCard(null);
         resetDrawerFeedback();
     }
 
@@ -1806,8 +1841,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 return;
             }
 
-            if (!normalizedNotes) {
-                setErrorMessage("Explique o motivo operacional antes de remanejar o plantao.");
+            if (selectedTransferTarget.targetId <= 0 || selectedTransferTarget.key === selectedCardTargetKey) {
+                setErrorMessage("Escolha um destino diferente da lotacao atual.");
+                return;
+            }
+
+            if (!normalizedNotes || normalizedNotes.length < 8) {
+                setErrorMessage("Descreva o motivo do remanejamento com pelo menos 8 caracteres.");
                 return;
             }
 
@@ -2038,6 +2078,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setSelectedCard(null);
             setIsContinuityEntry(false);
             setProfessionalDrawerOpen(false);
+            setRemanejarOpen(false);
             if (session?.canManage) void fetchLatestUndoableAction();
             startRefresh(() => {
                 router.refresh();
@@ -2555,6 +2596,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         currentRole={resolveCardRoleLabel(card)}
                         isDisabled={isDisabledRegulation}
                         onOpenAdvanced={() => { setExpandedCardKey(null); openProfessionalDrawer(card); }}
+                        onRemanejar={() => { setExpandedCardKey(null); openRemanejarModal(card); }}
                     />
                 )}
             </AnimatePresence>
@@ -2686,6 +2728,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         currentRole={resolveCardRoleLabel(card)}
                         isDisabled={isDisabledIntervention}
                         onOpenAdvanced={() => { setExpandedCardKey(null); openProfessionalDrawer(card); }}
+                        onRemanejar={() => { setExpandedCardKey(null); openRemanejarModal(card); }}
                     />
                 )}
             </AnimatePresence>
@@ -3965,73 +4008,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                     </label>
 
                                                     {actionMode === "correct" && (
-                                                        <label className="chief-field">
-                                                            <span>Destino operacional</span>
-                                                            <select
-                                                                className="chief-input chief-select"
-                                                                value={formState.targetKey}
-                                                                onChange={(event) => {
-                                                                    setFixedRoleAck(false);
-                                                                    setFormState((current) => ({ ...current, targetKey: event.target.value }));
-                                                                }}
-                                                            >
-                                                                <optgroup label="Regulacao">
-                                                                    {transferTargetOptions
-                                                                        .filter((option) => option.domain === "regulation")
-                                                                        .map((option) => (
-                                                                            <option key={option.key} value={option.key}>
-                                                                                {option.code} · {option.label}{option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
-                                                                            </option>
-                                                                        ))}
-                                                                </optgroup>
-                                                                <optgroup label="Intervencao">
-                                                                    {transferTargetOptions
-                                                                        .filter((option) => option.domain === "intervention")
-                                                                        .map((option) => (
-                                                                            <option key={option.key} value={option.key} disabled={option.status === "disabled"}>
-                                                                                {option.code} · {option.label}
-                                                                                {option.status === "disabled" ? " · indisponivel" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
-                                                                            </option>
-                                                                        ))}
-                                                                </optgroup>
-                                                            </select>
-                                                            <small className="chief-field-hint">
-                                                                {isTransferAction
-                                                                    ? "O remanejamento apaga o vinculo atual e recria o plantao no destino, preservando chegada, nome e continuidade do pagamento."
-                                                                    : "Mantenha o destino atual para corrigir so medico, horario ou funcao sem mudar a lotacao."}
-                                                            </small>
-                                                            {selectedTransferConflict && (
-                                                                <div className="chief-inline-help chief-transfer-inline-note warning">
-                                                                    {selectedTransferTarget?.code} ja esta ocupado por {selectedTransferConflict.occupantName}. Ao continuar, a chefia precisara retirar ou remanejar quem esta nesse destino.
-                                                                </div>
-                                                            )}
-                                                            {transferFixedRoleImpact && (
-                                                                <div className="chief-inline-help chief-transfer-inline-note warning">
-                                                                    O ramal {selectedTransferTarget?.code} tem funcao fixa {transferFixedRoleImpact.forcedRole} no sistema: quem for lotado nele passa a contar como {transferFixedRoleImpact.forcedRole}, independente da funcao atual de {displayDoctorName(selectedCard)}.
-                                                                    {transferFixedRoleImpact.leavesPresentialMealQueue ? ` Como ${transferFixedRoleImpact.forcedRole} cobre remoto, ele sai da fila de refeicao presencial.` : ""}
-                                                                </div>
-                                                            )}
-                                                        </label>
-                                                    )}
-
-                                                    {isTransferAction && (
-                                                        <label className="chief-field chief-shadow-toggle">
-                                                            <span className="chief-shadow-toggle__control">
-                                                                <input
-                                                                    type="checkbox"
-                                                                    checked={transferAsShadow}
-                                                                    onChange={(event) => setTransferAsShadow(event.target.checked)}
-                                                                />
-                                                                <span className="chief-shadow-toggle__label">
-                                                                    Entrar como <strong>sombra</strong> no destino
-                                                                </span>
-                                                            </span>
-                                                            <small className="chief-field-hint">
-                                                                {transferAsShadow
-                                                                    ? "Acompanha o titular do destino sem ocupar a vaga (coexiste) e nao toma o board."
-                                                                    : "Entra como medico/titular no destino (ocupa a vaga normalmente)."}
-                                                            </small>
-                                                        </label>
+                                                        <p className="chief-field-hint chief-correct-hint">
+                                                            Para mudar a lotacao (ramal/base), use o botao <strong>Remanejar</strong> no card. Aqui voce corrige apenas medico, horario ou funcao.
+                                                        </p>
                                                     )}
                                                 </>
                                             )}
@@ -4385,25 +4364,104 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         )}
                     </aside>
 
-                    {transferConfirmOpen && selectedCard && selectedTransferTarget && (
-                        <div className="chief-transfer-backdrop open" onClick={() => setTransferConfirmOpen(false)}>
-                            <section className="chief-transfer-modal" aria-label="Confirmacao de remanejamento" onClick={(event) => event.stopPropagation()}>
+                    {remanejarOpen && selectedCard && (
+                        <div className="chief-transfer-backdrop open" onClick={closeRemanejarModal}>
+                            <section className="chief-transfer-modal" aria-label="Remanejamento de plantao" onClick={(event) => event.stopPropagation()}>
                                 <div className="chief-transfer-header">
                                     <div>
                                         <p className="ops-column-kicker">Remanejamento</p>
-                                        <h3>Confirmar troca de lotacao</h3>
+                                        <h3>Remanejar {displayDoctorName(selectedCard)}</h3>
                                     </div>
-                                    <button type="button" className="chief-drawer-close" onClick={() => setTransferConfirmOpen(false)} aria-label="Fechar confirmacao de remanejamento">
+                                    <button type="button" className="chief-drawer-close" onClick={closeRemanejarModal} aria-label="Fechar remanejamento">
                                         <svg viewBox="0 0 24 24" aria-hidden="true">
                                             <path d="M6.4 5L12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4Z" />
                                         </svg>
                                     </button>
                                 </div>
 
+                                {(successMessage || errorMessage) && (
+                                    <div className={`chief-flash ${errorMessage ? "error" : "success"}`}>
+                                        {errorMessage || successMessage}
+                                    </div>
+                                )}
+
                                 <p className="chief-transfer-copy">
-                                    O registro atual em {cardCode(selectedCard)} sera removido e o sistema abrira um novo registro em {selectedTransferTarget.code}, preservando o medico e a chegada ja consolidados para quadro, pagamento e banco de horas.
+                                    Escolha o destino de {displayDoctorName(selectedCard)} (hoje em {cardCode(selectedCard)}). O remanejamento apaga o vinculo atual e recria o plantao no destino, preservando medico, chegada e a continuidade de pagamento e banco de horas.
                                 </p>
 
+                                <label className="chief-field full-width">
+                                    <span>Destino operacional</span>
+                                    <select
+                                        className="chief-input chief-select"
+                                        value={formState.targetKey}
+                                        onChange={(event) => {
+                                            setFixedRoleAck(false);
+                                            setFormState((current) => ({ ...current, targetKey: event.target.value }));
+                                        }}
+                                    >
+                                        <optgroup label="Regulacao">
+                                            {transferTargetOptions
+                                                .filter((option) => option.domain === "regulation")
+                                                .map((option) => (
+                                                    <option key={option.key} value={option.key}>
+                                                        {option.code} · {option.label}{option.key === selectedCardTargetKey ? " · lotacao atual" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
+                                                    </option>
+                                                ))}
+                                        </optgroup>
+                                        <optgroup label="Intervencao">
+                                            {transferTargetOptions
+                                                .filter((option) => option.domain === "intervention")
+                                                .map((option) => (
+                                                    <option key={option.key} value={option.key} disabled={option.status === "disabled"}>
+                                                        {option.code} · {option.label}
+                                                        {option.status === "disabled" ? " · indisponivel" : option.key === selectedCardTargetKey ? " · lotacao atual" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
+                                                    </option>
+                                                ))}
+                                        </optgroup>
+                                    </select>
+                                    <small className="chief-field-hint">
+                                        {isTransferAction
+                                            ? "Confira o destino e o motivo abaixo antes de confirmar."
+                                            : "Selecione um posto/base diferente da lotacao atual para habilitar o remanejamento."}
+                                    </small>
+                                </label>
+
+                                {isTransferAction && selectedTransferTarget && (
+                                    <label className="chief-field chief-shadow-toggle full-width">
+                                        <span className="chief-shadow-toggle__control">
+                                            <input
+                                                type="checkbox"
+                                                checked={transferAsShadow}
+                                                onChange={(event) => setTransferAsShadow(event.target.checked)}
+                                            />
+                                            <span className="chief-shadow-toggle__label">
+                                                Entrar como <strong>sombra</strong> no destino
+                                            </span>
+                                        </span>
+                                        <small className="chief-field-hint">
+                                            {transferAsShadow
+                                                ? "Acompanha o titular do destino sem ocupar a vaga (coexiste) e nao toma o board."
+                                                : "Entra como medico/titular no destino (ocupa a vaga normalmente)."}
+                                        </small>
+                                    </label>
+                                )}
+
+                                <label className="chief-field full-width">
+                                    <span>Motivo do remanejamento</span>
+                                    <textarea
+                                        className="chief-input chief-textarea"
+                                        value={formState.notes}
+                                        onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
+                                        placeholder="Explique o motivo operacional do remanejamento e o que acontece com o destino atual"
+                                    />
+                                    <small className={`chief-field-hint ${transferNotesTooShort ? "error" : ""}`.trim()}>
+                                        {transferNotesTooShort
+                                            ? `Faltam ${8 - transferNotesValue.length} caractere(s) para o minimo de 8.`
+                                            : "Minimo de 8 caracteres. Fica registrado na trilha interna do plantao."}
+                                    </small>
+                                </label>
+
+                                {isTransferAction && selectedTransferTarget && (
                                 <div className="chief-transfer-grid">
                                     <div className="chief-transfer-card source">
                                         <span>Origem</span>
@@ -4416,8 +4474,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         <small>{targetTypeLabel(selectedTransferTarget.domain)}</small>
                                     </div>
                                 </div>
+                                )}
 
-                                {selectedTransferConflict ? (
+                                {isTransferAction && selectedTransferTarget && (selectedTransferConflict ? (
                                     <div className="chief-transfer-resolution-block">
                                         <div className="chief-transfer-warning-card">
                                             <strong>Destino ocupado</strong>
@@ -4491,9 +4550,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         <strong>Destino livre</strong>
                                         <span>O remanejamento vai apenas limpar a origem e recriar a lotacao em {selectedTransferTarget.code}.</span>
                                     </div>
-                                )}
+                                ))}
 
-                                {transferFixedRoleImpact && (
+                                {isTransferAction && selectedTransferTarget && transferFixedRoleImpact && (
                                     <div className="chief-transfer-resolution-block">
                                         <div className="chief-transfer-warning-card">
                                             <strong>Funcao fixa do destino: {transferFixedRoleImpact.forcedRole}</strong>
@@ -4514,13 +4573,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 )}
 
                                 <div className="chief-form-actions full-width">
-                                    <button type="button" className="chief-secondary-button" onClick={() => setTransferConfirmOpen(false)}>
-                                        Revisar drawer
+                                    <button type="button" className="chief-secondary-button" onClick={closeRemanejarModal}>
+                                        Cancelar
                                     </button>
                                     <button
                                         type="button"
                                         className="chief-primary-button"
-                                        disabled={isSubmitting || isRefreshing || (transferConflictStrategy === "move_destination" && (!selectedRelocationTarget || Boolean(relocationTargetConflict))) || (Boolean(transferFixedRoleImpact) && !fixedRoleAck)}
+                                        disabled={isSubmitting || isRefreshing || !isTransferAction || !selectedTransferTarget || !transferNotesValid || (transferConflictStrategy === "move_destination" && (!selectedRelocationTarget || Boolean(relocationTargetConflict))) || (Boolean(transferFixedRoleImpact) && !fixedRoleAck)}
                                         onClick={() => void submitOperationalAction({ confirmedTransfer: true })}
                                     >
                                         {isSubmitting || isRefreshing ? "Aplicando..." : "Confirmar remanejamento"}
