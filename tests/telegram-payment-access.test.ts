@@ -19,8 +19,10 @@ import {
 } from "@/lib/folha-ponto/token";
 import {
     parseTelegramPaymentCodenameAdminCommand,
+    parseTelegramPaymentListCommand,
     parseTelegramPaymentResetAllCommand,
     parseTelegramPaymentSelfServiceCommand,
+    parseTelegramResetCodinomeCommand,
 } from "@/modules/telegram/payment-commands";
 import { buildDoctorPayrollMessages } from "@/modules/telegram/payment-digest";
 import type { ChiefPayableBoardModel, ChiefPayableDoctorRow, PayableShift } from "@/modules/reporting/payable-shifts";
@@ -132,6 +134,19 @@ test("parseTelegramPaymentResetAllCommand: pede confirmação e reconhece CONFIR
     assert.equal(parseTelegramPaymentResetAllCommand("/pagamento codinome João"), null);
     assert.equal(parseTelegramPaymentResetAllCommand("/pagamento maio"), null);
     assert.equal(parseTelegramPaymentResetAllCommand("/pagamento"), null);
+});
+
+test("parseTelegramResetCodinomeCommand aceita nome ou codinome", () => {
+    assert.deepEqual(parseTelegramResetCodinomeCommand("/resetcodinome João Silva"), { name: "reset_codinome", query: "João Silva" });
+    assert.deepEqual(parseTelegramResetCodinomeCommand("/resetcodinome tigre-azul-958"), { name: "reset_codinome", query: "tigre-azul-958" });
+    assert.equal(parseTelegramResetCodinomeCommand("/resetcodinome"), null);
+    assert.equal(parseTelegramResetCodinomeCommand("/pagamento maio"), null);
+});
+
+test("parseTelegramPaymentListCommand reconhece só /pagamento listar", () => {
+    assert.deepEqual(parseTelegramPaymentListCommand("/pagamento listar"), { name: "payment_list" });
+    assert.equal(parseTelegramPaymentListCommand("/pagamento"), null);
+    assert.equal(parseTelegramPaymentListCommand("/pagamento listar tudo"), null);
 });
 
 // ---------- relatório do médico (com R$ + link) ----------

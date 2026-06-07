@@ -151,6 +151,32 @@ export function parseTelegramPaymentResetAllCommand(text: string): TelegramPayme
     return { name: "payment_reset_all", confirmed: rest === "CONFIRMO" };
 }
 
+export const TELEGRAM_RESET_CODINOME_USAGE = "/resetcodinome Nome Completo (ou o codinome atual)";
+
+export type TelegramResetCodinomeCommand = {
+    name: "reset_codinome";
+    query: string;
+};
+
+// Comando dedicado de reset de UM codinome, por nome OU pelo codinome atual.
+export function isTelegramResetCodinomeCommandText(text: string) {
+    return /^\/resetcodinome(?:@\w+)?\b/i.test(text.trim());
+}
+
+export function parseTelegramResetCodinomeCommand(text: string): TelegramResetCodinomeCommand | null {
+    const match = text.trim().match(/^\/resetcodinome(?:@\w+)?\s+([\s\S]+)$/i);
+    if (!match) {
+        return null;
+    }
+    const query = match[1].trim();
+    return query ? { name: "reset_codinome", query } : null;
+}
+
+// "/pagamento listar" — exporta a lista atual de codinomes (admin).
+export function parseTelegramPaymentListCommand(text: string) {
+    return /^\/pagamento(?:@\w+)?\s+listar\b\s*$/i.test(text.trim()) ? { name: "payment_list" as const } : null;
+}
+
 export type TelegramPaymentCodenameAdminCommand = {
     name: "payment_codename";
     doctorName: string;

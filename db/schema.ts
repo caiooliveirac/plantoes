@@ -478,6 +478,9 @@ export const doctorPaymentAccess = operationsV2.table(
         id: uuid("id").primaryKey().defaultRandom(),
         doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
         codenameHmac: text("codename_hmac").notNull(),
+        // Codinome em claro, para o coordenador consultar/exportar depois. Preenchido
+        // nas gerações novas; antigas (só-hash) ficam null até regerar.
+        codename: text("codename"),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
         updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     },

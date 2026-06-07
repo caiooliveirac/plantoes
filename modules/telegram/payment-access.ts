@@ -89,10 +89,10 @@ export async function upsertDoctorCodename(doctorId: string) {
         const codenameHmac = hashCodename(codename);
         try {
             await db.insert(doctorPaymentAccess)
-                .values({ doctorId, codenameHmac })
+                .values({ doctorId, codenameHmac, codename })
                 .onConflictDoUpdate({
                     target: doctorPaymentAccess.doctorId,
-                    set: { codenameHmac, updatedAt: new Date() },
+                    set: { codenameHmac, codename, updatedAt: new Date() },
                 });
             return codename;
         } catch (error) {
@@ -135,6 +135,37 @@ export async function resolveDoctorIdByCodename(code: string): Promise<string | 
         .where(eq(doctorPaymentAccess.codenameHmac, hashCodename(normalized)))
         .limit(1);
     return row?.doctorId ?? null;
+}
+
+// Reseta o codinome de um médico e devolve nome + novo codinome + o anterior em claro
+// (se conhecido), para uma resposta verbosa.
+export async function resetDoctorCodename(doctorId: string): Promise<{ fullName: string; codename: string; previous: string | null }> {
+    const db = getDb();
+    const [doctor] = await db
+        .select({ fullName: doctors.fullName })
+        .from(doctors)
+        .where(eq(doctors.id, doctorId))
+        .limit(1);
+    const [existing] = await db
+        .select({ codename: doctorPaymentAccess.codename })
+        .from(doctorPaymentAccess)
+        .where(eq(doctorPaymentAccess.doctorId, doctorId))
+        .limit(1);
+    const codename = await upsertDoctorCodename(doctorId);
+    return { fullName: doctor?.fullName ?? "médico", codename, previous: existing?.codename ?? null };
+}
+
+// Lista todos os médicos ativos com o codinome em claro conhecido (null se a linha
+// ainda é só-hash, ou se nunca teve codinome).
+export async function listDoctorCodenames(): Promise<Array<{ fullName: string; codename: string | null }>> {
+    const db = getDb();
+    const rows = await db
+        .select({ fullName: doctors.fullName, codename: doctorPaymentAccess.codename })
+        .from(doctors)
+        .leftJoin(doctorPaymentAccess, eq(doctorPaymentAccess.doctorId, doctors.id))
+        .where(eq(doctors.isActive, true))
+        .orderBy(asc(doctors.normalizedName));
+    return rows.map((r) => ({ fullName: r.fullName, codename: r.codename ?? null }));
 }
 
 export interface AttemptLockState {
