@@ -635,17 +635,27 @@ export function buildContinuityInterpretation(params: {
     };
 }
 
+// Normaliza um rótulo de turno para SD/SN concretos. P e nulos viram null porque
+// só uma troca explícita SD↔SN sinaliza "plantão novo" — P/ausente é ambíguo
+// (continuidade/24h) e não deve bloquear o remanejamento implícito.
+function normalizeConcreteShift(value: string | null | undefined): "SD" | "SN" | null {
+    const normalized = (value ?? "").trim().toUpperCase();
+    return normalized === "SD" || normalized === "SN" ? normalized : null;
+}
+
 export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
     sector: "REGULATION" | "INTERVENTION";
     baseCode: string | null;
     arrivalTime?: string | null;
     shiftType?: string | null;
     roleFunction?: string | null;
+    isShadow?: boolean;
     isDeparture: boolean;
     isContinuation: boolean;
     isReassignment?: boolean;
     activeSector?: "REGULATION" | "INTERVENTION" | null;
     activeBaseCode?: string | null;
+    activeShiftLabel?: string | null;
 }) {
     if (!params.baseCode) {
         return false;
@@ -655,7 +665,9 @@ export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
         return false;
     }
 
-    if (params.arrivalTime || params.shiftType || params.roleFunction) {
+    // Uma chegada de "sombra" é uma coexistência própria no novo ramal, não uma
+    // mudança de posição do titular — nunca move a ocupação existente.
+    if (params.isShadow) {
         return false;
     }
 
@@ -663,8 +675,24 @@ export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
         return false;
     }
 
-    // Keep implicit remanejamento conservative: same domain, only target switch.
-    return params.activeSector === params.sector && params.activeBaseCode !== params.baseCode;
+    // Mesma posição (mesmo domínio + mesmo código) não é remanejamento.
+    if (params.activeSector === params.sector && params.activeBaseCode === params.baseCode) {
+        return false;
+    }
+
+    // Um médico que já está no plantão e avisa chegada em OUTRA posição — ramal ou
+    // ambulância, inclusive cross-domínio — está mudando de posto, não começando
+    // um plantão novo. O sistema preserva o 1º horário de chegada (handled pelo
+    // transfer, que clona started_at/boardStartedAt) em vez de marcá-lo atrasado.
+    // A única exceção é declarar um turno concreto DIFERENTE do atual (SD↔SN):
+    // isso sinaliza um plantão novo de verdade, então trata como chegada nova.
+    const declaredShift = normalizeConcreteShift(params.shiftType);
+    const activeShift = normalizeConcreteShift(params.activeShiftLabel);
+    if (declaredShift && activeShift && declaredShift !== activeShift) {
+        return false;
+    }
+
+    return true;
 }
 
 export function shouldLinkTelegramArrivalToContinuitySource(params: {
@@ -6989,11 +7017,13 @@ async function applyParsedEntry(params: {
         arrivalTime: parsed.arrivalTime,
         shiftType: parsed.shiftType,
         roleFunction: parsed.roleFunction,
+        isShadow: parsed.isShadow,
         isDeparture: parsed.isDeparture,
         isContinuation: parsed.isContinuation,
         isReassignment: parsed.isReassignment,
         activeSector: activeOcc?.sector,
         activeBaseCode: activeOcc?.baseCode,
+        activeShiftLabel: activeOcc?.shiftLabel,
     });
 
     // Handle reassignment as a special case (end source + start target)
@@ -7949,7 +7979,7 @@ async function sendSuccessReply(
         : "";
 
     const reassignmentHint = reassignedFrom
-        ? `\n\n🔀 Remanejado de *${reassignedFrom}* para *${parsed.baseCode}*. Ocupação anterior encerrada.`
+        ? `\n\n🔀 Percebi que já havia um aviso de chegada em *${reassignedFrom}* — registrei como remanejamento para *${parsed.baseCode}*, sem contar atraso. Ocupação anterior encerrada.`
         : "";
     const forcedTakeoverHint = buildForcedTakeoverHint({
         displacedDoctorName,

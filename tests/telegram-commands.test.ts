@@ -2711,7 +2711,7 @@ test("shouldTreatTelegramArrivalAsImplicitReassignment detects same-doctor spars
     }), true);
 });
 
-test("shouldTreatTelegramArrivalAsImplicitReassignment stays false for explicit new arrival", () => {
+test("shouldTreatTelegramArrivalAsImplicitReassignment: troca de turno concreta (SD ativo, SN declarado) é plantão novo", () => {
     assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
         sector: "INTERVENTION",
         baseCode: "PP20",
@@ -2723,6 +2723,107 @@ test("shouldTreatTelegramArrivalAsImplicitReassignment stays false for explicit 
         isReassignment: false,
         activeSector: "INTERVENTION",
         activeBaseCode: "PM40",
+        activeShiftLabel: "SD",
+    }), false);
+});
+
+// Passo 2 (preservar 1º horário): um médico já presente que avisa chegada em outra
+// posição está mudando de posto, não começando plantão novo — vira remanejamento
+// implícito (que preserva started_at/boardStartedAt), mesmo com horário declarado.
+test("shouldTreatTelegramArrivalAsImplicitReassignment: novo ramal COM horário declarado ainda é move", () => {
+    assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: "REGULATION",
+        baseCode: "2034",
+        arrivalTime: "14:30",
+        shiftType: null,
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: false,
+        isReassignment: false,
+        activeSector: "REGULATION",
+        activeBaseCode: "2153",
+        activeShiftLabel: "SD",
+    }), true);
+});
+
+test("shouldTreatTelegramArrivalAsImplicitReassignment: mesmo turno declarado (SD ativo, SD) é move", () => {
+    assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: "REGULATION",
+        baseCode: "2034",
+        arrivalTime: null,
+        shiftType: "SD",
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: false,
+        isReassignment: false,
+        activeSector: "REGULATION",
+        activeBaseCode: "2153",
+        activeShiftLabel: "SD",
+    }), true);
+});
+
+test("shouldTreatTelegramArrivalAsImplicitReassignment: cross-domínio ramal→ambulância é move (preserva chegada)", () => {
+    assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: "INTERVENTION",
+        baseCode: "PM40",
+        arrivalTime: null,
+        shiftType: null,
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: false,
+        isReassignment: false,
+        activeSector: "REGULATION",
+        activeBaseCode: "2153",
+        activeShiftLabel: "SD",
+    }), true);
+});
+
+test("shouldTreatTelegramArrivalAsImplicitReassignment: chegada de sombra em novo ramal NÃO move o titular", () => {
+    assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: "REGULATION",
+        baseCode: "2034",
+        arrivalTime: null,
+        shiftType: null,
+        roleFunction: null,
+        isShadow: true,
+        isDeparture: false,
+        isContinuation: false,
+        isReassignment: false,
+        activeSector: "REGULATION",
+        activeBaseCode: "2153",
+        activeShiftLabel: "SD",
+    }), false);
+});
+
+test("shouldTreatTelegramArrivalAsImplicitReassignment: mesma posição não é move", () => {
+    assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: "REGULATION",
+        baseCode: "2153",
+        arrivalTime: null,
+        shiftType: null,
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: false,
+        isReassignment: false,
+        activeSector: "REGULATION",
+        activeBaseCode: "2153",
+        activeShiftLabel: "SD",
+    }), false);
+});
+
+test("shouldTreatTelegramArrivalAsImplicitReassignment: sem ocupação ativa não é move", () => {
+    assert.equal(shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: "REGULATION",
+        baseCode: "2034",
+        arrivalTime: null,
+        shiftType: null,
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: false,
+        isReassignment: false,
+        activeSector: null,
+        activeBaseCode: null,
+        activeShiftLabel: null,
     }), false);
 });
 
