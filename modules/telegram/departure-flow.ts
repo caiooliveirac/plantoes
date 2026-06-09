@@ -228,6 +228,103 @@ export function resolveTelegramEligibleLateDepartureReason(
     return null;
 }
 
+// ── Occurrence number requirement ──────────────────────────────────────────────
+
+/**
+ * Business rule: a doctor claiming a late departure for bank-hours credit under
+ * the "occurrence" reason MUST say which occurrence they were in. The occurrence
+ * number has exactly 4 digits. We charge it in the Telegram chat and surface it to
+ * the chief, so this extractor must recover it from free-form text while never
+ * mistaking the verbalized departure time (e.g. "19:40" / "1940") for it.
+ *
+ * Strategy:
+ *  1. Strip the known operational fragments (departure time, target code, name)
+ *     plus their digits-only forms, and any remaining HH:MM / HHhMM time tokens.
+ *  2. Prefer a 4-digit run sitting next to an occurrence keyword ("ocorrência 4521").
+ *  3. Fall back to a lone 4-digit token — safe in the reply context, where the bot
+ *     explicitly asked only for the number.
+ */
+export function extractTelegramOccurrenceNumber(
+    text: string,
+    fragments: Array<string | null | undefined> = [],
+): string | null {
+    const expandedFragments: Array<string | null | undefined> = [];
+    for (const fragment of fragments) {
+        if (!fragment) {
+            continue;
+        }
+        expandedFragments.push(fragment);
+        const digitsOnly = String(fragment).replace(/\D/g, "");
+        if (digitsOnly.length >= 3) {
+            expandedFragments.push(digitsOnly);
+        }
+    }
+
+    const reduced = stripTelegramOperationalFragments(text, expandedFragments)
+        // Remove residual time tokens so "1940" / "19 40" are never read as the number.
+        .replace(/\b\d{1,2}\s*[:.H]\s*\d{2}\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const keyed = reduced.match(/(?:OCORR\w*|CHAMAD\w*|ATEND\w*|NUMERO|N)\D{0,6}(\d{4})(?!\d)/);
+    if (keyed) {
+        return keyed[1];
+    }
+
+    const lone = reduced.match(/(?<!\d)\d{4}(?!\d)/);
+    return lone ? lone[0] : null;
+}
+
+export interface TelegramLateDepartureClaim {
+    code: TelegramEligibleLateDepartureReasonCode;
+    normalizedText: string;
+    /** The 4-digit occurrence number, when the rule applies and one was provided. */
+    occurrenceNumber: string | null;
+    /** True when the reason is "occurrence" but the mandatory 4-digit number is absent. */
+    missingOccurrenceNumber: boolean;
+}
+
+/**
+ * Resolves a late-departure claim AND enforces the occurrence-number rule on top of
+ * the reason match. Only "occurrence" requires the number; every other reason carries
+ * `missingOccurrenceNumber: false` so their behavior is unchanged.
+ *
+ * `missingOccurrenceNumber === true` means "recognized as occurrence, but not yet
+ * eligible for automatic credit — charge the doctor for the number first."
+ */
+export function resolveTelegramLateDepartureClaim(
+    text: string,
+    fragments: Array<string | null | undefined> = [],
+): TelegramLateDepartureClaim | null {
+    const reason = resolveTelegramEligibleLateDepartureReason(text, fragments);
+    if (!reason) {
+        return null;
+    }
+
+    const occurrenceNumber = reason.code === "occurrence"
+        ? extractTelegramOccurrenceNumber(text, fragments)
+        : null;
+
+    return {
+        code: reason.code,
+        normalizedText: reason.normalizedText,
+        occurrenceNumber,
+        missingOccurrenceNumber: reason.code === "occurrence" && !occurrenceNumber,
+    };
+}
+
+/**
+ * True when a recognized claim is eligible for automatic bank-hours credit: a valid
+ * reason was found and, if it is an occurrence, the 4-digit number is present.
+ */
+export function isTelegramCreditEligibleClaim(
+    text: string,
+    fragments: Array<string | null | undefined> = [],
+): boolean {
+    const claim = resolveTelegramLateDepartureClaim(text, fragments);
+    return Boolean(claim) && !claim!.missingOccurrenceNumber;
+}
+
 // ── Justification / prompt helpers ─────────────────────────────────────────────
 
 export function getPendingDepartureJustificationAttemptCount(data: { invalidJustificationAttempts?: number }) {

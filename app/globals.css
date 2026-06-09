@@ -8424,6 +8424,17 @@ button.chief-payable-tag:focus-visible {
     color: var(--accent-warn);
 }
 
+.pending-departure-card__reason-warn {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    font-size: 0.7rem;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: var(--accent-fraud-soft);
+    color: var(--accent-fraud);
+}
+
 .pending-departure-card__pattern-badge {
     display: inline-flex;
     align-items: center;
@@ -8434,6 +8445,42 @@ button.chief-payable-tag:focus-visible {
     color: var(--accent-fraud);
     font-size: 0.7rem;
     font-weight: 600;
+}
+
+.pending-departure-card__source {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface-glass-strong);
+    border: 1px solid var(--surface-elevated-border);
+    border-left: 3px solid var(--accent-warn);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.pending-departure-card__source-meta {
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--muted-strong);
+}
+
+.pending-departure-card__source-text {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.pending-departure-card__source--empty {
+    font-size: 0.78rem;
+    color: var(--muted-strong);
+    border-left-color: var(--surface-elevated-border);
+    font-style: italic;
 }
 
 .pending-departure-card__actions {

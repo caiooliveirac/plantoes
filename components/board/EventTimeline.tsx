@@ -49,7 +49,7 @@ export function EventTimeline({ pending }: { pending: PendingDepartureConfirmati
         events.push({
             ms: new Date(message.createdAt).getTime(),
             kind: "bot",
-            text: `Mensagem (${message.parsedAction ?? "—"}): "${message.rawText.slice(0, 120)}${message.rawText.length > 120 ? "…" : ""}"`,
+            text: `Mensagem (${message.parsedAction ?? "—"}): "${message.rawText.trim()}"`,
         });
     }
     events.push({
