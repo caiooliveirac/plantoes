@@ -42,6 +42,7 @@ import {
   MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE,
   type BankHoursBalanceOverrideSummary,
 } from "@/modules/bank-hours/service";
+import { extractTelegramOccurrenceNumber } from "@/modules/telegram/departure-flow";
 import { expireInterventionBaseDeactivations, expireStaleShadowInterventionOccupancies } from "@/modules/intervention/service";
 import { expireStaleRegulationOccupancies } from "@/modules/regulation/service";
 
@@ -1905,10 +1906,26 @@ export interface PendingDepartureConfirmation {
   /** Board-end (scheduled handoff). */
   endedAt: string | null;
   reasonCode: TelegramLateDepartureReasonCode | null;
+  /**
+   * The 4-digit occurrence number the doctor reported (rule: an "occurrence" late
+   * departure must say which occurrence). Null when not an occurrence or not provided.
+   */
+  occurrenceNumber: string | null;
+  /**
+   * True when the reason is "occurrence" but no 4-digit number was found — the chefe
+   * must scrutinize this before confirming (the bot did not vouch for it).
+   */
+  occurrenceNumberMissing: boolean;
   /** Minutes between scheduledEndAt and actualEndedAt; positive = ran long. */
   delayMinutes: number | null;
   /** Last messages from the bot ingestion referencing this occupancy. */
   recentMessages: PendingDepartureCorrelatedMessage[];
+  /**
+   * The single message the late-departure claim was read from — the one whose
+   * raw text produced `reasonCode` (or the most recent, when no reason matched).
+   * Surfaced on the card so the chefe sees the source verbatim before confirming.
+   */
+  sourceMessage: PendingDepartureCorrelatedMessage | null;
   /** Same-reason departures by this doctor in the past 30 days (pattern signal). */
   reasonOccurrenceCount30d: number;
   /** When the verbalized departure was recorded. */
@@ -2096,6 +2113,28 @@ export async function listPendingDepartureConfirmations(
       .find((code) => code !== null) ?? null;
     const reasonFromNotes = detectLateDepartureReasonCode(row.notes);
     const reasonCode = reasonFromMessages ?? reasonFromNotes;
+    const sourceMessage =
+      (reasonCode
+        ? recentMessages.find((message) => detectLateDepartureReasonCode(message.rawText) === reasonCode)
+        : undefined) ?? recentMessages[0] ?? null;
+    // Recover the 4-digit occurrence number from the doctor's message(s) / notes.
+    // Pass the shift times as fragments so the verbalized departure time is never
+    // mistaken for the occurrence number.
+    const timeFragments = [row.actualEndedAt, row.scheduledEndAt]
+      .filter(Boolean)
+      .map((iso: string) => {
+        const d = new Date(iso);
+        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      });
+    const occurrenceNumber = reasonCode === "occurrence"
+      ? (extractTelegramOccurrenceNumber(sourceMessage?.rawText ?? "", timeFragments)
+        ?? extractTelegramOccurrenceNumber(row.notes ?? "", timeFragments)
+        ?? recentMessages
+          .map((message) => extractTelegramOccurrenceNumber(message.rawText, timeFragments))
+          .find((value) => value !== null)
+        ?? null)
+      : null;
+    const occurrenceNumberMissing = reasonCode === "occurrence" && !occurrenceNumber;
     const delayMinutes = row.scheduledEndAt
       ? Math.round((new Date(row.actualEndedAt).getTime() - new Date(row.scheduledEndAt).getTime()) / 60000)
       : null;
@@ -2119,8 +2158,11 @@ export async function listPendingDepartureConfirmations(
       actualEndedAt: row.actualEndedAt,
       endedAt: row.endedAt,
       reasonCode,
+      occurrenceNumber,
+      occurrenceNumberMissing,
       delayMinutes,
       recentMessages,
+      sourceMessage,
       reasonOccurrenceCount30d,
       recordedAt: row.recordedAt,
     };

@@ -200,6 +200,9 @@ import {
     parseTelegramStandaloneTime,
     pickLikelyDepartureCorrectionCandidate,
     resolveTelegramEligibleLateDepartureReason,
+    extractTelegramOccurrenceNumber,
+    resolveTelegramLateDepartureClaim,
+    isTelegramCreditEligibleClaim,
     requiresTelegramDepartureAdjustmentJustification,
 } from "@/modules/telegram/departure-flow";
 import { compareTelegramInterventionCodes } from "@/modules/telegram/presentation-order";
@@ -211,6 +214,9 @@ export {
     parseTelegramStandaloneTime,
     pickLikelyDepartureCorrectionCandidate,
     resolveTelegramEligibleLateDepartureReason,
+    extractTelegramOccurrenceNumber,
+    resolveTelegramLateDepartureClaim,
+    isTelegramCreditEligibleClaim,
     requiresTelegramDepartureAdjustmentJustification,
 } from "@/modules/telegram/departure-flow";
 
@@ -249,6 +255,8 @@ interface PendingDepartureJustificationData {
     originalEventAt: string;
     originalReferenceAt?: string;
     invalidJustificationAttempts?: number;
+    /** Set when the pending claim is an "occurrence" still missing its 4-digit number. */
+    occurrenceNumberRequired?: boolean;
 }
 
 interface PendingDepartureCorrectionData {
@@ -6350,13 +6358,23 @@ async function queuePendingDepartureJustification(params: {
         time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
     });
 
+    // When the doctor already stated an "occurrence" reason but omitted the mandatory
+    // 4-digit occurrence number, the very first prompt charges for the number instead
+    // of asking for a (already-given) reason.
+    const inlineClaim = resolveTelegramLateDepartureClaim(params.originalText, [
+        params.parsed.baseCode,
+        params.resolvedDoctor.fullName,
+        params.parsed.arrivalTime,
+    ]);
+    const occurrenceNumberRequired = inlineClaim?.missingOccurrenceNumber ?? false;
+
     await markTelegramProcessed(params.logId, {
         status: "pending_departure_justification",
         parsedDomain: params.parsed.sector,
         parsedTargetCode: params.parsed.baseCode,
         parsedAction: resolveTelegramParsedAction(params.parsed),
         parsedDoctorName: params.resolvedDoctor.fullName,
-        errorMessage: "departure_justification_required",
+        errorMessage: occurrenceNumberRequired ? "departure_occurrence_number_required" : "departure_justification_required",
         resolutionData: {
             ...buildTelegramReviewLogData({
                 reason: "departure_justification_required",
@@ -6380,12 +6398,13 @@ async function queuePendingDepartureJustification(params: {
             originalEventAt: params.eventAt.toISOString(),
             originalReferenceAt: params.referenceAt.toISOString(),
             invalidJustificationAttempts: 0,
+            occurrenceNumberRequired,
         },
     });
 
     await sendMessage(
         params.message!.chat.id,
-        pickTelegramReply("departure_justification_required", params.message!.message_id, {
+        pickTelegramReply(occurrenceNumberRequired ? "departure_occurrence_number_required" : "departure_justification_required", params.message!.message_id, {
             name: resolveTelegramDoctorSurfaceName(params.resolvedDoctor),
             target: params.parsed.baseCode ?? "plantao",
             time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
@@ -6791,7 +6810,7 @@ async function applyParsedEntry(params: {
                         eventAt,
                         hasSuccessorOccupancy: hasHandoff,
                     })
-                    && !resolveTelegramEligibleLateDepartureReason(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+                    && !isTelegramCreditEligibleClaim(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
                 ) {
                     throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
@@ -7068,7 +7087,7 @@ async function applyParsedEntry(params: {
                             })
                             : false,
                     })
-                    && !resolveTelegramEligibleLateDepartureReason(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+                    && !isTelegramCreditEligibleClaim(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
                 ) {
                     throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
@@ -7894,7 +7913,10 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
     }
 
     const pendingAttemptCount = getPendingDepartureJustificationAttemptCount(pending.resolutionData);
-    const promptKind = resolveDepartureJustificationPromptKind(pendingAttemptCount);
+    const occurrenceNumberPending = pending.resolutionData.occurrenceNumberRequired ?? false;
+    const promptKind = occurrenceNumberPending
+        ? (pendingAttemptCount > 0 ? "departure_occurrence_number_retry" as const : "departure_occurrence_number_required" as const)
+        : resolveDepartureJustificationPromptKind(pendingAttemptCount);
     const replyTime = pending.resolutionData.parsed.arrivalTime ?? formatTelegramReplyTime(new Date(pending.resolutionData.originalEventAt));
     const replyExample = buildTelegramDepartureExample({
         doctorName: pending.resolutionData.resolvedDoctor.fullName,
@@ -7954,13 +7976,29 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         return { ok: true, ignored: true, pending: true };
     }
 
-    const eligibleReason = resolveTelegramEligibleLateDepartureReason(message.text);
+    const mergedText = buildTelegramJustificationFollowUpText(
+        pending.resolutionData.originalText,
+        message.text,
+    );
+    // Evaluate reason AND the occurrence-number rule on the merged text, so a reason
+    // stated in the original message combines with a number sent in the reply.
+    const claim = resolveTelegramLateDepartureClaim(mergedText, [
+        pending.resolutionData.parsed.baseCode,
+        pending.resolutionData.resolvedDoctor.fullName,
+        pending.resolutionData.parsed.arrivalTime,
+    ]);
+    // "occurrence" recognized but still missing its mandatory 4-digit number.
+    const needsOccurrenceNumber = claim?.missingOccurrenceNumber ?? false;
+    // Credit-eligible only when a reason matched AND (if occurrence) the number is present.
+    const eligibleReason = claim && !claim.missingOccurrenceNumber ? claim : null;
+
     if (!eligibleReason) {
         if (pendingAttemptCount < 1) {
             await markTelegramProcessed(pending.id, {
                 resolutionData: buildResolutionData(pending.resolutionData, {
                     invalidJustificationAttempts: pendingAttemptCount + 1,
                     latestInvalidJustificationReplyText: message.text,
+                    occurrenceNumberRequired: needsOccurrenceNumber,
                 }),
             });
             await markTelegramProcessed(logId, {
@@ -7969,7 +8007,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
                 parsedAction: "departure_justification_pending",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
-                errorMessage: "departure_justification_invalid_retry",
+                errorMessage: needsOccurrenceNumber ? "departure_occurrence_number_missing" : "departure_justification_invalid_retry",
                 resolutionData: {
                     pendingJustificationKept: true,
                     invalidJustificationAttempts: pendingAttemptCount + 1,
@@ -7977,7 +8015,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             });
             await sendMessage(
                 message.chat.id,
-                pickTelegramReply("departure_justification_retry", message.message_id, {
+                pickTelegramReply(needsOccurrenceNumber ? "departure_occurrence_number_retry" : "departure_justification_retry", message.message_id, {
                     name: pending.resolutionData.resolvedDoctor.fullName,
                     target: pending.resolutionData.parsed.baseCode,
                     time: replyTime,
@@ -7989,10 +8027,15 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         }
 
         const eventAt = new Date(pending.resolutionData.originalEventAt);
-        const mergedText = buildTelegramJustificationFollowUpText(
-            pending.resolutionData.originalText,
-            message.text,
-        );
+
+        // Exhausted retries. A missing occurrence number still surfaces the late
+        // departure to the chefe (actual_ended_at = verbalized time) for adjudication,
+        // but without automatic credit and flagged "sem numero". An unrecognized reason
+        // keeps the legacy note-only behavior (no window extension).
+        const noteMarker = needsOccurrenceNumber
+            ? "telegram ocorrencia sem numero - revisar chefia"
+            : "telegram saida sem credito automatico";
+        const exhaustionCorrection = needsOccurrenceNumber ? { actualEndedAt: eventAt } : {};
 
         try {
             let relatedOccupancyId: string;
@@ -8014,7 +8057,8 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 }
 
                 relatedOccupancyId = (await correctRegulationOccupancy(recentClosed.id, {
-                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida sem credito automatico", mergedText),
+                    ...exhaustionCorrection,
+                    notes: appendTelegramOperationalNote(recentClosed.notes, noteMarker, mergedText),
                 }, null)).id;
             } else {
                 const base = await getDb().query.interventionBases.findFirst({
@@ -8034,7 +8078,8 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 }
 
                 relatedOccupancyId = (await correctInterventionOccupancy(recentClosed.id, {
-                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida sem credito automatico", mergedText),
+                    ...exhaustionCorrection,
+                    notes: appendTelegramOperationalNote(recentClosed.notes, noteMarker, mergedText),
                 }, null)).id;
             }
 
@@ -8047,6 +8092,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                     finalJustificationReplyText: message.text,
                     automaticCreditGranted: false,
                     manualReviewOnly: true,
+                    occurrenceNumberMissing: needsOccurrenceNumber,
                 }),
             });
             await markTelegramProcessed(logId, {
@@ -8061,6 +8107,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                     justificationFromPending: true,
                     automaticCreditGranted: false,
                     manualReviewOnly: true,
+                    occurrenceNumberMissing: needsOccurrenceNumber,
                 },
             });
             await sendMessage(
@@ -8103,11 +8150,6 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             return { ok: true, ignored: true, processingError: true };
         }
     }
-
-    const mergedText = buildTelegramJustificationFollowUpText(
-        pending.resolutionData.originalText,
-        message.text,
-    );
 
     // Only occurrence/hygienization grant automatic bank-hour credit.
     // Other accepted reasons (chefia/handoff) stop the loop but stay manual-review only.
@@ -8216,6 +8258,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             resolutionData: buildResolutionData(pending.resolutionData, {
                 justificationReplyText: message.text,
                 matchedReasonCode: eligibleReason.code,
+                occurrenceNumber: eligibleReason.occurrenceNumber ?? null,
                 automaticCreditGranted: true,
             }),
         });

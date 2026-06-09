@@ -32,6 +32,9 @@ import {
     parseTelegramStandaloneTime,
     pickLikelyDepartureCorrectionCandidate,
     resolveTelegramEligibleLateDepartureReason,
+    extractTelegramOccurrenceNumber,
+    resolveTelegramLateDepartureClaim,
+    isTelegramCreditEligibleClaim,
     requiresTelegramDepartureAdjustmentJustification,
     resolveContinuationShiftStart,
     resolveTelegramContinuationStartedAt,
@@ -3012,6 +3015,26 @@ test("pickTelegramReply explains when the justification stays only for manual re
     assert.match(reply, /chefia/i);
 });
 
+test("pickTelegramReply cobra o número da ocorrência (4 dígitos) no chat", () => {
+    const required = pickTelegramReply("departure_occurrence_number_required", 12, {
+        name: "Vagner Barroso",
+        target: "PR03",
+        time: "19:20",
+        example: "Vagner PR03 19:20 ocorrencia 4521",
+    });
+    assert.match(required, /ocorr/i);
+    assert.match(required, /n[úu]mero|4 d[íi]gitos/i);
+
+    const retry = pickTelegramReply("departure_occurrence_number_retry", 7, {
+        name: "Vagner Barroso",
+        target: "PR03",
+        time: "19:20",
+        example: "Vagner PR03 19:20 ocorrencia 4521",
+    });
+    assert.match(retry, /4 d[íi]gitos|n[úu]mero/i);
+    assert.match(retry, /chefia/i);
+});
+
 test("resolveTelegramEligibleLateDepartureReason aceita ocorrência com variações e typos", () => {
     assert.equal(
         resolveTelegramEligibleLateDepartureReason("Vagner saindo PR03 19:20 porque estava em ocorrência 0729", ["Vagner", "PR03", "19:20"])?.code,
@@ -3019,6 +3042,53 @@ test("resolveTelegramEligibleLateDepartureReason aceita ocorrência com variaç�
     );
     assert.equal(resolveTelegramEligibleLateDepartureReason("em ocorencia 0729")?.code, "occurrence");
     assert.equal(resolveTelegramEligibleLateDepartureReason("atendendo chamado no local")?.code, "occurrence");
+});
+
+test("extractTelegramOccurrenceNumber recupera o número de 4 dígitos e ignora o horário da saída", () => {
+    // Número junto da palavra-chave, com o horário de saída presente.
+    assert.equal(
+        extractTelegramOccurrenceNumber("Vagner saindo PR03 19:40 estava em ocorrência 4521", ["Vagner", "PR03", "19:40"]),
+        "4521",
+    );
+    // Horário sem separador (1940) não pode ser confundido com o número.
+    assert.equal(
+        extractTelegramOccurrenceNumber("saiu 1940 ocorrencia 0729", ["19:40"]),
+        "0729",
+    );
+    // Resposta enxuta só com o número (contexto em que o bot pediu o número).
+    assert.equal(extractTelegramOccurrenceNumber("0729"), "0729");
+    assert.equal(extractTelegramOccurrenceNumber("ocorrência 0729"), "0729");
+    // Sem número informado.
+    assert.equal(extractTelegramOccurrenceNumber("estava em ocorrência"), null);
+    // Três dígitos não bastam.
+    assert.equal(extractTelegramOccurrenceNumber("ocorrencia 072"), null);
+});
+
+test("resolveTelegramLateDepartureClaim exige o número apenas para ocorrência", () => {
+    const withNumber = resolveTelegramLateDepartureClaim("estava em ocorrência 4521");
+    assert.equal(withNumber?.code, "occurrence");
+    assert.equal(withNumber?.occurrenceNumber, "4521");
+    assert.equal(withNumber?.missingOccurrenceNumber, false);
+
+    const withoutNumber = resolveTelegramLateDepartureClaim("estava em ocorrência");
+    assert.equal(withoutNumber?.code, "occurrence");
+    assert.equal(withoutNumber?.occurrenceNumber, null);
+    assert.equal(withoutNumber?.missingOccurrenceNumber, true);
+
+    // Higienização e demais motivos nunca exigem número.
+    const hygi = resolveTelegramLateDepartureClaim("estava higienizando a viatura");
+    assert.equal(hygi?.code, "hygienization");
+    assert.equal(hygi?.missingOccurrenceNumber, false);
+
+    assert.equal(resolveTelegramLateDepartureClaim("fui liberado pela chefia")?.missingOccurrenceNumber, false);
+    assert.equal(resolveTelegramLateDepartureClaim("sem motivo nenhum aqui"), null);
+});
+
+test("isTelegramCreditEligibleClaim bloqueia ocorrência sem número e libera com número", () => {
+    assert.equal(isTelegramCreditEligibleClaim("estava em ocorrência"), false);
+    assert.equal(isTelegramCreditEligibleClaim("estava em ocorrência 4521"), true);
+    assert.equal(isTelegramCreditEligibleClaim("estava higienizando a viatura"), true);
+    assert.equal(isTelegramCreditEligibleClaim("sem motivo"), false);
 });
 
 test("resolveTelegramEligibleLateDepartureReason aceita higienização com sinônimos e erros de digitação", () => {

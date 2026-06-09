@@ -18,6 +18,16 @@ function formatHourMinute(iso: string) {
     return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function formatDayHourMinute(iso: string) {
+    const date = new Date(iso);
+    return date.toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+    });
+}
+
 function formatDelay(minutes: number | null) {
     if (minutes === null) return null;
     if (minutes === 0) return { label: "no horário", className: "zero" as const };
@@ -73,10 +83,33 @@ export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, 
 
             <div className="pending-departure-card__meta">
                 {pending.reasonCode && (
-                    <span className="pending-departure-card__reason">{REASON_SHORT[pending.reasonCode]}</span>
+                    <span className="pending-departure-card__reason">
+                        {REASON_SHORT[pending.reasonCode]}
+                        {pending.reasonCode === "occurrence" && pending.occurrenceNumber ? ` Nº ${pending.occurrenceNumber}` : ""}
+                    </span>
+                )}
+                {pending.occurrenceNumberMissing && (
+                    <span className="pending-departure-card__reason-warn" title="O médico alegou ocorrência mas não informou o número (4 dígitos).">
+                        SEM Nº DE OCORRÊNCIA
+                    </span>
                 )}
                 <PatternBadge count={pending.reasonOccurrenceCount30d} reasonCode={pending.reasonCode} />
             </div>
+
+            {pending.sourceMessage ? (
+                <figure className="pending-departure-card__source">
+                    <figcaption className="pending-departure-card__source-meta">
+                        Telegram · {formatDayHourMinute(pending.sourceMessage.createdAt)}
+                    </figcaption>
+                    <blockquote className="pending-departure-card__source-text">
+                        “{pending.sourceMessage.rawText.trim()}”
+                    </blockquote>
+                </figure>
+            ) : (
+                <p className="pending-departure-card__source pending-departure-card__source--empty">
+                    Sem mensagem de Telegram vinculada a esta saída.
+                </p>
+            )}
 
             <div className="pending-departure-card__actions">
                 <motion.button
