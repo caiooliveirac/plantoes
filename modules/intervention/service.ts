@@ -202,6 +202,14 @@ export function isInterventionShadowOccupancyNotes(notes: string | null | undefi
     return normalized.includes("[TELEGRAM SOMBRA]") || /\bSOMBRA\b/.test(normalized);
 }
 
+// Espelha o domínio de regulação: ocupação "deslocada" numa tomada confirmada
+// permanece ativa fora do quadro (board_started_at nulo) com a chegada preservada.
+export const INTERVENTION_DISPLACED_NOTE_MARKER = "[DESLOCADO]";
+
+export function isInterventionDisplacedOccupancyNotes(notes: string | null | undefined) {
+    return normalizeInterventionOperationalNotes(notes).includes(INTERVENTION_DISPLACED_NOTE_MARKER);
+}
+
 export function resolveStaleShadowInterventionEndedAt(params: {
     notes: string | null | undefined;
     scheduledEndAt?: Date | null;
@@ -232,7 +240,54 @@ export function shouldCloseInterventionBoardCarrierOnArrival(params: {
         return false;
     }
 
+    if (isInterventionDisplacedOccupancyNotes(params.currentCarrierNotes)) {
+        return false;
+    }
+
     return !isInterventionShadowOccupancyNotes(params.currentCarrierNotes);
+}
+
+// Desloca o portador da base numa tomada confirmada: tira o board sem fechar,
+// preservando a chegada. Mantém ativo fora do quadro até redeclarar nova posição.
+export async function displaceInterventionOccupant(
+    occupancyId: string,
+    input: { displacedAt: Date; takenByDoctorName?: string | null },
+    updatedByUserId?: string | null,
+) {
+    const db = getDb();
+    const updated = await db.transaction(async (tx) => {
+        const existing = await tx.query.interventionOccupancies.findFirst({
+            where: eq(interventionOccupancies.id, occupancyId),
+        });
+        if (!existing) {
+            throw new Error("Intervention occupancy not found.");
+        }
+        if (existing.endedAt) {
+            throw new Error("Only active intervention occupancies can be displaced.");
+        }
+        if (isInterventionDisplacedOccupancyNotes(existing.notes)) {
+            return existing;
+        }
+
+        const stamp = input.displacedAt.toISOString();
+        const by = input.takenByDoctorName ? ` por ${input.takenByDoctorName}` : "";
+        const marker = `${INTERVENTION_DISPLACED_NOTE_MARKER} ${stamp}${by}`.trim();
+        const nextNotes = existing.notes ? `${existing.notes}\n${marker}` : marker;
+
+        const [row] = await tx.update(interventionOccupancies)
+            .set({
+                boardStartedAt: null,
+                notes: nextNotes,
+                updatedByUserId: updatedByUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .where(eq(interventionOccupancies.id, occupancyId))
+            .returning();
+        return row;
+    });
+
+    publishBoardUpdate(`intervention:displace:${updated.baseId}`);
+    return updated;
 }
 
 export function resolveInterventionArrivalBoardPolicy(params: {

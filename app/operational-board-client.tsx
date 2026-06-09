@@ -319,6 +319,34 @@ function renderShadowOccupantLines(
     );
 }
 
+// Sub-linhas de "deslocado": médico que perdeu o board numa tomada confirmada e
+// segue ativo fora do quadro (chegada preservada) até redeclarar nova posição.
+function renderDisplacedOccupantLines(displacedOccupants: BoardShadowOccupant[] | undefined) {
+    if (!displacedOccupants || displacedOccupants.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="ops-inline-flags subtle">
+            {displacedOccupants.map((occ) => {
+                const name = occ.displayName?.trim() || occ.doctorName;
+                const arrival = formatBoardTime(occ.boardStartedAt ?? occ.startedAt);
+                return (
+                    <span
+                        key={occ.occupancyId}
+                        className="ops-doctor-line displaced"
+                        title={`${name} foi deslocado — chegada preservada (${arrival}). Aguardando nova posição.`}
+                    >
+                        <span className="ops-inline-flag displaced">deslocado</span>
+                        <span className="ops-shadow-name" title={name}>{name}</span>
+                        <span className="ops-shadow-time">{arrival}</span>
+                    </span>
+                );
+            })}
+        </div>
+    );
+}
+
 function formatDateTimeDetail(value: string | null) {
     if (!value) {
         return "Nao informado";
@@ -2531,6 +2559,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 isShadow: true,
                             });
                         })}
+                        {renderDisplacedOccupantLines(card.displacedOccupants)}
                         {isDisabledRegulation ? (
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
@@ -2702,6 +2731,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 isShadow: true,
                             });
                         })}
+                        {renderDisplacedOccupantLines(card.displacedOccupants)}
                         {isDisabledIntervention ? (
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}

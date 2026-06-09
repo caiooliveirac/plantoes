@@ -133,6 +133,16 @@ export function isRegulationShadowOccupancyNotes(notes: string | null | undefine
     return normalized.includes("[TELEGRAM SOMBRA]") || /\bSOMBRA\b/.test(normalized);
 }
 
+// Marcador de ocupação "deslocada": médico que tinha o ramal mas perdeu o board numa
+// tomada confirmada. Ele NÃO é fechado — fica ativo fora do quadro (board_started_at
+// nulo, fora do índice de board único) com a chegada original preservada, podendo
+// redeclarar uma nova posição (vira remanejamento/move que preserva started_at).
+export const REGULATION_DISPLACED_NOTE_MARKER = "[DESLOCADO]";
+
+export function isRegulationDisplacedOccupancyNotes(notes: string | null | undefined) {
+    return normalizeRegulationOperationalNotes(notes).includes(REGULATION_DISPLACED_NOTE_MARKER);
+}
+
 // A "sombra" (shadow) doctor observes/accompanies the active titular on the same
 // ramal without owning it. A shadow arrival must NEVER displace the active doctor,
 // and a real arrival must NEVER displace a shadow — the two coexist on the ramal.
@@ -151,7 +161,57 @@ export function shouldCloseRegulationOccupantOnArrival(params: {
         return false;
     }
 
+    // Um ocupante "deslocado" (perdeu o board numa tomada confirmada) coexiste fora do
+    // quadro — a chegada que assume o board NÃO o fecha; ele segue ativo até redeclarar.
+    if (isRegulationDisplacedOccupancyNotes(params.currentOccupantNotes)) {
+        return false;
+    }
+
     return !isRegulationShadowOccupancyNotes(params.currentOccupantNotes);
+}
+
+// Desloca um ocupante de ramal numa tomada confirmada: tira o board (board_started_at
+// nulo, sai do índice one-active-board-per-post) sem fechar a ocupação, preservando a
+// chegada. Marca a nota para coexistir e ser exibido como "deslocado" no painel.
+export async function displaceRegulationOccupant(
+    occupancyId: string,
+    input: { displacedAt: Date; takenByDoctorName?: string | null },
+    updatedByUserId?: string | null,
+) {
+    const db = getDb();
+    const updated = await db.transaction(async (tx) => {
+        const existing = await tx.query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, occupancyId),
+        });
+        if (!existing) {
+            throw new Error("Regulation occupancy not found.");
+        }
+        if (existing.endedAt) {
+            throw new Error("Only active regulation occupancies can be displaced.");
+        }
+        if (isRegulationDisplacedOccupancyNotes(existing.notes)) {
+            return existing;
+        }
+
+        const stamp = input.displacedAt.toISOString();
+        const by = input.takenByDoctorName ? ` por ${input.takenByDoctorName}` : "";
+        const marker = `${REGULATION_DISPLACED_NOTE_MARKER} ${stamp}${by}`.trim();
+        const nextNotes = existing.notes ? `${existing.notes}\n${marker}` : marker;
+
+        const [row] = await tx.update(regulationOccupancies)
+            .set({
+                boardStartedAt: null,
+                notes: nextNotes,
+                updatedByUserId: updatedByUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .where(eq(regulationOccupancies.id, occupancyId))
+            .returning();
+        return row;
+    });
+
+    publishBoardUpdate(`regulation:displace:${updated.postId}`);
+    return updated;
 }
 
 // Whether an arrival should take the board immediately. A shadow takes the board

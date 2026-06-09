@@ -807,6 +807,36 @@ button.ops-doctor-line.shadow.clickable:hover {
     background: rgba(150, 120, 220, 0.12);
 }
 
+/* Sub-linha de "deslocado": médico que perdeu o board numa tomada confirmada e
+   aguarda redeclarar posição (chegada preservada). Arte âmbar para destacar pendência. */
+.ops-inline-flag.displaced {
+    background: rgba(230, 160, 60, 0.18);
+    border-color: rgba(230, 160, 60, 0.4);
+    color: #ffe2b8;
+}
+
+.ops-doctor-line.displaced {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+    padding-left: 8px;
+    border-left: 2px dashed rgba(230, 160, 60, 0.5);
+    opacity: 0.9;
+}
+
+.ops-doctor-line.displaced .ops-shadow-name {
+    font-style: italic;
+    font-weight: 600;
+    color: #ffd79a;
+}
+
+.ops-doctor-line.displaced .ops-shadow-time {
+    font-size: 0.62rem;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.7;
+}
+
 /* Toggle "entrar como sombra" no drawer de remanejamento. */
 .chief-shadow-toggle .chief-shadow-toggle__control {
     display: inline-flex;
