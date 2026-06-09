@@ -57,7 +57,7 @@ import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operation
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
-import { continueRegulationOccupancy, deactivateRegulationPost, endRegulationOccupancy, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
+import { continueRegulationOccupancy, deactivateRegulationPost, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
     deserializeDepartureCorrectionCandidate,
@@ -7642,6 +7642,12 @@ async function isPiamPreferredDoctor(doctorId: string) {
     return extractDoctorPreferredOperationalRole(doctor.metadata) === "PIAM";
 }
 
+export type PiamAlreadyPresentInfo = {
+    role: string;
+    shiftLabel: "SD" | "SN";
+    isShadow: boolean;
+};
+
 async function handlePiamAutoArrival(params: {
     parsed: OperationalParsedEntry;
     doctorId: string;
@@ -7659,49 +7665,80 @@ async function handlePiamAutoArrival(params: {
         throw new Error("Ramal PIAM nao cadastrado no sistema.");
     }
 
-    const existingActive = await db.query.regulationOccupancies.findFirst({
-        where: and(
-            eq(regulationOccupancies.postId, post.id),
-            eq(regulationOccupancies.doctorId, params.doctorId),
-            isNull(regulationOccupancies.endedAt),
-        ),
-    });
-
-    let occupancyId: string;
-    if (existingActive) {
-        const closed = await endRegulationOccupancy(existingActive.id, {
-            endedAt: bounds.scheduledEndAt,
-            actualEndedAt: bounds.scheduledEndAt,
-        });
-        occupancyId = closed.id;
-    } else {
-        const reg = await startRegulationOccupancy({
-            doctorId: params.doctorId,
-            postId: post.id,
-            startedAt: bounds.scheduledStartAt,
-            boardStartedAt: bounds.scheduledStartAt,
-            scheduledStartAt: bounds.scheduledStartAt,
-            scheduledEndAt: bounds.scheduledEndAt,
-            shiftLabel: params.shiftLabel,
-            roleLabel: "PIAM",
-            ramalLabel: "PIAM",
-            source: "telegram",
-            notes: `[PIAM auto ${params.shiftLabel}] ${params.messageText}`.trim(),
-            createdByUserId: null,
-        });
-        const closed = await endRegulationOccupancy(reg.id, {
-            endedAt: bounds.scheduledEndAt,
-            actualEndedAt: bounds.scheduledEndAt,
-        });
-        occupancyId = closed.id;
-    }
-
     // Reflect the forced PIAM placement on the parsed entry so downstream replies and
     // logs show the final ramal/shift instead of whatever the doctor typed.
     params.parsed.sector = "REGULATION";
     params.parsed.baseCode = "PIAM";
     params.parsed.shiftType = params.shiftLabel;
     params.parsed.arrivalTime = params.shiftLabel === "SD" ? "07:00" : "19:00";
+
+    const arrivalIsShadow = isRegulationShadowOccupancyNotes(params.messageText);
+
+    // Idempotency guard: a doctor already registered on PIAM for THIS shift window
+    // (matched by the fixed scheduled start) must never spawn a second occupancy nor
+    // open a departure. Re-announcing the same arrival — even from a second person —
+    // gets a didactic reply, no mutation. This covers both the still-open shadow and
+    // the titular that was already closed at the fixed scheduled end.
+    const existingThisShift = await db.query.regulationOccupancies.findFirst({
+        where: and(
+            eq(regulationOccupancies.postId, post.id),
+            eq(regulationOccupancies.doctorId, params.doctorId),
+            eq(regulationOccupancies.scheduledStartAt, bounds.scheduledStartAt),
+        ),
+        orderBy: [desc(regulationOccupancies.startedAt)],
+    });
+    if (existingThisShift) {
+        return {
+            occupancyId: existingThisShift.id,
+            successKind: "standard" as const,
+            treatedAsContinuation: false,
+            replyTimeAt: bounds.scheduledStartAt,
+            autoReactivated: false,
+            effectiveShiftType: params.shiftLabel,
+            reassignedFrom: null as string | null,
+            assumedHalfShift: false,
+            continuationFrom: null as string | null,
+            displacedDoctorName: null as string | null,
+            extendedLongShift: false,
+            continuityInterpretation: null as ContinuityInterpretation | null,
+            piamAutoAllocated: true,
+            piamOriginalCode: params.originalCode,
+            forwardContinuityPrompt: null as ForwardContinuityPrompt,
+            alreadyPresent: {
+                role: "PIAM",
+                shiftLabel: params.shiftLabel,
+                isShadow: isRegulationShadowOccupancyNotes(existingThisShift.notes),
+            } as PiamAlreadyPresentInfo,
+        };
+    }
+
+    const reg = await startRegulationOccupancy({
+        doctorId: params.doctorId,
+        postId: post.id,
+        startedAt: bounds.scheduledStartAt,
+        boardStartedAt: bounds.scheduledStartAt,
+        scheduledStartAt: bounds.scheduledStartAt,
+        scheduledEndAt: bounds.scheduledEndAt,
+        shiftLabel: params.shiftLabel,
+        roleLabel: "PIAM",
+        ramalLabel: "PIAM",
+        source: "telegram",
+        notes: `[PIAM auto ${params.shiftLabel}] ${params.messageText}`.trim(),
+        createdByUserId: null,
+    });
+
+    // A PIAM "sombra" coexists with the titular and must stay OPEN (ended_at null) so
+    // the live board renders it through the shadow query — exactly like a regular
+    // (non-PIAM) shadow. Only the TITULAR keeps the fixed-window behaviour of closing
+    // immediately so payment closing already sees a finished, no-bank-hours shift.
+    let occupancyId = reg.id;
+    if (!arrivalIsShadow) {
+        const closed = await endRegulationOccupancy(reg.id, {
+            endedAt: bounds.scheduledEndAt,
+            actualEndedAt: bounds.scheduledEndAt,
+        });
+        occupancyId = closed.id;
+    }
 
     return {
         occupancyId,
@@ -7719,6 +7756,7 @@ async function handlePiamAutoArrival(params: {
         piamAutoAllocated: true,
         piamOriginalCode: params.originalCode,
         forwardContinuityPrompt: null as ForwardContinuityPrompt,
+        alreadyPresent: null as PiamAlreadyPresentInfo | null,
     };
 }
 
@@ -7784,6 +7822,25 @@ async function maybeSendContinuityForwardPrompt(
             callback_data: buildContinuityRevertCallbackData(prompt.domain, prompt.occupancyId),
         }]]),
     );
+}
+
+export function buildPiamAlreadyPresentReply(doctorName: string, info: PiamAlreadyPresentInfo) {
+    const turnoLabel = info.shiftLabel === "SD" ? "SD (diurno)" : "SN (noturno)";
+    const coverage = info.isShadow ? " na cobertura *sombra*" : "";
+    return `🩺 *${doctorName}* já está no plantão como *${info.role}* — ${turnoLabel}${coverage}.`
+        + `\nNão registrei de novo: reinformar a mesma chegada não cria duplicata nem abre saída.`
+        + `\n\nSe a intenção for outra, me diga assim:`
+        + `\n• *Saída*: _${doctorName} saída HH:mm_ — se for saída atrasada, mande o motivo (ex.: _em ocorrência 0729_ ou _higienizando_).`
+        + `\n• *Remanejamento*: _${doctorName} <RAMAL destino>_ — movo para a nova posição preservando a chegada original.`;
+}
+
+async function sendPiamAlreadyPresentReply(
+    chatId: number,
+    replyToMessageId: number,
+    doctorName: string,
+    info: PiamAlreadyPresentInfo,
+) {
+    await sendMessage(chatId, buildPiamAlreadyPresentReply(doctorName, info), replyToMessageId);
 }
 
 async function sendSuccessReply(
@@ -9793,13 +9850,15 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const eventAt = resolveArrivalEventTimeForPhase(messageReferenceAt, firstParsed.arrivalTime, isGenuineArrival);
 
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName, forwardContinuityPrompt } = await applyParsedEntry({
+                const applyResult = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
                     referenceAt: new Date(message.date * 1000),
                     messageText: message.text,
                 });
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName, forwardContinuityPrompt } = applyResult;
+                const alreadyPresent = (applyResult as { alreadyPresent?: PiamAlreadyPresentInfo | null }).alreadyPresent ?? null;
 
                 if (message.from?.id) {
                     await supersedePendingDepartureJustification(String(message.chat.id), String(message.from.id));
@@ -9817,6 +9876,19 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         continuationMode: resolveTelegramContinuationMode(firstParsed),
                     },
                 });
+
+                if (alreadyPresent) {
+                    // Re-announcement of a doctor already on shift: never opens a departure
+                    // nor duplicates the occupancy — just a didactic reply pointing to the
+                    // saída / remanejamento flows.
+                    await sendPiamAlreadyPresentReply(
+                        message.chat.id,
+                        message.message_id,
+                        resolveTelegramDoctorSurfaceName(resolvedDoctor),
+                        alreadyPresent,
+                    );
+                    return { ok: true, occupancyId };
+                }
 
                 await sendSuccessReply(
                     message.chat.id,
