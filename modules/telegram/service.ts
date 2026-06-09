@@ -50,14 +50,14 @@ import {
     setDoctorPreferredOperationalRole,
     updateDoctorDirectoryEntry,
 } from "@/modules/doctors/service";
-import { continueInterventionOccupancy, deactivateInterventionBase, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
+import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
-import { continueRegulationOccupancy, deactivateRegulationPost, endRegulationOccupancy, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
+import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
     deserializeDepartureCorrectionCandidate,
@@ -183,8 +183,17 @@ import {
 } from "@/modules/telegram/commands";
 import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp, type TelegramRecentSenderMessage } from "@/modules/telegram/command-suggestions";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeMealBreakMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines, type ParsedMessage } from "@/modules/telegram/parser";
-import type { TelegramUpdate } from "@/modules/telegram/api";
-import { buildChoiceKeyboard, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
+import type { TelegramCallbackQuery, TelegramUpdate } from "@/modules/telegram/api";
+import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
+import {
+    buildContinuityRevertCallbackData,
+    type ContinuityRevertDomain,
+    evaluateContinuityRevert,
+    parseContinuityRevertCallbackData,
+} from "@/modules/telegram/continuity-revert";
+
+/** Botão "Foi só esta noite" para reverter um P forward noturno. Null = sem botão. */
+type ForwardContinuityPrompt = { occupancyId: string; domain: ContinuityRevertDomain } | null;
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
 import { buildLateArrivalAcknowledgementAnnouncement, maybeSendInterventionLateArrivalOrientation } from "@/modules/telegram/late-arrival-prompt";
 import { acknowledgeInterventionLateArrival, LATE_HALF_SHIFT_CUTOFF_HOUR, resolveBahiaHour } from "@/modules/bank-hours/late-arrival";
@@ -198,6 +207,9 @@ import {
     parseTelegramStandaloneTime,
     pickLikelyDepartureCorrectionCandidate,
     resolveTelegramEligibleLateDepartureReason,
+    extractTelegramOccurrenceNumber,
+    resolveTelegramLateDepartureClaim,
+    isTelegramCreditEligibleClaim,
     requiresTelegramDepartureAdjustmentJustification,
 } from "@/modules/telegram/departure-flow";
 import { compareTelegramInterventionCodes } from "@/modules/telegram/presentation-order";
@@ -209,6 +221,9 @@ export {
     parseTelegramStandaloneTime,
     pickLikelyDepartureCorrectionCandidate,
     resolveTelegramEligibleLateDepartureReason,
+    extractTelegramOccurrenceNumber,
+    resolveTelegramLateDepartureClaim,
+    isTelegramCreditEligibleClaim,
     requiresTelegramDepartureAdjustmentJustification,
 } from "@/modules/telegram/departure-flow";
 
@@ -247,6 +262,8 @@ interface PendingDepartureJustificationData {
     originalEventAt: string;
     originalReferenceAt?: string;
     invalidJustificationAttempts?: number;
+    /** Set when the pending claim is an "occurrence" still missing its 4-digit number. */
+    occurrenceNumberRequired?: boolean;
 }
 
 interface PendingDepartureCorrectionData {
@@ -618,17 +635,27 @@ export function buildContinuityInterpretation(params: {
     };
 }
 
+// Normaliza um rótulo de turno para SD/SN concretos. P e nulos viram null porque
+// só uma troca explícita SD↔SN sinaliza "plantão novo" — P/ausente é ambíguo
+// (continuidade/24h) e não deve bloquear o remanejamento implícito.
+function normalizeConcreteShift(value: string | null | undefined): "SD" | "SN" | null {
+    const normalized = (value ?? "").trim().toUpperCase();
+    return normalized === "SD" || normalized === "SN" ? normalized : null;
+}
+
 export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
     sector: "REGULATION" | "INTERVENTION";
     baseCode: string | null;
     arrivalTime?: string | null;
     shiftType?: string | null;
     roleFunction?: string | null;
+    isShadow?: boolean;
     isDeparture: boolean;
     isContinuation: boolean;
     isReassignment?: boolean;
     activeSector?: "REGULATION" | "INTERVENTION" | null;
     activeBaseCode?: string | null;
+    activeShiftLabel?: string | null;
 }) {
     if (!params.baseCode) {
         return false;
@@ -638,7 +665,9 @@ export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
         return false;
     }
 
-    if (params.arrivalTime || params.shiftType || params.roleFunction) {
+    // Uma chegada de "sombra" é uma coexistência própria no novo ramal, não uma
+    // mudança de posição do titular — nunca move a ocupação existente.
+    if (params.isShadow) {
         return false;
     }
 
@@ -646,8 +675,24 @@ export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
         return false;
     }
 
-    // Keep implicit remanejamento conservative: same domain, only target switch.
-    return params.activeSector === params.sector && params.activeBaseCode !== params.baseCode;
+    // Mesma posição (mesmo domínio + mesmo código) não é remanejamento.
+    if (params.activeSector === params.sector && params.activeBaseCode === params.baseCode) {
+        return false;
+    }
+
+    // Um médico que já está no plantão e avisa chegada em OUTRA posição — ramal ou
+    // ambulância, inclusive cross-domínio — está mudando de posto, não começando
+    // um plantão novo. O sistema preserva o 1º horário de chegada (handled pelo
+    // transfer, que clona started_at/boardStartedAt) em vez de marcá-lo atrasado.
+    // A única exceção é declarar um turno concreto DIFERENTE do atual (SD↔SN):
+    // isso sinaliza um plantão novo de verdade, então trata como chegada nova.
+    const declaredShift = normalizeConcreteShift(params.shiftType);
+    const activeShift = normalizeConcreteShift(params.activeShiftLabel);
+    if (declaredShift && activeShift && declaredShift !== activeShift) {
+        return false;
+    }
+
+    return true;
 }
 
 export function shouldLinkTelegramArrivalToContinuitySource(params: {
@@ -6634,13 +6679,23 @@ async function queuePendingDepartureJustification(params: {
         time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
     });
 
+    // When the doctor already stated an "occurrence" reason but omitted the mandatory
+    // 4-digit occurrence number, the very first prompt charges for the number instead
+    // of asking for a (already-given) reason.
+    const inlineClaim = resolveTelegramLateDepartureClaim(params.originalText, [
+        params.parsed.baseCode,
+        params.resolvedDoctor.fullName,
+        params.parsed.arrivalTime,
+    ]);
+    const occurrenceNumberRequired = inlineClaim?.missingOccurrenceNumber ?? false;
+
     await markTelegramProcessed(params.logId, {
         status: "pending_departure_justification",
         parsedDomain: params.parsed.sector,
         parsedTargetCode: params.parsed.baseCode,
         parsedAction: resolveTelegramParsedAction(params.parsed),
         parsedDoctorName: params.resolvedDoctor.fullName,
-        errorMessage: "departure_justification_required",
+        errorMessage: occurrenceNumberRequired ? "departure_occurrence_number_required" : "departure_justification_required",
         resolutionData: {
             ...buildTelegramReviewLogData({
                 reason: "departure_justification_required",
@@ -6664,12 +6719,13 @@ async function queuePendingDepartureJustification(params: {
             originalEventAt: params.eventAt.toISOString(),
             originalReferenceAt: params.referenceAt.toISOString(),
             invalidJustificationAttempts: 0,
+            occurrenceNumberRequired,
         },
     });
 
     await sendMessage(
         params.message!.chat.id,
-        pickTelegramReply("departure_justification_required", params.message!.message_id, {
+        pickTelegramReply(occurrenceNumberRequired ? "departure_occurrence_number_required" : "departure_justification_required", params.message!.message_id, {
             name: resolveTelegramDoctorSurfaceName(params.resolvedDoctor),
             target: params.parsed.baseCode ?? "plantao",
             time: params.parsed.arrivalTime ?? formatTelegramReplyTime(params.eventAt),
@@ -6847,10 +6903,14 @@ async function handleTelegramReassignment(params: {
             throw new Error("Ramal de destino nao encontrado.");
         }
 
+        // Só um BOARD CARRIER (board_started_at não nulo) bloqueia o destino. Um
+        // ocupante já deslocado (board nulo, aguardando redeclarar) coexiste e não
+        // conflita — é justamente esse o estado deixado por uma tomada confirmada.
         const targetConflict = await db.query.regulationOccupancies.findFirst({
             where: and(
                 eq(regulationOccupancies.postId, post.id),
                 isNull(regulationOccupancies.endedAt),
+                isNotNull(regulationOccupancies.boardStartedAt),
             ),
         });
         if (targetConflict && targetConflict.doctorId !== resolvedDoctor.id) {
@@ -6872,6 +6932,7 @@ async function handleTelegramReassignment(params: {
             where: and(
                 eq(interventionOccupancies.baseId, base.id),
                 isNull(interventionOccupancies.endedAt),
+                isNotNull(interventionOccupancies.boardStartedAt),
             ),
         });
         if (targetConflict && targetConflict.doctorId !== resolvedDoctor.id) {
@@ -6912,7 +6973,150 @@ async function handleTelegramReassignment(params: {
         continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
+        forwardContinuityPrompt: null as ForwardContinuityPrompt,
     };
+}
+
+// ── Tomada de ramal/base ocupado no mesmo turno (confirmação por reenvio) ──────────
+// Comportamento basal mudou: declarar chegada num ramal/ambulância já ocupado por
+// OUTRO médico NO MESMO TURNO não desloca mais ninguém automaticamente. O bot avisa
+// quem ocupa e pede o reenvio EXATO da mensagem para confirmar. Só então o ocupante
+// é "deslocado" (sai do quadro, chegada preservada, pode redeclarar nova posição).
+// Rendição normal cross-turno (carry-over do turno anterior) segue automática.
+const TAKEOVER_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
+
+type TakeoverPendingData = {
+    kind: "takeover_confirmation";
+    sector: "REGULATION" | "INTERVENTION";
+    targetCode: string;
+    arrivingDoctorId: string;
+    occupantDoctorId: string;
+    occupantOccupancyId: string;
+};
+
+function isTakeoverPendingData(value: unknown): value is TakeoverPendingData {
+    return Boolean(value)
+        && typeof value === "object"
+        && (value as { kind?: unknown }).kind === "takeover_confirmation";
+}
+
+export function takeoverPendingMatches(data: TakeoverPendingData, incoming: {
+    sector: "REGULATION" | "INTERVENTION";
+    targetCode: string;
+    arrivingDoctorId: string;
+    occupantDoctorId: string;
+}) {
+    return data.sector === incoming.sector
+        && data.targetCode.trim().toUpperCase() === incoming.targetCode.trim().toUpperCase()
+        && data.arrivingDoctorId === incoming.arrivingDoctorId
+        && data.occupantDoctorId === incoming.occupantDoctorId;
+}
+
+export function isWithinTakeoverConfirmationWindow(pendingCreatedAt: Date, referenceAt: Date) {
+    return referenceAt.getTime() - pendingCreatedAt.getTime() <= TAKEOVER_CONFIRMATION_WINDOW_MS;
+}
+
+export function buildTakeoverWarningReply(params: {
+    occupantName: string;
+    targetLabel: string;
+    shiftLabel: string | null;
+    sinceTime: string;
+    exactMessage: string;
+}) {
+    const turno = params.shiftLabel ? ` (turno *${params.shiftLabel}*)` : "";
+    return `⚠️ *${params.targetLabel}* já está ocupado por *${params.occupantName}*${turno}, desde *${params.sinceTime}*.`
+        + `\n\nConfere se é isso mesmo. Se você *realmente* vai assumir e *desativar ${params.occupantName}* dessa posição, reenvie exatamente:`
+        + `\n\`${params.exactMessage}\``
+        + `\n\n🔁 ${params.occupantName} sai do quadro nesse ramal, mas o horário de chegada dele fica preservado — ele pode declarar uma nova posição depois sem ser marcado atrasado.`;
+}
+
+export function buildTakeoverDisplacedAnnouncement(params: {
+    arrivingName: string;
+    occupantName: string;
+    targetLabel: string;
+    sinceTime: string;
+}) {
+    return `🔁 *${params.arrivingName}* assumiu *${params.targetLabel}*. *${params.occupantName}* foi deslocado do quadro (chegada preservada desde *${params.sinceTime}*) e precisa declarar uma nova posição.`;
+}
+
+async function findActiveSameTurnoBoardCarrierOnTarget(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    targetCode: string;
+    eventAt: Date;
+    excludeDoctorId: string;
+}): Promise<{ occupancyId: string; doctorId: string; doctorName: string; startedAt: Date; shiftLabel: string | null } | null> {
+    const db = getDb();
+    const windowStart = resolveOperationalShiftWindow(params.eventAt).startedAt;
+
+    if (params.sector === "REGULATION") {
+        const post = await db.query.regulationPosts.findFirst({
+            where: eq(regulationPosts.code, params.targetCode),
+        });
+        if (!post) {
+            return null;
+        }
+        const occ = await db.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, post.id),
+                isNull(regulationOccupancies.endedAt),
+                isNotNull(regulationOccupancies.boardStartedAt),
+                ne(regulationOccupancies.doctorId, params.excludeDoctorId),
+            ),
+            orderBy: [desc(regulationOccupancies.boardStartedAt)],
+        });
+        // "Mesmo turno": o ocupante chegou DENTRO da janela de turno atual. Carry-over
+        // do turno anterior (started_at antes da janela) é rendição normal, não tomada.
+        if (!occ || occ.startedAt.getTime() < windowStart.getTime()) {
+            return null;
+        }
+        const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
+        return {
+            occupancyId: occ.id,
+            doctorId: occ.doctorId,
+            doctorName: resolveTelegramDoctorSurfaceName(doc),
+            startedAt: occ.startedAt,
+            shiftLabel: occ.shiftLabel,
+        };
+    }
+
+    const base = await db.query.interventionBases.findFirst({
+        where: eq(interventionBases.code, params.targetCode),
+    });
+    if (!base) {
+        return null;
+    }
+    const occ = await db.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.baseId, base.id),
+            isNull(interventionOccupancies.endedAt),
+            isNotNull(interventionOccupancies.boardStartedAt),
+            ne(interventionOccupancies.doctorId, params.excludeDoctorId),
+        ),
+        orderBy: [desc(interventionOccupancies.boardStartedAt)],
+    });
+    if (!occ || occ.startedAt.getTime() < windowStart.getTime()) {
+        return null;
+    }
+    const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
+    return {
+        occupancyId: occ.id,
+        doctorId: occ.doctorId,
+        doctorName: resolveTelegramDoctorSurfaceName(doc),
+        startedAt: occ.startedAt,
+        shiftLabel: occ.shiftLabel,
+    };
+}
+
+async function findPendingTakeoverConfirmation(chatId: string, senderTelegramId: string) {
+    const db = getDb();
+    return db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "pending_takeover_confirmation"),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+    });
 }
 
 async function applyParsedEntry(params: {
@@ -6960,11 +7164,13 @@ async function applyParsedEntry(params: {
         arrivalTime: parsed.arrivalTime,
         shiftType: parsed.shiftType,
         roleFunction: parsed.roleFunction,
+        isShadow: parsed.isShadow,
         isDeparture: parsed.isDeparture,
         isContinuation: parsed.isContinuation,
         isReassignment: parsed.isReassignment,
         activeSector: activeOcc?.sector,
         activeBaseCode: activeOcc?.baseCode,
+        activeShiftLabel: activeOcc?.shiftLabel,
     });
 
     // Handle reassignment as a special case (end source + start target)
@@ -7074,7 +7280,7 @@ async function applyParsedEntry(params: {
                         eventAt,
                         hasSuccessorOccupancy: hasHandoff,
                     })
-                    && !resolveTelegramEligibleLateDepartureReason(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+                    && !isTelegramCreditEligibleClaim(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
                 ) {
                     throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
@@ -7351,7 +7557,7 @@ async function applyParsedEntry(params: {
                             })
                             : false,
                     })
-                    && !resolveTelegramEligibleLateDepartureReason(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
+                    && !isTelegramCreditEligibleClaim(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
                 ) {
                     throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
@@ -7557,6 +7763,19 @@ async function applyParsedEntry(params: {
         effectiveShiftType,
     }) && parsed.sector === "REGULATION" && !parsed.isDeparture;
 
+    // "P forward": chegada NOTURNA registrada como P que vai cobrir também o SD de
+    // amanhã. Só oferecemos o botão de reverter quando NÃO é continuidade do dia
+    // (treatedAsContinuation) — espelha a regra do pagamento: quem tem SD no dia
+    // fecha às 07h e não avança (ver board.service.ts). Backward não ganha botão.
+    const isNightForwardP = effectiveShiftType === "P"
+        && !parsed.isDeparture
+        && !treatedAsContinuation
+        && occupancyId !== null
+        && resolveOperationalShiftWindow(eventAt).shiftLabel === "SN";
+    const forwardContinuityPrompt: ForwardContinuityPrompt = isNightForwardP && occupancyId
+        ? { occupancyId, domain: parsed.sector === "REGULATION" ? "regulation" : "intervention" }
+        : null;
+
     return {
         occupancyId,
         successKind,
@@ -7572,6 +7791,7 @@ async function applyParsedEntry(params: {
         continuityInterpretation,
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
+        forwardContinuityPrompt,
     };
 }
 
@@ -7599,6 +7819,12 @@ async function isPiamPreferredDoctor(doctorId: string) {
     return extractDoctorPreferredOperationalRole(doctor.metadata) === "PIAM";
 }
 
+export type PiamAlreadyPresentInfo = {
+    role: string;
+    shiftLabel: "SD" | "SN";
+    isShadow: boolean;
+};
+
 async function handlePiamAutoArrival(params: {
     parsed: OperationalParsedEntry;
     doctorId: string;
@@ -7616,49 +7842,80 @@ async function handlePiamAutoArrival(params: {
         throw new Error("Ramal PIAM nao cadastrado no sistema.");
     }
 
-    const existingActive = await db.query.regulationOccupancies.findFirst({
-        where: and(
-            eq(regulationOccupancies.postId, post.id),
-            eq(regulationOccupancies.doctorId, params.doctorId),
-            isNull(regulationOccupancies.endedAt),
-        ),
-    });
-
-    let occupancyId: string;
-    if (existingActive) {
-        const closed = await endRegulationOccupancy(existingActive.id, {
-            endedAt: bounds.scheduledEndAt,
-            actualEndedAt: bounds.scheduledEndAt,
-        });
-        occupancyId = closed.id;
-    } else {
-        const reg = await startRegulationOccupancy({
-            doctorId: params.doctorId,
-            postId: post.id,
-            startedAt: bounds.scheduledStartAt,
-            boardStartedAt: bounds.scheduledStartAt,
-            scheduledStartAt: bounds.scheduledStartAt,
-            scheduledEndAt: bounds.scheduledEndAt,
-            shiftLabel: params.shiftLabel,
-            roleLabel: "PIAM",
-            ramalLabel: "PIAM",
-            source: "telegram",
-            notes: `[PIAM auto ${params.shiftLabel}] ${params.messageText}`.trim(),
-            createdByUserId: null,
-        });
-        const closed = await endRegulationOccupancy(reg.id, {
-            endedAt: bounds.scheduledEndAt,
-            actualEndedAt: bounds.scheduledEndAt,
-        });
-        occupancyId = closed.id;
-    }
-
     // Reflect the forced PIAM placement on the parsed entry so downstream replies and
     // logs show the final ramal/shift instead of whatever the doctor typed.
     params.parsed.sector = "REGULATION";
     params.parsed.baseCode = "PIAM";
     params.parsed.shiftType = params.shiftLabel;
     params.parsed.arrivalTime = params.shiftLabel === "SD" ? "07:00" : "19:00";
+
+    const arrivalIsShadow = isRegulationShadowOccupancyNotes(params.messageText);
+
+    // Idempotency guard: a doctor already registered on PIAM for THIS shift window
+    // (matched by the fixed scheduled start) must never spawn a second occupancy nor
+    // open a departure. Re-announcing the same arrival — even from a second person —
+    // gets a didactic reply, no mutation. This covers both the still-open shadow and
+    // the titular that was already closed at the fixed scheduled end.
+    const existingThisShift = await db.query.regulationOccupancies.findFirst({
+        where: and(
+            eq(regulationOccupancies.postId, post.id),
+            eq(regulationOccupancies.doctorId, params.doctorId),
+            eq(regulationOccupancies.scheduledStartAt, bounds.scheduledStartAt),
+        ),
+        orderBy: [desc(regulationOccupancies.startedAt)],
+    });
+    if (existingThisShift) {
+        return {
+            occupancyId: existingThisShift.id,
+            successKind: "standard" as const,
+            treatedAsContinuation: false,
+            replyTimeAt: bounds.scheduledStartAt,
+            autoReactivated: false,
+            effectiveShiftType: params.shiftLabel,
+            reassignedFrom: null as string | null,
+            assumedHalfShift: false,
+            continuationFrom: null as string | null,
+            displacedDoctorName: null as string | null,
+            extendedLongShift: false,
+            continuityInterpretation: null as ContinuityInterpretation | null,
+            piamAutoAllocated: true,
+            piamOriginalCode: params.originalCode,
+            forwardContinuityPrompt: null as ForwardContinuityPrompt,
+            alreadyPresent: {
+                role: "PIAM",
+                shiftLabel: params.shiftLabel,
+                isShadow: isRegulationShadowOccupancyNotes(existingThisShift.notes),
+            } as PiamAlreadyPresentInfo,
+        };
+    }
+
+    const reg = await startRegulationOccupancy({
+        doctorId: params.doctorId,
+        postId: post.id,
+        startedAt: bounds.scheduledStartAt,
+        boardStartedAt: bounds.scheduledStartAt,
+        scheduledStartAt: bounds.scheduledStartAt,
+        scheduledEndAt: bounds.scheduledEndAt,
+        shiftLabel: params.shiftLabel,
+        roleLabel: "PIAM",
+        ramalLabel: "PIAM",
+        source: "telegram",
+        notes: `[PIAM auto ${params.shiftLabel}] ${params.messageText}`.trim(),
+        createdByUserId: null,
+    });
+
+    // A PIAM "sombra" coexists with the titular and must stay OPEN (ended_at null) so
+    // the live board renders it through the shadow query — exactly like a regular
+    // (non-PIAM) shadow. Only the TITULAR keeps the fixed-window behaviour of closing
+    // immediately so payment closing already sees a finished, no-bank-hours shift.
+    let occupancyId = reg.id;
+    if (!arrivalIsShadow) {
+        const closed = await endRegulationOccupancy(reg.id, {
+            endedAt: bounds.scheduledEndAt,
+            actualEndedAt: bounds.scheduledEndAt,
+        });
+        occupancyId = closed.id;
+    }
 
     return {
         occupancyId,
@@ -7675,6 +7932,8 @@ async function handlePiamAutoArrival(params: {
         continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: true,
         piamOriginalCode: params.originalCode,
+        forwardContinuityPrompt: null as ForwardContinuityPrompt,
+        alreadyPresent: null as PiamAlreadyPresentInfo | null,
     };
 }
 
@@ -7719,6 +7978,46 @@ async function maybeApplyPiamRouting(
     parsed.sector = "REGULATION";
     parsed.baseCode = "PIAM";
     return { applied: true, originalCode };
+}
+
+async function maybeSendContinuityForwardPrompt(
+    chatId: number,
+    replyToMessageId: number,
+    prompt: ForwardContinuityPrompt,
+) {
+    if (!prompt) {
+        return;
+    }
+
+    await sendMessage(
+        chatId,
+        "📋 Entendi como *P* (plantão 24h) — cobre até as *19h de amanhã*."
+        + "\nSe foi só esta noite, toque abaixo nos próximos 2 min.",
+        replyToMessageId,
+        buildInlineKeyboard([[{
+            text: "Foi só esta noite (SN)",
+            callback_data: buildContinuityRevertCallbackData(prompt.domain, prompt.occupancyId),
+        }]]),
+    );
+}
+
+export function buildPiamAlreadyPresentReply(doctorName: string, info: PiamAlreadyPresentInfo) {
+    const turnoLabel = info.shiftLabel === "SD" ? "SD (diurno)" : "SN (noturno)";
+    const coverage = info.isShadow ? " na cobertura *sombra*" : "";
+    return `🩺 *${doctorName}* já está no plantão como *${info.role}* — ${turnoLabel}${coverage}.`
+        + `\nNão registrei de novo: reinformar a mesma chegada não cria duplicata nem abre saída.`
+        + `\n\nSe a intenção for outra, me diga assim:`
+        + `\n• *Saída*: _${doctorName} saída HH:mm_ — se for saída atrasada, mande o motivo (ex.: _em ocorrência 0729_ ou _higienizando_).`
+        + `\n• *Remanejamento*: _${doctorName} <RAMAL destino>_ — movo para a nova posição preservando a chegada original.`;
+}
+
+async function sendPiamAlreadyPresentReply(
+    chatId: number,
+    replyToMessageId: number,
+    doctorName: string,
+    info: PiamAlreadyPresentInfo,
+) {
+    await sendMessage(chatId, buildPiamAlreadyPresentReply(doctorName, info), replyToMessageId);
 }
 
 async function sendSuccessReply(
@@ -7827,7 +8126,7 @@ async function sendSuccessReply(
         : "";
 
     const reassignmentHint = reassignedFrom
-        ? `\n\n🔀 Remanejado de *${reassignedFrom}* para *${parsed.baseCode}*. Ocupação anterior encerrada.`
+        ? `\n\n🔀 Percebi que já havia um aviso de chegada em *${reassignedFrom}* — registrei como remanejamento para *${parsed.baseCode}*, sem contar atraso. Ocupação anterior encerrada.`
         : "";
     const forcedTakeoverHint = buildForcedTakeoverHint({
         displacedDoctorName,
@@ -8079,6 +8378,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             nameSelectionFirstMsgAt,
             pending.resolutionData.parsed.arrivalTime,
         );
+        await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
@@ -8140,7 +8440,10 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
     }
 
     const pendingAttemptCount = getPendingDepartureJustificationAttemptCount(pending.resolutionData);
-    const promptKind = resolveDepartureJustificationPromptKind(pendingAttemptCount);
+    const occurrenceNumberPending = pending.resolutionData.occurrenceNumberRequired ?? false;
+    const promptKind = occurrenceNumberPending
+        ? (pendingAttemptCount > 0 ? "departure_occurrence_number_retry" as const : "departure_occurrence_number_required" as const)
+        : resolveDepartureJustificationPromptKind(pendingAttemptCount);
     const replyTime = pending.resolutionData.parsed.arrivalTime ?? formatTelegramReplyTime(new Date(pending.resolutionData.originalEventAt));
     const replyExample = buildTelegramDepartureExample({
         doctorName: pending.resolutionData.resolvedDoctor.fullName,
@@ -8200,13 +8503,29 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         return { ok: true, ignored: true, pending: true };
     }
 
-    const eligibleReason = resolveTelegramEligibleLateDepartureReason(message.text);
+    const mergedText = buildTelegramJustificationFollowUpText(
+        pending.resolutionData.originalText,
+        message.text,
+    );
+    // Evaluate reason AND the occurrence-number rule on the merged text, so a reason
+    // stated in the original message combines with a number sent in the reply.
+    const claim = resolveTelegramLateDepartureClaim(mergedText, [
+        pending.resolutionData.parsed.baseCode,
+        pending.resolutionData.resolvedDoctor.fullName,
+        pending.resolutionData.parsed.arrivalTime,
+    ]);
+    // "occurrence" recognized but still missing its mandatory 4-digit number.
+    const needsOccurrenceNumber = claim?.missingOccurrenceNumber ?? false;
+    // Credit-eligible only when a reason matched AND (if occurrence) the number is present.
+    const eligibleReason = claim && !claim.missingOccurrenceNumber ? claim : null;
+
     if (!eligibleReason) {
         if (pendingAttemptCount < 1) {
             await markTelegramProcessed(pending.id, {
                 resolutionData: buildResolutionData(pending.resolutionData, {
                     invalidJustificationAttempts: pendingAttemptCount + 1,
                     latestInvalidJustificationReplyText: message.text,
+                    occurrenceNumberRequired: needsOccurrenceNumber,
                 }),
             });
             await markTelegramProcessed(logId, {
@@ -8215,7 +8534,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
                 parsedAction: "departure_justification_pending",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
-                errorMessage: "departure_justification_invalid_retry",
+                errorMessage: needsOccurrenceNumber ? "departure_occurrence_number_missing" : "departure_justification_invalid_retry",
                 resolutionData: {
                     pendingJustificationKept: true,
                     invalidJustificationAttempts: pendingAttemptCount + 1,
@@ -8223,7 +8542,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             });
             await sendMessage(
                 message.chat.id,
-                pickTelegramReply("departure_justification_retry", message.message_id, {
+                pickTelegramReply(needsOccurrenceNumber ? "departure_occurrence_number_retry" : "departure_justification_retry", message.message_id, {
                     name: pending.resolutionData.resolvedDoctor.fullName,
                     target: pending.resolutionData.parsed.baseCode,
                     time: replyTime,
@@ -8235,10 +8554,15 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         }
 
         const eventAt = new Date(pending.resolutionData.originalEventAt);
-        const mergedText = buildTelegramJustificationFollowUpText(
-            pending.resolutionData.originalText,
-            message.text,
-        );
+
+        // Exhausted retries. A missing occurrence number still surfaces the late
+        // departure to the chefe (actual_ended_at = verbalized time) for adjudication,
+        // but without automatic credit and flagged "sem numero". An unrecognized reason
+        // keeps the legacy note-only behavior (no window extension).
+        const noteMarker = needsOccurrenceNumber
+            ? "telegram ocorrencia sem numero - revisar chefia"
+            : "telegram saida sem credito automatico";
+        const exhaustionCorrection = needsOccurrenceNumber ? { actualEndedAt: eventAt } : {};
 
         try {
             let relatedOccupancyId: string;
@@ -8260,7 +8584,8 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 }
 
                 relatedOccupancyId = (await correctRegulationOccupancy(recentClosed.id, {
-                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida sem credito automatico", mergedText),
+                    ...exhaustionCorrection,
+                    notes: appendTelegramOperationalNote(recentClosed.notes, noteMarker, mergedText),
                 }, null)).id;
             } else {
                 const base = await getDb().query.interventionBases.findFirst({
@@ -8280,7 +8605,8 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 }
 
                 relatedOccupancyId = (await correctInterventionOccupancy(recentClosed.id, {
-                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida sem credito automatico", mergedText),
+                    ...exhaustionCorrection,
+                    notes: appendTelegramOperationalNote(recentClosed.notes, noteMarker, mergedText),
                 }, null)).id;
             }
 
@@ -8293,6 +8619,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                     finalJustificationReplyText: message.text,
                     automaticCreditGranted: false,
                     manualReviewOnly: true,
+                    occurrenceNumberMissing: needsOccurrenceNumber,
                 }),
             });
             await markTelegramProcessed(logId, {
@@ -8307,6 +8634,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                     justificationFromPending: true,
                     automaticCreditGranted: false,
                     manualReviewOnly: true,
+                    occurrenceNumberMissing: needsOccurrenceNumber,
                 },
             });
             await sendMessage(
@@ -8349,11 +8677,6 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             return { ok: true, ignored: true, processingError: true };
         }
     }
-
-    const mergedText = buildTelegramJustificationFollowUpText(
-        pending.resolutionData.originalText,
-        message.text,
-    );
 
     // Only occurrence/hygienization grant automatic bank-hour credit.
     // Other accepted reasons (chefia/handoff) stop the loop but stay manual-review only.
@@ -8462,6 +8785,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             resolutionData: buildResolutionData(pending.resolutionData, {
                 justificationReplyText: message.text,
                 matchedReasonCode: eligibleReason.code,
+                occurrenceNumber: eligibleReason.occurrenceNumber ?? null,
                 automaticCreditGranted: true,
             }),
         });
@@ -8911,6 +9235,7 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
             originalEventAt,
             parsedEntry.arrivalTime,
         );
+        await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "cru_coi_ramal_apply_failed";
@@ -8932,7 +9257,72 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
     }
 }
 
+async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery) {
+    const parsed = parseContinuityRevertCallbackData(callbackQuery.data);
+    if (!parsed) {
+        // Callback desconhecido: encerra o "loading" do cliente e ignora.
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+
+    const chat = callbackQuery.message?.chat;
+    const messageId = callbackQuery.message?.message_id;
+    const allowed = chat
+        ? await isTelegramMessageAllowed({
+            message_id: messageId ?? 0,
+            chat,
+            from: callbackQuery.from,
+            date: 0,
+        } as TelegramUpdate["message"])
+        : false;
+    if (!allowed) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+
+    const db = getDb();
+    const occupancy = parsed.domain === "regulation"
+        ? await db.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, parsed.occupancyId) })
+        : await db.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, parsed.occupancyId) });
+
+    const outcome = evaluateContinuityRevert({
+        occupancy: occupancy ? { shiftLabel: occupancy.shiftLabel, createdAt: occupancy.createdAt } : null,
+        now: new Date(),
+    });
+
+    if (outcome !== "ok") {
+        const text = outcome === "expired"
+            ? "Tempo esgotado: a janela de 2 min para reverter já passou. Se precisar, avise a chefia."
+            : outcome === "already_changed"
+                ? "Já estava ajustado — nada a reverter."
+                : "Não encontrei esse registro para reverter.";
+        await answerCallbackQuery(callbackQuery.id, text, true);
+        return { ok: true, reverted: false, outcome };
+    }
+
+    // Rebaixa P -> SN: correctXxxOccupancy recalcula a janela agendada (só a noite).
+    if (parsed.domain === "regulation") {
+        await correctRegulationOccupancy(parsed.occupancyId, { shiftLabel: "SN" }, null);
+    } else {
+        await correctInterventionOccupancy(parsed.occupancyId, { shiftLabel: "SN" }, null);
+    }
+
+    await answerCallbackQuery(callbackQuery.id, "Pronto! Marquei como SN — cobre só esta noite.");
+    if (chat && messageId) {
+        await editMessageText(
+            chat.id,
+            messageId,
+            "✅ Corrigido para *SN (noturno)* — cobre só esta noite, sem o dia de amanhã.",
+        );
+    }
+    return { ok: true, reverted: true };
+}
+
 export async function processTelegramUpdate(update: TelegramUpdate) {
+    if (update.callback_query) {
+        return handleTelegramCallbackQuery(update.callback_query);
+    }
+
     const message = update.message;
     if (!message?.text) {
         return { ok: true, ignored: true };
@@ -9169,6 +9559,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.extendedLongShift,
                                 result.displacedDoctorName,
                             );
+                            await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
                             const errorMsg = error instanceof Error ? error.message : "unknown_error";
@@ -9257,6 +9648,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 result.effectiveShiftType,
                                 result.reassignedFrom,
                             );
+                            await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
                             return { ok: true, occupancyId: result.occupancyId };
                         } catch (error) {
                             const errorMsg = error instanceof Error ? error.message : "unknown_error";
@@ -9634,14 +10026,102 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const isGenuineArrival = !firstParsed.isDeparture && !firstParsed.isContinuation && !firstParsed.isReassignment;
             const eventAt = resolveArrivalEventTimeForPhase(messageReferenceAt, firstParsed.arrivalTime, isGenuineArrival);
 
+            // Tomada de ramal/base ocupado no mesmo turno: avisa quem ocupa e exige
+            // reenvio EXATO para confirmar. Só então desloca o ocupante (preservando a
+            // chegada dele). Vale para chegada nova e para move (remanejamento).
+            let takeoverDisplaced: { occupantName: string; targetLabel: string; sinceTime: string } | null = null;
+            const takeoverSenderId = message.from?.id ? String(message.from.id) : null;
+            const takeoverWantsBoard = !firstParsed.isDeparture
+                && !firstParsed.isContinuation
+                && !firstParsed.isShadow
+                && Boolean(firstParsed.baseCode);
+            if (takeoverWantsBoard && takeoverSenderId && firstParsed.baseCode) {
+                const occupant = await findActiveSameTurnoBoardCarrierOnTarget({
+                    sector: firstParsed.sector,
+                    targetCode: firstParsed.baseCode,
+                    eventAt,
+                    excludeDoctorId: resolvedDoctor.id,
+                });
+                if (occupant) {
+                    const incoming = {
+                        sector: firstParsed.sector,
+                        targetCode: firstParsed.baseCode,
+                        arrivingDoctorId: resolvedDoctor.id,
+                        occupantDoctorId: occupant.doctorId,
+                    };
+                    const pending = await findPendingTakeoverConfirmation(String(message.chat.id), takeoverSenderId);
+                    const confirmed = Boolean(pending)
+                        && isTakeoverPendingData(pending!.resolutionData)
+                        && takeoverPendingMatches(pending!.resolutionData as TakeoverPendingData, incoming)
+                        && isWithinTakeoverConfirmationWindow(pending!.createdAt, messageReferenceAt);
+
+                    if (!confirmed) {
+                        await markTelegramProcessed(log.id, {
+                            status: "pending_takeover_confirmation",
+                            parsedDomain: firstParsed.sector,
+                            parsedTargetCode: firstParsed.baseCode,
+                            parsedAction: resolveTelegramParsedAction(firstParsed),
+                            parsedDoctorName: resolvedDoctor.fullName,
+                            errorMessage: "takeover_confirmation_required",
+                            resolutionData: {
+                                kind: "takeover_confirmation",
+                                sector: firstParsed.sector,
+                                targetCode: firstParsed.baseCode,
+                                arrivingDoctorId: resolvedDoctor.id,
+                                occupantDoctorId: occupant.doctorId,
+                                occupantOccupancyId: occupant.occupancyId,
+                            } satisfies TakeoverPendingData,
+                        });
+                        await sendMessage(
+                            message.chat.id,
+                            buildTakeoverWarningReply({
+                                occupantName: occupant.doctorName,
+                                targetLabel: firstParsed.baseCode,
+                                shiftLabel: occupant.shiftLabel,
+                                sinceTime: formatTelegramReplyTime(occupant.startedAt),
+                                exactMessage: message.text,
+                            }),
+                            message.message_id,
+                        );
+                        return { ok: true, ignored: true, pending: true };
+                    }
+
+                    // Confirmado: desloca o ocupante (board nulo, chegada preservada) ANTES
+                    // de criar a chegada — assim o caminho normal não o fecha (guard de
+                    // coexistência) e o que chega assume o board.
+                    if (firstParsed.sector === "REGULATION") {
+                        await displaceRegulationOccupant(occupant.occupancyId, {
+                            displacedAt: eventAt,
+                            takenByDoctorName: resolveTelegramDoctorSurfaceName(resolvedDoctor),
+                        });
+                    } else {
+                        await displaceInterventionOccupant(occupant.occupancyId, {
+                            displacedAt: eventAt,
+                            takenByDoctorName: resolveTelegramDoctorSurfaceName(resolvedDoctor),
+                        });
+                    }
+                    await markTelegramProcessed(pending!.id, {
+                        status: "accepted",
+                        errorMessage: "takeover_confirmed",
+                    });
+                    takeoverDisplaced = {
+                        occupantName: occupant.doctorName,
+                        targetLabel: firstParsed.baseCode,
+                        sinceTime: formatTelegramReplyTime(occupant.startedAt),
+                    };
+                }
+            }
+
             try {
-                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName } = await applyParsedEntry({
+                const applyResult = await applyParsedEntry({
                     parsed: firstParsed,
                     resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
                     eventAt,
                     referenceAt: new Date(message.date * 1000),
                     messageText: message.text,
                 });
+                const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName, forwardContinuityPrompt } = applyResult;
+                const alreadyPresent = (applyResult as { alreadyPresent?: PiamAlreadyPresentInfo | null }).alreadyPresent ?? null;
 
                 if (message.from?.id) {
                     await supersedePendingDepartureJustification(String(message.chat.id), String(message.from.id));
@@ -9659,6 +10139,19 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         continuationMode: resolveTelegramContinuationMode(firstParsed),
                     },
                 });
+
+                if (alreadyPresent) {
+                    // Re-announcement of a doctor already on shift: never opens a departure
+                    // nor duplicates the occupancy — just a didactic reply pointing to the
+                    // saída / remanejamento flows.
+                    await sendPiamAlreadyPresentReply(
+                        message.chat.id,
+                        message.message_id,
+                        resolveTelegramDoctorSurfaceName(resolvedDoctor),
+                        alreadyPresent,
+                    );
+                    return { ok: true, occupancyId };
+                }
 
                 await sendSuccessReply(
                     message.chat.id,
@@ -9685,6 +10178,21 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     messageReferenceAt,
                     firstParsed.arrivalTime,
                 );
+                await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, forwardContinuityPrompt);
+
+                if (takeoverDisplaced) {
+                    // Avisa o grupo que o ocupante foi deslocado e precisa redeclarar
+                    // posição (chegada preservada) para a chefia não esquecê-lo.
+                    await sendMessage(
+                        message.chat.id,
+                        buildTakeoverDisplacedAnnouncement({
+                            arrivingName: resolveTelegramDoctorSurfaceName(resolvedDoctor),
+                            occupantName: takeoverDisplaced.occupantName,
+                            targetLabel: takeoverDisplaced.targetLabel,
+                            sinceTime: takeoverDisplaced.sinceTime,
+                        }),
+                    );
+                }
 
                 // Late half-shift orientation: when an intervention SD arrival lands
                 // at or after the 9h coordination cutoff (Bahia local), publish a

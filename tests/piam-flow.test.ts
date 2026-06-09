@@ -4,7 +4,8 @@ import {
     isTelegramPiamCommandText,
     parseTelegramPiamCommand,
 } from "@/modules/telegram/piam-commands";
-import { resolvePiamShiftBounds } from "@/modules/telegram/service";
+import { buildPiamAlreadyPresentReply, resolvePiamShiftBounds } from "@/modules/telegram/service";
+import { isRegulationShadowOccupancyNotes } from "@/modules/regulation/service";
 import { resolveDoctorPaymentProfile } from "@/modules/reporting/payable-shifts";
 
 test("parseTelegramPiamCommand recognizes assign by bare name", () => {
@@ -101,4 +102,30 @@ test("resolveDoctorPaymentProfile maps PSIQ to psychiatry (regression)", () => {
 test("resolveDoctorPaymentProfile falls back to generalist without role flags", () => {
     assert.equal(resolveDoctorPaymentProfile({}), "generalist");
     assert.equal(resolveDoctorPaymentProfile({ preferredOperationalRole: "RECIP" }), "generalist");
+});
+
+// Caso Polliana (2026-06-09): a chegada PIAM "sombra" deve ser reconhecida como
+// sombra a partir do texto da mensagem — esse é o sinal que mantém a ocupação ABERTA
+// (ended_at nulo) para que o painel a renderize pela query de sombra, em vez de fechá-la
+// na hora como o titular.
+test("handlePiamAutoArrival: mensagem PIAM sombra é reconhecida como sombra (mantém aberta)", () => {
+    assert.equal(isRegulationShadowOccupancyNotes("[PIAM auto SD] Polliana Roriz sombra PIAM SD"), true);
+    assert.equal(isRegulationShadowOccupancyNotes("[PIAM auto SD] Diego Aguiar PIAM SD"), false);
+});
+
+test("buildPiamAlreadyPresentReply: reinformar chegada não abre saída e orienta saída/remanejamento", () => {
+    const reply = buildPiamAlreadyPresentReply("Pollianna", { role: "PIAM", shiftLabel: "SD", isShadow: true });
+    assert.match(reply, /já está no plantão como \*PIAM\*/);
+    assert.match(reply, /SD \(diurno\)/);
+    assert.match(reply, /cobertura \*sombra\*/);
+    assert.match(reply, /não cria duplicata nem abre saída/);
+    assert.match(reply, /Saída/);
+    assert.match(reply, /Remanejamento/);
+    assert.match(reply, /preservando a chegada original/);
+});
+
+test("buildPiamAlreadyPresentReply: titular (não-sombra) noturno sem o sufixo de sombra", () => {
+    const reply = buildPiamAlreadyPresentReply("Diego", { role: "PIAM", shiftLabel: "SN", isShadow: false });
+    assert.match(reply, /SN \(noturno\)/);
+    assert.doesNotMatch(reply, /cobertura \*sombra\*/);
 });

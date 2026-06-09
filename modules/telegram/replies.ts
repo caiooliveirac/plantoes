@@ -1,4 +1,4 @@
-type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "half_shift_assumed" | "continuation_recorded" | "reassignment_recorded" | "departure_recorded" | "departure_adjusted" | "half_shift_already_closed" | "departure_justification_required" | "departure_justification_retry" | "departure_justification_recorded" | "departure_justification_manual_review" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
+type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "half_shift_assumed" | "continuation_recorded" | "reassignment_recorded" | "departure_recorded" | "departure_adjusted" | "half_shift_already_closed" | "departure_justification_required" | "departure_justification_retry" | "departure_justification_recorded" | "departure_justification_manual_review" | "departure_occurrence_number_required" | "departure_occurrence_number_retry" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
 
 interface NamedCandidate {
     fullName: string;
@@ -101,6 +101,15 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Ainda não consegui reconhecer um motivo válido para crédito automático dessa saída tardia de {name} em {target}.\n\n🚑 Em ocorrência\nEx.: estava em ocorrência 0729\n\n🧼 Higienizando\nEx.: estava higienizando a viatura\n\nPode tentar explicar mais uma vez só com o motivo. Se eu ainda não conseguir confirmar ocorrência ou higienização, deixo a justificativa salva para coordenação, mas sem crédito automático e só a chefia poderá lançar esses minutos extras.",
         "O motivo que chegou ainda não fechou como ocorrência ou higienização para a saída tardia de {name} em {target}.\n\n🚑 Em ocorrência\nEx.: em atendimento de ocorrência 0729\n\n🧼 Higienizando\nEx.: em higienização da viatura\n\nMe responda mais uma vez só com o motivo. Se eu não conseguir validar, a explicação fica registrada para coordenação, mas sem crédito automático e com lançamento extra apenas pela chefia.",
         "Para crédito automático dessa saída tardia em {target}, eu ainda preciso reconhecer um destes dois motivos:\n\n🚑 Em ocorrência\nEx.: ainda em ocorrência 0729\n\n🧼 Higienizando\nEx.: finalizando higienização da ambulância\n\nPode tentar mais uma vez. Se eu continuar sem certeza, salvo a justificativa para coordenação, mas sem pagar banco de horas automaticamente e com ajuste extra só pela chefia.",
+    ],
+    departure_occurrence_number_required: [
+        "Entendi que {name} saiu tarde de {target} por ocorrência. Para creditar esses minutos no banco de horas eu preciso saber QUAL ocorrência — me responda só com o número dela (4 dígitos).\n\nEx.: ocorrência 4521\n\nSe o horário {time} mudou, reenvie a saída completa assim: {example}",
+        "Saída tardia de {name} em {target} por ocorrência registrada. Falta só o número da ocorrência (4 dígitos) para eu lançar no banco de horas. Responda apenas o número.\n\nEx.: 4521\n\nSe precisar corrigir o horário {time}, reenvie tudo assim: {example}",
+        "Para creditar a saída tardia de {name} em {target} por ocorrência, preciso do número da ocorrência (4 dígitos). Me mande só o número.\n\nEx.: estava na ocorrência 0729\n\nSe o horário {time} estiver errado, reenvie a saída completa: {example}",
+    ],
+    departure_occurrence_number_retry: [
+        "Ainda não recebi o número da ocorrência (4 dígitos) de {name} em {target}. Responda só com o número.\n\nEx.: 4521\n\nSe eu continuar sem o número, deixo a saída registrada para a chefia revisar, mas sem crédito automático no banco de horas.",
+        "Esse não parece ser o número da ocorrência. Preciso de 4 dígitos para creditar a saída tardia de {name} em {target}.\n\nEx.: ocorrência 0729\n\nSem o número, a saída fica para a chefia decidir e não entra como crédito automático.",
     ],
     departure_justification_recorded: [
         "Justificativa recebida. Anexei o motivo à saída de {name} em {target} às {time}. Isso já ficou registrado para a coordenação, pagamento e banco de horas.",
@@ -266,6 +275,8 @@ const REPLY_PREFIX: Record<ReplyKind, string> = {
     half_shift_already_closed: "🟠⏱️",
     departure_justification_required: "⚠️",
     departure_justification_retry: "⚠️",
+    departure_occurrence_number_required: "🚑🔢",
+    departure_occurrence_number_retry: "🚑🔢",
     departure_justification_recorded: "📝✅",
     departure_justification_manual_review: "📝⚠️",
     departure_not_found: "⛔",

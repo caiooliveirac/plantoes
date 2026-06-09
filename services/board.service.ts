@@ -42,6 +42,7 @@ import {
   MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE,
   type BankHoursBalanceOverrideSummary,
 } from "@/modules/bank-hours/service";
+import { extractTelegramOccurrenceNumber } from "@/modules/telegram/departure-flow";
 import { expireInterventionBaseDeactivations, expireStaleShadowInterventionOccupancies } from "@/modules/intervention/service";
 import { expireStaleRegulationOccupancies } from "@/modules/regulation/service";
 
@@ -78,6 +79,7 @@ export interface RegulationBoardRow {
   liveSource: "operations_v2" | "legacy_live" | "none";
   liveUpdatedAt: string | null;
   shadowOccupants?: BoardShadowOccupant[];
+  displacedOccupants?: BoardShadowOccupant[];
 }
 
 export interface InterventionBoardRow {
@@ -102,6 +104,7 @@ export interface InterventionBoardRow {
   lateArrivalAcknowledgedAt?: string | null;
   lateArrivalAcknowledgedNote?: string | null;
   shadowOccupants?: BoardShadowOccupant[];
+  displacedOccupants?: BoardShadowOccupant[];
 }
 
 export type PreviousOperationalBucket = "P_INVERTIDO" | "P" | "SD" | "SN";
@@ -764,6 +767,35 @@ async function listOpenInterventionShadowOccupantsByBase(): Promise<Map<number, 
     from operations_v2.intervention_occupancies io
     join operations_v2.doctors d on d.id = io.doctor_id
     where io.ended_at is null and coalesce(io.notes, '') ~* 'SOMBRA'
+  `);
+  return groupShadowOccupantsByTarget(result, "baseId");
+}
+
+// Ocupações "deslocadas" (perderam o board numa tomada confirmada): seguem ativas
+// fora do quadro, com a chegada preservada, aguardando o médico redeclarar posição.
+// Renderizadas no painel como "deslocado" para a chefia não esquecê-las.
+async function listOpenRegulationDisplacedOccupantsByPost(): Promise<Map<number, BoardShadowOccupant[]>> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    select ro.id as "occupancyId", ro.post_id as "postId", ro.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           ro.started_at as "startedAt", ro.board_started_at as "boardStartedAt"
+    from operations_v2.regulation_occupancies ro
+    join operations_v2.doctors d on d.id = ro.doctor_id
+    where ro.ended_at is null and coalesce(ro.notes, '') like '%[DESLOCADO]%'
+  `);
+  return groupShadowOccupantsByTarget(result, "postId");
+}
+
+async function listOpenInterventionDisplacedOccupantsByBase(): Promise<Map<number, BoardShadowOccupant[]>> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    select io.id as "occupancyId", io.base_id as "baseId", io.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           io.started_at as "startedAt", io.board_started_at as "boardStartedAt"
+    from operations_v2.intervention_occupancies io
+    join operations_v2.doctors d on d.id = io.doctor_id
+    where io.ended_at is null and coalesce(io.notes, '') like '%[DESLOCADO]%'
   `);
   return groupShadowOccupantsByTarget(result, "baseId");
 }
@@ -1600,6 +1632,7 @@ export async function listRegulationBoard() {
   const rows = (result as unknown as Record<string, unknown>[]).map(mapRegulationRow);
   const reference = new Date();
   const shadowByPost = await listOpenRegulationShadowOccupantsByPost();
+  const displacedByPost = await listOpenRegulationDisplacedOccupantsByPost();
 
   return rows.map((row) => {
     const visible = (row.status !== "active" || !row.doctorId)
@@ -1614,7 +1647,10 @@ export async function listRegulationBoard() {
 
     const shadows = (shadowByPost.get(visible.postId) ?? [])
       .filter((shadow) => shadow.occupancyId !== visible.occupancyId);
-    return shadows.length > 0 ? { ...visible, shadowOccupants: shadows } : visible;
+    const displaced = (displacedByPost.get(visible.postId) ?? [])
+      .filter((occ) => occ.occupancyId !== visible.occupancyId);
+    const withShadows = shadows.length > 0 ? { ...visible, shadowOccupants: shadows } : visible;
+    return displaced.length > 0 ? { ...withShadows, displacedOccupants: displaced } : withShadows;
   });
 }
 
@@ -1714,11 +1750,15 @@ export async function listInterventionBoard() {
   `);
 
   const shadowByBase = await listOpenInterventionShadowOccupantsByBase();
+  const displacedByBase = await listOpenInterventionDisplacedOccupantsByBase();
 
   return (result as unknown as Record<string, unknown>[]).map(mapInterventionRow).map((row) => {
     const shadows = (shadowByBase.get(row.baseId) ?? [])
       .filter((shadow) => shadow.occupancyId !== row.occupancyId);
-    return shadows.length > 0 ? { ...row, shadowOccupants: shadows } : row;
+    const displaced = (displacedByBase.get(row.baseId) ?? [])
+      .filter((occ) => occ.occupancyId !== row.occupancyId);
+    const withShadows = shadows.length > 0 ? { ...row, shadowOccupants: shadows } : row;
+    return displaced.length > 0 ? { ...withShadows, displacedOccupants: displaced } : withShadows;
   });
 }
 
@@ -1905,10 +1945,26 @@ export interface PendingDepartureConfirmation {
   /** Board-end (scheduled handoff). */
   endedAt: string | null;
   reasonCode: TelegramLateDepartureReasonCode | null;
+  /**
+   * The 4-digit occurrence number the doctor reported (rule: an "occurrence" late
+   * departure must say which occurrence). Null when not an occurrence or not provided.
+   */
+  occurrenceNumber: string | null;
+  /**
+   * True when the reason is "occurrence" but no 4-digit number was found — the chefe
+   * must scrutinize this before confirming (the bot did not vouch for it).
+   */
+  occurrenceNumberMissing: boolean;
   /** Minutes between scheduledEndAt and actualEndedAt; positive = ran long. */
   delayMinutes: number | null;
   /** Last messages from the bot ingestion referencing this occupancy. */
   recentMessages: PendingDepartureCorrelatedMessage[];
+  /**
+   * The single message the late-departure claim was read from — the one whose
+   * raw text produced `reasonCode` (or the most recent, when no reason matched).
+   * Surfaced on the card so the chefe sees the source verbatim before confirming.
+   */
+  sourceMessage: PendingDepartureCorrelatedMessage | null;
   /** Same-reason departures by this doctor in the past 30 days (pattern signal). */
   reasonOccurrenceCount30d: number;
   /** When the verbalized departure was recorded. */
@@ -2096,6 +2152,28 @@ export async function listPendingDepartureConfirmations(
       .find((code) => code !== null) ?? null;
     const reasonFromNotes = detectLateDepartureReasonCode(row.notes);
     const reasonCode = reasonFromMessages ?? reasonFromNotes;
+    const sourceMessage =
+      (reasonCode
+        ? recentMessages.find((message) => detectLateDepartureReasonCode(message.rawText) === reasonCode)
+        : undefined) ?? recentMessages[0] ?? null;
+    // Recover the 4-digit occurrence number from the doctor's message(s) / notes.
+    // Pass the shift times as fragments so the verbalized departure time is never
+    // mistaken for the occurrence number.
+    const timeFragments = [row.actualEndedAt, row.scheduledEndAt]
+      .filter(Boolean)
+      .map((iso: string) => {
+        const d = new Date(iso);
+        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      });
+    const occurrenceNumber = reasonCode === "occurrence"
+      ? (extractTelegramOccurrenceNumber(sourceMessage?.rawText ?? "", timeFragments)
+        ?? extractTelegramOccurrenceNumber(row.notes ?? "", timeFragments)
+        ?? recentMessages
+          .map((message) => extractTelegramOccurrenceNumber(message.rawText, timeFragments))
+          .find((value) => value !== null)
+        ?? null)
+      : null;
+    const occurrenceNumberMissing = reasonCode === "occurrence" && !occurrenceNumber;
     const delayMinutes = row.scheduledEndAt
       ? Math.round((new Date(row.actualEndedAt).getTime() - new Date(row.scheduledEndAt).getTime()) / 60000)
       : null;
@@ -2119,8 +2197,11 @@ export async function listPendingDepartureConfirmations(
       actualEndedAt: row.actualEndedAt,
       endedAt: row.endedAt,
       reasonCode,
+      occurrenceNumber,
+      occurrenceNumberMissing,
       delayMinutes,
       recentMessages,
+      sourceMessage,
       reasonOccurrenceCount30d,
       recordedAt: row.recordedAt,
     };
