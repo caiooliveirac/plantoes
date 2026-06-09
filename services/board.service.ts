@@ -79,6 +79,7 @@ export interface RegulationBoardRow {
   liveSource: "operations_v2" | "legacy_live" | "none";
   liveUpdatedAt: string | null;
   shadowOccupants?: BoardShadowOccupant[];
+  displacedOccupants?: BoardShadowOccupant[];
 }
 
 export interface InterventionBoardRow {
@@ -103,6 +104,7 @@ export interface InterventionBoardRow {
   lateArrivalAcknowledgedAt?: string | null;
   lateArrivalAcknowledgedNote?: string | null;
   shadowOccupants?: BoardShadowOccupant[];
+  displacedOccupants?: BoardShadowOccupant[];
 }
 
 export type PreviousOperationalBucket = "P_INVERTIDO" | "P" | "SD" | "SN";
@@ -765,6 +767,35 @@ async function listOpenInterventionShadowOccupantsByBase(): Promise<Map<number, 
     from operations_v2.intervention_occupancies io
     join operations_v2.doctors d on d.id = io.doctor_id
     where io.ended_at is null and coalesce(io.notes, '') ~* 'SOMBRA'
+  `);
+  return groupShadowOccupantsByTarget(result, "baseId");
+}
+
+// Ocupações "deslocadas" (perderam o board numa tomada confirmada): seguem ativas
+// fora do quadro, com a chegada preservada, aguardando o médico redeclarar posição.
+// Renderizadas no painel como "deslocado" para a chefia não esquecê-las.
+async function listOpenRegulationDisplacedOccupantsByPost(): Promise<Map<number, BoardShadowOccupant[]>> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    select ro.id as "occupancyId", ro.post_id as "postId", ro.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           ro.started_at as "startedAt", ro.board_started_at as "boardStartedAt"
+    from operations_v2.regulation_occupancies ro
+    join operations_v2.doctors d on d.id = ro.doctor_id
+    where ro.ended_at is null and coalesce(ro.notes, '') like '%[DESLOCADO]%'
+  `);
+  return groupShadowOccupantsByTarget(result, "postId");
+}
+
+async function listOpenInterventionDisplacedOccupantsByBase(): Promise<Map<number, BoardShadowOccupant[]>> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    select io.id as "occupancyId", io.base_id as "baseId", io.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           io.started_at as "startedAt", io.board_started_at as "boardStartedAt"
+    from operations_v2.intervention_occupancies io
+    join operations_v2.doctors d on d.id = io.doctor_id
+    where io.ended_at is null and coalesce(io.notes, '') like '%[DESLOCADO]%'
   `);
   return groupShadowOccupantsByTarget(result, "baseId");
 }
@@ -1601,6 +1632,7 @@ export async function listRegulationBoard() {
   const rows = (result as unknown as Record<string, unknown>[]).map(mapRegulationRow);
   const reference = new Date();
   const shadowByPost = await listOpenRegulationShadowOccupantsByPost();
+  const displacedByPost = await listOpenRegulationDisplacedOccupantsByPost();
 
   return rows.map((row) => {
     const visible = (row.status !== "active" || !row.doctorId)
@@ -1615,7 +1647,10 @@ export async function listRegulationBoard() {
 
     const shadows = (shadowByPost.get(visible.postId) ?? [])
       .filter((shadow) => shadow.occupancyId !== visible.occupancyId);
-    return shadows.length > 0 ? { ...visible, shadowOccupants: shadows } : visible;
+    const displaced = (displacedByPost.get(visible.postId) ?? [])
+      .filter((occ) => occ.occupancyId !== visible.occupancyId);
+    const withShadows = shadows.length > 0 ? { ...visible, shadowOccupants: shadows } : visible;
+    return displaced.length > 0 ? { ...withShadows, displacedOccupants: displaced } : withShadows;
   });
 }
 
@@ -1715,11 +1750,15 @@ export async function listInterventionBoard() {
   `);
 
   const shadowByBase = await listOpenInterventionShadowOccupantsByBase();
+  const displacedByBase = await listOpenInterventionDisplacedOccupantsByBase();
 
   return (result as unknown as Record<string, unknown>[]).map(mapInterventionRow).map((row) => {
     const shadows = (shadowByBase.get(row.baseId) ?? [])
       .filter((shadow) => shadow.occupancyId !== row.occupancyId);
-    return shadows.length > 0 ? { ...row, shadowOccupants: shadows } : row;
+    const displaced = (displacedByBase.get(row.baseId) ?? [])
+      .filter((occ) => occ.occupancyId !== row.occupancyId);
+    const withShadows = shadows.length > 0 ? { ...row, shadowOccupants: shadows } : row;
+    return displaced.length > 0 ? { ...withShadows, displacedOccupants: displaced } : withShadows;
   });
 }
 

@@ -1,11 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    isRegulationDisplacedOccupancyNotes,
     isRegulationShadowOccupancyNotes,
     resolveRegulationArrivalBoardPolicy,
     shouldCloseRegulationOccupantOnArrival,
 } from "@/modules/regulation/service";
 import { buildOperationalSlotPresenceBoardModel } from "@/services/board.service";
+
+// Passo 3 (tomada confirmada): um ocupante "deslocado" coexiste fora do quadro — a
+// chegada que assume o board NÃO o fecha, e ele segue ativo até redeclarar posição.
+test("isRegulationDisplacedOccupancyNotes reconhece o marcador [DESLOCADO]", () => {
+    assert.equal(isRegulationDisplacedOccupancyNotes("Joao 2153 07:00\n[DESLOCADO] 2026-06-09T10:00:00Z por Maria"), true);
+    assert.equal(isRegulationDisplacedOccupancyNotes("Joao 2153 07:00"), false);
+    assert.equal(isRegulationDisplacedOccupancyNotes(null), false);
+});
+
+test("shouldCloseRegulationOccupantOnArrival: ocupante deslocado coexiste (não é fechado pela chegada)", () => {
+    assert.equal(
+        shouldCloseRegulationOccupantOnArrival({
+            currentOccupantDoctorId: "doc-fulano",
+            arrivingDoctorId: "doc-novo",
+            arrivingIsShadow: false,
+            currentOccupantNotes: "Fulano 2153 07:00\n[DESLOCADO] 2026-06-09T10:00:00Z por Novo",
+        }),
+        false,
+    );
+});
 
 // Regression: Yngra entrou de "sombra" no ramal 2152 onde Indira já estava ativa.
 // O login da sombra NUNCA deve fechar o titular ativo (e vice-versa). Espelha a

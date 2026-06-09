@@ -61,6 +61,10 @@ import {
     shouldCloseAsHandoff,
     buildTelegramArrivalConflictMessage,
     buildForcedTakeoverHint,
+    takeoverPendingMatches,
+    isWithinTakeoverConfirmationWindow,
+    buildTakeoverWarningReply,
+    buildTakeoverDisplacedAnnouncement,
 } from "@/modules/telegram/service";
 import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
 
@@ -2825,6 +2829,69 @@ test("shouldTreatTelegramArrivalAsImplicitReassignment: sem ocupação ativa nã
         activeBaseCode: null,
         activeShiftLabel: null,
     }), false);
+});
+
+// Passo 3 — confirmação de tomada de ramal/base ocupado no mesmo turno.
+test("takeoverPendingMatches: confirma só com mesmo alvo, mesmo médico que chega e mesmo ocupante", () => {
+    const data = {
+        kind: "takeover_confirmation" as const,
+        sector: "REGULATION" as const,
+        targetCode: "2153",
+        arrivingDoctorId: "doc-novo",
+        occupantDoctorId: "doc-fulano",
+        occupantOccupancyId: "occ-1",
+    };
+    assert.equal(takeoverPendingMatches(data, {
+        sector: "REGULATION", targetCode: "2153", arrivingDoctorId: "doc-novo", occupantDoctorId: "doc-fulano",
+    }), true);
+    // código com caixa/espaço diferente ainda casa
+    assert.equal(takeoverPendingMatches(data, {
+        sector: "REGULATION", targetCode: " 2153 ", arrivingDoctorId: "doc-novo", occupantDoctorId: "doc-fulano",
+    }), true);
+    // ocupante mudou → não confirma (re-avisa)
+    assert.equal(takeoverPendingMatches(data, {
+        sector: "REGULATION", targetCode: "2153", arrivingDoctorId: "doc-novo", occupantDoctorId: "doc-outro",
+    }), false);
+    // alvo diferente → não confirma
+    assert.equal(takeoverPendingMatches(data, {
+        sector: "REGULATION", targetCode: "2154", arrivingDoctorId: "doc-novo", occupantDoctorId: "doc-fulano",
+    }), false);
+    // outro domínio → não confirma
+    assert.equal(takeoverPendingMatches(data, {
+        sector: "INTERVENTION", targetCode: "2153", arrivingDoctorId: "doc-novo", occupantDoctorId: "doc-fulano",
+    }), false);
+});
+
+test("isWithinTakeoverConfirmationWindow: confirma dentro de 30min, expira depois", () => {
+    const base = new Date("2026-06-09T12:00:00Z");
+    assert.equal(isWithinTakeoverConfirmationWindow(base, new Date("2026-06-09T12:10:00Z")), true);
+    assert.equal(isWithinTakeoverConfirmationWindow(base, new Date("2026-06-09T12:45:00Z")), false);
+});
+
+test("buildTakeoverWarningReply: avisa ocupante, pede reenvio exato e garante preservação da chegada", () => {
+    const reply = buildTakeoverWarningReply({
+        occupantName: "Fulano",
+        targetLabel: "2153",
+        shiftLabel: "SD",
+        sinceTime: "07:00",
+        exactMessage: "Maria 2153 SD",
+    });
+    assert.match(reply, /já está ocupado por \*Fulano\*/);
+    assert.match(reply, /turno \*SD\*/);
+    assert.match(reply, /desde \*07:00\*/);
+    assert.match(reply, /reenvie exatamente/);
+    assert.match(reply, /Maria 2153 SD/);
+    assert.match(reply, /horário de chegada dele fica preservado/);
+});
+
+test("buildTakeoverDisplacedAnnouncement: anuncia deslocamento com chegada preservada", () => {
+    const msg = buildTakeoverDisplacedAnnouncement({
+        arrivingName: "Maria", occupantName: "Fulano", targetLabel: "2153", sinceTime: "07:00",
+    });
+    assert.match(msg, /\*Maria\* assumiu \*2153\*/);
+    assert.match(msg, /\*Fulano\* foi deslocado/);
+    assert.match(msg, /chegada preservada desde \*07:00\*/);
+    assert.match(msg, /declarar uma nova posição/);
 });
 
 test("resolveTelegramSuccessReplyKind can force reassignment wording for implicit remanejamento", () => {
