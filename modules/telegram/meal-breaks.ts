@@ -176,9 +176,17 @@ export interface MealBreakPriorityOverrideRecord {
 
 interface MealBreakEligibilityOverrideRecord {
     kind: "telegram_meal_break_eligibility_overrides";
-    version: 1;
+    // v2: exclusoes de almoco/descanso indexadas por doctorId (seguem o medico no
+    // remanejamento). v1 (legado): indexadas por ramal — ainda lidas como estao. Mesma
+    // motivacao da prioridade v2 (resolvePriorityOverridesByDoctorId).
+    version: 1 | 2;
     mode: MealBreakMode;
     operationalDate: string;
+    // v2 — fonte de verdade.
+    lunchExcludedDoctorIds?: string[];
+    restExcludedDoctorIds?: string[];
+    // Snapshot dos ramais no momento da escrita: compat com v1 e observabilidade. Nunca
+    // lido quando o registro e v2 (a verdade vem dos doctorIds, resolvidos pelo board vivo).
     lunchExcludedRamals: string[];
     restExcludedRamals: string[];
     updatedAt: string;
@@ -391,7 +399,7 @@ function isMealBreakEligibilityOverrideRecord(value: unknown): value is MealBrea
 
     const candidate = value as Record<string, unknown>;
     return candidate.kind === ELIGIBILITY_KIND
-        && candidate.version === 1
+        && (candidate.version === 1 || candidate.version === 2)
         && typeof candidate.operationalDate === "string"
         && typeof candidate.mode === "string"
         && typeof candidate.updatedAt === "string"
@@ -1927,6 +1935,152 @@ function stripMealBreakRosterDoctor(doctor: MealBreakRosterDoctor): MealBreakDoc
     return mealBreakDoctor;
 }
 
+// Mapeia o board vivo nos dois sentidos doctorId<->ramal (apenas regulacao ativa). E a
+// base para tudo que precisa "seguir o medico": reconciliacao de ramais da sessao e
+// traducao das exclusoes de elegibilidade v2 (doctorId) para o ramal atual.
+function buildBoardRamalMaps(board: OperationalBoard) {
+    const ramalByDoctorId = new Map<string, string>();
+    const doctorIdByRamal = new Map<string, string>();
+    for (const row of board.regulation) {
+        if (row.status !== "active" || !row.doctorId) {
+            continue;
+        }
+        const ramal = normalizeRamal(row.postCode);
+        ramalByDoctorId.set(row.doctorId, ramal);
+        doctorIdByRamal.set(ramal, row.doctorId);
+    }
+    return { ramalByDoctorId, doctorIdByRamal };
+}
+
+// Exclusoes de almoco/descanso pertencem ao MEDICO (doctorId, v2): traduzidas para o ramal
+// ATUAL pelo board vivo, entao seguem o remanejamento. Registros v1 (legado) devolvem os
+// ramais gravados como estao (melhor esforco). Pura e testavel — trava o comportamento no CI.
+export function resolveMealBreakEligibilityExclusions(
+    overrides: MealBreakEligibilityOverrideRecord | null,
+    ramalByDoctorId: Map<string, string>,
+): { lunchExcludedRamals: string[]; restExcludedRamals: string[] } {
+    if (!overrides) {
+        return { lunchExcludedRamals: [], restExcludedRamals: [] };
+    }
+
+    const isV2 = overrides.version === 2
+        || Array.isArray(overrides.lunchExcludedDoctorIds)
+        || Array.isArray(overrides.restExcludedDoctorIds);
+    if (!isV2) {
+        return {
+            lunchExcludedRamals: overrides.lunchExcludedRamals ?? [],
+            restExcludedRamals: overrides.restExcludedRamals ?? [],
+        };
+    }
+
+    const toRamals = (doctorIds: string[] | undefined) => [
+        ...new Set(
+            (doctorIds ?? [])
+                .map((doctorId) => ramalByDoctorId.get(doctorId))
+                .filter((ramal): ramal is string => Boolean(ramal)),
+        ),
+    ];
+    return {
+        lunchExcludedRamals: toRamals(overrides.lunchExcludedDoctorIds),
+        restExcludedRamals: toRamals(overrides.restExcludedDoctorIds),
+    };
+}
+
+// doctorIds atualmente excluidos: direto se v2; traduzidos ramal->doctorId pelo board atual
+// se v1 (legado, melhor esforco). Usado na escrita para acumular sobre o registro anterior.
+function resolveExcludedDoctorIdSet(
+    overrides: MealBreakEligibilityOverrideRecord | null,
+    kind: "lunch" | "rest",
+    doctorIdByRamal: Map<string, string>,
+): Set<string> {
+    if (!overrides) {
+        return new Set();
+    }
+
+    const doctorIds = kind === "lunch" ? overrides.lunchExcludedDoctorIds : overrides.restExcludedDoctorIds;
+    if (Array.isArray(doctorIds)) {
+        return new Set(doctorIds);
+    }
+
+    const ramals = kind === "lunch" ? overrides.lunchExcludedRamals : overrides.restExcludedRamals;
+    return new Set(
+        (ramals ?? [])
+            .map((ramal) => doctorIdByRamal.get(normalizeRamal(ramal)))
+            .filter((doctorId): doctorId is string => Boolean(doctorId)),
+    );
+}
+
+// Remanejamento ou troca voluntaria de ramal: as atribuicoes de almoco/descanso/jantar/
+// trabalho noturno pertencem ao MEDICO (doctorId), nao a posicao. Aqui detectamos, pelo
+// doctorId, quando o ramal vivo no board difere do ramal gravado na sessao e re-mapeamos
+// TODAS as estruturas indexadas por ramal, para que o horario siga o medico mesmo quando
+// ele muda de ramal. Mesma motivacao da prioridade v2 (resolvePriorityOverridesByDoctorId).
+export function reconcileMealBreakSessionRamalsWithBoard(params: {
+    session: MealBreakSession;
+    board: OperationalBoard;
+}): MealBreakSession {
+    const { ramalByDoctorId: liveRamalByDoctorId } = buildBoardRamalMaps(params.board);
+
+    const oldToNew = new Map<string, string>();
+    for (const doctor of params.session.roster) {
+        const liveRamal = liveRamalByDoctorId.get(doctor.doctorId);
+        if (liveRamal && liveRamal !== doctor.ramal) {
+            oldToNew.set(doctor.ramal, liveRamal);
+        }
+    }
+
+    if (oldToNew.size === 0) {
+        return params.session;
+    }
+
+    const remapRamal = (ramal: string) => oldToNew.get(ramal) ?? ramal;
+    const remapNullableRamal = (ramal: string | null) => (ramal ? remapRamal(ramal) : ramal);
+    const remapList = (ramals: string[]) => ramals.map(remapRamal);
+    const remapRecord = <T,>(record: Record<string, T>) => {
+        const next: Record<string, T> = {};
+        for (const [ramal, value] of Object.entries(record)) {
+            next[remapRamal(ramal)] = value;
+        }
+        return next;
+    };
+    const remapSnapshot = (snapshot: MealBreakUndoSnapshot): MealBreakUndoSnapshot => ({
+        ...snapshot,
+        recipRamal: remapNullableRamal(snapshot.recipRamal),
+        mrvRamals: remapList(snapshot.mrvRamals),
+        mrvLunch1230Ramal: remapNullableRamal(snapshot.mrvLunch1230Ramal),
+        lunchAssignments: remapRecord(snapshot.lunchAssignments),
+        restAssignments: remapRecord(snapshot.restAssignments),
+        nightWorkAssignments: remapRecord(snapshot.nightWorkAssignments),
+        dinnerAssignments: remapRecord(snapshot.dinnerAssignments),
+    });
+
+    const remapped: MealBreakSession = {
+        ...params.session,
+        roster: params.session.roster.map((doctor) => {
+            const nextRamal = remapRamal(doctor.ramal);
+            return nextRamal === doctor.ramal ? doctor : { ...doctor, ramal: nextRamal };
+        }),
+        chiefRamal: remapNullableRamal(params.session.chiefRamal),
+        recipRamal: remapNullableRamal(params.session.recipRamal),
+        mrvRamals: remapList(params.session.mrvRamals),
+        mrvLunch1230Ramal: remapNullableRamal(params.session.mrvLunch1230Ramal),
+        lunchAssignments: remapRecord(params.session.lunchAssignments),
+        lunchExcludedRamals: remapList(params.session.lunchExcludedRamals),
+        restAssignments: remapRecord(params.session.restAssignments),
+        restExcludedRamals: remapList(params.session.restExcludedRamals),
+        nightWorkAssignments: remapRecord(params.session.nightWorkAssignments),
+        dinnerAssignments: remapRecord(params.session.dinnerAssignments),
+        dinnerDurationAssignments: remapRecord(params.session.dinnerDurationAssignments),
+        lunchQueue: remapList(params.session.lunchQueue),
+        restQueue: remapList(params.session.restQueue),
+        nightWorkQueue: remapList(params.session.nightWorkQueue),
+        dinnerQueue: remapList(params.session.dinnerQueue),
+        undoSnapshots: params.session.undoSnapshots.map(remapSnapshot),
+    };
+
+    return remapped.mode === "night" ? syncNightSessionState(remapped) : syncDaySessionState(remapped);
+}
+
 export function reconcileNightMealBreakSessionWithBoard(params: {
     session: MealBreakSession;
     board: OperationalBoard;
@@ -2411,8 +2565,12 @@ async function buildMealBreakPriorityContext(params: {
     const built = buildMealBreakRosterEntries(board, params.referenceAt, mode);
     const overrides = await loadMealBreakPriorityOverrides(operationalDate, mode);
     const eligibilityOverrides = await loadMealBreakEligibilityOverrides(operationalDate, mode);
-    const lunchExcluded = new Set(eligibilityOverrides?.lunchExcludedRamals ?? []);
-    const restExcluded = new Set(eligibilityOverrides?.restExcludedRamals ?? []);
+    const eligibilityExclusions = resolveMealBreakEligibilityExclusions(
+        eligibilityOverrides,
+        buildBoardRamalMaps(board).ramalByDoctorId,
+    );
+    const lunchExcluded = new Set(eligibilityExclusions.lunchExcludedRamals);
+    const restExcluded = new Set(eligibilityExclusions.restExcludedRamals);
     const automaticEntries = buildMealBreakPriorityEntries({
         doctors: built.rosterEntries
             .map(stripMealBreakRosterDoctor)
@@ -4163,8 +4321,9 @@ async function loadMealBreakSession(chatId: string, operationalDate: string, mod
         return null;
     }
 
+    const board = await getOperationalBoard();
+    session = reconcileMealBreakSessionRamalsWithBoard({ session, board });
     if (mode === "night") {
-        const board = await getOperationalBoard();
         session = reconcileNightMealBreakSessionWithBoard({
             session,
             board,
@@ -4444,6 +4603,10 @@ export async function runTelegramMealBreakCommand(params: {
         board,
     });
     const eligibilityOverrides = await loadMealBreakEligibilityOverrides(operationalDate, mode);
+    const eligibilityExclusions = resolveMealBreakEligibilityExclusions(
+        eligibilityOverrides,
+        buildBoardRamalMaps(board).ramalByDoctorId,
+    );
     const session = createMealBreakSession({
         roster: priorityContext.entries.map((entry) => entry.doctor),
         chiefRamal: priorityContext.chiefRamal,
@@ -4453,8 +4616,8 @@ export async function runTelegramMealBreakCommand(params: {
         trigger: params.trigger,
         restarted: Boolean(existing && params.forceRestart),
         actorTelegramId: params.actorTelegramId,
-        lunchExcludedRamals: eligibilityOverrides?.lunchExcludedRamals,
-        restExcludedRamals: eligibilityOverrides?.restExcludedRamals,
+        lunchExcludedRamals: eligibilityExclusions.lunchExcludedRamals,
+        restExcludedRamals: eligibilityExclusions.restExcludedRamals,
     });
 
     await saveMealBreakSession(params.chatId, session);
@@ -4524,9 +4687,57 @@ export async function getCurrentMealBreakEligibilityOverrides(referenceAt = new 
     const mode = resolveMealBreakModeFromReference(referenceAt);
     const operationalDate = formatOperationalDate(referenceAt);
     const overrides = await loadMealBreakEligibilityOverrides(operationalDate, mode);
-    return overrides
-        ? { lunchExcludedRamals: overrides.lunchExcludedRamals, restExcludedRamals: overrides.restExcludedRamals }
-        : { lunchExcludedRamals: [] as string[], restExcludedRamals: [] as string[] };
+    if (!overrides) {
+        return { lunchExcludedRamals: [] as string[], restExcludedRamals: [] as string[] };
+    }
+
+    // Resolve doctorId->ramal-atual contra o board vivo: as exclusoes seguem o remanejamento
+    // mesmo antes de existir uma sessao (este endpoint alimenta o board cinza no front).
+    const board = await getOperationalBoard();
+    return resolveMealBreakEligibilityExclusions(overrides, buildBoardRamalMaps(board).ramalByDoctorId);
+}
+
+// Soberania do chefe: quando ele configura almoco/descanso/jantar de um plantonista que
+// (ainda) nao esta no roster da sessao — tipicamente chegada tardia ou remanejamento para um
+// ramal novo — nos o incluimos a partir do board ao vivo em vez de recusar com erro. PIAM/
+// NUCLEO e medicos de outro turno seguem fora por regra (mapRegulationDoctor devolve null).
+async function ensureMealBreakDoctorInSession(params: {
+    session: MealBreakSession;
+    ramal: string;
+    mode: MealBreakMode;
+    referenceAt: Date;
+    board?: OperationalBoard;
+}): Promise<MealBreakSession | null> {
+    if (findDoctor(params.session, params.ramal)) {
+        return params.session;
+    }
+
+    const board = params.board ?? await getOperationalBoard();
+    const row = board.regulation.find(
+        (candidate) => candidate.status === "active" && normalizeRamal(candidate.postCode) === params.ramal,
+    );
+    if (!row) {
+        return null;
+    }
+
+    const rosterDoctor = mapRegulationDoctor(row, params.mode, params.referenceAt);
+    if (!rosterDoctor) {
+        return null;
+    }
+
+    return {
+        ...params.session,
+        roster: [...params.session.roster, stripMealBreakRosterDoctor(rosterDoctor)],
+    };
+}
+
+// Mensagem clara para os casos em que o medico legitimamente nao entra na divisao, no lugar
+// do generico "nao participa da divisao atual" que confundia o chefe.
+function resolveMealBreakOutOfDivisionMessage(ramal: string) {
+    if (isPiamRegulationPost(ramal) || isNucleoRegulationPost(ramal)) {
+        return `O posto ${ramal} (PIAM/NUCLEO) nao entra na divisao de almoco/jantar por regra fixa.`;
+    }
+    return `O posto ${ramal} nao esta ativo na regulacao agora, entao nao da para incluir na divisao.`;
 }
 
 export async function updateNightMealBreakAssignment(params: {
@@ -4545,8 +4756,8 @@ export async function updateNightMealBreakAssignment(params: {
         }
         : await resolveCurrentOperationalMealBreakState(params.referenceAt, "night");
     const chatId = resolvedState?.chatId ?? null;
-    const session = resolvedState?.session ?? null;
-    if (!session) {
+    const baseSession = resolvedState?.session ?? null;
+    if (!baseSession) {
         throw new Error("Nao existe sessao noturna ativa para este plantao.");
     }
     if (!chatId) {
@@ -4554,8 +4765,14 @@ export async function updateNightMealBreakAssignment(params: {
     }
 
     const ramal = normalizeRamal(params.ramal);
-    if (!findDoctor(session, ramal)) {
-        throw new Error(`O posto ${ramal} nao participa da divisao atual.`);
+    const session = await ensureMealBreakDoctorInSession({
+        session: baseSession,
+        ramal,
+        mode: "night",
+        referenceAt: params.referenceAt,
+    });
+    if (!session) {
+        throw new Error(resolveMealBreakOutOfDivisionMessage(ramal));
     }
 
     const hasNightWorkPatch = Object.prototype.hasOwnProperty.call(params, "nightWorkSlot");
@@ -4642,33 +4859,54 @@ export async function updateDayMealBreakEligibility(params: {
 
     const operationalDate = formatOperationalDate(params.referenceAt);
     const normalizedRamal = normalizeRamal(params.ramal);
+    const board = await getOperationalBoard();
+    const { ramalByDoctorId, doctorIdByRamal } = buildBoardRamalMaps(board);
+
+    // Exclusao segue o MEDICO: resolvemos o ramal clicado para o doctorId ativo no board.
+    // Sem isso (posto vazio/inativo) nao da para gravar uma exclusao que acompanhe alguem.
+    const targetDoctorId = doctorIdByRamal.get(normalizedRamal) ?? null;
+    if (!targetDoctorId) {
+        throw new Error(resolveMealBreakOutOfDivisionMessage(normalizedRamal));
+    }
+
     const previous = await loadMealBreakEligibilityOverrides(operationalDate, "day");
-    const lunchExcluded = new Set(previous?.lunchExcludedRamals ?? []);
-    const restExcluded = new Set(previous?.restExcludedRamals ?? []);
+    const lunchExcludedDoctorIds = resolveExcludedDoctorIdSet(previous, "lunch", doctorIdByRamal);
+    const restExcludedDoctorIds = resolveExcludedDoctorIdSet(previous, "rest", doctorIdByRamal);
 
     if (Object.prototype.hasOwnProperty.call(params, "lunchExcluded")) {
         if (params.lunchExcluded) {
-            lunchExcluded.add(normalizedRamal);
+            lunchExcludedDoctorIds.add(targetDoctorId);
         } else {
-            lunchExcluded.delete(normalizedRamal);
+            lunchExcludedDoctorIds.delete(targetDoctorId);
         }
     }
 
     if (Object.prototype.hasOwnProperty.call(params, "restExcluded")) {
         if (params.restExcluded) {
-            restExcluded.add(normalizedRamal);
+            restExcludedDoctorIds.add(targetDoctorId);
         } else {
-            restExcluded.delete(normalizedRamal);
+            restExcludedDoctorIds.delete(targetDoctorId);
         }
     }
 
+    const doctorIdsToRamals = (doctorIds: Set<string>) => [
+        ...new Set(
+            [...doctorIds]
+                .map((doctorId) => ramalByDoctorId.get(doctorId))
+                .filter((ramal): ramal is string => Boolean(ramal)),
+        ),
+    ];
+
     const overrides: MealBreakEligibilityOverrideRecord = {
         kind: ELIGIBILITY_KIND,
-        version: 1,
+        version: 2,
         mode: "day",
         operationalDate,
-        lunchExcludedRamals: [...lunchExcluded],
-        restExcludedRamals: [...restExcluded],
+        lunchExcludedDoctorIds: [...lunchExcludedDoctorIds],
+        restExcludedDoctorIds: [...restExcludedDoctorIds],
+        // Snapshot dos ramais atuais (compat/observabilidade) — a verdade sao os doctorIds.
+        lunchExcludedRamals: doctorIdsToRamals(lunchExcludedDoctorIds),
+        restExcludedRamals: doctorIdsToRamals(restExcludedDoctorIds),
         updatedAt: params.referenceAt.toISOString(),
     };
 
@@ -4681,14 +4919,20 @@ export async function updateDayMealBreakEligibility(params: {
         }
         : await resolveCurrentOperationalMealBreakState(params.referenceAt, "day");
     const chatId = resolvedState?.chatId ?? null;
-    const session = resolvedState?.session ?? null;
+    const baseSession = resolvedState?.session ?? null;
 
-    if (!session || !chatId) {
+    if (!baseSession || !chatId) {
         return { session: null, overrides };
     }
 
-    if (!findDoctor(session, normalizedRamal)) {
-        throw new Error(`O posto ${normalizedRamal} nao participa da divisao atual.`);
+    const session = await ensureMealBreakDoctorInSession({
+        session: baseSession,
+        ramal: normalizedRamal,
+        mode: "day",
+        referenceAt: params.referenceAt,
+    });
+    if (!session) {
+        throw new Error(resolveMealBreakOutOfDivisionMessage(normalizedRamal));
     }
 
     const nextSession = syncDaySessionState(withEvent({
@@ -4725,8 +4969,8 @@ export async function updateDayMealBreakAssignment(params: {
         ? { chatId: params.chatId, session: await loadMealBreakSession(params.chatId, operationalDate, "day") }
         : await resolveCurrentOperationalMealBreakState(params.referenceAt, "day");
     const chatId = resolvedState?.chatId ?? null;
-    const session = resolvedState?.session ?? null;
-    if (!session) {
+    const baseSession = resolvedState?.session ?? null;
+    if (!baseSession) {
         throw new Error("Nao existe sessao diurna ativa para este plantao.");
     }
     if (!chatId) {
@@ -4734,8 +4978,14 @@ export async function updateDayMealBreakAssignment(params: {
     }
 
     const ramal = normalizeRamal(params.ramal);
-    if (!findDoctor(session, ramal)) {
-        throw new Error(`O posto ${ramal} nao participa da divisao atual.`);
+    const session = await ensureMealBreakDoctorInSession({
+        session: baseSession,
+        ramal,
+        mode: "day",
+        referenceAt: params.referenceAt,
+    });
+    if (!session) {
+        throw new Error(resolveMealBreakOutOfDivisionMessage(ramal));
     }
 
     const lunchAssignments = { ...session.lunchAssignments };
