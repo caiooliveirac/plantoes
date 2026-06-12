@@ -4,6 +4,7 @@ import { useMemo, useTransition } from "react";
 import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { fadeRise, staggerChild, staggerList } from "@/lib/board/motion";
+import { resolveEntryDeparture } from "@/lib/board/entry-departure";
 import { InlineTimeEditor } from "@/components/board/InlineTimeEditor";
 import type {
     PendingDepartureConfirmation,
@@ -79,9 +80,6 @@ function entryArrival(entry: PreviousOperationalEntry) {
     return entry.boardStartedAt ?? entry.startedAt;
 }
 
-function entryEffectiveEnd(entry: PreviousOperationalEntry) {
-    return entry.actualEndedAt ?? entry.endedAt;
-}
 
 export function PreviousShiftList({
     entries,
@@ -162,7 +160,7 @@ export function PreviousShiftList({
                             const balance = entry.balanceMinutes;
                             const tone = balanceTone(balance);
                             const arrivalIso = entryArrival(entry);
-                            const departureIso = entryEffectiveEnd(entry);
+                            const { time: departureIso, isHandoffOnly } = resolveEntryDeparture(entry);
                             return (
                                 <motion.div
                                     key={`${entry.domain}-${entry.occupancyId}`}
@@ -212,10 +210,15 @@ export function PreviousShiftList({
                                                 targetCode={entry.targetCode}
                                                 onSaved={handleSaved}
                                             >
-                                                {({ value }) => value}
+                                                {({ value }) => isHandoffOnly
+                                                    ? <span className="historico-grid-time-inner--handoff" title="Fechamento por handoff — médico não verbalizou saída">{value}</span>
+                                                    : value}
                                             </InlineTimeEditor>
                                         ) : (
-                                            <span className="historico-grid-time historico-grid-time--readonly" title="Somente leitura — fora do escopo do turno corrente">
+                                            <span
+                                                className={`historico-grid-time historico-grid-time--readonly${isHandoffOnly ? " historico-grid-time--handoff" : ""}`}
+                                                title={isHandoffOnly ? "Fechamento por handoff — médico não verbalizou saída" : "Somente leitura — fora do escopo do turno corrente"}
+                                            >
                                                 {departureIso ? formatHourMinute(departureIso) : "Em aberto"}
                                             </span>
                                         )}

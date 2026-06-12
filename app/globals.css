@@ -9324,6 +9324,18 @@ button.chief-payable-tag:focus-visible {
     background: transparent;
 }
 
+/* Handoff-only departure: ended_at is set but actual_ended_at is null.
+   The doctor has not verbalized the real exit; the time shown is the handoff
+   closure, not a confirmed departure. Amber + italic signals "needs attention". */
+.historico-grid-time--handoff {
+    color: var(--amber);
+    font-style: italic;
+}
+.historico-grid-time-inner--handoff {
+    color: var(--amber);
+    font-style: italic;
+}
+
 .historico-gantt-nav-pill {
     display: inline-flex;
     align-items: center;
