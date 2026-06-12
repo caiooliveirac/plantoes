@@ -4,7 +4,7 @@ import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTrans
 import { useRouter } from "next/navigation";
 import { OperationalHistoryPanel } from "@/components/operational-history-panel";
 import { InterventionLateArrivalPanel } from "@/components/intervention-late-arrival-panel";
-import { buildOperationalRoleChoices, dedupeOperationalIdentityLabels, describeFixedRoleTransferImpact, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
+import { buildOperationalRoleChoices, describeFixedRoleTransferImpact, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
     MealBreakDinnerDuration,
@@ -2446,10 +2446,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const items: React.ReactNode[] = [];
         const roleLabel = resolveCardRoleLabel(card);
         const sessionRecip = card.domain === "regulation" && isRecipRamal(mealBreakSession, card.postCode);
-        const seenLabels = new Set<string>(dedupeOperationalIdentityLabels([roleLabel]));
+        // seenLabels é populado conforme os itens são de fato emitidos — não antecipadamente.
+        // Se pré-populado com roleLabel antes de emitir, o caso roleLabel="RECIP"+sessionRecip=true
+        // bloqueava tanto o role badge (guard abaixo) quanto a inline flag (seenLabels.has("RECIP")),
+        // resultando em zero tags para o ramal RECIP.
+        const seenLabels = new Set<string>();
 
         if (roleLabel && !(roleLabel === "RECIP" && sessionRecip)) {
             items.push(<span key={`role-${cardCode(card)}`} className={`ops-role-badge ${getOperationalRoleTone(roleLabel)}`.trim()}>{roleLabel}</span>);
+            seenLabels.add(roleLabel);
         }
 
         if (card.domain === "regulation") {
