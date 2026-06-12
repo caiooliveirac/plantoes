@@ -4,7 +4,7 @@ import { getDb } from "@/db";
 import { doctors, interventionBaseDeactivations, interventionBases, interventionOccupancies, regulationOccupancies } from "@/db/schema";
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 import { publishBoardUpdate } from "@/lib/board-live";
-import { syncInterventionBankHours } from "@/modules/bank-hours/service";
+import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
@@ -594,6 +594,35 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 eventAt: input.startedAt,
             })) {
                 resolvedContinuityGroupId = otherBaseOccupancy.continuityGroupId;
+            }
+        }
+
+        // Cross-domain cleanup: close open regulation occupancy when doctor moves to an intervention base.
+        // Symmetric counterpart to the same guard in startRegulationOccupancy.
+        const otherRegulationOccupancy = await tx.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.doctorId, input.doctorId),
+                isNull(regulationOccupancies.endedAt),
+            ),
+            orderBy: [desc(regulationOccupancies.startedAt)],
+        });
+        const shouldPreserveCrossRegulation = Boolean(
+            historicalCorrectionEndAt
+            && otherRegulationOccupancy
+            && input.startedAt.getTime() < otherRegulationOccupancy.startedAt.getTime(),
+        );
+        if (otherRegulationOccupancy && !shouldPreserveCrossRegulation) {
+            const crossCloseMs = input.startedAt.getTime() - otherRegulationOccupancy.startedAt.getTime();
+            if (crossCloseMs >= 60_000) {
+                await tx.update(regulationOccupancies)
+                    .set({
+                        endedAt: input.startedAt,
+                        actualEndedAt: otherRegulationOccupancy.actualEndedAt ?? input.startedAt,
+                        updatedByUserId: input.createdByUserId ?? null,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(regulationOccupancies.id, otherRegulationOccupancy.id));
+                await syncRegulationBankHours(tx, otherRegulationOccupancy.id);
             }
         }
 

@@ -4,7 +4,7 @@ import { getDb } from "@/db";
 import { doctors, interventionOccupancies, regulationOccupancies, regulationPostDeactivations, regulationPosts } from "@/db/schema";
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 import { publishBoardUpdate } from "@/lib/board-live";
-import { syncRegulationBankHours } from "@/modules/bank-hours/service";
+import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
@@ -688,6 +688,36 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             // Inherit continuity group from the previous ramal if not already set
             if (!resolvedContinuityGroupId) {
                 resolvedContinuityGroupId = otherRamalOccupancy.continuityGroupId;
+            }
+        }
+
+        // Cross-domain cleanup: close open intervention occupancy when doctor moves to a regulation post.
+        // Covers the case where a doctor was DESLOCADO at an intervention base and then declared at regulation
+        // without the intervention occupancy ever being closed (no same-domain trigger exists for this path).
+        const otherInterventionOccupancy = await tx.query.interventionOccupancies.findFirst({
+            where: and(
+                eq(interventionOccupancies.doctorId, input.doctorId),
+                isNull(interventionOccupancies.endedAt),
+            ),
+            orderBy: [desc(interventionOccupancies.startedAt)],
+        });
+        const shouldPreserveCrossIntervention = Boolean(
+            historicalCorrectionEndAt
+            && otherInterventionOccupancy
+            && input.startedAt.getTime() < otherInterventionOccupancy.startedAt.getTime(),
+        );
+        if (otherInterventionOccupancy && !shouldPreserveCrossIntervention) {
+            const crossCloseMs = input.startedAt.getTime() - otherInterventionOccupancy.startedAt.getTime();
+            if (crossCloseMs >= 60_000) {
+                await tx.update(interventionOccupancies)
+                    .set({
+                        endedAt: input.startedAt,
+                        actualEndedAt: otherInterventionOccupancy.actualEndedAt ?? input.startedAt,
+                        updatedByUserId: input.createdByUserId ?? null,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(interventionOccupancies.id, otherInterventionOccupancy.id));
+                await syncInterventionBankHours(tx, otherInterventionOccupancy.id);
             }
         }
 

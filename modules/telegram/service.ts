@@ -2627,6 +2627,7 @@ async function findActiveOccupancyByTarget(parsed: OperationalParsedEntry) {
             where: and(
                 eq(regulationOccupancies.postId, post.id),
                 isNull(regulationOccupancies.endedAt),
+                isNotNull(regulationOccupancies.boardStartedAt),
             ),
         });
         return { post, occupancy, base: null };
@@ -2641,6 +2642,7 @@ async function findActiveOccupancyByTarget(parsed: OperationalParsedEntry) {
         where: and(
             eq(interventionOccupancies.baseId, base.id),
             isNull(interventionOccupancies.endedAt),
+            isNotNull(interventionOccupancies.boardStartedAt),
         ),
         orderBy: [desc(interventionOccupancies.boardStartedAt), desc(interventionOccupancies.startedAt)],
     });
