@@ -1,9 +1,9 @@
 :root {
     color-scheme: dark;
-    --bg: #0a0d12;
-    --bg-deep: #040608;
-    --panel: rgba(16, 20, 27, 0.88);
-    --panel-border: rgba(216, 225, 236, 0.1);
+    --bg: #0e1118;
+    --bg-deep: #080a10;
+    --panel: rgba(20, 26, 38, 0.93);
+    --panel-border: rgba(216, 225, 236, 0.13);
     --text: #f3f5f7;
     --muted: #8e98a7;
     --muted-strong: #aeb8c6;
@@ -508,22 +508,22 @@ body > * { position: relative; z-index: 1; }
 
 .ops-table-row.emphasis-coi,
 .ops-grid-row.emphasis-coi {
-    background: linear-gradient(90deg, rgba(89, 166, 255, 0.16) 0%, rgba(89, 166, 255, 0.06) 54%, transparent 78%);
+    background: linear-gradient(90deg, rgba(100, 182, 255, 0.26) 0%, rgba(100, 182, 255, 0.10) 54%, transparent 78%);
 }
 
 .ops-table-row.emphasis-coi.clickable:hover,
 .ops-grid-row.emphasis-coi.clickable:hover {
-    background: linear-gradient(90deg, rgba(89, 166, 255, 0.22) 0%, rgba(89, 166, 255, 0.1) 58%, rgba(255, 255, 255, 0.02) 82%);
+    background: linear-gradient(90deg, rgba(100, 182, 255, 0.34) 0%, rgba(100, 182, 255, 0.16) 58%, rgba(255, 255, 255, 0.03) 82%);
 }
 
 .ops-table-row.emphasis-mrv-day,
 .ops-grid-row.emphasis-mrv-day {
-    background: linear-gradient(90deg, rgba(178, 61, 61, 0.16) 0%, rgba(178, 61, 61, 0.06) 56%, transparent 78%);
+    background: linear-gradient(90deg, rgba(235, 90, 90, 0.24) 0%, rgba(235, 90, 90, 0.09) 56%, transparent 78%);
 }
 
 .ops-table-row.emphasis-mrv-day.clickable:hover,
 .ops-grid-row.emphasis-mrv-day.clickable:hover {
-    background: linear-gradient(90deg, rgba(178, 61, 61, 0.22) 0%, rgba(178, 61, 61, 0.09) 60%, rgba(255, 255, 255, 0.02) 82%);
+    background: linear-gradient(90deg, rgba(235, 90, 90, 0.32) 0%, rgba(235, 90, 90, 0.13) 60%, rgba(255, 255, 255, 0.03) 82%);
 }
 
 .ops-table-row.emphasis-psiq,
@@ -548,32 +548,32 @@ body > * { position: relative; z-index: 1; }
 
 .ops-table-row.emphasis-rmt,
 .ops-grid-row.emphasis-rmt {
-    background: linear-gradient(90deg, rgba(176, 145, 255, 0.16) 0%, rgba(176, 145, 255, 0.06) 54%, transparent 78%);
+    background: linear-gradient(90deg, rgba(190, 158, 255, 0.26) 0%, rgba(190, 158, 255, 0.10) 54%, transparent 78%);
 }
 
 .ops-table-row.emphasis-rmt.clickable:hover,
 .ops-grid-row.emphasis-rmt.clickable:hover {
-    background: linear-gradient(90deg, rgba(176, 145, 255, 0.22) 0%, rgba(176, 145, 255, 0.1) 58%, rgba(255, 255, 255, 0.02) 82%);
+    background: linear-gradient(90deg, rgba(190, 158, 255, 0.34) 0%, rgba(190, 158, 255, 0.16) 58%, rgba(255, 255, 255, 0.03) 82%);
 }
 
 .ops-table-row.emphasis-ies,
 .ops-grid-row.emphasis-ies {
-    background: linear-gradient(90deg, rgba(146, 104, 72, 0.18) 0%, rgba(146, 104, 72, 0.08) 56%, transparent 80%);
+    background: linear-gradient(90deg, rgba(200, 145, 95, 0.24) 0%, rgba(200, 145, 95, 0.10) 56%, transparent 80%);
 }
 
 .ops-table-row.emphasis-ies.clickable:hover,
 .ops-grid-row.emphasis-ies.clickable:hover {
-    background: linear-gradient(90deg, rgba(146, 104, 72, 0.24) 0%, rgba(146, 104, 72, 0.12) 60%, rgba(255, 255, 255, 0.02) 84%);
+    background: linear-gradient(90deg, rgba(200, 145, 95, 0.32) 0%, rgba(200, 145, 95, 0.15) 60%, rgba(255, 255, 255, 0.03) 84%);
 }
 
 .ops-table-row.emphasis-recip,
 .ops-grid-row.emphasis-recip {
-    background: linear-gradient(90deg, rgba(35, 201, 134, 0.14) 0%, rgba(35, 201, 134, 0.05) 54%, transparent 78%);
+    background: linear-gradient(90deg, rgba(35, 210, 140, 0.22) 0%, rgba(35, 210, 140, 0.08) 54%, transparent 78%);
 }
 
 .ops-table-row.emphasis-recip.clickable:hover,
 .ops-grid-row.emphasis-recip.clickable:hover {
-    background: linear-gradient(90deg, rgba(35, 201, 134, 0.2) 0%, rgba(35, 201, 134, 0.08) 58%, rgba(255, 255, 255, 0.02) 82%);
+    background: linear-gradient(90deg, rgba(35, 210, 140, 0.30) 0%, rgba(35, 210, 140, 0.12) 58%, rgba(255, 255, 255, 0.03) 82%);
 }
 
 .ops-table-row.emphasis-waiting,
@@ -728,14 +728,14 @@ body > * { position: relative; z-index: 1; }
 }
 
 .ops-inline-flag.recip {
-    background: rgba(108, 184, 132, 0.16);
-    border-color: rgba(108, 184, 132, 0.28);
+    background: rgba(108, 200, 148, 0.22);
+    border-color: rgba(108, 200, 148, 0.40);
     color: #d9ffe4;
 }
 
 .ops-inline-flag.mrv {
-    background: rgba(201, 96, 96, 0.16);
-    border-color: rgba(201, 96, 96, 0.28);
+    background: rgba(235, 100, 100, 0.22);
+    border-color: rgba(235, 100, 100, 0.40);
     color: #ffd8d8;
 }
 
@@ -755,9 +755,9 @@ body > * { position: relative; z-index: 1; }
    Arte própria (violeta, borda tracejada, nome em itálico) para distinguir
    visualmente da linha do titular, que permanece normal. */
 .ops-inline-flag.shadow {
-    background: rgba(150, 120, 220, 0.18);
-    border-color: rgba(150, 120, 220, 0.34);
-    color: #e6dbff;
+    background: rgba(165, 135, 235, 0.24);
+    border-color: rgba(165, 135, 235, 0.44);
+    color: #eedeff;
 }
 
 .ops-doctor-line.shadow {
