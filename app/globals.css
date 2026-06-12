@@ -508,72 +508,86 @@ body > * { position: relative; z-index: 1; }
 
 .ops-table-row.emphasis-coi,
 .ops-grid-row.emphasis-coi {
-    background: linear-gradient(90deg, rgba(100, 182, 255, 0.26) 0%, rgba(100, 182, 255, 0.10) 54%, transparent 78%);
+    background: linear-gradient(90deg, rgba(100, 182, 255, 0.42) 0%, rgba(100, 182, 255, 0.16) 54%, transparent 78%);
+    box-shadow: inset 3px 0 0 rgba(100, 182, 255, 0.70);
 }
 
 .ops-table-row.emphasis-coi.clickable:hover,
 .ops-grid-row.emphasis-coi.clickable:hover {
-    background: linear-gradient(90deg, rgba(100, 182, 255, 0.34) 0%, rgba(100, 182, 255, 0.16) 58%, rgba(255, 255, 255, 0.03) 82%);
+    background: linear-gradient(90deg, rgba(100, 182, 255, 0.54) 0%, rgba(100, 182, 255, 0.22) 58%, rgba(255, 255, 255, 0.03) 82%);
+    box-shadow: inset 3px 0 0 rgba(100, 182, 255, 0.90);
 }
 
 .ops-table-row.emphasis-mrv-day,
 .ops-grid-row.emphasis-mrv-day {
-    background: linear-gradient(90deg, rgba(235, 90, 90, 0.24) 0%, rgba(235, 90, 90, 0.09) 56%, transparent 78%);
+    background: linear-gradient(90deg, rgba(235, 90, 90, 0.40) 0%, rgba(235, 90, 90, 0.15) 56%, transparent 78%);
+    box-shadow: inset 3px 0 0 rgba(235, 90, 90, 0.70);
 }
 
 .ops-table-row.emphasis-mrv-day.clickable:hover,
 .ops-grid-row.emphasis-mrv-day.clickable:hover {
-    background: linear-gradient(90deg, rgba(235, 90, 90, 0.32) 0%, rgba(235, 90, 90, 0.13) 60%, rgba(255, 255, 255, 0.03) 82%);
+    background: linear-gradient(90deg, rgba(235, 90, 90, 0.52) 0%, rgba(235, 90, 90, 0.20) 60%, rgba(255, 255, 255, 0.03) 82%);
+    box-shadow: inset 3px 0 0 rgba(235, 90, 90, 0.90);
 }
 
 .ops-table-row.emphasis-psiq,
 .ops-grid-row.emphasis-psiq {
-    background: linear-gradient(90deg, rgba(255, 210, 87, 0.16) 0%, rgba(255, 210, 87, 0.06) 54%, transparent 78%);
+    background: linear-gradient(90deg, rgba(255, 210, 87, 0.32) 0%, rgba(255, 210, 87, 0.12) 54%, transparent 78%);
+    box-shadow: inset 3px 0 0 rgba(255, 210, 87, 0.65);
 }
 
 .ops-table-row.emphasis-psiq.clickable:hover,
 .ops-grid-row.emphasis-psiq.clickable:hover {
-    background: linear-gradient(90deg, rgba(255, 210, 87, 0.22) 0%, rgba(255, 210, 87, 0.1) 58%, rgba(255, 255, 255, 0.02) 82%);
+    background: linear-gradient(90deg, rgba(255, 210, 87, 0.42) 0%, rgba(255, 210, 87, 0.18) 58%, rgba(255, 255, 255, 0.03) 82%);
+    box-shadow: inset 3px 0 0 rgba(255, 210, 87, 0.85);
 }
 
 .ops-table-row.emphasis-cp,
 .ops-grid-row.emphasis-cp {
-    background: linear-gradient(90deg, rgba(214, 134, 84, 0.16) 0%, rgba(214, 134, 84, 0.06) 54%, transparent 78%);
+    background: linear-gradient(90deg, rgba(214, 134, 84, 0.32) 0%, rgba(214, 134, 84, 0.12) 54%, transparent 78%);
+    box-shadow: inset 3px 0 0 rgba(214, 134, 84, 0.65);
 }
 
 .ops-table-row.emphasis-cp.clickable:hover,
 .ops-grid-row.emphasis-cp.clickable:hover {
-    background: linear-gradient(90deg, rgba(214, 134, 84, 0.22) 0%, rgba(214, 134, 84, 0.1) 58%, rgba(255, 255, 255, 0.02) 82%);
+    background: linear-gradient(90deg, rgba(214, 134, 84, 0.42) 0%, rgba(214, 134, 84, 0.18) 58%, rgba(255, 255, 255, 0.03) 82%);
+    box-shadow: inset 3px 0 0 rgba(214, 134, 84, 0.85);
 }
 
 .ops-table-row.emphasis-rmt,
 .ops-grid-row.emphasis-rmt {
-    background: linear-gradient(90deg, rgba(190, 158, 255, 0.26) 0%, rgba(190, 158, 255, 0.10) 54%, transparent 78%);
+    background: linear-gradient(90deg, rgba(190, 158, 255, 0.42) 0%, rgba(190, 158, 255, 0.16) 54%, transparent 78%);
+    box-shadow: inset 3px 0 0 rgba(190, 158, 255, 0.70);
 }
 
 .ops-table-row.emphasis-rmt.clickable:hover,
 .ops-grid-row.emphasis-rmt.clickable:hover {
-    background: linear-gradient(90deg, rgba(190, 158, 255, 0.34) 0%, rgba(190, 158, 255, 0.16) 58%, rgba(255, 255, 255, 0.03) 82%);
+    background: linear-gradient(90deg, rgba(190, 158, 255, 0.54) 0%, rgba(190, 158, 255, 0.22) 58%, rgba(255, 255, 255, 0.03) 82%);
+    box-shadow: inset 3px 0 0 rgba(190, 158, 255, 0.90);
 }
 
 .ops-table-row.emphasis-ies,
 .ops-grid-row.emphasis-ies {
-    background: linear-gradient(90deg, rgba(200, 145, 95, 0.24) 0%, rgba(200, 145, 95, 0.10) 56%, transparent 80%);
+    background: linear-gradient(90deg, rgba(200, 145, 95, 0.40) 0%, rgba(200, 145, 95, 0.15) 56%, transparent 80%);
+    box-shadow: inset 3px 0 0 rgba(200, 145, 95, 0.70);
 }
 
 .ops-table-row.emphasis-ies.clickable:hover,
 .ops-grid-row.emphasis-ies.clickable:hover {
-    background: linear-gradient(90deg, rgba(200, 145, 95, 0.32) 0%, rgba(200, 145, 95, 0.15) 60%, rgba(255, 255, 255, 0.03) 84%);
+    background: linear-gradient(90deg, rgba(200, 145, 95, 0.52) 0%, rgba(200, 145, 95, 0.22) 60%, rgba(255, 255, 255, 0.03) 84%);
+    box-shadow: inset 3px 0 0 rgba(200, 145, 95, 0.90);
 }
 
 .ops-table-row.emphasis-recip,
 .ops-grid-row.emphasis-recip {
-    background: linear-gradient(90deg, rgba(35, 210, 140, 0.22) 0%, rgba(35, 210, 140, 0.08) 54%, transparent 78%);
+    background: linear-gradient(90deg, rgba(35, 210, 140, 0.38) 0%, rgba(35, 210, 140, 0.14) 54%, transparent 78%);
+    box-shadow: inset 3px 0 0 rgba(35, 210, 140, 0.70);
 }
 
 .ops-table-row.emphasis-recip.clickable:hover,
 .ops-grid-row.emphasis-recip.clickable:hover {
-    background: linear-gradient(90deg, rgba(35, 210, 140, 0.30) 0%, rgba(35, 210, 140, 0.12) 58%, rgba(255, 255, 255, 0.03) 82%);
+    background: linear-gradient(90deg, rgba(35, 210, 140, 0.50) 0%, rgba(35, 210, 140, 0.20) 58%, rgba(255, 255, 255, 0.03) 82%);
+    box-shadow: inset 3px 0 0 rgba(35, 210, 140, 0.90);
 }
 
 .ops-table-row.emphasis-waiting,
