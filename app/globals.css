@@ -479,6 +479,22 @@ body > * { position: relative; z-index: 1; }
     border-top: 0;
 }
 
+.ops-group-separator {
+    grid-column: 1 / -1;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+}
+
+.ops-group-separator::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.07);
+    margin: 0 8px;
+}
+
 .ops-table-row.clickable,
 .ops-grid-row.clickable {
     cursor: pointer;

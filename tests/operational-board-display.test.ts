@@ -23,6 +23,38 @@ test("root board keeps 2151 and 2032 prioritized on P shift like daytime", () =>
     );
 });
 
+test("role-based ordering: CP → MRV → RECIP → PSIQ → normais → COI → NUCLEO → PIAM", () => {
+    const cards = [
+        { code: "PIAM",  roleLabel: null },
+        { code: "2100",  roleLabel: "PSIQ" },
+        { code: "2200",  roleLabel: null },   // ramal normal sem papel
+        { code: "2032",  roleLabel: "MRV" },
+        { code: "2151",  roleLabel: "MRV" },
+        { code: "2031",  roleLabel: "CP" },
+        { code: "1367",  roleLabel: "COI" },
+        { code: "2300",  roleLabel: "RECIP" },
+        { code: "NUCLEO", roleLabel: null },
+    ];
+    const result = [...cards]
+        .sort((l, r) => compareRootBoardRegulationCodes(l, r, "SD"))
+        .map((c) => c.code);
+    assert.deepEqual(result, ["2031", "2032", "2151", "2300", "2100", "2200", "1367", "NUCLEO", "PIAM"]);
+});
+
+test("role-based: MRV em ramal nao-canonico vem antes de ramais normais", () => {
+    // Chefe atribuiu MRV a 2080 e RECIP a 2032 (fora do padrao)
+    const cards = [
+        { code: "2032", roleLabel: "RECIP" },
+        { code: "2080", roleLabel: "MRV" },
+        { code: "2031", roleLabel: "CP" },
+        { code: "2200", roleLabel: null },
+    ];
+    const result = [...cards]
+        .sort((l, r) => compareRootBoardRegulationCodes(l, r, "SD"))
+        .map((c) => c.code);
+    assert.deepEqual(result, ["2031", "2080", "2032", "2200"]);
+});
+
 test("root board keeps PIAM pending visible on any shift and nucleo only on SD", () => {
     assert.equal(shouldShowRegulationCardOnRootBoard({
         postCode: "PIAM",

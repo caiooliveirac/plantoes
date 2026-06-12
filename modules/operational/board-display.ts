@@ -48,44 +48,52 @@ export function shouldShowRegulationCardOnRootBoard(params: {
     return isPiamRegulationPost(params.postCode) || isNucleoRegulationPost(params.postCode);
 }
 
-function regulationSortBucket(code: string, shiftLabel: string) {
+// Ordem: CP(0) → MRV(1) → RECIP(2) → PSIQ(3) → normais "2"(4) → COI/"1"(5) → outros(6) → NUCLEO(98) → PIAM(99)
+// Quando roleLabel é fornecido, a ordenação usa o papel real da ocupação (que pode divergir do ramal
+// padrão — ex.: chefe/bot mudam MRV para um ramal diferente de 2032/2151, ou 2032 recebe RECIP).
+// Quando roleLabel é undefined (chamadas sem contexto de papel, ex.: testes com código puro),
+// aplica-se o fallback por código para manter compatibilidade.
+function regulationSortBucket(code: string, shiftLabel: string, roleLabel?: string | null) {
     const normalized = normalizeOperationalCode(code);
+    const role = roleLabel !== undefined ? (roleLabel?.trim().toUpperCase() ?? null) : undefined;
 
-    if (normalized === "2031") {
-        return 0;
+    if (normalized === "2031" || role === "CP") return 0;
+    if (isNucleoRegulationPost(normalized)) return 98;
+    if (isPiamRegulationPost(normalized)) return 99;
+
+    if (role !== undefined) {
+        if (role === "MRV") return 1;
+        if (role === "RECIP") return 2;
+        if (role === "PSIQ") return 3;
+        if (role === "COI") return 5;
+        // Papel nulo em ramais MRV canônicos: trata como MRV (comportamento base)
+        if (role === null && shiftLabel !== "SN" && (normalized === "2151" || normalized === "2032")) return 1;
+        if (normalized.startsWith("1")) return 5;
+        if (normalized.startsWith("2")) return 4;
+        return 6;
     }
 
-    if (shiftLabel !== "SN" && normalized === "2151") {
-        return 1;
-    }
-
-    if (shiftLabel !== "SN" && normalized === "2032") {
-        return 2;
-    }
-
-    if (isNucleoRegulationPost(normalized)) {
-        return 98;
-    }
-
-    if (isPiamRegulationPost(normalized)) {
-        return 99;
-    }
-
-    if (normalized.startsWith("1")) {
-        return 4;
-    }
-
-    if (normalized.startsWith("2")) {
-        return 3;
-    }
-
-    return 5;
+    // Fallback por código (sem contexto de papel — compatibilidade com testes e uso legado)
+    if (shiftLabel !== "SN" && normalized === "2151") return 1;
+    if (shiftLabel !== "SN" && normalized === "2032") return 2;
+    if (normalized.startsWith("1")) return 5;
+    if (normalized.startsWith("2")) return 4;
+    return 6;
 }
 
-export function compareRootBoardRegulationCodes(left: string, right: string, shiftLabel: string) {
-    const normalizedLeft = normalizeOperationalCode(left);
-    const normalizedRight = normalizeOperationalCode(right);
-    const bucketDiff = regulationSortBucket(normalizedLeft, shiftLabel) - regulationSortBucket(normalizedRight, shiftLabel);
+type SortKey = string | { code: string; roleLabel?: string | null };
+
+function extractSortKey(v: SortKey): { code: string; roleLabel?: string | null } {
+    return typeof v === "string" ? { code: v } : v;
+}
+
+export function compareRootBoardRegulationCodes(left: SortKey, right: SortKey, shiftLabel: string) {
+    const lk = extractSortKey(left);
+    const rk = extractSortKey(right);
+    const normalizedLeft = normalizeOperationalCode(lk.code);
+    const normalizedRight = normalizeOperationalCode(rk.code);
+    const bucketDiff = regulationSortBucket(normalizedLeft, shiftLabel, lk.roleLabel)
+        - regulationSortBucket(normalizedRight, shiftLabel, rk.roleLabel);
 
     if (bucketDiff !== 0) {
         return bucketDiff;

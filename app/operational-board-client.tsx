@@ -816,7 +816,18 @@ function extractTrailingNumber(value: string) {
 }
 
 function compareRegulationCards(left: RegulationCard, right: RegulationCard, shiftLabel: string) {
-    return compareRootBoardRegulationCodes(left.postCode, right.postCode, shiftLabel);
+    const resolveForSort = (card: RegulationCard) => resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: card.postCode,
+        shiftLabel: shiftLabel as "SD" | "SN" | "P",
+        roleLabel: card.roleLabel,
+        defaultRole: card.defaultRole,
+    });
+    return compareRootBoardRegulationCodes(
+        { code: left.postCode, roleLabel: resolveForSort(left) },
+        { code: right.postCode, roleLabel: resolveForSort(right) },
+        shiftLabel,
+    );
 }
 
 function isInterventionAwaitingNews(card: BoardCard, generatedAt: string) {
@@ -3415,7 +3426,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         </div>
 
                                         <div className="ops-grid-body" role="rowgroup">
-                                            {filteredRegulationCards.length > 0 ? filteredRegulationCards.map((card) => renderRegulationRow(card)) : (
+                                            {filteredRegulationCards.length > 0 ? filteredRegulationCards.flatMap((card, index) => {
+                                                const prev = filteredRegulationCards[index - 1];
+                                                const isTail = isNucleoRegulationPost(card.postCode) || isPiamRegulationPost(card.postCode);
+                                                const prevIsTail = prev && (isNucleoRegulationPost(prev.postCode) || isPiamRegulationPost(prev.postCode));
+                                                const needsSeparator = isTail && !prevIsTail;
+                                                return needsSeparator
+                                                    ? [<div key={`sep-${card.postCode}`} className="ops-group-separator" role="presentation" aria-hidden="true" />, renderRegulationRow(card)]
+                                                    : [renderRegulationRow(card)];
+                                            }) : (
                                                 <div className="ops-empty-row">{visibleRegulationCards.length === 0 ? "Nenhum ramal ativo na regulação neste turno." : "Nenhum ramal corresponde aos filtros atuais."}</div>
                                             )}
                                             {session?.canManage && hasAvailableRegulationPost && (
