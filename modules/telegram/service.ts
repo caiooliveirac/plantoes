@@ -51,7 +51,7 @@ import {
     updateDoctorDirectoryEntry,
 } from "@/modules/doctors/service";
 import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
-import { getSaoPauloParts, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
+import { getSaoPauloParts, isSameOperationalShiftArrival, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
@@ -7109,7 +7109,10 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         });
         // "Mesmo turno": o ocupante chegou DENTRO da janela de turno atual. Carry-over
         // do turno anterior (started_at antes da janela) é rendição normal, não tomada.
-        if (!occ || occ.startedAt.getTime() < windowStart.getTime()) {
+        // Também não é tomada quando a chegada é para o PRÓXIMO turno (relevo de fim de
+        // plantão ~17h/05h): o ocupante do turno que acaba é rendido normalmente.
+        if (!occ || occ.startedAt.getTime() < windowStart.getTime()
+            || !isSameOperationalShiftArrival(occ.startedAt, params.eventAt)) {
             return null;
         }
         const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
@@ -7137,7 +7140,8 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         ),
         orderBy: [desc(interventionOccupancies.boardStartedAt)],
     });
-    if (!occ || occ.startedAt.getTime() < windowStart.getTime()) {
+    if (!occ || occ.startedAt.getTime() < windowStart.getTime()
+        || !isSameOperationalShiftArrival(occ.startedAt, params.eventAt)) {
         return null;
     }
     const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });

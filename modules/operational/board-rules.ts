@@ -102,6 +102,16 @@ export function resolveArrivalShiftLabel(arrivalAt: string | Date): OperationalS
     return window.shiftLabel;
 }
 
+// Tomada de posto/base só vale DENTRO do mesmo turno operacional. Uma chegada para o
+// PRÓXIMO turno (relevo de fim de plantão, ~17h→19h / ~05h→07h) que assume um posto
+// ainda ocupado pelo médico do turno que está acabando é rendição normal — não tomada:
+// fecha o anterior com saída inicial (que ele pode justificar como saída tardia) e NÃO
+// dispara confirmação nem deslocamento. Sem isso, quem chega 18:50 para a noite é
+// avisado de "posição ocupada" por quem chegou 07:00 para o dia — 12h antes, sem sentido.
+export function isSameOperationalShiftArrival(occupantStartedAt: string | Date, arrivalAt: string | Date): boolean {
+    return resolveArrivalShiftLabel(occupantStartedAt) === resolveArrivalShiftLabel(arrivalAt);
+}
+
 export function isBeforeCurrentOperationalShift(startedAt: string | Date | null, reference: string | Date) {
     if (!startedAt) {
         return false;

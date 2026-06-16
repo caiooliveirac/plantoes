@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
     hasPlannedInterventionCoverageForCurrentShift,
+    isSameOperationalShiftArrival,
     requiresOvertimeJustification,
     resolveArrivalShiftLabel,
     resolveContinuationBadgeLabel,
@@ -1227,6 +1228,42 @@ test("resolveArrivalShiftLabel classifies near-boundary arrivals to the upcoming
     assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T19:00:00-03:00")), "SN");
     // exactly 07:00 → SD
     assert.equal(resolveArrivalShiftLabel(new Date("2026-03-25T07:00:00-03:00")), "SD");
+});
+
+test("isSameOperationalShiftArrival: relevo de fim de plantão (07h x 18:50) NÃO é mesmo turno", () => {
+    // Bug reportado: quem chega 18:50 para a noite não pode ser avisado de "posição
+    // ocupada" por quem chegou 07:00 para o dia — turnos diferentes, é rendição normal.
+    assert.equal(
+        isSameOperationalShiftArrival(
+            new Date("2026-03-25T07:00:00-03:00"),
+            new Date("2026-03-25T18:50:00-03:00"),
+        ),
+        false,
+    );
+    // Espelho na virada da manhã: ocupante SN das 19h x chegada 06:40 para o dia.
+    assert.equal(
+        isSameOperationalShiftArrival(
+            new Date("2026-03-25T19:00:00-03:00"),
+            new Date("2026-03-26T06:40:00-03:00"),
+        ),
+        false,
+    );
+    // Mesmo turno (ambos SD, com poucos minutos de diferença): É tomada → segue confirmação.
+    assert.equal(
+        isSameOperationalShiftArrival(
+            new Date("2026-03-25T07:05:00-03:00"),
+            new Date("2026-03-25T07:40:00-03:00"),
+        ),
+        true,
+    );
+    // Mesmo turno SN (ambos chegando perto das 19h): tomada dentro do turno.
+    assert.equal(
+        isSameOperationalShiftArrival(
+            new Date("2026-03-25T18:30:00-03:00"),
+            new Date("2026-03-25T18:55:00-03:00"),
+        ),
+        true,
+    );
 });
 
 test("null shiftLabel arrival near boundary produces correct coverage window", () => {

@@ -745,6 +745,14 @@ body > * { position: relative; z-index: 1; }
     color: #ffe2b5;
 }
 
+/* "Continua" (carry-over de turno): verde = tudo certo, o plantonista segue. Semântica
+   oposta ao "Verificar" âmbar (pede atenção). Fica ao final do nome, não na fileira de ações. */
+.ops-inline-flag.continua {
+    background: rgba(111, 188, 142, 0.18);
+    border-color: rgba(111, 188, 142, 0.38);
+    color: #c8ffdd;
+}
+
 .ops-inline-flag.disabled {
     background: rgba(132, 146, 166, 0.18);
     border-color: rgba(132, 146, 166, 0.28);
