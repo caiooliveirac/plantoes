@@ -65,6 +65,7 @@ import {
     isWithinTakeoverConfirmationWindow,
     buildTakeoverWarningReply,
     buildTakeoverDisplacedAnnouncement,
+    parseTakeoverConfirmShortcut,
 } from "@/modules/telegram/service";
 import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
 
@@ -2868,20 +2869,39 @@ test("isWithinTakeoverConfirmationWindow: confirma dentro de 30min, expira depoi
     assert.equal(isWithinTakeoverConfirmationWindow(base, new Date("2026-06-09T12:45:00Z")), false);
 });
 
-test("buildTakeoverWarningReply: avisa ocupante, pede reenvio exato e garante preservação da chegada", () => {
+test("buildTakeoverWarningReply: avisa ocupante, pede confirmação curta 'confirmo NNNN' e garante preservação da chegada", () => {
     const reply = buildTakeoverWarningReply({
         occupantName: "Fulano",
         targetLabel: "2153",
         shiftLabel: "SD",
         sinceTime: "07:00",
-        exactMessage: "Maria 2153 SD",
     });
     assert.match(reply, /já está ocupado por \*Fulano\*/);
     assert.match(reply, /turno \*SD\*/);
     assert.match(reply, /desde \*07:00\*/);
-    assert.match(reply, /reenvie exatamente/);
-    assert.match(reply, /Maria 2153 SD/);
+    assert.match(reply, /responda só/);
+    assert.match(reply, /`confirmo 2153`/);
     assert.match(reply, /horário de chegada dele fica preservado/);
+});
+
+test("parseTakeoverConfirmShortcut: reconhece 'confirmo NNNN' e variações, ignora o resto", () => {
+    // Casos válidos (ramal de regulação)
+    assert.equal(parseTakeoverConfirmShortcut("confirmo 1368"), "1368");
+    assert.equal(parseTakeoverConfirmShortcut("Confirmo 1368"), "1368");
+    assert.equal(parseTakeoverConfirmShortcut("confirmo 1368."), "1368");
+    assert.equal(parseTakeoverConfirmShortcut("  confirmo o 1368"), "1368");
+    assert.equal(parseTakeoverConfirmShortcut("confirmo ramal 1368"), "1368");
+    // Base de intervenção e posto nomeado
+    assert.equal(parseTakeoverConfirmShortcut("confirmo PM04"), "PM04");
+    assert.equal(parseTakeoverConfirmShortcut("confirmo pm-04"), "PM04");
+    assert.equal(parseTakeoverConfirmShortcut("confirmo nucleo"), "NUCLEO");
+    assert.equal(parseTakeoverConfirmShortcut("confirmo núcleo"), "NUCLEO");
+    // Não casa: sem alvo, vazio, ou frase qualquer
+    assert.equal(parseTakeoverConfirmShortcut("confirmo"), null);
+    assert.equal(parseTakeoverConfirmShortcut("confirmado tudo certo"), null);
+    assert.equal(parseTakeoverConfirmShortcut("Emily 1368 p coi"), null);
+    assert.equal(parseTakeoverConfirmShortcut(""), null);
+    assert.equal(parseTakeoverConfirmShortcut(null), null);
 });
 
 test("buildTakeoverDisplacedAnnouncement: anuncia deslocamento com chegada preservada", () => {

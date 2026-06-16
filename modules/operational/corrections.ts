@@ -18,7 +18,7 @@
  *   - Removal cascades to bank-hours entries for that occupancy
  *   - actualEndedAt tracks the real departure; endedAt tracks scheduled handoff
  */
-import { and, asc, desc, eq, isNull, ne, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, ne, notInArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
     bankHoursEntries,
@@ -452,11 +452,18 @@ async function findOpenTargetOccupancies(tx: Executor, params: {
 }) {
     const excludeIds = [...new Set((params.excludeOccupancyIds ?? []).filter(Boolean))];
 
+    // Só um BOARD CARRIER (board_started_at não nulo) ocupa de fato o destino. Ocupações
+    // com board nulo coexistem fora do quadro — deslocados aguardando redeclarar (regulação)
+    // e sombras de intervenção — e NÃO contam como conflito de remanejamento. Isso alinha o
+    // transfer com o handshake de tomada, o painel ao vivo e o índice único de board por posto;
+    // sem isso, quem assume um posto via tomada ainda recebe "destino já ocupado" pelo
+    // ocupante que acabou de ser deslocado.
     if (params.target.domain === "regulation") {
         return tx.query.regulationOccupancies.findMany({
             where: and(
                 eq(regulationOccupancies.postId, params.target.targetId),
                 isNull(regulationOccupancies.endedAt),
+                isNotNull(regulationOccupancies.boardStartedAt),
                 excludeIds.length > 0 ? notInArray(regulationOccupancies.id, excludeIds) : undefined,
             ),
             orderBy: [asc(regulationOccupancies.startedAt)],
@@ -467,6 +474,7 @@ async function findOpenTargetOccupancies(tx: Executor, params: {
         where: and(
             eq(interventionOccupancies.baseId, params.target.targetId),
             isNull(interventionOccupancies.endedAt),
+            isNotNull(interventionOccupancies.boardStartedAt),
             excludeIds.length > 0 ? notInArray(interventionOccupancies.id, excludeIds) : undefined,
         ),
         orderBy: [asc(interventionOccupancies.startedAt)],

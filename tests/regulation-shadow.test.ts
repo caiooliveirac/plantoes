@@ -3,6 +3,7 @@ import test from "node:test";
 import {
     isRegulationDisplacedOccupancyNotes,
     isRegulationShadowOccupancyNotes,
+    preserveRegulationDisplacedMarker,
     resolveRegulationArrivalBoardPolicy,
     shouldCloseRegulationOccupantOnArrival,
 } from "@/modules/regulation/service";
@@ -14,6 +15,28 @@ test("isRegulationDisplacedOccupancyNotes reconhece o marcador [DESLOCADO]", () 
     assert.equal(isRegulationDisplacedOccupancyNotes("Joao 2153 07:00\n[DESLOCADO] 2026-06-09T10:00:00Z por Maria"), true);
     assert.equal(isRegulationDisplacedOccupancyNotes("Joao 2153 07:00"), false);
     assert.equal(isRegulationDisplacedOccupancyNotes(null), false);
+});
+
+// Incidente 16/06 (Malcon sumiu do painel): ao redeclarar o mesmo posto, a continuação
+// reescrevia as notas e apagava o [DESLOCADO] — com board nulo, o médico sumia das duas
+// queries do painel. O marcador precisa sobreviver à reescrita.
+test("preserveRegulationDisplacedMarker mantém [DESLOCADO] quando a continuação reescreve as notas", () => {
+    const existing = "Malcon 1368 07:10\n[DESLOCADO] 2026-06-16T10:51:00Z por Emily";
+    const next = "MALCON 1368 P";
+    const result = preserveRegulationDisplacedMarker(existing, next);
+    assert.ok(result?.includes("MALCON 1368 P"), `Esperava notas novas, veio: ${result}`);
+    assert.ok(isRegulationDisplacedOccupancyNotes(result), `Marcador [DESLOCADO] deveria sobreviver, veio: ${result}`);
+});
+
+test("preserveRegulationDisplacedMarker é idempotente e não inventa marcador", () => {
+    // Notas novas já com marcador: não duplica
+    const already = "X 1368\n[DESLOCADO] 2026-06-16T10:51:00Z por Y";
+    assert.equal(preserveRegulationDisplacedMarker(already, already), already);
+    // Origem não-deslocada: continuação normal não ganha marcador
+    assert.equal(preserveRegulationDisplacedMarker("Joao 2153 07:00", "Joao 2153 P"), "Joao 2153 P");
+    // Origem deslocada mas notas novas vazias: preserva a linha do marcador
+    const result = preserveRegulationDisplacedMarker("Z 1368\n[DESLOCADO] 2026-06-16T10:51:00Z por W", null);
+    assert.ok(isRegulationDisplacedOccupancyNotes(result));
 });
 
 test("shouldCloseRegulationOccupantOnArrival: ocupante deslocado coexiste (não é fechado pela chegada)", () => {

@@ -143,6 +143,25 @@ export function isRegulationDisplacedOccupancyNotes(notes: string | null | undef
     return normalizeRegulationOperationalNotes(notes).includes(REGULATION_DISPLACED_NOTE_MARKER);
 }
 
+// Ao atualizar/continuar uma ocupação deslocada, garante que o marcador [DESLOCADO]
+// sobreviva à reescrita das notas — senão o médico (board nulo + marcador apagado) some
+// das duas queries do painel. Preserva a linha original do marcador anexando-a às notas
+// novas. Idempotente: se as notas novas já têm o marcador, retorna-as inalteradas.
+export function preserveRegulationDisplacedMarker(
+    existingNotes: string | null | undefined,
+    nextNotes: string | null | undefined,
+): string | null {
+    if (isRegulationDisplacedOccupancyNotes(existingNotes) && !isRegulationDisplacedOccupancyNotes(nextNotes)) {
+        const displacedLine = (existingNotes ?? "")
+            .split("\n")
+            .find((line) => line.includes(REGULATION_DISPLACED_NOTE_MARKER));
+        if (displacedLine) {
+            return nextNotes ? `${nextNotes}\n${displacedLine}` : displacedLine;
+        }
+    }
+    return nextNotes ?? null;
+}
+
 // A "sombra" (shadow) doctor observes/accompanies the active titular on the same
 // ramal without owning it. A shadow arrival must NEVER displace the active doctor,
 // and a real arrival must NEVER displace a shadow — the two coexist on the ramal.
@@ -911,9 +930,14 @@ export async function continueRegulationOccupancy(
             throw new Error("Only active regulation occupancies can be continued.");
         }
 
-        const nextNotes = input?.notes?.trim()
+        const baseNextNotes = input?.notes?.trim()
             ? input.notes.trim()
             : existing.notes;
+        // Deslocado redeclarando o mesmo posto: a continuação substitui as notas e
+        // apagaria o marcador [DESLOCADO], somindo o médico do painel (board nulo +
+        // sem marcador = não aparece em nenhuma das duas queries). Preserva a linha do
+        // marcador para ele seguir visível como deslocado até assumir uma PA.
+        const nextNotes = preserveRegulationDisplacedMarker(existing.notes, baseNextNotes);
         const postCode = (await tx.query.regulationPosts.findFirst({
             where: eq(regulationPosts.id, existing.postId),
             columns: { code: true },

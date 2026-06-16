@@ -7033,6 +7033,9 @@ type TakeoverPendingData = {
     arrivingDoctorId: string;
     occupantDoctorId: string;
     occupantOccupancyId: string;
+    // Texto original da chegada que disparou a tomada. Permite confirmar com o atalho
+    // curto "confirmo NNNN" reprocessando exatamente a intenção original.
+    arrivingMessageText?: string;
 };
 
 function isTakeoverPendingData(value: unknown): value is TakeoverPendingData {
@@ -7062,12 +7065,11 @@ export function buildTakeoverWarningReply(params: {
     targetLabel: string;
     shiftLabel: string | null;
     sinceTime: string;
-    exactMessage: string;
 }) {
     const turno = params.shiftLabel ? ` (turno *${params.shiftLabel}*)` : "";
     return `⚠️ *${params.targetLabel}* já está ocupado por *${params.occupantName}*${turno}, desde *${params.sinceTime}*.`
-        + `\n\nConfere se é isso mesmo. Se você *realmente* vai assumir e *desativar ${params.occupantName}* dessa posição, reenvie exatamente:`
-        + `\n\`${params.exactMessage}\``
+        + `\n\nConfere se é isso mesmo. Se você *realmente* vai assumir e *desativar ${params.occupantName}* dessa posição, responda só:`
+        + `\n\`confirmo ${params.targetLabel}\``
         + `\n\n🔁 ${params.occupantName} sai do quadro nesse ramal, mas o horário de chegada dele fica preservado — ele pode declarar uma nova posição depois sem ser marcado atrasado.`;
 }
 
@@ -7158,6 +7160,73 @@ async function findPendingTakeoverConfirmation(chatId: string, senderTelegramId:
         ),
         orderBy: [desc(telegramIngestedMessages.createdAt)],
     });
+}
+
+// Atalho curto de confirmação de tomada: "confirmo NNNN" (ou XX99 / NUCLEO / PIAM).
+// Em vez de exigir reenvio EXATO da chegada, o ocupante/chefia confirma com uma linha
+// curta. Casamos a tomada pendente do remetente pelo destino + janela e reprocessamos
+// o texto ORIGINAL da chegada (guardado na pendência), que então segue o fluxo normal
+// e confirma a tomada (desloca ocupante + registra a chegada de quem assumiu).
+const TAKEOVER_CONFIRM_SHORTCUT_RE = /^\s*confirm[oa]\b[\s:]*(?:a|o|que|no|na|posto|ramal|base|assumir|tomada)?\s*([A-Za-z]{2}\s?-?\s?\d{2}|\d{4}|nucleo|n[úu]cleo|piam)\b/i;
+
+function normalizeTakeoverTargetCode(value: string) {
+    return value
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[\s-]/g, "")
+        .toUpperCase();
+}
+
+// Reconhece o atalho curto de confirmação de tomada ("confirmo NNNN" / "confirmo PM04"
+// / "confirmo nucleo") e devolve o código-alvo normalizado, ou null se não casar.
+export function parseTakeoverConfirmShortcut(text: string | null | undefined): string | null {
+    if (!text) {
+        return null;
+    }
+    const match = text.match(TAKEOVER_CONFIRM_SHORTCUT_RE);
+    return match ? normalizeTakeoverTargetCode(match[1]) : null;
+}
+
+async function tryHandlePendingTakeoverConfirmation(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id) {
+        return null;
+    }
+
+    const requestedTarget = parseTakeoverConfirmShortcut(message.text);
+    if (!requestedTarget) {
+        return null;
+    }
+
+    const pending = await findPendingTakeoverConfirmation(String(message.chat.id), String(message.from.id));
+    const data = pending && isTakeoverPendingData(pending.resolutionData)
+        ? (pending.resolutionData as TakeoverPendingData)
+        : null;
+    const referenceAt = new Date(message.date * 1000);
+    const valid = Boolean(pending) && Boolean(data)
+        && Boolean(data!.arrivingMessageText)
+        && normalizeTakeoverTargetCode(data!.targetCode) === requestedTarget
+        && isWithinTakeoverConfirmationWindow(pending!.createdAt, referenceAt);
+
+    if (!valid) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedTargetCode: requestedTarget,
+            errorMessage: "takeover_confirmation_no_pending",
+        });
+        await sendMessage(
+            message.chat.id,
+            `🤔 Não encontrei uma tomada pendente para *${requestedTarget}* no seu nome (a confirmação expira em alguns minutos). Reenvie a chegada que você quer registrar e eu peço a confirmação de novo.`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true };
+    }
+
+    // Reescreve o texto efetivo para a chegada original e devolve null: o fluxo principal
+    // segue, reencontra a tomada pendente e a confirma. A pendência só é marcada como
+    // aceita lá; aqui apenas traduzimos "confirmo NNNN" -> intenção original.
+    message.text = data!.arrivingMessageText!;
+    return null;
 }
 
 async function applyParsedEntry(params: {
@@ -9399,6 +9468,14 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
 
 
             if (message.from?.id) {
+                // "confirmo NNNN": confirma uma tomada pendente e reescreve o texto para a
+                // chegada original (cai no fluxo normal). Vem antes dos demais pendings para
+                // reivindicar o atalho; só termina aqui quando NÃO há tomada pendente válida.
+                const pendingTakeoverResult = await tryHandlePendingTakeoverConfirmation(update, log.id);
+                if (pendingTakeoverResult) {
+                    return pendingTakeoverResult;
+                }
+
                 const pendingAlertaResult = await tryHandlePendingAlertaConfirmation(update, log.id);
                 if (pendingAlertaResult) {
                     return pendingAlertaResult;
@@ -9872,7 +9949,12 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 const hasShift = Boolean(firstParsed.shiftType)
                     || arrivalHalfShiftSatisfiesShiftGate(firstParsed, new Date(message.date * 1000));
                 const isBareButtonPayload = looksLikeMealBreakButtonReply(message.text);
-                if (isBareButtonPayload || !hasName || !hasShift) {
+                // Remanejamento (mudou/trocou/remanejado PARA NNNN): o médico já está em
+                // plantão, então a mensagem de relocação naturalmente não traz SD/SN/P. Exige
+                // o nome (para saber QUEM move), mas NÃO o turno — ele é herdado da ocupação
+                // de origem em handleTelegramReassignment.
+                const shiftRequired = !firstParsed.isReassignment;
+                if (isBareButtonPayload || !hasName || (shiftRequired && !hasShift)) {
                     const reason: TelegramReviewReason = isBareButtonPayload
                         ? "meal_break_button_outside_flow"
                         : "arrival_missing_name_or_shift";
@@ -9904,7 +9986,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
 
                     const missing: string[] = [];
                     if (!hasName) missing.push("*nome do médico*");
-                    if (!hasShift) missing.push("*turno* (SD, SN, P — ou *meio plantão* / *tarde* / *meio turno*)");
+                    if (shiftRequired && !hasShift) missing.push("*turno* (SD, SN, P — ou *meio plantão* / *tarde* / *meio turno*)");
 
                     let body: string;
                     if (isBareButtonPayload) {
@@ -10111,6 +10193,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 arrivingDoctorId: resolvedDoctor.id,
                                 occupantDoctorId: occupant.doctorId,
                                 occupantOccupancyId: occupant.occupancyId,
+                                arrivingMessageText: message.text,
                             } satisfies TakeoverPendingData,
                         });
                         await sendMessage(
@@ -10120,7 +10203,6 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 targetLabel: firstParsed.baseCode,
                                 shiftLabel: occupant.shiftLabel,
                                 sinceTime: formatTelegramReplyTime(occupant.startedAt),
-                                exactMessage: message.text,
                             }),
                             message.message_id,
                         );

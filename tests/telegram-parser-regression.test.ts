@@ -745,6 +745,30 @@ test("parses 'Taiara trocou para 2034 SN' as reassignment to regulation", () => 
     assert.equal(parsed.isReassignment, true);
 });
 
+// Incidente 16/06 (Emily/Malcon trocando de PA): comandos de remanejamento NÃO trazem
+// turno (o médico já está em plantão). O parser deve extrair nome + alvo + isReassignment
+// mesmo sem SD/SN/P — o gate de chegada isenta remanejamento da exigência de turno e o
+// turno é herdado da ocupação de origem. Antes, esses comandos morriam como
+// "arrival_missing_name_or_shift".
+test("parses 'Malcon MUDANDO PARA 1367' (sem turno) as reassignment with name extracted", () => {
+    const parsed = parseMessage("Malcon MUDANDO PARA 1367");
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1367");
+    assert.equal(parsed.isReassignment, true);
+    assert.equal(parsed.shiftType, null);
+    assert.equal(parsed.isDeparture, false);
+    assert.ok(parsed.extractedNames[0]?.includes("Malcon"), `Expected name Malcon, got: ${parsed.extractedNames[0]}`);
+});
+
+test("parses 'Emily Thaís remanejada para 1368' (sem turno) as reassignment with name extracted", () => {
+    const parsed = parseMessage("Emily Thaís remanejada para 1368");
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "1368");
+    assert.equal(parsed.isReassignment, true);
+    assert.equal(parsed.shiftType, null);
+    assert.ok(parsed.extractedNames[0]?.toLowerCase().includes("emily"), `Expected name Emily, got: ${parsed.extractedNames[0]}`);
+});
+
 test("reassignment does not trigger for normal arrival without transfer verb", () => {
     const parsed = parseMessage("João Pedro 2035 SN 19:00");
     assert.equal(parsed.isReassignment, false);
