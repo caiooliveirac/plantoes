@@ -18,6 +18,8 @@ import {
     parseTelegramMealBreakPriorityCommand,
     resolveMealBreakContinuityStartedAt,
     resolveMealBreakLunchCapacities,
+    reconcileMealBreakSessionRamalsWithBoard,
+    resolveMealBreakEligibilityExclusions,
     reconcileNightMealBreakSessionWithBoard,
     resolveMealBreakTurnNudgeAction,
     shouldPreferMealBreakReplyForSession,
@@ -796,6 +798,140 @@ test("applyMealBreakReply orders blank remote ramal by normal arrival instead of
 
     assert.deepEqual(mrv?.session.lunchQueue, ["2039", "2038", "2036", "2037"]);
     assert.equal(mrv?.session.roster.find((doctor) => doctor.ramal === "2039")?.roleLabel, null);
+});
+
+test("reconcileMealBreakSessionRamalsWithBoard: o horario de almoco segue o medico ao trocar de ramal", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    // Um plantonista comum (fora de chefia/recip/mrv) com almoco definido no ramal antigo.
+    const target = session.roster.find(
+        (doctor) => doctor.ramal !== session.chiefRamal && !session.mrvRamals.includes(doctor.ramal),
+    )!;
+    const oldRamal = target.ramal;
+    const withAssignment = {
+        ...session,
+        lunchAssignments: { ...session.lunchAssignments, [oldRamal]: "12:30" as const },
+        restExcludedRamals: [...session.restExcludedRamals, oldRamal],
+    };
+
+    // O board ao vivo mostra o mesmo medico (doctorId) num ramal novo: remanejamento.
+    const newRamal = "2099";
+    const board = makeBoard();
+    const movedRow = board.regulation.find((row) => row.doctorId === target.doctorId)!;
+    movedRow.postCode = newRamal;
+    movedRow.postLabel = newRamal;
+    movedRow.ramalLabel = newRamal;
+
+    const reconciled = reconcileMealBreakSessionRamalsWithBoard({ session: withAssignment, board });
+
+    assert.equal(reconciled.lunchAssignments[newRamal], "12:30", "almoco migrou para o ramal novo");
+    assert.equal(reconciled.lunchAssignments[oldRamal], undefined, "almoco nao ficou preso ao ramal antigo");
+    assert.equal(
+        reconciled.roster.find((doctor) => doctor.doctorId === target.doctorId)?.ramal,
+        newRamal,
+        "o roster passou a refletir o ramal novo do medico",
+    );
+    assert.equal(
+        reconciled.roster.some((doctor) => doctor.ramal === oldRamal),
+        false,
+        "ninguem ficou no ramal antigo",
+    );
+    assert.equal(
+        reconciled.restExcludedRamals.includes(newRamal),
+        true,
+        "a exclusao de descanso tambem seguiu para o ramal novo",
+    );
+    assert.equal(
+        reconciled.restExcludedRamals.includes(oldRamal),
+        false,
+        "a exclusao nao ficou presa ao ramal antigo",
+    );
+});
+
+test("resolveMealBreakEligibilityExclusions: v2 segue o medico (doctorId) ao trocar de ramal", () => {
+    // Exclusao gravada quando o medico estava no 2035; agora ele esta no 2099 (remanejamento).
+    const ramalByDoctorId = new Map([["doc-x", "2099"], ["doc-y", "2036"]]);
+    const overrides = {
+        kind: "telegram_meal_break_eligibility_overrides" as const,
+        version: 2 as const,
+        mode: "day" as const,
+        operationalDate: "2026-03-29",
+        lunchExcludedDoctorIds: ["doc-x"],
+        restExcludedDoctorIds: ["doc-y"],
+        lunchExcludedRamals: ["2035"], // snapshot antigo: deve ser ignorado em favor do doctorId
+        restExcludedRamals: ["2036"],
+        updatedAt: "2026-03-29T12:00:00.000Z",
+    };
+
+    const resolved = resolveMealBreakEligibilityExclusions(overrides, ramalByDoctorId);
+    assert.deepEqual(resolved.lunchExcludedRamals, ["2099"], "exclusao de almoco seguiu o medico para o ramal novo");
+    assert.deepEqual(resolved.restExcludedRamals, ["2036"], "exclusao de descanso resolvida pelo doctorId");
+});
+
+test("resolveMealBreakEligibilityExclusions: doctorId fora do board vivo some da exclusao", () => {
+    const ramalByDoctorId = new Map([["doc-y", "2036"]]); // doc-x nao esta mais ativo
+    const overrides = {
+        kind: "telegram_meal_break_eligibility_overrides" as const,
+        version: 2 as const,
+        mode: "day" as const,
+        operationalDate: "2026-03-29",
+        lunchExcludedDoctorIds: ["doc-x", "doc-y"],
+        restExcludedDoctorIds: [],
+        lunchExcludedRamals: [],
+        restExcludedRamals: [],
+        updatedAt: "2026-03-29T12:00:00.000Z",
+    };
+
+    const resolved = resolveMealBreakEligibilityExclusions(overrides, ramalByDoctorId);
+    assert.deepEqual(resolved.lunchExcludedRamals, ["2036"], "apenas medicos ativos no board entram na exclusao");
+});
+
+test("resolveMealBreakEligibilityExclusions: registro v1 (legado) devolve os ramais como estao", () => {
+    const overrides = {
+        kind: "telegram_meal_break_eligibility_overrides" as const,
+        version: 1 as const,
+        mode: "day" as const,
+        operationalDate: "2026-03-29",
+        lunchExcludedRamals: ["2035", "2036"],
+        restExcludedRamals: ["2037"],
+        updatedAt: "2026-03-29T12:00:00.000Z",
+    };
+
+    const resolved = resolveMealBreakEligibilityExclusions(overrides, new Map());
+    assert.deepEqual(resolved.lunchExcludedRamals, ["2035", "2036"]);
+    assert.deepEqual(resolved.restExcludedRamals, ["2037"]);
+});
+
+test("resolveMealBreakEligibilityExclusions: sem registro devolve listas vazias", () => {
+    const resolved = resolveMealBreakEligibilityExclusions(null, new Map());
+    assert.deepEqual(resolved, { lunchExcludedRamals: [], restExcludedRamals: [] });
+});
+
+test("reconcileMealBreakSessionRamalsWithBoard: sem troca de ramal devolve a mesma sessao", () => {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+
+    const reconciled = reconcileMealBreakSessionRamalsWithBoard({ session, board: makeBoard() });
+    assert.equal(reconciled, session, "sem remanejamento, a sessao e retornada sem mudancas");
 });
 
 test("createMealBreakSession recalcula vagas quando ha ramais dispensados do almoco e do descanso", () => {

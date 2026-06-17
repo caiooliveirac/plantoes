@@ -2469,6 +2469,22 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             }
         }
 
+        // Carry-over de turno anterior (P que atravessa a virada das 19h/07h): tag verde
+        // "Continua" ao FINAL do nome — semântica distinta (verde = tudo certo, ele segue)
+        // do "Verificar" âmbar, que pede atenção. Vale para regulação e intervenção.
+        if (card.status === "active") {
+            const continuation = resolveInterventionLineState({
+                startedAt: card.startedAt,
+                boardStartedAt: card.boardStartedAt,
+                scheduledEndAt: card.scheduledEndAt,
+                shiftLabel: card.shiftLabel,
+                reference: generatedAt,
+            });
+            if (continuation.kind === "continua") {
+                items.push(<span key={`continua-${cardCode(card)}`} className="ops-inline-flag continua">Continua</span>);
+            }
+        }
+
         return items.length > 0 ? <span className="ops-name-tag-row">{items}</span> : null;
     }
 
@@ -2678,10 +2694,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         // "VERIFICAR" e o realce de saida andam juntos com o botao "Retirar",
         // uniforme para todo o grupo que esta saindo.
         const isAwaitingNews = isLeaving;
-        // Carry-over de turno anterior: so a palavra "Continua" (sem horario).
-        const continuationLabel = lineState.kind === "continua" ? "Continua" : null;
-        const isSaoPauloNightShift = getSaoPauloParts(generatedAt).hour >= 19 || getSaoPauloParts(generatedAt).hour < 7;
-        const showSecondaryFlags = isAwaitingNews || Boolean(continuationLabel);
+        // A tag "Continua" (carry-over) agora é verde e fica ao final do nome, via
+        // renderCardIdentityTags — a fileira secundária guarda só "Verificar" (âmbar).
+        const showSecondaryFlags = isAwaitingNews;
         const intCardKey = `${card.domain}-${card.baseCode}`;
         const showKickButton = isClickable && !isDisabledIntervention && !isWaitingIntervention
             && card.status === "active" && card.occupancyId && isLeaving;
@@ -2756,7 +2771,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         ) : showKickButton ? (
                             <div className="ops-inline-flags subtle">
                                 {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
-                                {continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
                                 <button
                                     type="button"
                                     className="ops-kick-button"
@@ -2769,7 +2783,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         ) : showSecondaryFlags ? (
                             <div className="ops-inline-flags subtle">
                                 {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
-                                {continuationLabel && <span className={`ops-doctor-note continuation ${isSaoPauloNightShift ? "night" : "day"}`.trim()}>{continuationLabel}</span>}
                             </div>
                         ) : null}
                     </div>
