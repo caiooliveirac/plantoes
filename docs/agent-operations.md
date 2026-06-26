@@ -149,6 +149,38 @@ O ideal é a produção **não compilar**: buildar no Mac ou em runner hospedado
 e enviar só o artefato (`.next` + deps), deixando o EC2 apenas reiniciar o PM2. Isso
 elimina de vez o pico de memória do build no servidor. (Não implementado ainda.)
 
+### 4.3 Migrations — passo MANUAL (o deploy NÃO aplica)
+
+⚠️ Nem o CI (`deploy.yml`) nem `deploy-production.sh` rodam `npm run db:migrate`. Logo,
+**toda PR que adiciona um `db/migrations/NNNN_*.sql` exige aplicar a migration à mão no
+banco de produção** — senão a página/feature que consulta a tabela nova quebra (500)
+assim que o código novo sobe.
+
+O túnel do Mac usa o papel **read-only** (`plantoes_ro`, §3) e **não cria tabela**. O
+papel read-write vive só no `.env.production` **do servidor**, então a migration roda
+**no servidor**. Procedimento verificado (26/jun, migrations 0024+0025), feito **antes
+do merge** para zero-downtime (migrations aditivas são inócuas ao código antigo):
+
+```bash
+# 1. Copiar os .sql novos para o servidor (ainda não versionados lá).
+scp db/migrations/00NN_*.sql plantoes-prod:'~/plantoes/db/migrations/'
+
+# 2. Aplicar com o DATABASE_URL read-write do .env.production. NUNCA printar o segredo:
+#    'set -a; . ./.env.production; set +a' exporta o env (apply-migrations.ts não carrega dotenv).
+ssh plantoes-prod 'cd ~/plantoes && set -a && . ./.env.production && set +a && npm run db:migrate'
+
+# 3. Verificar a(s) tabela(s) e LIMPAR os arquivos temporários — o deploy barra tree sujo.
+ssh plantoes-prod 'cd ~/plantoes && rm -f db/migrations/00NN_*.sql && git status --porcelain'  # deve sair VAZIO
+
+# 4. Só então mergear o PR → o CI deploya o commit (que re-traz os .sql já versionados;
+#    o migrate já está registrado em schema_migrations e é pulado).
+```
+
+Pré-requisitos no servidor (já presentes): `node_modules/.bin/tsx`, `node_modules/postgres`,
+`psql` v16. `apply-migrations.ts` rastreia o que já rodou em `schema_migrations` (idempotente).
+Alternativa sem zero-downtime: mergear primeiro e rodar o passo 2 logo após o deploy —
+há uma janela de 500 na página afetada até o migrate terminar.
+
 ---
 
 ## 5. Princípios
