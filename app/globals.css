@@ -4602,6 +4602,93 @@ button.ops-doctor-line.shadow.clickable:hover {
     cursor: wait;
 }
 
+/* Toggle compacto "assinar / ✓ assinado" na coluna do médico. */
+.chief-payable-attest-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: fit-content;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    background: rgba(11, 31, 48, 0.62);
+    color: var(--muted, #9aa4b2);
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.chief-payable-attest-toggle.on {
+    border-color: rgba(52, 211, 153, 0.6);
+    background: rgba(52, 211, 153, 0.14);
+    color: #8ff0c8;
+}
+
+.chief-payable-attest-toggle input {
+    margin: 0;
+}
+
+.chief-payable-attest-toggle input:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+/* Linha do médico já atestado: discreta marca verde à esquerda + leve atenuação. */
+.chief-payable-row-attested td.sticky-col.doctor {
+    box-shadow: inset 3px 0 0 0 rgba(52, 211, 153, 0.7);
+}
+
+/* Card de atestação dentro do modal do médico. */
+.chief-payable-attest-card {
+    margin-top: 16px;
+    padding: 14px;
+    border: 1px solid var(--surface-elevated-border, rgba(255, 255, 255, 0.14));
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.chief-payable-attest-card.on {
+    border-color: rgba(52, 211, 153, 0.45);
+    background: rgba(52, 211, 153, 0.08);
+}
+
+.chief-payable-attest-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.chief-payable-attest-main input {
+    margin-top: 3px;
+    width: 18px;
+    height: 18px;
+    accent-color: #34d399;
+}
+
+.chief-payable-attest-main span {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.chief-payable-attest-main strong {
+    font-size: 0.95rem;
+}
+
+.chief-payable-attest-main small {
+    color: var(--muted, #9aa4b2);
+    font-size: 0.78rem;
+}
+
+.chief-payable-attest-hint {
+    margin: 8px 0 0;
+    font-size: 0.78rem;
+    color: var(--muted, #9aa4b2);
+}
+
 .chief-payable-cell-tags {
     display: flex;
     flex-wrap: wrap;
@@ -4671,6 +4758,15 @@ button.chief-payable-tag:focus-visible {
     background: rgba(255, 72, 72, 0.22);
     border-color: rgba(255, 122, 122, 0.58);
     color: #ffe9e9;
+}
+
+/* Plantão extra adicionado pelo admin: verde, distinto do amarelo (SD) e do roxo
+   (SN) que o bot gera. O admin sempre sabe que aquilo foi acréscimo manual dele. */
+.chief-payable-tag.admin-extra {
+    background: rgba(52, 211, 153, 0.2);
+    border-color: rgba(52, 211, 153, 0.55);
+    color: #c7f9e3;
+    box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.3);
 }
 
 @keyframes chief-payable-flash-pulse {
@@ -4897,6 +4993,75 @@ button.chief-payable-tag:focus-visible {
     border-color: rgba(139, 255, 198, 0.28);
 }
 
+.chief-payable-extra-form {
+    margin-top: 16px;
+    padding: 14px;
+    border: 1px solid rgba(52, 211, 153, 0.32);
+    border-radius: 12px;
+    background: rgba(52, 211, 153, 0.07);
+}
+
+.chief-payable-extra-form header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 10px;
+}
+
+.chief-payable-extra-form header h4 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: #c7f9e3;
+}
+
+.chief-payable-extra-form header small {
+    color: var(--muted, #9aa4b2);
+    font-size: 0.78rem;
+}
+
+.chief-payable-extra-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px;
+}
+
+.chief-payable-extra-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.74rem;
+    color: var(--muted, #9aa4b2);
+}
+
+.chief-payable-extra-fields select,
+.chief-payable-extra-fields input {
+    padding: 7px 9px;
+    border-radius: 8px;
+    border: 1px solid var(--surface-elevated-border, rgba(255, 255, 255, 0.14));
+    background: var(--surface-elevated, rgba(255, 255, 255, 0.04));
+    color: inherit;
+    font-size: 0.85rem;
+    min-width: 84px;
+}
+
+.chief-payable-extra-fields input {
+    min-width: 130px;
+}
+
+.chief-payable-extra-feedback {
+    margin: 10px 0 0;
+    font-size: 0.8rem;
+}
+
+.chief-payable-extra-feedback.ok {
+    color: #8ff0c8;
+}
+
+.chief-payable-extra-feedback.danger {
+    color: #ffb4bf;
+}
+
 .chief-payable-modal-shifts {
     margin-top: 14px;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -4980,6 +5145,11 @@ button.chief-payable-tag:focus-visible {
 .chief-payable-modal-shift-turn.sn {
     background: rgba(120, 160, 255, 0.18);
     color: #b6c8ff;
+}
+
+.chief-payable-modal-shift-turn.admin-extra {
+    background: rgba(52, 211, 153, 0.2);
+    color: #8ff0c8;
 }
 
 .chief-payable-modal-shift-target {

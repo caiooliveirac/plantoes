@@ -25,6 +25,7 @@
 import {
     bigint,
     boolean,
+    date,
     index,
     integer,
     jsonb,
@@ -286,6 +287,42 @@ export const interventionOccupancies = operationsV2.table(
         index("intervention_occupancies_base_idx").on(table.baseId),
         index("intervention_occupancies_board_idx").on(table.baseId, table.boardStartedAt),
         index("intervention_occupancies_active_idx").on(table.endedAt),
+    ],
+);
+
+// Plantões extra adicionados manualmente pelo admin na tela de fechamento de
+// pagamento. Não são ocupações reais do quadro operacional — entram só no board
+// do payment-closing (em verde) e contam para o valor a pagar do médico.
+export const adminExtraShifts = operationsV2.table(
+    "admin_extra_shifts",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        operationalDate: date("operational_date").notNull(),
+        shiftLabel: varchar("shift_label", { length: 2 }).notNull(),
+        label: varchar("label", { length: 40 }),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index("admin_extra_shifts_doctor_idx").on(table.doctorId),
+        index("admin_extra_shifts_date_idx").on(table.operationalDate),
+    ],
+);
+
+// Atestação por médico/mês: o admin marca que já conferiu e assinou a
+// produtividade do plantonista naquele mês. Uma linha por (médico, mês); toggle.
+export const paymentClosingAttestations = operationsV2.table(
+    "payment_closing_attestations",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        monthKey: varchar("month_key", { length: 7 }).notNull(),
+        attestedByUserId: uuid("attested_by_user_id").references(() => users.id),
+        attestedAt: timestamp("attested_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("payment_closing_attestations_doctor_month_idx").on(table.doctorId, table.monthKey),
     ],
 );
 

@@ -3,6 +3,7 @@ import { getDb } from "@/db";
 import { doctors } from "@/db/schema";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
 import {
+    buildAdminExtraPayableShift,
     buildAttestationSegments,
     buildChiefPayableBoard,
     buildDisabledTargetsFromBoards,
@@ -13,6 +14,8 @@ import {
     resolveDoctorPaymentProfile,
     type RawPresenceEvent,
 } from "@/modules/reporting/payable-shifts";
+import { loadAdminExtraShiftsForRange } from "@/services/admin-extra-shifts.service";
+import { loadDoctorAttestationsForMonth } from "@/services/payment-closing-attestation.service";
 import {
     buildPaymentAllocationBoardModel,
     type PaymentAllocationBoard,
@@ -426,10 +429,16 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     const range = resolveMonthlyReportRange(monthKey);
     const rawStartIso = new Date(range.start.getTime() - 86400000).toISOString();
     const rawEndIso = new Date(range.end.getTime() + 86400000).toISOString();
-    const [targets, targetDeactivationIntervals, rawResultRows, allDoctorRows] = await Promise.all([
+    // Datas operacionais (São Paulo, -180min) que delimitam o mês visível — usadas
+    // para buscar os plantões extra do admin, cuja coluna operational_date é um date.
+    const extraStartDate = new Date(range.start.getTime() - (180 * 60000)).toISOString().slice(0, 10);
+    const extraEndDate = new Date(range.end.getTime() - (180 * 60000) - 1).toISOString().slice(0, 10);
+    const [targets, targetDeactivationIntervals, rawResultRows, adminExtraRows, doctorAttestations, allDoctorRows] = await Promise.all([
         loadTargets(rawStartIso, rawEndIso),
         loadTargetDeactivationIntervals(rawStartIso, rawEndIso),
         loadRawRows(rawStartIso, rawEndIso),
+        loadAdminExtraShiftsForRange(extraStartDate, extraEndDate),
+        loadDoctorAttestationsForMonth(range.monthKey),
         getDb()
             .select({
                 id: doctors.id,
@@ -450,6 +459,12 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         rawRows,
     });
     const payableShifts = buildPayableShiftsFromBoards(boards);
+    // Plantões extra do admin entram como PayableShift verdes — contam no total a
+    // pagar, mas não viram opção de ramal/base nem segmento de presença.
+    const adminExtraShifts = adminExtraRows.map(buildAdminExtraPayableShift);
+    const payableShiftsWithExtras = adminExtraShifts.length > 0
+        ? [...payableShifts, ...adminExtraShifts]
+        : payableShifts;
     const disabledTargets = buildDisabledTargetsFromBoards({
         boards,
         maxSlotStartedAtIso: new Date().toISOString(),
@@ -480,13 +495,14 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         presetMonths: range.presetMonths,
         rangeStartIso: range.start.toISOString(),
         rangeEndIso: range.end.toISOString(),
-        payableShifts,
+        payableShifts: payableShiftsWithExtras,
         disabledTargets,
         uncoveredTargets,
         targetOptions,
         attestationSegments,
         allDoctorNames: allDoctorRows.map((row) => row.fullName),
         doctorPaymentProfiles,
+        doctorAttestations,
     });
 }
 
