@@ -94,6 +94,65 @@ export interface PayableShift {
     paymentTag: string | null;
 }
 
+/**
+ * Marca um PayableShift como plantão extra adicionado manualmente pelo admin na
+ * tela de fechamento. O board do payment-closing pinta de verde toda tag com este
+ * source — distinguindo o que o chefe acrescentou do que o bot registrou.
+ */
+export const ADMIN_EXTRA_SHIFT_SOURCE = "admin_extra";
+
+export interface AdminExtraShiftInput {
+    id: string;
+    doctorId: string;
+    doctorName: string;
+    displayName: string | null;
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+    label: string | null;
+}
+
+/**
+ * Converte um plantão extra (tabela admin_extra_shifts) num PayableShift verde.
+ * Não amarra a ramal/base: usa um rótulo livre como tagCode e um slot sintético
+ * de 12h só para ordenação. operationalDate define a coluna do dia e a tarifa
+ * (dia útil vs fim de semana/feriado), igual aos demais plantões.
+ */
+export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): PayableShift {
+    const tagCode = input.label?.trim() ? input.label.trim() : "EXTRA";
+    // Slot local: SD = 06:00–18:00, SN = 18:00–06:00 (offset São Paulo -180min).
+    const slotStartedAt = input.shiftLabel === "SD"
+        ? `${input.operationalDate}T09:00:00.000Z`
+        : `${input.operationalDate}T21:00:00.000Z`;
+    const slotEndMs = new Date(slotStartedAt).getTime() + (12 * 60 * 60 * 1000);
+    const slotEndedAt = new Date(slotEndMs).toISOString();
+
+    return {
+        payableShiftId: `extra:${input.id}`,
+        occupancyId: `extra:${input.id}`,
+        domain: "regulation",
+        doctorId: input.doctorId,
+        doctorName: input.doctorName,
+        displayName: input.displayName,
+        targetCode: tagCode,
+        targetLabel: tagCode,
+        tagCode,
+        operationalDate: input.operationalDate,
+        shiftLabel: input.shiftLabel,
+        slotStartedAt,
+        slotEndedAt,
+        startedAt: slotStartedAt,
+        endedAt: slotEndedAt,
+        durationMinutes: 12 * 60,
+        paymentStatus: "ready_for_payment",
+        auditStatus: "clean",
+        issues: [],
+        source: ADMIN_EXTRA_SHIFT_SOURCE,
+        roleLabel: null,
+        paymentUnit: 1,
+        paymentTag: null,
+    } satisfies PayableShift;
+}
+
 export interface DisabledTargetSnapshot {
     snapshotId: string;
     domain: "regulation" | "intervention";
@@ -144,6 +203,8 @@ export interface ChiefPayableDoctorRow {
     weekendShiftCount?: number;
     paymentProfile?: DoctorPaymentProfile;
     pendingCount: number;
+    /** ISO de quando o admin conferiu/assinou este médico no mês; null = não atestado. */
+    attestedAt: string | null;
     cells: ChiefPayableCell[];
 }
 
@@ -626,6 +687,7 @@ export function buildChiefPayableBoard(params: {
     attestationSegments: AttestationSegment[];
     allDoctorNames: string[];
     doctorPaymentProfiles?: Record<string, DoctorPaymentProfile>;
+    doctorAttestations?: Record<string, string>;
 }) {
     const dayCount = new Date(params.rangeEndIso).getTime() > new Date(params.rangeStartIso).getTime()
         ? Math.round((new Date(params.rangeEndIso).getTime() - new Date(params.rangeStartIso).getTime()) / 86400000)
@@ -712,6 +774,7 @@ export function buildChiefPayableBoard(params: {
             weekendShiftCount,
             paymentProfile,
             pendingCount,
+            attestedAt: params.doctorAttestations?.[doctorId] ?? null,
             cells: days.map((day) => ({
                 day,
                 shifts: [...(dayMap.get(day) ?? [])].sort((left, right) => {

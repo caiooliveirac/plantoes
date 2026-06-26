@@ -31,7 +31,7 @@ type PaymentStatusFilter = "all" | "ready_for_payment" | "needs_review";
 type ShiftFilter = "all" | "SD" | "SN";
 type DomainFilter = "all" | "regulation" | "intervention";
 type CoverageFilter = "all" | "half" | "full";
-type SortMode = "name" | "total" | "pending" | "sd" | "sn";
+type SortMode = "name" | "total" | "pending" | "weekday" | "weekend";
 type DoctorProfile = "generalist" | "specialist" | "psychiatry";
 
 const MONEY_FORMATTER = new Intl.NumberFormat("pt-BR", {
@@ -216,6 +216,30 @@ export function ChiefPaymentViewClient({ board }: Props) {
     const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(new Set());
     const [shiftActionBusy, setShiftActionBusy] = useState(false);
     const [shiftActionError, setShiftActionError] = useState<string | null>(null);
+    // Formulário "adicionar plantão extra" dentro do modal do médico.
+    const [extraDay, setExtraDay] = useState("");
+    const [extraShift, setExtraShift] = useState<"SD" | "SN">("SD");
+    const [extraLabel, setExtraLabel] = useState("");
+    const [extraBusy, setExtraBusy] = useState(false);
+    const [extraError, setExtraError] = useState<string | null>(null);
+    const [extraFeedback, setExtraFeedback] = useState<string | null>(null);
+    // Limpa o formulário de plantão extra ao trocar de médico / fechar o modal.
+    useEffect(() => {
+        setExtraDay("");
+        setExtraShift("SD");
+        setExtraLabel("");
+        setExtraError(null);
+        setExtraFeedback(null);
+        setAttestError(null);
+    }, [selectedDoctorId]);
+    // Atestação: "já conferi e assinei a produtividade deste médico no mês".
+    const [attestationOverrides, setAttestationOverrides] = useState<Record<string, boolean>>({});
+    const [attestBusyDoctorId, setAttestBusyDoctorId] = useState<string | null>(null);
+    const [attestError, setAttestError] = useState<string | null>(null);
+    // Quando o board chega atualizado, descarta os estados otimistas de atestação.
+    useEffect(() => {
+        setAttestationOverrides({});
+    }, [board]);
     const normalized = normalize(search);
     const normalizedTarget = normalize(targetSearch);
 
@@ -497,12 +521,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 return right.total - left.total || left.doctorName.localeCompare(right.doctorName, "pt-BR");
             }
 
-            if (sortMode === "sd") {
-                return right.totalSD - left.totalSD || left.doctorName.localeCompare(right.doctorName, "pt-BR");
+            if (sortMode === "weekday") {
+                return right.weekdayShiftCount - left.weekdayShiftCount || left.doctorName.localeCompare(right.doctorName, "pt-BR");
             }
 
-            if (sortMode === "sn") {
-                return right.totalSN - left.totalSN || left.doctorName.localeCompare(right.doctorName, "pt-BR");
+            if (sortMode === "weekend") {
+                return right.weekendShiftCount - left.weekendShiftCount || left.doctorName.localeCompare(right.doctorName, "pt-BR");
             }
 
             return right.pendingCount - left.pendingCount || right.total - left.total || left.doctorName.localeCompare(right.doctorName, "pt-BR");
@@ -757,22 +781,40 @@ export function ChiefPaymentViewClient({ board }: Props) {
             return next;
         });
 
+        const isExtra = draft.source === "admin_extra";
+
         try {
-            const response = await fetch("/api/admin/payment-attestation/slot", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    action: "manual_remove",
-                    date: `${board.monthKey}-${draft.day}`,
-                    shift: draft.shiftLabel,
-                    domain: draft.domain,
-                    targetCode: draft.targetCode,
-                    occupancyId: draft.occupancyId,
-                }),
-            });
+            const response = isExtra
+                ? await fetch("/api/admin/payment-closing/extra-shift", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "remove",
+                        id: draft.occupancyId.replace(/^extra:/, ""),
+                    }),
+                })
+                : await fetch("/api/admin/payment-attestation/slot", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action: "manual_remove",
+                        date: `${board.monthKey}-${draft.day}`,
+                        shift: draft.shiftLabel,
+                        domain: draft.domain,
+                        targetCode: draft.targetCode,
+                        occupancyId: draft.occupancyId,
+                    }),
+                });
             const body = await response.json().catch(() => null) as { error?: string } | null;
             if (!response.ok) {
                 throw new Error(body?.error ?? "Não foi possível remover o plantão.");
+            }
+
+            if (isExtra) {
+                setManualFeedback(`Plantão extra removido: dia ${draft.day} ${draft.shiftLabel} (${draft.doctorName}).`);
+                setShiftActionDraft(null);
+                requestRouterRefresh();
+                return;
             }
 
             persistFlash({
@@ -799,6 +841,82 @@ export function ChiefPaymentViewClient({ board }: Props) {
             setShiftActionError(error instanceof Error ? error.message : "Falha ao remover plantão.");
         } finally {
             setShiftActionBusy(false);
+        }
+    }
+
+    async function submitAddExtraShift(doctorId: string, doctorName: string) {
+        const day = extraDay.trim();
+        if (!/^\d{2}$/.test(day)) {
+            setExtraError("Selecione o dia do plantão extra.");
+            return;
+        }
+
+        const label = extraLabel.trim();
+        if (label.length < 2) {
+            setExtraError("Descreva o plantão extra com pelo menos 2 caracteres (assim você não perde o controle).");
+            return;
+        }
+
+        setExtraBusy(true);
+        setExtraError(null);
+        setExtraFeedback(null);
+
+        try {
+            const response = await fetch("/api/admin/payment-closing/extra-shift", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action: "add",
+                    doctorId,
+                    date: `${board.monthKey}-${day}`,
+                    shift: extraShift,
+                    label,
+                }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível adicionar o plantão extra.");
+            }
+
+            setExtraFeedback(`Plantão extra adicionado: dia ${day} ${extraShift} → ${doctorName}.`);
+            setExtraLabel("");
+            // Se o filtro de status esconderia a linha, garante visibilidade.
+            if (status === "needs_review") {
+                setStatus("all");
+            }
+            requestRouterRefresh();
+        } catch (error) {
+            setExtraError(error instanceof Error ? error.message : "Falha ao adicionar plantão extra.");
+        } finally {
+            setExtraBusy(false);
+        }
+    }
+
+    function isDoctorAttested(target: { doctorId: string; attestedAt: string | null }) {
+        const override = attestationOverrides[target.doctorId];
+        return override !== undefined ? override : Boolean(target.attestedAt);
+    }
+
+    async function toggleDoctorAttestation(doctorId: string, attested: boolean) {
+        setAttestBusyDoctorId(doctorId);
+        setAttestError(null);
+        setAttestationOverrides((prev) => ({ ...prev, [doctorId]: attested }));
+        try {
+            const response = await fetch("/api/admin/payment-closing/attestation", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ doctorId, monthKey: board.monthKey, attested }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível salvar a atestação.");
+            }
+            requestRouterRefresh();
+        } catch (error) {
+            setAttestationOverrides((prev) => ({ ...prev, [doctorId]: !attested }));
+            setAttestError(error instanceof Error ? error.message : "Falha ao salvar atestação.");
+        } finally {
+            setAttestBusyDoctorId(null);
         }
     }
 
@@ -1058,8 +1176,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
                         <option value="pending">Pendências</option>
                         <option value="total">Total</option>
-                        <option value="sd">Total SD</option>
-                        <option value="sn">Total SN</option>
+                        <option value="weekday">Dia útil</option>
+                        <option value="weekend">Fim de semana / feriado</option>
                         <option value="name">Nome</option>
                     </select>
                 </label>
@@ -1214,8 +1332,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             <tr>
                                 <th className="sticky-col doctor">Médico</th>
                                 {board.days.map((day) => <th key={day}>{day}</th>)}
-                                <th>Total SD</th>
-                                <th>Total SN</th>
+                                <th>Dia útil</th>
+                                <th>Fim de semana / feriado</th>
                                 <th>Total</th>
                                 <th>Valor semana</th>
                                 <th>Valor fim de semana / feriado</th>
@@ -1348,6 +1466,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                         animate={{ opacity: 1, y: 0 }}
                                         exit={{ opacity: 0, y: -6 }}
                                         transition={{ duration: 0.2, delay: Math.min(index * 0.018, 0.18) }}
+                                        className={isDoctorAttested(doctor) ? "chief-payable-row-attested" : undefined}
                                     >
                                         <td className="sticky-col doctor">
                                             <div className="chief-payable-doctor-cell">
@@ -1377,6 +1496,18 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                         <span>ESP</span>
                                                     </label>
                                                 ) : null}
+
+                                                <label className={`chief-payable-attest-toggle ${isDoctorAttested(doctor) ? "on" : ""}`.trim()} title="Conferido e assinado">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isDoctorAttested(doctor)}
+                                                        onChange={(event) => {
+                                                            void toggleDoctorAttestation(doctor.doctorId, event.target.checked);
+                                                        }}
+                                                        disabled={attestBusyDoctorId === doctor.doctorId}
+                                                    />
+                                                    <span>{isDoctorAttested(doctor) ? "✓ assinado" : "assinar"}</span>
+                                                </label>
                                             </div>
                                         </td>
 
@@ -1391,8 +1522,10 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                             key={shift.payableShiftId}
                                                             type="button"
                                                             data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
-                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
-                                                            title={`${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
+                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? "admin-extra" : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
+                                                            title={shift.source === "admin_extra"
+                                                                ? `Plantão extra (admin) · ${shift.shiftLabel} · ${shift.doctorName}`
+                                                                : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
                                                             initial={{ opacity: 0, scale: 0.92 }}
                                                             animate={{ opacity: 1, scale: 1 }}
                                                             transition={{ duration: 0.15 }}
@@ -1419,8 +1552,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                             </td>
                                         ))}
 
-                                        <td>{formatUnits(doctor.totalSD)}</td>
-                                        <td>{formatUnits(doctor.totalSN)}</td>
+                                        <td>{doctor.weekdayShiftCount}</td>
+                                        <td>{doctor.weekendShiftCount}</td>
                                         <td>{formatUnits(doctor.total)}</td>
                                         <td>{formatCurrency(doctor.weekdayDue)}</td>
                                         <td>{formatCurrency(doctor.weekendDue)}</td>
@@ -1455,7 +1588,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             <strong>
                                 {shiftActionDraft.targetCode} {shiftActionDraft.shiftLabel} · dia {shiftActionDraft.day}/{board.monthKey.slice(5,7)} · {shiftActionDraft.doctorName}
                             </strong>
-                            {shiftActionDraft.source ? <small>Origem: {shiftActionDraft.source}</small> : null}
+                            {shiftActionDraft.source ? <small>Origem: {shiftActionDraft.source === "admin_extra" ? "plantão extra (admin)" : shiftActionDraft.source}</small> : null}
                         </header>
 
                         {shiftActionError ? (
@@ -1474,12 +1607,14 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             >
                                 {shiftActionBusy ? "Removendo..." : `Remover ${shiftActionDraft.doctorName} deste plantão`}
                             </button>
-                            <a
-                                className="payment-button"
-                                href={cellAuditLink(board.monthKey, shiftActionDraft.day, shiftActionDraft.shiftLabel)}
-                            >
-                                Abrir auditoria detalhada
-                            </a>
+                            {shiftActionDraft.source === "admin_extra" ? null : (
+                                <a
+                                    className="payment-button"
+                                    href={cellAuditLink(board.monthKey, shiftActionDraft.day, shiftActionDraft.shiftLabel)}
+                                >
+                                    Abrir auditoria detalhada
+                                </a>
+                            )}
                             <button
                                 type="button"
                                 className="payment-button"
@@ -1491,9 +1626,11 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         </div>
 
                         <p className="chief-payable-action-hint">
-                            Remover {shiftActionDraft.source === "admin_correction" || shiftActionDraft.source === "manual"
-                                ? "apaga a correção manual deste plantão."
-                                : "encerra o plantão no início deste turno (recalcula banco de horas). Use quando o médico não estava de fato no plantão."}
+                            {shiftActionDraft.source === "admin_extra"
+                                ? "Remover apaga este plantão extra adicionado pelo admin (sai do quadro e do valor a pagar)."
+                                : (shiftActionDraft.source === "admin_correction" || shiftActionDraft.source === "manual"
+                                    ? "Remover apaga a correção manual deste plantão."
+                                    : "Remover encerra o plantão no início deste turno (recalcula banco de horas). Use quando o médico não estava de fato no plantão.")}
                         </p>
                     </section>
                 </div>
@@ -1543,6 +1680,87 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             </article>
                         </div>
 
+                        <section className="chief-payable-extra-form">
+                            <header>
+                                <h4>Adicionar plantão extra</h4>
+                                <small>Entra em verde no quadro e conta no valor a pagar. Use para plantões que o bot não registrou.</small>
+                            </header>
+                            <div className="chief-payable-extra-fields">
+                                <label>
+                                    <span>Dia</span>
+                                    <select
+                                        value={extraDay}
+                                        onChange={(event) => setExtraDay(event.target.value)}
+                                        disabled={extraBusy}
+                                    >
+                                        <option value="">—</option>
+                                        {board.days.map((day) => (
+                                            <option key={day} value={day}>{day}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Turno</span>
+                                    <select
+                                        value={extraShift}
+                                        onChange={(event) => setExtraShift(event.target.value === "SN" ? "SN" : "SD")}
+                                        disabled={extraBusy}
+                                    >
+                                        <option value="SD">SD (diurno)</option>
+                                        <option value="SN">SN (noturno)</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Motivo (obrigatório, ≥2 caracteres)</span>
+                                    <input
+                                        type="text"
+                                        value={extraLabel}
+                                        onChange={(event) => setExtraLabel(event.target.value)}
+                                        placeholder="ex.: plantão trocado"
+                                        minLength={2}
+                                        maxLength={40}
+                                        required
+                                        disabled={extraBusy}
+                                    />
+                                </label>
+                                <button
+                                    type="button"
+                                    className="payment-button"
+                                    onClick={() => void submitAddExtraShift(selectedDoctor.doctorId, selectedDoctor.doctorName)}
+                                    disabled={extraBusy}
+                                >
+                                    {extraBusy ? "Adicionando..." : "Adicionar plantão"}
+                                </button>
+                            </div>
+                            {extraError ? <p className="chief-payable-extra-feedback danger">{extraError}</p> : null}
+                            {extraFeedback ? <p className="chief-payable-extra-feedback ok">{extraFeedback}</p> : null}
+                        </section>
+
+                        <section className={`chief-payable-attest-card ${isDoctorAttested(selectedDoctor) ? "on" : ""}`.trim()}>
+                            <label className="chief-payable-attest-main">
+                                <input
+                                    type="checkbox"
+                                    checked={isDoctorAttested(selectedDoctor)}
+                                    onChange={(event) => {
+                                        void toggleDoctorAttestation(selectedDoctor.doctorId, event.target.checked);
+                                    }}
+                                    disabled={attestBusyDoctorId === selectedDoctor.doctorId}
+                                />
+                                <span>
+                                    <strong>Conferido e assinado</strong>
+                                    <small>Já atestei a produtividade de {selectedDoctor.doctorName} em {board.monthLabel}.</small>
+                                </span>
+                            </label>
+                            <p className="chief-payable-attest-hint">
+                                {isDoctorAttested(selectedDoctor)
+                                    ? "Assinado — não precisa olhar de novo. Desmarque se algo mudar."
+                                    : "Antes de assinar, confira se falta lançar algum plantão extra (formulário acima)."}
+                            </p>
+                            {attestError && attestBusyDoctorId === null ? (
+                                <p className="chief-payable-extra-feedback danger">{attestError}</p>
+                            ) : null}
+                        </section>
+
                         {(() => {
                             const profile = (selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile;
                             const flatShifts = selectedDoctor.cells
@@ -1582,11 +1800,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                             <strong>{dayMonth}</strong>
                                                             <small>{weekday}</small>
                                                         </span>
-                                                        <span className={`chief-payable-modal-shift-turn ${shift.shiftLabel === "SD" ? "sd" : "sn"}`}>
+                                                        <span className={`chief-payable-modal-shift-turn ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? "admin-extra" : ""}`.trim()}>
                                                             {shift.shiftLabel}
                                                         </span>
                                                         <span className="chief-payable-modal-shift-target">
-                                                            {shift.targetCode}
+                                                            {shift.source === "admin_extra" ? (shift.tagCode || "EXTRA") : shift.targetCode}
+                                                            {shift.source === "admin_extra" ? <em className="chief-payable-modal-shift-half">extra</em> : null}
                                                             {shift.paymentTag ? <em className="chief-payable-modal-shift-half">{shift.paymentTag}</em> : null}
                                                         </span>
                                                         <span className={`chief-payable-modal-shift-kind ${kindClass}`}>{kindLabel}</span>

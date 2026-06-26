@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    buildAdminExtraPayableShift,
     buildAttestationSegments,
     buildChiefPayableBoard,
     buildDisabledTargetsFromBoards,
@@ -801,4 +802,83 @@ test("buildChiefPayableBoard computes due amount by profile and weekday/weekend"
     assert.equal(doctor?.totalSNDue, 1457.15);
     assert.equal(doctor?.totalDue, 2786.81);
     assert.equal(board.summary.totalDueAmount, 2786.81);
+});
+
+test("buildAdminExtraPayableShift marca plantão extra verde com unidade cheia", () => {
+    const extra = buildAdminExtraPayableShift({
+        id: "extra-1",
+        doctorId: "doc-1",
+        doctorName: "Syone de Jesus Feitosa",
+        displayName: "Syone Feitosa",
+        operationalDate: "2026-04-14",
+        shiftLabel: "SD",
+        label: "EXTRA",
+    });
+
+    assert.equal(extra.source, "admin_extra");
+    assert.equal(extra.payableShiftId, "extra:extra-1");
+    assert.equal(extra.occupancyId, "extra:extra-1");
+    assert.equal(extra.tagCode, "EXTRA");
+    assert.equal(extra.targetCode, "EXTRA");
+    assert.equal(extra.operationalDate, "2026-04-14");
+    assert.equal(extra.shiftLabel, "SD");
+    assert.equal(extra.paymentUnit, 1);
+    assert.equal(extra.paymentStatus, "ready_for_payment");
+    // SD começa 06:00 local (09:00Z) e dura 12h.
+    assert.equal(extra.slotStartedAt, "2026-04-14T09:00:00.000Z");
+    assert.equal(extra.slotEndedAt, "2026-04-14T21:00:00.000Z");
+});
+
+test("buildAdminExtraPayableShift usa rótulo padrão EXTRA e slot noturno", () => {
+    const extra = buildAdminExtraPayableShift({
+        id: "extra-2",
+        doctorId: "doc-1",
+        doctorName: "Syone de Jesus Feitosa",
+        displayName: null,
+        operationalDate: "2026-04-14",
+        shiftLabel: "SN",
+        label: null,
+    });
+
+    assert.equal(extra.tagCode, "EXTRA");
+    // SN começa 18:00 local (21:00Z).
+    assert.equal(extra.slotStartedAt, "2026-04-14T21:00:00.000Z");
+    assert.equal(extra.slotEndedAt, "2026-04-15T09:00:00.000Z");
+});
+
+test("plantão extra entra no board, na coluna do dia e no total a pagar", () => {
+    const extra = buildAdminExtraPayableShift({
+        id: "extra-3",
+        doctorId: "doc-x",
+        doctorName: "Dra. Exemplo",
+        displayName: null,
+        operationalDate: "2026-04-15",
+        shiftLabel: "SD",
+        label: "EXTRA",
+    });
+
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-04",
+        monthLabel: "abril de 2026",
+        presetMonths: [{ key: "2026-04", label: "abril de 2026" }],
+        rangeStartIso: "2026-04-01T10:00:00.000Z",
+        rangeEndIso: "2026-05-01T10:00:00.000Z",
+        payableShifts: [extra],
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: [],
+        attestationSegments: [],
+        allDoctorNames: [],
+        doctorPaymentProfiles: { "doc-x": "generalist" },
+    });
+
+    const doctor = board.doctors.find((entry) => entry.doctorId === "doc-x");
+    assert.ok(doctor);
+    assert.equal(doctor?.total, 1);
+    assert.equal(doctor?.totalSD, 1);
+    // dia 15, tarifa dia útil de generalista.
+    assert.equal(doctor?.totalDue, 1244.87);
+    const cell = doctor?.cells.find((entry) => entry.day === "15");
+    assert.equal(cell?.shifts.length, 1);
+    assert.equal(cell?.shifts[0]?.source, "admin_extra");
 });
