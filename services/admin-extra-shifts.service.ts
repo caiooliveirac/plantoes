@@ -10,6 +10,10 @@ export interface AdminExtraShiftRow {
     operationalDate: string;
     shiftLabel: "SD" | "SN";
     label: string | null;
+    /** 'extra' (verde manual) | 'bonus' (verde do banco) | 'penalty' (vermelho). */
+    kind: string;
+    /** +1 para verdes, -1 para o vermelho (punição do banco de horas). */
+    unit: number;
     createdAt: string;
 }
 
@@ -82,6 +86,8 @@ export async function createAdminExtraShift(params: {
         operationalDate,
         shiftLabel,
         label: normalizedLabel,
+        kind: "extra",
+        unit: 1,
         createdAt: row.createdAt.toISOString(),
     };
 }
@@ -116,6 +122,8 @@ export async function loadAdminExtraShiftsForRange(
             operationalDate: adminExtraShifts.operationalDate,
             shiftLabel: adminExtraShifts.shiftLabel,
             label: adminExtraShifts.label,
+            kind: adminExtraShifts.kind,
+            unit: adminExtraShifts.unit,
             createdAt: adminExtraShifts.createdAt,
         })
         .from(adminExtraShifts)
@@ -131,6 +139,8 @@ export async function loadAdminExtraShiftsForRange(
         operationalDate: row.operationalDate,
         shiftLabel: row.shiftLabel === "SN" ? "SN" : "SD",
         label: row.label,
+        kind: row.kind,
+        unit: row.unit,
         createdAt: row.createdAt.toISOString(),
     }));
 }

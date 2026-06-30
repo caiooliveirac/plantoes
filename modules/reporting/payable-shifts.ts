@@ -109,6 +109,10 @@ export interface AdminExtraShiftInput {
     operationalDate: string;
     shiftLabel: "SD" | "SN";
     label: string | null;
+    /** 'extra' | 'bonus' | 'penalty'. Padrão 'extra' para registros antigos. */
+    kind?: string;
+    /** +1 (verde) ou -1 (vermelho, punição do banco de horas). Padrão +1. */
+    unit?: number;
 }
 
 /**
@@ -148,7 +152,9 @@ export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): Payabl
         issues: [],
         source: ADMIN_EXTRA_SHIFT_SOURCE,
         roleLabel: null,
-        paymentUnit: 1,
+        // unit -1 (penalty) faz o plantão subtrair do total a pagar — o board pinta
+        // de vermelho quando paymentUnit < 0; verdes (extra/bonus) ficam +1.
+        paymentUnit: typeof input.unit === "number" ? input.unit : 1,
         paymentTag: null,
     } satisfies PayableShift;
 }
@@ -205,7 +211,40 @@ export interface ChiefPayableDoctorRow {
     pendingCount: number;
     /** ISO de quando o admin conferiu/assinou este médico no mês; null = não atestado. */
     attestedAt: string | null;
+    /** Nº da nota fiscal informado pelo admin neste mês. */
+    invoiceNumber?: string | null;
+    /** Nº do processo de pagamento informado pelo admin neste mês. */
+    paymentProcessNumber?: string | null;
+    /** Teto do contrato em R$ (semente); null quando ainda não cadastrado. */
+    contractCeilingBrl?: number | null;
+    /** Mês inicial do contrato (YYYY-MM) a partir do qual o teto é consumido. */
+    contractSeedMonth?: string | null;
+    /** Saldo contratual calculado até este mês (teto - pagamentos acumulados). */
+    contractBalanceBrl?: number | null;
+    /** Saldo efetivo do banco de horas (bruto + acertos), em minutos. */
+    bankHoursMinutes?: number | null;
+    /** Acerto de banco de horas lançado neste mês (bônus/punição), se houver. */
+    bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
     cells: ChiefPayableCell[];
+}
+
+export interface ChiefPayableBankHoursSettlement {
+    kind: "bonus" | "penalty";
+    deltaMinutes: number;
+    operationalDate: string | null;
+    notes: string;
+    createdAt: string;
+}
+
+/** Dados financeiros por médico injetados no board pelo serviço (fora do cálculo de plantões). */
+export interface DoctorFinancialExtras {
+    invoiceNumber?: string | null;
+    paymentProcessNumber?: string | null;
+    contractCeilingBrl?: number | null;
+    contractSeedMonth?: string | null;
+    contractBalanceBrl?: number | null;
+    bankHoursMinutes?: number | null;
+    bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
 }
 
 export interface ChiefPayableBoardModel {
@@ -688,6 +727,7 @@ export function buildChiefPayableBoard(params: {
     allDoctorNames: string[];
     doctorPaymentProfiles?: Record<string, DoctorPaymentProfile>;
     doctorAttestations?: Record<string, string>;
+    doctorFinancials?: Record<string, DoctorFinancialExtras>;
 }) {
     const dayCount = new Date(params.rangeEndIso).getTime() > new Date(params.rangeStartIso).getTime()
         ? Math.round((new Date(params.rangeEndIso).getTime() - new Date(params.rangeStartIso).getTime()) / 86400000)
@@ -775,6 +815,13 @@ export function buildChiefPayableBoard(params: {
             paymentProfile,
             pendingCount,
             attestedAt: params.doctorAttestations?.[doctorId] ?? null,
+            invoiceNumber: params.doctorFinancials?.[doctorId]?.invoiceNumber ?? null,
+            paymentProcessNumber: params.doctorFinancials?.[doctorId]?.paymentProcessNumber ?? null,
+            contractCeilingBrl: params.doctorFinancials?.[doctorId]?.contractCeilingBrl ?? null,
+            contractSeedMonth: params.doctorFinancials?.[doctorId]?.contractSeedMonth ?? null,
+            contractBalanceBrl: params.doctorFinancials?.[doctorId]?.contractBalanceBrl ?? null,
+            bankHoursMinutes: params.doctorFinancials?.[doctorId]?.bankHoursMinutes ?? null,
+            bankHoursSettlement: params.doctorFinancials?.[doctorId]?.bankHoursSettlement ?? null,
             cells: days.map((day) => ({
                 day,
                 shifts: [...(dayMap.get(day) ?? [])].sort((left, right) => {

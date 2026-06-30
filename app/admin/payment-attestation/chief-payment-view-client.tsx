@@ -46,6 +46,27 @@ function formatCurrency(value: number | null | undefined) {
     return MONEY_FORMATTER.format(safeValue);
 }
 
+/** Minutos → "1 h 30" / "-45 min". Espelha formatMinutesForHumans do servidor. */
+function formatMinutesAsHours(minutes: number | null | undefined) {
+    if (minutes === null || minutes === undefined || !Number.isFinite(minutes)) {
+        return "--";
+    }
+    const sign = minutes < 0 ? "-" : "";
+    const absolute = Math.abs(minutes);
+    const hours = Math.floor(absolute / 60);
+    const remainder = absolute % 60;
+    if (hours === 0) {
+        return `${sign}${remainder} min`;
+    }
+    if (remainder === 0) {
+        return `${sign}${hours} h`;
+    }
+    return `${sign}${hours} h ${String(remainder).padStart(2, "0")}`;
+}
+
+/** Gatilho do acerto de banco de horas: ±12h em minutos. */
+const BANK_HOURS_THRESHOLD_MINUTES = 12 * 60;
+
 function paymentProfileLabel(profile: string | null | undefined) {
     if (profile === "psychiatry") {
         return "Psiquiatria";
@@ -223,6 +244,17 @@ export function ChiefPaymentViewClient({ board }: Props) {
     const [extraBusy, setExtraBusy] = useState(false);
     const [extraError, setExtraError] = useState<string | null>(null);
     const [extraFeedback, setExtraFeedback] = useState<string | null>(null);
+    // Acompanhamento financeiro do modal: nota fiscal, processo, contrato, banco.
+    const [invoiceDraft, setInvoiceDraft] = useState("");
+    const [processDraft, setProcessDraft] = useState("");
+    const [metaBusy, setMetaBusy] = useState(false);
+    const [metaError, setMetaError] = useState<string | null>(null);
+    const [metaFeedback, setMetaFeedback] = useState<string | null>(null);
+    const [contractDraft, setContractDraft] = useState("");
+    const [contractBusy, setContractBusy] = useState(false);
+    const [contractError, setContractError] = useState<string | null>(null);
+    const [bankBusy, setBankBusy] = useState(false);
+    const [bankError, setBankError] = useState<string | null>(null);
     // Limpa o formulário de plantão extra ao trocar de médico / fechar o modal.
     useEffect(() => {
         setExtraDay("");
@@ -231,6 +263,18 @@ export function ChiefPaymentViewClient({ board }: Props) {
         setExtraError(null);
         setExtraFeedback(null);
         setAttestError(null);
+        // Semeia NF/processo a partir do que já está gravado para este médico.
+        const baseDoctor = board.doctors.find((doctor) => doctor.doctorId === selectedDoctorId);
+        setInvoiceDraft(baseDoctor?.invoiceNumber ?? "");
+        setProcessDraft(baseDoctor?.paymentProcessNumber ?? "");
+        setContractDraft("");
+        setMetaError(null);
+        setMetaFeedback(null);
+        setContractError(null);
+        setBankError(null);
+        // Semeado só ao (re)abrir o modal de um médico — não a cada refresh do board,
+        // para não apagar o feedback de "salvos" nem o que o admin está digitando.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedDoctorId]);
     // Atestação: "já conferi e assinei a produtividade deste médico no mês".
     const [attestationOverrides, setAttestationOverrides] = useState<Record<string, boolean>>({});
@@ -892,6 +936,85 @@ export function ChiefPaymentViewClient({ board }: Props) {
         }
     }
 
+    async function submitPaymentMeta(doctorId: string) {
+        setMetaBusy(true);
+        setMetaError(null);
+        setMetaFeedback(null);
+        try {
+            const response = await fetch("/api/admin/payment-closing/meta", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    doctorId,
+                    monthKey: board.monthKey,
+                    invoiceNumber: invoiceDraft.trim() || null,
+                    paymentProcessNumber: processDraft.trim() || null,
+                }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível salvar a nota fiscal / processo.");
+            }
+            setMetaFeedback("Nota fiscal / processo salvos.");
+            requestRouterRefresh();
+        } catch (error) {
+            setMetaError(error instanceof Error ? error.message : "Falha ao salvar.");
+        } finally {
+            setMetaBusy(false);
+        }
+    }
+
+    async function submitContractSeed(doctorId: string) {
+        const ceiling = Number(contractDraft);
+        if (!Number.isFinite(ceiling) || ceiling <= 0) {
+            setContractError("Informe um teto de contrato em reais maior que zero.");
+            return;
+        }
+        setContractBusy(true);
+        setContractError(null);
+        try {
+            const response = await fetch("/api/admin/payment-closing/contract", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ doctorId, ceilingBrl: ceiling, seedMonth: board.monthKey }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível salvar o contrato.");
+            }
+            requestRouterRefresh();
+        } catch (error) {
+            setContractError(error instanceof Error ? error.message : "Falha ao salvar o contrato.");
+        } finally {
+            setContractBusy(false);
+        }
+    }
+
+    async function submitBankHoursSettlement(doctorId: string, kind: "bonus" | "penalty") {
+        setBankBusy(true);
+        setBankError(null);
+        try {
+            const response = await fetch("/api/admin/payment-closing/bank-hours-settlement", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ doctorId, monthKey: board.monthKey, kind }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível lançar o acerto do banco de horas.");
+            }
+            // O plantão verde/vermelho pode estar fora do filtro atual — garante visibilidade.
+            if (status === "needs_review") {
+                setStatus("all");
+            }
+            requestRouterRefresh();
+        } catch (error) {
+            setBankError(error instanceof Error ? error.message : "Falha ao lançar o acerto.");
+        } finally {
+            setBankBusy(false);
+        }
+    }
+
     function isDoctorAttested(target: { doctorId: string; attestedAt: string | null }) {
         const override = attestationOverrides[target.doctorId];
         return override !== undefined ? override : Boolean(target.attestedAt);
@@ -1522,9 +1645,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                             key={shift.payableShiftId}
                                                             type="button"
                                                             data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
-                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? "admin-extra" : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
+                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
                                                             title={shift.source === "admin_extra"
-                                                                ? `Plantão extra (admin) · ${shift.shiftLabel} · ${shift.doctorName}`
+                                                                ? `${shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.shiftLabel} · ${shift.doctorName}`
                                                                 : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
                                                             initial={{ opacity: 0, scale: 0.92 }}
                                                             animate={{ opacity: 1, scale: 1 }}
@@ -1680,6 +1803,129 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             </article>
                         </div>
 
+                        <section className="chief-payable-financials">
+                            <header>
+                                <h4>Acompanhamento financeiro</h4>
+                                <small>Nota fiscal e processo são preenchidos por você; saldo contratual e banco de horas são calculados.</small>
+                            </header>
+                            <div className="chief-payable-financials-grid">
+                                <div className="chief-payable-financials-meta">
+                                    <label>
+                                        <span>Nota fiscal</span>
+                                        <input
+                                            type="text"
+                                            value={invoiceDraft}
+                                            onChange={(event) => setInvoiceDraft(event.target.value)}
+                                            placeholder="—"
+                                            maxLength={60}
+                                            disabled={metaBusy}
+                                        />
+                                    </label>
+                                    <label>
+                                        <span>Processo de pagamento</span>
+                                        <input
+                                            type="text"
+                                            value={processDraft}
+                                            onChange={(event) => setProcessDraft(event.target.value)}
+                                            placeholder="—"
+                                            maxLength={60}
+                                            disabled={metaBusy}
+                                        />
+                                    </label>
+                                    <button
+                                        type="button"
+                                        className="payment-button"
+                                        onClick={() => void submitPaymentMeta(selectedDoctor.doctorId)}
+                                        disabled={metaBusy}
+                                    >
+                                        {metaBusy ? "Salvando..." : "Salvar NF / processo"}
+                                    </button>
+                                    {metaError ? <p className="chief-payable-extra-feedback danger">{metaError}</p> : null}
+                                    {metaFeedback ? <p className="chief-payable-extra-feedback ok">{metaFeedback}</p> : null}
+                                </div>
+
+                                <article className="chief-payable-modal-card">
+                                    <span>Saldo contratual</span>
+                                    {selectedDoctor.contractCeilingBrl == null ? (
+                                        <>
+                                            <small>Informe o teto do contrato (R$). A partir daí vira cálculo automático.</small>
+                                            <div className="chief-payable-contract-seed">
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={contractDraft}
+                                                    onChange={(event) => setContractDraft(event.target.value)}
+                                                    placeholder="ex.: 120000.00"
+                                                    disabled={contractBusy}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    className="payment-button"
+                                                    onClick={() => void submitContractSeed(selectedDoctor.doctorId)}
+                                                    disabled={contractBusy}
+                                                >
+                                                    {contractBusy ? "Salvando..." : "Definir teto"}
+                                                </button>
+                                            </div>
+                                            {contractError ? <p className="chief-payable-extra-feedback danger">{contractError}</p> : null}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <strong className={(selectedDoctor.contractBalanceBrl ?? 0) < 0 ? "negative" : ""}>
+                                                {formatCurrency(selectedDoctor.contractBalanceBrl)}
+                                            </strong>
+                                            <small>
+                                                Teto {formatCurrency(selectedDoctor.contractCeilingBrl)}
+                                                {selectedDoctor.contractSeedMonth ? ` desde ${selectedDoctor.contractSeedMonth}` : ""} · calculado
+                                            </small>
+                                        </>
+                                    )}
+                                </article>
+
+                                <article className="chief-payable-modal-card">
+                                    <span>Saldo banco de horas</span>
+                                    <strong className={(selectedDoctor.bankHoursMinutes ?? 0) < 0 ? "negative" : ""}>
+                                        {formatMinutesAsHours(selectedDoctor.bankHoursMinutes)}
+                                    </strong>
+                                    {selectedDoctor.bankHoursSettlement ? (
+                                        <small className="chief-payable-bank-note">
+                                            {selectedDoctor.bankHoursSettlement.kind === "bonus" ? "Bônus" : "Punição"} de 12h lançado neste mês
+                                            {selectedDoctor.bankHoursSettlement.operationalDate ? ` (dia ${selectedDoctor.bankHoursSettlement.operationalDate.slice(8, 10)})` : ""}.{" "}
+                                            <a href="/admin/bank-hours" target="_blank" rel="noopener">ver no banco de horas</a>
+                                        </small>
+                                    ) : (selectedDoctor.bankHoursMinutes ?? 0) >= BANK_HOURS_THRESHOLD_MINUTES ? (
+                                        <>
+                                            <small>+12h ou mais — bonifique com 1 plantão verde (dia útil) e debite 12h.</small>
+                                            <button
+                                                type="button"
+                                                className="payment-button bank-bonus"
+                                                onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
+                                                disabled={bankBusy}
+                                            >
+                                                {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde)"}
+                                            </button>
+                                        </>
+                                    ) : (selectedDoctor.bankHoursMinutes ?? 0) <= -BANK_HOURS_THRESHOLD_MINUTES ? (
+                                        <>
+                                            <small>-12h ou menos — debite 1 plantão vermelho e zere 12h.</small>
+                                            <button
+                                                type="button"
+                                                className="payment-button bank-penalty"
+                                                onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
+                                                disabled={bankBusy}
+                                            >
+                                                {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho)"}
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <small>Dentro de ±12h — sem acerto sugerido.</small>
+                                    )}
+                                    {bankError ? <p className="chief-payable-extra-feedback danger">{bankError}</p> : null}
+                                </article>
+                            </div>
+                        </section>
+
                         <section className="chief-payable-extra-form">
                             <header>
                                 <h4>Adicionar plantão extra</h4>
@@ -1800,12 +2046,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                             <strong>{dayMonth}</strong>
                                                             <small>{weekday}</small>
                                                         </span>
-                                                        <span className={`chief-payable-modal-shift-turn ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? "admin-extra" : ""}`.trim()}>
+                                                        <span className={`chief-payable-modal-shift-turn ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""}`.trim()}>
                                                             {shift.shiftLabel}
                                                         </span>
                                                         <span className="chief-payable-modal-shift-target">
                                                             {shift.source === "admin_extra" ? (shift.tagCode || "EXTRA") : shift.targetCode}
-                                                            {shift.source === "admin_extra" ? <em className="chief-payable-modal-shift-half">extra</em> : null}
+                                                            {shift.source === "admin_extra" ? <em className="chief-payable-modal-shift-half">{shift.paymentUnit < 0 ? "punição" : "extra"}</em> : null}
                                                             {shift.paymentTag ? <em className="chief-payable-modal-shift-half">{shift.paymentTag}</em> : null}
                                                         </span>
                                                         <span className={`chief-payable-modal-shift-kind ${kindClass}`}>{kindLabel}</span>

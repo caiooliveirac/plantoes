@@ -29,6 +29,7 @@ import {
     index,
     integer,
     jsonb,
+    numeric,
     pgSchema,
     primaryKey,
     serial,
@@ -301,12 +302,73 @@ export const adminExtraShifts = operationsV2.table(
         operationalDate: date("operational_date").notNull(),
         shiftLabel: varchar("shift_label", { length: 2 }).notNull(),
         label: varchar("label", { length: 40 }),
+        // 'extra' = verde manual; 'bonus' = verde gerado pelo acerto do banco de
+        // horas; 'penalty' = vermelho (unit -1, desconta um plantão do total).
+        kind: varchar("kind", { length: 10 }).notNull().default("extra"),
+        unit: integer("unit").notNull().default(1),
         createdByUserId: uuid("created_by_user_id").references(() => users.id),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
         index("admin_extra_shifts_doctor_idx").on(table.doctorId),
         index("admin_extra_shifts_date_idx").on(table.operationalDate),
+    ],
+);
+
+// Nota fiscal e nº do processo de pagamento por médico/mês — preenchidos à mão
+// pelo admin no modal do fechamento. Uma linha por (médico, mês); upsert.
+export const paymentClosingMeta = operationsV2.table(
+    "payment_closing_meta",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        monthKey: varchar("month_key", { length: 7 }).notNull(),
+        invoiceNumber: varchar("invoice_number", { length: 60 }),
+        paymentProcessNumber: varchar("payment_process_number", { length: 60 }),
+        updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("payment_closing_meta_doctor_month_idx").on(table.doctorId, table.monthKey),
+    ],
+);
+
+// Semente do contrato do médico: teto em R$ informado uma vez. A partir daí o
+// saldo contratual é cálculo (teto - pagamentos acumulados desde seed_month).
+export const doctorContracts = operationsV2.table(
+    "doctor_contracts",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        ceilingBrl: numeric("ceiling_brl", { precision: 12, scale: 2 }).notNull(),
+        seedMonth: varchar("seed_month", { length: 7 }).notNull(),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("doctor_contracts_doctor_idx").on(table.doctorId),
+    ],
+);
+
+// Acerto do banco de horas (débito/bônus de 12h) lançado no fechamento. Move o
+// saldo do médico em direção a zero (delta negativo = bônus pago; positivo =
+// punição cobrada) e fica casado ao plantão verde/vermelho gerado.
+export const bankHoursSettlements = operationsV2.table(
+    "bank_hours_settlements",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        monthKey: varchar("month_key", { length: 7 }).notNull(),
+        deltaMinutes: integer("delta_minutes").notNull(),
+        kind: varchar("kind", { length: 10 }).notNull(),
+        adminExtraShiftId: uuid("admin_extra_shift_id").references(() => adminExtraShifts.id, { onDelete: "set null" }),
+        notes: text("notes").notNull(),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index("bank_hours_settlements_doctor_idx").on(table.doctorId, table.monthKey),
     ],
 );
 
