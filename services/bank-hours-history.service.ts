@@ -7,6 +7,10 @@ import {
     type RawBankHoursHistoryShift,
 } from "@/modules/reporting/bank-hours-history";
 import type { MonthlyReportAuditEntry, MonthlyReportSource } from "@/modules/reporting/monthly-report";
+import {
+    loadAllBankHoursSettlements,
+    loadBankHoursSettlementDeltaByDoctor,
+} from "@/services/bank-hours-settlements.service";
 
 function mapRow(row: Record<string, unknown>): RawBankHoursHistoryShift {
     return {
@@ -236,7 +240,10 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
     `);
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
-    const auditTrailByOccupancy = await loadAuditTrailByOccupancy(rows);
+    const [auditTrailByOccupancy, settlementsByDoctor] = await Promise.all([
+        loadAuditTrailByOccupancy(rows),
+        loadAllBankHoursSettlements(),
+    ]);
     const manualOverridesByGroup = await loadManualBalanceOverrides(rows.map((row) => row.continuityGroupId));
     const enrichedRows = rows.map((row) => ({
         ...row,
@@ -247,5 +254,30 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
         auditTrail: auditTrailByOccupancy.get(`${row.domain === "regulation" ? "regulation_occupancy" : "intervention_occupancy"}:${row.occupancyId}`) ?? [],
     }));
 
-    return buildBankHoursHistoryModel(enrichedRows);
+    return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor);
+}
+
+/**
+ * Saldo EFETIVO do banco de horas por médico, em minutos. É a fonte única usada
+ * pelo modal do payment-closing para decidir o gatilho de ±12h. O saldo do
+ * histórico JÁ inclui os acertos (buildBankHoursHistoryModel os soma), então aqui
+ * apenas reusamos esse número — sem dobrar a contagem.
+ */
+export async function getDoctorBankHoursEffectiveBalances(): Promise<Map<string, number>> {
+    const [history, settlementDelta] = await Promise.all([
+        getBankHoursHistory(),
+        loadBankHoursSettlementDeltaByDoctor(),
+    ]);
+
+    const balances = new Map<string, number>();
+    for (const doctor of history.doctors) {
+        balances.set(doctor.doctorId, doctor.balanceMinutes);
+    }
+    // Médicos que só têm acerto (sem histórico de plantão) ainda precisam aparecer.
+    for (const [doctorId, delta] of settlementDelta) {
+        if (!balances.has(doctorId)) {
+            balances.set(doctorId, delta);
+        }
+    }
+    return balances;
 }

@@ -4769,6 +4769,14 @@ button.chief-payable-tag:focus-visible {
     box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.3);
 }
 
+/* Plantão vermelho: punição do banco de horas (unit -1, subtrai do total). */
+.chief-payable-tag.admin-penalty {
+    background: rgba(211, 100, 100, 0.22);
+    border-color: rgba(211, 100, 100, 0.6);
+    color: #ffd2d2;
+    box-shadow: inset 0 0 0 1px rgba(211, 100, 100, 0.35);
+}
+
 @keyframes chief-payable-flash-pulse {
     0%   { box-shadow: 0 0 0 0 rgba(80, 220, 140, 0.85), 0 0 0 0 rgba(80, 220, 140, 0.55); transform: scale(1); }
     35%  { box-shadow: 0 0 0 6px rgba(80, 220, 140, 0.35), 0 0 24px 6px rgba(80, 220, 140, 0.45); transform: scale(1.18); }
@@ -5150,6 +5158,164 @@ button.chief-payable-tag:focus-visible {
 .chief-payable-modal-shift-turn.admin-extra {
     background: rgba(52, 211, 153, 0.2);
     color: #8ff0c8;
+}
+
+.chief-payable-modal-shift-turn.admin-penalty {
+    background: rgba(211, 100, 100, 0.2);
+    color: #ffb3b3;
+}
+
+/* Bloco de acompanhamento financeiro do modal (NF, processo, contrato, banco). */
+.chief-payable-financials {
+    margin-top: 16px;
+    padding: 14px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.chief-payable-financials header h4 {
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+.chief-payable-financials header small {
+    display: block;
+    margin-top: 2px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.chief-payable-financials-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.chief-payable-financials-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chief-payable-financials-meta label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.78rem;
+}
+
+.chief-payable-financials-meta label span {
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.chief-payable-financials-meta input,
+.chief-payable-contract-seed input {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    padding: 6px 8px;
+    color: inherit;
+    font-size: 0.85rem;
+}
+
+.chief-payable-contract-seed {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 6px;
+}
+
+.chief-payable-contract-seed input {
+    flex: 1;
+    min-width: 0;
+}
+
+.chief-payable-modal-card strong.negative {
+    color: #ff9b9b;
+}
+
+.chief-payable-bank-note {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.chief-payable-bank-note a {
+    color: #8ab4ff;
+}
+
+.payment-button.bank-bonus {
+    margin-top: 8px;
+    border-color: rgba(52, 211, 153, 0.55);
+    color: #c7f9e3;
+    background: rgba(52, 211, 153, 0.16);
+}
+
+.payment-button.bank-penalty {
+    margin-top: 8px;
+    border-color: rgba(211, 100, 100, 0.6);
+    color: #ffd2d2;
+    background: rgba(211, 100, 100, 0.16);
+}
+
+/* Acertos do banco de horas, na página de banco de horas. */
+.hours-settlements {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.hours-settlements-list {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.hours-settlement-row {
+    display: grid;
+    grid-template-columns: auto auto auto 1fr;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+}
+
+.hours-settlement-row.bonus {
+    background: rgba(52, 211, 153, 0.12);
+}
+
+.hours-settlement-row.penalty {
+    background: rgba(211, 100, 100, 0.12);
+}
+
+.hours-settlement-tag {
+    font-weight: 700;
+}
+
+.hours-settlement-row.bonus .hours-settlement-tag {
+    color: #8ff0c8;
+}
+
+.hours-settlement-row.penalty .hours-settlement-tag {
+    color: #ffb3b3;
+}
+
+.hours-settlement-notes {
+    color: rgba(255, 255, 255, 0.6);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hours-settlement-hint {
+    margin: 8px 0 0;
+    font-size: 0.78rem;
+    color: rgba(255, 255, 255, 0.55);
 }
 
 .chief-payable-modal-shift-target {

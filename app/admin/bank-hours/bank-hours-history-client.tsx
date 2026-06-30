@@ -376,6 +376,34 @@ export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
                                 </article>
                             </section>
 
+                            {selectedDoctor.settlements.length > 0 ? (
+                                <section className="hours-settlements">
+                                    <p className="reports-summary-label">Acertos lançados no fechamento</p>
+                                    <ul className="hours-settlements-list">
+                                        {selectedDoctor.settlements.map((settlement) => (
+                                            <li
+                                                key={settlement.id}
+                                                className={`hours-settlement-row ${settlement.kind === "bonus" ? "bonus" : "penalty"}`}
+                                            >
+                                                <span className="hours-settlement-tag">
+                                                    {settlement.kind === "bonus" ? "Bônus" : "Punição"}
+                                                </span>
+                                                <span className="hours-settlement-month">{settlement.monthKey}</span>
+                                                <span className="hours-settlement-delta">
+                                                    {settlement.deltaMinutes > 0 ? "+" : ""}
+                                                    {formatMinutesForHumans(settlement.deltaMinutes)}
+                                                </span>
+                                                <span className="hours-settlement-notes">{settlement.notes}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    <p className="hours-settlement-hint">
+                                        Cada acerto move o saldo 12h em direção a zero e gera um plantão {""}
+                                        <strong>verde</strong> (bônus) ou <strong>vermelho</strong> (punição) no fechamento daquele mês.
+                                    </p>
+                                </section>
+                            ) : null}
+
                             <section className="hours-doctor-summary-strip">
                                 <article className="hours-mini-note">
                                     <span className="hours-proof-label">Saldo executivo</span>

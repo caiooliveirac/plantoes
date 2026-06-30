@@ -90,6 +90,18 @@ export interface BankHoursDoctorHistory {
     openShiftCount: number;
     lastShiftAt: string | null;
     shifts: BankHoursHistoryShift[];
+    /** Acertos (bônus/punição) lançados no fechamento; já somados em balanceMinutes. */
+    settlements: BankHoursSettlementSummary[];
+}
+
+export interface BankHoursSettlementSummary {
+    id: string;
+    monthKey: string;
+    kind: "bonus" | "penalty";
+    deltaMinutes: number;
+    operationalDate: string | null;
+    notes: string;
+    createdAt: string;
 }
 
 export interface BankHoursHistoryModel {
@@ -440,7 +452,10 @@ function compareDoctors(left: BankHoursDoctorHistory, right: BankHoursDoctorHist
     return left.doctorName.localeCompare(right.doctorName, "pt-BR");
 }
 
-export function buildBankHoursHistoryModel(shifts: RawBankHoursHistoryShift[]): BankHoursHistoryModel {
+export function buildBankHoursHistoryModel(
+    shifts: RawBankHoursHistoryShift[],
+    settlementsByDoctor: Map<string, BankHoursSettlementSummary[]> = new Map(),
+): BankHoursHistoryModel {
     const normalizedShifts: BankHoursHistoryShift[] = collapseContinuityHistoryShifts(shifts)
         .map((shift) => {
             const countedStartAt = resolveCountedStartAt(shift);
@@ -496,6 +511,7 @@ export function buildBankHoursHistoryModel(shifts: RawBankHoursHistoryShift[]): 
                 openShiftCount: shift.flags.hasOpenShift ? 1 : 0,
                 lastShiftAt: shift.startedAt,
                 shifts: [shift],
+                settlements: [],
             });
             continue;
         }
@@ -515,6 +531,19 @@ export function buildBankHoursHistoryModel(shifts: RawBankHoursHistoryShift[]): 
         current.shifts.push(shift);
     }
 
+    // Dobra os acertos do fechamento no saldo do médico: o saldo da página passa a
+    // ser o EFETIVO (bruto + acertos), igual ao que o modal do payment-closing usa.
+    let settlementTotalMinutes = 0;
+    for (const doctor of doctorsMap.values()) {
+        const entries = (settlementsByDoctor.get(doctor.doctorId) ?? [])
+            .slice()
+            .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+        doctor.settlements = entries;
+        const delta = entries.reduce((sum, entry) => sum + entry.deltaMinutes, 0);
+        doctor.balanceMinutes += delta;
+        settlementTotalMinutes += delta;
+    }
+
     const doctors = Array.from(doctorsMap.values()).sort(compareDoctors);
 
     return {
@@ -523,7 +552,7 @@ export function buildBankHoursHistoryModel(shifts: RawBankHoursHistoryShift[]): 
             doctorCount: doctors.length,
             shiftCount: normalizedShifts.length,
             workedMinutes: normalizedShifts.reduce((total, shift) => total + (shift.workedMinutes ?? 0), 0),
-            balanceMinutes: normalizedShifts.reduce((total, shift) => total + (shift.balanceMinutes ?? 0), 0),
+            balanceMinutes: normalizedShifts.reduce((total, shift) => total + (shift.balanceMinutes ?? 0), 0) + settlementTotalMinutes,
             lateArrivalCount: normalizedShifts.filter((shift) => shift.flags.hasLateArrival).length,
             handoffOverrideCount: normalizedShifts.filter((shift) => shift.flags.hasHandoffOverride).length,
             correctionCount: normalizedShifts.filter((shift) => shift.flags.hasCorrectionHistory).length,
