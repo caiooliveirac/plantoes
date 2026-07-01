@@ -4941,6 +4941,10 @@ button.chief-payable-tag:focus-visible {
 
 .chief-payable-modal {
     width: min(680px, calc(100vw - 24px));
+    max-height: min(90vh, 900px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     border-radius: 18px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: linear-gradient(180deg, rgba(8, 16, 30, 0.98), rgba(6, 12, 22, 0.98));
@@ -4953,6 +4957,15 @@ button.chief-payable-tag:focus-visible {
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
+    /* Fica fixo no topo enquanto o corpo rola — "Fechar" sempre acessível. */
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    margin: -16px -16px 4px;
+    padding: 16px 16px 10px;
+    background: rgba(8, 16, 30, 0.98);
+    border-radius: 18px 18px 0 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .chief-payable-modal-header h3 {
@@ -4964,6 +4977,13 @@ button.chief-payable-tag:focus-visible {
     margin: 0;
     color: var(--muted-strong);
     font-size: 0.84rem;
+}
+
+.chief-payable-modal-header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
 }
 
 .chief-payable-modal-grid {
@@ -5386,6 +5406,27 @@ button.chief-payable-tag:focus-visible {
     .chief-payable-modal-shift-kind { grid-area: kind; justify-self: end; }
     .chief-payable-modal-shift-rate { grid-area: rate; text-align: left; }
     .chief-payable-modal-shift-value { grid-area: value; }
+
+    .chief-payable-modal {
+        width: calc(100vw - 16px);
+        max-height: 92vh;
+        padding: 12px;
+    }
+
+    .chief-payable-modal-header {
+        flex-wrap: wrap;
+        margin: -12px -12px 4px;
+        padding: 12px 12px 8px;
+    }
+
+    .chief-payable-modal-header-actions {
+        flex-wrap: wrap;
+    }
+
+    .chief-payable-modal-grid,
+    .chief-payable-financials-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 @media (max-width: 1180px) {

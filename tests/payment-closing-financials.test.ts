@@ -59,6 +59,16 @@ test("plantão vermelho (unit -1) subtrai do total; verde + vermelho no mesmo di
     assert.equal(both.totalDue, 0, "verde + vermelho no mesmo dia zeram o total");
 });
 
+test("meio plantão conta 0,5 na casinha (dia útil ou fim de semana), não 1", () => {
+    const half = buildAdminExtraPayableShift(makeExtraInput({ id: "h", unit: 0.5 }));
+    const doctor = buildBoardWith([half]).doctors[0];
+    assert.equal(
+        (doctor.weekdayShiftCount ?? 0) + (doctor.weekendShiftCount ?? 0),
+        0.5,
+        "meio plantão deve somar 0,5 na contagem, não 1",
+    );
+});
+
 function makeBankShift(overrides: Partial<RawBankHoursHistoryShift> = {}): RawBankHoursHistoryShift {
     return {
         occupancyId: "occ-1",

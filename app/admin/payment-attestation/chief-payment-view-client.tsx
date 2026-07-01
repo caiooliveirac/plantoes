@@ -513,8 +513,15 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 const totalDue = Number(visibleShifts
                     .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
                     .toFixed(2));
-                const weekdayShiftCount = visibleShifts.filter((shift) => !isWeekendDate(shift.operationalDate)).length;
-                const weekendShiftCount = visibleShifts.length - weekdayShiftCount;
+                // Conta em UNIDADES de plantão: meio plantão vale 0,5 (não 1).
+                const weekdayShiftCount = Number(visibleShifts
+                    .filter((shift) => !isWeekendDate(shift.operationalDate))
+                    .reduce((sum, shift) => sum + shift.paymentUnit, 0)
+                    .toFixed(2));
+                const weekendShiftCount = Number(visibleShifts
+                    .filter((shift) => isWeekendDate(shift.operationalDate))
+                    .reduce((sum, shift) => sum + shift.paymentUnit, 0)
+                    .toFixed(2));
                 const weekdayDue = Number(visibleShifts
                     .filter((shift) => !isWeekendDate(shift.operationalDate))
                     .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
@@ -1675,8 +1682,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                             </td>
                                         ))}
 
-                                        <td>{doctor.weekdayShiftCount}</td>
-                                        <td>{doctor.weekendShiftCount}</td>
+                                        <td>{formatUnits(doctor.weekdayShiftCount)}</td>
+                                        <td>{formatUnits(doctor.weekendShiftCount)}</td>
                                         <td>{formatUnits(doctor.total)}</td>
                                         <td>{formatCurrency(doctor.weekdayDue)}</td>
                                         <td>{formatCurrency(doctor.weekendDue)}</td>
@@ -1784,14 +1791,14 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         <div className="chief-payable-modal-grid">
                             <article className="chief-payable-modal-card">
                                 <span>Plantões dia útil</span>
-                                <strong>{selectedDoctor.weekdayShiftCount}</strong>
+                                <strong>{formatUnits(selectedDoctor.weekdayShiftCount)}</strong>
                                 <small>
                                     Tarifa: {formatCurrency(PROFILE_RATES[(selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile].weekday)} · Total: {formatCurrency(selectedDoctor.weekdayDue)}
                                 </small>
                             </article>
                             <article className="chief-payable-modal-card">
                                 <span>Plantões fim de semana / feriado</span>
-                                <strong>{selectedDoctor.weekendShiftCount}</strong>
+                                <strong>{formatUnits(selectedDoctor.weekendShiftCount)}</strong>
                                 <small>
                                     Tarifa: {formatCurrency(PROFILE_RATES[(selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile].weekend)} · Total: {formatCurrency(selectedDoctor.weekendDue)}
                                 </small>

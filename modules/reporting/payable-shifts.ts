@@ -794,8 +794,15 @@ export function buildChiefPayableBoard(params: {
                 operationalDate: shift.operationalDate,
                 paymentUnit: shift.paymentUnit,
             }), 0);
-        const weekdayShiftCount = orderedShifts.filter((shift) => !isWeekendOperationalDate(shift.operationalDate)).length;
-        const weekendShiftCount = orderedShifts.length - weekdayShiftCount;
+        // Unidades de plantão (meio plantão = 0,5), não contagem de linhas.
+        const weekdayShiftCount = Number(orderedShifts
+            .filter((shift) => !isWeekendOperationalDate(shift.operationalDate))
+            .reduce((sum, shift) => sum + shift.paymentUnit, 0)
+            .toFixed(2));
+        const weekendShiftCount = Number(orderedShifts
+            .filter((shift) => isWeekendOperationalDate(shift.operationalDate))
+            .reduce((sum, shift) => sum + shift.paymentUnit, 0)
+            .toFixed(2));
         const pendingCount = orderedShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
         const paymentStatus = pendingCount > 0 ? "needs_review" : "ready_for_payment";
 
