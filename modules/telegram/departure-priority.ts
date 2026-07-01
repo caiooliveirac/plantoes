@@ -231,6 +231,11 @@ function buildDeparturePriorityCandidates(params: {
             defaultRole: row.defaultRole,
         });
         const rowStartedAt = row.startedAt;
+        // Ancora de prioridade: para continuacoes cross-domain (ex.: SD na intervencao,
+        // SN na regulacao), boardStartedAt guarda a chegada historica real, enquanto
+        // startedAt pode refletir so o evento desta ocupacao especifica. Mesma leitura
+        // que meal-breaks.ts:948 ja usa pra prioridade de refeicao.
+        const priorityAnchorStartedAt = row.boardStartedAt ?? row.startedAt;
         const pushContinuation = () => excludedContinuations.push({
             targetCode: row.postCode,
             name: formatDoctorSurfaceName({
@@ -254,7 +259,7 @@ function buildDeparturePriorityCandidates(params: {
         } else if (row.shiftLabel === "P") {
             // P iniciado dentro do plantão atual → continua para o próximo (excluir do ranking).
             // P iniciado num plantão anterior → está terminando agora; trata como saída regular.
-            const startedDuringCurrentShift = !isBeforeCurrentOperationalShift(row.startedAt, params.referenceAt);
+            const startedDuringCurrentShift = !isBeforeCurrentOperationalShift(priorityAnchorStartedAt, params.referenceAt);
             if (startedDuringCurrentShift) {
                 pushContinuation();
                 continue;
@@ -285,12 +290,12 @@ function buildDeparturePriorityCandidates(params: {
         }
 
         // Chegou há pouco: sem 4h de plantão acumuladas, não entra no ranking de saída.
-        const tenureMs = params.referenceAt.getTime() - new Date(row.startedAt).getTime();
+        const tenureMs = params.referenceAt.getTime() - new Date(priorityAnchorStartedAt).getTime();
         if (tenureMs < MINIMUM_DEPARTURE_PRIORITY_MS) {
             continue;
         }
 
-        const priorityStartedAt = new Date(resolvePriorityStartedAt(row.startedAt, roleLabel, thresholdAtMs)).toISOString();
+        const priorityStartedAt = new Date(resolvePriorityStartedAt(priorityAnchorStartedAt, roleLabel, thresholdAtMs)).toISOString();
 
         candidates.push({
             domain: "regulation",

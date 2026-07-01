@@ -18,6 +18,7 @@
         "telegram:continuity:repair": "tsx scripts/repair-telegram-continuity.ts",
         "telegram:review-inputs": "tsx scripts/list-telegram-review-inputs.ts",
         "telegram:suggestions": "tsx scripts/list-telegram-command-suggestions.ts",
+        "audit:payment-gap": "tsx scripts/audit-doctor-payment-gap.ts",
         "db:migrate": "tsx scripts/apply-migrations.ts",
         "db:import-doctors": "tsx scripts/import-doctors.ts",
         "telegram:worker": "node --import tsx scripts/telegram-reminder-worker.ts",

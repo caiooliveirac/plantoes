@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { OperationalHistoryPanel } from "@/components/operational-history-panel";
 import { InterventionLateArrivalPanel } from "@/components/intervention-late-arrival-panel";
 import { buildOperationalRoleChoices, describeFixedRoleTransferImpact, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
-import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
+import { compareRootBoardRegulationCodes, isExistingContinuityRecord, isNucleoRegulationPost, isPiamRegulationPost, resolveOperationalArrival, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
     MealBreakDinnerDuration,
     MealBreakDinnerSlot,
@@ -556,13 +556,6 @@ function minutesSince(referenceIso: string, value: string | null) {
     return Math.max(0, Math.floor(diffMs / 60000));
 }
 
-/** Operational arrival for display and priority: boardStartedAt reflects the true
- *  arrival when a doctor continues across shifts (SD→SN, P→SN). Falls back to
- *  startedAt for occupancies without a separate board anchor. */
-function resolveOperationalArrival(card: BoardCard): string | null {
-    return card.boardStartedAt ?? card.startedAt;
-}
-
 function formatMinutesLabel(minutes: number | null) {
     if (minutes === null) {
         return "Sem marcação";
@@ -750,7 +743,10 @@ function priorityCopy(card: BoardCard, generatedAt: string) {
 function buildInitialForm(card: BoardCard) {
     return {
         doctorId: card.doctorId ?? "",
-        startedAt: toLocalDateTimeValue(card.startedAt),
+        // Mesmo valor exibido no card (resolveOperationalArrival): para registros de
+        // continuidade cross-domain isso e boardStartedAt, nao o startedAt bruto — senao
+        // o formulario abre com um horario diferente do que o chefe ve no quadro.
+        startedAt: toLocalDateTimeValue(resolveOperationalArrival(card)),
         endedAt: toLocalDateTimeValue(),
         roleLabel: resolveCardFixedRole(card) ?? card.roleLabel ?? "",
         shiftOverride: "",
@@ -1963,14 +1959,22 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             : {}),
                     };
                 } else {
+                    // O campo edita o mesmo valor exibido no card (resolveOperationalArrival).
+                    // Para um registro de continuidade cross-domain, isso e boardStartedAt (a
+                    // ancora que o painel/prioridade de almoco/saida realmente leem) — startedAt
+                    // (ancora do motor de pagamento) fica intocado por padrao, senao a correcao
+                    // corrompe silenciosamente o pagamento sem sequer mudar o que o chefe ve
+                    // (caso Ana Beatriz, ramal 1364, 20/06/2026).
+                    const previousArrival = resolveOperationalArrival(selectedCard);
                     const nextStartedAtIso = toIsoDateTime(formState.startedAt);
-                    const startedAtChanged = Boolean(
-                        selectedCard.startedAt
-                        && nextStartedAtIso !== new Date(selectedCard.startedAt).toISOString(),
+                    const arrivalChanged = Boolean(
+                        previousArrival
+                        && nextStartedAtIso !== new Date(previousArrival).toISOString(),
                     );
-                    if (startedAtChanged && !normalizedNotes) {
+                    if (arrivalChanged && !normalizedNotes) {
                         throw new Error("Digite o motivo antes de corrigir horario.");
                     }
+                    const isContinuityRecord = isExistingContinuityRecord(selectedCard);
 
                     endpoint = selectedCard.domain === "regulation"
                         ? `/api/regulation/occupancies/${selectedCard.occupancyId}`
@@ -1978,10 +1982,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     method = "PATCH";
                     payload = {
                         doctorId: formState.doctorId || undefined,
-                        startedAt: nextStartedAtIso,
-                        boardStartedAt: startedAtChanged
-                            ? nextStartedAtIso
-                            : (selectedCard.boardStartedAt ? new Date(selectedCard.boardStartedAt).toISOString() : nextStartedAtIso),
+                        ...(isContinuityRecord
+                            ? { boardStartedAt: nextStartedAtIso }
+                            : { startedAt: nextStartedAtIso, boardStartedAt: nextStartedAtIso }),
                         roleLabel: resolveRoleLabelForExplicitRemoval(trimToNull(formState.roleLabel)),
                         notes: normalizedNotes,
                     };
@@ -4024,7 +4027,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                     )}
 
                                                     <label className="chief-field">
-                                                        <span>{isContinuityEntry ? "Horário de início neste posto" : actionMode === "start" ? "Horario de abertura" : "Horario corrigido"}</span>
+                                                        <span>
+                                                            {isContinuityEntry
+                                                                ? "Horário de início neste posto"
+                                                                : actionMode === "correct" && !isTransferAction && selectedCard && isExistingContinuityRecord(selectedCard)
+                                                                    ? "Horário exibido no quadro (chegada / prioridade)"
+                                                                    : actionMode === "start" ? "Horario de abertura" : "Horario corrigido"}
+                                                        </span>
                                                         <input
                                                             type="datetime-local"
                                                             className="chief-input"
@@ -4037,6 +4046,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                         )}
                                                         {isTransferAction && (
                                                             <small className="chief-field-hint">O novo registro nasce com o horario de chegada ja consolidado neste plantao.</small>
+                                                        )}
+                                                        {actionMode === "correct" && !isTransferAction && selectedCard && isExistingContinuityRecord(selectedCard) && (
+                                                            <small className="chief-field-hint">
+                                                                Este plantonista continua de outra função/posto. Isto corrige o horário exibido aqui e usado
+                                                                para prioridade de almoço e saída — o horário de pagamento deste segmento não é alterado.
+                                                            </small>
                                                         )}
                                                     </label>
 

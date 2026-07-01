@@ -3759,6 +3759,44 @@ function describePaymentAllocationOutcome(row: PaymentAllocationRow | null) {
     return `o alvo ainda precisa revisao: ${summarizePaymentAllocationIssues(row.issues)}`;
 }
 
+// Registro de continuidade (boardStartedAt != startedAt): boardStartedAt e a ancora
+// historica que o painel/prioridade de almoco e saida realmente leem (meal-breaks.ts:948,
+// departure-priority.ts); startedAt e a ancora que o motor de pagamento usa pra fechar o
+// slot SD/SN (board.service.ts resolveLogicalAnchorAt). Quando o chefe roda /corrigir num
+// registro assim, a intencao quase sempre e consertar o horario EXIBIDO (boardStartedAt) —
+// nao o horario de pagamento. Corrigir startedAt aqui corrompia silenciosamente o pagamento
+// sem sequer mudar o que aparece no painel (caso Ana Beatriz, ramal 1364, 20/06/2026).
+// Extraida pura para teste; o hasOwn em correctRegulationOccupancy/correctInterventionOccupancy
+// preserva o campo omitido do resultado.
+export function resolveTelegramCorrigirCorrectionBase(params: {
+    doctorId: string;
+    eventAt: Date;
+    notes: string;
+    existingBoardStartedAt: Date | null;
+    existingStartedAt: Date | null;
+}) {
+    const isContinuityRecord = Boolean(
+        params.existingBoardStartedAt
+        && params.existingStartedAt
+        && params.existingBoardStartedAt.getTime() !== params.existingStartedAt.getTime(),
+    );
+
+    if (isContinuityRecord) {
+        return {
+            doctorId: params.doctorId,
+            boardStartedAt: params.eventAt,
+            notes: params.notes,
+        };
+    }
+
+    return {
+        doctorId: params.doctorId,
+        startedAt: params.eventAt,
+        boardStartedAt: params.eventAt,
+        notes: params.notes,
+    };
+}
+
 async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     const message = update.message;
     if (!message?.text) {
@@ -5907,21 +5945,14 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         try {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), command.time);
 
-            // Preserve boardStartedAt when it differs from startedAt (continuity record).
-            // The hasOwn check in correctRegulationOccupancy / correctInterventionOccupancy
-            // keeps the existing value when boardStartedAt is omitted from input.
-            const existingBoardStartedAt = active.occupancy!.boardStartedAt;
-            const existingStartedAt = active.occupancy!.startedAt;
-            const isContinuityRecord = existingBoardStartedAt
-                && existingStartedAt
-                && existingBoardStartedAt.getTime() !== existingStartedAt.getTime();
-
-            const correctionBase = {
+            const correctionNotes = `${active.occupancy!.notes ?? ""}\n[telegram /corrigir] ${message.text}`.trim();
+            const correctionBase = resolveTelegramCorrigirCorrectionBase({
                 doctorId: doctor.id,
-                startedAt: eventAt,
-                notes: `${active.occupancy!.notes ?? ""}\n[telegram /corrigir] ${message.text}`.trim(),
-                ...(isContinuityRecord ? {} : { boardStartedAt: eventAt }),
-            };
+                eventAt,
+                notes: correctionNotes,
+                existingBoardStartedAt: active.occupancy!.boardStartedAt,
+                existingStartedAt: active.occupancy!.startedAt,
+            });
 
             const updated = command.sector === "REGULATION"
                 ? await correctRegulationOccupancy(active.occupancy!.id, correctionBase, resolveCommandAuditUserId(null))

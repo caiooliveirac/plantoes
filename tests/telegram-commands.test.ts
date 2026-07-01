@@ -66,6 +66,7 @@ import {
     buildTakeoverWarningReply,
     buildTakeoverDisplacedAnnouncement,
     parseTakeoverConfirmShortcut,
+    resolveTelegramCorrigirCorrectionBase,
 } from "@/modules/telegram/service";
 import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
 
@@ -785,6 +786,40 @@ test("getCurrentDeparturePriorityView exclui quem chegou ha menos de 4h e os pos
     assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035"]);
 });
 
+test("getCurrentDeparturePriorityView usa boardStartedAt (ancora historica) e nao startedAt bruto pra tenure/ranking em continuacao cross-domain", async () => {
+    // Caso Ana Beatriz (ramal 1364, 20/06/2026): medica fez SD numa base de intervencao e
+    // continuou o SN num ramal de regulacao diferente. startedAt reflete o evento REAL desta
+    // ocupacao (chegada recente no novo posto), boardStartedAt guarda a chegada historica real
+    // (usada pelo painel e por meal-breaks.ts:948). Prioridade de saida deve seguir boardStartedAt,
+    // senao ela some da lista por "menos de 4h" mesmo tendo continuidade real ha muito mais tempo.
+    const view = await getCurrentDeparturePriorityView({
+        referenceAt: new Date("2026-03-30T15:00:00-03:00"),
+        board: {
+            generatedAt: "2026-03-30T18:00:00.000Z",
+            intervention: [makeInterventionPriorityRow()],
+            regulation: [
+                makeRegulationPriorityRow({
+                    postCode: "1364",
+                    postLabel: "1364",
+                    doctorName: "Elis Continuidade",
+                    displayName: "Elis",
+                    startedAt: "2026-03-30T17:30:00.000Z", // evento recente nesta ocupacao (30min atras)
+                    boardStartedAt: "2026-03-30T08:00:00.000Z", // ancora real: turno anterior, 10h atras
+                    shiftLabel: "P",
+                    roleLabel: null,
+                    ramalLabel: "1364",
+                }),
+            ],
+        },
+        mealBreakSession: { recipRamal: null },
+    });
+
+    assert.equal(view.shiftLabel, "SD");
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["1364"]);
+    assert.deepEqual(view.excludedContinuations, []);
+    assert.equal(view.entries[0]?.priorityStartedAt, new Date("2026-03-30T08:00:00.000Z").toISOString());
+});
+
 test("getCurrentDeparturePriorityView no SN filtra por turma 23:00 antes de 03:00 e por 03:00 depois", async () => {
     const board = {
         generatedAt: "2026-03-31T04:40:00.000Z",
@@ -909,7 +944,10 @@ test("getCurrentDeparturePriorityView na janela 16-21h lista saida das 19h (SD +
     assert.equal(view.shiftLabel, "SD");
     assert.equal(view.departureBoundary, "19h");
     // SD e P invertido saem 19h → rankeados. Emily (P normal) sai 07h → continuacao. Caroline (SN) fora.
-    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035", "2036"]);
+    // Bruno (P invertido) tem boardStartedAt de 19h do dia anterior — ~23h de plantao real ate aqui,
+    // bem mais que a Ana (~11h) — entao sai primeiro (prioridade por tempo real de plantao, nao pelo
+    // startedAt bruto desta ocupacao especifica).
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2036", "2035"]);
     assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
 
     const reply = buildDeparturePriorityReply(view);
@@ -979,7 +1017,10 @@ test("getCurrentDeparturePriorityView na janela 02-09h lista saida das 07h (SN +
     assert.equal(view.shiftLabel, "SN");
     assert.equal(view.departureBoundary, "07h");
     // SN e P normal saem 07h → rankeados. Carla (P invertido) sai 19h → continuacao. Diego (SD) fora.
-    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035", "2036"]);
+    // Bruno (P normal) tem boardStartedAt de 07h do dia anterior — ~21h de plantao real ate aqui,
+    // bem mais que a Ana (~9h) — entao sai primeiro (prioridade por tempo real de plantao, nao pelo
+    // startedAt bruto desta ocupacao especifica).
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2036", "2035"]);
     assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
 
     const reply = buildDeparturePriorityReply(view);
@@ -3547,4 +3588,58 @@ test("buildForcedTakeoverHint retorna string vazia para string vazia de nome", (
     });
 
     assert.equal(hint, "", "nome vazio também não deve gerar hint");
+});
+
+test("resolveTelegramCorrigirCorrectionBase corrige boardStartedAt (nao startedAt) num registro de continuidade", () => {
+    // Caso Ana Beatriz (ramal 1364, 20/06/2026): boardStartedAt ja diverge de startedAt
+    // (continuacao cross-domain). O chefe roda /corrigir pra consertar o horario que ve no
+    // painel — isso deve mexer em boardStartedAt, preservando startedAt (ancora de pagamento).
+    const base = resolveTelegramCorrigirCorrectionBase({
+        doctorId: "doc-1",
+        eventAt: new Date("2026-06-20T22:36:00.000Z"),
+        notes: "nota",
+        existingBoardStartedAt: new Date("2026-06-20T10:10:00.000Z"),
+        existingStartedAt: new Date("2026-06-20T22:29:13.000Z"),
+    });
+
+    assert.deepEqual(base, {
+        doctorId: "doc-1",
+        boardStartedAt: new Date("2026-06-20T22:36:00.000Z"),
+        notes: "nota",
+    });
+    assert.ok(!("startedAt" in base), "startedAt nao deve ser tocado num registro de continuidade");
+});
+
+test("resolveTelegramCorrigirCorrectionBase corrige startedAt e boardStartedAt juntos fora de continuidade", () => {
+    const base = resolveTelegramCorrigirCorrectionBase({
+        doctorId: "doc-1",
+        eventAt: new Date("2026-06-20T10:05:00.000Z"),
+        notes: "nota",
+        existingBoardStartedAt: new Date("2026-06-20T10:00:00.000Z"),
+        existingStartedAt: new Date("2026-06-20T10:00:00.000Z"),
+    });
+
+    assert.deepEqual(base, {
+        doctorId: "doc-1",
+        startedAt: new Date("2026-06-20T10:05:00.000Z"),
+        boardStartedAt: new Date("2026-06-20T10:05:00.000Z"),
+        notes: "nota",
+    });
+});
+
+test("resolveTelegramCorrigirCorrectionBase trata ocupacao sem boardStartedAt como nao-continuidade", () => {
+    const base = resolveTelegramCorrigirCorrectionBase({
+        doctorId: "doc-1",
+        eventAt: new Date("2026-06-20T10:05:00.000Z"),
+        notes: "nota",
+        existingBoardStartedAt: null,
+        existingStartedAt: new Date("2026-06-20T10:00:00.000Z"),
+    });
+
+    assert.deepEqual(base, {
+        doctorId: "doc-1",
+        startedAt: new Date("2026-06-20T10:05:00.000Z"),
+        boardStartedAt: new Date("2026-06-20T10:05:00.000Z"),
+        notes: "nota",
+    });
 });

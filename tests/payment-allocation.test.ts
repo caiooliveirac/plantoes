@@ -1098,3 +1098,96 @@ test("o P noturno suprimido não desloca o SD real do médico em outro ramal", (
     assert.equal(row1368?.doctorName, "Reinaldo Lima", "o SD real de terça na 1368 deve ser pago");
     assert.notEqual(row2033?.doctorName, "Reinaldo Lima", "a 2033 não deve receber o fantasma de terça");
 });
+
+// ---------------------------------------------------------------------------
+// Caracterização do caso Ana Beatriz (ramal 1364, 20/06/2026): SD real numa base de
+// intervenção + continuação "P" à noite num ramal de regulação DIFERENTE (cross-domain,
+// mesmo médico). Com startedAt/boardStartedAt corretamente distintos (o que as correções
+// em modules/telegram/service.ts e app/operational-board-client.tsx agora preservam —
+// antes, uma correção manual colapsava os dois no mesmo valor retrodatado e isso fazia o
+// "P" perder o slot SD para a SM01 e o SN correspondente nunca ser pago), confirma que o
+// motor de pagamento já paga os dois segmentos corretamente sem precisar de nenhuma
+// mudança em services/board.service.ts.
+// ---------------------------------------------------------------------------
+
+function makeAnaBeatrizRawRows() {
+    return [
+        // SD real na base de intervenção SM01: chegada e saída reais, sem retrodatação.
+        makeRow({
+            occupancyId: "occ-ana-sm01",
+            domain: "intervention",
+            targetCode: "SM01",
+            targetLabel: "SM01",
+            ramalLabel: null,
+            doctorId: "doc-ana-beatriz",
+            doctorName: "Ana Beatriz Nunes Bonfim",
+            displayName: "Beatriz Bomfim",
+            startedAt: "2026-06-20T10:10:04.000Z", // 07:10 SP
+            boardStartedAt: "2026-06-20T10:10:04.000Z",
+            endedAt: "2026-06-20T21:41:21.000Z", // 18:41 SP
+            actualEndedAt: "2026-06-20T21:41:21.000Z",
+            scheduledStartAt: "2026-06-20T10:00:00.000Z",
+            scheduledEndAt: "2026-06-20T22:00:00.000Z",
+            shiftLabel: "SD",
+            continuityGroupId: "cg-ana-sm01",
+            notes: "Beatriz Bomfim SD SM01",
+        }),
+        // Continuação "P" no ramal 1364 à noite: startedAt reflete o evento REAL desta
+        // ocupação (chegada ~19:29 SP), boardStartedAt preserva a âncora histórica (07:10,
+        // igual à chegada na SM01) — exatamente o design que as 3 correções protegem.
+        makeRegRow({
+            occupancyId: "occ-ana-1364",
+            targetCode: "1364", targetLabel: "1364", ramalLabel: "1364",
+            doctorId: "doc-ana-beatriz",
+            doctorName: "Ana Beatriz Nunes Bonfim",
+            displayName: "Beatriz Bomfim",
+            startedAt: "2026-06-20T22:29:13.000Z", // 19:29 SP — evento real desta ocupação
+            boardStartedAt: "2026-06-20T10:10:04.000Z", // 07:10 SP — âncora histórica (SM01)
+            endedAt: "2026-06-21T10:00:00.000Z", // 07:00 SP do dia seguinte
+            actualEndedAt: "2026-06-21T10:00:00.000Z",
+            scheduledStartAt: "2026-06-20T22:00:00.000Z",
+            scheduledEndAt: "2026-06-21T10:15:00.000Z",
+            shiftLabel: "P",
+            continuityGroupId: "cg-ana-1364",
+            notes: "Beatriz Bomfim continua 1364",
+        }),
+    ];
+}
+
+test("caso Ana Beatriz: SD paga via SM01 (intervenção) sem conflito do P retrodatado no 1364", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [
+            makeTarget({ domain: "intervention", targetCode: "SM01", targetLabel: "SM01", sortOrder: 1 }),
+            makeTarget({ domain: "regulation", targetCode: "1364", targetLabel: "1364", sortOrder: 64 }),
+        ],
+        rawRows: makeAnaBeatrizRawRows(),
+        operationalDate: "2026-06-20T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-06-20T10:00:00.000Z",
+        endedAt: "2026-06-20T22:00:00.000Z",
+        generatedAt: "2026-06-20T23:00:00.000Z",
+    });
+
+    const sm01Row = board.intervention.find((row) => row.targetCode === "SM01");
+    const row1364 = board.regulation.find((row) => row.targetCode === "1364");
+    assert.equal(sm01Row?.doctorName, "Ana Beatriz Nunes Bonfim", "o SD real na SM01 deve ser pago");
+    assert.notEqual(row1364?.doctorName, "Ana Beatriz Nunes Bonfim", "o 1364 não deve competir pelo SD com um 'P' que só chegou à noite");
+});
+
+test("caso Ana Beatriz: SN paga via 1364 (regulação, continuação P) sem precisar de admin_extra_shift", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [
+            makeTarget({ domain: "intervention", targetCode: "SM01", targetLabel: "SM01", sortOrder: 1 }),
+            makeTarget({ domain: "regulation", targetCode: "1364", targetLabel: "1364", sortOrder: 64 }),
+        ],
+        rawRows: makeAnaBeatrizRawRows(),
+        operationalDate: "2026-06-20T15:00:00.000Z",
+        shiftLabel: "SN",
+        startedAt: "2026-06-20T22:00:00.000Z",
+        endedAt: "2026-06-21T10:00:00.000Z",
+        generatedAt: "2026-06-21T11:00:00.000Z",
+    });
+
+    const row1364 = board.regulation.find((row) => row.targetCode === "1364");
+    assert.equal(row1364?.doctorName, "Ana Beatriz Nunes Bonfim", "o SN no 1364 deve ser pago pelo 'P' — sem isso o chefe precisa lançar admin_extra_shift manual");
+});

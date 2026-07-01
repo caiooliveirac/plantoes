@@ -114,3 +114,25 @@ export function compareRootBoardRegulationCodes(left: SortKey, right: SortKey, s
 
     return normalizedLeft.localeCompare(normalizedRight, "pt-BR", { numeric: true });
 }
+
+type OccupancyAnchorFields = { boardStartedAt: string | null; startedAt: string | null };
+
+/** Operational arrival for display and priority: boardStartedAt reflects the true
+ *  arrival when a doctor continues across shifts/domains (SD→SN, P→SN). Falls back to
+ *  startedAt for occupancies without a separate board anchor. */
+export function resolveOperationalArrival(occupancy: OccupancyAnchorFields): string | null {
+    return occupancy.boardStartedAt ?? occupancy.startedAt;
+}
+
+/** True when boardStartedAt (o que o quadro/prioridade de almoço e saída leem) já diverge
+ *  de startedAt (a âncora que o motor de pagamento usa pra fechar o slot SD/SN) — ex.:
+ *  continuação cross-domain (SD na intervenção, SN na regulação). Corrigir o horário
+ *  exibido nesse caso deve mexer só em boardStartedAt, nunca em startedAt (caso Ana
+ *  Beatriz, ramal 1364, 20/06/2026). */
+export function isExistingContinuityRecord(occupancy: OccupancyAnchorFields): boolean {
+    return Boolean(
+        occupancy.boardStartedAt
+        && occupancy.startedAt
+        && new Date(occupancy.boardStartedAt).getTime() !== new Date(occupancy.startedAt).getTime(),
+    );
+}

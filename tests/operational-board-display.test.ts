@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareRootBoardRegulationCodes, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
+import { compareRootBoardRegulationCodes, isExistingContinuityRecord, resolveOperationalArrival, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 
 test("root board keeps nucleo before PIAM at the end of day shift ordering", () => {
     assert.deepEqual(
@@ -104,4 +104,37 @@ test("disabled regulation posts stay visible on the root board regardless of shi
         doctorId: null,
         shiftLabel: "SN",
     }), true);
+});
+
+test("resolveOperationalArrival prefere boardStartedAt (ancora historica) sobre startedAt bruto", () => {
+    assert.equal(
+        resolveOperationalArrival({ boardStartedAt: "2026-06-20T10:10:00.000Z", startedAt: "2026-06-20T22:29:13.000Z" }),
+        "2026-06-20T10:10:00.000Z",
+    );
+});
+
+test("resolveOperationalArrival cai para startedAt quando boardStartedAt e nulo", () => {
+    assert.equal(
+        resolveOperationalArrival({ boardStartedAt: null, startedAt: "2026-06-20T10:10:00.000Z" }),
+        "2026-06-20T10:10:00.000Z",
+    );
+});
+
+test("isExistingContinuityRecord detecta boardStartedAt divergente de startedAt (continuacao cross-domain)", () => {
+    // Caso Ana Beatriz: SD real na intervencao, "continuando" na regulacao a noite.
+    assert.equal(
+        isExistingContinuityRecord({ boardStartedAt: "2026-06-20T10:10:00.000Z", startedAt: "2026-06-20T22:29:13.000Z" }),
+        true,
+    );
+});
+
+test("isExistingContinuityRecord e false quando os campos coincidem ou boardStartedAt e nulo", () => {
+    assert.equal(
+        isExistingContinuityRecord({ boardStartedAt: "2026-06-20T10:10:00.000Z", startedAt: "2026-06-20T10:10:00.000Z" }),
+        false,
+    );
+    assert.equal(
+        isExistingContinuityRecord({ boardStartedAt: null, startedAt: "2026-06-20T10:10:00.000Z" }),
+        false,
+    );
 });
