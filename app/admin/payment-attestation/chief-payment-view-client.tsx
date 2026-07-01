@@ -943,6 +943,23 @@ export function ChiefPaymentViewClient({ board }: Props) {
         }
     }
 
+    // NF/processo digitados diferem do que está gravado? (evita salvar à toa)
+    function isMetaDirty(doctor: { invoiceNumber?: string | null; paymentProcessNumber?: string | null } | null) {
+        if (!doctor) {
+            return false;
+        }
+        return invoiceDraft.trim() !== (doctor.invoiceNumber ?? "")
+            || processDraft.trim() !== (doctor.paymentProcessNumber ?? "");
+    }
+
+    // Auto-salva NF/processo ao sair do campo (blur) — inclui fechar o modal, pois
+    // o blur dispara antes do clique de fechar. Assim o valor não se perde.
+    function autoSavePaymentMeta(doctor: { doctorId: string; invoiceNumber?: string | null; paymentProcessNumber?: string | null }) {
+        if (!metaBusy && isMetaDirty(doctor)) {
+            void submitPaymentMeta(doctor.doctorId);
+        }
+    }
+
     async function submitPaymentMeta(doctorId: string) {
         setMetaBusy(true);
         setMetaError(null);
@@ -1823,6 +1840,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                             type="text"
                                             value={invoiceDraft}
                                             onChange={(event) => setInvoiceDraft(event.target.value)}
+                                            onBlur={() => autoSavePaymentMeta(selectedDoctor)}
                                             placeholder="—"
                                             maxLength={60}
                                             disabled={metaBusy}
@@ -1834,6 +1852,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                             type="text"
                                             value={processDraft}
                                             onChange={(event) => setProcessDraft(event.target.value)}
+                                            onBlur={() => autoSavePaymentMeta(selectedDoctor)}
                                             placeholder="—"
                                             maxLength={60}
                                             disabled={metaBusy}
