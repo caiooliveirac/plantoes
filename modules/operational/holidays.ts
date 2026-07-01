@@ -5,6 +5,7 @@ export const SAMU_HOLIDAYS: ReadonlySet<string> = new Set<string>([
     "2026-04-21", // Tiradentes
     "2026-05-01", // Dia do Trabalho
     "2026-06-04", // Corpus Christi
+    "2026-06-24", // feriado SAMU (junho/2026)
 ]);
 
 export function isSamuHolidayDate(operationalDate: string): boolean {
