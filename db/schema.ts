@@ -22,6 +22,7 @@
  *   - isActive on doctors/posts/bases is a domain state, not a soft delete
  *   - Occupancy.endedAt = scheduled handoff; actualEndedAt = real departure
  */
+import { sql } from "drizzle-orm";
 import {
     bigint,
     boolean,
@@ -33,6 +34,7 @@ import {
     pgSchema,
     primaryKey,
     serial,
+    smallint,
     text,
     timestamp,
     uniqueIndex,
@@ -42,13 +44,16 @@ import {
 
 const operationsV2 = pgSchema("operations_v2");
 
-export const userRoleEnum = operationsV2.enum("user_role", ["admin", "chief"]);
+export const userRoleEnum = operationsV2.enum("user_role", ["admin", "chief", "doctor"]);
 export const inviteModeEnum = operationsV2.enum("invite_mode", ["email", "bearer"]);
 export const chiefRequestStatusEnum = operationsV2.enum("chief_request_status", ["pending", "approved", "rejected"]);
 export const occupancySourceEnum = operationsV2.enum("occupancy_source", ["manual", "telegram", "import", "admin_correction"]);
 export const shiftEventDomainEnum = operationsV2.enum("shift_event_domain", ["regulation", "intervention", "chief", "doctors", "bank_hours", "auth"]);
 export const bankHoursSourceEnum = operationsV2.enum("bank_hours_source", ["regulation", "intervention", "manual_adjustment"]);
 export const paymentAttestationSlotStatusEnum = operationsV2.enum("payment_attestation_slot_status", ["draft", "approved"]);
+export const scheduledShiftStatusEnum = operationsV2.enum("scheduled_shift_status", ["planned", "cancelled"]);
+export const shiftSwapTypeEnum = operationsV2.enum("shift_swap_type", ["transfer", "mutual", "function_change", "base_change"]);
+export const shiftSwapStatusEnum = operationsV2.enum("shift_swap_status", ["offered", "accepted", "approved", "rejected", "cancelled"]);
 
 export const doctors = operationsV2.table(
     "doctors",
@@ -59,6 +64,12 @@ export const doctors = operationsV2.table(
         displayName: varchar("display_name", { length: 255 }),
         normalizedName: varchar("normalized_name", { length: 255 }).notNull(),
         isActive: boolean("is_active").notNull().default(true),
+        // Elegibilidade por domínio para a escala web; default true = todo
+        // médico existente nasce apto aos dois domínios.
+        eligibleRegulation: boolean("eligible_regulation").notNull().default(true),
+        eligibleIntervention: boolean("eligible_intervention").notNull().default(true),
+        // Antiguidade (data de admissão); nullable, preenchida pelo admin.
+        admittedAt: date("admitted_at"),
         metadata: jsonb("metadata").notNull().default({}),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
         updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -614,4 +625,104 @@ export const auditLogs = operationsV2.table(
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [index("audit_logs_action_idx").on(table.action, table.createdAt)],
+);
+
+// Preferências de base ordenadas do médico (só intervenção tem bases).
+export const doctorBasePreferences = operationsV2.table(
+    "doctor_base_preferences",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
+        baseId: integer("base_id").notNull().references(() => interventionBases.id),
+        preferenceOrder: integer("preference_order").notNull(),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("doctor_base_preferences_doctor_base_idx").on(table.doctorId, table.baseId),
+        uniqueIndex("doctor_base_preferences_doctor_order_idx").on(table.doctorId, table.preferenceOrder),
+    ],
+);
+
+// Dia fixo da semana: médicos "do dia" aparecem primeiro na view de escala.
+// weekday: 0 = domingo ... 6 = sábado.
+export const doctorWeekdayPreferences = operationsV2.table(
+    "doctor_weekday_preferences",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
+        weekday: smallint("weekday").notNull(),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("doctor_weekday_preferences_doctor_weekday_idx").on(table.doctorId, table.weekday),
+    ],
+);
+
+// Escala prevista: quem o chefe planejou para cada alvo/data/turno. Camada
+// paralela às occupancies (que continuam sendo o realizado + pagamento).
+export const scheduledShifts = operationsV2.table(
+    "scheduled_shifts",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        domain: varchar("domain", { length: 32 }).notNull(),
+        postId: integer("post_id").references(() => regulationPosts.id),
+        baseId: integer("base_id").references(() => interventionBases.id),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        operationalDate: date("operational_date").notNull(),
+        shiftLabel: varchar("shift_label", { length: 8 }).notNull(),
+        scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }).notNull(),
+        scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
+        roleLabel: varchar("role_label", { length: 100 }),
+        status: scheduledShiftStatusEnum("status").notNull().default("planned"),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("scheduled_shifts_regulation_slot_idx")
+            .on(table.postId, table.operationalDate, table.shiftLabel)
+            .where(sql`${table.status} = 'planned' and ${table.postId} is not null`),
+        uniqueIndex("scheduled_shifts_intervention_slot_idx")
+            .on(table.baseId, table.operationalDate, table.shiftLabel)
+            .where(sql`${table.status} = 'planned' and ${table.baseId} is not null`),
+        index("scheduled_shifts_doctor_idx").on(table.doctorId, table.operationalDate),
+        index("scheduled_shifts_date_idx").on(table.operationalDate, table.shiftLabel),
+    ],
+);
+
+// Trocas de plantão, append-only (triggers no banco proíbem DELETE e UPDATE
+// fora da transição de status). Atribuição "fulano está POR sicrano" segue a
+// cadeia de transfer/mutual; function_change/base_change movem só o local/
+// função efetivos da linhagem, nunca a atribuição.
+export const shiftSwaps = operationsV2.table(
+    "shift_swaps",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        shiftId: uuid("shift_id").notNull().references(() => scheduledShifts.id),
+        swapType: shiftSwapTypeEnum("swap_type").notNull(),
+        fromDoctorId: uuid("from_doctor_id").notNull().references(() => doctors.id),
+        toDoctorId: uuid("to_doctor_id").notNull().references(() => doctors.id),
+        counterpartShiftId: uuid("counterpart_shift_id").references(() => scheduledShifts.id),
+        toPostId: integer("to_post_id").references(() => regulationPosts.id),
+        toBaseId: integer("to_base_id").references(() => interventionBases.id),
+        toRoleLabel: varchar("to_role_label", { length: 100 }),
+        status: shiftSwapStatusEnum("status").notNull().default("offered"),
+        offeredAt: timestamp("offered_at", { withTimezone: true }).notNull().defaultNow(),
+        acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+        approvedAt: timestamp("approved_at", { withTimezone: true }),
+        rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+        cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+        approvedByUserId: uuid("approved_by_user_id").references(() => users.id),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        notes: text("notes"),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index("shift_swaps_shift_idx").on(table.shiftId, table.status),
+        index("shift_swaps_from_doctor_idx").on(table.fromDoctorId, table.status),
+        index("shift_swaps_to_doctor_idx").on(table.toDoctorId, table.status),
+    ],
 );

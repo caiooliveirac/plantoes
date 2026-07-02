@@ -1,0 +1,447 @@
+/* ==========================================================================
+   Escala & Trocas — camada visual da interface web de escala de médicos,
+   trocas de plantão e relatório de cobertura. Usa os tokens do design system
+   (globals.css): superfícies glass, acentos semânticos e motion vars.
+   ========================================================================== */
+
+.et-shell {
+    min-height: 100vh;
+    padding: clamp(16px, 3vw, 40px);
+    background:
+        radial-gradient(1200px 500px at 85% -10%, rgba(124, 140, 248, 0.14), transparent 60%),
+        radial-gradient(900px 420px at -10% 110%, rgba(78, 201, 184, 0.10), transparent 55%),
+        var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.et-hero {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.et-hero h1 {
+    margin: 0;
+    font-family: var(--font-display), var(--font-sans), sans-serif;
+    font-size: clamp(26px, 4vw, 40px);
+    letter-spacing: -0.02em;
+    background: linear-gradient(120deg, var(--text) 30%, var(--ice) 70%, var(--accent-info) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.et-hero p {
+    margin: 6px 0 0;
+    color: var(--muted);
+    max-width: 60ch;
+}
+
+.et-datenav {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 999px;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+    backdrop-filter: var(--blur-glass);
+    box-shadow: var(--shadow-soft);
+}
+
+.et-datenav button {
+    appearance: none;
+    border: none;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--ice-soft);
+    color: var(--text);
+    font-size: 16px;
+    cursor: pointer;
+    transition: transform var(--dur-fast) var(--ease-out-soft), background var(--dur-fast) var(--ease-out-soft);
+}
+
+.et-datenav button:hover {
+    transform: scale(1.08);
+    background: var(--accent-info-soft);
+}
+
+.et-datenav strong {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    padding: 0 6px;
+}
+
+.et-datenav .et-weekday {
+    color: var(--gold);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+}
+
+.et-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 20px;
+    align-items: start;
+}
+
+@media (max-width: 980px) {
+    .et-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.et-panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 22px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.et-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--line);
+}
+
+.et-panel-head h2 {
+    margin: 0;
+    font-size: 15px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--muted-strong);
+}
+
+.et-domain-tag {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.et-domain-tag.regulation { background: var(--accent-info-soft); color: var(--accent-info); }
+.et-domain-tag.intervention { background: var(--accent-confirm-soft); color: var(--accent-confirm); }
+
+.et-grid {
+    display: grid;
+    grid-template-columns: minmax(140px, 1.2fr) 1fr 1fr;
+    gap: 1px;
+    background: var(--line);
+}
+
+.et-grid > * {
+    background: var(--panel);
+    padding: 12px 16px;
+    min-height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.et-grid .et-colhead {
+    min-height: 40px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    background: var(--surface-elevated);
+}
+
+.et-target-label {
+    font-weight: 600;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.et-target-label small {
+    color: var(--muted);
+    font-weight: 400;
+}
+
+.et-slot {
+    justify-content: space-between;
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out-soft);
+}
+
+.et-slot:hover { background: var(--ice-soft); }
+
+.et-slot.filled { cursor: default; }
+
+.et-slot .et-empty {
+    color: var(--muted);
+    font-size: 13px;
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+    padding: 6px 12px;
+    width: 100%;
+    text-align: center;
+    transition: border-color var(--dur-fast) var(--ease-out-soft), color var(--dur-fast) var(--ease-out-soft);
+}
+
+.et-slot:hover .et-empty {
+    border-color: var(--accent-info);
+    color: var(--accent-info);
+}
+
+.et-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 12px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    box-shadow: var(--shadow-soft);
+    font-size: 13.5px;
+    max-width: 100%;
+}
+
+.et-chip .et-chip-x {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px;
+    border-radius: 6px;
+}
+
+.et-chip .et-chip-x:hover { color: var(--accent-fraud); background: var(--accent-fraud-soft); }
+
+/* --- Painel de médicos ---------------------------------------------------- */
+
+.et-doctors {
+    position: sticky;
+    top: 20px;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 40px);
+}
+
+.et-doctors-list {
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.et-doctor-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 14px;
+    background: var(--surface-glass);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease-out-soft), transform var(--dur-fast) var(--ease-out-soft);
+}
+
+.et-doctor-card:hover {
+    border-color: var(--accent-info);
+    transform: translateX(3px);
+}
+
+.et-doctor-card.selected {
+    border-color: var(--accent-confirm);
+    box-shadow: var(--shadow-confirm);
+}
+
+.et-doctor-card .et-doc-name { font-weight: 600; font-size: 14px; }
+
+.et-doctor-card .et-doc-meta {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.et-badge {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.et-badge.fixed { background: var(--gold-soft); color: var(--gold); }
+.et-badge.reg { background: var(--accent-info-soft); color: var(--accent-info); }
+.et-badge.int { background: var(--accent-confirm-soft); color: var(--accent-confirm); }
+
+.et-expander {
+    appearance: none;
+    width: 100%;
+    border: none;
+    border-top: 1px solid var(--line);
+    background: var(--surface-elevated);
+    color: var(--muted-strong);
+    padding: 12px;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color var(--dur-fast) var(--ease-out-soft);
+}
+
+.et-expander:hover { color: var(--ice); }
+
+/* --- Trocas ---------------------------------------------------------------- */
+
+.et-swap-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 18px;
+    border-radius: 18px;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+    backdrop-filter: var(--blur-glass);
+}
+
+.et-swap-flow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 15px;
+}
+
+.et-swap-flow .et-arrow {
+    color: var(--accent-info);
+    font-size: 18px;
+}
+
+.et-status {
+    padding: 3px 12px;
+    border-radius: 999px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    width: fit-content;
+}
+
+.et-status.offered { background: var(--amber-soft); color: var(--amber); }
+.et-status.accepted { background: var(--accent-info-soft); color: var(--accent-info); }
+.et-status.approved { background: var(--accent-confirm-soft); color: var(--accent-confirm); }
+.et-status.rejected, .et-status.cancelled { background: var(--red-soft); color: var(--red); }
+
+.et-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.et-btn {
+    appearance: none;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-elevated);
+    color: var(--text);
+    padding: 8px 16px;
+    border-radius: 12px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: transform var(--dur-fast) var(--ease-out-soft), box-shadow var(--dur-fast) var(--ease-out-soft);
+}
+
+.et-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-soft); }
+.et-btn.primary { background: linear-gradient(120deg, var(--accent-info), #5a6bf0); border: none; }
+.et-btn.confirm { background: linear-gradient(120deg, var(--accent-confirm), #35a896); border: none; color: #05201c; font-weight: 600; }
+.et-btn.danger { background: transparent; border-color: var(--accent-fraud); color: var(--accent-fraud); }
+.et-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.et-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 440px;
+}
+
+.et-form input, .et-form select, .et-form textarea {
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    border-radius: 12px;
+    padding: 11px 14px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+}
+
+.et-form input:focus, .et-form select:focus, .et-form textarea:focus {
+    outline: 2px solid var(--accent-info);
+    outline-offset: 1px;
+}
+
+.et-form label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted-strong);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.et-feedback { font-size: 13.5px; padding: 10px 14px; border-radius: 12px; }
+.et-feedback.ok { background: var(--accent-confirm-soft); color: var(--accent-confirm); }
+.et-feedback.err { background: var(--accent-fraud-soft); color: var(--accent-fraud); }
+
+/* --- Relatório de cobertura ------------------------------------------------ */
+
+.et-report-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) minmax(0, 2.2fr) auto;
+    gap: 14px;
+    align-items: center;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+}
+
+.et-report-row:last-child { border-bottom: none; }
+
+.et-coverage-chain {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 14.5px;
+}
+
+.et-coverage-chain .por {
+    color: var(--gold);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--gold-soft);
+}
+
+.et-coverage-chain .divergent {
+    color: var(--amber);
+    font-size: 12px;
+}
+
+.et-presence { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.et-presence .dot { width: 9px; height: 9px; border-radius: 50%; }
+.et-presence.presente .dot { background: var(--accent-confirm); box-shadow: 0 0 10px var(--accent-confirm-glow); }
+.et-presence.ausente .dot { background: var(--accent-fraud); box-shadow: 0 0 10px var(--accent-fraud-glow); }
+
+.et-empty-state {
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--muted);
+}
