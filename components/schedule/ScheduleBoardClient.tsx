@@ -177,7 +177,9 @@ export function ScheduleBoardClient({ initialBoard }: { initialBoard: ScheduleBo
                                         </div>
                                     </div>
                                     <div className="et-doc-meta">
-                                        {doctor.fixedForWeekday ? <span className="et-badge fixed">fixo</span> : null}
+                                        {doctor.fixedForWeekday ? (
+                                            <span className="et-badge fixed">fixo {doctor.fixedShiftLabels.join("·")}</span>
+                                        ) : null}
                                         {doctor.eligibleRegulation ? <span className="et-badge reg">REG</span> : null}
                                         {doctor.eligibleIntervention ? <span className="et-badge int">INT</span> : null}
                                     </div>

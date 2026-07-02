@@ -2,6 +2,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
     doctorBasePreferences,
+    doctorFixedShifts,
     doctorWeekdayPreferences,
     doctors,
     interventionBases,
@@ -53,8 +54,12 @@ export interface ScheduleDoctorEntry {
     admittedAt: string | null;
     eligibleRegulation: boolean;
     eligibleIntervention: boolean;
-    /** true = médico fixo do dia da semana da data consultada. */
+    /** true = médico tem turno fixo no dia da semana da data consultada. */
     fixedForWeekday: boolean;
+    /** turnos fixos do médico nesse dia da semana (ex.: ["SD"], ["SD","SN"]). */
+    fixedShiftLabels: string[];
+    /** posição do dia no ranking de dias preferidos (0 = mais preferido; null = sem preferência). */
+    weekdayPreferenceRank: number | null;
     /** baseIds em ordem de preferência (vazio = sem preferência). */
     basePreferences: number[];
 }
@@ -81,11 +86,37 @@ export interface ScheduleBoard {
     doctors: ScheduleDoctorEntry[];
 }
 
+/**
+ * Ordenação do painel de médicos na escala do dia:
+ * 1. turno fixo no dia > dia preferido (melhor rank primeiro) > demais;
+ * 2. dentro do bloco, antiguidade (admitido há mais tempo primeiro; sem data
+ *    vai pro fim); 3. nome.
+ */
+export function compareScheduleDoctors(left: ScheduleDoctorEntry, right: ScheduleDoctorEntry) {
+    if (left.fixedForWeekday !== right.fixedForWeekday) {
+        return left.fixedForWeekday ? -1 : 1;
+    }
+
+    const leftRank = left.weekdayPreferenceRank ?? Number.POSITIVE_INFINITY;
+    const rightRank = right.weekdayPreferenceRank ?? Number.POSITIVE_INFINITY;
+    if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+    }
+
+    if (left.admittedAt !== right.admittedAt) {
+        if (!left.admittedAt) return 1;
+        if (!right.admittedAt) return -1;
+        return left.admittedAt.localeCompare(right.admittedAt);
+    }
+
+    return left.fullName.localeCompare(right.fullName, "pt-BR");
+}
+
 export async function getScheduleBoard(operationalDate: string): Promise<ScheduleBoard> {
     const db = getDb();
     const weekday = resolveWeekday(operationalDate);
 
-    const [posts, bases, planned, activeDoctors, weekdayPrefs, basePrefs] = await Promise.all([
+    const [posts, bases, planned, activeDoctors, weekdayPrefs, basePrefs, fixedShifts] = await Promise.all([
         db.select().from(regulationPosts).where(eq(regulationPosts.isActive, true)).orderBy(asc(regulationPosts.sortOrder)),
         db.select().from(interventionBases).where(eq(interventionBases.isActive, true)).orderBy(asc(interventionBases.sortOrder)),
         db.select().from(scheduledShifts).where(and(
@@ -95,10 +126,17 @@ export async function getScheduleBoard(operationalDate: string): Promise<Schedul
         db.select().from(doctors).where(eq(doctors.isActive, true)).orderBy(asc(doctors.fullName)),
         db.select().from(doctorWeekdayPreferences).where(eq(doctorWeekdayPreferences.weekday, weekday)),
         db.select().from(doctorBasePreferences).orderBy(asc(doctorBasePreferences.preferenceOrder)),
+        db.select().from(doctorFixedShifts).where(eq(doctorFixedShifts.weekday, weekday)).orderBy(asc(doctorFixedShifts.shiftLabel)),
     ]);
 
     const doctorNames = new Map(activeDoctors.map((doctor) => [doctor.id, doctor.displayName ?? doctor.fullName]));
-    const fixedDoctorIds = new Set(weekdayPrefs.map((pref) => pref.doctorId));
+    const weekdayRankByDoctor = new Map(weekdayPrefs.map((pref) => [pref.doctorId, pref.preferenceOrder]));
+    const fixedLabelsByDoctor = new Map<string, string[]>();
+    for (const fixed of fixedShifts) {
+        const list = fixedLabelsByDoctor.get(fixed.doctorId) ?? [];
+        list.push(fixed.shiftLabel);
+        fixedLabelsByDoctor.set(fixed.doctorId, list);
+    }
     const basePrefsByDoctor = new Map<string, number[]>();
     for (const pref of basePrefs) {
         const list = basePrefsByDoctor.get(pref.doctorId) ?? [];
@@ -147,21 +185,12 @@ export async function getScheduleBoard(operationalDate: string): Promise<Schedul
             admittedAt: doctor.admittedAt,
             eligibleRegulation: doctor.eligibleRegulation,
             eligibleIntervention: doctor.eligibleIntervention,
-            fixedForWeekday: fixedDoctorIds.has(doctor.id),
+            fixedForWeekday: fixedLabelsByDoctor.has(doctor.id),
+            fixedShiftLabels: fixedLabelsByDoctor.get(doctor.id) ?? [],
+            weekdayPreferenceRank: weekdayRankByDoctor.get(doctor.id) ?? null,
             basePreferences: basePrefsByDoctor.get(doctor.id) ?? [],
         }))
-        .sort((left, right) => {
-            if (left.fixedForWeekday !== right.fixedForWeekday) {
-                return left.fixedForWeekday ? -1 : 1;
-            }
-            // Antiguidade: admitido há mais tempo primeiro; sem data vai pro fim do bloco.
-            if (left.admittedAt !== right.admittedAt) {
-                if (!left.admittedAt) return 1;
-                if (!right.admittedAt) return -1;
-                return left.admittedAt.localeCompare(right.admittedAt);
-            }
-            return left.fullName.localeCompare(right.fullName, "pt-BR");
-        });
+        .sort(compareScheduleDoctors);
 
     return { operationalDate, weekday, targets, doctors: doctorEntries };
 }

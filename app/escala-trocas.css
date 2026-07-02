@@ -445,3 +445,86 @@
     text-align: center;
     color: var(--muted);
 }
+
+/* --- Gestão de médicos ------------------------------------------------------ */
+
+.et-search {
+    width: 100%;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 14px;
+}
+
+.et-search:focus { outline: 2px solid var(--accent-info); outline-offset: 1px; }
+
+.et-section-title {
+    margin: 8px 0 0;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--muted-strong);
+}
+
+.et-weekday-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.et-weekday-chip {
+    appearance: none;
+    position: relative;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-elevated);
+    color: var(--muted-strong);
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all var(--dur-fast) var(--ease-out-soft);
+}
+
+.et-weekday-chip.on {
+    background: var(--gold-soft);
+    border-color: var(--gold);
+    color: var(--gold);
+}
+
+.et-weekday-chip .et-rank {
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.et-fixed-grid {
+    display: grid;
+    grid-template-columns: 44px repeat(7, 1fr);
+    gap: 4px;
+    align-items: center;
+}
+
+.et-fixed-head {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    text-align: center;
+}
+
+.et-fixed-cell {
+    appearance: none;
+    height: 34px;
+    border-radius: 10px;
+    border: 1px dashed var(--line);
+    background: transparent;
+    color: var(--accent-confirm);
+    cursor: pointer;
+    transition: all var(--dur-fast) var(--ease-out-soft);
+}
+
+.et-fixed-cell:hover { border-color: var(--accent-confirm); }
+
+.et-fixed-cell.on {
+    border: 1px solid var(--accent-confirm);
+    background: var(--accent-confirm-soft);
+    box-shadow: 0 0 12px -4px var(--accent-confirm-glow);
+}

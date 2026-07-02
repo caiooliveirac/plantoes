@@ -644,18 +644,36 @@ export const doctorBasePreferences = operationsV2.table(
     ],
 );
 
-// Dia fixo da semana: médicos "do dia" aparecem primeiro na view de escala.
-// weekday: 0 = domingo ... 6 = sábado.
+// Dias preferidos do médico, RANQUEADOS (preference_order menor = mais
+// preferido). weekday: 0 = domingo ... 6 = sábado.
 export const doctorWeekdayPreferences = operationsV2.table(
     "doctor_weekday_preferences",
     {
         id: uuid("id").primaryKey().defaultRandom(),
         doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
         weekday: smallint("weekday").notNull(),
+        preferenceOrder: integer("preference_order").notNull().default(0),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
         uniqueIndex("doctor_weekday_preferences_doctor_weekday_idx").on(table.doctorId, table.weekday),
+    ],
+);
+
+// Turnos fixos do médico (dia da semana + SD/SN); pode ter vários. É o que
+// faz o médico aparecer primeiro na montagem da escala daquele dia.
+export const doctorFixedShifts = operationsV2.table(
+    "doctor_fixed_shifts",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
+        weekday: smallint("weekday").notNull(),
+        shiftLabel: varchar("shift_label", { length: 8 }).notNull(),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("doctor_fixed_shifts_doctor_slot_idx").on(table.doctorId, table.weekday, table.shiftLabel),
+        index("doctor_fixed_shifts_weekday_idx").on(table.weekday, table.shiftLabel),
     ],
 );
 
