@@ -21,7 +21,8 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        await requireAuthenticatedSession(["admin", "chief"]);
+        // Médico logado também lê a escala (a edição continua só em POST).
+        await requireAuthenticatedSession(["admin", "chief", "doctor"]);
         const date = request.nextUrl.searchParams.get("date");
         if (!date || !DATE_PATTERN.test(date)) {
             return NextResponse.json({ error: "invalid_date" }, { status: 400 });

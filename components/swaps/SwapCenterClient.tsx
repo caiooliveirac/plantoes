@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { Monogram } from "@/components/ui/Monogram";
 
 interface SwapShift {
     id: string;
@@ -40,17 +41,35 @@ const SWAP_TYPE_LABELS: Record<SwapEntry["swapType"], string> = {
     base_change: "troca de base",
 };
 
-const STATUS_LABELS: Record<SwapEntry["status"], string> = {
-    offered: "oferecida",
-    accepted: "aceita — aguarda chefia",
-    approved: "aprovada",
-    rejected: "recusada",
-    cancelled: "cancelada",
-};
+const MONTHS_SHORT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
 function formatDateBr(date: string) {
     const [y, m, d] = date.split("-");
     return `${d}/${m}/${y}`;
+}
+
+/** Trilho proposta → aceite → chefia; rejeitada/cancelada mata o passo corrente. */
+function TicketSteps({ status }: { status: SwapEntry["status"] }) {
+    const dead = status === "rejected" || status === "cancelled";
+    const reach = status === "approved" ? 3 : status === "accepted" ? 2 : 1;
+    const steps = [
+        { lbl: "proposta", done: reach >= 1 },
+        { lbl: "aceite", done: reach >= 2 },
+        { lbl: "chefia", done: reach >= 3 },
+    ];
+    return (
+        <div className="tk-steps" aria-label={`status: ${status}`}>
+            {steps.map((step, index) => (
+                <span key={step.lbl} style={{ display: "contents" }}>
+                    {index > 0 ? <span className={`bar${steps[index].done ? " done" : ""}`} /> : null}
+                    <span className={`step${step.done ? " done" : ""}${dead && index === reach - 1 ? " dead" : ""}`}>
+                        <span className="dot" />
+                        <span className="lbl">{step.lbl}</span>
+                    </span>
+                </span>
+            ))}
+        </div>
+    );
 }
 
 export function SwapCenterClient({
@@ -137,9 +156,8 @@ export function SwapCenterClient({
                 <div>
                     <h1>Trocas de plantão</h1>
                     <p>
-                        Proponha o repasse ou a troca do seu plantão previsto. O colega aceita, a chefia aprova —
-                        e o relatório de cobertura passa a mostrar quem está por quem. Check-ins e pagamento
-                        seguem exatamente como hoje.
+                        Cada troca é um bilhete: você propõe, o colega aceita, a chefia carimba. O relatório de
+                        cobertura passa a mostrar quem está por quem — check-ins e pagamento seguem como hoje.
                     </p>
                 </div>
             </header>
@@ -165,52 +183,71 @@ export function SwapCenterClient({
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 16 }}>
                         <AnimatePresence initial={false}>
-                            {swaps.map((swap) => (
-                                <motion.article
-                                    key={swap.id}
-                                    layout
-                                    className="et-swap-card"
-                                    initial={{ opacity: 0, y: 10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0 }}
-                                >
-                                    <div className="et-swap-flow">
-                                        <span className="et-chip">{swap.fromDoctorName}</span>
-                                        <span className="et-arrow">⇢</span>
-                                        <span className="et-chip">{swap.toDoctorName}</span>
-                                        <span className="et-badge fixed">{SWAP_TYPE_LABELS[swap.swapType]}</span>
-                                        {swap.shift ? (
-                                            <small style={{ color: "var(--muted)" }}>
-                                                {formatDateBr(swap.shift.operationalDate)} · {swap.shift.shiftLabel} · {swap.shift.domain === "regulation" ? "regulação" : "intervenção"}
-                                            </small>
-                                        ) : null}
-                                    </div>
-                                    <span className={`et-status ${swap.status}`}>{STATUS_LABELS[swap.status]}</span>
-                                    {swap.notes ? <small style={{ color: "var(--muted)" }}>{swap.notes}</small> : null}
-                                    <div className="et-actions">
-                                        {swap.status === "offered" && myDoctorId && swap.toDoctorName !== swap.fromDoctorName ? (
-                                            <button type="button" className="et-btn confirm" disabled={busy} onClick={() => transition(swap.id, "accept")}>
-                                                Aceitar
-                                            </button>
-                                        ) : null}
-                                        {swap.status === "accepted" && isChief ? (
-                                            <button type="button" className="et-btn primary" disabled={busy} onClick={() => transition(swap.id, "approve")}>
-                                                Aprovar
-                                            </button>
-                                        ) : null}
-                                        {(swap.status === "offered" || swap.status === "accepted") ? (
-                                            <>
-                                                <button type="button" className="et-btn danger" disabled={busy} onClick={() => transition(swap.id, "reject")}>
-                                                    Recusar
-                                                </button>
-                                                <button type="button" className="et-btn" disabled={busy} onClick={() => transition(swap.id, "cancel")}>
-                                                    Cancelar
-                                                </button>
-                                            </>
-                                        ) : null}
-                                    </div>
-                                </motion.article>
-                            ))}
+                            {swaps.map((swap) => {
+                                const [, month, day] = (swap.shift?.operationalDate ?? "----00-00").split("-");
+                                return (
+                                    <motion.article
+                                        key={swap.id}
+                                        layout
+                                        className="tk-card"
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0 }}
+                                    >
+                                        <div className="tk-stub">
+                                            <span className="day">{day}</span>
+                                            <span className="month">{MONTHS_SHORT[Number(month) - 1] ?? "—"}</span>
+                                            <span className={`turno ${swap.shift?.shiftLabel === "SN" ? "sn" : "sd"}`}>
+                                                {swap.shift?.shiftLabel === "SN" ? "☾ SN" : "☀ SD"}
+                                            </span>
+                                        </div>
+                                        <div className="tk-body">
+                                            <div className="tk-flow">
+                                                <span className="who">
+                                                    <Monogram name={swap.fromDoctorName} size={26} />
+                                                    {swap.fromDoctorName}
+                                                </span>
+                                                <span className="arrow">⇢</span>
+                                                <span className="who">
+                                                    <Monogram name={swap.toDoctorName} size={26} />
+                                                    {swap.toDoctorName}
+                                                </span>
+                                                <span className="kind">{SWAP_TYPE_LABELS[swap.swapType]}</span>
+                                            </div>
+                                            <span className="tk-note">
+                                                {swap.shift ? `${swap.shift.domain === "regulation" ? "regulação" : "intervenção"} · ${formatDateBr(swap.shift.operationalDate)}` : ""}
+                                                {swap.notes ? ` — ${swap.notes}` : ""}
+                                            </span>
+                                            <div className="et-actions">
+                                                {swap.status === "offered" && myDoctorId ? (
+                                                    <button type="button" className="et-btn confirm" disabled={busy} onClick={() => transition(swap.id, "accept")}>
+                                                        Aceitar
+                                                    </button>
+                                                ) : null}
+                                                {swap.status === "accepted" && isChief ? (
+                                                    <button type="button" className="et-btn primary" disabled={busy} onClick={() => transition(swap.id, "approve")}>
+                                                        Aprovar
+                                                    </button>
+                                                ) : null}
+                                                {(swap.status === "offered" || swap.status === "accepted") ? (
+                                                    <>
+                                                        <button type="button" className="et-btn danger" disabled={busy} onClick={() => transition(swap.id, "reject")}>
+                                                            Recusar
+                                                        </button>
+                                                        <button type="button" className="et-btn" disabled={busy} onClick={() => transition(swap.id, "cancel")}>
+                                                            Cancelar
+                                                        </button>
+                                                    </>
+                                                ) : null}
+                                            </div>
+                                        </div>
+                                        <div className="tk-side">
+                                            <TicketSteps status={swap.status} />
+                                            <span className={`et-status ${swap.status}`}>{swap.status === "accepted" ? "aguarda chefia" : swap.status}</span>
+                                        </div>
+                                    </motion.article>
+                                );
+                            })}
                         </AnimatePresence>
                         {swaps.length === 0 ? <div className="et-empty-state">Nenhuma troca por aqui ainda.</div> : null}
                     </div>

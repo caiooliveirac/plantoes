@@ -25,14 +25,17 @@ export default async function EscalaPage({ searchParams }: { searchParams: Promi
         return <Unavailable title="Banco indisponível" copy="Sem DATABASE_URL não há escala para montar." />;
     }
 
+    // Chefia/admin editam; médico logado vê a escala em modo leitura.
+    let canEdit = false;
     try {
-        await requireAuthenticatedSession(["admin", "chief"]);
+        const session = await requireAuthenticatedSession(["admin", "chief", "doctor"]);
+        canEdit = session.user.roles.includes("admin") || session.user.roles.includes("chief");
     } catch (error) {
         if (error instanceof AuthError) {
             return (
                 <Unavailable
                     title={error.status === 403 ? "Acesso restrito" : "Autenticação necessária"}
-                    copy="A montagem da escala é exclusiva da chefia de plantão."
+                    copy="Entre com sua conta para ver a escala. Médicos podem se cadastrar em /cadastro-medico."
                 />
             );
         }
@@ -43,5 +46,5 @@ export default async function EscalaPage({ searchParams }: { searchParams: Promi
     const operationalDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todaySaoPaulo();
     const board = await getScheduleBoard(operationalDate);
 
-    return <ScheduleBoardClient initialBoard={board} />;
+    return <ScheduleBoardClient initialBoard={board} canEdit={canEdit} />;
 }
