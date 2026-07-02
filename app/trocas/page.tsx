@@ -1,9 +1,8 @@
-import { asc, eq } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { doctors } from "@/db/schema";
+import { interventionBases, regulationPosts } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { SwapCenterClient } from "@/components/swaps/SwapCenterClient";
-import { listScheduledShiftsForDoctor } from "@/services/schedule.service";
+import { getSwapBoard, listOfferableShifts } from "@/services/shift-offers.service";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +19,7 @@ function Unavailable({ title, copy }: { title: string; copy: string }) {
 
 export default async function TrocasPage() {
     if (!hasDatabaseUrl()) {
-        return <Unavailable title="Banco indisponível" copy="Sem DATABASE_URL não há trocas para operar." />;
+        return <Unavailable title="Banco indisponível" copy="Sem DATABASE_URL não há mural de trocas." />;
     }
 
     let session;
@@ -31,35 +30,41 @@ export default async function TrocasPage() {
             return (
                 <Unavailable
                     title={error.status === 403 ? "Acesso restrito" : "Autenticação necessária"}
-                    copy="Entre com sua conta para operar trocas de plantão. Médicos podem se cadastrar em /cadastro-medico."
+                    copy="Entre com sua conta para ver o mural. Médicos podem se cadastrar em /cadastro-medico."
                 />
             );
         }
         throw error;
     }
 
-    const db = getDb();
     const isChief = session.user.roles.includes("admin") || session.user.roles.includes("chief");
     const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
 
-    const [myShifts, activeDoctors] = await Promise.all([
-        session.user.doctorId ? listScheduledShiftsForDoctor(session.user.doctorId, today) : Promise.resolve([]),
-        db.select().from(doctors).where(eq(doctors.isActive, true)).orderBy(asc(doctors.fullName)),
+    const db = getDb();
+    const [board, offerable, posts, bases] = await Promise.all([
+        getSwapBoard(today, 14),
+        session.user.doctorId ? listOfferableShifts(session.user.doctorId, today) : Promise.resolve([]),
+        db.select().from(regulationPosts),
+        db.select().from(interventionBases),
     ]);
+    const postLabels = new Map(posts.map((post) => [post.id, post.label]));
+    const baseLabels = new Map(bases.map((base) => [base.id, base.label]));
 
     return (
         <SwapCenterClient
             isChief={isChief}
             myDoctorId={session.user.doctorId}
-            myShifts={myShifts.map((shift) => ({
+            today={today}
+            initialBoard={board}
+            myShifts={offerable.map((shift) => ({
                 id: shift.id,
                 domain: shift.domain,
                 operationalDate: shift.operationalDate,
                 shiftLabel: shift.shiftLabel,
+                targetLabel: shift.postId != null
+                    ? postLabels.get(shift.postId) ?? `ramal ${shift.postId}`
+                    : baseLabels.get(shift.baseId!) ?? `base ${shift.baseId}`,
             }))}
-            doctorOptions={activeDoctors
-                .filter((doctor) => doctor.id !== session.user.doctorId)
-                .map((doctor) => ({ id: doctor.id, name: doctor.displayName ?? doctor.fullName }))}
         />
     );
 }

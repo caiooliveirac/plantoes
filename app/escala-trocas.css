@@ -240,71 +240,185 @@
 
 .et-tile.armable:hover .vacant-hint { color: var(--accent-info); }
 
-/* --- Trilho de comando (CP + COI, sempre presentes) -------------------------- */
+/* --- Faixa do CP (destaque separado; COI fica na regulação com cor própria) --- */
 
-.et-cmdgrid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 10px;
-    padding: 14px;
-}
-
-.et-cmd {
-    border-radius: 18px;
-    border: 1px solid var(--surface-elevated-border);
-    background: var(--surface-glass);
-    padding: 14px 16px;
-    min-height: 96px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    gap: 10px;
-    transition: all var(--dur-base) var(--ease-emph);
-}
-
-.et-cmd .slot-title {
+.et-cpbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    font-family: var(--font-display), var(--font-sans), sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-}
-
-.et-cmd .seat { font-size: 11px; color: var(--muted); letter-spacing: 0.06em; }
-
-.et-cmd.cp {
-    border-color: rgba(197, 161, 106, 0.45);
+    gap: 12px;
+    padding: 12px 18px;
+    border-radius: 18px;
+    border: 1px solid rgba(197, 161, 106, 0.45);
     background: linear-gradient(140deg, rgba(197, 161, 106, 0.12), var(--surface-glass) 55%);
+    backdrop-filter: var(--blur-glass);
 }
-.et-cmd.cp .slot-title { color: var(--gold); }
 
-.et-cmd.coi {
-    border-color: rgba(159, 191, 214, 0.35);
-    background: linear-gradient(140deg, rgba(159, 191, 214, 0.10), var(--surface-glass) 55%);
-}
-.et-cmd.coi .slot-title { color: var(--ice); }
+.et-cpbar .sub { color: var(--muted); font-size: 12.5px; }
+.et-cpbar .sub.warn { color: var(--accent-warn); }
 
-/* Vaga de comando aberta = alerta, não célula vazia qualquer. */
-.et-cmd.open {
+.et-cpbar.open {
     border-style: dashed;
     border-color: var(--accent-warn);
-    box-shadow: 0 0 22px -12px var(--accent-warn-glow);
 }
 
-.et-cmd.open .vacant-hint { color: var(--accent-warn); font-size: 12.5px; }
-
-.et-cmd.armable { cursor: pointer; }
-.et-cmd.armable:hover { transform: translateY(-2px); }
-
 @media (prefers-reduced-motion: no-preference) {
-    .et-cmd.open { animation: et-cmd-pulse 3.2s var(--ease-out-soft) infinite; }
-    @keyframes et-cmd-pulse {
+    .et-cpbar.open { animation: et-cp-pulse 3.2s var(--ease-out-soft) infinite; }
+    @keyframes et-cp-pulse {
         0%, 100% { box-shadow: 0 0 22px -14px var(--accent-warn-glow); }
         50% { box-shadow: 0 0 26px -8px var(--accent-warn-glow); }
     }
 }
+
+.et-cpbar .unassign {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 15px;
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+
+.et-cpbar .unassign:hover { color: var(--accent-fraud); background: var(--accent-fraud-soft); }
+
+/* Tiles ganham tinta da função escalada (COI azul-gelo dentro da regulação) */
+.et-tile.role-coi { border-color: rgba(159, 191, 214, 0.45); background: linear-gradient(140deg, rgba(159, 191, 214, 0.10), var(--surface-glass) 55%); }
+.et-tile.role-cp { border-color: rgba(197, 161, 106, 0.45); background: linear-gradient(140deg, rgba(197, 161, 106, 0.10), var(--surface-glass) 55%); }
+.et-tile.role-psiq { border-color: rgba(239, 105, 97, 0.35); }
+.et-tile.role-piam { border-color: rgba(224, 164, 88, 0.35); }
+
+/* --- Overlay + diálogo de escalação -------------------------------------------- */
+
+.et-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(5, 7, 11, 0.6);
+    backdrop-filter: blur(6px);
+}
+
+@media (min-width: 720px) {
+    .et-overlay { align-items: center; }
+}
+
+.et-dialog {
+    width: min(560px, 100%);
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 22px;
+    box-shadow: var(--shadow-elevated);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* --- Mural de trocas ------------------------------------------------------------- */
+
+.mu-day {
+    border-radius: 18px;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-glass);
+    overflow: hidden;
+}
+
+.mu-day.today { border-color: var(--accent-info); }
+
+.mu-day-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+}
+
+.mu-day-head .dow {
+    font-family: var(--font-display), var(--font-sans), sans-serif;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: capitalize;
+}
+
+.mu-day-head .dt { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mu-day-head .count { margin-left: auto; font-size: 11px; color: var(--muted); }
+
+.mu-lanes { display: grid; grid-template-columns: 1fr 1fr; }
+@media (max-width: 720px) { .mu-lanes { grid-template-columns: 1fr; } }
+
+.mu-lane { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-height: 64px; }
+.mu-lane + .mu-lane { border-left: 1px solid var(--line); }
+@media (max-width: 720px) { .mu-lane + .mu-lane { border-left: none; border-top: 1px solid var(--line); } }
+
+.mu-lane-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.mu-lane-head.sd { color: var(--amber); }
+.mu-lane-head.sn { color: var(--ice); }
+.mu-lane .none { color: var(--muted); font-size: 12px; padding: 4px 0; }
+
+.mu-offer {
+    border-radius: 14px;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-elevated);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: border-color var(--dur-fast) var(--ease-out-soft);
+}
+
+.mu-offer:hover { border-color: var(--accent-info); }
+.mu-offer.committed { opacity: 0.75; border-style: dashed; }
+
+.mu-offer-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mu-offer-top .name { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mu-offer-top .target { font-size: 11px; color: var(--muted); }
+
+/* Bônus: um $ a cada R$100 — brilha, sem cifra explícita */
+.mu-bonus {
+    margin-left: auto;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    color: var(--accent-confirm);
+    text-shadow: 0 0 12px var(--accent-confirm-glow);
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.mu-offer .note { font-size: 12px; color: var(--muted); }
+
+.mu-bids { display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.mu-bid { display: flex; align-items: center; gap: 8px; font-size: 12.5px; flex-wrap: wrap; }
+.mu-bid .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.mu-bid.chosen { color: var(--accent-confirm); }
+
+.mu-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.mu-actions .et-btn { padding: 6px 12px; font-size: 12px; border-radius: 10px; }
+
+/* Stepper de bônus no formulário de oferta */
+.mu-bonus-stepper { display: inline-flex; align-items: center; gap: 10px; }
+.mu-bonus-stepper button {
+    appearance: none;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-elevated);
+    color: var(--text);
+    font-size: 16px;
+    cursor: pointer;
+}
+.mu-bonus-stepper .icons { min-width: 120px; text-align: center; }
 
 /* Baias da frota USA: código grande, presença forte */
 .et-bay {

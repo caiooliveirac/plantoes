@@ -7,7 +7,7 @@ import type { ScheduleBoard, ScheduleDoctorEntry, ScheduleShiftLabel, ScheduleTa
 
 const WEEKDAYS = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
 
-/** Funções da regulação com cor semântica própria (dados reais do serviço). */
+/** Funções da regulação. COI fica DENTRO da regulação, só muda a cor; CP tem destaque próprio. */
 const ROLE_OPTIONS = ["RMT", "COI", "CP", "MRV", "PIAM", "PSIQ"] as const;
 
 function roleClass(role: string | null | undefined) {
@@ -56,9 +56,7 @@ export function ScheduleBoardClient({ initialBoard, canEdit }: { initialBoard: S
     const [board, setBoard] = useState<ScheduleBoard>(initialBoard);
     const [date, setDate] = useState(initialBoard.operationalDate);
     const [lens, setLens] = useState<ScheduleShiftLabel>("SD");
-    const [armedDoctor, setArmedDoctor] = useState<ScheduleDoctorEntry | null>(null);
-    const [armedRole, setArmedRole] = useState<string>("RMT");
-    const [showAllDoctors, setShowAllDoctors] = useState(false);
+    const [picker, setPicker] = useState<ScheduleTargetEntry | null>(null);
     const [feedback, setFeedback] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
     const [busy, setBusy] = useState(false);
 
@@ -71,65 +69,34 @@ export function ScheduleBoardClient({ initialBoard, canEdit }: { initialBoard: S
 
     useEffect(() => {
         if (date !== board.operationalDate) {
+            setPicker(null);
             void refresh(date);
         }
     }, [date, board.operationalDate, refresh]);
-
-    const fixedDoctors = useMemo(
-        () => board.doctors.filter((doctor) => doctor.fixedShiftLabels.includes(lens) || (doctor.fixedForWeekday && doctor.fixedShiftLabels.length === 0)),
-        [board.doctors, lens],
-    );
-    const otherDoctors = useMemo(
-        () => board.doctors.filter((doctor) => !fixedDoctors.includes(doctor)),
-        [board.doctors, fixedDoctors],
-    );
-    const visibleDoctors = showAllDoctors ? [...fixedDoctors, ...otherDoctors] : fixedDoctors;
 
     const regulationTargets = board.targets.filter((target) => target.domain === "regulation");
     const usaTargets = board.targets.filter((target) => target.domain === "intervention");
 
     const filledCount = (targets: ScheduleTargetEntry[]) => targets.filter((target) => target.scheduled[lens]).length;
 
-    // Trilho de comando: o invariante do serviço (1 CP + 2 COI, sempre) vira
-    // slots dedicados no topo, derivados das escalações da regulação por função.
-    const commandSeats = useMemo(() => {
-        const assignments = regulationTargets
-            .map((target) => ({ target, scheduled: target.scheduled[lens] }))
-            .filter((entry) => entry.scheduled);
-        const cp = assignments.filter((entry) => (entry.scheduled!.roleLabel ?? "").toUpperCase() === "CP");
-        const coi = assignments.filter((entry) => (entry.scheduled!.roleLabel ?? "").toUpperCase() === "COI");
-        return {
-            cp: [cp[0] ?? null],
-            coi: [coi[0] ?? null, coi[1] ?? null],
-            extraCoi: coi.slice(2),
-        };
+    // CP é destaque separado; deriva da escalação da regulação com função CP.
+    const cpAssignment = useMemo(() => {
+        for (const target of regulationTargets) {
+            const scheduled = target.scheduled[lens];
+            if (scheduled && (scheduled.roleLabel ?? "").toUpperCase() === "CP") {
+                return { target, scheduled };
+            }
+        }
+        return null;
     }, [regulationTargets, lens]);
 
-    function armForRole(role: string) {
-        setArmedRole(role);
-        setFeedback({
-            kind: "ok",
-            text: armedDoctor
-                ? `Função ${role} armada para ${armedDoctor.displayName ?? armedDoctor.fullName} — toque num ramal.`
-                : `Função ${role} armada — selecione um médico na bancada e toque num ramal.`,
-        });
-    }
+    const coiCount = useMemo(
+        () => regulationTargets.filter((target) => (target.scheduled[lens]?.roleLabel ?? "").toUpperCase() === "COI").length,
+        [regulationTargets, lens],
+    );
 
-    async function assign(target: ScheduleTargetEntry) {
+    async function assign(target: ScheduleTargetEntry, doctor: ScheduleDoctorEntry, roleLabel: string | null) {
         if (!canEdit || busy) return;
-        if (!armedDoctor) {
-            setFeedback({ kind: "err", text: "Selecione um médico na bancada para armar a escalação." });
-            return;
-        }
-        if (target.domain === "regulation" && !armedDoctor.eligibleRegulation) {
-            setFeedback({ kind: "err", text: `${armedDoctor.displayName ?? armedDoctor.fullName} não está apto(a) a REGULAÇÃO.` });
-            return;
-        }
-        if (target.domain === "intervention" && !armedDoctor.eligibleIntervention) {
-            setFeedback({ kind: "err", text: `${armedDoctor.displayName ?? armedDoctor.fullName} não está apto(a) a INTERVENÇÃO.` });
-            return;
-        }
-
         setBusy(true);
         setFeedback(null);
         try {
@@ -139,10 +106,10 @@ export function ScheduleBoardClient({ initialBoard, canEdit }: { initialBoard: S
                 body: JSON.stringify({
                     domain: target.domain,
                     targetId: target.targetId,
-                    doctorId: armedDoctor.id,
+                    doctorId: doctor.id,
                     operationalDate: date,
                     shiftLabel: lens,
-                    roleLabel: target.domain === "regulation" ? armedRole : null,
+                    roleLabel: target.domain === "regulation" ? roleLabel : null,
                 }),
             });
             const payload = await response.json();
@@ -150,6 +117,7 @@ export function ScheduleBoardClient({ initialBoard, canEdit }: { initialBoard: S
                 setFeedback({ kind: "err", text: payload.error ?? "Não foi possível escalar." });
                 return;
             }
+            setPicker(null);
             await refresh(date);
         } finally {
             setBusy(false);
@@ -176,8 +144,8 @@ export function ScheduleBoardClient({ initialBoard, canEdit }: { initialBoard: S
                     <h1>{canEdit ? "Mesa de escala" : "Escala do dia"}</h1>
                     <p>
                         {canEdit
-                            ? `Componha o turno ${lens === "SD" ? "diurno" : "noturno"} de ${WEEKDAYS[board.weekday]}: arme um médico na bancada, escolha a função e toque no slot. Fixos de ${lens} aparecem primeiro.`
-                            : `Escala prevista de ${WEEKDAYS[board.weekday]}, ${formatDateBr(date)}. Trocas aprovadas aparecem no relatório de cobertura.`}
+                            ? `Turno ${lens === "SD" ? "diurno" : "noturno"} de ${WEEKDAYS[board.weekday]}: toque num slot vago e escolha o médico — fixos do dia aparecem primeiro. COI fica na regulação, com cor própria.`
+                            : `Escala prevista de ${WEEKDAYS[board.weekday]}, ${formatDateBr(date)}.`}
                     </p>
                 </div>
                 <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -185,14 +153,14 @@ export function ScheduleBoardClient({ initialBoard, canEdit }: { initialBoard: S
                         <button
                             type="button" role="tab" aria-selected={lens === "SD"}
                             className={`sd${lens === "SD" ? " on" : ""}`}
-                            onClick={() => setLens("SD")}
+                            onClick={() => { setLens("SD"); setPicker(null); }}
                         >
                             <span className="glyph">☀</span> SD 07–19
                         </button>
                         <button
                             type="button" role="tab" aria-selected={lens === "SN"}
                             className={`sn${lens === "SN" ? " on" : ""}`}
-                            onClick={() => setLens("SN")}
+                            onClick={() => { setLens("SN"); setPicker(null); }}
                         >
                             <span className="glyph">☾</span> SN 19–07
                         </button>
@@ -222,256 +190,111 @@ export function ScheduleBoardClient({ initialBoard, canEdit }: { initialBoard: S
                 ) : null}
             </AnimatePresence>
 
-            <div className={`et-layout${canEdit ? "" : " solo"}`}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-                    <section className="et-panel">
-                        <div className="et-panel-head">
-                            <h2>Comando do plantão</h2>
-                            <SectionMeter
-                                filled={(commandSeats.cp[0] ? 1 : 0) + commandSeats.coi.filter(Boolean).length}
-                                total={3}
-                            />
-                        </div>
-                        <div className="et-cmdgrid">
-                            <CommandSeat
-                                role="CP"
-                                seatLabel="chefe de plantão"
-                                entry={commandSeats.cp[0]}
+            {/* CP: destaque separado do restante da regulação */}
+            <section className={`et-cpbar${cpAssignment ? "" : " open"}`}>
+                <span className="et-role cp">CP</span>
+                {cpAssignment ? (
+                    <>
+                        <Monogram name={cpAssignment.scheduled!.doctorName} size={30} />
+                        <strong>{cpAssignment.scheduled!.doctorName}</strong>
+                        <span className="sub">{cpAssignment.target.label} · chefe do plantão {lens}</span>
+                        {canEdit ? (
+                            <button
+                                type="button" className="unassign" aria-label="Retirar CP"
+                                onClick={() => unassign(cpAssignment.scheduled!.shiftId)}
+                            >
+                                ×
+                            </button>
+                        ) : null}
+                    </>
+                ) : (
+                    <span className="sub warn">sem chefe de plantão no {lens} — escale alguém com função CP num ramal</span>
+                )}
+                <span className="et-badge fixed" style={{ marginLeft: "auto" }}>COI no turno: {coiCount}/2</span>
+            </section>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                <section className="et-panel">
+                    <div className="et-panel-head">
+                        <h2>Regulação <span className="et-badge reg">ramais</span> <span className="et-badge" style={{ background: "var(--ice-soft)", color: "var(--ice)" }}>COI em azul-gelo</span></h2>
+                        <SectionMeter filled={filledCount(regulationTargets)} total={regulationTargets.length} />
+                    </div>
+                    <div className="et-tilegrid">
+                        {regulationTargets.map((target) => (
+                            <SlotTile
+                                key={`${target.domain}-${target.targetId}-${lens}`}
+                                target={target}
+                                lens={lens}
                                 canEdit={canEdit}
-                                onArm={() => armForRole("CP")}
+                                onOpen={() => setPicker(target)}
                                 onUnassign={unassign}
                             />
-                            {commandSeats.coi.map((entry, index) => (
-                                <CommandSeat
-                                    key={`coi-${index}`}
-                                    role="COI"
-                                    seatLabel={`assento ${index + 1} de 2`}
-                                    entry={entry}
-                                    canEdit={canEdit}
-                                    onArm={() => armForRole("COI")}
-                                    onUnassign={unassign}
-                                />
-                            ))}
-                            {commandSeats.extraCoi.map((entry) => (
-                                <CommandSeat
-                                    key={entry!.scheduled!.shiftId}
-                                    role="COI"
-                                    seatLabel="excedente"
-                                    entry={entry}
-                                    canEdit={canEdit}
-                                    onArm={() => armForRole("COI")}
-                                    onUnassign={unassign}
-                                />
-                            ))}
-                        </div>
-                    </section>
+                        ))}
+                    </div>
+                </section>
 
-                    <section className="et-panel">
-                        <div className="et-panel-head">
-                            <h2>Regulação <span className="et-badge reg">ramais</span></h2>
-                            <SectionMeter filled={filledCount(regulationTargets)} total={regulationTargets.length} />
-                        </div>
-                        <div className="et-tilegrid">
-                            <AnimatePresence initial={false} mode="popLayout">
-                                {regulationTargets.map((target) => (
-                                    <SlotTile
-                                        key={`${target.domain}-${target.targetId}-${lens}`}
-                                        target={target}
-                                        lens={lens}
-                                        canEdit={canEdit}
-                                        armed={Boolean(armedDoctor)}
-                                        onAssign={() => assign(target)}
-                                        onUnassign={unassign}
-                                    />
-                                ))}
-                            </AnimatePresence>
-                        </div>
-                    </section>
-
-                    <section className="et-panel">
-                        <div className="et-panel-head">
-                            <h2>Frota USA <span className="et-badge int">{usaTargets.length} bases</span></h2>
-                            <SectionMeter filled={filledCount(usaTargets)} total={usaTargets.length} />
-                        </div>
-                        <div className="et-tilegrid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))" }}>
-                            <AnimatePresence initial={false} mode="popLayout">
-                                {usaTargets.map((target) => (
-                                    <SlotTile
-                                        key={`${target.domain}-${target.targetId}-${lens}`}
-                                        target={target}
-                                        lens={lens}
-                                        canEdit={canEdit}
-                                        armed={Boolean(armedDoctor)}
-                                        bay
-                                        onAssign={() => assign(target)}
-                                        onUnassign={unassign}
-                                    />
-                                ))}
-                            </AnimatePresence>
-                        </div>
-                    </section>
-
-                    <AnimatePresence>
-                        {canEdit && armedDoctor ? (
-                            <motion.div
-                                className="et-armed"
-                                initial={{ opacity: 0, y: 24 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: 24 }}
-                            >
-                                <Monogram name={armedDoctor.displayName ?? armedDoctor.fullName} size={32} />
-                                <strong>{armedDoctor.displayName ?? armedDoctor.fullName}</strong>
-                                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted-strong)" }}>
-                                    função
-                                    <select value={armedRole} onChange={(event) => setArmedRole(event.target.value)}>
-                                        {ROLE_OPTIONS.map((role) => <option key={role} value={role}>{role}</option>)}
-                                    </select>
-                                </label>
-                                <span className="hint">toque num slot para escalar no {lens}</span>
-                                <button type="button" className="et-btn" style={{ marginLeft: "auto" }} onClick={() => setArmedDoctor(null)}>
-                                    Desarmar
-                                </button>
-                            </motion.div>
-                        ) : null}
-                    </AnimatePresence>
-                </div>
-
-                {canEdit ? (
-                    <aside className="et-panel et-doctors">
-                        <div className="et-panel-head">
-                            <h2>Bancada</h2>
-                            <span className="et-badge fixed">{fixedDoctors.length} fixos de {WEEKDAYS[board.weekday]}</span>
-                        </div>
-                        <div className="et-doctors-list">
-                            <AnimatePresence initial={false}>
-                                {visibleDoctors.map((doctor) => {
-                                    const name = doctor.displayName ?? doctor.fullName;
-                                    return (
-                                        <motion.button
-                                            key={doctor.id}
-                                            layout
-                                            type="button"
-                                            initial={{ opacity: 0, y: 6 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            exit={{ opacity: 0 }}
-                                            className={`et-doctor-card${armedDoctor?.id === doctor.id ? " selected" : ""}`}
-                                            style={{ textAlign: "left", font: "inherit", color: "inherit" }}
-                                            onClick={() => setArmedDoctor(armedDoctor?.id === doctor.id ? null : doctor)}
-                                        >
-                                            <Monogram name={name} size={30} ringed={doctor.fixedForWeekday} />
-                                            <div style={{ minWidth: 0, flex: 1 }}>
-                                                <div className="et-doc-name">{name}</div>
-                                                <div className="et-doc-meta">
-                                                    {doctor.fixedForWeekday ? <span className="et-badge fixed">fixo {doctor.fixedShiftLabels.join("·") || "dia"}</span> : null}
-                                                    {doctor.admittedAt ? <span>desde {formatDateBr(doctor.admittedAt)}</span> : null}
-                                                </div>
-                                            </div>
-                                            <div className="et-doc-meta">
-                                                {doctor.eligibleRegulation ? <span className="et-badge reg">R</span> : null}
-                                                {doctor.eligibleIntervention ? <span className="et-badge int">I</span> : null}
-                                            </div>
-                                        </motion.button>
-                                    );
-                                })}
-                            </AnimatePresence>
-                            {visibleDoctors.length === 0 ? (
-                                <div className="et-empty-state">Nenhum fixo de {WEEKDAYS[board.weekday]} no {lens}. Expanda a bancada.</div>
-                            ) : null}
-                        </div>
-                        <button type="button" className="et-expander" onClick={() => setShowAllDoctors(!showAllDoctors)}>
-                            {showAllDoctors ? "▲ Só os fixos do dia" : `▼ Corpo clínico completo (${otherDoctors.length})`}
-                        </button>
-                    </aside>
-                ) : null}
+                <section className="et-panel">
+                    <div className="et-panel-head">
+                        <h2>Frota USA <span className="et-badge int">{usaTargets.length} bases</span></h2>
+                        <SectionMeter filled={filledCount(usaTargets)} total={usaTargets.length} />
+                    </div>
+                    <div className="et-tilegrid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))" }}>
+                        {usaTargets.map((target) => (
+                            <SlotTile
+                                key={`${target.domain}-${target.targetId}-${lens}`}
+                                target={target}
+                                lens={lens}
+                                canEdit={canEdit}
+                                bay
+                                onOpen={() => setPicker(target)}
+                                onUnassign={unassign}
+                            />
+                        ))}
+                    </div>
+                </section>
             </div>
+
+            <AnimatePresence>
+                {canEdit && picker ? (
+                    <PickerDialog
+                        key={`${picker.domain}-${picker.targetId}`}
+                        target={picker}
+                        lens={lens}
+                        weekday={board.weekday}
+                        doctors={board.doctors}
+                        busy={busy}
+                        onPick={(doctor, role) => assign(picker, doctor, role)}
+                        onClose={() => setPicker(null)}
+                    />
+                ) : null}
+            </AnimatePresence>
         </main>
     );
 }
 
-function CommandSeat({ role, seatLabel, entry, canEdit, onArm, onUnassign }: {
-    role: "CP" | "COI";
-    seatLabel: string;
-    entry: { target: ScheduleTargetEntry; scheduled: ScheduleTargetEntry["scheduled"][ScheduleShiftLabel] } | null;
-    canEdit: boolean;
-    onArm: () => void;
-    onUnassign: (shiftId: string) => void;
-}) {
-    const scheduled = entry?.scheduled ?? null;
-    const open = !scheduled;
-    const armable = canEdit && open;
-
-    return (
-        <motion.div
-            layout
-            initial={{ opacity: 0, scale: 0.97 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className={`et-cmd ${role.toLowerCase()}${open ? " open" : ""}${armable ? " armable" : ""}`}
-            onClick={armable ? onArm : undefined}
-            role={armable ? "button" : undefined}
-            tabIndex={armable ? 0 : undefined}
-            onKeyDown={armable ? (event) => { if (event.key === "Enter" || event.key === " ") onArm(); } : undefined}
-        >
-            <span className="slot-title">
-                {role}
-                <span className="seat">{seatLabel}</span>
-            </span>
-            {scheduled ? (
-                <span className="et-occupant">
-                    <Monogram name={scheduled.doctorName} size={30} />
-                    <span style={{ minWidth: 0 }}>
-                        <span className="name" style={{ display: "block" }}>{scheduled.doctorName}</span>
-                        <span style={{ fontSize: 11, color: "var(--muted)" }}>{entry!.target.label}</span>
-                    </span>
-                    {canEdit ? (
-                        <button
-                            type="button"
-                            className="unassign"
-                            aria-label={`Retirar ${scheduled.doctorName} do ${role}`}
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                onUnassign(scheduled.shiftId);
-                            }}
-                        >
-                            ×
-                        </button>
-                    ) : null}
-                </span>
-            ) : (
-                <span className="vacant-hint">
-                    {canEdit ? `sem ${role} no turno — toque para armar a função` : `sem ${role} escalado`}
-                </span>
-            )}
-        </motion.div>
-    );
-}
-
-function SlotTile({ target, lens, canEdit, armed, bay = false, onAssign, onUnassign }: {
+function SlotTile({ target, lens, canEdit, bay = false, onOpen, onUnassign }: {
     target: ScheduleTargetEntry;
     lens: ScheduleShiftLabel;
     canEdit: boolean;
-    armed: boolean;
     bay?: boolean;
-    onAssign: () => void;
+    onOpen: () => void;
     onUnassign: (shiftId: string) => void;
 }) {
     const scheduled = target.scheduled[lens];
-    const armable = canEdit && !scheduled;
+    const openable = canEdit && !scheduled;
+    const tileRole = roleClass(scheduled?.roleLabel);
 
     return (
-        <motion.div
-            layout
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.96 }}
-            className={`et-tile${bay ? " et-bay" : ""}${scheduled ? "" : " vacant"}${armable ? " armable" : ""}`}
-            onClick={armable ? onAssign : undefined}
-            role={armable ? "button" : undefined}
-            tabIndex={armable ? 0 : undefined}
-            onKeyDown={armable ? (event) => { if (event.key === "Enter" || event.key === " ") onAssign(); } : undefined}
+        <div
+            className={`et-tile${bay ? " et-bay" : ""}${scheduled ? ` filled role-${tileRole}` : " vacant"}${openable ? " armable" : ""}`}
+            onClick={openable ? onOpen : undefined}
+            role={openable ? "button" : undefined}
+            tabIndex={openable ? 0 : undefined}
+            onKeyDown={openable ? (event) => { if (event.key === "Enter" || event.key === " ") onOpen(); } : undefined}
         >
             <span className="code">
                 {bay ? target.code : target.label}
-                {scheduled?.roleLabel ? <span className={`et-role ${roleClass(scheduled.roleLabel)}`}>{scheduled.roleLabel}</span> : null}
+                {scheduled?.roleLabel ? <span className={`et-role ${tileRole}`}>{scheduled.roleLabel}</span> : null}
             </span>
             {scheduled ? (
                 <span className="et-occupant">
@@ -492,8 +315,99 @@ function SlotTile({ target, lens, canEdit, armed, bay = false, onAssign, onUnass
                     ) : null}
                 </span>
             ) : (
-                <span className="vacant-hint">{canEdit ? (armed ? "toque para escalar" : "vago") : "vago"}</span>
+                <span className="vacant-hint">{canEdit ? "+ escalar" : "vago"}</span>
             )}
+        </div>
+    );
+}
+
+function PickerDialog({ target, lens, weekday, doctors, busy, onPick, onClose }: {
+    target: ScheduleTargetEntry;
+    lens: ScheduleShiftLabel;
+    weekday: number;
+    doctors: ScheduleDoctorEntry[];
+    busy: boolean;
+    onPick: (doctor: ScheduleDoctorEntry, role: string | null) => void;
+    onClose: () => void;
+}) {
+    const [search, setSearch] = useState("");
+    const [role, setRole] = useState<string>("RMT");
+
+    const eligible = useMemo(() => doctors.filter((doctor) =>
+        target.domain === "regulation" ? doctor.eligibleRegulation : doctor.eligibleIntervention), [doctors, target.domain]);
+
+    const filtered = useMemo(() => {
+        const query = search.trim().toLowerCase();
+        if (!query) return eligible;
+        return eligible.filter((doctor) =>
+            doctor.fullName.toLowerCase().includes(query)
+            || (doctor.displayName ?? "").toLowerCase().includes(query));
+    }, [eligible, search]);
+
+    return (
+        <motion.div
+            className="et-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+        >
+            <motion.div
+                className="et-dialog"
+                initial={{ opacity: 0, y: 20, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 20 }}
+                onClick={(event) => event.stopPropagation()}
+                role="dialog"
+                aria-label={`Escalar ${target.label} no ${lens}`}
+            >
+                <div className="et-panel-head">
+                    <h2>Escalar · {target.label} · {lens}</h2>
+                    <button type="button" className="et-btn" onClick={onClose}>Fechar</button>
+                </div>
+                <div style={{ display: "flex", gap: 10, padding: "12px 16px 0", alignItems: "center" }}>
+                    <input
+                        className="et-search"
+                        placeholder="Buscar médico…"
+                        value={search}
+                        onChange={(event) => setSearch(event.target.value)}
+                        autoFocus
+                    />
+                    {target.domain === "regulation" ? (
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted-strong)" }}>
+                            função
+                            <select value={role} onChange={(event) => setRole(event.target.value)}>
+                                {ROLE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                            </select>
+                        </label>
+                    ) : null}
+                </div>
+                <div className="et-doctors-list" style={{ maxHeight: "48vh" }}>
+                    {filtered.map((doctor) => {
+                        const name = doctor.displayName ?? doctor.fullName;
+                        return (
+                            <button
+                                key={doctor.id}
+                                type="button"
+                                className="et-doctor-card"
+                                style={{ textAlign: "left", font: "inherit", color: "inherit", width: "100%" }}
+                                disabled={busy}
+                                onClick={() => onPick(doctor, target.domain === "regulation" ? role : null)}
+                            >
+                                <Monogram name={name} size={30} ringed={doctor.fixedForWeekday} />
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div className="et-doc-name">{name}</div>
+                                    <div className="et-doc-meta">
+                                        {doctor.fixedForWeekday ? <span className="et-badge fixed">fixo de {WEEKDAYS[weekday]} {doctor.fixedShiftLabels.join("·")}</span> : null}
+                                        {doctor.admittedAt ? <span>desde {formatDateBr(doctor.admittedAt)}</span> : null}
+                                    </div>
+                                </div>
+                            </button>
+                        );
+                    })}
+                    {filtered.length === 0 ? <div className="et-empty-state">Nenhum médico apto encontrado.</div> : null}
+                </div>
+            </motion.div>
         </motion.div>
     );
 }

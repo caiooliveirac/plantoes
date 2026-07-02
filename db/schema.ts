@@ -744,3 +744,47 @@ export const shiftSwaps = operationsV2.table(
         index("shift_swaps_to_doctor_idx").on(table.toDoctorId, table.status),
     ],
 );
+
+// Mural de trocas: oferta pública de um plantão, com bônus em R$ (um $ a cada
+// R$100 na UI). Negociação — o acordo vira uma linha em shiftSwaps.
+export const shiftOffers = operationsV2.table(
+    "shift_offers",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        shiftId: uuid("shift_id").notNull().references(() => scheduledShifts.id),
+        offeredByDoctorId: uuid("offered_by_doctor_id").notNull().references(() => doctors.id),
+        bonusBrl: integer("bonus_brl").notNull().default(0),
+        note: text("note"),
+        status: varchar("status", { length: 16 }).notNull().default("open"),
+        settledSwapId: uuid("settled_swap_id").references(() => shiftSwaps.id),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("shift_offers_open_shift_idx").on(table.shiftId).where(sql`${table.status} = 'open'`),
+        index("shift_offers_status_idx").on(table.status, table.createdAt),
+    ],
+);
+
+// Lances numa oferta: "pegar" ou contra-oferta com outro plantão. Vários
+// médicos podem ter lance pendente na mesma oferta simultaneamente.
+export const shiftOfferBids = operationsV2.table(
+    "shift_offer_bids",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        offerId: uuid("offer_id").notNull().references(() => shiftOffers.id, { onDelete: "cascade" }),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        kind: varchar("kind", { length: 16 }).notNull().default("take"),
+        counterShiftId: uuid("counter_shift_id").references(() => scheduledShifts.id),
+        note: text("note"),
+        status: varchar("status", { length: 16 }).notNull().default("pending"),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("shift_offer_bids_offer_doctor_idx").on(table.offerId, table.doctorId).where(sql`${table.status} = 'pending'`),
+        index("shift_offer_bids_offer_idx").on(table.offerId, table.status),
+    ],
+);

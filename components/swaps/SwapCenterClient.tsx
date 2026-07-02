@@ -3,163 +3,120 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Monogram } from "@/components/ui/Monogram";
+import type { OfferView, SwapBoardDay } from "@/services/shift-offers.service";
 
-interface SwapShift {
-    id: string;
-    domain: string;
-    operationalDate: string;
-    shiftLabel: string;
-}
-
-interface SwapEntry {
-    id: string;
-    swapType: "transfer" | "mutual" | "function_change" | "base_change";
-    status: "offered" | "accepted" | "approved" | "rejected" | "cancelled";
-    fromDoctorName: string;
-    toDoctorName: string;
-    notes: string | null;
-    shift: SwapShift | null;
-    counterpartShift: SwapShift | null;
-}
+const WEEKDAYS = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
 
 interface MyShift {
     id: string;
     domain: string;
     operationalDate: string;
     shiftLabel: string;
+    targetLabel: string;
 }
 
-interface DoctorOption {
+interface PendingSwap {
     id: string;
-    name: string;
+    status: string;
+    fromDoctorName: string;
+    toDoctorName: string;
+    shift: { operationalDate: string; shiftLabel: string } | null;
 }
-
-const SWAP_TYPE_LABELS: Record<SwapEntry["swapType"], string> = {
-    transfer: "repasse",
-    mutual: "troca mútua",
-    function_change: "troca de função",
-    base_change: "troca de base",
-};
-
-const MONTHS_SHORT = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
 function formatDateBr(date: string) {
     const [y, m, d] = date.split("-");
     return `${d}/${m}/${y}`;
 }
 
-/** Trilho proposta → aceite → chefia; rejeitada/cancelada mata o passo corrente. */
-function TicketSteps({ status }: { status: SwapEntry["status"] }) {
-    const dead = status === "rejected" || status === "cancelled";
-    const reach = status === "approved" ? 3 : status === "accepted" ? 2 : 1;
-    const steps = [
-        { lbl: "proposta", done: reach >= 1 },
-        { lbl: "aceite", done: reach >= 2 },
-        { lbl: "chefia", done: reach >= 3 },
-    ];
-    return (
-        <div className="tk-steps" aria-label={`status: ${status}`}>
-            {steps.map((step, index) => (
-                <span key={step.lbl} style={{ display: "contents" }}>
-                    {index > 0 ? <span className={`bar${steps[index].done ? " done" : ""}`} /> : null}
-                    <span className={`step${step.done ? " done" : ""}${dead && index === reach - 1 ? " dead" : ""}`}>
-                        <span className="dot" />
-                        <span className="lbl">{step.lbl}</span>
-                    </span>
-                </span>
-            ))}
-        </div>
-    );
-}
-
-export function SwapCenterClient({
-    isChief,
-    myDoctorId,
-    myShifts,
-    doctorOptions,
-}: {
+export function SwapCenterClient({ isChief, myDoctorId, myShifts, initialBoard, today }: {
     isChief: boolean;
     myDoctorId: string | null;
     myShifts: MyShift[];
-    doctorOptions: DoctorOption[];
+    initialBoard: SwapBoardDay[];
+    today: string;
 }) {
-    const [swaps, setSwaps] = useState<SwapEntry[]>([]);
+    const [board, setBoard] = useState<SwapBoardDay[]>(initialBoard);
+    const [pending, setPending] = useState<PendingSwap[]>([]);
     const [feedback, setFeedback] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
     const [busy, setBusy] = useState(false);
-    const [form, setForm] = useState({ shiftId: "", swapType: "transfer", toDoctorId: "", notes: "" });
+    const [offerForm, setOfferForm] = useState({ shiftId: "", bonusBrl: 0, note: "", open: false });
+    const [counterFor, setCounterFor] = useState<{ offerId: string; shiftId: string } | null>(null);
 
     const refresh = useCallback(async () => {
-        const response = await fetch("/api/swaps");
-        if (response.ok) {
-            const payload = await response.json();
-            setSwaps(payload.swaps ?? []);
+        const [offersResponse, swapsResponse] = await Promise.all([
+            fetch("/api/offers"),
+            isChief ? fetch("/api/swaps") : Promise.resolve(null),
+        ]);
+        if (offersResponse.ok) {
+            const payload = await offersResponse.json();
+            setBoard(payload.board ?? []);
         }
-    }, []);
+        if (swapsResponse?.ok) {
+            const payload = await swapsResponse.json();
+            setPending((payload.swaps ?? []).filter((swap: PendingSwap) => swap.status === "accepted"));
+        }
+    }, [isChief]);
 
     useEffect(() => {
         void refresh();
     }, [refresh]);
 
-    async function submit() {
-        if (busy || !form.shiftId || !form.toDoctorId) {
-            setFeedback({ kind: "err", text: "Escolha o plantão e o médico destinatário." });
-            return;
-        }
+    async function call(url: string, body?: unknown) {
         setBusy(true);
         setFeedback(null);
         try {
-            const response = await fetch("/api/swaps", {
+            const response = await fetch(url, {
                 method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({
-                    shiftId: form.shiftId,
-                    swapType: form.swapType,
-                    toDoctorId: form.toDoctorId,
-                    notes: form.notes || null,
-                }),
+                headers: body ? { "content-type": "application/json" } : undefined,
+                body: body ? JSON.stringify(body) : undefined,
             });
-            const payload = await response.json();
+            const payload = await response.json().catch(() => ({}));
             if (!response.ok) {
-                setFeedback({ kind: "err", text: payload.error ?? "Não foi possível propor a troca." });
-                return;
+                setFeedback({ kind: "err", text: payload.error ?? "Operação falhou." });
+                return false;
             }
-            setFeedback({ kind: "ok", text: "Troca proposta. Aguarde o aceite do colega e a aprovação da chefia." });
-            setForm({ shiftId: "", swapType: "transfer", toDoctorId: "", notes: "" });
             await refresh();
+            return true;
         } finally {
             setBusy(false);
         }
     }
 
-    async function transition(swapId: string, action: "accept" | "approve" | "reject" | "cancel") {
-        if (busy) return;
-        setBusy(true);
-        try {
-            const response = await fetch(`/api/swaps/${swapId}/transition`, {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ action }),
-            });
-            const payload = await response.json();
-            if (!response.ok) {
-                setFeedback({ kind: "err", text: payload.error ?? "Transição não permitida." });
-            }
-            await refresh();
-        } finally {
-            setBusy(false);
+    async function submitOffer() {
+        if (!offerForm.shiftId) {
+            setFeedback({ kind: "err", text: "Escolha qual dos seus plantões vai para o mural." });
+            return;
+        }
+        const ok = await call("/api/offers", {
+            shiftId: offerForm.shiftId,
+            bonusBrl: offerForm.bonusBrl,
+            note: offerForm.note || null,
+        });
+        if (ok) {
+            setOfferForm({ shiftId: "", bonusBrl: 0, note: "", open: false });
+            setFeedback({ kind: "ok", text: "Plantão no mural. Todo o corpo clínico já pode ver e pegar." });
         }
     }
+
+    const bonusPreview = "$".repeat(Math.min(10, Math.floor(offerForm.bonusBrl / 100)));
 
     return (
         <main className="et-shell">
             <header className="et-hero">
                 <div>
-                    <h1>Trocas de plantão</h1>
+                    <h1>Mural de trocas</h1>
                     <p>
-                        Cada troca é um bilhete: você propõe, o colega aceita, a chefia carimba. O relatório de
-                        cobertura passa a mostrar quem está por quem — check-ins e pagamento seguem como hoje.
+                        As próximas duas semanas, dia a dia, diurno e noturno separados — com todas as ofertas
+                        abertas. Cada <strong style={{ color: "var(--accent-confirm)" }}>$</strong> sinaliza R$100 de
+                        bônus de quem oferta. Pegue direto, ou contra-oferte um plantão seu: a oferta continua
+                        visível e outros colegas podem dar lance até o ofertante escolher.
                     </p>
                 </div>
+                {myDoctorId ? (
+                    <button type="button" className="et-btn primary" onClick={() => setOfferForm({ ...offerForm, open: !offerForm.open })}>
+                        {offerForm.open ? "Fechar" : "＋ Ofertar plantão meu"}
+                    </button>
+                ) : null}
             </header>
 
             <AnimatePresence>
@@ -176,128 +133,227 @@ export function SwapCenterClient({
                 ) : null}
             </AnimatePresence>
 
-            <div className="et-layout">
-                <section className="et-panel">
-                    <div className="et-panel-head">
-                        <h2>{isChief ? "Todas as trocas" : "Minhas trocas"}</h2>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 16 }}>
-                        <AnimatePresence initial={false}>
-                            {swaps.map((swap) => {
-                                const [, month, day] = (swap.shift?.operationalDate ?? "----00-00").split("-");
-                                return (
-                                    <motion.article
-                                        key={swap.id}
-                                        layout
-                                        className="tk-card"
-                                        initial={{ opacity: 0, y: 10 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0 }}
-                                    >
-                                        <div className="tk-stub">
-                                            <span className="day">{day}</span>
-                                            <span className="month">{MONTHS_SHORT[Number(month) - 1] ?? "—"}</span>
-                                            <span className={`turno ${swap.shift?.shiftLabel === "SN" ? "sn" : "sd"}`}>
-                                                {swap.shift?.shiftLabel === "SN" ? "☾ SN" : "☀ SD"}
-                                            </span>
-                                        </div>
-                                        <div className="tk-body">
-                                            <div className="tk-flow">
-                                                <span className="who">
-                                                    <Monogram name={swap.fromDoctorName} size={26} />
-                                                    {swap.fromDoctorName}
-                                                </span>
-                                                <span className="arrow">⇢</span>
-                                                <span className="who">
-                                                    <Monogram name={swap.toDoctorName} size={26} />
-                                                    {swap.toDoctorName}
-                                                </span>
-                                                <span className="kind">{SWAP_TYPE_LABELS[swap.swapType]}</span>
-                                            </div>
-                                            <span className="tk-note">
-                                                {swap.shift ? `${swap.shift.domain === "regulation" ? "regulação" : "intervenção"} · ${formatDateBr(swap.shift.operationalDate)}` : ""}
-                                                {swap.notes ? ` — ${swap.notes}` : ""}
-                                            </span>
-                                            <div className="et-actions">
-                                                {swap.status === "offered" && myDoctorId ? (
-                                                    <button type="button" className="et-btn confirm" disabled={busy} onClick={() => transition(swap.id, "accept")}>
-                                                        Aceitar
-                                                    </button>
-                                                ) : null}
-                                                {swap.status === "accepted" && isChief ? (
-                                                    <button type="button" className="et-btn primary" disabled={busy} onClick={() => transition(swap.id, "approve")}>
-                                                        Aprovar
-                                                    </button>
-                                                ) : null}
-                                                {(swap.status === "offered" || swap.status === "accepted") ? (
-                                                    <>
-                                                        <button type="button" className="et-btn danger" disabled={busy} onClick={() => transition(swap.id, "reject")}>
-                                                            Recusar
-                                                        </button>
-                                                        <button type="button" className="et-btn" disabled={busy} onClick={() => transition(swap.id, "cancel")}>
-                                                            Cancelar
-                                                        </button>
-                                                    </>
-                                                ) : null}
-                                            </div>
-                                        </div>
-                                        <div className="tk-side">
-                                            <TicketSteps status={swap.status} />
-                                            <span className={`et-status ${swap.status}`}>{swap.status === "accepted" ? "aguarda chefia" : swap.status}</span>
-                                        </div>
-                                    </motion.article>
-                                );
-                            })}
-                        </AnimatePresence>
-                        {swaps.length === 0 ? <div className="et-empty-state">Nenhuma troca por aqui ainda.</div> : null}
-                    </div>
-                </section>
-
-                {myDoctorId ? (
-                    <aside className="et-panel">
-                        <div className="et-panel-head">
-                            <h2>Propor troca</h2>
-                        </div>
-                        <div className="et-form" style={{ padding: 16 }}>
+            <AnimatePresence>
+                {offerForm.open ? (
+                    <motion.section
+                        className="et-panel"
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        style={{ overflow: "hidden" }}
+                    >
+                        <div className="et-panel-head"><h2>Nova oferta</h2></div>
+                        <div className="et-form" style={{ padding: 16, maxWidth: 640 }}>
                             <label>
-                                Meu plantão previsto
-                                <select value={form.shiftId} onChange={(event) => setForm({ ...form, shiftId: event.target.value })}>
+                                Qual plantão meu vai pro mural
+                                <select value={offerForm.shiftId} onChange={(event) => setOfferForm({ ...offerForm, shiftId: event.target.value })}>
                                     <option value="">— selecione —</option>
                                     {myShifts.map((shift) => (
                                         <option key={shift.id} value={shift.id}>
-                                            {formatDateBr(shift.operationalDate)} · {shift.shiftLabel} · {shift.domain === "regulation" ? "regulação" : "intervenção"}
+                                            {formatDateBr(shift.operationalDate)} · {shift.shiftLabel} · {shift.targetLabel}
                                         </option>
                                     ))}
                                 </select>
                             </label>
                             <label>
-                                Tipo
-                                <select value={form.swapType} onChange={(event) => setForm({ ...form, swapType: event.target.value })}>
-                                    <option value="transfer">Repasse (colega assume por mim)</option>
-                                    <option value="function_change">Troca de função</option>
-                                    <option value="base_change">Troca de base</option>
-                                </select>
+                                Bônus (opcional — cada $ = R$100, ninguém vê o valor em texto)
+                                <span className="mu-bonus-stepper">
+                                    <button type="button" onClick={() => setOfferForm({ ...offerForm, bonusBrl: Math.max(0, offerForm.bonusBrl - 100) })} aria-label="Menos R$100">−</button>
+                                    <span className="icons mu-bonus">{bonusPreview || "sem bônus"}</span>
+                                    <button type="button" onClick={() => setOfferForm({ ...offerForm, bonusBrl: Math.min(5000, offerForm.bonusBrl + 100) })} aria-label="Mais R$100">＋</button>
+                                </span>
                             </label>
                             <label>
-                                Para
-                                <select value={form.toDoctorId} onChange={(event) => setForm({ ...form, toDoctorId: event.target.value })}>
-                                    <option value="">— selecione o colega —</option>
-                                    {doctorOptions.map((doctor) => (
-                                        <option key={doctor.id} value={doctor.id}>{doctor.name}</option>
-                                    ))}
-                                </select>
+                                Recado (opcional)
+                                <input value={offerForm.note} onChange={(event) => setOfferForm({ ...offerForm, note: event.target.value })} placeholder="ex.: preciso viajar, dou preferência a troca em julho" />
                             </label>
-                            <label>
-                                Observação (opcional)
-                                <textarea rows={2} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} />
-                            </label>
-                            <button type="button" className="et-btn primary" disabled={busy} onClick={submit}>
-                                Propor troca
+                            <button type="button" className="et-btn confirm" disabled={busy} onClick={submitOffer}>
+                                Publicar no mural
                             </button>
                         </div>
-                    </aside>
+                    </motion.section>
                 ) : null}
+            </AnimatePresence>
+
+            {isChief && pending.length > 0 ? (
+                <section className="et-panel">
+                    <div className="et-panel-head"><h2>Acordos aguardando sua aprovação</h2></div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 14 }}>
+                        {pending.map((swap) => (
+                            <div key={swap.id} className="mu-offer">
+                                <div className="mu-offer-top">
+                                    <Monogram name={swap.fromDoctorName} size={24} />
+                                    <span className="name">{swap.fromDoctorName} ⇢ {swap.toDoctorName}</span>
+                                    <span className="target">
+                                        {swap.shift ? `${formatDateBr(swap.shift.operationalDate)} · ${swap.shift.shiftLabel}` : ""}
+                                    </span>
+                                    <span className="mu-actions" style={{ marginLeft: "auto" }}>
+                                        <button type="button" className="et-btn primary" disabled={busy} onClick={() => call(`/api/swaps/${swap.id}/transition`, { action: "approve" })}>Aprovar</button>
+                                        <button type="button" className="et-btn danger" disabled={busy} onClick={() => call(`/api/swaps/${swap.id}/transition`, { action: "reject" })}>Recusar</button>
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            ) : null}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {board.map((day) => {
+                    const total = day.offers.SD.length + day.offers.SN.length;
+                    return (
+                        <section key={day.operationalDate} className={`mu-day${day.operationalDate === today ? " today" : ""}`}>
+                            <div className="mu-day-head">
+                                <span className="dow">{WEEKDAYS[day.weekday]}</span>
+                                <span className="dt">{formatDateBr(day.operationalDate)}</span>
+                                {day.operationalDate === today ? <span className="et-badge reg">hoje</span> : null}
+                                <span className="count">{total === 0 ? "sem ofertas" : `${total} oferta${total > 1 ? "s" : ""}`}</span>
+                            </div>
+                            <div className="mu-lanes">
+                                <OfferLane
+                                    label="☀ diurno"
+                                    lane="sd"
+                                    offers={day.offers.SD}
+                                    myDoctorId={myDoctorId}
+                                    myShifts={myShifts}
+                                    busy={busy}
+                                    counterFor={counterFor}
+                                    setCounterFor={setCounterFor}
+                                    call={call}
+                                />
+                                <OfferLane
+                                    label="☾ noturno"
+                                    lane="sn"
+                                    offers={day.offers.SN}
+                                    myDoctorId={myDoctorId}
+                                    myShifts={myShifts}
+                                    busy={busy}
+                                    counterFor={counterFor}
+                                    setCounterFor={setCounterFor}
+                                    call={call}
+                                />
+                            </div>
+                        </section>
+                    );
+                })}
             </div>
         </main>
+    );
+}
+
+function OfferLane({ label, lane, offers, myDoctorId, myShifts, busy, counterFor, setCounterFor, call }: {
+    label: string;
+    lane: "sd" | "sn";
+    offers: OfferView[];
+    myDoctorId: string | null;
+    myShifts: MyShift[];
+    busy: boolean;
+    counterFor: { offerId: string; shiftId: string } | null;
+    setCounterFor: (value: { offerId: string; shiftId: string } | null) => void;
+    call: (url: string, body?: unknown) => Promise<boolean>;
+}) {
+    return (
+        <div className="mu-lane">
+            <span className={`mu-lane-head ${lane}`}>{label}</span>
+            {offers.length === 0 ? <span className="none">—</span> : null}
+            <AnimatePresence initial={false}>
+                {offers.map((offer) => {
+                    const mine = offer.offeredByDoctorId === myDoctorId;
+                    const myBid = offer.bids.find((bid) => bid.doctorId === myDoctorId && bid.status === "pending");
+                    return (
+                        <motion.article
+                            key={offer.id}
+                            layout
+                            className={`mu-offer${offer.status === "committed" ? " committed" : ""}`}
+                            initial={{ opacity: 0, y: 8 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                        >
+                            <div className="mu-offer-top">
+                                <Monogram name={offer.offeredByDoctorName} size={26} />
+                                <span style={{ minWidth: 0 }}>
+                                    <span className="name" style={{ display: "block" }}>{offer.offeredByDoctorName}</span>
+                                    <span className="target">{offer.targetLabel} · {offer.domain === "regulation" ? "regulação" : "intervenção"}</span>
+                                </span>
+                                {offer.bonusBrl > 0 ? (
+                                    <span className="mu-bonus" title="Bônus sinalizado: cada $ vale R$100">{offer.bonusIcons}</span>
+                                ) : null}
+                            </div>
+                            {offer.note ? <span className="note">{offer.note}</span> : null}
+                            {offer.status === "committed" ? (
+                                <span className="note" style={{ color: "var(--accent-info)" }}>acordo fechado — aguardando chefia</span>
+                            ) : null}
+
+                            {offer.bids.length > 0 ? (
+                                <div className="mu-bids">
+                                    {offer.bids.map((bid) => (
+                                        <div key={bid.id} className={`mu-bid${bid.status === "chosen" ? " chosen" : ""}`}>
+                                            <Monogram name={bid.doctorName} size={20} />
+                                            <span>{bid.doctorName}</span>
+                                            <span className="k">{bid.kind === "take" ? "quer pegar" : `oferece ${bid.counterShiftLabel ?? "troca"}`}</span>
+                                            {mine && offer.status === "open" && bid.status === "pending" ? (
+                                                <button
+                                                    type="button" className="et-btn confirm" style={{ marginLeft: "auto", padding: "4px 10px", fontSize: 11 }}
+                                                    disabled={busy}
+                                                    onClick={() => call(`/api/offers/${offer.id}/choose`, { bidId: bid.id })}
+                                                >
+                                                    Fechar com {bid.doctorName.split(" ")[0]}
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : null}
+
+                            {offer.status === "open" && myDoctorId && !mine && !myBid ? (
+                                <div className="mu-actions">
+                                    <button type="button" className="et-btn confirm" disabled={busy} onClick={() => call(`/api/offers/${offer.id}/bids`, { kind: "take" })}>
+                                        Pegar
+                                    </button>
+                                    {counterFor?.offerId === offer.id ? (
+                                        <>
+                                            <select
+                                                value={counterFor.shiftId}
+                                                onChange={(event) => setCounterFor({ offerId: offer.id, shiftId: event.target.value })}
+                                                style={{ background: "var(--surface-elevated)", color: "var(--text)", border: "1px solid var(--surface-elevated-border)", borderRadius: 10, padding: "6px 8px", fontSize: 12 }}
+                                            >
+                                                <option value="">meu plantão…</option>
+                                                {myShifts.map((shift) => (
+                                                    <option key={shift.id} value={shift.id}>
+                                                        {formatDateBr(shift.operationalDate)} · {shift.shiftLabel} · {shift.targetLabel}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                type="button" className="et-btn primary" disabled={busy || !counterFor.shiftId}
+                                                onClick={async () => {
+                                                    const ok = await call(`/api/offers/${offer.id}/bids`, { kind: "counter", counterShiftId: counterFor.shiftId });
+                                                    if (ok) setCounterFor(null);
+                                                }}
+                                            >
+                                                Enviar
+                                            </button>
+                                            <button type="button" className="et-btn" onClick={() => setCounterFor(null)}>✕</button>
+                                        </>
+                                    ) : (
+                                        <button type="button" className="et-btn" disabled={busy} onClick={() => setCounterFor({ offerId: offer.id, shiftId: "" })}>
+                                            Contra-ofertar
+                                        </button>
+                                    )}
+                                </div>
+                            ) : null}
+                            {myBid ? <span className="note" style={{ color: "var(--accent-confirm)" }}>seu lance está no mural — aguardando o ofertante</span> : null}
+                            {mine && offer.status === "open" ? (
+                                <div className="mu-actions">
+                                    <button type="button" className="et-btn danger" disabled={busy} onClick={() => call(`/api/offers/${offer.id}/withdraw`)}>
+                                        Retirar oferta
+                                    </button>
+                                </div>
+                            ) : null}
+                        </motion.article>
+                    );
+                })}
+            </AnimatePresence>
+        </div>
     );
 }
