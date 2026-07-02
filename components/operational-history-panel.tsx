@@ -9,7 +9,7 @@ import type {
     HistoricalTargetOption,
 } from "@/services/operational-history.service";
 
-type UserRole = "admin" | "chief";
+type UserRole = "admin" | "chief" | "doctor";
 type OperationalDomain = "regulation" | "intervention";
 type EditorMode = "create" | "update";
 
