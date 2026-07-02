@@ -6,13 +6,16 @@ import { createScheduledShift, getScheduleBoard } from "@/services/schedule.serv
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+// Regulação não tem ramal/alvo (escala por função); intervenção exige a base.
 const createSchema = z.object({
     domain: z.enum(["regulation", "intervention"]),
-    targetId: z.number().int().positive(),
+    targetId: z.number().int().positive().nullable().optional(),
     doctorId: z.string().uuid(),
     operationalDate: z.string().regex(DATE_PATTERN),
     shiftLabel: z.enum(["SD", "SN"]),
     roleLabel: z.string().trim().max(100).nullable().optional(),
+}).refine((value) => value.domain === "regulation" || value.targetId != null, {
+    message: "Intervenção exige a base (ambulância).",
 });
 
 export async function GET(request: NextRequest) {
@@ -52,6 +55,7 @@ export async function POST(request: NextRequest) {
 
         const created = await createScheduledShift({
             ...parsed.data,
+            targetId: parsed.data.targetId ?? null,
             roleLabel: parsed.data.roleLabel ?? null,
             createdByUserId: session.user.id,
         });

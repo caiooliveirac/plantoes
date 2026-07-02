@@ -6,7 +6,6 @@ import {
     doctorWeekdayPreferences,
     doctors,
     interventionBases,
-    regulationPosts,
     scheduledShifts,
 } from "@/db/schema";
 
@@ -14,6 +13,9 @@ export type ScheduleShiftLabel = "SD" | "SN";
 export type ScheduleDomain = "regulation" | "intervention";
 
 const SAO_PAULO_OFFSET_HOURS = 3;
+
+/** Limites de comando por turno na regulação: 1 CP e 2 COI, sempre. */
+export const COMMAND_LIMITS: Record<string, number> = { CP: 1, COI: 2 };
 
 function parseOperationalDate(value: string) {
     const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -64,8 +66,15 @@ export interface ScheduleDoctorEntry {
     basePreferences: number[];
 }
 
+export interface RegulationAssignment {
+    shiftId: string;
+    doctorId: string;
+    doctorName: string;
+    roleLabel: string | null;
+}
+
 export interface ScheduleTargetEntry {
-    domain: ScheduleDomain;
+    domain: "intervention";
     targetId: number;
     code: string;
     label: string;
@@ -82,6 +91,9 @@ export interface ScheduleTargetEntry {
 export interface ScheduleBoard {
     operationalDate: string;
     weekday: number;
+    /** Regulação por turno, SEM ramal: CP/COI/demais por função. */
+    regulation: { [label in ScheduleShiftLabel]: RegulationAssignment[] };
+    /** Intervenção mantém a base (ambulância) exata. */
     targets: ScheduleTargetEntry[];
     doctors: ScheduleDoctorEntry[];
 }
@@ -116,8 +128,7 @@ export async function getScheduleBoard(operationalDate: string): Promise<Schedul
     const db = getDb();
     const weekday = resolveWeekday(operationalDate);
 
-    const [posts, bases, planned, activeDoctors, weekdayPrefs, basePrefs, fixedShifts] = await Promise.all([
-        db.select().from(regulationPosts).where(eq(regulationPosts.isActive, true)).orderBy(asc(regulationPosts.sortOrder)),
+    const [bases, planned, activeDoctors, weekdayPrefs, basePrefs, fixedShifts] = await Promise.all([
         db.select().from(interventionBases).where(eq(interventionBases.isActive, true)).orderBy(asc(interventionBases.sortOrder)),
         db.select().from(scheduledShifts).where(and(
             eq(scheduledShifts.operationalDate, operationalDate),
@@ -144,37 +155,51 @@ export async function getScheduleBoard(operationalDate: string): Promise<Schedul
         basePrefsByDoctor.set(pref.doctorId, list);
     }
 
-    const targets: ScheduleTargetEntry[] = [
-        ...posts.map((post) => ({
-            domain: "regulation" as const,
-            targetId: post.id,
-            code: post.code,
-            label: post.label,
-            scheduled: {},
-        })),
-        ...bases.map((base) => ({
-            domain: "intervention" as const,
-            targetId: base.id,
-            code: base.code,
-            label: base.label,
-            scheduled: {},
-        })),
-    ];
+    const targets: ScheduleTargetEntry[] = bases.map((base) => ({
+        domain: "intervention" as const,
+        targetId: base.id,
+        code: base.code,
+        label: base.label,
+        scheduled: {},
+    }));
+    const targetIndex = new Map(targets.map((target) => [target.targetId, target]));
 
-    const targetIndex = new Map(targets.map((target) => [`${target.domain}:${target.targetId}`, target]));
+    const regulation: ScheduleBoard["regulation"] = { SD: [], SN: [] };
+    const commandOrder = (role: string | null) => role === "CP" ? 0 : role === "COI" ? 1 : 2;
+
     for (const shift of planned) {
-        const key = shift.postId != null ? `regulation:${shift.postId}` : `intervention:${shift.baseId}`;
-        const target = targetIndex.get(key);
         const label = shift.shiftLabel as ScheduleShiftLabel;
-        if (!target || (label !== "SD" && label !== "SN")) {
+        if (label !== "SD" && label !== "SN") {
             continue;
         }
-        target.scheduled[label] = {
-            shiftId: shift.id,
-            doctorId: shift.doctorId,
-            doctorName: doctorNames.get(shift.doctorId) ?? "?",
-            roleLabel: shift.roleLabel,
-        };
+
+        if (shift.domain === "regulation") {
+            regulation[label].push({
+                shiftId: shift.id,
+                doctorId: shift.doctorId,
+                doctorName: doctorNames.get(shift.doctorId) ?? "?",
+                roleLabel: shift.roleLabel,
+            });
+            continue;
+        }
+
+        const target = shift.baseId != null ? targetIndex.get(shift.baseId) : undefined;
+        if (target) {
+            target.scheduled[label] = {
+                shiftId: shift.id,
+                doctorId: shift.doctorId,
+                doctorName: doctorNames.get(shift.doctorId) ?? "?",
+                roleLabel: shift.roleLabel,
+            };
+        }
+    }
+
+    for (const label of ["SD", "SN"] as const) {
+        regulation[label].sort((left, right) => {
+            const orderDiff = commandOrder(left.roleLabel) - commandOrder(right.roleLabel);
+            if (orderDiff !== 0) return orderDiff;
+            return left.doctorName.localeCompare(right.doctorName, "pt-BR");
+        });
     }
 
     const doctorEntries: ScheduleDoctorEntry[] = activeDoctors
@@ -192,12 +217,13 @@ export async function getScheduleBoard(operationalDate: string): Promise<Schedul
         }))
         .sort(compareScheduleDoctors);
 
-    return { operationalDate, weekday, targets, doctors: doctorEntries };
+    return { operationalDate, weekday, regulation, targets, doctors: doctorEntries };
 }
 
 export async function createScheduledShift(params: {
     domain: ScheduleDomain;
-    targetId: number;
+    /** Obrigatório na intervenção (base exata); regulação não tem alvo. */
+    targetId?: number | null;
     doctorId: string;
     operationalDate: string;
     shiftLabel: ScheduleShiftLabel;
@@ -216,18 +242,40 @@ export async function createScheduledShift(params: {
     if (params.domain === "intervention" && !doctor.eligibleIntervention) {
         throw new Error(`${doctor.fullName} não está apto(a) a INTERVENÇÃO.`);
     }
+    if (params.domain === "intervention" && params.targetId == null) {
+        throw new Error("Intervenção exige a base (ambulância).");
+    }
+
+    const dayShifts = await db.select().from(scheduledShifts).where(and(
+        eq(scheduledShifts.operationalDate, params.operationalDate),
+        eq(scheduledShifts.shiftLabel, params.shiftLabel),
+        eq(scheduledShifts.status, "planned"),
+    ));
+
+    if (dayShifts.some((shift) => shift.doctorId === params.doctorId)) {
+        throw new Error(`${doctor.fullName} já está escalado(a) neste dia/turno.`);
+    }
+
+    const role = params.domain === "regulation" ? (params.roleLabel ?? "RMT").toUpperCase() : null;
+    if (role && COMMAND_LIMITS[role] != null) {
+        const current = dayShifts.filter((shift) =>
+            shift.domain === "regulation" && (shift.roleLabel ?? "").toUpperCase() === role).length;
+        if (current >= COMMAND_LIMITS[role]) {
+            throw new Error(`Turno já tem ${COMMAND_LIMITS[role]} ${role} — o limite do serviço.`);
+        }
+    }
 
     const window = resolveScheduledWindow(params.operationalDate, params.shiftLabel);
     const [created] = await db.insert(scheduledShifts).values({
         domain: params.domain,
-        postId: params.domain === "regulation" ? params.targetId : null,
+        postId: null,
         baseId: params.domain === "intervention" ? params.targetId : null,
         doctorId: params.doctorId,
         operationalDate: params.operationalDate,
         shiftLabel: params.shiftLabel,
         scheduledStartAt: window.scheduledStartAt,
         scheduledEndAt: window.scheduledEndAt,
-        roleLabel: params.roleLabel ?? null,
+        roleLabel: role,
         createdByUserId: params.createdByUserId,
     }).returning();
 

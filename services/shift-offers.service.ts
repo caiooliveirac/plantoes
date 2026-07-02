@@ -104,8 +104,12 @@ export async function getSwapBoard(fromDate: string, days = 14): Promise<SwapBoa
     const baseLabels = new Map(baseRows.map((row) => [row.id, row.label]));
 
     function targetLabel(shift: typeof shiftRows[number]) {
-        if (shift.postId != null) return postLabels.get(shift.postId) ?? `ramal ${shift.postId}`;
+        // Regulação não tem ramal na escala — identifica-se pela função.
+        if (shift.domain === "regulation") {
+            return shift.roleLabel ? `Regulação · ${shift.roleLabel}` : "Regulação";
+        }
         if (shift.baseId != null) return baseLabels.get(shift.baseId) ?? `base ${shift.baseId}`;
+        if (shift.postId != null) return postLabels.get(shift.postId) ?? `ramal ${shift.postId}`;
         return shift.domain;
     }
 

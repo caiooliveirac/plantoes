@@ -4,6 +4,11 @@
 -- scheduled_shifts é o que está PLANEJADO e norteia quem eram os donos
 -- originais de cada plantão. Nenhum código existente lê esta tabela.
 --
+-- REGULAÇÃO NÃO TEM RAMAL EXATO na escala: escala-se por função (1 CP,
+-- 2 COI, demais "Regulação" via role_label) — post_id fica sempre null e a
+-- alocação de ramal acontece na operação, não no planejamento. INTERVENÇÃO
+-- mantém a base (ambulância) exata.
+--
 -- ROLLBACK:
 --   drop table if exists operations_v2.scheduled_shifts;
 --   drop type if exists operations_v2.scheduled_shift_status;
@@ -26,22 +31,22 @@ create table if not exists operations_v2.scheduled_shifts (
     updated_by_user_id uuid references operations_v2.users (id),
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
-    -- Exatamente um alvo, coerente com o domínio (espelha a separação
-    -- regulation/intervention das occupancies).
+    -- Regulação: sem alvo (função em role_label). Intervenção: base exata.
     constraint scheduled_shifts_domain_target_check check (
-        (domain = 'regulation' and post_id is not null and base_id is null)
+        (domain = 'regulation' and post_id is null and base_id is null)
         or (domain = 'intervention' and base_id is not null and post_id is null)
     )
 );
 
--- Um planejamento ativo por alvo/data/turno (cancelados ficam fora).
-create unique index if not exists scheduled_shifts_regulation_slot_idx
-    on operations_v2.scheduled_shifts (post_id, operational_date, shift_label)
-    where status = 'planned' and post_id is not null;
-
+-- Um planejamento ativo por base/data/turno na intervenção.
 create unique index if not exists scheduled_shifts_intervention_slot_idx
     on operations_v2.scheduled_shifts (base_id, operational_date, shift_label)
     where status = 'planned' and base_id is not null;
+
+-- Um médico não pode estar escalado duas vezes no mesmo dia/turno.
+create unique index if not exists scheduled_shifts_doctor_slot_idx
+    on operations_v2.scheduled_shifts (doctor_id, operational_date, shift_label)
+    where status = 'planned';
 
 create index if not exists scheduled_shifts_doctor_idx
     on operations_v2.scheduled_shifts (doctor_id, operational_date);

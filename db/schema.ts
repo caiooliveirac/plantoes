@@ -699,12 +699,12 @@ export const scheduledShifts = operationsV2.table(
         updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
-        uniqueIndex("scheduled_shifts_regulation_slot_idx")
-            .on(table.postId, table.operationalDate, table.shiftLabel)
-            .where(sql`${table.status} = 'planned' and ${table.postId} is not null`),
         uniqueIndex("scheduled_shifts_intervention_slot_idx")
             .on(table.baseId, table.operationalDate, table.shiftLabel)
             .where(sql`${table.status} = 'planned' and ${table.baseId} is not null`),
+        uniqueIndex("scheduled_shifts_doctor_slot_idx")
+            .on(table.doctorId, table.operationalDate, table.shiftLabel)
+            .where(sql`${table.status} = 'planned'`),
         index("scheduled_shifts_doctor_idx").on(table.doctorId, table.operationalDate),
         index("scheduled_shifts_date_idx").on(table.operationalDate, table.shiftLabel),
     ],

@@ -295,9 +295,13 @@ export async function getCoverageReport(operationalDate: string): Promise<Covera
         checkinsByDoctor.set(row.doctorId, list);
     }
 
-    function targetLabel(domain: string, postId: number | null, baseId: number | null) {
-        if (postId != null) return postLabels.get(postId) ?? `ramal ${postId}`;
+    function targetLabel(domain: string, postId: number | null, baseId: number | null, roleLabel?: string | null) {
+        // Regulação é escalada por função, sem ramal.
+        if (domain === "regulation") {
+            return roleLabel ? `Regulação · ${roleLabel}` : "Regulação";
+        }
         if (baseId != null) return baseLabels.get(baseId) ?? `base ${baseId}`;
+        if (postId != null) return postLabels.get(postId) ?? `ramal ${postId}`;
         return domain;
     }
 
@@ -310,10 +314,18 @@ export async function getCoverageReport(operationalDate: string): Promise<Covera
             );
             const checkin = checkins[0] ?? null;
 
+            // Regulação não tem alvo previsto: presença bate se o check-in foi
+            // em qualquer ramal. Intervenção compara a base exata.
+            const presenceTargetMatches = checkin
+                ? coverage.effectiveTarget.domain === "regulation"
+                    ? checkin.postId != null
+                    : checkin.baseId != null && checkin.baseId === coverage.effectiveTarget.baseId
+                : null;
+
             return {
                 shiftId: row.id,
                 domain: row.domain,
-                targetLabel: targetLabel(row.domain, row.postId, row.baseId),
+                targetLabel: targetLabel(row.domain, row.postId, row.baseId, row.roleLabel),
                 shiftLabel: row.shiftLabel,
                 originalDoctorId: coverage.originalDoctorId,
                 originalDoctorName: doctorNames.get(coverage.originalDoctorId) ?? "?",
@@ -323,14 +335,12 @@ export async function getCoverageReport(operationalDate: string): Promise<Covera
                     coverage.effectiveTarget.domain,
                     coverage.effectiveTarget.postId,
                     coverage.effectiveTarget.baseId,
+                    coverage.effectiveTarget.roleLabel,
                 ),
                 coveredBySwap: coverage.effectiveDoctorId !== coverage.originalDoctorId,
                 swapChainLength: coverage.chain.length,
                 presence: checkin ? "presente" : "ausente",
-                presenceTargetMatches: checkin
-                    ? (checkin.postId != null && checkin.postId === coverage.effectiveTarget.postId)
-                        || (checkin.baseId != null && checkin.baseId === coverage.effectiveTarget.baseId)
-                    : null,
+                presenceTargetMatches,
                 checkinAt: checkin ? checkin.startedAt.toISOString() : null,
             };
         })

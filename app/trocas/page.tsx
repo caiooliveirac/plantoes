@@ -61,8 +61,8 @@ export default async function TrocasPage() {
                 domain: shift.domain,
                 operationalDate: shift.operationalDate,
                 shiftLabel: shift.shiftLabel,
-                targetLabel: shift.postId != null
-                    ? postLabels.get(shift.postId) ?? `ramal ${shift.postId}`
+                targetLabel: shift.domain === "regulation"
+                    ? (shift.roleLabel ? `Regulação · ${shift.roleLabel}` : "Regulação")
                     : baseLabels.get(shift.baseId!) ?? `base ${shift.baseId}`,
             }))}
         />
