@@ -1,0 +1,115 @@
+name: Release and Deploy
+
+# Deploy no servidor magalu (PM2, sem containers): valida rápido no runner e
+# faz git reset + build no próprio servidor via scripts/deploy-magalu.sh.
+# O build roda ANTES do restart — se falhar, a produção antiga segue no ar.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: "Rodar db:migrate no deploy (faz backup antes)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: plantoes-production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Typecheck e testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: plantoes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d plantoes_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2
+      AUTH_SECRET: ci-local-auth-secret-not-for-production
+      AUTH_URL: http://127.0.0.1:3000
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Migrações no banco de CI
+        run: npm run db:migrate
+
+      - name: Typecheck (next typegen + tsc)
+        run: npm run typecheck
+
+      - name: Testes
+        run: npm run test:deploy
+
+  deploy:
+    name: Deploy no magalu (git + build no servidor + pm2)
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
+      RUN_MIGRATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.run_migrations || false }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy (script do repo, executado no servidor)
+        run: |
+          set -euo pipefail
+          MIGRATION_FLAG=""
+          if [[ "${RUN_MIGRATIONS}" == "true" ]]; then
+            MIGRATION_FLAG=" --run-migrations"
+          fi
+          scp -i ~/.ssh/id_ed25519 scripts/deploy-magalu.sh "${REMOTE}:/tmp/deploy-magalu.sh"
+          ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=90 -i ~/.ssh/id_ed25519 \
+            "${REMOTE}" "bash /tmp/deploy-magalu.sh ${GITHUB_SHA}${MIGRATION_FLAG} && rm -f /tmp/deploy-magalu.sh"
+
+      - name: Healthcheck público
+        run: |
+          code="$(curl -sk -o /tmp/health.json -w '%{http_code}' https://plantoes.mnrs.com.br/api/health)"
+          cat /tmp/health.json || true
+          echo
+          echo "HTTP ${code}"
+          [ "${code}" = "200" ]
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "### Deploy plantoes.mnrs.com.br (magalu/PM2)"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Migrações: ${RUN_MIGRATIONS}"
+            echo "- Upstream local: http://127.0.0.1:3004/api/health"
+            echo "- Público: https://plantoes.mnrs.com.br/api/health"
+          } >> "$GITHUB_STEP_SUMMARY"

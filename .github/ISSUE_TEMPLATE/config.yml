@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Dúvida operacional rápida
+    url: https://github.com/caiooliveirac/plantoes/discussions
+    about: Use discussions para dúvidas e alinhamentos que ainda não são issue de implementação.
