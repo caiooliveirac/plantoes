@@ -1188,13 +1188,6 @@ export function ChiefPaymentViewClient({ board }: Props) {
             });
     }, [board.payableShifts]);
 
-    const selectedDoctorConflictShifts = useMemo(() => {
-        if (!selectedDoctor) {
-            return [];
-        }
-        return allocationConflictShifts.filter((shift) => shift.doctorId === selectedDoctor.doctorId);
-    }, [allocationConflictShifts, selectedDoctor]);
-
     const selectedDoctorDisplacedConflictSegments = useMemo(() => {
         if (!selectedDoctor) {
             return [] as Array<{
@@ -1255,7 +1248,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
         });
     }, [allocationConflictShifts, board.attestationSegments, selectedDoctor]);
 
-    const selectedDoctorConflictCount = selectedDoctorConflictShifts.length + selectedDoctorDisplacedConflictSegments.length;
+    const selectedDoctorConflictCount = selectedDoctorDisplacedConflictSegments.length;
 
     return (
         <main className="chief-payable-shell">
@@ -1948,31 +1941,36 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         </header>
 
                         {selectedDoctorConflictCount > 0 ? (
-                            <section className="chief-payable-attest-card" style={{ borderColor: "#f59e0b", background: "#fff8eb" }}>
+                            <section className="chief-payable-attest-card" style={{ borderColor: "#d97706", background: "#fff7ed", color: "#7c2d12" }}>
                                 <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
-                                    <strong>Conflitos de alocação deste médico no mês:</strong> {selectedDoctorConflictCount}.
+                                    <strong>Possível deslocamento por conflito de alocação:</strong> {selectedDoctorConflictCount} caso(s) deste médico no mês.
                                 </p>
                                 <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
-                                    O alerta só aparece quando há participação direta deste médico no conflito:
-                                    escolhido no slot conflitante ou segmento descartado por sobreposição no mesmo dia/turno/alvo.
+                                    Este alerta só aparece para médico potencialmente deslocado (segmento descartado por sobreposição no mesmo dia/turno/alvo de um conflito).
                                 </p>
-                                {selectedDoctorConflictShifts.length > 0 ? (
-                                    <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
-                                        <strong>Escolhido em conflito ({selectedDoctorConflictShifts.length}):</strong>{" "}
-                                        {selectedDoctorConflictShifts
-                                            .slice(0, 6)
-                                            .map((shift) => `${shift.operationalDate.slice(8, 10)}/${shift.operationalDate.slice(5, 7)} ${shift.shiftLabel} ${shift.targetCode}`)
-                                            .join(" · ")}
-                                    </p>
-                                ) : null}
                                 {selectedDoctorDisplacedConflictSegments.length > 0 ? (
-                                    <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
-                                        <strong>Não selecionado por sobreposição ({selectedDoctorDisplacedConflictSegments.length}):</strong>{" "}
-                                        {selectedDoctorDisplacedConflictSegments
-                                            .slice(0, 6)
-                                            .map((segment) => `${segment.operationalDate.slice(8, 10)}/${segment.operationalDate.slice(5, 7)} ${segment.shiftLabel} ${segment.targetCode} (escolhido: ${segment.chosenDoctorName})`)
-                                            .join(" · ")}
-                                    </p>
+                                    <div className="chief-payable-attest-hint" style={{ marginBottom: "0.5rem" }}>
+                                        <strong>Onde pode ter faltado plantão:</strong>
+                                        <ul style={{ margin: "0.35rem 0 0", paddingLeft: "1.1rem", fontSize: "0.92rem", lineHeight: 1.45 }}>
+                                            {selectedDoctorDisplacedConflictSegments.slice(0, 6).map((segment) => {
+                                                const day = segment.operationalDate.slice(8, 10);
+                                                const month = segment.operationalDate.slice(5, 7);
+                                                return (
+                                                    <li key={segment.segmentId}>
+                                                        <a href={cellAuditLink(board.monthKey, day, segment.shiftLabel)}>
+                                                            {day}/{month} {segment.shiftLabel} {segment.targetCode}
+                                                        </a>{" "}
+                                                        - escolhido no slot: {segment.chosenDoctorName}
+                                                    </li>
+                                                );
+                                            })}
+                                        </ul>
+                                        {selectedDoctorDisplacedConflictSegments.length > 6 ? (
+                                            <small>
+                                                +{selectedDoctorDisplacedConflictSegments.length - 6} ocorrência(s). Abra a auditoria técnica para ver todas.
+                                            </small>
+                                        ) : null}
+                                    </div>
                                 ) : null}
                                 <p className="chief-payable-attest-hint">
                                     Revise no detalhe para não perder pagamento por sobreposição: <a href="/admin/payment-attestation/audit">abrir auditoria técnica</a>.
