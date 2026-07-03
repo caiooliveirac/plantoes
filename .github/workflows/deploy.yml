@@ -31,7 +31,7 @@ jobs:
       # valores dummy só satisfazem código que lê env em import-time.
       # Nada disso é inlinado no bundle (não há NEXT_PUBLIC_* no app).
       DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci
-      AUTH_SECRET: ci-dummy-secret
+      AUTH_SECRET: ci-placeholder-not-a-real-secret
       AUTH_URL: http://127.0.0.1:3004
     steps:
       - name: Checkout
@@ -105,9 +105,24 @@ jobs:
         run: npm ci --prefer-offline
 
       - name: Bootstrap test schema
+        # As migrações 0003–0005 importam dados do sistema legado lendo
+        # tabelas public.* que só existem no banco de produção. Num Postgres
+        # zerado não há nada a importar: criamos o extension que a 0003
+        # criaria e pré-marcamos as três como aplicadas antes do db:migrate.
         run: |
-          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d plantoes_test \
-            -c 'create schema if not exists operations_v2'
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d plantoes_test <<'SQL'
+          create schema if not exists operations_v2;
+          create extension if not exists unaccent;
+          create table if not exists operations_v2.schema_migrations (
+            filename text primary key,
+            applied_at timestamptz not null default now()
+          );
+          insert into operations_v2.schema_migrations (filename) values
+            ('0003_import_legacy_directory.sql'),
+            ('0004_import_legacy_access.sql'),
+            ('0005_import_legacy_active_board.sql')
+          on conflict (filename) do nothing;
+          SQL
           npm run db:migrate
 
       - name: Run deploy smoke tests
@@ -154,9 +169,24 @@ jobs:
         run: npm ci --prefer-offline
 
       - name: Bootstrap test schema
+        # As migrações 0003–0005 importam dados do sistema legado lendo
+        # tabelas public.* que só existem no banco de produção. Num Postgres
+        # zerado não há nada a importar: criamos o extension que a 0003
+        # criaria e pré-marcamos as três como aplicadas antes do db:migrate.
         run: |
-          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d plantoes_test \
-            -c 'create schema if not exists operations_v2'
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d plantoes_test <<'SQL'
+          create schema if not exists operations_v2;
+          create extension if not exists unaccent;
+          create table if not exists operations_v2.schema_migrations (
+            filename text primary key,
+            applied_at timestamptz not null default now()
+          );
+          insert into operations_v2.schema_migrations (filename) values
+            ('0003_import_legacy_directory.sql'),
+            ('0004_import_legacy_access.sql'),
+            ('0005_import_legacy_active_board.sql')
+          on conflict (filename) do nothing;
+          SQL
           npm run db:migrate
 
       - name: Run full tests
