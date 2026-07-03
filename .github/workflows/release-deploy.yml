@@ -1,0 +1,191 @@
+name: Release and Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: "Run db:migrate explicitly during deploy"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: plantoes-production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate on hosted runner
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: plantoes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d plantoes_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2
+      AUTH_SECRET: ci-local-auth-secret-not-for-production
+      AUTH_URL: http://127.0.0.1:3000
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations in CI database
+        run: npm run db:migrate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  build_and_push:
+    name: Build and publish ARM64 image
+    runs-on: ubuntu-latest
+    needs: validate
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_repo: ${{ steps.meta.outputs.image_repo }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      image_digest: ${{ steps.meta.outputs.image_digest }}
+      image_ref: ${{ steps.meta.outputs.image_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+
+      - name: Login to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Prepare Buildx for linux/arm64
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --name plantoes-builder --driver docker-container --use
+          docker buildx inspect --bootstrap
+
+      - name: Build and push image
+        id: build
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}/plantoes"
+          IMAGE_TAG="${IMAGE_REPO}:sha-${GITHUB_SHA}"
+          docker buildx build \
+            --platform linux/arm64 \
+            --tag "${IMAGE_TAG}" \
+            --cache-from type=registry,ref="${IMAGE_REPO}:buildcache" \
+            --cache-to type=registry,ref="${IMAGE_REPO}:buildcache",mode=max \
+            --iidfile /tmp/plantoes-image.iid \
+            --push \
+            .
+          echo "IMAGE_REPO=${IMAGE_REPO}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Resolve immutable digest
+        id: meta
+        run: |
+          set -euo pipefail
+          IMAGE_DIGEST="$(cat /tmp/plantoes-image.iid)"
+          IMAGE_REF="${IMAGE_REPO}@${IMAGE_DIGEST}"
+          echo "image_repo=${IMAGE_REPO}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy digest to EC2
+    runs-on: ubuntu-latest
+    needs: build_and_push
+    permissions:
+      contents: read
+    env:
+      DEPLOY_HOST: ${{ secrets.PROD_SSH_HOST }}
+      DEPLOY_USER: ${{ secrets.PROD_SSH_USER }}
+      DEPLOY_PORT: ${{ secrets.PROD_SSH_PORT }}
+      RUN_MIGRATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.run_migrations || false }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+
+      - name: Configure SSH key
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${DEPLOY_PORT}" -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Install fixed deploy script on host
+        run: |
+          set -euo pipefail
+          scp -P "${DEPLOY_PORT}" scripts/deploy-plantoes-container.sh "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/deploy-plantoes-container.sh"
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo install -o root -g root -m 0755 /tmp/deploy-plantoes-container.sh /usr/local/sbin/deploy-plantoes && rm -f /tmp/deploy-plantoes-container.sh"
+
+      - name: Deploy immutable digest
+        run: |
+          set -euo pipefail
+          MIGRATION_FLAG=""
+          if [[ "${RUN_MIGRATIONS}" == "true" ]]; then
+            MIGRATION_FLAG=" --run-migrations"
+          fi
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo /usr/local/sbin/deploy-plantoes '${{ needs.build_and_push.outputs.image_ref }}'${MIGRATION_FLAG}"
+
+      - name: Validate upstream local health
+        id: local_health
+        run: |
+          set -euo pipefail
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "curl -fsS http://127.0.0.1:3004/api/health"
+
+      - name: Validate public health
+        id: public_health
+        run: |
+          set -euo pipefail
+          HEALTH_CODE="$(curl -sk -o /tmp/public-health.json -w '%{http_code}' https://plantoes.mnrs.com.br/api/health)"
+          echo "code=${HEALTH_CODE}" >> "$GITHUB_OUTPUT"
+          [[ "${HEALTH_CODE}" == "200" ]]
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          {
+            echo "### Container Deploy Summary"
+            echo "- Commit: ${{ github.sha }}"
+            echo "- Image tag: ${{ needs.build_and_push.outputs.image_tag }}"
+            echo "- Image digest: ${{ needs.build_and_push.outputs.image_digest }}"
+            echo "- Image ref: ${{ needs.build_and_push.outputs.image_ref }}"
+            echo "- Local upstream health: http://127.0.0.1:3004/api/health (checked via SSH)"
+            echo "- Public health URL: https://plantoes.mnrs.com.br/api/health"
+            echo "- Public health HTTP: ${{ steps.public_health.outputs.code }}"
+          } >> "$GITHUB_STEP_SUMMARY"
