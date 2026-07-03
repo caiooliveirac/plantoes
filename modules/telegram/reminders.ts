@@ -48,6 +48,7 @@ interface ReminderPlanningParams {
 const TEN_MINUTES = 10 * 60 * 1000;
 const TWENTY_MINUTES = 20 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
+const PAYMENT_CONFLICT_ALERT_BUCKET = 2 * ONE_HOUR;
 
 function floorToBucket(date: Date, bucketMs: number) {
     return new Date(Math.floor(date.getTime() / bucketMs) * bucketMs);
@@ -191,6 +192,7 @@ export function resolveReminderRecipientsForPlan(params: {
     plan: ReminderPlan;
     reminderChatIds: string[];
     adminChatIds: string[];
+    chiefPrivateAlertRecipients: string[];
 }) {
     if (!isNoonPaymentCheckpoint(params.plan)) {
         return uniqueChatIds(params.reminderChatIds);
@@ -724,9 +726,9 @@ function buildPaymentConflictAlertPlan(params: {
     now: Date;
     paymentBoard: PaymentAllocationBoard;
 }): ReminderPlan | null {
-    const bucket = floorToBucket(params.now, TWENTY_MINUTES);
+    const bucket = floorToBucket(params.now, PAYMENT_CONFLICT_ALERT_BUCKET);
     const conflictRows = [...params.paymentBoard.regulation, ...params.paymentBoard.intervention]
-        .filter((row) => row.candidateCount > 1 || row.issues.includes("Mais de um medico candidato no mesmo alvo/turno"));
+        .filter((row) => row.hasDoctorOverlapConflict);
 
     if (conflictRows.length === 0) {
         return null;
@@ -737,7 +739,12 @@ function buildPaymentConflictAlertPlan(params: {
         .map((row) => {
             const domainLabel = row.domain === "regulation" ? "Regulação" : "Intervenção";
             const doctor = row.doctorName?.trim() || "sem escolhido";
-            return `- ${domainLabel} ${row.targetCode} ${row.shiftLabel}: ${doctor} | candidatos ${row.candidateCount}`;
+            const candidates = row.conflictCandidateLabels.length > 0 ? row.conflictCandidateLabels.join(" x ") : "nao detalhado";
+            const reasons = row.issues
+                .filter((issue) => issue !== "Conflito entre medicos titulares no mesmo alvo/turno")
+                .slice(0, 2);
+            const reasonLabel = reasons.length > 0 ? reasons.join("; ") : "entrada por cima de outro titular no mesmo turno";
+            return `- ${domainLabel} ${row.targetCode} ${row.shiftLabel}: ${doctor} | candidatos ${row.candidateCount}: ${candidates} | motivo: ${reasonLabel}`;
         });
 
     const operationalDate = params.paymentBoard.operationalDate.slice(0, 10);
@@ -751,9 +758,9 @@ function buildPaymentConflictAlertPlan(params: {
             conflictCount: conflictRows.length,
         },
         text: [
-            `🚨 Conflito de alocação para pagamento (${params.paymentBoard.shiftLabel} ${formatHour(bucket)}).`,
+            `🚨 Conflito real de alocação para pagamento (${params.paymentBoard.shiftLabel} ${formatHour(bucket)}).`,
             "",
-            "Há mais de um médico candidato no mesmo alvo/turno. Se ninguém corrigir, alguém pode sair da folha.",
+            "Detectei sobreposição entre titulares no mesmo alvo/turno (entrada por cima). Sombra não entra neste alerta.",
             "",
             ...lines,
             ...(conflictRows.length > lines.length ? [`- ... e mais ${conflictRows.length - lines.length} conflito(s)`] : []),
@@ -811,6 +818,7 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
             plan,
             reminderChatIds,
             adminChatIds,
+            chiefPrivateAlertRecipients,
         });
 
         evaluated += recipients.length;
