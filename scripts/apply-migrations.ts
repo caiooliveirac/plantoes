@@ -25,6 +25,7 @@ async function main() {
         .sort();
 
         await sqlClient.unsafe(`create schema if not exists ${migrationsSchema}`);
+        await sqlClient.unsafe(`set search_path to ${migrationsSchema}, public`);
         await sqlClient.unsafe(`create table if not exists ${migrationsTable} (
         filename text primary key,
         applied_at timestamptz not null default now()
@@ -40,6 +41,7 @@ async function main() {
 
         const sqlText = await readFile(path.join(migrationsDir, file), "utf8");
         await sqlClient.begin(async (transaction) => {
+            await transaction.unsafe(`set search_path to ${migrationsSchema}, public`);
             await transaction.unsafe(sqlText);
             await transaction.unsafe(`insert into ${migrationsTable} (filename) values ($1)`, [file]);
         });
