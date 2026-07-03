@@ -7109,12 +7109,14 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
             ),
             orderBy: [desc(regulationOccupancies.boardStartedAt)],
         });
+        const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
+
         // "Mesmo turno": o ocupante chegou DENTRO da janela de turno atual. Carry-over
         // do turno anterior (started_at antes da janela) é rendição normal, não tomada.
         // Também não é tomada quando a chegada é para o PRÓXIMO turno (relevo de fim de
         // plantão ~17h/05h): o ocupante do turno que acaba é rendido normalmente.
-        if (!occ || occ.startedAt.getTime() < windowStart.getTime()
-            || !isSameOperationalShiftArrival(occ.startedAt, params.eventAt)) {
+        if (!occ || occupancyAnchorAt.getTime() < windowStart.getTime()
+            || !isSameOperationalShiftArrival(occupancyAnchorAt, params.eventAt)) {
             return null;
         }
         const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
@@ -7122,7 +7124,7 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
             occupancyId: occ.id,
             doctorId: occ.doctorId,
             doctorName: resolveTelegramDoctorSurfaceName(doc),
-            startedAt: occ.startedAt,
+            startedAt: occupancyAnchorAt,
             shiftLabel: occ.shiftLabel,
         };
     }
@@ -7142,8 +7144,9 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         ),
         orderBy: [desc(interventionOccupancies.boardStartedAt)],
     });
-    if (!occ || occ.startedAt.getTime() < windowStart.getTime()
-        || !isSameOperationalShiftArrival(occ.startedAt, params.eventAt)) {
+    const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
+    if (!occ || occupancyAnchorAt.getTime() < windowStart.getTime()
+        || !isSameOperationalShiftArrival(occupancyAnchorAt, params.eventAt)) {
         return null;
     }
     const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
@@ -7151,7 +7154,7 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         occupancyId: occ.id,
         doctorId: occ.doctorId,
         doctorName: resolveTelegramDoctorSurfaceName(doc),
-        startedAt: occ.startedAt,
+        startedAt: occupancyAnchorAt,
         shiftLabel: occ.shiftLabel,
     };
 }
