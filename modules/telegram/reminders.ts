@@ -15,7 +15,9 @@ import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, getTelegramRegulationAlertUserIds, getTelegramReminderChatIds } from "@/modules/telegram/config";
 import {
     getOperationalBoard,
+    getPaymentAllocationBoard,
     type InterventionBoardRow,
+    type PaymentAllocationBoard,
     type RegulationBoardRow,
 } from "@/services/board.service";
 import {
@@ -33,7 +35,7 @@ export interface ReminderBoardSnapshot {
 
 export interface ReminderPlan {
     noticeKey: string;
-    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "regulation_confirmation" | "regulation_confirmation_private";
+    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "payment_conflict_alert" | "regulation_confirmation" | "regulation_confirmation_private";
     text: string;
     payload: Record<string, unknown>;
 }
@@ -44,6 +46,7 @@ interface ReminderPlanningParams {
 }
 
 const TEN_MINUTES = 10 * 60 * 1000;
+const TWENTY_MINUTES = 20 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
 
 function floorToBucket(date: Date, bucketMs: number) {
@@ -625,6 +628,49 @@ export function buildReminderPlans(params: ReminderPlanningParams) {
     ].filter((plan): plan is ReminderPlan => Boolean(plan));
 }
 
+function buildPaymentConflictAlertPlan(params: {
+    now: Date;
+    paymentBoard: PaymentAllocationBoard;
+}): ReminderPlan | null {
+    const bucket = floorToBucket(params.now, TWENTY_MINUTES);
+    const conflictRows = [...params.paymentBoard.regulation, ...params.paymentBoard.intervention]
+        .filter((row) => row.candidateCount > 1 || row.issues.includes("Mais de um medico candidato no mesmo alvo/turno"));
+
+    if (conflictRows.length === 0) {
+        return null;
+    }
+
+    const lines = conflictRows
+        .slice(0, 12)
+        .map((row) => {
+            const domainLabel = row.domain === "regulation" ? "Regulação" : "Intervenção";
+            const doctor = row.doctorName?.trim() || "sem escolhido";
+            return `- ${domainLabel} ${row.targetCode} ${row.shiftLabel}: ${doctor} | candidatos ${row.candidateCount}`;
+        });
+
+    const operationalDate = params.paymentBoard.operationalDate.slice(0, 10);
+    return {
+        noticeKey: `payment-conflict:${operationalDate}:${params.paymentBoard.shiftLabel}:${bucket.toISOString()}`,
+        stage: "payment_conflict_alert",
+        payload: {
+            bucketAt: bucket.toISOString(),
+            operationalDate,
+            shiftLabel: params.paymentBoard.shiftLabel,
+            conflictCount: conflictRows.length,
+        },
+        text: [
+            `🚨 Conflito de alocação para pagamento (${params.paymentBoard.shiftLabel} ${formatHour(bucket)}).`,
+            "",
+            "Há mais de um médico candidato no mesmo alvo/turno. Se ninguém corrigir, alguém pode sair da folha.",
+            "",
+            ...lines,
+            ...(conflictRows.length > lines.length ? [`- ... e mais ${conflictRows.length - lines.length} conflito(s)`] : []),
+            "",
+            "👨‍✈️ Chefia: revisar agora em /admin/payment-attestation/audit ou no modal do fechamento.",
+        ].join("\n"),
+    };
+}
+
 async function markNoticeSent(plan: ReminderPlan, chatId: string) {
     const db = getDb();
     const [inserted] = await db.insert(telegramBotNotices)
@@ -715,6 +761,35 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
                 console.error(`telegram reminder failed for ${chatId} ${chiefPrivateAlertPlan.noticeKey}`, error);
             }
         }
+    }
+
+    try {
+        const paymentBoard = await getPaymentAllocationBoard({
+            reference: referenceDate,
+            expireDeactivations: false,
+        });
+        const paymentConflictPlan = buildPaymentConflictAlertPlan({ now: referenceDate, paymentBoard });
+        if (paymentConflictPlan) {
+            const recipients = uniqueChatIds([...reminderChatIds, ...adminChatIds]);
+            evaluated += recipients.length;
+
+            for (const chatId of recipients) {
+                const inserted = await markNoticeSent(paymentConflictPlan, chatId);
+                if (!inserted) {
+                    continue;
+                }
+
+                try {
+                    await sendMessage(chatId, paymentConflictPlan.text);
+                    sent += 1;
+                } catch (error) {
+                    await rollbackNotice(chatId, paymentConflictPlan);
+                    console.error(`telegram reminder failed for ${chatId} ${paymentConflictPlan.noticeKey}`, error);
+                }
+            }
+        }
+    } catch (error) {
+        console.error("telegram payment conflict alert failed", error);
     }
 
     return { sent: sent + halfShiftAutoCheckoutSent, evaluated };

@@ -1119,6 +1119,25 @@ export function ChiefPaymentViewClient({ board }: Props) {
         [filteredDoctors, selectedDoctorId],
     );
 
+    const allocationConflictShifts = useMemo(() => {
+        return board.payableShifts
+            .filter((shift) => shift.issues.some((issue) => issue === "Mais de um medico candidato no mesmo alvo/turno"))
+            .slice()
+            .sort((left, right) => {
+                const byDate = left.operationalDate.localeCompare(right.operationalDate);
+                if (byDate !== 0) return byDate;
+                if (left.shiftLabel !== right.shiftLabel) return left.shiftLabel === "SD" ? -1 : 1;
+                return left.targetCode.localeCompare(right.targetCode, "pt-BR");
+            });
+    }, [board.payableShifts]);
+
+    const selectedDoctorConflictShifts = useMemo(() => {
+        if (!selectedDoctor) {
+            return [];
+        }
+        return allocationConflictShifts.filter((shift) => shift.doctorId === selectedDoctor.doctorId);
+    }, [allocationConflictShifts, selectedDoctor]);
+
     return (
         <main className="chief-payable-shell">
             <section className="chief-payable-hero">
@@ -1808,6 +1827,28 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                 <button type="button" className="payment-button" onClick={() => setSelectedDoctorId(null)}>Fechar</button>
                             </div>
                         </header>
+
+                        {allocationConflictShifts.length > 0 ? (
+                            <section className="chief-payable-attest-card" style={{ borderColor: "#f59e0b", background: "#fff8eb" }}>
+                                <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
+                                    <strong>Conflitos de alocação detectados no mês:</strong> {allocationConflictShifts.length}.
+                                    {selectedDoctorConflictShifts.length > 0
+                                        ? ` Este médico está em ${selectedDoctorConflictShifts.length} conflito(s).`
+                                        : " Este médico não é o escolhido em conflitos, mas pode ter sido deslocado por conflito em outro candidato."}
+                                </p>
+                                {selectedDoctorConflictShifts.length > 0 ? (
+                                    <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
+                                        {selectedDoctorConflictShifts
+                                            .slice(0, 4)
+                                            .map((shift) => `${shift.operationalDate.slice(8, 10)}/${shift.operationalDate.slice(5, 7)} ${shift.shiftLabel} ${shift.targetCode}`)
+                                            .join(" · ")}
+                                    </p>
+                                ) : null}
+                                <p className="chief-payable-attest-hint">
+                                    Revise no detalhe para não perder pagamento por sobreposição: <a href="/admin/payment-attestation/audit">abrir auditoria técnica</a>.
+                                </p>
+                            </section>
+                        ) : null}
 
                         <div className="chief-payable-modal-grid">
                             <article className="chief-payable-modal-card">

@@ -85,6 +85,11 @@ test("shouldAssumeTelegramHalfShift: assume meia jornada pela hora do evento na 
     assert.equal(shouldAssumeTelegramHalfShift({ parsed, eventAt: at("18:00"), effectiveShiftType: null }), false);
 });
 
+test("shouldAssumeTelegramHalfShift: chegada SD às 11:37 também vira meio plantão", () => {
+    const parsed = parseMessage("Alessandra 1361 SD 11:37");
+    assert.equal(shouldAssumeTelegramHalfShift({ parsed, eventAt: at("11:37"), effectiveShiftType: "SD" }), true);
+});
+
 // --- Banco de horas: janela fixa 11:30–17:00, "só pesa atraso" (sem crédito por chegar cedo) ---
 
 const halfShiftBank = (actualStartHHMM: string, actualEndHHMM = "17:00") => calculateBankHours({

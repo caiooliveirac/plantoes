@@ -838,22 +838,11 @@ export function arrivalHalfShiftSatisfiesShiftGate(
 }
 
 export function shouldAssumeTelegramHalfShift(params: {
-    parsed: Pick<ParsedMessage, "sector" | "shiftType" | "roleFunction" | "isDeparture" | "isContinuation">;
+    parsed: Pick<ParsedMessage, "sector" | "isDeparture" | "isContinuation">;
     eventAt: Date;
     effectiveShiftType: string | null;
 }) {
     if (params.parsed.sector !== "REGULATION" || params.parsed.isDeparture || params.parsed.isContinuation) {
-        return false;
-    }
-
-    // Só assume meio plantão quando o aviso foi explicitamente de meia jornada
-    // (MEIO/MP/MT/tarde) e sem turno informado. Se já veio SD/SN/P, respeita o
-    // turno explícito e não força MEIO pela janela de horário.
-    if (params.effectiveShiftType || params.parsed.shiftType) {
-        return false;
-    }
-
-    if (!isHalfShiftRoleLabel(params.parsed.roleFunction)) {
         return false;
     }
 
