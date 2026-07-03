@@ -99,13 +99,30 @@ const PROFILE_RATES: Record<DoctorProfile, { weekday: number; weekend: number }>
     psychiatry: { weekday: 1299.82, weekend: 1411.47 },
 };
 
+const PROFILE_RATE_CENTS: Record<DoctorProfile, { weekday: number; weekend: number }> = {
+    generalist: { weekday: 124487, weekend: 138110 },
+    specialist: { weekday: 132966, weekend: 145715 },
+    psychiatry: { weekday: 129982, weekend: 141147 },
+};
+
 function isWeekendDate(operationalDate: string) {
     return isPremiumRateDate(operationalDate);
 }
 
 function resolveShiftAmount(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile) {
-    const rate = isWeekendDate(shift.operationalDate) ? PROFILE_RATES[profile].weekend : PROFILE_RATES[profile].weekday;
-    return Number((rate * shift.paymentUnit).toFixed(2));
+    return resolveShiftAmountCents(shift, profile) / 100;
+}
+
+function resolveShiftAmountCents(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile) {
+    const rateCents = isWeekendDate(shift.operationalDate) ? PROFILE_RATE_CENTS[profile].weekend : PROFILE_RATE_CENTS[profile].weekday;
+    const unitMilli = Math.round(shift.paymentUnit * 1000);
+    return Math.round((rateCents * unitMilli) / 1000);
+}
+
+function resolveAmountCentsByDayKind(params: { profile: DoctorProfile; isWeekend: boolean; paymentUnit: number }) {
+    const rateCents = params.isWeekend ? PROFILE_RATE_CENTS[params.profile].weekend : PROFILE_RATE_CENTS[params.profile].weekday;
+    const unitMilli = Math.round(params.paymentUnit * 1000);
+    return Math.round((rateCents * unitMilli) / 1000);
 }
 
 function parseTargetPriority(code: string) {
@@ -174,6 +191,24 @@ function formatOperationalDate(operationalDate: string) {
     const reference = new Date(`${operationalDate}T12:00:00-03:00`);
     const weekday = WEEKDAY_LABELS_PT[reference.getUTCDay()];
     return { dayMonth: `${day}/${month}/${year.slice(2)}`, weekday };
+}
+
+function resolveOperationalDateFromIso(iso: string) {
+    const local = new Date(new Date(iso).getTime() + (-180 * 60000));
+    const year = local.getUTCFullYear();
+    const month = String(local.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(local.getUTCDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
+
+function resolveSegmentShiftLabel(segment: { shiftLabel: "SD" | "SN" | "P" | null; startedAt: string }): "SD" | "SN" {
+    if (segment.shiftLabel === "SD" || segment.shiftLabel === "SN") {
+        return segment.shiftLabel;
+    }
+
+    const local = new Date(new Date(segment.startedAt).getTime() + (-180 * 60000));
+    const hour = local.getUTCHours();
+    return hour >= 19 || hour < 7 ? "SN" : "SD";
 }
 
 function dayKindLabel(operationalDate: string) {
@@ -362,15 +397,30 @@ export function ChiefPaymentViewClient({ board }: Props) {
     }, [board.days, board.payableShifts]);
 
     const totalDueAmount = useMemo(() => {
-        return Number(board.doctors
+        const totalCents = board.doctors
             .reduce((sum, doctor) => {
                 const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
-                const doctorDue = doctor.cells
+                const doctorShifts = doctor.cells
                     .flatMap((cell) => cell.shifts)
-                    .reduce((doctorSum, shift) => doctorSum + resolveShiftAmount(shift, paymentProfile), 0);
+                const weekdayUnits = doctorShifts
+                    .filter((shift) => !isWeekendDate(shift.operationalDate))
+                    .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
+                const weekendUnits = doctorShifts
+                    .filter((shift) => isWeekendDate(shift.operationalDate))
+                    .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
+                const doctorDue = resolveAmountCentsByDayKind({
+                    profile: paymentProfile,
+                    isWeekend: false,
+                    paymentUnit: weekdayUnits,
+                }) + resolveAmountCentsByDayKind({
+                    profile: paymentProfile,
+                    isWeekend: true,
+                    paymentUnit: weekendUnits,
+                });
                 return sum + doctorDue;
-            }, 0)
-            .toFixed(2));
+            }, 0);
+
+        return totalCents / 100;
     }, [board.doctors, doctorProfileOverrides]);
 
     const visibleDisabledTargets = useMemo(() => board.disabledTargets.filter((item) => {
@@ -504,17 +554,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     .toFixed(2));
                 const total = Number(visibleShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2));
                 const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
-                const totalSDDue = Number(visibleShifts
+                const totalSDDueCents = visibleShifts
                     .filter((shift) => shift.shiftLabel === "SD")
-                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
-                    .toFixed(2));
-                const totalSNDue = Number(visibleShifts
+                    .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile), 0);
+                const totalSNDueCents = visibleShifts
                     .filter((shift) => shift.shiftLabel === "SN")
-                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
-                    .toFixed(2));
-                const totalDue = Number(visibleShifts
-                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
-                    .toFixed(2));
+                    .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile), 0);
                 // Conta em UNIDADES de plantão: meio plantão vale 0,5 (não 1).
                 const weekdayShiftCount = Number(visibleShifts
                     .filter((shift) => !isWeekendDate(shift.operationalDate))
@@ -524,14 +569,17 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     .filter((shift) => isWeekendDate(shift.operationalDate))
                     .reduce((sum, shift) => sum + shift.paymentUnit, 0)
                     .toFixed(2));
-                const weekdayDue = Number(visibleShifts
-                    .filter((shift) => !isWeekendDate(shift.operationalDate))
-                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
-                    .toFixed(2));
-                const weekendDue = Number(visibleShifts
-                    .filter((shift) => isWeekendDate(shift.operationalDate))
-                    .reduce((sum, shift) => sum + resolveShiftAmount(shift, paymentProfile), 0)
-                    .toFixed(2));
+                const weekdayDueCents = resolveAmountCentsByDayKind({
+                    profile: paymentProfile,
+                    isWeekend: false,
+                    paymentUnit: weekdayShiftCount,
+                });
+                const weekendDueCents = resolveAmountCentsByDayKind({
+                    profile: paymentProfile,
+                    isWeekend: true,
+                    paymentUnit: weekendShiftCount,
+                });
+                const totalDueCents = weekdayDueCents + weekendDueCents;
                 const pendingCount = visibleShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
 
                 return {
@@ -540,13 +588,13 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     totalSD,
                     totalSN,
                     total,
-                    totalSDDue,
-                    totalSNDue,
-                    totalDue,
+                    totalSDDue: totalSDDueCents / 100,
+                    totalSNDue: totalSNDueCents / 100,
+                    totalDue: totalDueCents / 100,
                     weekdayShiftCount,
                     weekendShiftCount,
-                    weekdayDue,
-                    weekendDue,
+                    weekdayDue: weekdayDueCents / 100,
+                    weekendDue: weekendDueCents / 100,
                     pendingCount,
                 };
             })
@@ -1120,9 +1168,18 @@ export function ChiefPaymentViewClient({ board }: Props) {
     );
 
     const allocationConflictShifts = useMemo(() => {
-        return board.payableShifts
+        const uniqueBySlot = new Map<string, typeof board.payableShifts[number]>();
+
+        for (const shift of board.payableShifts
             .filter((shift) => shift.issues.some((issue) => issue === "Mais de um medico candidato no mesmo alvo/turno"))
-            .slice()
+            .slice()) {
+            const key = [shift.operationalDate, shift.shiftLabel, shift.domain, shift.targetCode].join("|");
+            if (!uniqueBySlot.has(key)) {
+                uniqueBySlot.set(key, shift);
+            }
+        }
+
+        return Array.from(uniqueBySlot.values())
             .sort((left, right) => {
                 const byDate = left.operationalDate.localeCompare(right.operationalDate);
                 if (byDate !== 0) return byDate;
@@ -1137,6 +1194,68 @@ export function ChiefPaymentViewClient({ board }: Props) {
         }
         return allocationConflictShifts.filter((shift) => shift.doctorId === selectedDoctor.doctorId);
     }, [allocationConflictShifts, selectedDoctor]);
+
+    const selectedDoctorDisplacedConflictSegments = useMemo(() => {
+        if (!selectedDoctor) {
+            return [] as Array<{
+                segmentId: string;
+                operationalDate: string;
+                shiftLabel: "SD" | "SN";
+                domain: "regulation" | "intervention";
+                targetCode: string;
+                targetLabel: string;
+                chosenDoctorName: string;
+            }>;
+        }
+
+        const conflictBySlot = new Map<string, typeof allocationConflictShifts[number]>();
+        for (const shift of allocationConflictShifts) {
+            const key = [shift.operationalDate, shift.shiftLabel, shift.domain, shift.targetCode].join("|");
+            conflictBySlot.set(key, shift);
+        }
+
+        const matches = board.attestationSegments
+            .filter((segment) => segment.doctorId === selectedDoctor.doctorId)
+            .filter((segment) => segment.discardReason === "not_selected_for_payment")
+            .map((segment) => {
+                const operationalDate = resolveOperationalDateFromIso(segment.startedAt);
+                const shiftLabel = resolveSegmentShiftLabel(segment);
+                const key = [operationalDate, shiftLabel, segment.domain, segment.targetCode].join("|");
+                const chosen = conflictBySlot.get(key);
+                if (!chosen) {
+                    return null;
+                }
+
+                return {
+                    segmentId: segment.segmentId,
+                    operationalDate,
+                    shiftLabel,
+                    domain: segment.domain,
+                    targetCode: segment.targetCode,
+                    targetLabel: segment.targetLabel,
+                    chosenDoctorName: chosen.doctorName,
+                };
+            })
+            .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+        const unique = new Map<string, (typeof matches)[number]>();
+        for (const entry of matches) {
+            const key = [entry.operationalDate, entry.shiftLabel, entry.domain, entry.targetCode].join("|");
+            if (!unique.has(key)) {
+                unique.set(key, entry);
+            }
+        }
+
+        return Array.from(unique.values()).sort((left, right) => {
+            const byDate = left.operationalDate.localeCompare(right.operationalDate);
+            if (byDate !== 0) return byDate;
+            if (left.shiftLabel !== right.shiftLabel) return left.shiftLabel === "SD" ? -1 : 1;
+            if (left.domain !== right.domain) return left.domain === "regulation" ? -1 : 1;
+            return left.targetCode.localeCompare(right.targetCode, "pt-BR");
+        });
+    }, [allocationConflictShifts, board.attestationSegments, selectedDoctor]);
+
+    const selectedDoctorConflictCount = selectedDoctorConflictShifts.length + selectedDoctorDisplacedConflictSegments.length;
 
     return (
         <main className="chief-payable-shell">
@@ -1828,19 +1947,30 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             </div>
                         </header>
 
-                        {allocationConflictShifts.length > 0 ? (
+                        {selectedDoctorConflictCount > 0 ? (
                             <section className="chief-payable-attest-card" style={{ borderColor: "#f59e0b", background: "#fff8eb" }}>
                                 <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
-                                    <strong>Conflitos de alocação detectados no mês:</strong> {allocationConflictShifts.length}.
-                                    {selectedDoctorConflictShifts.length > 0
-                                        ? ` Este médico está em ${selectedDoctorConflictShifts.length} conflito(s).`
-                                        : " Este médico não é o escolhido em conflitos, mas pode ter sido deslocado por conflito em outro candidato."}
+                                    <strong>Conflitos de alocação deste médico no mês:</strong> {selectedDoctorConflictCount}.
+                                </p>
+                                <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
+                                    O alerta só aparece quando há participação direta deste médico no conflito:
+                                    escolhido no slot conflitante ou segmento descartado por sobreposição no mesmo dia/turno/alvo.
                                 </p>
                                 {selectedDoctorConflictShifts.length > 0 ? (
                                     <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
+                                        <strong>Escolhido em conflito ({selectedDoctorConflictShifts.length}):</strong>{" "}
                                         {selectedDoctorConflictShifts
-                                            .slice(0, 4)
+                                            .slice(0, 6)
                                             .map((shift) => `${shift.operationalDate.slice(8, 10)}/${shift.operationalDate.slice(5, 7)} ${shift.shiftLabel} ${shift.targetCode}`)
+                                            .join(" · ")}
+                                    </p>
+                                ) : null}
+                                {selectedDoctorDisplacedConflictSegments.length > 0 ? (
+                                    <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
+                                        <strong>Não selecionado por sobreposição ({selectedDoctorDisplacedConflictSegments.length}):</strong>{" "}
+                                        {selectedDoctorDisplacedConflictSegments
+                                            .slice(0, 6)
+                                            .map((segment) => `${segment.operationalDate.slice(8, 10)}/${segment.operationalDate.slice(5, 7)} ${segment.shiftLabel} ${segment.targetCode} (escolhido: ${segment.chosenDoctorName})`)
                                             .join(" · ")}
                                     </p>
                                 ) : null}
