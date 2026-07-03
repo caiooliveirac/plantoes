@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
 
     let session;
     try {
-        session = await requireAuthenticatedSession(["admin"]);
+        session = await requireAuthenticatedSession(["admin", "payment_closing_limited"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

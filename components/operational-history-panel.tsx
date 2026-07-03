@@ -8,8 +8,8 @@ import type {
     HistoricalShiftLabel,
     HistoricalTargetOption,
 } from "@/services/operational-history.service";
+import type { UserRole } from "@/modules/auth/contracts";
 
-type UserRole = "admin" | "chief" | "doctor";
 type OperationalDomain = "regulation" | "intervention";
 type EditorMode = "create" | "update";
 

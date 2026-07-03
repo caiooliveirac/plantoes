@@ -46,8 +46,8 @@ import { RowActions } from "@/components/board/RowActions";
 import { MealSlotPicker, type MealKind } from "@/components/board/MealSlotPicker";
 import { AnimatePresence } from "framer-motion";
 import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
+import type { UserRole } from "@/modules/auth/contracts";
 
-type UserRole = "admin" | "chief" | "doctor";
 type ActionMode = "correct" | "end" | "start";
 type PriorityLevel = "critical" | "high" | "elevated" | "steady";
 type OperationalDomain = "regulation" | "intervention";
