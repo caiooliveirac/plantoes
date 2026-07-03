@@ -59,7 +59,10 @@ build_with_rollback() {
             || warn "Nao foi possivel reaproveitar .next/cache (segue com build frio)."
     fi
 
-    if NODE_OPTIONS="--max-old-space-size=2048" npm run build && [[ -f .next/BUILD_ID ]]; then
+    local build_heap_mb="${DEPLOY_BUILD_MAX_OLD_SPACE_MB:-2048}"
+    info "Heap maximo do build Node: ${build_heap_mb}MB (DEPLOY_BUILD_MAX_OLD_SPACE_MB)"
+
+    if NODE_OPTIONS="--max-old-space-size=${build_heap_mb}" npm run build && [[ -f .next/BUILD_ID ]]; then
         rm -rf .next.prev
         info "Build concluido (BUILD_ID=$(cat .next/BUILD_ID))."
         return 0
