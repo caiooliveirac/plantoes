@@ -26,6 +26,7 @@ jobs:
   build:
     name: Typecheck + build (GitHub runner)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       # O build não toca banco (páginas críticas são force-dynamic);
       # valores dummy só satisfazem código que lê env em import-time.
@@ -76,6 +77,7 @@ jobs:
   test_smoke:
     name: Smoke tests (GitHub runner)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -138,6 +140,7 @@ jobs:
   test_regression:
     name: Full regression tests (PR)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: github.event_name == 'pull_request'
     continue-on-error: true
     services:
@@ -203,6 +206,7 @@ jobs:
     name: Deploy to production
     needs: [build, test_smoke]
     runs-on: self-hosted
+    timeout-minutes: 30
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: read
