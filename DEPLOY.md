@@ -1,188 +1,96 @@
-# Deploy de producao
+# Deploy de produção (modelo container por digest)
 
-## Fonte oficial de runtime
+## Regra principal
 
-Este projeto adota **PM2 como runtime oficial de producao**.
+A EC2 de produção **não executa**:
 
-Nao existe arquitetura hibrida oficial PM2+Docker para o bot/plantao.
-Qualquer runtime concorrente (ex.: container legado consumindo Telegram em polling)
-e tratado como incidente de deploy.
+- `npm ci`, `npm install`, `pnpm install`, `yarn install`
+- `next build`, `vite build`, `tsc`
+- testes (`npm test`, `node --test`)
+- `git pull`, `git checkout`
+- `docker build`
 
-Este projeto roda em PM2 com dois processos separados no mesmo checkout:
+A EC2 apenas:
 
-- `plantoes`: web Next.js via `npm start`
-- `plantoes-telegram-worker`: worker de lembretes via `npm run telegram:worker`
+- recebe `image@sha256:...`
+- faz `docker pull`
+- valida arquitetura `arm64`
+- sobe candidato
+- checa health
+- promove ou faz rollback
 
-## Mapa de execucao (single source of truth)
+## Pipeline
 
-- Process manager oficial: `pm2`
-- Config oficial: `ecosystem.config.cjs`
-- Script oficial de deploy: `scripts/deploy-production.sh`
-- Endpoint oficial Telegram: `/api/telegram/webhook`
-- Proxy oficial: nginx (`plantoes.mnrs.com.br` -> `host.docker.internal:3004`)
+1. Pull Request
+- Runner: `ubuntu-latest` (GitHub-hosted)
+- Executa: lint, typecheck, testes, build
+- Não publica imagem
+- Não acessa EC2
 
-Arquivos que controlam runtime:
+2. Merge em `main`
+- Runner: `ubuntu-latest` (GitHub-hosted)
+- Executa validações novamente
+- Buildx `linux/arm64`
+- Push para GHCR com tag imutável `sha-<commit>`
+- Resolve digest e faz deploy remoto por digest
 
-- `ecosystem.config.cjs` (processos e env)
-- `scripts/deploy-production.sh` (pre-checks, build, restart, webhook, validacoes)
-- `app/api/telegram/webhook/route.ts` (entrada webhook + guard)
-- `scripts/telegram-reminder-worker.ts` (worker + guard)
-- `lib/runtime-identity.ts` (fingerprint + runtime guard)
-- `app/api/health/route.ts` (observabilidade de runtime)
+3. Host EC2
+- Script fixo: `/usr/local/sbin/deploy-plantoes`
+- Entrada: `ghcr.io/...@sha256:...`
+- Rollback automático em falha de health
 
-## Regras que nao podem ser quebradas
+## Script remoto oficial
 
-O banco e acessado exclusivamente por `DATABASE_URL`.
+Arquivo versionado no repositório:
 
-- a web precisa desse valor
-- o worker precisa desse valor
-- reiniciar o PM2 sem recarregar o ambiente pode deixar o worker sem `DATABASE_URL`, mesmo quando a web continua funcionando
+- `scripts/deploy-plantoes-container.sh`
 
-Por isso, qualquer deploy precisa carregar `.env.production` no shell antes do restart e usar `pm2 restart ... --update-env`.
+Ele é instalado pelo workflow em:
 
-E obrigatorio manter runtime unico:
+- `/usr/local/sbin/deploy-plantoes`
 
-- `RUNTIME_SOURCE_OF_TRUTH=pm2`
-- `TELEGRAM_DELIVERY_MODE=webhook`
-- webhook apontando para `https://plantoes.mnrs.com.br/api/telegram/webhook`
-- nenhum container legado `plantoes-app` ativo
-
-Observacao importante:
-
-- na web Next.js, ler `/proc/<pid>/environ` do wrapper `npm start` nao prova que `DATABASE_URL` chegou ao processo real da aplicacao
-- a validacao confiavel da web e o sucesso de `api/health` e `api/board`
-- para o worker, se precisar inspecionar ambiente no host, confira o processo filho real do `npm run telegram:worker`, nao apenas o wrapper do PM2
-
-## Comando recomendado
-
-Use sempre:
+Uso no host (manual, emergência):
 
 ```bash
-cd /home/ubuntu/plantoes
-npm run deploy:production
+sudo /usr/local/sbin/deploy-plantoes ghcr.io/<org>/<repo>/plantoes@sha256:<digest>
 ```
 
-Esse script faz, nesta ordem:
-
-1. carrega `.env.production`
-2. executa **pre-checks anti-concorrencia** (container legado, duplicidade PM2, porta ambigua, polling/webhook conflitante)
-3. roda `npm run build`
-4. recria `plantoes` e `plantoes-telegram-worker` no PM2 com `--update-env`
-5. valida `api/health` e `api/board`
-6. reconfigura o webhook do Telegram para `${AUTH_URL}/api/telegram/webhook`
-7. valida que o webhook ficou registrado no Telegram
-8. executa **post-checks anti-concorrencia**
-9. roda `pm2 save`
-10. imprime resumo final de deploy (runtime/commit/porta/pids/webhook)
-
-## Passo a passo manual
-
-Se o script nao puder ser usado, siga exatamente esta sequencia:
+Migração explícita (opcional):
 
 ```bash
-cd /home/ubuntu/plantoes
-set -a
-source .env.production
-set +a
-npm test
-npm run build
-pm2 restart plantoes --update-env
-pm2 restart plantoes-telegram-worker --update-env
-curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-	-H 'Content-Type: application/json' \
-	-d "{\"url\":\"${AUTH_URL%/}/api/telegram/webhook\",\"secret_token\":\"${TELEGRAM_WEBHOOK_SECRET}\",\"allowed_updates\":[\"message\"]}"
-curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
-pm2 save
+sudo /usr/local/sbin/deploy-plantoes ghcr.io/<org>/<repo>/plantoes@sha256:<digest> --run-migrations
 ```
 
-## Validacoes obrigatorias
+## Segredos e ambiente
 
-Depois do restart:
+- Segredos continuam fora da imagem e fora do Git.
+- Arquivo de ambiente no host: `/home/ubuntu/plantoes/.env.production`.
+- Credencial GHCR do host deve ser **read-only** (`packages:read`) via:
+  - `GHCR_USERNAME`
+  - `GHCR_READ_TOKEN`
+  - ou login Docker pré-configurado no host.
 
-```bash
-pm2 list
-pm2 logs plantoes --lines 20 --nostream
-pm2 logs plantoes-telegram-worker --lines 20 --nostream
-```
+## Health check
 
-E confirme localmente:
+- Candidato: `http://127.0.0.1:3904/api/health`
+- Ativo: `http://127.0.0.1:3004/api/health`
+- Público: `https://plantoes.mnrs.com.br/api/health`
 
-```bash
-curl -fsS http://127.0.0.1:3004/api/health
-curl -fsS http://127.0.0.1:3004/api/board
-```
+Endpoint adicional estável para orquestração:
 
-E confirme no Telegram que o bot aponta para a instancia publica certa:
+- `GET /healthz`
 
-```bash
-curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
-```
+## Rollback
 
-O campo `result.url` precisa ser exatamente `https://plantoes.mnrs.com.br/api/telegram/webhook`.
+- O script salva digest atual e anterior em `/var/lib/plantoes-deploy/`.
+- Se falhar health após promoção, ele reinicia a versão anterior e retorna código não-zero.
+- Logs de deploy ficam no stdout/stderr do comando remoto e no resumo do GitHub Actions.
 
-## Validacao obrigatoria no host publico (fluxo do agente)
+## Workflows
 
-Para qualquer alteracao de UX, rota admin, filtro ou comportamento de tela, o agente so pode encerrar a entrega apos validar no host publico usado para teste:
+- PR CI: `.github/workflows/ci-pr.yml`
+- Release/Deploy: `.github/workflows/release-deploy.yml`
 
-- Host oficial de teste do usuario: `plantoes.mnrs.com.br`
-- Fazer cheque local do upstream (`127.0.0.1:3004`) e cheque externo no dominio publico
-- Reportar no resumo final quais URLs foram testadas e os codigos HTTP retornados
+## Observação
 
-Checklist minimo:
-
-```bash
-# upstream local
-curl -fsS http://127.0.0.1:3004/api/health
-
-# host publico (mesmo caminho que o usuario testa)
-curl -sk -o /dev/null -w "%{http_code}\n" https://plantoes.mnrs.com.br/api/health
-
-# rota de tela alterada (exemplo: fechamento)
-curl -sk -o /dev/null -w "%{http_code}\n" https://plantoes.mnrs.com.br/admin/payment-closing
-```
-
-Sem essa validacao no dominio publico, a tarefa nao deve ser considerada concluida.
-
-## Runtime guard / simulacao de cenarios
-
-Use este comando para validar as protecoes contra runtime concorrente:
-
-```bash
-cd /home/ubuntu/plantoes
-npm run runtime:guard-check
-```
-
-Simulacoes disponiveis:
-
-```bash
-bash scripts/runtime-guard-check.sh legacy-container
-bash scripts/runtime-guard-check.sh duplicate-pm2
-bash scripts/runtime-guard-check.sh polling-webhook-conflict
-bash scripts/runtime-guard-check.sh clean
-bash scripts/runtime-guard-check.sh live
-```
-
-O script deve falhar em cenarios ambiguos e passar no cenario limpo.
-
-## Provisionamento inicial de acesso
-
-As contas operacionais iniciais devem ser provisionadas por script, nunca com senha fixa versionada no repositório.
-
-Use:
-
-```bash
-cd /home/ubuntu/plantoes
-set -a
-source .env.production
-set +a
-BOOTSTRAP_ACCESS_PASSWORD='defina-aqui' npm run provision:initial-access
-```
-
-O script cria ou atualiza:
-
-- `tom@samu.local`
-- `dora@samu.local`
-- `ivan@samu.local`
-- `caio@samu.local`
-
-Todos saem com troca obrigatoria de senha no primeiro login.
+`npm run deploy:production` foi mantido apenas como bloqueio explícito para impedir uso do fluxo legado de build no host.
