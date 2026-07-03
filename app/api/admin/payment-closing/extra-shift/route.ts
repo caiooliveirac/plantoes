@@ -12,6 +12,7 @@ const payloadSchema = z.discriminatedUnion("action", [
         doctorId: z.string().uuid(),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         shift: z.enum(["SD", "SN"]),
+        coverage: z.enum(["full", "half"]).optional(),
         label: z.string().trim().min(2, "Descreva o plantão extra com pelo menos 2 caracteres.").max(40),
     }),
     z.object({
@@ -44,6 +45,7 @@ export async function POST(request: NextRequest) {
                 doctorId: parsed.data.doctorId,
                 operationalDate: parsed.data.date,
                 shiftLabel: parsed.data.shift,
+                coverage: parsed.data.coverage ?? "full",
                 label: parsed.data.label,
                 actorUserId: session.user.id,
             });
@@ -58,6 +60,7 @@ export async function POST(request: NextRequest) {
                     doctorName: extra.doctorName,
                     operationalDate: extra.operationalDate,
                     shiftLabel: extra.shiftLabel,
+                    coverage: parsed.data.coverage ?? "full",
                     label: extra.label,
                 },
             });

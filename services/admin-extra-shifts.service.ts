@@ -17,6 +17,8 @@ export interface AdminExtraShiftRow {
     createdAt: string;
 }
 
+export type AdminExtraShiftCoverage = "full" | "half";
+
 function normalizeShiftLabel(value: string): "SD" | "SN" {
     const normalized = value.trim().toUpperCase();
     if (normalized !== "SD" && normalized !== "SN") {
@@ -33,6 +35,10 @@ function normalizeOperationalDate(value: string): string {
     return date;
 }
 
+function normalizeCoverage(value: string | null | undefined): AdminExtraShiftCoverage {
+    return value === "half" ? "half" : "full";
+}
+
 /**
  * Cria um plantão extra arbitrário para um médico — sem amarrar a ramal/base.
  * Aparece em verde no board do payment-closing e conta para o valor a pagar.
@@ -41,11 +47,13 @@ export async function createAdminExtraShift(params: {
     doctorId: string;
     operationalDate: string;
     shiftLabel: string;
+    coverage?: AdminExtraShiftCoverage;
     label: string | null;
     actorUserId: string;
 }): Promise<AdminExtraShiftRow> {
     const operationalDate = normalizeOperationalDate(params.operationalDate);
     const shiftLabel = normalizeShiftLabel(params.shiftLabel);
+    const coverage = normalizeCoverage(params.coverage);
     const label = params.label?.trim() ?? "";
     if (label.length < 2) {
         throw new Error("Descreva o plantão extra com pelo menos 2 caracteres.");
@@ -69,6 +77,7 @@ export async function createAdminExtraShift(params: {
             doctorId: params.doctorId,
             operationalDate,
             shiftLabel,
+            kind: coverage === "half" ? "half_extra" : "extra",
             label: normalizedLabel,
             createdByUserId: params.actorUserId,
         })
@@ -86,7 +95,7 @@ export async function createAdminExtraShift(params: {
         operationalDate,
         shiftLabel,
         label: normalizedLabel,
-        kind: "extra",
+        kind: coverage === "half" ? "half_extra" : "extra",
         unit: 1,
         createdAt: row.createdAt.toISOString(),
     };

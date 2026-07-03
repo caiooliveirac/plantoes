@@ -1,5 +1,5 @@
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
-import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
+import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_ROLE_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 
@@ -123,12 +123,17 @@ export interface AdminExtraShiftInput {
  */
 export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): PayableShift {
     const tagCode = input.label?.trim() ? input.label.trim() : "EXTRA";
+    const normalizedKind = String(input.kind ?? "extra").trim().toLowerCase();
+    const isHalfExtra = normalizedKind === "half_extra";
     // Slot local: SD = 06:00–18:00, SN = 18:00–06:00 (offset São Paulo -180min).
     const slotStartedAt = input.shiftLabel === "SD"
         ? `${input.operationalDate}T09:00:00.000Z`
         : `${input.operationalDate}T21:00:00.000Z`;
     const slotEndMs = new Date(slotStartedAt).getTime() + (12 * 60 * 60 * 1000);
     const slotEndedAt = new Date(slotEndMs).toISOString();
+    const paymentUnit = isHalfExtra
+        ? 0.5
+        : (typeof input.unit === "number" ? input.unit : 1);
 
     return {
         payableShiftId: `extra:${input.id}`,
@@ -149,13 +154,13 @@ export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): Payabl
         durationMinutes: 12 * 60,
         paymentStatus: "ready_for_payment",
         auditStatus: "clean",
-        issues: [],
+        issues: isHalfExtra ? [HALF_SHIFT_DISPLAY_LABEL] : [],
         source: ADMIN_EXTRA_SHIFT_SOURCE,
-        roleLabel: null,
+        roleLabel: isHalfExtra ? HALF_SHIFT_ROLE_LABEL : null,
         // unit -1 (penalty) faz o plantão subtrair do total a pagar — o board pinta
         // de vermelho quando paymentUnit < 0; verdes (extra/bonus) ficam +1.
-        paymentUnit: typeof input.unit === "number" ? input.unit : 1,
-        paymentTag: null,
+        paymentUnit,
+        paymentTag: isHalfExtra ? HALF_SHIFT_TAG_LABEL : null,
     } satisfies PayableShift;
 }
 
