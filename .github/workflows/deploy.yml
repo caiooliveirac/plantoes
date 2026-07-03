@@ -115,9 +115,9 @@ jobs:
           # Falha loud se o tree estiver sujo (ALLOW_DIRTY_TREE=1 para override).
           EXPECTED_GIT_COMMIT_SHA: ${{ github.sha }}
           # Host compartilhado: aceita headroom um pouco menor, mantendo guard ativo.
-          DEPLOY_MIN_HEADROOM_MB: "2600"
+          DEPLOY_MIN_HEADROOM_MB: "2500"
           # Reduz pico de RAM do next build para evitar abortos por memória.
-          DEPLOY_BUILD_MAX_OLD_SPACE_MB: "1536"
+          DEPLOY_BUILD_MAX_OLD_SPACE_MB: "1280"
 
       - name: Validate — local upstream
         run: |
