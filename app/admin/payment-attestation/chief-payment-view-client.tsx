@@ -9,6 +9,7 @@ import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendD
 
 interface Props {
     board: ChiefPayableBoardModel;
+    canManageClosing?: boolean;
 }
 
 interface FlashRecord {
@@ -223,7 +224,7 @@ function dayKindClassName(operationalDate: string) {
     return "weekday";
 }
 
-export function ChiefPaymentViewClient({ board }: Props) {
+export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props) {
     const router = useRouter();
     const [, startRefreshTransition] = useTransition();
     const requestRouterRefresh = useCallback(() => {
@@ -1259,6 +1260,11 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     <p className="chief-payable-subtitle">
                         Esta visão mostra apenas o que vira pagamento. Resíduos técnicos, fragmentos e duplicações ficam na auditoria detalhada.
                     </p>
+                    {!canManageClosing ? (
+                        <p className="chief-payable-subtitle">
+                            Perfil restrito: você pode visualizar todo o fechamento e salvar somente NF/processo.
+                        </p>
+                    ) : null}
                 </div>
 
                 <div className="chief-payable-peak-day" aria-live="polite">
@@ -1268,12 +1274,16 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 </div>
 
                 <AdminGlobalNavigationLinks current="payment-closing" containerClassName="chief-payable-hero-actions">
-                    <a className="reports-primary-link" href={`/api/admin/reports/export?month=${board.monthKey}`}>
-                        Exportar XLSX (payable shifts)
-                    </a>
-                    <a className="reports-secondary-link" href="/admin/payment-attestation/audit">
-                        Abrir auditoria técnica
-                    </a>
+                    {canManageClosing ? (
+                        <>
+                            <a className="reports-primary-link" href={`/api/admin/reports/export?month=${board.monthKey}`}>
+                                Exportar XLSX (payable shifts)
+                            </a>
+                            <a className="reports-secondary-link" href="/admin/payment-attestation/audit">
+                                Abrir auditoria técnica
+                            </a>
+                        </>
+                    ) : null}
                 </AdminGlobalNavigationLinks>
             </section>
 
@@ -1510,7 +1520,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 </section>
             ) : null}
 
-            {manualDraft ? (
+            {canManageClosing && manualDraft ? (
                 <section className="payment-detail-card">
                     <div className="payment-detail-card-header">
                         <div>
@@ -1650,6 +1660,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                         className={`chief-payable-tag disabled ${item.shiftLabel === "SD" ? "sd" : "sn"} ${highlightKey === `${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}|disable` ? "flash" : ""}`.trim()}
                                                         title={`${item.targetCode} ${item.shiftLabel}${item.disabledReason ? ` · ${item.disabledReason}` : ""}`}
                                                         onClick={() => {
+                                                            if (!canManageClosing) {
+                                                                return;
+                                                            }
                                                             setManualDraft({
                                                                 domain: item.domain,
                                                                 targetCode: item.targetCode,
@@ -1705,6 +1718,9 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                         className={`chief-payable-tag uncovered ${item.shiftLabel === "SD" ? "sd" : "sn"}`.trim()}
                                                         title={`${item.targetCode} ${item.shiftLabel}${item.reason ? ` · ${item.reason}` : ""}`}
                                                         onClick={() => {
+                                                            if (!canManageClosing) {
+                                                                return;
+                                                            }
                                                             setManualDraft({
                                                                 domain: item.domain,
                                                                 targetCode: item.targetCode,
@@ -1773,7 +1789,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                             onChange={(event) => {
                                                                 void toggleDoctorSpecialistProfile(doctor.doctorId, event.target.checked);
                                                             }}
-                                                            disabled={profileBusyDoctorId === doctor.doctorId}
+                                                            disabled={!canManageClosing || profileBusyDoctorId === doctor.doctorId}
                                                         />
                                                         <span>ESP</span>
                                                     </label>
@@ -1786,7 +1802,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                                         onChange={(event) => {
                                                             void toggleDoctorAttestation(doctor.doctorId, event.target.checked);
                                                         }}
-                                                        disabled={attestBusyDoctorId === doctor.doctorId}
+                                                        disabled={!canManageClosing || attestBusyDoctorId === doctor.doctorId}
                                                     />
                                                     <span>{isDoctorAttested(doctor) ? "✓ assinado" : "assinar"}</span>
                                                 </label>
@@ -1881,14 +1897,16 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         ) : null}
 
                         <div className="chief-payable-action-buttons">
-                            <button
-                                type="button"
-                                className="payment-button danger"
-                                onClick={() => void submitShiftRemoval()}
-                                disabled={shiftActionBusy}
-                            >
-                                {shiftActionBusy ? "Removendo..." : `Remover ${shiftActionDraft.doctorName} deste plantão`}
-                            </button>
+                            {canManageClosing ? (
+                                <button
+                                    type="button"
+                                    className="payment-button danger"
+                                    onClick={() => void submitShiftRemoval()}
+                                    disabled={shiftActionBusy}
+                                >
+                                    {shiftActionBusy ? "Removendo..." : `Remover ${shiftActionDraft.doctorName} deste plantão`}
+                                </button>
+                            ) : null}
                             {shiftActionDraft.source === "admin_extra" ? null : (
                                 <a
                                     className="payment-button"
@@ -1908,11 +1926,13 @@ export function ChiefPaymentViewClient({ board }: Props) {
                         </div>
 
                         <p className="chief-payable-action-hint">
-                            {shiftActionDraft.source === "admin_extra"
-                                ? "Remover apaga este plantão extra adicionado pelo admin (sai do quadro e do valor a pagar)."
-                                : (shiftActionDraft.source === "admin_correction" || shiftActionDraft.source === "manual"
-                                    ? "Remover apaga a correção manual deste plantão."
-                                    : "Remover encerra o plantão no início deste turno (recalcula banco de horas). Use quando o médico não estava de fato no plantão.")}
+                            {canManageClosing
+                                ? (shiftActionDraft.source === "admin_extra"
+                                    ? "Remover apaga este plantão extra adicionado pelo admin (sai do quadro e do valor a pagar)."
+                                    : (shiftActionDraft.source === "admin_correction" || shiftActionDraft.source === "manual"
+                                        ? "Remover apaga a correção manual deste plantão."
+                                        : "Remover encerra o plantão no início deste turno (recalcula banco de horas). Use quando o médico não estava de fato no plantão."))
+                                : "Perfil somente leitura para plantões: remoções e correções manuais ficam bloqueadas."}
                         </p>
                     </section>
                 </div>
@@ -2047,27 +2067,35 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                     <span>Saldo contratual</span>
                                     {selectedDoctor.contractCeilingBrl == null ? (
                                         <>
-                                            <small>Informe o teto do contrato (R$). A partir daí vira cálculo automático.</small>
-                                            <div className="chief-payable-contract-seed">
-                                                <input
-                                                    type="number"
-                                                    min="0"
-                                                    step="0.01"
-                                                    value={contractDraft}
-                                                    onChange={(event) => setContractDraft(event.target.value)}
-                                                    placeholder="ex.: 120000.00"
-                                                    disabled={contractBusy}
-                                                />
-                                                <button
-                                                    type="button"
-                                                    className="payment-button"
-                                                    onClick={() => void submitContractSeed(selectedDoctor.doctorId)}
-                                                    disabled={contractBusy}
-                                                >
-                                                    {contractBusy ? "Salvando..." : "Definir teto"}
-                                                </button>
-                                            </div>
-                                            {contractError ? <p className="chief-payable-extra-feedback danger">{contractError}</p> : null}
+                                            <small>
+                                                {canManageClosing
+                                                    ? "Informe o teto do contrato (R$). A partir daí vira cálculo automático."
+                                                    : "Teto de contrato ainda não definido para este médico."}
+                                            </small>
+                                            {canManageClosing ? (
+                                                <>
+                                                    <div className="chief-payable-contract-seed">
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.01"
+                                                            value={contractDraft}
+                                                            onChange={(event) => setContractDraft(event.target.value)}
+                                                            placeholder="ex.: 120000.00"
+                                                            disabled={contractBusy}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            className="payment-button"
+                                                            onClick={() => void submitContractSeed(selectedDoctor.doctorId)}
+                                                            disabled={contractBusy}
+                                                        >
+                                                            {contractBusy ? "Salvando..." : "Definir teto"}
+                                                        </button>
+                                                    </div>
+                                                    {contractError ? <p className="chief-payable-extra-feedback danger">{contractError}</p> : null}
+                                                </>
+                                            ) : null}
                                         </>
                                     ) : (
                                         <>
@@ -2096,26 +2124,30 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                     ) : (selectedDoctor.bankHoursMinutes ?? 0) >= BANK_HOURS_THRESHOLD_MINUTES ? (
                                         <>
                                             <small>+12h ou mais — bonifique com 1 plantão verde (dia útil) e debite 12h.</small>
-                                            <button
-                                                type="button"
-                                                className="payment-button bank-bonus"
-                                                onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
-                                                disabled={bankBusy}
-                                            >
-                                                {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde)"}
-                                            </button>
+                                            {canManageClosing ? (
+                                                <button
+                                                    type="button"
+                                                    className="payment-button bank-bonus"
+                                                    onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
+                                                    disabled={bankBusy}
+                                                >
+                                                    {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde)"}
+                                                </button>
+                                            ) : null}
                                         </>
                                     ) : (selectedDoctor.bankHoursMinutes ?? 0) <= -BANK_HOURS_THRESHOLD_MINUTES ? (
                                         <>
                                             <small>-12h ou menos — debite 1 plantão vermelho e zere 12h.</small>
-                                            <button
-                                                type="button"
-                                                className="payment-button bank-penalty"
-                                                onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
-                                                disabled={bankBusy}
-                                            >
-                                                {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho)"}
-                                            </button>
+                                            {canManageClosing ? (
+                                                <button
+                                                    type="button"
+                                                    className="payment-button bank-penalty"
+                                                    onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
+                                                    disabled={bankBusy}
+                                                >
+                                                    {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho)"}
+                                                </button>
+                                            ) : null}
                                         </>
                                     ) : (
                                         <small>Dentro de ±12h — sem acerto sugerido.</small>
@@ -2125,72 +2157,74 @@ export function ChiefPaymentViewClient({ board }: Props) {
                             </div>
                         </section>
 
-                        <section className="chief-payable-extra-form">
-                            <header>
-                                <h4>Adicionar plantão extra</h4>
-                                <small>Entra em verde no quadro e conta no valor a pagar. Use para plantões que o bot não registrou.</small>
-                            </header>
-                            <div className="chief-payable-extra-fields">
-                                <label>
-                                    <span>Dia</span>
-                                    <select
-                                        value={extraDay}
-                                        onChange={(event) => setExtraDay(event.target.value)}
+                        {canManageClosing ? (
+                            <section className="chief-payable-extra-form">
+                                <header>
+                                    <h4>Adicionar plantão extra</h4>
+                                    <small>Entra em verde no quadro e conta no valor a pagar. Use para plantões que o bot não registrou.</small>
+                                </header>
+                                <div className="chief-payable-extra-fields">
+                                    <label>
+                                        <span>Dia</span>
+                                        <select
+                                            value={extraDay}
+                                            onChange={(event) => setExtraDay(event.target.value)}
+                                            disabled={extraBusy}
+                                        >
+                                            <option value="">—</option>
+                                            {board.days.map((day) => (
+                                                <option key={day} value={day}>{day}</option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                    <label>
+                                        <span>Turno</span>
+                                        <select
+                                            value={extraShift}
+                                            onChange={(event) => setExtraShift(event.target.value === "SN" ? "SN" : "SD")}
+                                            disabled={extraBusy}
+                                        >
+                                            <option value="SD">SD (diurno)</option>
+                                            <option value="SN">SN (noturno)</option>
+                                        </select>
+                                    </label>
+                                    <label>
+                                        <span>Cobertura</span>
+                                        <select
+                                            value={extraCoverage}
+                                            onChange={(event) => setExtraCoverage(event.target.value === "half" ? "half" : "full")}
+                                            disabled={extraBusy}
+                                        >
+                                            <option value="full">Plantão inteiro (1.0)</option>
+                                            <option value="half">Meio plantão (0.5)</option>
+                                        </select>
+                                    </label>
+                                    <label>
+                                        <span>Motivo (obrigatório, ≥2 caracteres)</span>
+                                        <input
+                                            type="text"
+                                            value={extraLabel}
+                                            onChange={(event) => setExtraLabel(event.target.value)}
+                                            placeholder="ex.: plantão trocado"
+                                            minLength={2}
+                                            maxLength={40}
+                                            required
+                                            disabled={extraBusy}
+                                        />
+                                    </label>
+                                    <button
+                                        type="button"
+                                        className="payment-button"
+                                        onClick={() => void submitAddExtraShift(selectedDoctor.doctorId, selectedDoctor.doctorName)}
                                         disabled={extraBusy}
                                     >
-                                        <option value="">—</option>
-                                        {board.days.map((day) => (
-                                            <option key={day} value={day}>{day}</option>
-                                        ))}
-                                    </select>
-                                </label>
-                                <label>
-                                    <span>Turno</span>
-                                    <select
-                                        value={extraShift}
-                                        onChange={(event) => setExtraShift(event.target.value === "SN" ? "SN" : "SD")}
-                                        disabled={extraBusy}
-                                    >
-                                        <option value="SD">SD (diurno)</option>
-                                        <option value="SN">SN (noturno)</option>
-                                    </select>
-                                </label>
-                                <label>
-                                    <span>Cobertura</span>
-                                    <select
-                                        value={extraCoverage}
-                                        onChange={(event) => setExtraCoverage(event.target.value === "half" ? "half" : "full")}
-                                        disabled={extraBusy}
-                                    >
-                                        <option value="full">Plantão inteiro (1.0)</option>
-                                        <option value="half">Meio plantão (0.5)</option>
-                                    </select>
-                                </label>
-                                <label>
-                                    <span>Motivo (obrigatório, ≥2 caracteres)</span>
-                                    <input
-                                        type="text"
-                                        value={extraLabel}
-                                        onChange={(event) => setExtraLabel(event.target.value)}
-                                        placeholder="ex.: plantão trocado"
-                                        minLength={2}
-                                        maxLength={40}
-                                        required
-                                        disabled={extraBusy}
-                                    />
-                                </label>
-                                <button
-                                    type="button"
-                                    className="payment-button"
-                                    onClick={() => void submitAddExtraShift(selectedDoctor.doctorId, selectedDoctor.doctorName)}
-                                    disabled={extraBusy}
-                                >
-                                    {extraBusy ? "Adicionando..." : "Adicionar plantão"}
-                                </button>
-                            </div>
-                            {extraError ? <p className="chief-payable-extra-feedback danger">{extraError}</p> : null}
-                            {extraFeedback ? <p className="chief-payable-extra-feedback ok">{extraFeedback}</p> : null}
-                        </section>
+                                        {extraBusy ? "Adicionando..." : "Adicionar plantão"}
+                                    </button>
+                                </div>
+                                {extraError ? <p className="chief-payable-extra-feedback danger">{extraError}</p> : null}
+                                {extraFeedback ? <p className="chief-payable-extra-feedback ok">{extraFeedback}</p> : null}
+                            </section>
+                        ) : null}
 
                         <section className={`chief-payable-attest-card ${isDoctorAttested(selectedDoctor) ? "on" : ""}`.trim()}>
                             <label className="chief-payable-attest-main">
@@ -2198,9 +2232,12 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                     type="checkbox"
                                     checked={isDoctorAttested(selectedDoctor)}
                                     onChange={(event) => {
+                                        if (!canManageClosing) {
+                                            return;
+                                        }
                                         void toggleDoctorAttestation(selectedDoctor.doctorId, event.target.checked);
                                     }}
-                                    disabled={attestBusyDoctorId === selectedDoctor.doctorId}
+                                    disabled={!canManageClosing || attestBusyDoctorId === selectedDoctor.doctorId}
                                 />
                                 <span>
                                     <strong>Conferido e assinado</strong>

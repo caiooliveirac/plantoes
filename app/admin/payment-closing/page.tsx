@@ -27,8 +27,9 @@ export default async function AdminPaymentClosingPage({
         return <PaymentClosingUnavailable title="Banco indisponível" copy="Sem DATABASE_URL não existe base para fechar e atestar o pagamento do turno." />;
     }
 
+    let session;
     try {
-        await requireAuthenticatedSession(["admin"]);
+        session = await requireAuthenticatedSession(["admin", "payment_closing_limited"]);
     } catch (error) {
         if (error instanceof AuthError) {
             return (
@@ -44,6 +45,7 @@ export default async function AdminPaymentClosingPage({
 
     const { month } = await searchParams;
     const board = await getChiefPayableShiftsBoard(month ?? null);
+    const canManageClosing = Boolean(session.user.roles.includes("admin"));
 
-    return <ChiefPaymentViewClient board={board} />;
+    return <ChiefPaymentViewClient board={board} canManageClosing={canManageClosing} />;
 }
