@@ -362,18 +362,19 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     }, [targetPills]);
 
     const filterSummary = useMemo(() => {
+        const visiblePayableShifts = board.payableShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
         const readyDoctors = board.doctors.filter((doctor) => doctor.paymentStatus === "ready_for_payment").length;
         const reviewDoctors = board.doctors.length - readyDoctors;
-        const sdCount = board.payableShifts
+        const sdCount = visiblePayableShifts
             .filter((shift) => shift.shiftLabel === "SD")
             .reduce((sum, shift) => sum + shift.paymentUnit, 0);
-        const snCount = board.payableShifts
+        const snCount = visiblePayableShifts
             .filter((shift) => shift.shiftLabel === "SN")
             .reduce((sum, shift) => sum + shift.paymentUnit, 0);
-        const regulationCount = board.payableShifts.filter((shift) => shift.domain === "regulation").length;
-        const interventionCount = board.payableShifts.filter((shift) => shift.domain === "intervention").length;
-        const halfCount = board.payableShifts.filter((shift) => Boolean(shift.paymentTag)).length;
-        const fullCount = board.payableShifts.length - halfCount;
+        const regulationCount = visiblePayableShifts.filter((shift) => shift.domain === "regulation").length;
+        const interventionCount = visiblePayableShifts.filter((shift) => shift.domain === "intervention").length;
+        const halfCount = visiblePayableShifts.filter((shift) => Boolean(shift.paymentTag)).length;
+        const fullCount = visiblePayableShifts.length - halfCount;
 
         return {
             readyDoctors,
@@ -385,17 +386,20 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             halfCount,
             fullCount,
         };
-    }, [board.doctors, board.payableShifts]);
+    }, [board.doctors, board.payableShifts, pendingRemovals]);
 
     const dayLoad = useMemo(() => {
         const counts = new Map<string, number>();
         for (const shift of board.payableShifts) {
+            if (pendingRemovals.has(shift.payableShiftId)) {
+                continue;
+            }
             const day = shift.operationalDate.slice(8, 10);
             counts.set(day, (counts.get(day) ?? 0) + 1);
         }
 
         return board.days.map((day) => ({ day, count: counts.get(day) ?? 0 }));
-    }, [board.days, board.payableShifts]);
+    }, [board.days, board.payableShifts, pendingRemovals]);
 
     const totalDueAmount = useMemo(() => {
         const totalCents = board.doctors
@@ -403,6 +407,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
                 const doctorShifts = doctor.cells
                     .flatMap((cell) => cell.shifts)
+                    .filter((shift) => !pendingRemovals.has(shift.payableShiftId));
                 const weekdayUnits = doctorShifts
                     .filter((shift) => !isWeekendDate(shift.operationalDate))
                     .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
@@ -422,7 +427,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             }, 0);
 
         return totalCents / 100;
-    }, [board.doctors, doctorProfileOverrides]);
+    }, [board.doctors, doctorProfileOverrides, pendingRemovals]);
 
     const visibleDisabledTargets = useMemo(() => board.disabledTargets.filter((item) => {
         if (shiftFilter !== "all" && item.shiftLabel !== shiftFilter) {
@@ -545,28 +550,29 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 }));
 
                 const visibleShifts = nextCells.flatMap((cell) => cell.shifts);
+                const effectiveVisibleShifts = visibleShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
                 const totalSD = Number(visibleShifts
-                    .filter((shift) => shift.shiftLabel === "SD")
+                    .filter((shift) => !pendingRemovals.has(shift.payableShiftId) && shift.shiftLabel === "SD")
                     .reduce((sum, shift) => sum + shift.paymentUnit, 0)
                     .toFixed(2));
                 const totalSN = Number(visibleShifts
-                    .filter((shift) => shift.shiftLabel === "SN")
+                    .filter((shift) => !pendingRemovals.has(shift.payableShiftId) && shift.shiftLabel === "SN")
                     .reduce((sum, shift) => sum + shift.paymentUnit, 0)
                     .toFixed(2));
-                const total = Number(visibleShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2));
+                const total = Number(effectiveVisibleShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2));
                 const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
-                const totalSDDueCents = visibleShifts
+                const totalSDDueCents = effectiveVisibleShifts
                     .filter((shift) => shift.shiftLabel === "SD")
                     .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile), 0);
-                const totalSNDueCents = visibleShifts
+                const totalSNDueCents = effectiveVisibleShifts
                     .filter((shift) => shift.shiftLabel === "SN")
                     .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile), 0);
                 // Conta em UNIDADES de plantão: meio plantão vale 0,5 (não 1).
-                const weekdayShiftCount = Number(visibleShifts
+                const weekdayShiftCount = Number(effectiveVisibleShifts
                     .filter((shift) => !isWeekendDate(shift.operationalDate))
                     .reduce((sum, shift) => sum + shift.paymentUnit, 0)
                     .toFixed(2));
-                const weekendShiftCount = Number(visibleShifts
+                const weekendShiftCount = Number(effectiveVisibleShifts
                     .filter((shift) => isWeekendDate(shift.operationalDate))
                     .reduce((sum, shift) => sum + shift.paymentUnit, 0)
                     .toFixed(2));
@@ -581,7 +587,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                     paymentUnit: weekendShiftCount,
                 });
                 const totalDueCents = weekdayDueCents + weekendDueCents;
-                const pendingCount = visibleShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
+                const pendingCount = effectiveVisibleShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
 
                 return {
                     ...doctor,
@@ -635,7 +641,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         });
 
         return sorted;
-    }, [board.doctors, coverageFilter, doctorProfileOverrides, domainFilter, normalized, normalizedTarget, shiftFilter, sortMode, status, targetFilter]);
+    }, [board.doctors, coverageFilter, doctorProfileOverrides, domainFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
 
     useEffect(() => {
         // Reconcile optimistic removals with server truth: if a payableShiftId
@@ -877,9 +883,23 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         setShiftActionError(null);
 
         // Optimistic: hide the cell immediately
+        const relatedPayableShiftIds = new Set<string>([draft.payableShiftId]);
+        if (!draft.occupancyId.startsWith("extra:")) {
+            for (const doctor of board.doctors) {
+                for (const cell of doctor.cells) {
+                    for (const shift of cell.shifts) {
+                        if (shift.occupancyId === draft.occupancyId) {
+                            relatedPayableShiftIds.add(shift.payableShiftId);
+                        }
+                    }
+                }
+            }
+        }
         setPendingRemovals((prev) => {
             const next = new Set(prev);
-            next.add(draft.payableShiftId);
+            for (const id of relatedPayableShiftIds) {
+                next.add(id);
+            }
             return next;
         });
 
@@ -937,7 +957,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             // Rollback optimistic
             setPendingRemovals((prev) => {
                 const next = new Set(prev);
-                next.delete(draft.payableShiftId);
+                for (const id of relatedPayableShiftIds) {
+                    next.delete(id);
+                }
                 return next;
             });
             setShiftActionError(error instanceof Error ? error.message : "Falha ao remover plantão.");

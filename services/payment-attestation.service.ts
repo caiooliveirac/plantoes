@@ -1092,9 +1092,9 @@ export async function applyManualRemoveAssignment(params: {
                 await tx.delete(regulationOccupancies)
                     .where(eq(regulationOccupancies.id, existing.id));
             } else {
-                const clampedEnd = slotStart.getTime() <= existing.startedAt.getTime()
-                    ? existing.startedAt
-                    : slotStart;
+                // Remocao no fechamento deve excluir o plantao do pagamento por
+                // completo (todos os slots), evitando recaptura em outro turno.
+                const clampedEnd = existing.startedAt;
                 await tx.update(regulationOccupancies)
                     .set({
                         endedAt: clampedEnd,
@@ -1119,9 +1119,9 @@ export async function applyManualRemoveAssignment(params: {
                 await tx.delete(interventionOccupancies)
                     .where(eq(interventionOccupancies.id, existing.id));
             } else {
-                const clampedEnd = slotStart.getTime() <= existing.startedAt.getTime()
-                    ? existing.startedAt
-                    : slotStart;
+                // Remocao no fechamento deve excluir o plantao do pagamento por
+                // completo (todos os slots), evitando recaptura em outro turno.
+                const clampedEnd = existing.startedAt;
                 await tx.update(interventionOccupancies)
                     .set({
                         endedAt: clampedEnd,
