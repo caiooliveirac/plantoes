@@ -9,7 +9,7 @@
         "dev": "next dev",
         "build": "next build",
         "start": "next start",
-        "lint": "tsc --noEmit -p tsconfig.deploy.json",
+        "lint": "next typegen && tsc --noEmit -p tsconfig.deploy.json",
         "typecheck": "next typegen && tsc --noEmit -p tsconfig.deploy.json",
         "test:deploy": "node --test --import tsx $(find tests -name '*.test.ts' ! -name 'telegram-meal-breaks.test.ts' -print)",
         "test:full": "node --test --import tsx tests/**/*.test.ts",
