@@ -81,7 +81,7 @@ test("buildPaymentAllocationBoardModel chooses a primary candidate and flags tar
     assert.equal(board.intervention[0]?.doctorName, "Bruno Lima");
     assert.equal(board.intervention[0]?.candidateCount, 2);
     assert.equal(board.intervention[0]?.paymentStatus, "needs_review");
-    assert.match(board.intervention[0]?.issues.join(" ") ?? "", /Mais de um medico candidato/i);
+    assert.match(board.intervention[0]?.issues.join(" ") ?? "", /Conflito entre medicos titulares/i);
 });
 
 test("buildPaymentAllocationBoardModel inclui titular e sombra como linhas pagaveis no mesmo alvo", () => {
@@ -129,6 +129,9 @@ test("buildPaymentAllocationBoardModel inclui titular e sombra como linhas pagav
     const pm40Rows = board.intervention.filter((row) => row.targetCode === "PM40" && row.occupancyId);
     assert.equal(pm40Rows.length, 2);
     assert.deepEqual(pm40Rows.map((row) => row.doctorName).sort(), ["Leonardo Prado Faben", "Titular PM40"]);
+    const titularRow = pm40Rows.find((row) => row.doctorName === "Titular PM40") ?? null;
+    assert.equal(titularRow?.hasDoctorOverlapConflict, false);
+    assert.equal(titularRow?.issues.some((issue) => /Conflito entre medicos titulares/i.test(issue)), false);
 });
 
 test("buildPaymentAllocationBoardModel inclui sombra aberta no mesmo alvo quando o titular tambem esta aberto", () => {

@@ -140,6 +140,7 @@ test("resolveReminderRecipientsForPlan includes admins on noon payment checkpoin
         }),
         reminderChatIds: ["-1001591556887"],
         adminChatIds: ["1438288563", "140695090"],
+        chiefPrivateAlertRecipients: ["700000001"],
     });
 
     assert.deepEqual(recipients, ["-1001591556887", "1438288563", "140695090"]);
@@ -153,6 +154,21 @@ test("resolveReminderRecipientsForPlan keeps regular plans in reminder chats onl
         }),
         reminderChatIds: ["-1001591556887"],
         adminChatIds: ["1438288563", "140695090"],
+        chiefPrivateAlertRecipients: ["700000001"],
+    });
+
+    assert.deepEqual(recipients, ["-1001591556887"]);
+});
+
+test("resolveReminderRecipientsForPlan keeps payment conflict alerts in reminder chats", () => {
+    const recipients = resolveReminderRecipientsForPlan({
+        plan: makePlan({
+            noticeKey: "payment-conflict:2026-03-26:SD:2026-03-26T11:00:00.000Z",
+            stage: "payment_conflict_alert",
+        }),
+        reminderChatIds: ["-1001591556887"],
+        adminChatIds: ["1438288563", "140695090"],
+        chiefPrivateAlertRecipients: ["700000001", "700000002"],
     });
 
     assert.deepEqual(recipients, ["-1001591556887"]);

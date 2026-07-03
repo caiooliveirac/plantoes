@@ -232,6 +232,9 @@ export interface PaymentAllocationRow {
   source: string | null;
   notes?: string | null;
   candidateCount: number;
+  candidateLabels: string[];
+  conflictCandidateLabels: string[];
+  hasDoctorOverlapConflict: boolean;
   paymentStatus: PaymentAllocationStatus;
   issues: string[];
   arrivalDelayMinutes: number | null;
@@ -254,6 +257,63 @@ export interface PaymentAllocationRow {
   sourceRuleCode?: string | null;
   sourceBankHoursExplanation?: string | null;
   continuesBeyondShift?: boolean;
+}
+
+function resolvePaymentCandidateLabel(candidate: LogicalShiftCandidate) {
+  const baseName = candidate.displayName?.trim() || candidate.doctorName.trim();
+  return candidate.isShadow ? `${baseName} (sombra)` : baseName;
+}
+
+function resolvePaymentCandidateLabels(candidates: LogicalShiftCandidate[]) {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const label = resolvePaymentCandidateLabel(candidate);
+    if (!label || seen.has(label)) {
+      continue;
+    }
+
+    seen.add(label);
+    labels.push(label);
+  }
+
+  return labels;
+}
+
+function resolveTitularCandidateLabels(candidates: LogicalShiftCandidate[]) {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (candidate.isShadow) {
+      continue;
+    }
+
+    const label = candidate.displayName?.trim() || candidate.doctorName.trim();
+    if (!label || seen.has(label)) {
+      continue;
+    }
+
+    seen.add(label);
+    labels.push(label);
+  }
+
+  return labels;
+}
+
+function hasDoctorOverlapConflict(candidates: LogicalShiftCandidate[]) {
+  const titularDoctorIds = new Set<string>();
+  for (const candidate of candidates) {
+    if (candidate.isShadow) {
+      continue;
+    }
+
+    titularDoctorIds.add(candidate.doctorId);
+    if (titularDoctorIds.size > 1) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export interface PaymentAllocationBoard {
@@ -2786,13 +2846,13 @@ function filterTargetPaymentCandidates(params: {
 
 function detectPaymentAllocationIssues(params: {
   candidate: LogicalShiftCandidate;
-  candidateCount: number;
+  candidates: LogicalShiftCandidate[];
   syntheticBankHours: SyntheticBankHoursSummary;
 }) {
   const issues: string[] = [];
 
-  if (params.candidateCount > 1) {
-    issues.push("Mais de um medico candidato no mesmo alvo/turno");
+  if (hasDoctorOverlapConflict(params.candidates)) {
+    issues.push("Conflito entre medicos titulares no mesmo alvo/turno");
   }
 
   if (!params.candidate.effectiveEndedAt) {
@@ -2843,6 +2903,9 @@ function buildEmptyPaymentAllocationRow(params: {
     source: null,
     notes: null,
     candidateCount: params.candidateCount ?? 0,
+    candidateLabels: [],
+    conflictCandidateLabels: [],
+    hasDoctorOverlapConflict: false,
     paymentStatus: resolvePaymentAllocationStatus(issues),
     issues,
     arrivalDelayMinutes: null,
@@ -3018,9 +3081,11 @@ function buildChosenPaymentAllocationRow(params: {
     syntheticBankHours: applyBankHoursBalanceOverrideToSummary(sourceBankHours.syntheticBankHours, bankHoursOverride),
   };
   const effectiveBankHours = shouldUseContinuitySource ? adjustedSourceBankHours.syntheticBankHours : syntheticBankHours;
+  const overlapConflict = hasDoctorOverlapConflict(params.candidates);
+  const conflictCandidateLabels = overlapConflict ? resolveTitularCandidateLabels(params.candidates) : [];
   const issues = detectPaymentAllocationIssues({
     candidate: chosen,
-    candidateCount: params.candidates.length,
+    candidates: params.candidates,
     syntheticBankHours: effectiveBankHours,
   });
   const disabledState = params.disabledStateOverride ?? {
@@ -3056,6 +3121,9 @@ function buildChosenPaymentAllocationRow(params: {
     source: chosen.source,
     notes: chosen.notes,
     candidateCount: params.candidates.length,
+    candidateLabels: resolvePaymentCandidateLabels(params.candidates),
+    conflictCandidateLabels,
+    hasDoctorOverlapConflict: overlapConflict,
     paymentStatus: resolvePaymentAllocationStatus(issues),
     issues,
     arrivalDelayMinutes: syntheticBankHours.arrivalDelayMinutes,

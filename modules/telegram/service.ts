@@ -3715,11 +3715,14 @@ function buildPaymentAllocationReportLine(row: PaymentAllocationRow) {
         fallback: "medico nao identificado",
     });
     const halfTag = isHalfShiftRoleLabel(row.roleLabel) ? " [MEIO]" : "";
+    const conflictDetail = row.hasDoctorOverlapConflict && row.conflictCandidateLabels.length > 0
+        ? ` | conflito titulares: ${row.conflictCandidateLabels.join(" x ")}`
+        : "";
     if (row.paymentStatus === "ready_for_payment") {
         return `OK ${row.targetCode} - ${name}${halfTag}`;
     }
 
-    return `REV ${row.targetCode} - ${name}${halfTag} | ${summarizePaymentAllocationIssues(row.issues)}`;
+    return `REV ${row.targetCode} - ${name}${halfTag} | ${summarizePaymentAllocationIssues(row.issues)}${conflictDetail}`;
 }
 
 function buildPaymentAllocationReportReply(board: PaymentAllocationBoard) {
@@ -7109,13 +7112,16 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
             ),
             orderBy: [desc(regulationOccupancies.boardStartedAt)],
         });
+        if (!occ) {
+            return null;
+        }
         const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
 
         // "Mesmo turno": o ocupante chegou DENTRO da janela de turno atual. Carry-over
         // do turno anterior (started_at antes da janela) é rendição normal, não tomada.
         // Também não é tomada quando a chegada é para o PRÓXIMO turno (relevo de fim de
         // plantão ~17h/05h): o ocupante do turno que acaba é rendido normalmente.
-        if (!occ || occupancyAnchorAt.getTime() < windowStart.getTime()
+        if (occupancyAnchorAt.getTime() < windowStart.getTime()
             || !isSameOperationalShiftArrival(occupancyAnchorAt, params.eventAt)) {
             return null;
         }
@@ -7144,8 +7150,11 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         ),
         orderBy: [desc(interventionOccupancies.boardStartedAt)],
     });
+    if (!occ) {
+        return null;
+    }
     const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
-    if (!occ || occupancyAnchorAt.getTime() < windowStart.getTime()
+    if (occupancyAnchorAt.getTime() < windowStart.getTime()
         || !isSameOperationalShiftArrival(occupancyAnchorAt, params.eventAt)) {
         return null;
     }
