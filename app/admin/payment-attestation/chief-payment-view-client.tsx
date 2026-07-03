@@ -240,6 +240,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
     // Formulário "adicionar plantão extra" dentro do modal do médico.
     const [extraDay, setExtraDay] = useState("");
     const [extraShift, setExtraShift] = useState<"SD" | "SN">("SD");
+    const [extraCoverage, setExtraCoverage] = useState<"full" | "half">("full");
     const [extraLabel, setExtraLabel] = useState("");
     const [extraBusy, setExtraBusy] = useState(false);
     const [extraError, setExtraError] = useState<string | null>(null);
@@ -259,6 +260,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
     useEffect(() => {
         setExtraDay("");
         setExtraShift("SD");
+        setExtraCoverage("full");
         setExtraLabel("");
         setExtraError(null);
         setExtraFeedback(null);
@@ -921,6 +923,7 @@ export function ChiefPaymentViewClient({ board }: Props) {
                     doctorId,
                     date: `${board.monthKey}-${day}`,
                     shift: extraShift,
+                    coverage: extraCoverage,
                     label,
                 }),
             });
@@ -929,7 +932,8 @@ export function ChiefPaymentViewClient({ board }: Props) {
                 throw new Error(body?.error ?? "Não foi possível adicionar o plantão extra.");
             }
 
-            setExtraFeedback(`Plantão extra adicionado: dia ${day} ${extraShift} → ${doctorName}.`);
+            const coverageLabel = extraCoverage === "half" ? "meio plantão" : "plantão inteiro";
+            setExtraFeedback(`Plantão extra adicionado: dia ${day} ${extraShift} (${coverageLabel}) → ${doctorName}.`);
             setExtraLabel("");
             // Se o filtro de status esconderia a linha, garante visibilidade.
             if (status === "needs_review") {
@@ -1980,6 +1984,17 @@ export function ChiefPaymentViewClient({ board }: Props) {
                                     >
                                         <option value="SD">SD (diurno)</option>
                                         <option value="SN">SN (noturno)</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Cobertura</span>
+                                    <select
+                                        value={extraCoverage}
+                                        onChange={(event) => setExtraCoverage(event.target.value === "half" ? "half" : "full")}
+                                        disabled={extraBusy}
+                                    >
+                                        <option value="full">Plantão inteiro (1.0)</option>
+                                        <option value="half">Meio plantão (0.5)</option>
                                     </select>
                                 </label>
                                 <label>

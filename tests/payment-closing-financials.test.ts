@@ -69,6 +69,20 @@ test("meio plantão conta 0,5 na casinha (dia útil ou fim de semana), não 1", 
     );
 });
 
+test("plantão extra half_extra conta 0,5 mesmo com unit inteiro persistido", () => {
+    const halfFromDbKind = buildAdminExtraPayableShift(makeExtraInput({
+        id: "h2",
+        kind: "half_extra",
+        unit: 1,
+    }));
+    const doctor = buildBoardWith([halfFromDbKind]).doctors[0];
+    assert.equal(
+        (doctor.weekdayShiftCount ?? 0) + (doctor.weekendShiftCount ?? 0),
+        0.5,
+        "kind half_extra deve resultar em 0,5 unidade pagável",
+    );
+});
+
 function makeBankShift(overrides: Partial<RawBankHoursHistoryShift> = {}): RawBankHoursHistoryShift {
     return {
         occupancyId: "occ-1",
