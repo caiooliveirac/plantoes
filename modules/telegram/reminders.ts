@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import { getDb } from "@/db";
-import { telegramBotNotices } from "@/db/schema";
+import { telegramBotNotices, telegramIngestedMessages } from "@/db/schema";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import {
@@ -35,7 +35,7 @@ export interface ReminderBoardSnapshot {
 
 export interface ReminderPlan {
     noticeKey: string;
-    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "payment_conflict_alert" | "regulation_confirmation" | "regulation_confirmation_private";
+    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "payment_conflict_alert" | "takeover_conflict_alert" | "regulation_confirmation" | "regulation_confirmation_private";
     text: string;
     payload: Record<string, unknown>;
 }
@@ -93,6 +93,98 @@ function resolveReminderChatIds() {
 
 function isNoonPaymentCheckpoint(plan: ReminderPlan) {
     return plan.stage === "payment_checkpoint" && plan.noticeKey.endsWith("T12:00");
+}
+
+interface PendingTakeoverConflict {
+    id: string;
+    createdAt: Date;
+    chatId: string;
+    sector: "REGULATION" | "INTERVENTION";
+    targetCode: string;
+    arrivingDoctorId: string;
+    occupantDoctorId: string;
+}
+
+function isTakeoverResolutionData(value: unknown): value is {
+    kind: "takeover_confirmation";
+    sector: "REGULATION" | "INTERVENTION";
+    targetCode: string;
+    arrivingDoctorId: string;
+    occupantDoctorId: string;
+} {
+    if (!value || typeof value !== "object") return false;
+    const data = value as Record<string, unknown>;
+    return data.kind === "takeover_confirmation"
+        && (data.sector === "REGULATION" || data.sector === "INTERVENTION")
+        && typeof data.targetCode === "string"
+        && typeof data.arrivingDoctorId === "string"
+        && typeof data.occupantDoctorId === "string";
+}
+
+async function loadPendingTakeoverConflicts(referenceDate: Date): Promise<PendingTakeoverConflict[]> {
+    const db = getDb();
+    const lowerBound = new Date(referenceDate.getTime() - (35 * 60 * 1000));
+    const rows = await db
+        .select({
+            id: telegramIngestedMessages.id,
+            createdAt: telegramIngestedMessages.createdAt,
+            chatId: telegramIngestedMessages.chatId,
+            resolutionData: telegramIngestedMessages.resolutionData,
+        })
+        .from(telegramIngestedMessages)
+        .where(and(
+            eq(telegramIngestedMessages.status, "pending_takeover_confirmation"),
+            gte(telegramIngestedMessages.createdAt, lowerBound),
+        ));
+
+    const conflicts: PendingTakeoverConflict[] = [];
+    for (const row of rows) {
+        if (!isTakeoverResolutionData(row.resolutionData)) {
+            continue;
+        }
+
+        conflicts.push({
+            id: row.id,
+            createdAt: row.createdAt,
+            chatId: row.chatId,
+            sector: row.resolutionData.sector,
+            targetCode: row.resolutionData.targetCode,
+            arrivingDoctorId: row.resolutionData.arrivingDoctorId,
+            occupantDoctorId: row.resolutionData.occupantDoctorId,
+        });
+    }
+
+    return conflicts;
+}
+
+function buildTakeoverConflictPlan(params: {
+    now: Date;
+    conflict: PendingTakeoverConflict;
+}): ReminderPlan {
+    const bucket = floorToBucket(params.now, TEN_MINUTES);
+    const elapsedMinutes = Math.max(0, Math.floor((params.now.getTime() - params.conflict.createdAt.getTime()) / 60000));
+    const domainLabel = params.conflict.sector === "REGULATION" ? "Regulação" : "Intervenção";
+
+    return {
+        noticeKey: `takeover-conflict:${params.conflict.id}:${bucket.toISOString()}`,
+        stage: "takeover_conflict_alert",
+        payload: {
+            conflictId: params.conflict.id,
+            bucketAt: bucket.toISOString(),
+            chatId: params.conflict.chatId,
+            sector: params.conflict.sector,
+            targetCode: params.conflict.targetCode,
+            elapsedMinutes,
+        },
+        text: [
+            `🚨 Conflito de chegada em ${domainLabel} ${params.conflict.targetCode} ainda pendente (${elapsedMinutes} min).`,
+            "",
+            "Há uma tomada de posição aguardando confirmação e o pagamento pode ficar inconsistente se ninguém resolver.",
+            "",
+            `Confirme no grupo com: confirmo ${params.conflict.targetCode}`,
+            "ou ajuste manualmente em /admin/payment-attestation/audit.",
+        ].join("\n"),
+    };
 }
 
 export function resolveReminderRecipientsForPlan(params: {
@@ -748,6 +840,37 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
         evaluated += chiefPrivateAlertRecipients.length;
 
         for (const chatId of chiefPrivateAlertRecipients) {
+
+    try {
+        const pendingTakeovers = await loadPendingTakeoverConflicts(referenceDate);
+        const takeoverRecipients = uniqueChatIds([
+            ...reminderChatIds,
+            ...adminChatIds,
+            ...chiefPrivateAlertRecipients,
+        ]);
+
+        for (const conflict of pendingTakeovers) {
+            const plan = buildTakeoverConflictPlan({ now: referenceDate, conflict });
+            evaluated += takeoverRecipients.length;
+
+            for (const chatId of takeoverRecipients) {
+                const inserted = await markNoticeSent(plan, chatId);
+                if (!inserted) {
+                    continue;
+                }
+
+                try {
+                    await sendMessage(chatId, plan.text);
+                    sent += 1;
+                } catch (error) {
+                    await rollbackNotice(chatId, plan);
+                    console.error(`telegram reminder failed for ${chatId} ${plan.noticeKey}`, error);
+                }
+            }
+        }
+    } catch (error) {
+        console.error("telegram takeover conflict alerts failed", error);
+    }
             const inserted = await markNoticeSent(chiefPrivateAlertPlan, chatId);
             if (!inserted) {
                 continue;
