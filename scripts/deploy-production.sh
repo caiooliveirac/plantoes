@@ -24,7 +24,13 @@ ensure_memory_headroom() {
     # 'next build' pode usar ~2GB de heap. Nesta maquina compartilhada, abortar
     # cedo com mensagem clara e' muito melhor do que travar o host em swap/OOM
     # (que ja' rebootou a instancia e derrubou tudo junto). Ajustavel via env.
-    local min_mb="${DEPLOY_MIN_HEADROOM_MB:-3000}"
+    # Em modo artefato (DEPLOY_NEXT_ARTIFACT) nao ha build local: o pico e' so
+    # extract + npm ci eventual + pm2 reload, entao o piso default e' bem menor.
+    local default_min_mb=3000
+    if [[ -n "${DEPLOY_NEXT_ARTIFACT:-}" ]]; then
+        default_min_mb=700
+    fi
+    local min_mb="${DEPLOY_MIN_HEADROOM_MB:-${default_min_mb}}"
     local avail_mb swap_free_mb headroom_mb
     avail_mb="$(free -m | awk '/^Mem:/{print $7}')"
     swap_free_mb="$(free -m | awk '/^Swap:/{print $4}')"
@@ -75,6 +81,61 @@ build_with_rollback() {
         warn "Rollback aplicado: build anterior restaurado. Producao mantem a versao antiga (sem downtime)."
     fi
     fail "Build incompleto: .next/BUILD_ID nao gerado. Deploy abortado."
+}
+
+deploy_prebuilt_artifact() {
+    # Modo artefato: o .next chega pronto do runner do GitHub (CI faz o
+    # 'next build'); aqui so' validamos e trocamos atomicamente. A EC2 de
+    # producao nao roda mais next build — era o maior pico de RAM/CPU do host.
+    # O artefato e' JS puro (sem binarios nativos), entao build x64 → runtime
+    # arm64 e' seguro; deps nativas vem do node_modules local (ensure_node_modules).
+    local artifact="${DEPLOY_NEXT_ARTIFACT}"
+    [[ -f "${artifact}" ]] || fail "Artefato de build nao encontrado: ${artifact}"
+
+    # Extrai para staging e valida ANTES de tocar no .next de producao.
+    rm -rf .next.incoming
+    mkdir -p .next.incoming
+    if ! tar -xzf "${artifact}" -C .next.incoming; then
+        rm -rf .next.incoming
+        fail "Falha ao extrair ${artifact}."
+    fi
+    if [[ ! -f .next.incoming/.next/BUILD_ID ]]; then
+        rm -rf .next.incoming
+        fail "Artefato sem .next/BUILD_ID — build invalido, producao intocada."
+    fi
+
+    # Troca atomica, mesmo contrato do build_with_rollback: o build anterior
+    # so' e' descartado depois que o novo esta' no lugar.
+    rm -rf .next.prev
+    if [[ -d .next && -f .next/BUILD_ID ]]; then
+        mv .next .next.prev
+    else
+        rm -rf .next
+    fi
+    mv .next.incoming/.next .next
+    rm -rf .next.incoming
+    rm -rf .next.prev
+    info "Artefato pre-buildado aplicado (BUILD_ID=$(cat .next/BUILD_ID))."
+}
+
+ensure_node_modules() {
+    # Sem build local, quem detectava lockfile desatualizado era o proprio
+    # 'next build'. Agora o runtime depende de node_modules em dia com o
+    # lockfile do commit deployado — instala apenas quando o lockfile muda
+    # (hash persistido em node_modules/.deployed-lock-hash), mantendo o
+    # deploy tipico leve para o host.
+    local marker="node_modules/.deployed-lock-hash"
+    local want have
+    want="$(sha256sum package-lock.json | awk '{print $1}')"
+    have="$(cat "${marker}" 2>/dev/null || true)"
+    if [[ -d node_modules && "${want}" == "${have}" ]]; then
+        info "node_modules em dia com o lockfile — npm ci pulado."
+        return
+    fi
+    info "Lockfile mudou (ou primeiro deploy neste modo) — rodando npm ci."
+    npm ci --prefer-offline --no-audit --no-fund
+    printf '%s\n' "${want}" > "${marker}"
+    info "Dependencias instaladas e marker atualizado."
 }
 
 pm2_meta_value() {
@@ -334,7 +395,14 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
 fi
 
 ensure_memory_headroom
-build_with_rollback
+ensure_node_modules
+
+if [[ -n "${DEPLOY_NEXT_ARTIFACT:-}" ]]; then
+    deploy_prebuilt_artifact
+else
+    warn "DEPLOY_NEXT_ARTIFACT nao definido — fallback para next build LOCAL (pesado para o host; use apenas em emergencia)."
+    build_with_rollback
+fi
 
 pm2 delete plantoes >/dev/null 2>&1 || true
 pm2 delete plantoes-telegram-worker >/dev/null 2>&1 || true

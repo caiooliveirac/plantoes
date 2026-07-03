@@ -14,64 +14,164 @@ concurrency:
 
 jobs:
   # ──────────────────────────────────────────────────────────
-  # Deploy gate: fast smoke tests only.
-  # Runs on push and PR to keep critical checks quick.
+  # Build fora da EC2: o runner do GitHub faz typecheck e
+  # `next build` e publica o artefato .next. A EC2 de produção
+  # (2 vCPU / 8GB, compartilhada com ~30 serviços) NÃO roda mais
+  # next build — só recebe o artefato pronto. O output de
+  # `next build` é JS puro (independente de arquitetura), então
+  # buildar em x64 e rodar em arm64 é seguro; os node_modules
+  # nativos continuam sendo instalados no host quando o lockfile
+  # muda.
   # ──────────────────────────────────────────────────────────
-  test_smoke:
-    name: Run deploy smoke tests
-    runs-on: self-hosted
+  build:
+    name: Typecheck + build (GitHub runner)
+    runs-on: ubuntu-latest
+    env:
+      # O build não toca banco (páginas críticas são force-dynamic);
+      # valores dummy só satisfazem código que lê env em import-time.
+      # Nada disso é inlinado no bundle (não há NEXT_PUBLIC_* no app).
+      DATABASE_URL: postgres://ci:ci@127.0.0.1:5432/ci
+      AUTH_SECRET: ci-dummy-secret
+      AUTH_URL: http://127.0.0.1:3004
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
       - name: Install dependencies
         run: npm ci --prefer-offline
-
-      - name: Run deploy smoke tests
-        run: npm run test:deploy
-        env:
-          # Tests that need DB use a localhost test database.
-          # Create it once with: createdb -U postgres plantoes_test
-          DATABASE_URL: ${{ vars.DATABASE_URL_TEST || 'postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2' }}
 
       - name: Type check
         run: |
           npx next typegen
           npx tsc --noEmit -p tsconfig.deploy.json
 
+      - name: Build
+        run: npm run build
+
+      - name: Pack .next artifact
+        run: |
+          set -euo pipefail
+          [[ -f .next/BUILD_ID ]] || { echo "::error::.next/BUILD_ID ausente após o build"; exit 1; }
+          tar --exclude='./.next/cache' -czf next-build.tgz ./.next
+          ls -lh next-build.tgz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-build
+          path: next-build.tgz
+          retention-days: 3
+          if-no-files-found: error
+
   # ──────────────────────────────────────────────────────────
-  # Full regression: runs only on pull requests.
-  # Keeps deploy path fast while preserving broad coverage.
+  # Smoke tests também fora da EC2, com Postgres de serviço
+  # bootstrapado do zero pelas migrações do repo.
   # ──────────────────────────────────────────────────────────
-  test_regression:
-    name: Run full regression tests (PR)
-    runs-on: self-hosted
-    if: github.event_name == 'pull_request'
-    # Informativo, NÃO-bloqueante: o gate real é o test_smoke (test:deploy = suíte
-    # ampla + typecheck). A suíte full inclui os testes de meal-breaks, que falham
-    # de forma intermitente no runner (auth de DB / isolamento) e deixavam todo PR
-    # vermelho/"unstable" sem motivo. continue-on-error mantém a cobertura visível
-    # nos logs sem transformar o flake em bloqueio. Ver memória ci-full-regression-db-flake.
-    continue-on-error: true
+  test_smoke:
+    name: Smoke tests (GitHub runner)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: plantoes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
       - name: Install dependencies
         run: npm ci --prefer-offline
 
+      - name: Bootstrap test schema
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d plantoes_test \
+            -c 'create schema if not exists operations_v2'
+          npm run db:migrate
+
+      - name: Run deploy smoke tests
+        run: npm run test:deploy
+
+  # ──────────────────────────────────────────────────────────
+  # Full regression: runs only on pull requests.
+  # Informativo, NÃO-bloqueante (ver histórico: flake de DB no
+  # runner antigo). Agora roda em Postgres efêmero no GitHub,
+  # o que deve eliminar o flake de isolamento — se estabilizar,
+  # dá para remover o continue-on-error.
+  # ──────────────────────────────────────────────────────────
+  test_regression:
+    name: Full regression tests (PR)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: plantoes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      - name: Bootstrap test schema
+        run: |
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d plantoes_test \
+            -c 'create schema if not exists operations_v2'
+          npm run db:migrate
+
       - name: Run full tests
         run: npm run test:full
-        env:
-          DATABASE_URL: ${{ vars.DATABASE_URL_TEST || 'postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2' }}
 
   # ──────────────────────────────────────────────────────────
   # Deploy job: only runs on pushes to main (not PRs).
   # The runner IS the production server — no SSH, no secrets.
+  # O trabalho pesado (typecheck, build, testes) já aconteceu
+  # nos runners do GitHub; aqui é só baixar o artefato, trocar
+  # o .next atomicamente e recarregar o PM2.
   # ──────────────────────────────────────────────────────────
   deploy:
     name: Deploy to production
-    needs: test_smoke
+    needs: [build, test_smoke]
     runs-on: self-hosted
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
@@ -104,20 +204,23 @@ jobs:
           fi
           echo "::notice::Commit veio de PR mergeado — OK."
 
-      - name: Install dependencies
-        run: npm ci --prefer-offline
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: next-build
 
-      - name: Deploy (PM2 restart with env reload)
-        run: npm run deploy:production
+      - name: Deploy (artefato pré-buildado — sem build na EC2)
+        run: bash scripts/deploy-production.sh
         env:
           # EXPECTED_GIT_COMMIT_SHA faz o deploy script reconciliar
           # /home/ubuntu/plantoes para este commit (fetch + checkout).
           # Falha loud se o tree estiver sujo (ALLOW_DIRTY_TREE=1 para override).
           EXPECTED_GIT_COMMIT_SHA: ${{ github.sha }}
-          # Host compartilhado: aceita headroom um pouco menor, mantendo guard ativo.
-          DEPLOY_MIN_HEADROOM_MB: "2500"
-          # Reduz pico de RAM do next build para evitar abortos por memória.
-          DEPLOY_BUILD_MAX_OLD_SPACE_MB: "1280"
+          # Artefato .next buildado no runner do GitHub; o script troca
+          # atomicamente e NÃO roda next build local.
+          DEPLOY_NEXT_ARTIFACT: ${{ github.workspace }}/next-build.tgz
+          # Sem build local o pico de memória é só extract + pm2 reload.
+          DEPLOY_MIN_HEADROOM_MB: "700"
 
       - name: Validate — local upstream
         run: |
@@ -145,6 +248,7 @@ jobs:
           echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Actor: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build: artefato pré-buildado no GitHub runner (sem next build na EC2)" >> $GITHUB_STEP_SUMMARY
           HEALTH=$(curl -fsS http://127.0.0.1:3004/api/health 2>/dev/null || echo '{}')
           GUARD=$(echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runtimeGuard','?'))")
           echo "- Runtime guard: \`$GUARD\`" >> $GITHUB_STEP_SUMMARY

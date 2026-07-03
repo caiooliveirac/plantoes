@@ -55,7 +55,15 @@ Observacao importante:
 
 ## Comando recomendado
 
-Use sempre:
+O caminho oficial de deploy e o **CI (push/merge em `main`)**: o runner do
+GitHub faz typecheck, testes e `next build` e publica o artefato `.next`;
+o job de deploy na EC2 apenas baixa o artefato, troca o `.next`
+atomicamente e recarrega o PM2. **A EC2 nao roda mais `next build`** — o
+build era o maior pico de RAM/CPU do host compartilhado e ja causou
+OOM/reboot.
+
+Para deploy manual de emergencia (sem artefato do CI), o script cai no
+build local com aviso:
 
 ```bash
 cd /home/ubuntu/plantoes
@@ -66,14 +74,15 @@ Esse script faz, nesta ordem:
 
 1. carrega `.env.production`
 2. executa **pre-checks anti-concorrencia** (container legado, duplicidade PM2, porta ambigua, polling/webhook conflitante)
-3. roda `npm run build`
-4. recria `plantoes` e `plantoes-telegram-worker` no PM2 com `--update-env`
-5. valida `api/health` e `api/board`
-6. reconfigura o webhook do Telegram para `${AUTH_URL}/api/telegram/webhook`
-7. valida que o webhook ficou registrado no Telegram
-8. executa **post-checks anti-concorrencia**
-9. roda `pm2 save`
-10. imprime resumo final de deploy (runtime/commit/porta/pids/webhook)
+3. garante `node_modules` em dia com o lockfile (`npm ci` so quando o lockfile muda)
+4. aplica o artefato `.next` pre-buildado (`DEPLOY_NEXT_ARTIFACT`) **ou**, sem artefato, roda `npm run build` local (emergencia)
+5. recria `plantoes` e `plantoes-telegram-worker` no PM2 com `--update-env`
+6. valida `api/health` e `api/board`
+7. reconfigura o webhook do Telegram para `${AUTH_URL}/api/telegram/webhook`
+8. valida que o webhook ficou registrado no Telegram
+9. executa **post-checks anti-concorrencia**
+10. roda `pm2 save`
+11. imprime resumo final de deploy (runtime/commit/porta/pids/webhook)
 
 ## Passo a passo manual
 
