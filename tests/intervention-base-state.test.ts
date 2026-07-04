@@ -10,6 +10,7 @@ import {
     resolveInterventionBaseDeactivationExpiresAt,
     resolveSafeInterventionHandoffAt,
     resolveStaleShadowInterventionEndedAt,
+    resolveDayOnlyBaseAutoCloseEndedAt,
     shouldCloseInterventionBoardCarrierOnArrival,
     shouldInheritContinuityFromOtherBaseOccupancy,
     shouldReuseImplicitContinuitySource,
@@ -327,6 +328,43 @@ test("resolveStaleShadowInterventionEndedAt encerra sombra exatamente no fim da 
         scheduledEndAt.toISOString(),
     );
 });
+test("resolveDayOnlyBaseAutoCloseEndedAt encerra titular e sombra de base diurna apos as 19h, sem tocar base normal", () => {
+    const scheduledEndAt = new Date("2026-04-28T22:00:00.000Z"); // 19:00 em SP (UTC-3)
+
+    assert.equal(resolveDayOnlyBaseAutoCloseEndedAt({
+        dayOnly: true,
+        scheduledEndAt,
+        endedAt: null,
+        referenceAt: new Date("2026-04-28T21:59:00.000Z"),
+    }), null);
+
+    assert.equal(
+        resolveDayOnlyBaseAutoCloseEndedAt({
+            dayOnly: true,
+            scheduledEndAt,
+            endedAt: null,
+            referenceAt: new Date("2026-04-28T22:01:00.000Z"),
+        })?.toISOString(),
+        scheduledEndAt.toISOString(),
+    );
+
+    // Base normal (day_only=false): nunca fecha automaticamente por esta regra.
+    assert.equal(resolveDayOnlyBaseAutoCloseEndedAt({
+        dayOnly: false,
+        scheduledEndAt,
+        endedAt: null,
+        referenceAt: new Date("2026-04-28T23:00:00.000Z"),
+    }), null);
+
+    // Já encerrada: não reprocessa.
+    assert.equal(resolveDayOnlyBaseAutoCloseEndedAt({
+        dayOnly: true,
+        scheduledEndAt,
+        endedAt: new Date("2026-04-28T22:00:00.000Z"),
+        referenceAt: new Date("2026-04-28T23:00:00.000Z"),
+    }), null);
+});
+
 test("shouldInheritContinuityFromOtherBaseOccupancy só herda em remanejamento dentro do mesmo turno", () => {
     // Remanejamento legítimo: aberto às 08:00 SD, chega outra base 13:00 mesmo SD
     assert.equal(shouldInheritContinuityFromOtherBaseOccupancy({

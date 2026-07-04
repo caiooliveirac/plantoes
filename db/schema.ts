@@ -185,6 +185,9 @@ export const interventionBases = operationsV2.table(
         label: varchar("label", { length: 255 }).notNull(),
         sortOrder: integer("sort_order").notNull().default(0),
         isActive: boolean("is_active").notNull().default(true),
+        // Base que só opera 07:00-19:00: nunca gera SN nem plantão continuo (P) — ver
+        // resolveDayOnlyBaseAutoCloseEndedAt em modules/intervention/service.ts.
+        dayOnly: boolean("day_only").notNull().default(false),
     },
     (table) => [uniqueIndex("intervention_bases_code_idx").on(table.code)],
 );
