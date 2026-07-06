@@ -12,11 +12,19 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
+# O projeto não tem pasta public/ hoje — garante que ela exista de qualquer
+# forma para o COPY --from=build /app/public do estágio runtime nunca falhar.
+RUN mkdir -p public
 
-FROM --platform=$BUILDPLATFORM node:20-bookworm-slim AS prod-deps
+# Sem --platform aqui (propositalmente): este é o único estágio cujo
+# node_modules vai para a imagem final (runtime, $TARGETPLATFORM=arm64). Rodar
+# em $BUILDPLATFORM instalaria binários nativos da arquitetura errada.
+FROM node:20-bookworm-slim AS prod-deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# Sem --omit=dev: o worker de lembretes roda via 'npm run telegram:worker' →
+# tsx, que é devDependency. Precisa estar presente em produção.
+RUN npm ci
 
 FROM --platform=$TARGETPLATFORM node:20-bookworm-slim AS runtime
 WORKDIR /app

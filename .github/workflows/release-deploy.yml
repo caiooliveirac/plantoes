@@ -125,6 +125,9 @@ jobs:
     needs: build_and_push
     permissions:
       contents: read
+      # packages: read permite usar o GITHUB_TOKEN efêmero deste run para o
+      # docker login do HOST (imagem GHCR é privada) — sem PAT permanente.
+      packages: read
     env:
       DEPLOY_HOST: ${{ secrets.PROD_SSH_HOST }}
       DEPLOY_USER: ${{ secrets.PROD_SSH_USER }}
@@ -150,6 +153,17 @@ jobs:
           scp -P "${DEPLOY_PORT}" scripts/deploy-plantoes-container.sh "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/deploy-plantoes-container.sh"
           ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "sudo install -o root -g root -m 0755 /tmp/deploy-plantoes-container.sh /usr/local/sbin/deploy-plantoes && rm -f /tmp/deploy-plantoes-container.sh"
+
+      - name: Login Docker do host no GHCR (token efêmero do run)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # A imagem GHCR é privada (contém código-fonte). Em vez de manter um
+          # PAT permanente no host, logamos com o GITHUB_TOKEN deste run — que
+          # expira ao fim do job. O token viaja por stdin (não aparece em ps).
+          printf '%s' "${GHCR_TOKEN}" | ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo docker login ghcr.io -u '${GITHUB_ACTOR}' --password-stdin"
 
       - name: Deploy immutable digest
         run: |
