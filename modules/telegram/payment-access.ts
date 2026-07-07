@@ -5,6 +5,10 @@ import { asc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { doctorPaymentAccess, doctors, telegramPaymentAccessAttempts } from "@/db/schema";
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 // Cooldown anti-força-bruta por conta de Telegram.
 export const ATTEMPT_LIMIT = 5;
 export const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
@@ -214,4 +218,65 @@ export async function clearAttempts(telegramUserId: string) {
     const db = getDb();
     await db.delete(telegramPaymentAccessAttempts)
         .where(eq(telegramPaymentAccessAttempts.telegramUserId, telegramUserId));
+}
+
+export function normalizeCompanyName(value: string) {
+    return value.trim().replace(/\s+/g, " ");
+}
+
+export function normalizeCnpj(value: string) {
+    const digits = value.replace(/\D/g, "");
+    if (digits.length !== 14) {
+        return null;
+    }
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
+}
+
+export function isLikelyValidCnpj(value: string) {
+    const digits = value.replace(/\D/g, "");
+    if (digits.length !== 14) {
+        return false;
+    }
+    if (/^(\d)\1{13}$/.test(digits)) {
+        return false;
+    }
+    return true;
+}
+
+export async function upsertDoctorFiscalProfile(params: {
+    doctorId: string;
+    razaoSocial: string;
+    cnpj: string;
+}) {
+    const db = getDb();
+    const [doctor] = await db
+        .select({ id: doctors.id, metadata: doctors.metadata, fullName: doctors.fullName })
+        .from(doctors)
+        .where(eq(doctors.id, params.doctorId))
+        .limit(1);
+
+    if (!doctor) {
+        throw new Error("doctor_not_found");
+    }
+
+    const nextMetadata = isPlainObject(doctor.metadata)
+        ? { ...doctor.metadata }
+        : {};
+
+    nextMetadata.razaoSocial = params.razaoSocial;
+    nextMetadata.cnpj = params.cnpj;
+
+    await db.update(doctors)
+        .set({
+            metadata: nextMetadata,
+            updatedAt: new Date(),
+        })
+        .where(eq(doctors.id, doctor.id));
+
+    return {
+        doctorId: doctor.id,
+        fullName: doctor.fullName,
+        razaoSocial: params.razaoSocial,
+        cnpj: params.cnpj,
+    };
 }
