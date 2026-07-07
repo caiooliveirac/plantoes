@@ -258,7 +258,16 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     const [manualFeedback, setManualFeedback] = useState<string | null>(null);
     const [profileBusyDoctorId, setProfileBusyDoctorId] = useState<string | null>(null);
     const [doctorProfileOverrides, setDoctorProfileOverrides] = useState<Record<string, DoctorProfile>>({});
+    // Última NF/processo confirmados pelo servidor por médico — evita depender só do
+    // router.refresh() (assíncrono) para o modal mostrar o valor recém-salvo ao reabrir.
+    const [doctorMetaOverrides, setDoctorMetaOverrides] = useState<Record<string, { invoiceNumber: string | null; paymentProcessNumber: string | null }>>({});
     const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
+    // Espelha selectedDoctorId para leitura em callbacks assíncronos (ex.: resposta de
+    // save chegando depois que o admin já trocou/fechou o modal do médico).
+    const selectedDoctorIdRef = useRef<string | null>(null);
+    useEffect(() => {
+        selectedDoctorIdRef.current = selectedDoctorId;
+    }, [selectedDoctorId]);
     const [shiftActionDraft, setShiftActionDraft] = useState<{
         payableShiftId: string;
         occupancyId: string;
@@ -301,10 +310,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         setExtraError(null);
         setExtraFeedback(null);
         setAttestError(null);
-        // Semeia NF/processo a partir do que já está gravado para este médico.
+        // Semeia NF/processo a partir do que já está gravado para este médico. Prioriza
+        // o override confirmado pelo servidor (última resposta de save) sobre o prop
+        // `board`, que pode estar desatualizado se o router.refresh() ainda não voltou.
         const baseDoctor = board.doctors.find((doctor) => doctor.doctorId === selectedDoctorId);
-        setInvoiceDraft(baseDoctor?.invoiceNumber ?? "");
-        setProcessDraft(baseDoctor?.paymentProcessNumber ?? "");
+        const metaOverride = selectedDoctorId ? doctorMetaOverrides[selectedDoctorId] : undefined;
+        setInvoiceDraft(metaOverride?.invoiceNumber ?? baseDoctor?.invoiceNumber ?? "");
+        setProcessDraft(metaOverride?.paymentProcessNumber ?? baseDoctor?.paymentProcessNumber ?? "");
         setContractDraft("");
         setMetaError(null);
         setMetaFeedback(null);
@@ -588,6 +600,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 });
                 const totalDueCents = weekdayDueCents + weekendDueCents;
                 const pendingCount = effectiveVisibleShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
+                const metaOverride = doctorMetaOverrides[doctor.doctorId];
 
                 return {
                     ...doctor,
@@ -603,6 +616,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                     weekdayDue: weekdayDueCents / 100,
                     weekendDue: weekendDueCents / 100,
                     pendingCount,
+                    invoiceNumber: metaOverride?.invoiceNumber ?? doctor.invoiceNumber,
+                    paymentProcessNumber: metaOverride?.paymentProcessNumber ?? doctor.paymentProcessNumber,
                 };
             })
             .filter((doctor) => {
@@ -641,7 +656,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         });
 
         return sorted;
-    }, [board.doctors, coverageFilter, doctorProfileOverrides, domainFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
+    }, [board.doctors, coverageFilter, doctorProfileOverrides, doctorMetaOverrides, domainFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
 
     useEffect(() => {
         // Reconcile optimistic removals with server truth: if a payableShiftId
@@ -1050,11 +1065,29 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                     paymentProcessNumber: processDraft.trim() || null,
                 }),
             });
-            const body = await response.json().catch(() => null) as { error?: string } | null;
+            const body = await response.json().catch(() => null) as {
+                error?: string;
+                meta?: { invoiceNumber: string | null; paymentProcessNumber: string | null };
+            } | null;
             if (!response.ok) {
                 throw new Error(body?.error ?? "Não foi possível salvar a nota fiscal / processo.");
             }
-            setMetaFeedback("Nota fiscal / processo salvos.");
+            // Fonte da verdade passa a ser a resposta do servidor, não o router.refresh()
+            // (assíncrono) — evita o campo "voltar" ao valor antigo se o médico reabrir
+            // o modal antes do refresh do board terminar.
+            if (body?.meta) {
+                setDoctorMetaOverrides((prev) => ({
+                    ...prev,
+                    [doctorId]: { invoiceNumber: body.meta!.invoiceNumber, paymentProcessNumber: body.meta!.paymentProcessNumber },
+                }));
+                // Só escreve nos campos visíveis se o modal ainda for deste médico —
+                // senão uma resposta atrasada pisa no que já foi digitado para outro.
+                if (selectedDoctorIdRef.current === doctorId) {
+                    setInvoiceDraft(body.meta.invoiceNumber ?? "");
+                    setProcessDraft(body.meta.paymentProcessNumber ?? "");
+                    setMetaFeedback("Nota fiscal / processo salvos.");
+                }
+            }
             requestRouterRefresh();
         } catch (error) {
             setMetaError(error instanceof Error ? error.message : "Falha ao salvar.");
