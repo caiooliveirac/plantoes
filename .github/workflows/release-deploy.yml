@@ -10,6 +10,14 @@ on:
         required: false
         default: false
         type: boolean
+      test_scope:
+        description: "Validation test scope before build/deploy"
+        required: false
+        default: deploy_smoke
+        type: choice
+        options:
+          - deploy_smoke
+          - full
 
 concurrency:
   group: plantoes-production-deploy
@@ -58,7 +66,15 @@ jobs:
         run: npm run typecheck
 
       - name: Tests
-        run: npm test
+        env:
+          TEST_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.test_scope || 'full' }}
+        run: |
+          set -euo pipefail
+          if [[ "${TEST_SCOPE}" == "deploy_smoke" ]]; then
+            npm run test:deploy
+          else
+            npm test
+          fi
 
       - name: Build
         run: npm run build
