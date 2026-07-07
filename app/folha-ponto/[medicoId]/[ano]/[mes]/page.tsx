@@ -75,6 +75,7 @@ export default async function FolhaPontoPage({
                 dia: dayFromOperationalDate(shift.operationalDate),
                 turno: shift.shiftLabel as Turno,
                 baseNomeCurto: baseNomeCurto(shift.domain),
+                meioPlantao,
                 ...(meioPlantao ? { horaEntrada: MEIO_PLANTAO_ENTRADA, horaSaida: MEIO_PLANTAO_SAIDA } : {}),
             };
         })

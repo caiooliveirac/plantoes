@@ -6,6 +6,7 @@ export interface Plantao {
     baseNomeCurto: string;
     horaEntrada?: string;
     horaSaida?: string;
+    meioPlantao?: boolean;
 }
 
 export interface LinhaFreq {

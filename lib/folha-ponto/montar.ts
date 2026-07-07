@@ -34,6 +34,8 @@ export function montarRelatorio(plantoes: Plantao[], mes: number): LinhaRelatori
 
     return ordenados.map((p) => ({
         data: `${String(p.dia).padStart(2, "0")}/${String(mes).padStart(2, "0")}`,
-        atividade: `${p.turno} na ${p.baseNomeCurto}`,
+        atividade: p.meioPlantao
+            ? `MEIO PLANTÃO NA ${p.baseNomeCurto.toUpperCase()}`
+            : `${p.turno} na ${p.baseNomeCurto}`,
     }));
 }
