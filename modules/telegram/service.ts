@@ -121,12 +121,14 @@ import {
     parseTelegramPaymentCodenameAdminCommand,
     parseTelegramPaymentDigestCommand,
     parseTelegramPaymentListCommand,
+    parseTelegramPaymentProfileSetupCommand,
     parseTelegramPaymentResetAllCommand,
     parseTelegramPaymentSelfServiceCommand,
     parseTelegramResetCodinomeCommand,
     TELEGRAM_PAYMENT_CODENAME_USAGE,
     TELEGRAM_PAYMENT_CORRECTION_USAGE,
     TELEGRAM_PAYMENT_DIGEST_USAGE,
+    TELEGRAM_PAYMENT_PROFILE_SETUP_USAGE,
     TELEGRAM_PAYMENT_REPORT_USAGE,
     TELEGRAM_RESET_CODINOME_USAGE,
 } from "@/modules/telegram/payment-commands";
@@ -134,11 +136,15 @@ import { buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/module
 import {
     checkAttemptLock,
     clearAttempts,
+    isLikelyValidCnpj,
     listDoctorCodenames,
+    normalizeCnpj,
+    normalizeCompanyName,
     registerFailedAttempt,
     resetAllDoctorCodenames,
     resetDoctorCodename,
     resolveDoctorIdByCodename,
+    upsertDoctorFiscalProfile,
     upsertDoctorCodename,
 } from "@/modules/telegram/payment-access";
 import { createFolhaToken } from "@/lib/folha-ponto/token";
@@ -278,6 +284,12 @@ interface PendingCruCoiRamalData {
     originalEventAt: string;
     originalReferenceAt?: string;
     senderName: string | null;
+}
+
+interface PendingPaymentProfileData {
+    stage: "awaiting_codename" | "awaiting_company_name" | "awaiting_cnpj";
+    doctorId?: string;
+    companyName?: string;
 }
 
 interface PendingBatchConfirmationEntry {
@@ -3485,6 +3497,9 @@ function buildPaymentSelfServiceTutorial() {
         "",
         "Você recebe seus plantões, o total em R$ e o link da folha de ponto. 📄",
         "",
+        "Para cadastrar/atualizar empresa e CNPJ da folha:",
+        "   /pagamento cadastro",
+        "",
         "🔑 Não tem o codinome? Peça à coordenação.",
     ].join("\n");
 }
@@ -3496,6 +3511,9 @@ function buildPaymentCommandUsageReply(isAdmin: boolean) {
         "📊 Relatório do mês por médico",
         "   /pagamento",
         "   /pagamento 05   (ou: /pagamento maio)",
+        "",
+        "🧾 Cadastrar dados da folha (empresa + CNPJ)",
+        `   ${TELEGRAM_PAYMENT_PROFILE_SETUP_USAGE}`,
         "",
         "🔎 Conferir um turno",
         "   /pagamento conferir",
@@ -4431,6 +4449,66 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_no_sender", parsedAction: "payment_self" });
                 await sendMessage(message.chat.id, ":/ Nao consegui identificar sua conta de Telegram.", message.message_id);
                 return { ok: true, ignored: true };
+            }
+
+            const profileSetupCommand = parseTelegramPaymentProfileSetupCommand(message.text);
+            if (profileSetupCommand) {
+                await supersedePendingPaymentProfile(String(message.chat.id), fromId, "payment_profile_restarted");
+
+                if (profileSetupCommand.codename) {
+                    const lock = await checkAttemptLock(fromId);
+                    if (lock.locked) {
+                        await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_locked", parsedAction: "payment_profile_setup" });
+                        await sendMessage(message.chat.id, ":/ Muitas tentativas com codinome incorreto. Aguarde um pouco e tente de novo, ou peça um novo codinome à coordenação.", message.message_id);
+                        return { ok: true, ignored: true };
+                    }
+
+                    const doctorId = await resolveDoctorIdByCodename(profileSetupCommand.codename);
+                    if (!doctorId) {
+                        const next = await registerFailedAttempt(fromId);
+                        await markTelegramProcessed(logId, {
+                            status: "pending_payment_profile",
+                            parsedAction: "payment_profile_setup",
+                            errorMessage: "payment_profile_codename_invalid",
+                            resolutionData: { stage: "awaiting_codename" },
+                        });
+                        const suffix = next.locked ? " Você excedeu as tentativas; aguarde antes de tentar de novo." : "";
+                        await sendMessage(message.chat.id, `:/ Codinome não confere.${suffix}\nEnvie seu codinome para continuar.`, message.message_id);
+                        return { ok: true, ignored: true, pending: true };
+                    }
+
+                    await clearAttempts(fromId);
+                    await markTelegramProcessed(logId, {
+                        status: "pending_payment_profile",
+                        parsedAction: "payment_profile_setup",
+                        errorMessage: null,
+                        resolutionData: {
+                            stage: "awaiting_company_name",
+                            doctorId,
+                        },
+                    });
+                    await sendMessage(message.chat.id, "✅ Codinome confirmado.\nAgora me diga o *nome completo da empresa* (razão social).", message.message_id);
+                    return { ok: true, pending: true };
+                }
+
+                await markTelegramProcessed(logId, {
+                    status: "pending_payment_profile",
+                    parsedAction: "payment_profile_setup",
+                    errorMessage: null,
+                    resolutionData: {
+                        stage: "awaiting_codename",
+                    },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    [
+                        "🙂 Vamos cadastrar os dados da sua folha de ponto.",
+                        "Responda com seu *codinome* para eu identificar seu cadastro.",
+                        "Se quiser cancelar, envie CANCELAR.",
+                    ].join("\n"),
+                    message.message_id,
+                );
+                return { ok: true, pending: true };
             }
 
             const lock = await checkAttemptLock(fromId);
@@ -6529,6 +6607,7 @@ async function expireAllStalePendingsGlobal() {
                 "pending_departure_justification",
                 "pending_departure_correction",
                 "pending_cru_coi_ramal",
+                "pending_payment_profile",
             ]),
             lt(telegramIngestedMessages.createdAt, cutoff),
         ));
@@ -6555,7 +6634,7 @@ async function findPendingRamalSelection(chatId: string, senderTelegramId: strin
 async function expireStalependings(
     chatId: string,
     senderTelegramId: string,
-    status: "pending_name_selection" | "pending_departure_justification" | "pending_departure_correction" | "pending_cru_coi_ramal",
+    status: "pending_name_selection" | "pending_departure_justification" | "pending_departure_correction" | "pending_cru_coi_ramal" | "pending_payment_profile",
 ) {
     const db = getDb();
     const cutoff = new Date(Date.now() - PENDING_TTL_MS);
@@ -6571,6 +6650,24 @@ async function expireStalependings(
             eq(telegramIngestedMessages.status, status),
             lt(telegramIngestedMessages.createdAt, cutoff),
         ));
+}
+
+async function findPendingPaymentProfile(chatId: string, senderTelegramId: string) {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    const fresh = await db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "pending_payment_profile"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+    });
+    if (!fresh) {
+        await expireStalependings(chatId, senderTelegramId, "pending_payment_profile");
+    }
+    return fresh ?? null;
 }
 
 async function findPendingNameSelection(chatId: string, senderTelegramId: string) {
@@ -6651,6 +6748,18 @@ async function supersedePendingDepartureCorrection(chatId: string, senderTelegra
     });
 }
 
+async function supersedePendingPaymentProfile(chatId: string, senderTelegramId: string, reason = "payment_profile_superseded") {
+    const pending = await findPendingPaymentProfile(chatId, senderTelegramId);
+    if (!pending) {
+        return;
+    }
+
+    await markTelegramProcessed(pending.id, {
+        status: "superseded",
+        errorMessage: reason,
+    });
+}
+
 function isPendingResolutionData(value: unknown): value is PendingNameResolutionData {
     if (!value || typeof value !== "object") {
         return false;
@@ -6703,6 +6812,174 @@ function isPendingCruCoiRamalData(value: unknown): value is PendingCruCoiRamalDa
         && typeof candidate.originalText === "string"
         && typeof candidate.originalEventAt === "string",
     );
+}
+
+function isPendingPaymentProfileData(value: unknown): value is PendingPaymentProfileData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+    const stage = candidate.stage;
+    return stage === "awaiting_codename" || stage === "awaiting_company_name" || stage === "awaiting_cnpj";
+}
+
+async function tryHandlePendingPaymentProfile(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id || message.chat.type !== "private") {
+        return null;
+    }
+
+    const chatId = String(message.chat.id);
+    const senderTelegramId = String(message.from.id);
+    const pending = await findPendingPaymentProfile(chatId, senderTelegramId);
+    if (!pending || !isPendingPaymentProfileData(pending.resolutionData)) {
+        return null;
+    }
+
+    const input = message.text.trim();
+    if (!input) {
+        return { ok: true, ignored: true };
+    }
+
+    if (isBatchCancelKeyword(input)) {
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: "payment_profile_cancelled",
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "payment_profile_setup_cancelled",
+        });
+        await sendMessage(message.chat.id, ":| Cadastro cancelado. Se quiser retomar, envie /pagamento cadastro.", message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    const data = pending.resolutionData;
+
+    if (data.stage === "awaiting_codename") {
+        const lock = await checkAttemptLock(senderTelegramId);
+        if (lock.locked) {
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_locked", parsedAction: "payment_profile_setup" });
+            await sendMessage(message.chat.id, ":/ Muitas tentativas com codinome incorreto. Aguarde um pouco e tente de novo, ou peça um novo codinome à coordenação.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const doctorId = await resolveDoctorIdByCodename(input);
+        if (!doctorId) {
+            const next = await registerFailedAttempt(senderTelegramId);
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_codename_invalid", parsedAction: "payment_profile_setup" });
+            const suffix = next.locked ? " Você excedeu as tentativas; aguarde antes de tentar de novo." : "";
+            await sendMessage(message.chat.id, `:/ Codinome não confere.${suffix}`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        await clearAttempts(senderTelegramId);
+        await markTelegramProcessed(pending.id, {
+            status: "pending_payment_profile",
+            parsedAction: "payment_profile_setup",
+            resolutionData: {
+                stage: "awaiting_company_name",
+                doctorId,
+            },
+            errorMessage: null,
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "payment_profile_setup",
+            resolutionData: { stage: "awaiting_company_name" },
+        });
+        await sendMessage(message.chat.id, "✅ Codinome confirmado.\nAgora me diga o *nome completo da empresa* (razão social).", message.message_id);
+        return { ok: true, pending: true };
+    }
+
+    if (data.stage === "awaiting_company_name") {
+        const companyName = normalizeCompanyName(input);
+        if (companyName.length < 3) {
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_company_invalid", parsedAction: "payment_profile_setup" });
+            await sendMessage(message.chat.id, ":/ Nome de empresa muito curto. Envie a razão social completa, por favor.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        await markTelegramProcessed(pending.id, {
+            status: "pending_payment_profile",
+            parsedAction: "payment_profile_setup",
+            resolutionData: {
+                stage: "awaiting_cnpj",
+                doctorId: data.doctorId,
+                companyName,
+            },
+            errorMessage: null,
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "payment_profile_setup",
+            resolutionData: { stage: "awaiting_cnpj" },
+        });
+        await sendMessage(message.chat.id, "Perfeito.\nAgora envie o *CNPJ* (com ou sem pontuação).", message.message_id);
+        return { ok: true, pending: true };
+    }
+
+    if (!data.doctorId || !data.companyName) {
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: "payment_profile_missing_context",
+        });
+        return null;
+    }
+
+    if (!isLikelyValidCnpj(input)) {
+        await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_cnpj_invalid", parsedAction: "payment_profile_setup" });
+        await sendMessage(message.chat.id, ":/ CNPJ inválido. Envie os 14 dígitos (com ou sem pontuação).", message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    const normalizedCnpj = normalizeCnpj(input);
+    if (!normalizedCnpj) {
+        await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_cnpj_invalid", parsedAction: "payment_profile_setup" });
+        await sendMessage(message.chat.id, ":/ CNPJ inválido. Envie os 14 dígitos (com ou sem pontuação).", message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    const saved = await upsertDoctorFiscalProfile({
+        doctorId: data.doctorId,
+        razaoSocial: data.companyName,
+        cnpj: normalizedCnpj,
+    });
+
+    await markTelegramProcessed(pending.id, {
+        status: "accepted",
+        parsedAction: "payment_profile_setup",
+        parsedDoctorName: saved.fullName,
+        resolutionData: {
+            doctorId: saved.doctorId,
+            companyName: saved.razaoSocial,
+            cnpj: saved.cnpj,
+        },
+        errorMessage: null,
+    });
+    await markTelegramProcessed(logId, {
+        status: "accepted",
+        parsedAction: "payment_profile_setup",
+        parsedDoctorName: saved.fullName,
+        resolutionData: {
+            doctorId: saved.doctorId,
+            companyName: saved.razaoSocial,
+            cnpj: saved.cnpj,
+        },
+    });
+    await sendMessage(
+        message.chat.id,
+        [
+            "✅ Cadastro fiscal atualizado.",
+            `👤 Médico: ${saved.fullName}`,
+            `🏢 Empresa: ${saved.razaoSocial}`,
+            `🧾 CNPJ: ${saved.cnpj}`,
+            "A folha de ponto já vai sair com esses dados.",
+        ].join("\n"),
+        message.message_id,
+    );
+    return { ok: true, reported: true };
 }
 
 async function queuePendingDepartureJustification(params: {
@@ -9504,6 +9781,11 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     return pendingBatchResult;
                 }
 
+                const pendingPaymentProfileResult = await tryHandlePendingPaymentProfile(update, log.id);
+                if (pendingPaymentProfileResult) {
+                    return pendingPaymentProfileResult;
+                }
+
                 const pendingRamalResult = await tryHandlePendingRamalSelection(update, log.id);
                 if (pendingRamalResult) {
                     return pendingRamalResult;
@@ -10004,7 +10286,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
 
                     const missing: string[] = [];
                     if (!hasName) missing.push("*nome do médico*");
-                    if (shiftRequired && !hasShift) missing.push("*turno* (SD, SN, P — ou *meio plantão* / *tarde* / *meio turno*)");
+                    if (shiftRequired && !hasShift) missing.push("*turno* (SD, SN, P — ou *meio plantão* / *meio turno* / *meia jornada* / *tarde* / *vespertino*)");
 
                     let body: string;
                     if (isBareButtonPayload) {
@@ -10023,7 +10305,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         const missingLine = `Faltou: ${missing.join(" e ")}.`;
                         body = [
                             "👀 Quase lá — pra registrar a *chegada* eu preciso de *nome + ramal + turno + horário*, todos na mesma mensagem.",
-                            "O turno pode ser *SD*, *SN*, *P* — ou *meio plantão* (também vale dizer *tarde* ou *meio turno*).",
+                            "O turno pode ser *SD*, *SN*, *P* — ou *meio plantão* (também vale dizer *meio turno*, *meia jornada*, *tarde* ou *vespertino*).",
                             "",
                             detectedLine,
                             missingLine,
@@ -10172,9 +10454,10 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             // chegada dele). Vale para chegada nova e para move (remanejamento).
             let takeoverDisplaced: { occupantName: string; targetLabel: string; sinceTime: string } | null = null;
             const takeoverSenderId = message.from?.id ? String(message.from.id) : null;
+            const isShadowTakeoverInput = resolveTelegramShadowFlag(firstParsed, message.text);
             const takeoverWantsBoard = !firstParsed.isDeparture
                 && !firstParsed.isContinuation
-                && !firstParsed.isShadow
+                && !isShadowTakeoverInput
                 && Boolean(firstParsed.baseCode);
             if (takeoverWantsBoard && takeoverSenderId && firstParsed.baseCode) {
                 const occupant = await findActiveSameTurnoBoardCarrierOnTarget({
