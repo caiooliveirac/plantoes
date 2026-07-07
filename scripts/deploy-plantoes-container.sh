@@ -37,6 +37,37 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Command not found: $1"
 }
 
+is_active_port_busy() {
+  local port="$1"
+  ss -ltn "( sport = :${port} )" | awk 'NR > 1 {print $0}' | grep -q .
+}
+
+try_stop_legacy_pm2_plantoes() {
+  if ! command -v runuser >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # One-time cutover support: stop only the legacy PM2 apps from this project.
+  runuser -u ubuntu -- bash -lc 'pm2 stop plantoes plantoes-telegram-worker >/dev/null 2>&1 || true'
+  runuser -u ubuntu -- bash -lc 'pm2 delete plantoes plantoes-telegram-worker >/dev/null 2>&1 || true'
+  runuser -u ubuntu -- bash -lc 'pm2 save >/dev/null 2>&1 || true'
+}
+
+ensure_active_port_available() {
+  local port="$1"
+  if ! is_active_port_busy "$port"; then
+    return 0
+  fi
+
+  log "Port ${port} is in use before promotion; attempting legacy PM2 plantoes takeover"
+  try_stop_legacy_pm2_plantoes
+
+  if is_active_port_busy "$port"; then
+    ss -ltnp "( sport = :${port} )" || true
+    fail "Port ${port} remains busy after legacy PM2 takeover attempt"
+  fi
+}
+
 validate_image_ref() {
   local ref="$1"
   if [[ ! "$ref" =~ ^[a-z0-9./:_-]+@sha256:[a-f0-9]{64}$ ]]; then
@@ -111,6 +142,7 @@ promote_new_release() {
 
   stop_and_remove_if_exists "$WEB_CONTAINER"
   stop_and_remove_if_exists "$WORKER_CONTAINER"
+  ensure_active_port_available "$ACTIVE_PORT"
 
   docker run -d \
     --name "$WEB_CONTAINER" \
