@@ -453,7 +453,15 @@ function summarizeRoles(roles: UserRole[]) {
         return roles.includes("chief") ? "Admin e chief" : "Admin";
     }
 
-    return "Chief";
+    if (roles.includes("chief")) {
+        return "Chief";
+    }
+
+    if (roles.includes("payment_closing_limited")) {
+        return "Fechamento (restrito)";
+    }
+
+    return "Leitura";
 }
 
 function doctorOptionLabel(doctor: DoctorOption) {
@@ -965,6 +973,13 @@ type BoardSnapshot = {
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [] } = props;
+    // Admin abre tudo; payment_closing_limited (ex.: Iasmin) só enxerga o fechamento
+    // de pagamento para visualizar e lançar NF/processo — sem editar o quadro.
+    const canOpenPaymentClosing = Boolean(
+        session
+        && !session.mustChangePassword
+        && (session.roles.includes("admin") || session.roles.includes("payment_closing_limited")),
+    );
     const router = useRouter();
     const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
     const [authOpen, setAuthOpen] = useState(false);
@@ -3084,7 +3099,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         </button>
                     )}
 
-                    {session?.roles.includes("admin") && !session.mustChangePassword && (
+                    {canOpenPaymentClosing && (
                         <button
                             type="button"
                             className="ops-history-trigger payment-allocation"
@@ -3187,7 +3202,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         ? "Senha temporaria ativa. Troque a senha agora para liberar as rotas operacionais."
                                         : session.canManage
                                             ? "Clique no quadro para abrir correcoes, aberturas e encerramentos."
-                                            : "Esta sessao nao habilita operacao."}
+                                            : session.roles.includes("payment_closing_limited")
+                                                ? "O quadro fica em leitura. Abra o fechamento de pagamento para visualizar e lançar NF/processo."
+                                                : "Esta sessao nao habilita operacao."}
                                 </span>
                                 {session.roles.includes("admin") && !session.mustChangePassword && (
                                     <>
@@ -3207,6 +3224,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 )}
 
                                 {session.roles.includes("chief") && !session.mustChangePassword && !session.roles.includes("admin") && (
+                                    <a className="ops-auth-inline-link" href="/admin/payment-closing">
+                                        Abrir fechamento de pagamento
+                                    </a>
+                                )}
+
+                                {session.roles.includes("payment_closing_limited") && !session.mustChangePassword && !session.roles.includes("admin") && (
                                     <a className="ops-auth-inline-link" href="/admin/payment-closing">
                                         Abrir fechamento de pagamento
                                     </a>
