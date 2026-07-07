@@ -43,6 +43,15 @@ function storageKey(medicoId: string) {
     return `folhaPonto:${medicoId}`;
 }
 
+function preferStoredValue(stored: unknown, fallback: string) {
+    if (typeof stored !== "string") {
+        return fallback;
+    }
+
+    const normalized = stored.trim();
+    return normalized.length > 0 ? normalized : fallback;
+}
+
 function loadCampos(medicoId: string, fallback: CamposEditaveis): CamposEditaveis {
     if (typeof window === "undefined") return fallback;
     try {
@@ -50,10 +59,10 @@ function loadCampos(medicoId: string, fallback: CamposEditaveis): CamposEditavei
         if (!raw) return fallback;
         const parsed = JSON.parse(raw) as Partial<CamposEditaveis>;
         return {
-            empresa: parsed.empresa ?? fallback.empresa,
-            cnpj: parsed.cnpj ?? fallback.cnpj,
-            razaoSocial: parsed.razaoSocial ?? fallback.razaoSocial,
-            localData: parsed.localData ?? fallback.localData,
+            empresa: preferStoredValue(parsed.empresa, fallback.empresa),
+            cnpj: preferStoredValue(parsed.cnpj, fallback.cnpj),
+            razaoSocial: preferStoredValue(parsed.razaoSocial, fallback.razaoSocial),
+            localData: preferStoredValue(parsed.localData, fallback.localData),
         };
     } catch {
         return fallback;
