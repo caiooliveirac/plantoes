@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { montarLinhasFrequencia, montarRelatorio } from "@/lib/folha-ponto/montar";
 import type { DadosFolhaPonto } from "@/lib/folha-ponto/types";
+import prefeituraLogo from "@/components/prefeitura-de-salvador.jpg";
+import samuLogo from "@/components/samu192.png";
 import "./folha-ponto.css";
 
 const MESES_PT = [
@@ -131,14 +133,16 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
                 <header className="fp-cabecalho">
                     <div className="fp-cabecalho-esq">
                         <div className="fp-cabecalho-secretaria">Secretaria da Saúde</div>
-                        {/* TODO: substituir placeholder por <img src="/assets/folha-ponto/logo-salvador.png" alt="Logo Salvador" /> */}
-                        <div className="fp-cabecalho-logo-salvador">Logo Salvador</div>
+                        <img
+                            src={prefeituraLogo.src}
+                            alt="Logo da Prefeitura de Salvador"
+                            className="fp-cabecalho-logo-salvador"
+                        />
                     </div>
                     <h1 className="fp-titulo">
                         Frequência – <strong>{mesLabel}/{data.ano}</strong>
                     </h1>
-                    {/* TODO: substituir placeholder por <img src="/assets/folha-ponto/logo-samu192.png" alt="Logo SAMU 192" /> */}
-                    <div className="fp-cabecalho-logo-samu">Logo SAMU 192</div>
+                    <img src={samuLogo.src} alt="Logo SAMU 192" className="fp-cabecalho-logo-samu" />
                 </header>
 
                 <section className="fp-meta-pg1">
@@ -233,8 +237,12 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
             </section>
 
             <section className="folha-ponto-page">
-                <header className="fp-cabecalho-pg2">
-                    <span>Atestados por:</span>
+                <header className="fp-cabecalho-pg2 fp-cabecalho-pg2-logo">
+                    <img
+                        src={prefeituraLogo.src}
+                        alt="Logo da Prefeitura de Salvador"
+                        className="fp-cabecalho-logo-relatorio"
+                    />
                 </header>
 
                 <div className="fp-titulo-bar">

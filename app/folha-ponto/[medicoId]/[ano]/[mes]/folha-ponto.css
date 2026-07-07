@@ -127,27 +127,17 @@
 }
 
 .fp-cabecalho-logo-salvador {
-    border: 1px dashed #888;
-    color: #666;
-    text-align: center;
-    font-size: 7pt;
-    width: 30mm;
-    height: 10mm;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 42mm;
+    max-height: 14mm;
+    object-fit: contain;
+    display: block;
 }
 
 .fp-cabecalho-logo-samu {
-    border: 1px dashed #888;
-    color: #666;
-    text-align: center;
-    font-size: 7pt;
-    width: 18mm;
-    height: 18mm;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 22mm;
+    max-height: 22mm;
+    object-fit: contain;
+    display: block;
     margin-left: auto;
 }
 
@@ -323,9 +313,20 @@
 
 .fp-cabecalho-pg2 {
     border-bottom: 1px solid #000;
-    padding-bottom: 4px;
+    padding-bottom: 3mm;
     margin-bottom: 4mm;
-    font-weight: 700;
+}
+
+.fp-cabecalho-pg2-logo {
+    display: flex;
+    justify-content: center;
+}
+
+.fp-cabecalho-logo-relatorio {
+    width: 72mm;
+    max-height: 26mm;
+    object-fit: contain;
+    display: block;
 }
 
 .fp-titulo-bar {
