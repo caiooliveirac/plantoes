@@ -4572,6 +4572,54 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             }
         }
 
+        const profileSetupCommand = parseTelegramPaymentProfileSetupCommand(message.text);
+        if (profileSetupCommand) {
+            if (!profileSetupCommand.codename) {
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "payment_profile_admin_missing_codename",
+                    parsedAction: "payment_profile_setup",
+                    resolutionData: { actorRoles: actor.roles },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    `:/ Para cadastro fiscal como admin, use ${TELEGRAM_PAYMENT_PROFILE_SETUP_USAGE}. Ex.: /pagamento cadastro falcao-jade-734`,
+                    message.message_id,
+                );
+                return { ok: true, ignored: true };
+            }
+
+            const doctorId = await resolveDoctorIdByCodename(profileSetupCommand.codename);
+            if (!doctorId) {
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "payment_profile_codename_invalid",
+                    parsedAction: "payment_profile_setup",
+                    resolutionData: { actorRoles: actor.roles },
+                });
+                await sendMessage(message.chat.id, ":/ Codinome não confere. Confirme o codinome do médico e tente novamente.", message.message_id);
+                return { ok: true, ignored: true };
+            }
+
+            const senderId = message.from?.id ? String(message.from.id) : null;
+            if (senderId) {
+                await supersedePendingPaymentProfile(String(message.chat.id), senderId, "payment_profile_restarted");
+            }
+
+            await markTelegramProcessed(logId, {
+                status: "pending_payment_profile",
+                parsedAction: "payment_profile_setup",
+                errorMessage: null,
+                resolutionData: {
+                    actorRoles: actor.roles,
+                    stage: "awaiting_company_name",
+                    doctorId,
+                },
+            });
+            await sendMessage(message.chat.id, "✅ Codinome confirmado.\nAgora me diga o *nome completo da empresa* (razão social).", message.message_id);
+            return { ok: true, pending: true };
+        }
+
         if (parseTelegramPaymentListCommand(message.text)) {
             if (!actor.roles.includes("admin")) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_list_forbidden", parsedAction: "payment_list" });
