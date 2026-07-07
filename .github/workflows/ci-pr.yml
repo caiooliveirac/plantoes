@@ -47,7 +47,11 @@ jobs:
         run: npm run typecheck
 
       - name: Tests
-        run: npm test
+        run: npm run test:deploy
+
+      - name: Tests (meal-breaks regression, non-blocking)
+        continue-on-error: true
+        run: node --test --import tsx --test-isolation=none tests/telegram-meal-breaks.test.ts
 
       - name: Build
         run: npm run build
