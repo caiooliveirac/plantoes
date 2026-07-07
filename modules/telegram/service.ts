@@ -2587,6 +2587,16 @@ async function isTelegramMessageAllowed(message: TelegramUpdate["message"]) {
         return true;
     }
 
+    // Cadastro guiado de empresa/CNPJ (/pagamento cadastro) segue com respostas em
+    // texto livre (codinome, razão social, CNPJ) que não batem no regex acima — sem
+    // isto, um médico comum é barrado no meio do fluxo e cai no fallback do tutorial.
+    if (message.from?.id) {
+        const pendingProfile = await findPendingPaymentProfile(String(message.chat.id), String(message.from.id));
+        if (pendingProfile) {
+            return true;
+        }
+    }
+
     const actor = await resolveTelegramCommandActor(message);
     return Boolean(actor && actor.roles.some((role) => role === "admin" || role === "chief"));
 }
