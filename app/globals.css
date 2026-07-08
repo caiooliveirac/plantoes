@@ -4577,6 +4577,18 @@ button.ops-doctor-line.shadow.clickable:hover {
     background: rgba(11, 51, 37, 0.5);
 }
 
+.chief-payable-profile-badge.pj {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.chief-payable-profile-badge.estatutario {
+    border-color: rgba(255, 184, 92, 0.55);
+    color: #ffe2b8;
+    background: rgba(64, 40, 8, 0.55);
+}
+
 .chief-payable-specialist-toggle {
     display: inline-flex;
     align-items: center;

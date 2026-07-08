@@ -8,10 +8,23 @@ const MIN_SEGMENT_MINUTES = 45;
 
 export type DoctorPaymentProfile = "generalist" | "specialist" | "psychiatry";
 
+/**
+ * Vínculo do médico com a prefeitura: "pj" (contratado via empresa, tabela de
+ * pagamento por plantão vigente) ou "estatutario" (efetivo/REDA, remunerado
+ * fora deste sistema — não gera valor a pagar por plantão aqui).
+ */
+export type DoctorEmploymentType = "pj" | "estatutario";
+
 const DOCTOR_PAYMENT_RATES: Record<DoctorPaymentProfile, { weekday: number; weekend: number }> = {
     generalist: { weekday: 1244.87, weekend: 1381.10 },
     specialist: { weekday: 1329.66, weekend: 1457.15 },
     psychiatry: { weekday: 1299.82, weekend: 1411.47 },
+};
+
+const DOCTOR_PAYMENT_RATE_CENTS: Record<DoctorPaymentProfile, { weekday: number; weekend: number }> = {
+    generalist: { weekday: 124487, weekend: 138110 },
+    specialist: { weekday: 132966, weekend: 145715 },
+    psychiatry: { weekday: 129982, weekend: 141147 },
 };
 
 interface DoctorPaymentMetadata {
@@ -20,6 +33,7 @@ interface DoctorPaymentMetadata {
         isSpecialist?: unknown;
     };
     isPaymentSpecialist?: unknown;
+    employmentType?: unknown;
 }
 
 export type AttestationSegmentStatus = "consolidated" | "discarded";
@@ -213,6 +227,8 @@ export interface ChiefPayableDoctorRow {
     weekdayShiftCount?: number;
     weekendShiftCount?: number;
     paymentProfile?: DoctorPaymentProfile;
+    /** "pj" (tabela de plantão vigente) ou "estatutario" (pago fora deste sistema; totalDue = 0). */
+    employmentType: DoctorEmploymentType;
     pendingCount: number;
     /** ISO de quando o admin conferiu/assinou este médico no mês; null = não atestado. */
     attestedAt: string | null;
@@ -273,6 +289,13 @@ export interface ChiefPayableBoardModel {
         discardedSegmentCount: number;
         disabledTargetCount: number;
         uncoveredTargetCount: number;
+        /** Somas separadas por vínculo — a prefeitura só desembolsa pela linha "pj"; "estatutario" fica a 0. */
+        byEmploymentType: Record<DoctorEmploymentType, {
+            doctorCount: number;
+            payableShiftCount: number;
+            payableUnitCount: number;
+            totalDueAmount: number;
+        }>;
     };
     targetOptions: PayableTargetOption[];
     doctors: ChiefPayableDoctorRow[];
@@ -329,14 +352,61 @@ export function resolveDoctorPaymentProfile(metadata: unknown): DoctorPaymentPro
     return "generalist";
 }
 
+/**
+ * Vínculo estatutário/REDA é remunerado fora deste sistema (folha da
+ * prefeitura) — por isso o padrão aqui é "pj": todo médico sem classificação
+ * explícita segue sendo pago normalmente pela tabela de plantão, como sempre
+ * foi antes desta distinção existir.
+ */
+export function resolveDoctorEmploymentType(metadata: unknown): DoctorEmploymentType {
+    const typed = asDoctorPaymentMetadata(metadata);
+    const raw = String(typed.employmentType ?? "").trim().toLowerCase();
+    if (raw === "estatutario" || raw === "estatutário" || raw === "reda") {
+        return "estatutario";
+    }
+
+    return "pj";
+}
+
 export function resolveShiftDueAmount(params: {
     profile: DoctorPaymentProfile;
     operationalDate: string;
     paymentUnit: number;
+    employmentType?: DoctorEmploymentType;
 }) {
-    const rates = DOCTOR_PAYMENT_RATES[params.profile];
-    const dayRate = isWeekendOperationalDate(params.operationalDate) ? rates.weekend : rates.weekday;
-    return Number((dayRate * params.paymentUnit).toFixed(2));
+    return resolveShiftDueAmountCents(params) / 100;
+}
+
+export function resolveShiftDueAmountCents(params: {
+    profile: DoctorPaymentProfile;
+    operationalDate: string;
+    paymentUnit: number;
+    employmentType?: DoctorEmploymentType;
+}) {
+    if (params.employmentType === "estatutario") {
+        return 0;
+    }
+
+    const rates = DOCTOR_PAYMENT_RATE_CENTS[params.profile];
+    const rateCents = isWeekendOperationalDate(params.operationalDate) ? rates.weekend : rates.weekday;
+    const unitMilli = Math.round(params.paymentUnit * 1000);
+    return Math.round((rateCents * unitMilli) / 1000);
+}
+
+function resolveDueAmountCentsByDayKind(params: {
+    profile: DoctorPaymentProfile;
+    isWeekend: boolean;
+    paymentUnit: number;
+    employmentType?: DoctorEmploymentType;
+}) {
+    if (params.employmentType === "estatutario") {
+        return 0;
+    }
+
+    const rates = DOCTOR_PAYMENT_RATE_CENTS[params.profile];
+    const rateCents = params.isWeekend ? rates.weekend : rates.weekday;
+    const unitMilli = Math.round(params.paymentUnit * 1000);
+    return Math.round((rateCents * unitMilli) / 1000);
 }
 
 function resolveDurationMinutes(startedAt: string, endedAt: string | null) {
@@ -731,6 +801,7 @@ export function buildChiefPayableBoard(params: {
     attestationSegments: AttestationSegment[];
     allDoctorNames: string[];
     doctorPaymentProfiles?: Record<string, DoctorPaymentProfile>;
+    doctorEmploymentTypes?: Record<string, DoctorEmploymentType>;
     doctorAttestations?: Record<string, string>;
     doctorFinancials?: Record<string, DoctorFinancialExtras>;
 }) {
@@ -779,26 +850,47 @@ export function buildChiefPayableBoard(params: {
             .reduce((sum, shift) => sum + shift.paymentUnit, 0);
         const totalUnits = orderedShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0);
         const paymentProfile = params.doctorPaymentProfiles?.[doctorId] ?? "generalist";
-        const totalSDDueValue = orderedShifts
+        const employmentType = params.doctorEmploymentTypes?.[doctorId] ?? "pj";
+        const totalSDDueCents = orderedShifts
             .filter((shift) => shift.shiftLabel === "SD")
-            .reduce((sum, shift) => sum + resolveShiftDueAmount({
+            .reduce((sum, shift) => sum + resolveShiftDueAmountCents({
                 profile: paymentProfile,
                 operationalDate: shift.operationalDate,
                 paymentUnit: shift.paymentUnit,
+                employmentType,
             }), 0);
-        const totalSNDueValue = orderedShifts
+        const totalSNDueCents = orderedShifts
             .filter((shift) => shift.shiftLabel === "SN")
-            .reduce((sum, shift) => sum + resolveShiftDueAmount({
+            .reduce((sum, shift) => sum + resolveShiftDueAmountCents({
                 profile: paymentProfile,
                 operationalDate: shift.operationalDate,
                 paymentUnit: shift.paymentUnit,
+                employmentType,
             }), 0);
-        const totalDueValue = orderedShifts
-            .reduce((sum, shift) => sum + resolveShiftDueAmount({
+        const totalDueCents = orderedShifts
+            .reduce((sum, shift) => sum + resolveShiftDueAmountCents({
                 profile: paymentProfile,
                 operationalDate: shift.operationalDate,
                 paymentUnit: shift.paymentUnit,
+                employmentType,
             }), 0);
+        const weekdayUnits = orderedShifts
+            .filter((shift) => !isWeekendOperationalDate(shift.operationalDate))
+            .reduce((sum, shift) => sum + shift.paymentUnit, 0);
+        const weekendUnits = orderedShifts
+            .filter((shift) => isWeekendOperationalDate(shift.operationalDate))
+            .reduce((sum, shift) => sum + shift.paymentUnit, 0);
+        const totalDueFromUnitsCents = resolveDueAmountCentsByDayKind({
+            profile: paymentProfile,
+            isWeekend: false,
+            paymentUnit: weekdayUnits,
+            employmentType,
+        }) + resolveDueAmountCentsByDayKind({
+            profile: paymentProfile,
+            isWeekend: true,
+            paymentUnit: weekendUnits,
+            employmentType,
+        });
         // Unidades de plantão (meio plantão = 0,5), não contagem de linhas.
         const weekdayShiftCount = Number(orderedShifts
             .filter((shift) => !isWeekendOperationalDate(shift.operationalDate))
@@ -819,12 +911,13 @@ export function buildChiefPayableBoard(params: {
             totalSD: Number(totalSDUnits.toFixed(2)),
             totalSN: Number(totalSNUnits.toFixed(2)),
             total: Number(totalUnits.toFixed(2)),
-            totalSDDue: Number(totalSDDueValue.toFixed(2)),
-            totalSNDue: Number(totalSNDueValue.toFixed(2)),
-            totalDue: Number(totalDueValue.toFixed(2)),
+            totalSDDue: totalSDDueCents / 100,
+            totalSNDue: totalSNDueCents / 100,
+            totalDue: totalDueFromUnitsCents / 100,
             weekdayShiftCount,
             weekendShiftCount,
             paymentProfile,
+            employmentType,
             pendingCount,
             attestedAt: params.doctorAttestations?.[doctorId] ?? null,
             invoiceNumber: params.doctorFinancials?.[doctorId]?.invoiceNumber ?? null,
@@ -846,6 +939,23 @@ export function buildChiefPayableBoard(params: {
         } satisfies ChiefPayableDoctorRow;
     }).sort((left, right) => left.doctorName.localeCompare(right.doctorName, "pt-BR"));
 
+    const byEmploymentType: Record<DoctorEmploymentType, {
+        doctorCount: number;
+        payableShiftCount: number;
+        payableUnitCount: number;
+        totalDueAmount: number;
+    }> = {
+        pj: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+        estatutario: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+    };
+    for (const doctor of doctors) {
+        const bucket = byEmploymentType[doctor.employmentType];
+        bucket.doctorCount += 1;
+        bucket.payableShiftCount += doctor.cells.reduce((sum, cell) => sum + cell.shifts.length, 0);
+        bucket.payableUnitCount = Number((bucket.payableUnitCount + doctor.total).toFixed(2));
+        bucket.totalDueAmount = Number((bucket.totalDueAmount + Math.round((doctor.totalDue ?? 0) * 100) / 100).toFixed(2));
+    }
+
     return {
         monthKey: params.monthKey,
         monthLabel: params.monthLabel,
@@ -859,13 +969,14 @@ export function buildChiefPayableBoard(params: {
             doctorCount: doctors.length,
             payableShiftCount: params.payableShifts.length,
             payableUnitCount: Number(params.payableShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2)),
-            totalDueAmount: Number(doctors.reduce((sum, doctor) => sum + (doctor.totalDue ?? 0), 0).toFixed(2)),
+            totalDueAmount: doctors.reduce((sum, doctor) => sum + Math.round((doctor.totalDue ?? 0) * 100), 0) / 100,
             readyCount: params.payableShifts.filter((shift) => shift.paymentStatus === "ready_for_payment").length,
             needsReviewCount: params.payableShifts.filter((shift) => shift.paymentStatus === "needs_review").length,
             segmentCount: params.attestationSegments.length,
             discardedSegmentCount: params.attestationSegments.filter((segment) => segment.status === "discarded").length,
             disabledTargetCount: params.disabledTargets.length,
             uncoveredTargetCount: params.uncoveredTargets.length,
+            byEmploymentType,
         },
         targetOptions: params.targetOptions,
         doctors,

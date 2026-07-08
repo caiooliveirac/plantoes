@@ -196,6 +196,7 @@ function makeRow(shifts: PayableShift[]): ChiefPayableDoctorRow {
         doctorId: "doc-123", doctorName: "Acácio Junio de Almeida", displayName: null,
         paymentStatus: "ready_for_payment", totalSD: 0, totalSN: 0, total: shifts.length,
         totalDue: 2489.74, paymentProfile: "generalist", pendingCount: 0,
+        employmentType: "pj",
         cells: [{ day: "01", shifts }],
     };
 }
@@ -204,7 +205,14 @@ function makeBoard(): ChiefPayableBoardModel {
     return {
         allDoctorNames: [], monthKey: "2026-06", monthLabel: "Junho 2026", presetMonths: [],
         range: { startIso: "", endIso: "" }, days: [],
-        summary: { doctorCount: 1, payableShiftCount: 0, payableUnitCount: 0, readyCount: 0, needsReviewCount: 0, segmentCount: 0, discardedSegmentCount: 0, disabledTargetCount: 0, uncoveredTargetCount: 0 },
+        summary: {
+            doctorCount: 1, payableShiftCount: 0, payableUnitCount: 0, readyCount: 0, needsReviewCount: 0,
+            segmentCount: 0, discardedSegmentCount: 0, disabledTargetCount: 0, uncoveredTargetCount: 0,
+            byEmploymentType: {
+                pj: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+                estatutario: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+            },
+        },
         targetOptions: [], doctors: [], payableShifts: [], disabledTargets: [], uncoveredTargets: [], attestationSegments: [],
     };
 }

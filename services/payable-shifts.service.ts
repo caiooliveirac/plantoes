@@ -11,8 +11,10 @@ import {
     buildPayableShiftsFromBoards,
     buildPayableTargetOptions,
     type ChiefPayableBoardModel,
+    type DoctorEmploymentType,
     type DoctorFinancialExtras,
     type DoctorPaymentProfile,
+    resolveDoctorEmploymentType,
     resolveDoctorPaymentProfile,
     resolveShiftDueAmount,
     type RawPresenceEvent,
@@ -439,6 +441,13 @@ async function loadDoctorPaymentProfiles(): Promise<Map<string, DoctorPaymentPro
     return new Map(rows.map((row) => [row.id, resolveDoctorPaymentProfile(row.metadata)]));
 }
 
+async function loadDoctorEmploymentTypes(): Promise<Map<string, DoctorEmploymentType>> {
+    const rows = await getDb()
+        .select({ id: doctors.id, metadata: doctors.metadata })
+        .from(doctors);
+    return new Map(rows.map((row) => [row.id, resolveDoctorEmploymentType(row.metadata)]));
+}
+
 /**
  * Soma do valor a pagar por (médico, mês) num intervalo arbitrário, reusando os
  * mesmos boards/extra-shifts do fechamento. Base do saldo contratual: consumo do
@@ -449,9 +458,10 @@ export async function getDoctorMonthlyPayableTotals(
     rangeStart: Date,
     rangeEnd: Date,
 ): Promise<Map<string, Map<string, number>>> {
-    const [{ boards }, profiles] = await Promise.all([
+    const [{ boards }, profiles, employmentTypes] = await Promise.all([
         getPayableAllocationBoardsForRange(rangeStart, rangeEnd),
         loadDoctorPaymentProfiles(),
+        loadDoctorEmploymentTypes(),
     ]);
     const payableShifts = buildPayableShiftsFromBoards(boards);
     const extraStartDate = new Date(rangeStart.getTime() - (180 * 60000)).toISOString().slice(0, 10);
@@ -463,10 +473,12 @@ export async function getDoctorMonthlyPayableTotals(
     for (const shift of allShifts) {
         const monthKey = shift.operationalDate.slice(0, 7);
         const profile = profiles.get(shift.doctorId) ?? "generalist";
+        const employmentType = employmentTypes.get(shift.doctorId) ?? "pj";
         const due = resolveShiftDueAmount({
             profile,
             operationalDate: shift.operationalDate,
             paymentUnit: shift.paymentUnit,
+            employmentType,
         });
         const byMonth = totals.get(shift.doctorId) ?? new Map<string, number>();
         byMonth.set(monthKey, (byMonth.get(monthKey) ?? 0) + due);
@@ -537,6 +549,9 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
 
     const doctorPaymentProfiles = Object.fromEntries(
         allDoctorRows.map((row) => [row.id, resolveDoctorPaymentProfile(row.metadata)])
+    );
+    const doctorEmploymentTypes = Object.fromEntries(
+        allDoctorRows.map((row) => [row.id, resolveDoctorEmploymentType(row.metadata)])
     );
 
     // Camada financeira do modal: nota fiscal/processo, semente do contrato,
@@ -616,6 +631,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         attestationSegments,
         allDoctorNames: allDoctorRows.map((row) => row.fullName),
         doctorPaymentProfiles,
+        doctorEmploymentTypes,
         doctorAttestations,
         doctorFinancials,
     });
