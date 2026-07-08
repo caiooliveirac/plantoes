@@ -14,6 +14,7 @@ interface DoctorPaymentMetadata {
     paymentProfile?: {
         isSpecialist?: unknown;
     };
+    employmentType?: unknown;
 }
 
 export type PaymentAttestationSlotLifecycleStatus = "preview" | "draft" | "approved";
@@ -146,6 +147,16 @@ function resolveDoctorPaymentProfileFromMetadata(metadata: unknown) {
     }
 
     return "generalist" as const;
+}
+
+function resolveDoctorEmploymentTypeFromMetadata(metadata: unknown) {
+    const normalized = normalizeDoctorPaymentMetadata(metadata);
+    const raw = String(normalized.employmentType ?? "").trim().toLowerCase();
+    if (raw === "estatutario" || raw === "estatutário" || raw === "reda") {
+        return "estatutario" as const;
+    }
+
+    return "pj" as const;
 }
 
 function buildSummary(entries: PaymentAttestationEntrySnapshot[]): PaymentAttestationSlotSummary {
@@ -1183,5 +1194,41 @@ export async function setDoctorPaymentSpecialistProfile(params: {
         fullName: doctor.fullName,
         isSpecialist: updatedMetadata.paymentProfile?.isSpecialist === true,
         paymentProfile,
+    };
+}
+
+export async function setDoctorEmploymentType(params: {
+    doctorId: string;
+    employmentType: "pj" | "estatutario";
+}) {
+    const [doctor] = await getDb().select({
+        id: doctors.id,
+        fullName: doctors.fullName,
+        metadata: doctors.metadata,
+    }).from(doctors)
+        .where(eq(doctors.id, params.doctorId))
+        .limit(1);
+
+    if (!doctor) {
+        throw new Error("Medico nao encontrado para atualizar vinculo empregaticio.");
+    }
+
+    const current = normalizeDoctorPaymentMetadata(doctor.metadata);
+    const updatedMetadata: DoctorPaymentMetadata = {
+        ...current,
+        employmentType: params.employmentType,
+    };
+
+    await getDb().update(doctors)
+        .set({
+            metadata: updatedMetadata,
+            updatedAt: new Date(),
+        })
+        .where(eq(doctors.id, params.doctorId));
+
+    return {
+        id: doctor.id,
+        fullName: doctor.fullName,
+        employmentType: resolveDoctorEmploymentTypeFromMetadata(updatedMetadata),
     };
 }

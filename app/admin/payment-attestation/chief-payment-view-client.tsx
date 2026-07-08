@@ -34,6 +34,8 @@ type DomainFilter = "all" | "regulation" | "intervention";
 type CoverageFilter = "all" | "half" | "full";
 type SortMode = "name" | "total" | "pending" | "weekday" | "weekend";
 type DoctorProfile = "generalist" | "specialist" | "psychiatry";
+type DoctorEmploymentType = "pj" | "estatutario";
+type EmploymentTypeFilter = "all" | DoctorEmploymentType;
 
 const MONEY_FORMATTER = new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -110,20 +112,30 @@ function isWeekendDate(operationalDate: string) {
     return isPremiumRateDate(operationalDate);
 }
 
-function resolveShiftAmount(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile) {
-    return resolveShiftAmountCents(shift, profile) / 100;
+function resolveShiftAmount(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile, employmentType: DoctorEmploymentType = "pj") {
+    return resolveShiftAmountCents(shift, profile, employmentType) / 100;
 }
 
-function resolveShiftAmountCents(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile) {
+function resolveShiftAmountCents(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile, employmentType: DoctorEmploymentType = "pj") {
+    if (employmentType === "estatutario") {
+        return 0;
+    }
     const rateCents = isWeekendDate(shift.operationalDate) ? PROFILE_RATE_CENTS[profile].weekend : PROFILE_RATE_CENTS[profile].weekday;
     const unitMilli = Math.round(shift.paymentUnit * 1000);
     return Math.round((rateCents * unitMilli) / 1000);
 }
 
-function resolveAmountCentsByDayKind(params: { profile: DoctorProfile; isWeekend: boolean; paymentUnit: number }) {
+function resolveAmountCentsByDayKind(params: { profile: DoctorProfile; isWeekend: boolean; paymentUnit: number; employmentType?: DoctorEmploymentType }) {
+    if (params.employmentType === "estatutario") {
+        return 0;
+    }
     const rateCents = params.isWeekend ? PROFILE_RATE_CENTS[params.profile].weekend : PROFILE_RATE_CENTS[params.profile].weekday;
     const unitMilli = Math.round(params.paymentUnit * 1000);
     return Math.round((rateCents * unitMilli) / 1000);
+}
+
+function employmentTypeLabel(employmentType: string | null | undefined) {
+    return employmentType === "estatutario" ? "Estatutário" : "PJ";
 }
 
 function parseTargetPriority(code: string) {
@@ -233,6 +245,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     const [search, setSearch] = useState("");
     const [targetSearch, setTargetSearch] = useState("");
     const [status, setStatus] = useState<PaymentStatusFilter>("all");
+    const [employmentTypeFilter, setEmploymentTypeFilter] = useState<EmploymentTypeFilter>("all");
     const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("all");
     const [domainFilter, setDomainFilter] = useState<DomainFilter>("all");
     const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("all");
@@ -258,6 +271,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     const [manualFeedback, setManualFeedback] = useState<string | null>(null);
     const [profileBusyDoctorId, setProfileBusyDoctorId] = useState<string | null>(null);
     const [doctorProfileOverrides, setDoctorProfileOverrides] = useState<Record<string, DoctorProfile>>({});
+    const [employmentTypeBusyDoctorId, setEmploymentTypeBusyDoctorId] = useState<string | null>(null);
+    const [doctorEmploymentTypeOverrides, setDoctorEmploymentTypeOverrides] = useState<Record<string, DoctorEmploymentType>>({});
     // Última NF/processo confirmados pelo servidor por médico — evita depender só do
     // router.refresh() (assíncrono) para o modal mostrar o valor recém-salvo ao reabrir.
     const [doctorMetaOverrides, setDoctorMetaOverrides] = useState<Record<string, { invoiceNumber: string | null; paymentProcessNumber: string | null }>>({});
@@ -413,33 +428,48 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         return board.days.map((day) => ({ day, count: counts.get(day) ?? 0 }));
     }, [board.days, board.payableShifts, pendingRemovals]);
 
-    const totalDueAmount = useMemo(() => {
-        const totalCents = board.doctors
-            .reduce((sum, doctor) => {
-                const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
-                const doctorShifts = doctor.cells
-                    .flatMap((cell) => cell.shifts)
-                    .filter((shift) => !pendingRemovals.has(shift.payableShiftId));
-                const weekdayUnits = doctorShifts
-                    .filter((shift) => !isWeekendDate(shift.operationalDate))
-                    .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
-                const weekendUnits = doctorShifts
-                    .filter((shift) => isWeekendDate(shift.operationalDate))
-                    .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
-                const doctorDue = resolveAmountCentsByDayKind({
-                    profile: paymentProfile,
-                    isWeekend: false,
-                    paymentUnit: weekdayUnits,
-                }) + resolveAmountCentsByDayKind({
-                    profile: paymentProfile,
-                    isWeekend: true,
-                    paymentUnit: weekendUnits,
-                });
-                return sum + doctorDue;
-            }, 0);
+    const dueAmountByEmploymentType = useMemo(() => {
+        const totalsCents: Record<DoctorEmploymentType, number> = { pj: 0, estatutario: 0 };
+        const doctorCounts: Record<DoctorEmploymentType, number> = { pj: 0, estatutario: 0 };
 
-        return totalCents / 100;
-    }, [board.doctors, doctorProfileOverrides, pendingRemovals]);
+        for (const doctor of board.doctors) {
+            const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
+            const employmentType = doctorEmploymentTypeOverrides[doctor.doctorId] ?? (doctor.employmentType ?? "pj") as DoctorEmploymentType;
+            const doctorShifts = doctor.cells
+                .flatMap((cell) => cell.shifts)
+                .filter((shift) => !pendingRemovals.has(shift.payableShiftId));
+
+            if (doctorShifts.length === 0) {
+                continue;
+            }
+
+            doctorCounts[employmentType] += 1;
+
+            const weekdayUnits = doctorShifts
+                .filter((shift) => !isWeekendDate(shift.operationalDate))
+                .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
+            const weekendUnits = doctorShifts
+                .filter((shift) => isWeekendDate(shift.operationalDate))
+                .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
+            const doctorDue = resolveAmountCentsByDayKind({
+                profile: paymentProfile,
+                isWeekend: false,
+                paymentUnit: weekdayUnits,
+                employmentType,
+            }) + resolveAmountCentsByDayKind({
+                profile: paymentProfile,
+                isWeekend: true,
+                paymentUnit: weekendUnits,
+                employmentType,
+            });
+            totalsCents[employmentType] += doctorDue;
+        }
+
+        return {
+            pj: { totalDue: totalsCents.pj / 100, doctorCount: doctorCounts.pj },
+            estatutario: { totalDue: totalsCents.estatutario / 100, doctorCount: doctorCounts.estatutario },
+        };
+    }, [board.doctors, doctorProfileOverrides, doctorEmploymentTypeOverrides, pendingRemovals]);
 
     const visibleDisabledTargets = useMemo(() => board.disabledTargets.filter((item) => {
         if (shiftFilter !== "all" && item.shiftLabel !== shiftFilter) {
@@ -573,12 +603,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                     .toFixed(2));
                 const total = Number(effectiveVisibleShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2));
                 const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
+                const employmentType = doctorEmploymentTypeOverrides[doctor.doctorId] ?? (doctor.employmentType ?? "pj") as DoctorEmploymentType;
                 const totalSDDueCents = effectiveVisibleShifts
                     .filter((shift) => shift.shiftLabel === "SD")
-                    .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile), 0);
+                    .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile, employmentType), 0);
                 const totalSNDueCents = effectiveVisibleShifts
                     .filter((shift) => shift.shiftLabel === "SN")
-                    .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile), 0);
+                    .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile, employmentType), 0);
                 // Conta em UNIDADES de plantão: meio plantão vale 0,5 (não 1).
                 const weekdayShiftCount = Number(effectiveVisibleShifts
                     .filter((shift) => !isWeekendDate(shift.operationalDate))
@@ -592,11 +623,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                     profile: paymentProfile,
                     isWeekend: false,
                     paymentUnit: weekdayShiftCount,
+                    employmentType,
                 });
                 const weekendDueCents = resolveAmountCentsByDayKind({
                     profile: paymentProfile,
                     isWeekend: true,
                     paymentUnit: weekendShiftCount,
+                    employmentType,
                 });
                 const totalDueCents = weekdayDueCents + weekendDueCents;
                 const pendingCount = effectiveVisibleShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
@@ -605,6 +638,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 return {
                     ...doctor,
                     cells: nextCells,
+                    employmentType,
                     totalSD,
                     totalSN,
                     total,
@@ -622,6 +656,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             })
             .filter((doctor) => {
                 if (status !== "all" && doctor.paymentStatus !== status) {
+                    return false;
+                }
+
+                if (employmentTypeFilter !== "all" && doctor.employmentType !== employmentTypeFilter) {
                     return false;
                 }
 
@@ -656,7 +694,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         });
 
         return sorted;
-    }, [board.doctors, coverageFilter, doctorProfileOverrides, doctorMetaOverrides, domainFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
+    }, [board.doctors, coverageFilter, doctorProfileOverrides, doctorEmploymentTypeOverrides, doctorMetaOverrides, domainFilter, employmentTypeFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
 
     useEffect(() => {
         // Reconcile optimistic removals with server truth: if a payableShiftId
@@ -1218,6 +1256,48 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         }
     }
 
+    async function toggleDoctorEmploymentType(doctorId: string, employmentType: DoctorEmploymentType) {
+        const baseDoctor = board.doctors.find((doctor) => doctor.doctorId === doctorId);
+        const previousType = doctorEmploymentTypeOverrides[doctorId] ?? ((baseDoctor?.employmentType ?? "pj") as DoctorEmploymentType);
+
+        setEmploymentTypeBusyDoctorId(doctorId);
+        setManualError(null);
+        setManualFeedback(null);
+        setDoctorEmploymentTypeOverrides((current) => ({
+            ...current,
+            [doctorId]: employmentType,
+        }));
+
+        try {
+            const response = await fetch("/api/admin/payment-attestation/slot", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    action: "set_doctor_employment_type",
+                    doctorId,
+                    employmentType,
+                }),
+            });
+
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível atualizar o vínculo do médico.");
+            }
+
+            setManualFeedback("Vínculo atualizado.");
+        } catch (error) {
+            setDoctorEmploymentTypeOverrides((current) => ({
+                ...current,
+                [doctorId]: previousType,
+            }));
+            setManualError(error instanceof Error ? error.message : "Falha ao atualizar vínculo.");
+        } finally {
+            setEmploymentTypeBusyDoctorId(null);
+        }
+    }
+
     const selectedDoctor = useMemo(
         () => filteredDoctors.find((doctor) => doctor.doctorId === selectedDoctorId) ?? null,
         [filteredDoctors, selectedDoctorId],
@@ -1372,8 +1452,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                     <strong>{board.summary.doctorCount}</strong>
                 </article>
                 <article className="chief-payable-summary-card">
-                    <span>Valor devido</span>
-                    <strong>{formatCurrency(totalDueAmount)}</strong>
+                    <span>Valor devido (PJ · {dueAmountByEmploymentType.pj.doctorCount} médicos)</span>
+                    <strong>{formatCurrency(dueAmountByEmploymentType.pj.totalDue)}</strong>
+                </article>
+                <article className="chief-payable-summary-card">
+                    <span>Estatutário ({dueAmountByEmploymentType.estatutario.doctorCount} médicos · sem pagamento aqui)</span>
+                    <strong>{formatCurrency(dueAmountByEmploymentType.estatutario.totalDue)}</strong>
                 </article>
                 <article className="chief-payable-summary-card">
                     <span>Desativadas</span>
@@ -1494,6 +1578,21 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                         </button>
                         <button type="button" className={`chief-payable-chip warning ${status === "needs_review" ? "active" : ""}`.trim()} onClick={() => setStatus("needs_review")}>
                             Pendências ({filterSummary.reviewDoctors})
+                        </button>
+                    </div>
+                </div>
+
+                <div className="chief-payable-inline-status" aria-label="Vínculo empregatício">
+                    <span>Vínculo</span>
+                    <div className="chief-payable-chip-row chief-payable-chip-row-inline">
+                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "all" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("all")}>
+                            Todos ({dueAmountByEmploymentType.pj.doctorCount + dueAmountByEmploymentType.estatutario.doctorCount})
+                        </button>
+                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "pj" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("pj")}>
+                            PJ ({dueAmountByEmploymentType.pj.doctorCount})
+                        </button>
+                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "estatutario" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("estatutario")}>
+                            Estatutário ({dueAmountByEmploymentType.estatutario.doctorCount})
                         </button>
                     </div>
                 </div>
@@ -1810,6 +1909,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                 {filteredDoctors.map((doctor, index) => {
                                     const doctorProfile = (doctor.paymentProfile ?? "generalist") as DoctorProfile;
                                     const profileBadge = paymentProfileBadge(doctorProfile);
+                                    const doctorEmploymentType = (doctor.employmentType ?? "pj") as DoctorEmploymentType;
 
                                     return (
                                     <motion.tr
@@ -1834,7 +1934,22 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                                     {profileBadge ? (
                                                         <span className={`chief-payable-profile-badge ${doctorProfile}`.trim()}>{profileBadge}</span>
                                                     ) : null}
+                                                    <span className={`chief-payable-profile-badge ${doctorEmploymentType}`.trim()} title="Vínculo com a prefeitura">
+                                                        {employmentTypeLabel(doctorEmploymentType)}
+                                                    </span>
                                                 </div>
+
+                                                <label className="chief-payable-specialist-toggle" title="Estatutário/REDA não gera valor a pagar por plantão">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={doctorEmploymentType === "estatutario"}
+                                                        onChange={(event) => {
+                                                            void toggleDoctorEmploymentType(doctor.doctorId, event.target.checked ? "estatutario" : "pj");
+                                                        }}
+                                                        disabled={!canManageClosing || employmentTypeBusyDoctorId === doctor.doctorId}
+                                                    />
+                                                    <span>Estatutário</span>
+                                                </label>
 
                                                 {doctorProfile !== "psychiatry" ? (
                                                     <label className="chief-payable-specialist-toggle">
@@ -2000,7 +2115,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                             <div>
                                 <span className="payment-eyebrow">Resumo do médico</span>
                                 <h3>{selectedDoctor.doctorName}</h3>
-                                <p>{paymentProfileLabel(selectedDoctor.paymentProfile)} · {board.monthLabel}</p>
+                                <p>{paymentProfileLabel(selectedDoctor.paymentProfile)} · {employmentTypeLabel(selectedDoctor.employmentType)} · {board.monthLabel}</p>
                             </div>
                             <div className="chief-payable-modal-header-actions">
                                 <a

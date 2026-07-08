@@ -24,6 +24,10 @@ function makeBoard(): ChiefPayableBoardModel {
             discardedSegmentCount: 1,
             disabledTargetCount: 0,
             uncoveredTargetCount: 0,
+        byEmploymentType: {
+            pj: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+            estatutario: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+        },
         },
         targetOptions: [],
         doctors: [
@@ -36,6 +40,7 @@ function makeBoard(): ChiefPayableBoardModel {
                 totalSN: 1,
                 total: 2,
                 pendingCount: 0,
+                employmentType: "pj",
                 cells: [
                     {
                         day: "01",

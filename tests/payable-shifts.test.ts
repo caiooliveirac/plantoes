@@ -9,6 +9,7 @@ import {
     buildPayableShiftsFromBoards,
     buildPayableTargetOptions,
     resolveDoctorPaymentProfile,
+    resolveShiftDueAmount,
     type RawPresenceEvent,
 } from "@/modules/reporting/payable-shifts";
 import type { PaymentAllocationBoard } from "@/services/board.service";
@@ -739,6 +740,98 @@ test("resolveDoctorPaymentProfile honors PSIQ and specialist flags", () => {
     assert.equal(resolveDoctorPaymentProfile({}), "generalist");
 });
 
+test("resolveShiftDueAmount mantém centésimos corretos em meio plantão de dia útil", () => {
+    assert.equal(resolveShiftDueAmount({
+        profile: "generalist",
+        operationalDate: "2026-06-22",
+        paymentUnit: 0.5,
+    }), 622.44);
+});
+
+test("buildChiefPayableBoard mantém total correto para 10,5 plantões em dia útil", () => {
+    const payableShifts = [
+        ...Array.from({ length: 10 }, (_, index) => buildAdminExtraPayableShift({
+            id: `full-${index + 1}`,
+            doctorId: "doc-105",
+            doctorName: "Alessandra Barboza",
+            displayName: null,
+            operationalDate: "2026-06-22",
+            shiftLabel: "SD",
+            label: `EXTRA-${index + 1}`,
+            unit: 1,
+        })),
+        buildAdminExtraPayableShift({
+            id: "half-1",
+            doctorId: "doc-105",
+            doctorName: "Alessandra Barboza",
+            displayName: null,
+            operationalDate: "2026-06-22",
+            shiftLabel: "SD",
+            label: "EXTRA-HALF",
+            unit: 0.5,
+        }),
+    ];
+
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-06",
+        monthLabel: "junho de 2026",
+        presetMonths: [{ key: "2026-06", label: "junho de 2026" }],
+        rangeStartIso: "2026-06-01T10:00:00.000Z",
+        rangeEndIso: "2026-07-01T10:00:00.000Z",
+        payableShifts,
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: [],
+        attestationSegments: [],
+        allDoctorNames: ["Alessandra Barboza"],
+        doctorPaymentProfiles: {
+            "doc-105": "generalist",
+        },
+    });
+
+    const doctor = board.doctors.find((entry) => entry.doctorId === "doc-105");
+    assert.ok(doctor);
+    assert.equal(doctor?.total, 10.5);
+    assert.equal(doctor?.weekdayShiftCount, 10.5);
+    assert.equal(doctor?.totalDue, 13071.14);
+});
+
+test("buildChiefPayableBoard mantém total de 10,5 por unidades agregadas mesmo com vários meios plantões", () => {
+    const payableShifts = Array.from({ length: 21 }, (_, index) => buildAdminExtraPayableShift({
+        id: `half-${index + 1}`,
+        doctorId: "doc-105b",
+        doctorName: "Alessandra Barboza",
+        displayName: null,
+        operationalDate: "2026-06-22",
+        shiftLabel: "SD",
+        label: `EXTRA-HALF-${index + 1}`,
+        unit: 0.5,
+    }));
+
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-06",
+        monthLabel: "junho de 2026",
+        presetMonths: [{ key: "2026-06", label: "junho de 2026" }],
+        rangeStartIso: "2026-06-01T10:00:00.000Z",
+        rangeEndIso: "2026-07-01T10:00:00.000Z",
+        payableShifts,
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: [],
+        attestationSegments: [],
+        allDoctorNames: ["Alessandra Barboza"],
+        doctorPaymentProfiles: {
+            "doc-105b": "generalist",
+        },
+    });
+
+    const doctor = board.doctors.find((entry) => entry.doctorId === "doc-105b");
+    assert.ok(doctor);
+    assert.equal(doctor?.total, 10.5);
+    assert.equal(doctor?.weekdayShiftCount, 10.5);
+    assert.equal(doctor?.totalDue, 13071.14);
+});
+
 test("buildChiefPayableBoard computes due amount by profile and weekday/weekend", () => {
     const weekdayShift = {
         ...makeBoard().intervention[0],
@@ -802,6 +895,54 @@ test("buildChiefPayableBoard computes due amount by profile and weekday/weekend"
     assert.equal(doctor?.totalSNDue, 1457.15);
     assert.equal(doctor?.totalDue, 2786.81);
     assert.equal(board.summary.totalDueAmount, 2786.81);
+});
+
+test("buildChiefPayableBoard zera valor devido e soma separado para médico estatutário", () => {
+    const shift = {
+        ...makeBoard().intervention[0],
+        occupancyId: "occ-estatutario",
+        startedAt: "2026-04-10T10:00:00.000Z",
+        endedAt: "2026-04-10T22:00:00.000Z",
+        actualEndedAt: "2026-04-10T22:00:00.000Z",
+        shiftLabel: "SD" as const,
+        sourceShiftLabel: "SD" as const,
+        continuesBeyondShift: false,
+    };
+
+    const payableShifts = buildPayableShiftsFromBoards([
+        makeBoard({
+            operationalDate: "2026-04-10T12:00:00.000Z",
+            shiftLabel: "SD",
+            startedAt: "2026-04-10T10:00:00.000Z",
+            endedAt: "2026-04-10T22:00:00.000Z",
+            intervention: [shift],
+        }),
+    ]);
+
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-04",
+        monthLabel: "abril de 2026",
+        presetMonths: [{ key: "2026-04", label: "abril de 2026" }],
+        rangeStartIso: "2026-04-01T10:00:00.000Z",
+        rangeEndIso: "2026-05-01T10:00:00.000Z",
+        payableShifts,
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: buildPayableTargetOptions({ payableShifts, disabledTargets: [], uncoveredTargets: [] }),
+        attestationSegments: [],
+        allDoctorNames: [],
+        doctorEmploymentTypes: {
+            "doc-1": "estatutario",
+        },
+    });
+
+    const doctor = board.doctors.find((entry) => entry.doctorId === "doc-1");
+    assert.ok(doctor);
+    assert.equal(doctor?.employmentType, "estatutario");
+    assert.equal(doctor?.totalDue, 0);
+    assert.equal(board.summary.byEmploymentType.estatutario.doctorCount, 1);
+    assert.equal(board.summary.byEmploymentType.estatutario.totalDueAmount, 0);
+    assert.equal(board.summary.byEmploymentType.pj.doctorCount, 0);
 });
 
 test("buildAdminExtraPayableShift marca plantão extra verde com unidade cheia", () => {
