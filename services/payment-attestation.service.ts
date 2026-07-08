@@ -1232,3 +1232,61 @@ export async function setDoctorEmploymentType(params: {
         employmentType: resolveDoctorEmploymentTypeFromMetadata(updatedMetadata),
     };
 }
+
+/**
+ * Atualiza vínculo (PJ/estatutário) e perfil de pagamento (generalista/
+ * especialista/psiquiatria) de um médico numa tacada só — usado pelo comando
+ * admin "/pagamento perfil" do bot, já que hoje só dá pra fazer isso editando
+ * o banco na mão. Especialista vira isSpecialist=true; psiquiatria marca
+ * preferredOperationalRole=PSIQ; generalista limpa os dois (mas nunca mexe
+ * num preferredOperationalRole diferente de PSIQ, como PIAM, que é papel
+ * operacional — não gerenciado por este comando).
+ */
+export async function setDoctorClassification(params: {
+    doctorId: string;
+    employmentType: "pj" | "estatutario";
+    paymentRole: "generalist" | "specialist" | "psychiatry";
+}) {
+    const [doctor] = await getDb().select({
+        id: doctors.id,
+        fullName: doctors.fullName,
+        metadata: doctors.metadata,
+    }).from(doctors)
+        .where(eq(doctors.id, params.doctorId))
+        .limit(1);
+
+    if (!doctor) {
+        throw new Error("Medico nao encontrado para atualizar perfil.");
+    }
+
+    const current = normalizeDoctorPaymentMetadata(doctor.metadata);
+    const currentPreferredRole = String(current.preferredOperationalRole ?? "").trim().toUpperCase();
+    const updatedMetadata: DoctorPaymentMetadata = {
+        ...current,
+        employmentType: params.employmentType,
+        paymentProfile: {
+            ...(current.paymentProfile ?? {}),
+            isSpecialist: params.paymentRole === "specialist",
+        },
+    };
+
+    if (params.paymentRole === "psychiatry") {
+        updatedMetadata.preferredOperationalRole = "PSIQ";
+    } else if (currentPreferredRole === "PSIQ") {
+        delete updatedMetadata.preferredOperationalRole;
+    }
+
+    await getDb().update(doctors)
+        .set({
+            metadata: updatedMetadata,
+            updatedAt: new Date(),
+        })
+        .where(eq(doctors.id, params.doctorId));
+
+    return {
+        id: doctor.id,
+        fullName: doctor.fullName,
+        employmentType: resolveDoctorEmploymentTypeFromMetadata(updatedMetadata),
+        paymentProfile: resolveDoctorPaymentProfileFromMetadata(updatedMetadata),
+    };
+}

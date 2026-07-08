@@ -115,8 +115,10 @@ import {
     TELEGRAM_SLOT_AUDIT_USAGE,
 } from "@/modules/telegram/slot-audit-commands";
 import {
+    isTelegramDoctorClassificationCommandText,
     isTelegramPaymentAdminCommandText,
     isTelegramResetCodinomeCommandText,
+    parseTelegramDoctorClassificationCommand,
     parseTelegramPaymentAdminCommand,
     parseTelegramPaymentCodenameAdminCommand,
     parseTelegramPaymentDigestCommand,
@@ -125,6 +127,7 @@ import {
     parseTelegramPaymentResetAllCommand,
     parseTelegramPaymentSelfServiceCommand,
     parseTelegramResetCodinomeCommand,
+    TELEGRAM_DOCTOR_CLASSIFICATION_USAGE,
     TELEGRAM_PAYMENT_CODENAME_USAGE,
     TELEGRAM_PAYMENT_CORRECTION_USAGE,
     TELEGRAM_PAYMENT_DIGEST_USAGE,
@@ -149,6 +152,7 @@ import {
 } from "@/modules/telegram/payment-access";
 import { createFolhaToken } from "@/lib/folha-ponto/token";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
+import { setDoctorClassification } from "@/services/payment-attestation.service";
 import { buildTelegramDepartureReport, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
 import { buildTelegramSlotAuditMessages } from "@/modules/telegram/slot-audit-report";
 import { buildTelegramSummaryReport } from "@/modules/telegram/summary-report";
@@ -4642,6 +4646,67 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             return { ok: true, pending: true };
         }
 
+        if (isTelegramDoctorClassificationCommandText(message.text) && !parseTelegramDoctorClassificationCommand(message.text)) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "doctor_classification_usage",
+                parsedAction: "doctor_classification",
+                resolutionData: { actorRoles: actor.roles },
+            });
+            await sendMessage(message.chat.id, `:/ Uso: ${TELEGRAM_DOCTOR_CLASSIFICATION_USAGE}\nEx.: /pagamento perfil falcao-jade-734 pj psiq`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const classificationCommand = parseTelegramDoctorClassificationCommand(message.text);
+        if (classificationCommand) {
+            const classificationDoctorId = await resolveDoctorIdByCodename(classificationCommand.codename);
+            if (!classificationDoctorId) {
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "doctor_classification_codename_invalid",
+                    parsedAction: "doctor_classification",
+                    resolutionData: { actorRoles: actor.roles },
+                });
+                await sendMessage(message.chat.id, ":/ Codinome não confere. Confirme o codinome do médico e tente novamente.", message.message_id);
+                return { ok: true, ignored: true };
+            }
+
+            try {
+                const updated = await setDoctorClassification({
+                    doctorId: classificationDoctorId,
+                    employmentType: classificationCommand.employmentType,
+                    paymentRole: classificationCommand.paymentRole,
+                });
+                await markTelegramProcessed(logId, {
+                    status: "accepted",
+                    parsedAction: "doctor_classification",
+                    parsedDoctorName: updated.fullName,
+                    resolutionData: {
+                        actorRoles: actor.roles,
+                        doctorId: updated.id,
+                        employmentType: updated.employmentType,
+                        paymentProfile: updated.paymentProfile,
+                    },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    [
+                        "✅ Perfil atualizado.",
+                        `👤 Médico: ${updated.fullName}`,
+                        `📄 Vínculo: ${updated.employmentType === "estatutario" ? "Estatutário (sem pagamento aqui)" : "PJ"}`,
+                        `💰 Perfil de pagamento: ${paymentProfileLabel(updated.paymentProfile)}`,
+                    ].join("\n"),
+                    message.message_id,
+                );
+                return { ok: true, reported: true };
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : "doctor_classification_failed";
+                await markTelegramProcessed(logId, { status: "error", errorMessage, parsedAction: "doctor_classification" });
+                await sendMessage(message.chat.id, `:/ Não consegui atualizar o perfil. ${errorMessage}`, message.message_id);
+                return { ok: true, ignored: true };
+            }
+        }
+
         if (parseTelegramPaymentListCommand(message.text)) {
             if (!actor.roles.includes("admin")) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_list_forbidden", parsedAction: "payment_list" });
@@ -6882,6 +6947,16 @@ function isPendingCruCoiRamalData(value: unknown): value is PendingCruCoiRamalDa
         && typeof candidate.originalText === "string"
         && typeof candidate.originalEventAt === "string",
     );
+}
+
+function paymentProfileLabel(profile: string) {
+    if (profile === "psychiatry") {
+        return "Psiquiatria";
+    }
+    if (profile === "specialist") {
+        return "Especialista";
+    }
+    return "Generalista";
 }
 
 function isPendingPaymentProfileData(value: unknown): value is PendingPaymentProfileData {

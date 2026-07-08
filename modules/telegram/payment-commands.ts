@@ -238,6 +238,59 @@ export function parseTelegramPaymentSelfServiceCommand(text: string, reference =
     return { name: "payment_self", codename: tokens[0] ?? null, monthKey };
 }
 
+export const TELEGRAM_DOCTOR_CLASSIFICATION_USAGE = "/pagamento perfil <codinome> <pj|estatutario> <geral|esp|psiq>";
+
+export type TelegramDoctorClassificationCommand = {
+    name: "doctor_classification";
+    codename: string;
+    employmentType: "pj" | "estatutario";
+    paymentRole: "generalist" | "specialist" | "psychiatry";
+};
+
+const EMPLOYMENT_TYPE_TOKENS: Record<string, "pj" | "estatutario"> = {
+    pj: "pj",
+    estatutario: "estatutario",
+    reda: "estatutario",
+};
+
+const PAYMENT_ROLE_TOKENS: Record<string, "generalist" | "specialist" | "psychiatry"> = {
+    geral: "generalist",
+    generalista: "generalist",
+    nada: "generalist",
+    esp: "specialist",
+    especialista: "specialist",
+    psiq: "psychiatry",
+    psiquiatria: "psychiatry",
+};
+
+export function isTelegramDoctorClassificationCommandText(text: string) {
+    return /^\/pagamento(?:@\w+)?\s+perfil\b/i.test(text.trim());
+}
+
+// Admin: "/pagamento perfil <codinome> <pj|estatutario> <geral|esp|psiq>"
+// atualiza vínculo e perfil de pagamento de um médico numa tacada só (sem
+// precisar editar o banco na mão).
+export function parseTelegramDoctorClassificationCommand(text: string): TelegramDoctorClassificationCommand | null {
+    const match = text.trim().match(/^\/pagamento(?:@\w+)?\s+perfil\b\s*([\s\S]*)$/i);
+    if (!match) {
+        return null;
+    }
+
+    const tokens = (match[1] ?? "").trim().split(/\s+/).filter(Boolean);
+    if (tokens.length !== 3) {
+        return null;
+    }
+
+    const [codename, employmentToken, roleToken] = tokens;
+    const employmentType = EMPLOYMENT_TYPE_TOKENS[stripAccents(employmentToken.toLowerCase())];
+    const paymentRole = PAYMENT_ROLE_TOKENS[stripAccents(roleToken.toLowerCase())];
+    if (!codename || !employmentType || !paymentRole) {
+        return null;
+    }
+
+    return { name: "doctor_classification", codename, employmentType, paymentRole };
+}
+
 export type TelegramPaymentAdminCommand =
     | {
         name: "payment_report";

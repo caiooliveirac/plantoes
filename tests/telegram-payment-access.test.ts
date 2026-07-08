@@ -20,6 +20,8 @@ import {
     verifyFolhaToken,
 } from "@/lib/folha-ponto/token";
 import {
+    isTelegramDoctorClassificationCommandText,
+    parseTelegramDoctorClassificationCommand,
     parseTelegramPaymentCodenameAdminCommand,
     parseTelegramPaymentListCommand,
     parseTelegramPaymentProfileSetupCommand,
@@ -176,6 +178,47 @@ test("parseTelegramPaymentListCommand reconhece só /pagamento listar", () => {
     assert.deepEqual(parseTelegramPaymentListCommand("/pagamento listar"), { name: "payment_list" });
     assert.equal(parseTelegramPaymentListCommand("/pagamento"), null);
     assert.equal(parseTelegramPaymentListCommand("/pagamento listar tudo"), null);
+});
+
+test("parseTelegramDoctorClassificationCommand: vínculo + perfil de pagamento", () => {
+    assert.deepEqual(parseTelegramDoctorClassificationCommand("/pagamento perfil falcao-jade-734 pj psiq"), {
+        name: "doctor_classification",
+        codename: "falcao-jade-734",
+        employmentType: "pj",
+        paymentRole: "psychiatry",
+    });
+    assert.deepEqual(parseTelegramDoctorClassificationCommand("/pagamento perfil falcao-jade-734 estatutario esp"), {
+        name: "doctor_classification",
+        codename: "falcao-jade-734",
+        employmentType: "estatutario",
+        paymentRole: "specialist",
+    });
+    assert.deepEqual(parseTelegramDoctorClassificationCommand("/pagamento perfil falcao-jade-734 PJ Geral"), {
+        name: "doctor_classification",
+        codename: "falcao-jade-734",
+        employmentType: "pj",
+        paymentRole: "generalist",
+    });
+    assert.deepEqual(parseTelegramDoctorClassificationCommand("/pagamento perfil falcao-jade-734 pj nada"), {
+        name: "doctor_classification",
+        codename: "falcao-jade-734",
+        employmentType: "pj",
+        paymentRole: "generalist",
+    });
+});
+
+test("parseTelegramDoctorClassificationCommand: rejeita tokens inválidos ou faltando", () => {
+    assert.equal(parseTelegramDoctorClassificationCommand("/pagamento perfil falcao-jade-734 pj"), null);
+    assert.equal(parseTelegramDoctorClassificationCommand("/pagamento perfil falcao-jade-734 cooperativa psiq"), null);
+    assert.equal(parseTelegramDoctorClassificationCommand("/pagamento perfil falcao-jade-734 pj astrologia"), null);
+    assert.equal(parseTelegramDoctorClassificationCommand("/pagamento perfil"), null);
+    assert.equal(parseTelegramDoctorClassificationCommand("/pagamento cadastro falcao-jade-734"), null);
+});
+
+test("isTelegramDoctorClassificationCommandText casa o prefixo mesmo com args incompletos", () => {
+    assert.equal(isTelegramDoctorClassificationCommandText("/pagamento perfil falcao-jade-734"), true);
+    assert.equal(isTelegramDoctorClassificationCommandText("/pagamento perfil"), true);
+    assert.equal(isTelegramDoctorClassificationCommandText("/pagamento listar"), false);
 });
 
 // ---------- relatório do médico (com R$ + link) ----------
