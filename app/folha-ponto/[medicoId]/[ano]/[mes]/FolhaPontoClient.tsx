@@ -56,12 +56,17 @@ function loadCampos(medicoId: string, fallback: CamposEditaveis): CamposEditavei
     if (typeof window === "undefined") return fallback;
     try {
         const raw = window.localStorage.getItem(storageKey(medicoId));
-        if (!raw) return fallback;
-        const parsed = JSON.parse(raw) as Partial<CamposEditaveis>;
+        const parsed = raw ? (JSON.parse(raw) as Partial<CamposEditaveis>) : {};
         return {
-            empresa: preferStoredValue(parsed.empresa, fallback.empresa),
-            cnpj: preferStoredValue(parsed.cnpj, fallback.cnpj),
-            razaoSocial: preferStoredValue(parsed.razaoSocial, fallback.razaoSocial),
+            // Empresa/CNPJ/razão social são confirmados pelo médico no bot do
+            // Telegram — uma vez que o banco já tem o dado, ele manda sempre.
+            // O cache local só serve de rascunho enquanto ainda não há
+            // confirmação (fallback vazio); senão um valor salvo neste
+            // navegador antes da confirmação (inclusive vazio/placeholder de
+            // teste) ficaria escondendo o dado real para sempre.
+            empresa: fallback.empresa || preferStoredValue(parsed.empresa, fallback.empresa),
+            cnpj: fallback.cnpj || preferStoredValue(parsed.cnpj, fallback.cnpj),
+            razaoSocial: fallback.razaoSocial || preferStoredValue(parsed.razaoSocial, fallback.razaoSocial),
             localData: preferStoredValue(parsed.localData, fallback.localData),
         };
     } catch {
