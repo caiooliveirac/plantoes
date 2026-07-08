@@ -243,6 +243,45 @@ export function isLikelyValidCnpj(value: string) {
     return true;
 }
 
+/**
+ * Grava a sugestão de razão social/CNPJ importada da planilha oficial (sem
+ * confirmar nada) — usada pelo bot para oferecer "Está certo?" em vez de pedir
+ * para o médico digitar do zero. Não mexe em razaoSocial/cnpj (só o médico
+ * confirmando via upsertDoctorFiscalProfile grava o dado como definitivo).
+ */
+export async function upsertDoctorFiscalSuggestion(params: {
+    doctorId: string;
+    razaoSocial: string;
+    cnpj: string;
+}) {
+    const db = getDb();
+    const [doctor] = await db
+        .select({ id: doctors.id, metadata: doctors.metadata, fullName: doctors.fullName })
+        .from(doctors)
+        .where(eq(doctors.id, params.doctorId))
+        .limit(1);
+
+    if (!doctor) {
+        throw new Error("doctor_not_found");
+    }
+
+    const nextMetadata = isPlainObject(doctor.metadata)
+        ? { ...doctor.metadata }
+        : {};
+
+    nextMetadata.suggestedRazaoSocial = params.razaoSocial;
+    nextMetadata.suggestedCnpj = params.cnpj;
+
+    await db.update(doctors)
+        .set({
+            metadata: nextMetadata,
+            updatedAt: new Date(),
+        })
+        .where(eq(doctors.id, doctor.id));
+
+    return { doctorId: doctor.id, fullName: doctor.fullName };
+}
+
 export async function upsertDoctorFiscalProfile(params: {
     doctorId: string;
     razaoSocial: string;
