@@ -15,6 +15,8 @@
         "test:full": "node --test --import tsx tests/**/*.test.ts",
         "test": "node --test --import tsx tests/**/*.test.ts",
         "bank-hours:rebuild": "tsx scripts/rebuild-bank-hours.ts",
+        "bank-hours:legacy:matching-report": "tsx scripts/report-legacy-bank-hours-matching.ts",
+        "bank-hours:legacy:seed": "tsx scripts/seed-legacy-bank-hours.ts",
         "regulation:arrival": "tsx scripts/register-regulation-arrival.ts",
         "scheduled-windows:repair": "tsx scripts/repair-scheduled-windows.ts",
         "telegram:continuity:repair": "tsx scripts/repair-telegram-continuity.ts",

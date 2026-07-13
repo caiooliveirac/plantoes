@@ -75,13 +75,34 @@ export interface BankHoursHistoryShift extends RawBankHoursHistoryShift {
     };
 }
 
+/** Saldo legado da planilha da coordenação (migration 0033), já matched. */
+export interface BankHoursLegacySummary {
+    spreadsheetName: string;
+    preMay2025Minutes: number;
+    spreadsheetPeriodMinutes: number;
+    totalMinutes: number;
+    source: string;
+    notes: string | null;
+}
+
+export interface BankHoursLegacyDoctorRecord extends BankHoursLegacySummary {
+    doctorId: string;
+    doctorName: string;
+    displayName: string | null;
+}
+
 export interface BankHoursDoctorHistory {
     doctorId: string;
     doctorName: string;
     displayName: string | null;
     shiftCount: number;
     workedMinutes: number;
+    /** Saldo EFETIVO: apurado pela aplicação + acertos + saldo legado da planilha. */
     balanceMinutes: number;
+    /** Parcela apurada pela aplicação (plantões + acertos), sem o legado. */
+    applicationBalanceMinutes: number;
+    /** Parcela legada da planilha; null = plantonista sem registro legado. */
+    legacy: BankHoursLegacySummary | null;
     creditedOvertimeMinutes: number;
     arrivalDelayMinutes: number;
     lateArrivalCount: number;
@@ -455,6 +476,7 @@ function compareDoctors(left: BankHoursDoctorHistory, right: BankHoursDoctorHist
 export function buildBankHoursHistoryModel(
     shifts: RawBankHoursHistoryShift[],
     settlementsByDoctor: Map<string, BankHoursSettlementSummary[]> = new Map(),
+    legacyByDoctor: Map<string, BankHoursLegacyDoctorRecord> = new Map(),
 ): BankHoursHistoryModel {
     const normalizedShifts: BankHoursHistoryShift[] = collapseContinuityHistoryShifts(shifts)
         .map((shift) => {
@@ -512,6 +534,8 @@ export function buildBankHoursHistoryModel(
                 lastShiftAt: shift.startedAt,
                 shifts: [shift],
                 settlements: [],
+                applicationBalanceMinutes: 0,
+                legacy: null,
             });
             continue;
         }
@@ -544,6 +568,48 @@ export function buildBankHoursHistoryModel(
         settlementTotalMinutes += delta;
     }
 
+    // Soma o saldo legado da planilha por cima do apurado pela aplicação, sem
+    // misturar as parcelas: applicationBalanceMinutes preserva o que a aplicação
+    // apurou e legacy carrega a composição da planilha para a view. Plantonista
+    // com legado mas sem plantão na aplicação ainda precisa aparecer.
+    let legacyTotalMinutes = 0;
+    for (const record of legacyByDoctor.values()) {
+        const { doctorId, doctorName, displayName, ...summary } = record;
+        legacyTotalMinutes += summary.totalMinutes;
+        const current = doctorsMap.get(doctorId);
+        if (current) {
+            current.applicationBalanceMinutes = current.balanceMinutes;
+            current.legacy = summary;
+            current.balanceMinutes += summary.totalMinutes;
+            continue;
+        }
+
+        doctorsMap.set(doctorId, {
+            doctorId,
+            doctorName,
+            displayName,
+            shiftCount: 0,
+            workedMinutes: 0,
+            balanceMinutes: summary.totalMinutes,
+            applicationBalanceMinutes: 0,
+            legacy: summary,
+            creditedOvertimeMinutes: 0,
+            arrivalDelayMinutes: 0,
+            lateArrivalCount: 0,
+            handoffOverrideCount: 0,
+            correctionCount: 0,
+            openShiftCount: 0,
+            lastShiftAt: null,
+            shifts: [],
+            settlements: [],
+        });
+    }
+    for (const doctor of doctorsMap.values()) {
+        if (!doctor.legacy) {
+            doctor.applicationBalanceMinutes = doctor.balanceMinutes;
+        }
+    }
+
     const doctors = Array.from(doctorsMap.values()).sort(compareDoctors);
 
     return {
@@ -552,7 +618,7 @@ export function buildBankHoursHistoryModel(
             doctorCount: doctors.length,
             shiftCount: normalizedShifts.length,
             workedMinutes: normalizedShifts.reduce((total, shift) => total + (shift.workedMinutes ?? 0), 0),
-            balanceMinutes: normalizedShifts.reduce((total, shift) => total + (shift.balanceMinutes ?? 0), 0) + settlementTotalMinutes,
+            balanceMinutes: normalizedShifts.reduce((total, shift) => total + (shift.balanceMinutes ?? 0), 0) + settlementTotalMinutes + legacyTotalMinutes,
             lateArrivalCount: normalizedShifts.filter((shift) => shift.flags.hasLateArrival).length,
             handoffOverrideCount: normalizedShifts.filter((shift) => shift.flags.hasHandoffOverride).length,
             correctionCount: normalizedShifts.filter((shift) => shift.flags.hasCorrectionHistory).length,

@@ -1,9 +1,10 @@
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { auditLogs, bankHoursBalanceOverrides, users } from "@/db/schema";
+import { auditLogs, bankHoursBalanceOverrides, bankHoursLegacyBalances, doctors, users } from "@/db/schema";
 import {
     buildBankHoursHistoryModel,
     type BankHoursHistoryModel,
+    type BankHoursLegacyDoctorRecord,
     type RawBankHoursHistoryShift,
 } from "@/modules/reporting/bank-hours-history";
 import type { MonthlyReportAuditEntry, MonthlyReportSource } from "@/modules/reporting/monthly-report";
@@ -88,6 +89,31 @@ async function loadManualBalanceOverrides(continuityGroupIds: string[]) {
             actorEmail: row.actorEmail,
         },
     ]));
+}
+
+// Saldos legados da planilha da coordenação: só linhas matched entram na
+// composição — unmatched nunca aparece para nenhum médico.
+async function loadLegacyBalancesByDoctor(): Promise<Map<string, BankHoursLegacyDoctorRecord>> {
+    const db = getDb();
+    const rows = await db
+        .select({
+            doctorId: bankHoursLegacyBalances.doctorId,
+            doctorName: doctors.fullName,
+            displayName: doctors.displayName,
+            spreadsheetName: bankHoursLegacyBalances.spreadsheetName,
+            preMay2025Minutes: bankHoursLegacyBalances.preMay2025Minutes,
+            spreadsheetPeriodMinutes: bankHoursLegacyBalances.spreadsheetPeriodMinutes,
+            totalMinutes: bankHoursLegacyBalances.totalMinutes,
+            source: bankHoursLegacyBalances.source,
+            notes: bankHoursLegacyBalances.notes,
+        })
+        .from(bankHoursLegacyBalances)
+        .innerJoin(doctors, eq(doctors.id, bankHoursLegacyBalances.doctorId))
+        .where(eq(bankHoursLegacyBalances.status, "matched"));
+
+    return new Map(rows
+        .filter((row): row is typeof row & { doctorId: string } => Boolean(row.doctorId))
+        .map((row) => [row.doctorId, row]));
 }
 
 async function loadAuditTrailByOccupancy(shifts: RawBankHoursHistoryShift[]) {
@@ -240,9 +266,10 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
     `);
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
-    const [auditTrailByOccupancy, settlementsByDoctor] = await Promise.all([
+    const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor] = await Promise.all([
         loadAuditTrailByOccupancy(rows),
         loadAllBankHoursSettlements(),
+        loadLegacyBalancesByDoctor(),
     ]);
     const manualOverridesByGroup = await loadManualBalanceOverrides(rows.map((row) => row.continuityGroupId));
     const enrichedRows = rows.map((row) => ({
@@ -254,7 +281,7 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
         auditTrail: auditTrailByOccupancy.get(`${row.domain === "regulation" ? "regulation_occupancy" : "intervention_occupancy"}:${row.occupancyId}`) ?? [],
     }));
 
-    return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor);
+    return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor);
 }
 
 /**
