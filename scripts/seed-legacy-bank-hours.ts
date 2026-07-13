@@ -1,4 +1,4 @@
-// Seed idempotente dos saldos legados do banco de horas (migration 0033).
+// Seed idempotente dos saldos legados do banco de horas (migration 0034).
 // Insumos, ambos versionados:
 //   scripts/data/legacy-bank-hours-2026-07.csv      -> valores auditados
 //   scripts/data/legacy-bank-hours-matching.json    -> matching aprovado manualmente

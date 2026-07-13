@@ -469,7 +469,7 @@ export const bankHoursBalanceOverrides = operationsV2.table(
 // mai/2025 -> mai/2026 apurado pela planilha. Registros são imutáveis após a
 // importação (sem updated_at; correção = nova migração). doctor_id nasce nulo
 // e só é gravado com matching de nome aprovado manualmente (status matched).
-// Índice único parcial em doctor_id (where not null) vive só na migration 0033.
+// Índice único parcial em doctor_id (where not null) vive só na migration 0034.
 export const bankHoursLegacyBalances = operationsV2.table(
     "bank_hours_legacy_balances",
     {

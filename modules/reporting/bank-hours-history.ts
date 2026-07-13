@@ -75,7 +75,7 @@ export interface BankHoursHistoryShift extends RawBankHoursHistoryShift {
     };
 }
 
-/** Saldo legado da planilha da coordenação (migration 0033), já matched. */
+/** Saldo legado da planilha da coordenação (migration 0034), já matched. */
 export interface BankHoursLegacySummary {
     spreadsheetName: string;
     preMay2025Minutes: number;
