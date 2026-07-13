@@ -464,6 +464,31 @@ export const bankHoursBalanceOverrides = operationsV2.table(
     ],
 );
 
+// Saldo legado do banco de horas vindo da planilha da coordenação (pré-corte).
+// Duas parcelas separadas em minutos assinados: até 30/abr/2025 e o período
+// mai/2025 -> mai/2026 apurado pela planilha. Registros são imutáveis após a
+// importação (sem updated_at; correção = nova migração). doctor_id nasce nulo
+// e só é gravado com matching de nome aprovado manualmente (status matched).
+// Índice único parcial em doctor_id (where not null) vive só na migration 0034.
+export const bankHoursLegacyBalances = operationsV2.table(
+    "bank_hours_legacy_balances",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").references(() => doctors.id),
+        spreadsheetName: varchar("spreadsheet_name", { length: 255 }).notNull(),
+        preMay2025Minutes: integer("pre_may_2025_minutes").notNull(),
+        spreadsheetPeriodMinutes: integer("spreadsheet_period_minutes").notNull(),
+        totalMinutes: integer("total_minutes").notNull(),
+        source: text("source").notNull(),
+        notes: text("notes"),
+        status: varchar("status", { length: 10 }).notNull(),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        uniqueIndex("bank_hours_legacy_balances_name_idx").on(table.spreadsheetName),
+    ],
+);
+
 export const paymentAttestationSlots = operationsV2.table(
     "payment_attestation_slots",
     {
