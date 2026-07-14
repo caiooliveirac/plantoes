@@ -125,11 +125,12 @@ test("buildReminderPlans sends an instructional call 10 minutes before the shift
 
     const instruction = plans.find((plan) => plan.stage === "instruction");
     assert.ok(instruction);
-    assert.match(instruction?.text ?? "", /Plantão SN abrindo/);
-    assert.match(instruction?.text ?? "", /PM04 SN 19:00/);
-    assert.match(instruction?.text ?? "", /2031 SN 19:00/);
-    assert.match(instruction?.text ?? "", /continua P 19:00/);
-    assert.match(instruction?.text ?? "", /sem medico confirmado no grupo/i);
+    assert.match(instruction?.text ?? "", /^⏰ Plantão SN abre às 19:00\./);
+    assert.match(instruction?.text ?? "", /Chegada: Vagner Costa 1363 SN 19:00/);
+    assert.match(instruction?.text ?? "", /Continuação: Vagner Costa 1363 continuando SN/);
+    assert.match(instruction?.text ?? "", /Sem aviso, a posição fica sem médico no quadro\./);
+    assert.ok((instruction?.text ?? "").length <= 240);
+    assert.doesNotMatch(instruction?.text ?? "", /🧭/);
 });
 
 test("resolveReminderRecipientsForPlan includes admins on noon payment checkpoint", () => {

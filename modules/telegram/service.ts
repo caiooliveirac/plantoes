@@ -132,6 +132,7 @@ import {
 } from "@/modules/telegram/payment-commands";
 import { buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
 import {
+    ATTEMPT_LIMIT,
     checkAttemptLock,
     clearAttempts,
     listDoctorCodenames,
@@ -139,7 +140,6 @@ import {
     resetAllDoctorCodenames,
     resetDoctorCodename,
     resolveDoctorIdByCodename,
-    upsertDoctorCodename,
 } from "@/modules/telegram/payment-access";
 import { createFolhaToken } from "@/lib/folha-ponto/token";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
@@ -149,6 +149,8 @@ import { buildTelegramSummaryReport } from "@/modules/telegram/summary-report";
 import {
     buildMealBreakConsistencyAdminReply,
     buildMealBreakCommandUsageReply,
+    CONFIRM_TEXT as MEAL_BREAK_CONFIRM_BUTTON_TEXT,
+    UNDO_TEXT as MEAL_BREAK_UNDO_BUTTON_TEXT,
     buildMealBreakExcludeCommandUsageReply,
     buildMealBreakPriorityCommandUsageReply,
     buildMealBreakErrorReply,
@@ -202,6 +204,7 @@ import { getOperationalBoard, getPaymentAllocationBoard, type PaymentAllocationB
 import { getOperationalSlotAuditReport } from "@/services/slot-audit.service";
 
 import {
+    computeLevenshteinDistance,
     isBatchConfirmationKeyword,
     isBatchCancelKeyword,
     parseTelegramStandaloneTime,
@@ -859,11 +862,15 @@ function buildTelegramArrivalExample(params: {
     doctorName?: string | null;
     target?: string | null;
     time?: string | null;
+    shiftLabel?: string | null;
 }) {
     const compactName = params.doctorName?.trim() || "Vagner Costa";
     const target = params.target?.trim() || "PM04";
+    // O exemplo canônico SEMPRE inclui o turno: sem SD/SN/P o próprio gate de
+    // chegada rejeita quem copia o exemplo (auditoria comunicação §5#3).
+    const shiftLabel = params.shiftLabel?.trim() || "SD";
     const time = params.time?.trim() || "07:00";
-    return `${compactName} ${target} ${time}`;
+    return `${compactName} ${target} ${shiftLabel} ${time}`;
 }
 
 function buildTelegramDepartureExample(params: {
@@ -874,7 +881,9 @@ function buildTelegramDepartureExample(params: {
     const compactName = params.doctorName?.trim() || "Vagner Costa";
     const target = params.target?.trim() || "PR03";
     const time = params.time?.trim() || "19:20";
-    return `${compactName} saindo ${target} ${time} porque fui liberado pela chefia`;
+    // Sem justificativa no exemplo genérico: saída normal não precisa de motivo, e o
+    // "porque fui liberado..." induzia justificativa desnecessária (auditoria §3.1#16).
+    return `${compactName} saindo ${target} ${time}`;
 }
 
 function buildStructuredTelegramDepartureHint(params: {
@@ -1588,7 +1597,9 @@ export function buildForcedTakeoverHint(params: {
     baseCode: string;
 }): string {
     if (!params.displacedDoctorName) return "";
-    return `\n\n🚨 *ATENÇÃO*: ${params.displacedDoctorName} estava em *${params.baseCode}* e foi retirado automaticamente para você assumir este posto.`;
+    // 🔁 (remanejo/troca) no lugar do 🚨 *ATENÇÃO* e frase sem particípio flexionado
+    // ("foi retirado" não funciona para todo nome) — auditoria §2 e §3.1#18.
+    return `\n\n🔁 Retirei *${params.displacedDoctorName}* de *${params.baseCode}* automaticamente para você assumir este posto.`;
 }
 
 export function shouldForceTelegramTakeoverOnContinuationConflict(params: {
@@ -2076,7 +2087,7 @@ function resolveTelegramDoctorSurfaceName(doctor: { fullName: string; displayNam
     return formatDoctorSurfaceName({
         fullName: doctor?.fullName,
         displayName: doctor?.displayName ?? null,
-        fallback: "medico nao identificado",
+        fallback: "médico não identificado",
     });
 }
 
@@ -2088,7 +2099,7 @@ function buildApproximateMatchHint(params: {
         return "";
     }
 
-    return `\nSe eu associei \"${params.doctorQuery}\" a ${params.doctorName} e nao era essa pessoa, me corrija com o nome completo.`;
+    return `\nSe eu associei \"${params.doctorQuery}\" a ${params.doctorName} e não era essa pessoa, me corrija com o nome completo.`;
 }
 
 async function prepareTelegramBatchEntries(message: TelegramUpdate["message"]) {
@@ -2434,7 +2445,7 @@ function buildLembretesCommandText(params: {
     const doctorLabel = (fullName: string | null, displayName: string | null) => formatDoctorSurfaceName({
         fullName,
         displayName,
-        fallback: "medico nao identificado",
+        fallback: "médico não identificado",
     });
 
     const regularRegulationRows = params.regulationRows.filter((row) => !isChiefPost(row.postCode) && !isNucleo(row.postCode) && !isPiam(row.postCode));
@@ -2456,13 +2467,13 @@ function buildLembretesCommandText(params: {
         specialRegulationLines.push(
             nucleoRow?.status === "active"
                 ? `✅ NUCLEO — ${doctorLabel(nucleoRow.doctorName, nucleoRow.displayName)}`
-                : "⚠️ NUCLEO — sem confirmacao",
+                : "⚠️ NUCLEO — sem confirmação",
         );
     }
     specialRegulationLines.push(
         piamRow?.status === "active"
             ? `✅ PIAM — ${doctorLabel(piamRow.doctorName, piamRow.displayName)}`
-            : "⚠️ PIAM — sem confirmacao",
+            : "⚠️ PIAM — sem confirmação",
     );
 
     const interventionLines = [...params.interventionRows]
@@ -2474,7 +2485,7 @@ function buildLembretesCommandText(params: {
             if (row.status === "disabled") {
                 return `⚫ ${row.baseCode} — desativada`;
             }
-            return `🚨 ${row.baseCode} — sem informacao`;
+            return `⚠️ ${row.baseCode} — sem informação`;
         })
         .join("\n");
 
@@ -2486,11 +2497,11 @@ function buildLembretesCommandText(params: {
         "",
         ...specialRegulationLines,
         "",
-        `🚑 USA ${params.shiftLabel} (quem esta onde):`,
+        `🚑 USA ${params.shiftLabel} (quem está onde):`,
         interventionLines,
         "",
-        "❓ Certeza que nao falta alguem?",
-        "⚡ Se faltou, avisem agora: Nome + base/ramal + SD/SN/P + horario.",
+        "❓ Certeza que não falta alguém?",
+        "⚡ Se faltou, avisem agora: Nome + base/ramal + SD/SN/P + horário.",
     ].join("\n");
 }
 
@@ -2602,9 +2613,9 @@ async function announcePrivateBatchToGroups(seed: number, params: { appliedCount
 
     const appUrl = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
     const text = [
-        ":)",
+        "✅",
         `Atualizei em lote ${params.appliedCount} chegadas pelo bot privado.`,
-        `Confiram quadro e horarios de chegada em ${appUrl}`,
+        `Confiram quadro e horários de chegada em ${appUrl}`,
     ].join("\n");
 
     const results = await Promise.allSettled(groupChatIds.map((chatId) => sendMessage(chatId, text)));
@@ -2740,7 +2751,7 @@ async function handleTelegramUndoCommand(params: {
             parsedAction: "undo_confirm",
             resolutionData: { auditLogId: target.auditLogId, action: target.action },
         });
-        await sendMessage(message.chat.id, `:/ ${result.message}`, message.message_id);
+        await sendMessage(message.chat.id, `⛔ ${result.message}`, message.message_id);
         return { ok: true, ignored: true };
     }
 
@@ -2826,7 +2837,7 @@ async function handleOperationalBaseStateCommand(params: {
             parsedAction: command.name,
             resolutionData: { commandName: command.name, commandBody: command.rawBody },
         });
-        await sendMessage(message.chat.id, `:/ Nao encontrei ${isRegulation ? "o ramal" : "a base"} ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
+        await sendMessage(message.chat.id, `⛔ Não encontrei ${isRegulation ? "o ramal" : "a base"} ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
         return { ok: true, ignored: true };
     }
 
@@ -2911,7 +2922,7 @@ async function handleOperationalBaseStateCommand(params: {
                 targetId: target.id,
             },
         });
-        await sendMessage(message.chat.id, `:/ Nao consegui ${command.name} ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+        await sendMessage(message.chat.id, `⛔ Não consegui ${command.name} ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
         return { ok: true, ignored: true };
     }
 }
@@ -3026,7 +3037,7 @@ async function tryHandleHistoricalRemovalCommand(params: {
             parsedAction: command.name,
             resolutionData: { commandName: command.name, commandBody: command.rawBody },
         });
-        await sendMessage(message.chat.id, `:/ ${command.targetCode} não tem ocupação ativa agora. Para apagar um registro já fechado do banco, informe também o médico. Ex.: /remover Aline ${command.targetCode} SD.`, message.message_id);
+        await sendMessage(message.chat.id, `⛔ ${command.targetCode} não tem ocupação ativa agora. Para apagar um registro já fechado do banco, informe também o médico. Ex.: /remover Aline ${command.targetCode} SD.`, message.message_id);
         return { ok: true, ignored: true };
     }
 
@@ -3079,7 +3090,7 @@ async function tryHandleHistoricalRemovalCommand(params: {
                 requestedShiftLabel: command.shiftLabel,
             },
         });
-        await sendMessage(message.chat.id, `:/ Não encontrei registro recente de ${resolved.doctor.fullName} em ${command.targetCode}${command.shiftLabel ? ` no ${command.shiftLabel}` : ""} para apagar.`, message.message_id);
+        await sendMessage(message.chat.id, `⛔ Não encontrei registro recente de ${resolved.doctor.fullName} em ${command.targetCode}${command.shiftLabel ? ` no ${command.shiftLabel}` : ""} para apagar.`, message.message_id);
         return { ok: true, ignored: true };
     }
 
@@ -3096,7 +3107,7 @@ async function tryHandleHistoricalRemovalCommand(params: {
                 candidates: candidates.map((candidate) => formatHistoricalRemovalReference(candidate)),
             },
         });
-        await sendMessage(message.chat.id, `:/ Achei mais de um registro recente de ${resolved.doctor.fullName} em ${command.targetCode}. Acrescente o turno para apagar o certo. Recentes: ${candidates.map((candidate) => formatHistoricalRemovalReference(candidate)).join(" | ")}.`, message.message_id);
+        await sendMessage(message.chat.id, `⛔ Achei mais de um registro recente de ${resolved.doctor.fullName} em ${command.targetCode}. Acrescente o turno para apagar o certo. Recentes: ${candidates.map((candidate) => formatHistoricalRemovalReference(candidate)).join(" | ")}.`, message.message_id);
         return { ok: true, ignored: true };
     }
 
@@ -3420,7 +3431,7 @@ async function resolveOperationalDoctor(params: {
 }
 
 function buildDoctorDirectoryUsageReply() {
-    return `:/ Use ${TELEGRAM_DOCTOR_ADMIN_COMMAND_USAGE}. Para corrigir cadastro existente: /medico atualizar Busca Atual | Nome Completo Correto | Nome de exibicao | codigo | alias 1, alias 2.`;
+    return `⛔ Use ${TELEGRAM_DOCTOR_ADMIN_COMMAND_USAGE}. Para corrigir cadastro existente: /medico atualizar Busca Atual | Nome Completo Correto | Nome de exibição | código | alias 1, alias 2.`;
 }
 
 function buildDoctorDirectorySummary(doctor: {
@@ -3470,6 +3481,26 @@ function chunkTelegramLines(header: string, lines: string[], maxChars = 3500): s
     return chunks.map((chunk, index) => `(${index + 1}/${total})\n${chunk}`);
 }
 
+// Rede de segurança da ajuda (auditoria comunicação §5#2): quem pede /ajuda ou
+// /comandos nunca pode ficar no silêncio. Se o Telegram rejeitar o balão por
+// tamanho ("message is too long"), mandamos um fallback curto. Restrito a esses
+// caminhos — NÃO é um catch global do webhook.
+async function sendTelegramHelpMessage(chatId: string | number, text: string, replyToMessageId?: number) {
+    try {
+        await sendMessage(chatId, text, replyToMessageId);
+    } catch (error) {
+        if (error instanceof Error && error.message.toLowerCase().includes("message is too long")) {
+            await sendMessage(
+                chatId,
+                "⚠️ A lista completa não coube aqui. Me chame no privado ou mande /ajuda.",
+                replyToMessageId,
+            );
+            return;
+        }
+        throw error;
+    }
+}
+
 // Tutorial curto de autoatendimento (médico comum no privado): só o que ele pode
 // fazer. Usado como resposta a /ajuda e a qualquer mensagem fora do esperado.
 function buildPaymentSelfServiceTutorial() {
@@ -3489,9 +3520,25 @@ function buildPaymentSelfServiceTutorial() {
     ].join("\n");
 }
 
+// Copy canônica de entrega de codinome (auditoria §3.4#10): /resetcodinome e
+// /pagamento codinome respondem com o MESMO texto. O aviso sobre o anterior só
+// aparece quando havia codinome antes.
+function buildCodenameDeliveryReply(params: { fullName: string; codename: string; previous: string | null; hadPrevious: boolean }) {
+    const lines = [
+        `✅ Codinome de ${params.fullName}: ${params.codename}`,
+        `Entregue no privado. Para consultar o próprio pagamento, a pessoa manda no privado do bot: /pagamento ${params.codename}`,
+    ];
+    if (params.hadPrevious) {
+        lines.push(params.previous
+            ? `⚠️ O codinome anterior (${params.previous}) parou de valer.`
+            : "⚠️ O codinome anterior parou de valer.");
+    }
+    return lines.join("\n");
+}
+
 function buildPaymentCommandUsageReply(isAdmin: boolean) {
     const lines = [
-        ":/ Não entendi esse /pagamento. Formas de usar (no privado):",
+        "⛔ Não entendi esse /pagamento. Formas de usar (no privado):",
         "",
         "📊 Relatório do mês por médico",
         "   /pagamento",
@@ -3519,15 +3566,15 @@ function buildPaymentCommandUsageReply(isAdmin: boolean) {
 }
 
 function buildDepartureReportCommandUsageReply() {
-    return `:/ Use ${TELEGRAM_DEPARTURE_REPORT_USAGE}. Se mandar só /saidas, eu trago o turno anterior.`;
+    return `⛔ Use ${TELEGRAM_DEPARTURE_REPORT_USAGE}. Se mandar só /saidas, eu trago o turno anterior.`;
 }
 
 function buildShiftReportCommandUsageReply() {
-    return ":/ Use /plantao para pedir o relato do turno atual. Se quiser, pode escrever /plantao agora, mas não precisa de mais nada.";
+    return "⛔ Use /plantao para pedir o relato do turno atual. Se quiser, pode escrever /plantao agora, mas não precisa de mais nada.";
 }
 
 function buildSummaryReportCommandUsageReply() {
-    return `:/ Use ${TELEGRAM_SUMMARY_REPORT_USAGE}. Se quiser, pode escrever /resumo agora, mas não precisa de mais nada.`;
+    return `⛔ Use ${TELEGRAM_SUMMARY_REPORT_USAGE}. Se quiser, pode escrever /resumo agora, mas não precisa de mais nada.`;
 }
 
 export function buildPublicTelegramCommandHelpReply() {
@@ -3538,7 +3585,72 @@ export function buildPublicTelegramCommandHelpReply() {
         "• /plantao -> mostra o relato do turno atual (quem está em cada base e ramal).",
         "• /resumo -> mostra um resumo rápido da operação (contagens e status geral).",
         "• /saidas -> mostra o relatório de saídas do turno (quem saiu e horários).",
+        "• /ajuda -> guia rápido com os formatos de chegada e saída.",
     ].join("\n");
+}
+
+// Comandos reais aceitos pelo bot (sem a barra), usados no fuzzy do fallback de
+// comando desconhecido (auditoria comunicação §3.4#1 / §5#5).
+const KNOWN_TELEGRAM_COMMANDS = [
+    "plantao", "resumo", "saidas", "prioridadesaida", "prioridade", "ajuda", "help",
+    "comandos", "cobrar", "lembretes", "status", "meuturno", "almoco", "jantar",
+    "excluir", "incluir", "corrigir", "corrigirsaida", "retirar", "remover", "ramal",
+    "ativar", "desativar", "ontem", "hoje", "meioplantao", "pagamento", "resetcodinome",
+    "desfazer", "slots", "medico", "piam", "banco", "alerta", "saiu", "saindo", "saida",
+];
+
+// Aliases/erros de digitação frequentes → comando real. Resolvidos ANTES do fuzzy
+// para evitar colisões (ex.: "ordem" está a 2 edições de "ontem").
+// NÃO mapear /saida → /prioridadesaida: /saida é alias documentado de /retirar.
+const TELEGRAM_COMMAND_TYPO_ALIASES: Record<string, string> = {
+    refazerjantar: "jantar",
+    ordemdesaida: "prioridadesaida",
+    ordem: "prioridadesaida",
+    prioridadesaidas: "prioridadesaida",
+    plantoa: "plantao",
+};
+
+// Sugere o comando real mais próximo para um "/comando" desconhecido: primeiro o
+// mapa de aliases, depois Levenshtein ≤ 2 contra a lista de comandos reais.
+// Retorna null quando o token já é um comando conhecido (falhou por outro motivo)
+// ou quando nada fica perto o suficiente.
+export function suggestTelegramCommandForTypo(rawText: string): string | null {
+    const firstToken = rawText.trim().split(/\s+/)[0] ?? "";
+    if (!firstToken.startsWith("/")) {
+        return null;
+    }
+    const token = firstToken
+        .slice(1)
+        .replace(/@\w+$/, "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    if (!token) {
+        return null;
+    }
+
+    // /janta, /jantando, /jantarr... → /jantar (mesma tolerância do parser de refeição).
+    if (token !== "jantar" && /^jant\w*$/.test(token)) {
+        return "/jantar";
+    }
+
+    const alias = TELEGRAM_COMMAND_TYPO_ALIASES[token];
+    if (alias) {
+        return `/${alias}`;
+    }
+
+    if (KNOWN_TELEGRAM_COMMANDS.includes(token)) {
+        return null;
+    }
+
+    let best: { command: string; distance: number } | null = null;
+    for (const command of KNOWN_TELEGRAM_COMMANDS) {
+        const distance = computeLevenshteinDistance(token, command);
+        if (distance <= 2 && (!best || distance < best.distance)) {
+            best = { command, distance };
+        }
+    }
+    return best ? `/${best.command}` : null;
 }
 
 async function listRecentTelegramSenderMessages(params: {
@@ -3578,7 +3690,7 @@ async function listRecentTelegramSenderMessages(params: {
 }
 
 function buildBankHoursCommandUsageReply() {
-    return `:/ Use ${TELEGRAM_BANK_HOURS_USAGE}. Ex.: /banco Aline SN 0`;
+    return `⛔ Use ${TELEGRAM_BANK_HOURS_USAGE}. Ex.: /banco Aline SN 0`;
 }
 
 function formatOperationalDateKey(value: Date) {
@@ -3706,13 +3818,13 @@ function buildPaymentAllocationReportLine(row: PaymentAllocationRow) {
     }
 
     if (!row.occupancyId) {
-        return `VAZ ${row.targetCode} - sem ocupacao`;
+        return `VAZ ${row.targetCode} - sem ocupação`;
     }
 
     const name = formatDoctorSurfaceName({
         fullName: row.doctorName,
         displayName: row.displayName,
-        fallback: "medico nao identificado",
+        fallback: "médico não identificado",
     });
     const halfTag = isHalfShiftRoleLabel(row.roleLabel) ? " [MEIO]" : "";
     const conflictDetail = row.hasDoctorOverlapConflict && row.conflictCandidateLabels.length > 0
@@ -3727,7 +3839,7 @@ function buildPaymentAllocationReportLine(row: PaymentAllocationRow) {
 
 function buildPaymentAllocationReportReply(board: PaymentAllocationBoard) {
     const header = [
-        `:) Conferencia de pagamento ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`,
+        `✅ Conferência de pagamento ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`,
         `Prontos ${board.summary.readyForPaymentCount} | revisar ${board.summary.needsReviewCount} | vazios ${board.summary.unassignedCount} | desativadas ${board.summary.disabledCount ?? 0}`,
     ].join("\n");
 
@@ -3777,7 +3889,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "slot_audit_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `:/ Use ${TELEGRAM_SLOT_AUDIT_USAGE}. Sem argumentos eu trago os ultimos 7 dias.`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Use ${TELEGRAM_SLOT_AUDIT_USAGE}. Sem argumentos eu trago os últimos 7 dias.`, message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -3788,7 +3900,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "slot_audit_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ Auditoria de slots so roda no privado para o admin configurado do bot.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ Auditoria de slots só roda no privado para o admin configurado do bot.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -3824,7 +3936,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "slot_audit_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, error instanceof Error ? error.message : `:/ Use ${TELEGRAM_SLOT_AUDIT_USAGE}.`, message.message_id);
+            await sendMessage(message.chat.id, error instanceof Error ? error.message : `⛔ Use ${TELEGRAM_SLOT_AUDIT_USAGE}.`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -3850,7 +3962,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "meal_break_exclude_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ Apenas chefes e admins podem excluir ou incluir medicos na divisao.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ Apenas chefes e admins podem excluir ou incluir médicos na divisão.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -3968,7 +4080,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "meal_break_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ Almoco e jantar no privado ficam restritos a usuarios admin do bot. No grupo, a divisao continua aberta aos demais participantes.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ Almoço e jantar no privado ficam restritos a usuários admin do bot. No grupo, a divisão continua aberta aos demais participantes.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4017,7 +4129,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "undo",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ O comando /desfazer fica restrito a admin.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ O comando /desfazer fica restrito a admin.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4028,7 +4140,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "undo",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ O /desfazer funciona só no privado do bot.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ O /desfazer funciona só no privado do bot.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4062,7 +4174,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "doctor_create",
                 resolutionData: { commandBody: doctorDirectoryCommand?.rawBody ?? message.text },
             });
-            await sendMessage(message.chat.id, ":/ Esse comando de diretorio fica restrito a admin.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ Esse comando de diretório fica restrito a admin.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4073,7 +4185,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "doctor_create",
                 resolutionData: { commandBody: doctorDirectoryCommand?.rawBody ?? message.text },
             });
-            await sendMessage(message.chat.id, ":/ Cadastro de medico pelo Telegram fica so no privado do bot, para evitar ruido no grupo.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ Cadastro de médico pelo Telegram fica só no privado do bot, para evitar ruído no grupo.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4128,7 +4240,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 if (result.status === "not_found") {
                     await sendMessage(
                         message.chat.id,
-                        `:/ Nao achei medico com "${doctorDirectoryCommand.lookup}" para atualizar.`,
+                        `⛔ Não achei médico com "${doctorDirectoryCommand.lookup}" para atualizar.`,
                         message.message_id,
                     );
                     return { ok: true, ignored: true };
@@ -4138,7 +4250,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     await sendMessage(
                         message.chat.id,
                         [
-                            `:/ Achei mais de um medico para "${doctorDirectoryCommand.lookup}".`,
+                            `⛔ Achei mais de um médico para "${doctorDirectoryCommand.lookup}".`,
                             ...result.matches.map((doctor, index) => `${index + 1}. ${resolveTelegramDoctorSurfaceName(doctor)}${buildDoctorDirectorySummary(doctor)}`),
                             "",
                             "Use um identificador mais especifico, como nome completo atual, codigo ou alias unico.",
@@ -4151,8 +4263,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 await sendMessage(
                     message.chat.id,
                     result.status === "updated"
-                        ? `:) Diretorio atualizado. Corrigi ${resolveTelegramDoctorSurfaceName(result.doctor)}${buildDoctorDirectorySummary(result.doctor)}.`
-                        : `:) Diretorio atualizado. Reativei e corrigi ${resolveTelegramDoctorSurfaceName(result.doctor)}${buildDoctorDirectorySummary(result.doctor)}.`,
+                        ? `✅ Diretório atualizado. Corrigi ${resolveTelegramDoctorSurfaceName(result.doctor)}${buildDoctorDirectorySummary(result.doctor)}.`
+                        : `✅ Diretório atualizado. Reativei e corrigi ${resolveTelegramDoctorSurfaceName(result.doctor)}${buildDoctorDirectorySummary(result.doctor)}.`,
                     message.message_id,
                 );
                 return { ok: true, doctorId: result.doctor.id };
@@ -4190,8 +4302,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             await sendMessage(
                 message.chat.id,
                 result.status === "created"
-                    ? `:) Diretorio atualizado. Criei ${result.doctor.fullName}${buildDoctorDirectorySummary(result.doctor)}.`
-                    : `:) Diretorio atualizado. Reativei ${result.doctor.fullName}${buildDoctorDirectorySummary(result.doctor)}.`,
+                    ? `✅ Diretório atualizado. Criei ${result.doctor.fullName}${buildDoctorDirectorySummary(result.doctor)}.`
+                    : `✅ Diretório atualizado. Reativei ${result.doctor.fullName}${buildDoctorDirectorySummary(result.doctor)}.`,
                 message.message_id,
             );
             return { ok: true, doctorId: result.doctor.id };
@@ -4204,7 +4316,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
             await sendMessage(
                 message.chat.id,
-                `:/ Nao consegui atualizar esse medico. ${error instanceof Error ? error.message : "Falha inesperada."}`,
+                `⛔ Não consegui atualizar esse médico. ${error instanceof Error ? error.message : "Falha inesperada."}`,
                 message.message_id,
             );
             return { ok: true, ignored: true };
@@ -4220,7 +4332,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "piam_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ /piam fica restrito a admin.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ /piam fica restrito a admin.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4232,7 +4344,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "piam_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `:/ Uso: ${TELEGRAM_PIAM_COMMAND_USAGE}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Uso: ${TELEGRAM_PIAM_COMMAND_USAGE}`, message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4280,7 +4392,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: piamCommand.name,
                     resolutionData: { actorRoles: actor.roles, lookup: piamCommand.lookup },
                 });
-                await sendMessage(message.chat.id, `:/ Nao achei medico com "${piamCommand.lookup}".`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não achei médico com "${piamCommand.lookup}".`, message.message_id);
                 return { ok: true, ignored: true };
             }
 
@@ -4294,7 +4406,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 await sendMessage(
                     message.chat.id,
                     [
-                        `:/ Achei mais de um medico para "${piamCommand.lookup}".`,
+                        `⛔ Achei mais de um médico para "${piamCommand.lookup}".`,
                         ...result.matches.map((doctor, index) => `${index + 1}. ${doctor.fullName}`),
                         "",
                         "Use o nome completo.",
@@ -4324,8 +4436,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             }
 
             const reply = piamCommand.name === "piam_assign"
-                ? `:) ${result.doctor.fullName} marcado como cardiologista PIAM. A partir de agora, ao avisar SD/SN/dia/noite, o bot aloca automaticamente no ramal PIAM (07:00 as 19:00 ou 19:00 as 07:00).`
-                : `:) ${result.doctor.fullName} desmarcado de PIAM. Volta a ser lancado normalmente.`;
+                ? `✅ ${result.doctor.fullName} marcado como cardiologista PIAM. A partir de agora, ao avisar SD/SN/dia/noite, o bot aloca automaticamente no ramal PIAM (07:00 às 19:00 ou 19:00 às 07:00).`
+                : `✅ ${result.doctor.fullName} desmarcado de PIAM. Volta a ser lançado normalmente.`;
             await sendMessage(message.chat.id, reply, message.message_id);
             return { ok: true, doctorId: result.doctor.id };
         } catch (error) {
@@ -4337,7 +4449,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
             await sendMessage(
                 message.chat.id,
-                `:/ Nao consegui aplicar /piam. ${error instanceof Error ? error.message : "Falha inesperada."}`,
+                `⛔ Não consegui aplicar /piam. ${error instanceof Error ? error.message : "Falha inesperada."}`,
                 message.message_id,
             );
             return { ok: true, ignored: true };
@@ -4347,19 +4459,19 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     if (isTelegramResetCodinomeCommandText(message.text)) {
         if (message.chat.type !== "private") {
             await markTelegramProcessed(logId, { status: "ignored", errorMessage: "reset_codinome_private_only", parsedAction: "reset_codinome" });
-            await sendMessage(message.chat.id, ":/ /resetcodinome fica no privado do bot.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ /resetcodinome fica no privado do bot.", message.message_id);
             return { ok: true, ignored: true };
         }
         const actor = await resolveTelegramCommandActor(message);
         if (!actor || !actor.roles.some((role) => role === "admin" || role === "chief")) {
             await markTelegramProcessed(logId, { status: "ignored", errorMessage: "reset_codinome_forbidden", parsedAction: "reset_codinome" });
-            await sendMessage(message.chat.id, ":/ /resetcodinome e exclusivo de admin/chefia.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ /resetcodinome é exclusivo de admin/chefia.", message.message_id);
             return { ok: true, ignored: true };
         }
         const resetCmd = parseTelegramResetCodinomeCommand(message.text);
         if (!resetCmd) {
             await markTelegramProcessed(logId, { status: "ignored", errorMessage: "reset_codinome_usage", parsedAction: "reset_codinome" });
-            await sendMessage(message.chat.id, `:/ Use: ${TELEGRAM_RESET_CODINOME_USAGE}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Use: ${TELEGRAM_RESET_CODINOME_USAGE}`, message.message_id);
             return { ok: true, ignored: true };
         }
         try {
@@ -4386,18 +4498,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedDoctorName: result.fullName,
                 resolutionData: { actorRoles: actor.roles, doctorId },
             });
-            const lines = [
-                "✅ Codinome resetado",
-                `👤 Médico: ${result.fullName}`,
-                `🔑 Novo codinome: ${result.codename}`,
-                result.previous
-                    ? `↩️ O anterior (${result.previous}) não funciona mais.`
-                    : "↩️ O codinome anterior não funciona mais.",
-                "",
-                `Como o médico consulta: /pagamento ${result.codename}`,
-                "📝 Anote no seu controle.",
-            ];
-            await sendMessage(message.chat.id, lines.join("\n"), message.message_id);
+            await sendMessage(message.chat.id, buildCodenameDeliveryReply(result), message.message_id);
             return { ok: true, reported: true };
         } catch (error) {
             await markTelegramProcessed(logId, {
@@ -4405,7 +4506,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 errorMessage: error instanceof Error ? error.message : "reset_codinome_failed",
                 parsedAction: "reset_codinome",
             });
-            await sendMessage(message.chat.id, `:/ Nao consegui resetar o codinome. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui resetar o codinome. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -4419,7 +4520,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: paymentCommand?.name ?? "payment_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ Conferencia de pagamento fica no privado do bot, para nao poluir o grupo operacional.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ Conferência de pagamento fica no privado do bot, para não poluir o grupo operacional.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4429,14 +4530,21 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             const fromId = message.from?.id ? String(message.from.id) : null;
             if (!fromId) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_no_sender", parsedAction: "payment_self" });
-                await sendMessage(message.chat.id, ":/ Nao consegui identificar sua conta de Telegram.", message.message_id);
+                await sendMessage(message.chat.id, "⛔ Não consegui identificar sua conta de Telegram.", message.message_id);
                 return { ok: true, ignored: true };
             }
 
             const lock = await checkAttemptLock(fromId);
             if (lock.locked) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_locked", parsedAction: "payment_self" });
-                await sendMessage(message.chat.id, ":/ Muitas tentativas com codinome incorreto. Aguarde um pouco e tente de novo, ou peca um novo codinome ao coordenador.", message.message_id);
+                // Comunica QUANDO destrava (horário de SP), em vez de "aguarde um pouco".
+                await sendMessage(
+                    message.chat.id,
+                    lock.lockedUntil
+                        ? `⛔ Tentativas esgotadas. Libera às *${formatTelegramReplyTime(lock.lockedUntil)}*.`
+                        : "⛔ Tentativas esgotadas. Tente de novo em 1h.",
+                    message.message_id,
+                );
                 return { ok: true, ignored: true };
             }
 
@@ -4451,8 +4559,12 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             if (!selfDoctorId) {
                 const next = await registerFailedAttempt(fromId);
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_codename_invalid", parsedAction: "payment_self" });
-                const suffix = next.locked ? " Voce excedeu as tentativas; aguarde antes de tentar de novo." : "";
-                await sendMessage(message.chat.id, `:/ Codinome nao confere.${suffix}`, message.message_id);
+                // Regras de cooldown em payment-access.ts:9-11 (5 tentativas / trava de 1h),
+                // agora comunicadas: contador de tentativas e horário de liberação (SP).
+                const reply = next.locked
+                    ? `⛔ Codinome não confere. Tentativas esgotadas — libera às *${next.lockedUntil ? formatTelegramReplyTime(next.lockedUntil) : "daqui a 1h"}*.`
+                    : `⛔ Codinome não confere — tentativa *${next.failedCount} de ${ATTEMPT_LIMIT}* (na ${ATTEMPT_LIMIT}ª, trava por 1h).`;
+                await sendMessage(message.chat.id, reply, message.message_id);
                 return { ok: true, ignored: true };
             }
 
@@ -4489,7 +4601,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     errorMessage: error instanceof Error ? error.message : "payment_self_failed",
                     parsedAction: "payment_self",
                 });
-                await sendMessage(message.chat.id, `:/ Nao consegui montar o seu pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui montar o seu pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4497,13 +4609,13 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         if (parseTelegramPaymentListCommand(message.text)) {
             if (!actor.roles.includes("admin")) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_list_forbidden", parsedAction: "payment_list" });
-                await sendMessage(message.chat.id, ":/ /pagamento listar e exclusivo de admin.", message.message_id);
+                await sendMessage(message.chat.id, "⛔ /pagamento listar é exclusivo de admin.", message.message_id);
                 return { ok: true, ignored: true };
             }
             try {
                 const all = await listDoctorCodenames();
                 await markTelegramProcessed(logId, { status: "accepted", parsedAction: "payment_list", resolutionData: { count: all.length } });
-                const header = `🗒️ Codinomes (${all.length} médicos). Os "(sem registro)" foram gerados antes e estão só no seu txt.`;
+                const header = `📋 Codinomes (${all.length} médicos)\n"(sem registro)" = codinome antigo, de antes de eu guardar o texto — para gerar um novo, use /resetcodinome Nome Completo.`;
                 const lines = all.map((r) => `${r.fullName} — ${r.codename ?? "(sem registro)"}`);
                 const messages = chunkTelegramLines(header, lines);
                 for (const [index, text] of messages.entries()) {
@@ -4512,7 +4624,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 return { ok: true, reported: true };
             } catch (error) {
                 await markTelegramProcessed(logId, { status: "error", errorMessage: error instanceof Error ? error.message : "payment_list_failed", parsedAction: "payment_list" });
-                await sendMessage(message.chat.id, `:/ Nao consegui listar os codinomes. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui listar os codinomes. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4521,7 +4633,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         if (resetAllCommand) {
             if (!actor.roles.includes("admin")) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_reset_all_forbidden", parsedAction: "payment_reset_all" });
-                await sendMessage(message.chat.id, ":/ /pagamento resetar-todos e exclusivo de admin do bot.", message.message_id);
+                await sendMessage(message.chat.id, "⛔ /pagamento resetar-todos é exclusivo de admin do bot.", message.message_id);
                 return { ok: true, ignored: true };
             }
             if (!resetAllCommand.confirmed) {
@@ -4549,7 +4661,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     errorMessage: error instanceof Error ? error.message : "payment_reset_all_failed",
                     parsedAction: "payment_reset_all",
                 });
-                await sendMessage(message.chat.id, `:/ Nao consegui resetar os codinomes. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui resetar os codinomes. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4568,7 +4680,9 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     await sendMessage(message.chat.id, buildNameUnresolvedReply(message.message_id, candidates), message.message_id);
                     return { ok: true, ignored: true };
                 }
-                const codename = await upsertDoctorCodename(doctor.id);
+                // resetDoctorCodename (não upsert direto) para saber se havia codinome
+                // anterior — a copy canônica avisa que ele parou de valer.
+                const result = await resetDoctorCodename(doctor.id);
                 await markTelegramProcessed(logId, {
                     status: "accepted",
                     parsedAction: codenameCommand.name,
@@ -4577,7 +4691,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 });
                 await sendMessage(
                     message.chat.id,
-                    `:) Codinome de ${resolveTelegramDoctorSurfaceName(doctor)}: ${codename}\nEntregue no particular. Ele consulta enviando /pagamento ${codename}. Gerar de novo reseta o anterior.`,
+                    buildCodenameDeliveryReply({ ...result, fullName: resolveTelegramDoctorSurfaceName(doctor) }),
                     message.message_id,
                 );
                 return { ok: true, reported: true };
@@ -4588,7 +4702,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: codenameCommand.name,
                     resolutionData: { rawCommand: message.text },
                 });
-                await sendMessage(message.chat.id, `:/ Nao consegui gerar o codinome. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui gerar o codinome. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4612,7 +4726,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     });
 
                     if (messages.length === 0) {
-                        await sendMessage(message.chat.id, `:) Nenhum plantão registrado em ${board.monthLabel} ainda.`, message.message_id);
+                        await sendMessage(message.chat.id, `✅ Nenhum plantão registrado em ${board.monthLabel} ainda.`, message.message_id);
                         return { ok: true, reported: true };
                     }
 
@@ -4627,7 +4741,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                         parsedAction: "payment_digest",
                         resolutionData: { rawCommand: message.text },
                     });
-                    await sendMessage(message.chat.id, `:/ Nao consegui montar o relatorio mensal. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                    await sendMessage(message.chat.id, `⛔ Não consegui montar o relatório mensal. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                     return { ok: true, ignored: true };
                 }
             }
@@ -4667,7 +4781,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                             errorMessage: error instanceof Error ? error.message : "payment_self_admin_failed",
                             parsedAction: "payment_self_admin",
                         });
-                        await sendMessage(message.chat.id, `:/ Nao consegui montar o pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                        await sendMessage(message.chat.id, `⛔ Não consegui montar o pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                         return { ok: true, ignored: true };
                     }
                 }
@@ -4711,7 +4825,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: paymentCommand.name,
                     resolutionData: { rawCommand: message.text },
                 });
-                await sendMessage(message.chat.id, `:/ Nao consegui montar a conferencia de pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui montar a conferência de pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4729,7 +4843,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: paymentCommand.name,
                     parsedTargetCode: paymentCommand.targetCode,
                 });
-                await sendMessage(message.chat.id, `:/ Nao encontrei ${paymentCommand.targetCode} na conferencia de ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não encontrei ${paymentCommand.targetCode} na conferência de ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`, message.message_id);
                 return { ok: true, ignored: true };
             }
 
@@ -4740,7 +4854,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: paymentCommand.name,
                     parsedTargetCode: paymentCommand.targetCode,
                 });
-                await sendMessage(message.chat.id, `:/ ${targetRow.targetCode} ainda esta sem ocupacao identificada nesse turno. Primeiro ajuste o lancamento operacional e depois refaça a conferencia.`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ ${targetRow.targetCode} ainda está sem ocupação identificada nesse turno. Primeiro ajuste o lançamento operacional e depois refaça a conferência.`, message.message_id);
                 return { ok: true, ignored: true };
             }
 
@@ -4774,7 +4888,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                         shiftLabel: board.shiftLabel,
                     },
                 });
-                await sendMessage(message.chat.id, `:) ${resolveTelegramDoctorSurfaceName(doctor)} ja estava alocado em ${targetRow.targetCode} para ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`, message.message_id);
+                await sendMessage(message.chat.id, `✅ ${resolveTelegramDoctorSurfaceName(doctor)} já estava alocado em ${targetRow.targetCode} para ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`, message.message_id);
                 return { ok: true, occupancyId: targetRow.occupancyId };
             }
 
@@ -4817,7 +4931,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
             await sendMessage(
                 message.chat.id,
-                `:) Corrigi ${targetRow.targetCode} para ${resolveTelegramDoctorSurfaceName(doctor)} em ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}. Agora ${describePaymentAllocationOutcome(refreshedRow)}.`,
+                `✅ Corrigi ${targetRow.targetCode} para ${resolveTelegramDoctorSurfaceName(doctor)} em ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}. Agora ${describePaymentAllocationOutcome(refreshedRow)}.`,
                 message.message_id,
             );
             return { ok: true, occupancyId: updated.id };
@@ -4828,7 +4942,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: paymentCommand.name,
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `:/ Nao consegui corrigir essa alocacao de pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui corrigir essa alocação de pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -4843,7 +4957,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: bankHoursCommand?.name ?? "bank_hours_override",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ O comando /banco fica restrito a admin porque altera o saldo auditado do plantao.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ O comando /banco fica restrito a admin porque altera o saldo auditado do plantão.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4854,7 +4968,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: bankHoursCommand?.name ?? "bank_hours_override",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, ":/ O ajuste de banco fica no privado do bot, para nao poluir o grupo operacional.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ O ajuste de banco fica no privado do bot, para não poluir o grupo operacional.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -4937,7 +5051,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedDoctorName: resolvedDoctor.doctor.fullName,
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `:/ Nao consegui ajustar o banco. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui ajustar o banco. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -4988,7 +5102,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "departure_report",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `:/ Não consegui montar o relatório de saídas. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui montar o relatório de saídas. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -5029,7 +5143,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "departure_priority",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `:/ Nao consegui montar a prioridade de saida. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui montar a prioridade de saída. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -5073,7 +5187,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "shift_report",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `:/ Não consegui montar o relato do plantão. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui montar o relato do plantão. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -5137,58 +5251,30 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "summary_report",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `:/ Nao consegui montar o resumo. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui montar o resumo. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
 
-    const normalizedText = message.text.trim().toLowerCase();
+    // Sufixo @bot: "/ajuda@MeuBot" vale como "/ajuda" — mesmo padrão (?:@\w+)? já
+    // usado nos matchers regex do repo, aplicado aos matchers de igualdade estrita.
+    const normalizedText = message.text.trim().toLowerCase().replace(/^(\/[a-z_]+)@\w+$/, "$1");
     if (normalizedText === "/ajuda" || normalizedText === "/help") {
         const helpActor = await resolveTelegramCommandActor(message);
         const helpIsAdmin = helpActor?.roles.includes("admin") ?? false;
         const helpIsChief = helpActor?.roles.some((r) => r === "admin" || r === "chief") ?? false;
 
+        // Guia enxuto (auditoria comunicação §3.4#4): 1 exemplo copiável por ação,
+        // todos com turno. Pitfalls e lista completa ficam no /comandos.
         const helpLines = [
             "📋 *Guia rápido do bot*",
             "",
-            "Registre numa *única mensagem*:",
-            "*NOME e sobrenome + LOCAL + HORÁRIO*",
+            `▸ Chegada: \`${buildTelegramArrivalExample({})}\``,
+            `▸ Saída: \`${buildTelegramDepartureExample({})}\``,
+            "▸ Emenda (segue no posto): `Vagner Costa continuo PM04`",
             "",
-            "▸ *CHEGADA:*",
-            `  _${buildTelegramArrivalExample({})}_`,
-            "  _Vagner Costa 1363 07:00 SD_  (ramal de regulação)",
-            "  _Vagner Costa PM04 07:00 P_  (plantão de 24h)",
-            "",
-            "▸ *SAÍDA:*",
-            `  _${buildTelegramDepartureExample({})}_`,
-            "",
-            "▸ *CONTINUAÇÃO* (emenda o próximo turno):",
-            "  _Vagner Costa continuo PM04_",
-            "",
-            "▸ *TROCA de base/ramal* — mande nova chegada:",
-            "  _Vagner Costa PR03 08:30_",
-            "",
-            "▸ *ALMOÇO / JANTAR:* use /almoco ou /jantar",
-            "  (não mande \"ramal HH:MM\" solto)",
-            "",
-            "━━━━━━━━━━━━━━━━━━",
-            "📍 *Bases de intervenção:*",
-            "  SM01 · CB02 · PR03 · PM04 · BR05 · CN10",
-            "  PP20 · IT30 · PM40 · CZ50 · BR60 · CC70",
-            "",
-            "📞 *Ramais de regulação:*",
-            "  1321–1329 · 1361–1368 · 1476",
-            "  2031–2035 · 2151–2154 · 2377 · NUCLEO · PIAM",
-            "",
-            "━━━━━━━━━━━━━━━━━━",
-            "⚠️ *O que trava o registro:*",
-            "• só o primeiro nome → mande nome *e* sobrenome",
-            "• \"bom dia\" sem dados → saudação não registra",
-            "• \"24h\" como hora → significa plantão P, não meia-noite",
-            "• nome e local em mensagens separadas → junte tudo",
-            "",
-            "📌 Para ver *todos* os comandos com exemplos:",
-            "  /comandos",
+            "Sempre nome *e* sobrenome + local + turno (SD, SN ou P) na mesma mensagem.",
+            "Refeição: /almoco ou /jantar · Todos os comandos: /comandos",
         ];
 
         if (helpIsChief) {
@@ -5200,20 +5286,17 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
         if (helpIsAdmin) {
             helpLines.push(
-                "👑 *Admin (privado):* /desfazer · /slots · /medico · /piam · /banco",
-                "   /pagamento listar — lista nome → codinome",
-                "   ⚠️ /pagamento resetar-todos CONFIRMO — reset GERAL dos codinomes",
+                "👑 *Admin (privado):* /desfazer · /slots · /medico · /piam · /banco · /pagamento listar",
             );
         }
 
-        helpLines.push("", "💡 Em caso de dúvida, mande /ajuda novamente.");
         const helpText = helpLines.join("\n");
 
         await markTelegramProcessed(logId, {
             status: "accepted",
             parsedAction: "help_command",
         });
-        await sendMessage(message.chat.id, helpText, message.message_id);
+        await sendTelegramHelpMessage(message.chat.id, helpText, message.message_id);
         return { ok: true, help: true };
     }
 
@@ -5228,13 +5311,12 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         sections.push(
             "📖 *TUTORIAL COMPLETO DE COMANDOS*",
             "",
-            "━━━━━━━━━━━━━━━━━━",
             "📥 *CHEGADA / SAÍDA (mensagem livre no grupo)*",
             "",
             "▸ Chegada:",
             `  _${buildTelegramArrivalExample({})}_`,
-            "  _Vagner Costa 1363 07:00 SD_ (ramal de regulação)",
-            "  _Vagner Costa PM04 07:00 P_ (plantão P)",
+            "  _Vagner Costa 1363 SD 07:00_ (ramal de regulação)",
+            "  _Vagner Costa PM04 P 07:00_ (plantão P)",
             "",
             "▸ Saída:",
             `  _${buildTelegramDepartureExample({})}_`,
@@ -5243,14 +5325,19 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "  _Vagner Costa continuo PM04_",
             "",
             "▸ Troca de base/ramal:",
-            "  _Vagner Costa PR03 08:30_ (nova msg de chegada)",
+            "  _Vagner Costa trocando de PM04 para PR03 SD 08:30_",
             "",
-            "⚠️ Sempre nome *e* sobrenome + local + horário na mesma mensagem.",
+            "⚠️ Sempre nome *e* sobrenome + local + turno + horário na mesma mensagem.",
+            "",
+            "⚠️ O que trava o registro:",
+            "• só o primeiro nome → mande nome *e* sobrenome",
+            "• \"bom dia\" sem dados → saudação não registra",
+            "• \"24h\" como hora → significa plantão P, não meia-noite",
+            "• nome e local em mensagens separadas → junte tudo",
         );
 
         sections.push(
             "",
-            "━━━━━━━━━━━━━━━━━━",
             "📍 *BASES E RAMAIS VÁLIDOS*",
             "",
             "▸ Bases de intervenção:",
@@ -5266,7 +5353,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
         sections.push(
             "",
-            "━━━━━━━━━━━━━━━━━━",
             "🔧 *CORREÇÕES (comandos /)*",
             "",
             "▸ /corrigir — corrige hora de chegada:",
@@ -5294,7 +5380,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
         sections.push(
             "",
-            "━━━━━━━━━━━━━━━━━━",
             "🍽️ *ALMOÇO / JANTAR*",
             "",
             "▸ /almoco — inicia divisão de almoço (SD)",
@@ -5314,7 +5399,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
         sections.push(
             "",
-            "━━━━━━━━━━━━━━━━━━",
             "📊 *RELATÓRIOS*",
             "",
             "▸ /plantao — relatório do turno atual",
@@ -5333,18 +5417,16 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
         sections.push(
             "",
-            "━━━━━━━━━━━━━━━━━━",
             "📢 *UTILIDADES*",
             "",
             "▸ /cobrar — lembrete para equipe informar chegada no formato certo",
-            "▸ /lembretes — cobra chefia com USA sem informacao + total de reguladores",
+            "▸ /lembretes — cobra chefia com USA sem informação + total de reguladores",
             "▸ /ajuda — guia rápido",
         );
 
         if (isChief) {
             sections.push(
                 "",
-                "━━━━━━━━━━━━━━━━━━",
                 "🔐 *CHEFIA (grupo)*",
                 "",
                 "▸ /remover — apaga plantão (⚠️ só admin):",
@@ -5366,7 +5448,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
             sections.push(
                 "",
-                "━━━━━━━━━━━━━━━━━━",
                 "🔑 *CHEFIA (privado do bot)*",
                 "",
                 "▸ /pagamento — relatório do mês por médico (plantão a plantão):",
@@ -5394,7 +5475,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         if (isAdmin) {
             sections.push(
                 "",
-                "━━━━━━━━━━━━━━━━━━",
                 "👑 *ADMIN (privado do bot)*",
                 "",
                 "▸ /desfazer — lista e desfaz ações (12h):",
@@ -5428,14 +5508,12 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         if (!isChief) {
             sections.push(
                 "",
-                "━━━━━━━━━━━━━━━━━━",
                 "🔒 Comandos de chefia/admin aparecem aqui quando você tiver acesso.",
             );
         }
 
         sections.push(
             "",
-            "━━━━━━━━━━━━━━━━━━",
             "💡 Dica: mande /comandos a qualquer momento para rever este tutorial.",
         );
 
@@ -5444,38 +5522,27 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             parsedAction: "comandos_tutorial",
             resolutionData: { isAdmin, isChief, isPrivate },
         });
-        await sendMessage(message.chat.id, sections.join("\n"), message.message_id);
+        // A variante admin passa do limite de 4096 chars do Telegram — sem o
+        // particionamento a API rejeitava e o pedido de ajuda ficava mudo
+        // (auditoria comunicação §3.1#2). Blocos de até 3500 chars, numerados.
+        const comandosMessages = chunkTelegramLines(sections[0], sections.slice(1));
+        for (const [index, text] of comandosMessages.entries()) {
+            await sendTelegramHelpMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
+        }
         return { ok: true, help: true };
     }
 
     if (normalizedText === "/cobrar") {
+        // Copy enxuta com nomes FICTÍCIOS (auditoria §3.4#14) — nunca usar nomes
+        // reais de médicos em exemplo. A linha final de consequência fica.
         const cobrarText = [
-            "📢 *Atenção equipe!*",
+            "📢 *Atenção equipe!* Avisem sempre *nome completo + base/ramal + turno (SD, SN ou P) + horário*, tudo na mesma mensagem.",
             "",
-            "Para eu preencher certo no sistema, por favor *sempre* avisem:",
-            "  ▸ Nome completo",
-            "  ▸ Base ou ramal",
-            "  ▸ SD, SN ou P",
-            "  ▸ Horário",
+            "▸ Intervenção: _Vagner Costa PM04 SN 19:00_",
+            "▸ Regulação: _Ana Souza 2031 SN 19:00_",
+            "▸ Segue no posto: _Bruno Lima BR05 continua P 19:00_",
             "",
-            "━━━━━━━━━━━━━━━━━━",
-            "📌 *Exemplos:*",
-            "",
-            "▸ Intervenção:",
-            "  _Felipe Carvalho PM04 SN 19:00_",
-            "",
-            "▸ Regulação:",
-            "  _Luana Bordoni 2031 SN 19:00_",
-            "",
-            "▸ Se continua no posto:",
-            "  _Karla Pinto BR05 continua P 19:00_",
-            "",
-            "━━━━━━━━━━━━━━━━━━",
-            "⚠️ Se a pessoa *segue* no posto, escrevam *continua*.",
-            "Se *assumiu agora*, escrevam *SD*, *SN* ou *P* na mesma linha.",
-            "",
-            "Sem aviso de continua/P ou ajuste da chefia,",
-            "a posição fica como *sem médico confirmado* no grupo.",
+            "Sem aviso de continua/P ou ajuste da chefia, a posição fica como *sem médico confirmado* no grupo.",
         ].join("\n");
 
         await markTelegramProcessed(logId, {
@@ -5690,8 +5757,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             await sendMessage(
                 message.chat.id,
                 departureCorrectionCommand.targetCode
-                    ? `:/ Nao encontrei plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)} em ${departureCorrectionCommand.targetCode} para corrigir a saída.`
-                    : `:/ Nao encontrei plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)} para corrigir a saída.`,
+                    ? `⛔ Não encontrei plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)} em ${departureCorrectionCommand.targetCode} para corrigir a saída.`
+                    : `⛔ Não encontrei plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)} para corrigir a saída.`,
                 message.message_id,
             );
             return { ok: true, ignored: true };
@@ -5711,7 +5778,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             await sendMessage(
                 message.chat.id,
                 [
-                    `:/ Achei mais de um plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)}.`,
+                    `⛔ Achei mais de um plantão recente de ${resolveTelegramDoctorSurfaceName(doctor)}.`,
                     ...resolution.ambiguousCandidates.map((candidate, index) => `${index + 1}. ${formatDepartureCorrectionCandidateSummary(candidate)}`),
                     "",
                     `Reenvie com o alvo para eu travar o plantão certo. Ex.: /corrigirsaida ${resolveTelegramDoctorSurfaceName(doctor)} ${resolution.ambiguousCandidates[0]?.targetCode ?? "2035"}`,
@@ -5739,7 +5806,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 errorMessage: "alerta_command_forbidden",
                 parsedAction: "alerta_command",
             });
-            await sendMessage(message.chat.id, ":/ O comando /alerta só roda no privado para o admin configurado do bot.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ O comando /alerta só roda no privado para o admin configurado do bot.", message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -5763,6 +5830,33 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     const command = parseTelegramCommand(message.text);
     if (!command) {
         if (message.text.trim().startsWith("/")) {
+            // Comando desconhecido a poucas letras de um comando real: sugere o
+            // provável em vez do genérico (auditoria comunicação §3.4#1). Só
+            // sugere — nunca executa automaticamente comando restrito.
+            const typoSuggestion = suggestTelegramCommandForTypo(message.text);
+            if (typoSuggestion) {
+                const typedCommand = message.text.trim().split(/\s+/)[0];
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "command_parse_failed",
+                    resolutionData: {
+                        ...buildTelegramReviewLogData({
+                            reason: "command_parse_failed",
+                            trainingCandidate: true,
+                        }),
+                        rawCommand: message.text,
+                        suggestionKind: "command_typo",
+                        suggestedCommands: [typoSuggestion],
+                    },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    `⚠️ Não reconheci ${typedCommand}. Você quis dizer ${typoSuggestion}? (toque para ver)`,
+                    message.message_id,
+                );
+                return { ok: true, ignored: true };
+            }
+
             const recentMessages = await listRecentTelegramSenderMessages({
                 chatId: String(message.chat.id),
                 senderTelegramId: message.from?.id ? String(message.from.id) : null,
@@ -5806,7 +5900,13 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             parsedAction: command.name,
             resolutionData: { commandName: command.name, commandBody: command.rawBody },
         });
-        await sendMessage(message.chat.id, pickTelegramReply("command_forbidden", message.message_id, {}), message.message_id);
+        // "/saida PM04 19:00" de médico comum (alias de /retirar): em vez de só
+        // negar, ensina o formato texto-livre já semeado com o que a pessoa deu
+        // (auditoria comunicação §3.4#2). Demais comandos restritos: texto fixo.
+        const forbiddenReply = command.name === "retirar"
+            ? `⛔ /retirar é da chefia. Para registrar sua saída, mande: \`${command.doctorName?.trim() || "Seu Nome"} saindo ${command.targetCode} ${command.time ?? "19:00"}\``
+            : pickTelegramReply("command_forbidden", message.message_id, {});
+        await sendMessage(message.chat.id, forbiddenReply, message.message_id);
         return { ok: true, ignored: true };
     }
 
@@ -5822,8 +5922,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         await sendMessage(
             message.chat.id,
             command.name === "remover"
-                ? ":/ O comando /remover fica restrito a admin porque apaga o plantão do banco e da trilha operacional."
-                : ":/ Os comandos /ativar e /desativar ficam restritos a admin porque alteram o estado operacional auditado da base ou do ramal.",
+                ? "⛔ O comando /remover fica restrito a admin porque apaga o plantão do banco e da trilha operacional."
+                : "⛔ Os comandos /ativar e /desativar ficam restritos a admin porque alteram o estado operacional auditado da base ou do ramal.",
             message.message_id,
         );
         return { ok: true, ignored: true };
@@ -5867,7 +5967,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             parsedTargetCode: command.targetCode,
             parsedAction: command.name,
         });
-        await sendMessage(message.chat.id, `:/ Nao encontrei ocupacao ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
+        await sendMessage(message.chat.id, `⛔ Não encontrei ocupação ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
         return { ok: true, ignored: true };
     }
 
@@ -5972,7 +6072,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
-            await sendMessage(message.chat.id, `:/ Nao consegui corrigir ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui corrigir ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -6077,7 +6177,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
-            await sendMessage(message.chat.id, `:/ Nao consegui corrigir ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui corrigir ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -6133,7 +6233,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
-            await sendMessage(message.chat.id, `:/ ${command.targetCode} está com ${activeDoctorName} no plantão ativo. O comando /ramal só troca a função sem mexer no médico nem no horário.`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ ${command.targetCode} está com ${activeDoctorName} no plantão ativo. O comando /ramal só troca a função sem mexer no médico nem no horário.`, message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -6158,7 +6258,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     requestedRole: nextRoleLabel,
                 },
             });
-            await sendMessage(message.chat.id, `:/ ${command.targetCode} tem função fixa ${fixedRole} neste turno. Esse ramal não aceita troca manual de função.`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ ${command.targetCode} tem função fixa ${fixedRole} neste turno. Esse ramal não aceita troca manual de função.`, message.message_id);
             return { ok: true, ignored: true };
         }
 
@@ -6207,7 +6307,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
-            await sendMessage(message.chat.id, `:/ Nao consegui atualizar a função em ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui atualizar a função em ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -6897,7 +6997,7 @@ async function queuePendingNameSelection(
 
     await sendMessage(
         message!.chat.id,
-        `${buildCandidatePromptReply(message!.message_id, candidates, { target: parsed.baseCode, time: parsed.arrivalTime, shift: parsed.shiftType })}\n\n${isTelegramContinuationIntent(parsed) ? "Se isso for continuidade, vou manter a chegada original e registrar apenas a confirmacao da passagem para o proximo plantao." : "Vou manter o horario da primeira mensagem."}${departureHint}`,
+        `${buildCandidatePromptReply(message!.message_id, candidates, { target: parsed.baseCode, time: parsed.arrivalTime, shift: parsed.shiftType })}\n\n${isTelegramContinuationIntent(parsed) ? "Se isso for continuidade, vou manter a chegada original e registrar apenas a confirmação da passagem para o próximo plantão." : "Vou manter o horário da primeira mensagem."}${departureHint}`,
         message!.message_id,
         keyboard,
     );
@@ -7130,7 +7230,7 @@ export function buildTakeoverWarningReply(params: {
     return `⚠️ *${params.targetLabel}* já está ocupado por *${params.occupantName}*${turno}, desde *${params.sinceTime}*.`
         + `\n\nConfere se é isso mesmo. Se você *realmente* vai assumir e *desativar ${params.occupantName}* dessa posição, responda só:`
         + `\n\`confirmo ${params.targetLabel}\``
-        + `\n\n🔁 ${params.occupantName} sai do quadro nesse ramal, mas o horário de chegada dele fica preservado — ele pode declarar uma nova posição depois sem ser marcado atrasado.`;
+        + `\n\n🔁 ${params.occupantName} sai do quadro nesse ramal com o horário de chegada preservado — dá para declarar uma nova posição depois sem contar atraso.`;
 }
 
 export function buildTakeoverDisplacedAnnouncement(params: {
@@ -7139,7 +7239,10 @@ export function buildTakeoverDisplacedAnnouncement(params: {
     targetLabel: string;
     sinceTime: string;
 }) {
-    return `🔁 *${params.arrivingName}* assumiu *${params.targetLabel}*. *${params.occupantName}* foi deslocado do quadro (chegada preservada desde *${params.sinceTime}*) e precisa declarar uma nova posição.`;
+    // Forma neutra ("ficou fora do quadro", não "foi deslocado") + exemplo de como
+    // declarar a nova posição (auditoria §3.1#18).
+    return `🔁 *${params.arrivingName}* assumiu *${params.targetLabel}*. *${params.occupantName}* ficou fora do quadro (chegada preservada desde *${params.sinceTime}*) e precisa declarar uma nova posição.`
+        + `\nEx.: _${params.occupantName} <ramal ou base destino>_`;
 }
 
 async function findActiveSameTurnoBoardCarrierOnTarget(params: {
@@ -8172,9 +8275,11 @@ async function maybeSendContinuityForwardPrompt(
         return;
     }
 
+    // O balão de sucesso logo acima já explicou o P — aqui só o dado novo (até
+    // quando cobre) e a ação, sem repetir a explicação (auditoria §3.1#19).
     await sendMessage(
         chatId,
-        "📋 Entendi como *P* (plantão 24h) — cobre até as *19h de amanhã*."
+        "⚠️ Entendi como *P* — cobre até as *19h de amanhã*."
         + "\nSe foi só esta noite, toque abaixo nos próximos 2 min.",
         replyToMessageId,
         buildInlineKeyboard([[{
@@ -8296,12 +8401,16 @@ async function sendSuccessReply(
     }
 
     const resolvedShift = effectiveShiftType ?? parsed.shiftType;
-    const shiftHint = resolvedShift
-        ? `\n📋 Turno: *${resolvedShift === "SD" ? "SD (diurno)" : resolvedShift === "SN" ? "SN (noturno)" : "P (plantao 24h)"}*`
+    // arrival_p_recorded (e o pNote da regra de chegada) já explicam o P no corpo do
+    // balão — repetir "P (plantão 24h)" aqui era a frase duplicada no ✅ (auditoria §3.1#19).
+    const shiftHint = resolvedShift && replyKind !== "arrival_p_recorded"
+        ? `\n📋 Turno: *${resolvedShift === "SD" ? "SD (diurno)" : resolvedShift === "SN" ? "SN (noturno)" : "P (plantão 24h)"}*`
         : "";
 
-    const halfShiftHint = assumedHalfShift
-        ? "\n\n🟠 Tipo de cobertura: *Meio Plantao da Tarde* (ate 17:00)."
+    // A variante half_shift_assumed já explica o meio plantão no corpo do balão —
+    // sem esta guarda o hint duplicava a mesma informação (auditoria §3.1#14).
+    const halfShiftHint = assumedHalfShift && replyKind !== "half_shift_assumed"
+        ? "\n\n🟠 Tipo de cobertura: *Meio Plantão da Tarde* (até 17:00)."
         : "";
 
     const reactivationHint = autoReactivated
@@ -8480,9 +8589,11 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
                 errorMessage: "casual_smalltalk_pending",
                 resolutionData: { casual: true, pendingSelectionKept: true },
             });
+            // Com pendência de nome aberta, o lembrete curto vale mais que o
+            // smalltalk — sem ele a pendência morria em silêncio (auditoria §3.1#17).
             await sendMessage(
                 message.chat.id,
-                pickTelegramReply("casual_smalltalk", message.message_id, {}),
+                "⚠️ Ainda falta confirmar o nome do médico — responda *1*, *2* ou *3*, ou mande nome e sobrenome.",
                 message.message_id,
             );
             return { ok: true, ignored: true, pending: true };
@@ -8655,9 +8766,11 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
             errorMessage: null,
         });
+        // Prefixo neutro de propósito: ⚠️ soaria como pendência e ✅ como crédito
+        // registrado — cancelamento é só um desfecho informativo (auditoria §3.3#14).
         await sendMessage(
             message.chat.id,
-            `⚠️ Cancelado por aqui. A saida de ${pending.resolutionData.resolvedDoctor.fullName} em ${pending.resolutionData.parsed.baseCode} continua sem justificativa salva. Se precisar, reenvie a saida completa depois.`,
+            `OK, cancelado por aqui. A saída de ${pending.resolutionData.resolvedDoctor.fullName} em ${pending.resolutionData.parsed.baseCode} continua sem justificativa salva. Se precisar, reenvie a saída completa depois.`,
             message.message_id,
         );
         return { ok: true, ignored: true };
@@ -9268,7 +9381,7 @@ async function tryHandlePendingDepartureCorrection(update: TelegramUpdate, logId
             message.chat.id,
             isChronologyError
                 ? `Esse horário ficou antes da chegada registrada de ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode}. Responda com outra hora em HH:MM.`
-                : `:/ Nao consegui corrigir a saída de ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode}. ${errorMessage}`,
+                : `⛔ Não consegui corrigir a saída de ${pending.resolutionData.resolvedDoctor.fullName} em ${candidate.targetCode}. ${errorMessage}`,
             message.message_id,
         );
         return { ok: true, ignored: true, processingError: !isChronologyError };
@@ -9433,7 +9546,7 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
         });
         await sendMessage(
             message.chat.id,
-            `:/ Não consegui registrar com o ramal ${ramal}. Reenvie a mensagem completa: _${reconstructedText}_`,
+            `⛔ Não consegui registrar com o ramal ${ramal}. Reenvie a mensagem completa: _${reconstructedText}_`,
             message.message_id,
         );
         return { ok: true, ignored: true, processingError: true };
@@ -9614,7 +9727,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         });
                         await sendMessage(
                             message.chat.id,
-                            ":/ Lancamento em lote no privado fica restrito ao ID autorizado da chefia. Para os demais casos, envie os registros individualmente.",
+                            "⛔ Lançamento em lote no privado fica restrito ao ID autorizado da chefia. Para os demais casos, envie os registros individualmente.",
                             message.message_id,
                         );
                         return { ok: true, ignored: true };
@@ -9668,6 +9781,26 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     );
                     return { ok: true, ignored: true, pending: true };
                 }
+            }
+
+            // Toque nos botões literais da divisão de refeição ("↩️ Desfazer" /
+            // "✅ Confirmar") sem sessão ativa tratando: sem esta guarda o texto
+            // caía no parser de chegada e virava no_operational_match (~50/mês,
+            // auditoria comunicação §5#4). Fica DEPOIS dos handlers de meal-break
+            // (fluxo ativo tem prioridade) e ANTES do parser operacional.
+            const staleMealBreakButtonText = message.text.trim();
+            if (staleMealBreakButtonText === MEAL_BREAK_UNDO_BUTTON_TEXT || staleMealBreakButtonText === MEAL_BREAK_CONFIRM_BUTTON_TEXT) {
+                await markTelegramProcessed(log.id, {
+                    status: "ignored",
+                    errorMessage: "meal_break_button_stale",
+                    resolutionData: { staleMealBreakButton: staleMealBreakButtonText },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    "⛔ Esse botão era da divisão de refeição, que já encerrou. Para outra coisa, mande a mensagem por extenso.",
+                    message.message_id,
+                );
+                return { ok: true, ignored: true };
             }
 
             // F5: Intercept meal-break-related messages BEFORE operational parsing.
@@ -10045,7 +10178,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     });
 
                     const senderFullName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
-                    const guessedName = firstParsed.extractedNames[0] ?? senderFullName ?? "Vagner";
+                    const guessedName = firstParsed.extractedNames[0] ?? senderFullName ?? "Vagner Costa";
                     const guessedTarget = firstParsed.baseCode ?? "1363";
                     const guessedTime = firstParsed.arrivalTime ?? "07:00";
                     const guessedShift = firstParsed.shiftType ?? "SD";
@@ -10064,7 +10197,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     let body: string;
                     if (isBareButtonPayload) {
                         body = [
-                            "👋 Esse formato `ramal HH:MM` é o botão da divisão de almoço — fora do fluxo do `/almoco` ele não pode virar chegada.",
+                            "⛔ Esse formato `ramal HH:MM` é o botão da divisão de almoço — fora do fluxo do `/almoco` ele não pode virar chegada.",
                             "",
                             "Se a intenção era *registrar chegada* de alguém no ramal, mande o nome + ramal + turno + horário, por exemplo:",
                             `  _${exampleArrival}_`,
@@ -10077,7 +10210,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                             : "Não consegui montar a chegada com o que veio.";
                         const missingLine = `Faltou: ${missing.join(" e ")}.`;
                         body = [
-                            "👀 Quase lá — pra registrar a *chegada* eu preciso de *nome + ramal + turno + horário*, todos na mesma mensagem.",
+                            "⚠️ Quase lá — pra registrar a *chegada* eu preciso de *nome + ramal + turno + horário*, todos na mesma mensagem.",
                             "O turno pode ser *SD*, *SN*, *P* — ou *meio plantão* (também vale dizer *tarde* ou *meio turno*).",
                             "",
                             detectedLine,
@@ -10148,15 +10281,13 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         example: departureExample,
                     }),
                 });
+                // A reply de departure_missing_context já interpola {example}; anexar o
+                // hint estruturado repetia o MESMO exemplo no mesmo balão (auditoria §3.1#16).
                 await sendMessage(
                     message.chat.id,
-                    `${pickTelegramReply("departure_missing_context", message.message_id, {
+                    pickTelegramReply("departure_missing_context", message.message_id, {
                         example: departureExample,
-                    })}${buildStructuredTelegramDepartureHint({
-                        doctorName: firstParsed.extractedNames[0] ?? ([message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null),
-                        target: firstParsed.baseCode,
-                        time: firstParsed.arrivalTime,
-                    })}`,
+                    }),
                     message.message_id,
                 );
                 return { ok: true, ignored: true };

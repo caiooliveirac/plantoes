@@ -72,7 +72,7 @@ function formatCheckpointLabel(hour: number) {
 }
 
 function formatReminderDoctorName(fullName: string | null, displayName: string | null) {
-    return formatDoctorSurfaceName({ fullName, displayName, fallback: "medico ainda nao identificado" });
+    return formatDoctorSurfaceName({ fullName, displayName, fallback: "médico ainda não identificado" });
 }
 
 function renderSection(text: string, fallback: string) {
@@ -178,7 +178,7 @@ function buildTakeoverConflictPlan(params: {
             elapsedMinutes,
         },
         text: [
-            `🚨 Conflito de chegada em ${domainLabel} ${params.conflict.targetCode} ainda pendente (${elapsedMinutes} min).`,
+            `⚠️ Conflito de chegada em ${domainLabel} ${params.conflict.targetCode} ainda pendente (${elapsedMinutes} min).`,
             "",
             "Há uma tomada de posição aguardando confirmação e o pagamento pode ficar inconsistente se ninguém resolver.",
             "",
@@ -408,8 +408,8 @@ function resolveCoverageFooter(params: {
     const elapsedMs = params.now.getTime() - resolveOperationalShiftWindow(params.now).startedAt.getTime();
     if (elapsedMs < 20 * 60 * 1000) {
         return params.missingRegulationCount > 0
-            ? "🫶 Regulação: avisem ramal e turno. TARM precisa dos ramais."
-            : "🫶 Quem continuou: avisem continua/P para confirmar posição.";
+            ? "⚠️ Regulação: avisem ramal e turno. TARM precisa dos ramais."
+            : "⚠️ Quem continuou: avisem continua/P para confirmar posição.";
     }
 
     if (elapsedMs < 40 * 60 * 1000) {
@@ -419,24 +419,8 @@ function resolveCoverageFooter(params: {
     }
 
     return params.missingRegulationCount > 0
-        ? "🚨 Sem ramal informado não fecho cobertura nem folha. Regulação: avisem agora."
-        : "🚨 Sem continua/P ou ajuste da chefia, posição fica sem médico na cobertura e folha.";
-}
-
-function pickInstructionExamples(nextShiftLabel: "SD" | "SN") {
-    if (nextShiftLabel === "SD") {
-        return {
-            intervention: "Felipe Carvalho PM04 SD 07:00",
-            regulation: "Luana Bordoni 2031 SD 07:00",
-            continuation: "Karla Pinto BR05 continua P 07:00",
-        };
-    }
-
-    return {
-        intervention: "Felipe Carvalho PM04 SN 19:00",
-        regulation: "Luana Bordoni 2031 SN 19:00",
-        continuation: "Karla Pinto BR05 continua P 19:00",
-    };
+        ? "⚠️ Sem ramal informado não fecho cobertura nem folha. Regulação: avisem agora."
+        : "⚠️ Sem continua/P ou ajuste da chefia, posição fica sem médico na cobertura e folha.";
 }
 
 function buildPreShiftInstructionPlan(now: Date): ReminderPlan | null {
@@ -448,7 +432,7 @@ function buildPreShiftInstructionPlan(now: Date): ReminderPlan | null {
     }
 
     const nextShiftLabel = getSaoPauloParts(nextBoundaryAt).hour === 7 ? "SD" : "SN";
-    const examples = pickInstructionExamples(nextShiftLabel);
+    const boundaryHour = formatHour(nextBoundaryAt);
 
     return {
         noticeKey: `instruction:${nextBoundaryAt.toISOString()}`,
@@ -458,17 +442,11 @@ function buildPreShiftInstructionPlan(now: Date): ReminderPlan | null {
             shiftLabel: nextShiftLabel,
         },
         text: [
-            `🧭 Plantão ${nextShiftLabel} abrindo por volta de ${formatHour(nextBoundaryAt)}.`,
-            "",
-            "Para eu preencher certo no sistema, por favor sempre avisem nome completo, base ou ramal e SD, SN ou P.",
-            "",
-            "Exemplos:",
-            `- Intervenção: ${examples.intervention}`,
-            `- Regulação: ${examples.regulation}`,
-            `- Se continuar: ${examples.continuation}`,
-            "",
-            "Se a pessoa segue no posto, escrevam continua. Se assumiu agora, escrevam SD, SN ou P na mesma linha.",
-            "Sem aviso de continua/P ou ajuste da chefia, a posição fica como sem medico confirmado no grupo.",
+            `⏰ Plantão ${nextShiftLabel} abre às ${boundaryHour}.`,
+            "Avisem nome completo + ramal ou base + turno (SD, SN ou P).",
+            `Chegada: Vagner Costa 1363 ${nextShiftLabel} ${boundaryHour}`,
+            `Continuação: Vagner Costa 1363 continuando ${nextShiftLabel}`,
+            "Sem aviso, a posição fica sem médico no quadro.",
         ].join("\n"),
     };
 }
@@ -501,7 +479,7 @@ function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan
             unresolvedCount: coverage.unresolvedCount,
         },
         text: [
-            `🧭 Quadro ${shiftWindow.shiftLabel} ${formatHour(bucket)} | Intervenção ${coverage.confirmedIntervention.length}/${interventionOperationalTotal} | Regulação ${coverage.confirmedRegulation.length}/${params.board.regulation.length}`,
+            `📋 Quadro ${shiftWindow.shiftLabel} ${formatHour(bucket)} | Intervenção ${coverage.confirmedIntervention.length}/${interventionOperationalTotal} | Regulação ${coverage.confirmedRegulation.length}/${params.board.regulation.length}`,
             "",
             "🚑 Intervenção:",
             buildInterventionSection(params.board.intervention, params.now, { includeArrival: true, currentShiftLabel: shiftWindow.shiftLabel }),
@@ -739,7 +717,7 @@ function buildPaymentConflictAlertPlan(params: {
         .map((row) => {
             const domainLabel = row.domain === "regulation" ? "Regulação" : "Intervenção";
             const doctor = row.doctorName?.trim() || "sem escolhido";
-            const candidates = row.conflictCandidateLabels.length > 0 ? row.conflictCandidateLabels.join(" x ") : "nao detalhado";
+            const candidates = row.conflictCandidateLabels.length > 0 ? row.conflictCandidateLabels.join(" x ") : "não detalhado";
             const reasons = row.issues
                 .filter((issue) => issue !== "Conflito entre medicos titulares no mesmo alvo/turno")
                 .slice(0, 2);
@@ -758,7 +736,7 @@ function buildPaymentConflictAlertPlan(params: {
             conflictCount: conflictRows.length,
         },
         text: [
-            `🚨 Conflito real de alocação para pagamento (${params.paymentBoard.shiftLabel} ${formatHour(bucket)}).`,
+            `⚠️ Conflito real de alocação para pagamento (${params.paymentBoard.shiftLabel} ${formatHour(bucket)}).`,
             "",
             "Detectei sobreposição entre titulares no mesmo alvo/turno (entrada por cima). Sombra não entra neste alerta.",
             "",
@@ -930,13 +908,10 @@ function formatHalfShiftAutoCheckoutText(params: {
     doctorName: string | null;
     displayName: string | null;
     targetCode: string;
+    endedAt: Date;
 }) {
     const name = formatReminderDoctorName(params.doctorName, params.displayName);
-    return [
-        "🟠🕔 Meio plantao encerrado automaticamente.",
-        `${name} foi retirado de ${params.targetCode} as 17:00.`,
-        "Ja removi do quadro principal e registrei para pagamento como MEIO.",
-    ].join("\n");
+    return `⏰ *Meio plantão encerrado:* *${name}* saiu de *${params.targetCode}* às *${formatHour(params.endedAt)}* (automático). Já registrei para pagamento como MEIO.`;
 }
 
 async function runHalfShiftAutoCheckout(referenceDate: Date, board: ReminderBoardSnapshot) {
@@ -993,6 +968,7 @@ async function runHalfShiftAutoCheckout(referenceDate: Date, board: ReminderBoar
             doctorName: row.doctorName,
             displayName: row.displayName,
             targetCode: row.postCode,
+            endedAt,
         });
 
         const results = await Promise.allSettled(chatIds.map((chatId) => sendMessage(chatId, text)));

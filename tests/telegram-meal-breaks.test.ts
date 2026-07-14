@@ -642,7 +642,7 @@ test("buildMealBreakPriorityReplyMessages quebra a fila longa em blocos menores 
     assert.ok(messages.length > 1);
     for (const message of messages) {
         assert.ok(message.length <= 700);
-        assert.match(message, /PRIORIDADES DO ALMOCO/);
+        assert.match(message, /PRIORIDADES DO ALMOÇO/);
     }
 });
 
@@ -1346,8 +1346,8 @@ test("resumo final mostra CP com almoco e descanso a criterio", () => {
     assert.equal(rest1.status, "completed");
 
     assert.match(rest1.messages[1] ?? "", /👑 CHEFIA/);
-    assert.match(rest1.messages[1] ?? "", /• Almoco a criterio/);
-    assert.match(rest1.messages[1] ?? "", /• Descanso a criterio/);
+    assert.match(rest1.messages[1] ?? "", /• Almoço a critério/);
+    assert.match(rest1.messages[1] ?? "", /• Descanso a critério/);
 });
 
 test("resumo final mostra PSIQ fixo em 12:30 e 18:00", () => {
@@ -1749,7 +1749,7 @@ test("applyMealBreakReply conduz almoco e descanso ate o fechamento", () => {
     });
     assert.ok(outOfTurn);
     assert.equal(outOfTurn?.status, "invalid");
-    assert.match(outOfTurn?.messages[0] ?? "", /chamado atual e para o ramal 2036/i);
+    assert.match(outOfTurn?.messages[0] ?? "", /chamado atual é para o ramal 2036/i);
 
     const lunch1 = applyMealBreakReply({
         session: mrv!.session,
@@ -1806,7 +1806,7 @@ test("applyMealBreakReply conduz almoco e descanso ate o fechamento", () => {
     assert.ok(rest3);
     assert.equal(rest3?.session.stage, "completed");
     assert.equal(rest3?.session.restAssignments["2038"], "16:30");
-    assert.match(rest3?.messages[1] ?? "", /🍽️ ALMOCO/);
+    assert.match(rest3?.messages[1] ?? "", /🍽️ ALMOÇO/);
     assert.match(rest3?.messages[1] ?? "", /14:30\n• Patricia/);
     assert.match(rest3?.messages[1] ?? "", /18:00\n• Marina \(MRV\)\n• Carlos \(MRV\)\n• Renata \(RECIP\)/);
 });

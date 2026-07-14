@@ -1,4 +1,4 @@
-import { looksLikeDepartureMessage, parseMessage } from "@/modules/telegram/parser";
+import { looksLikeDepartureMessage, MEAL_BREAK_KEYWORDS, parseMessage } from "@/modules/telegram/parser";
 
 export interface TelegramRecentSenderMessage {
     rawText: string;
@@ -19,6 +19,10 @@ export interface TelegramCommandSuggestionResult {
     intro: string;
     suggestions: TelegramCommandSuggestion[];
 }
+
+// Detecta menção a jantar (JANTAR/JANTA/JANTANDO...) para escolher /jantar em vez
+// de /almoço — mesma tolerância a typo do parser (MEAL_BREAK_KEYWORDS).
+const DINNER_KEYWORD = /\bJANT\w{0,5}\b/;
 
 const SHORT_REPLY_PATTERNS = new Set([
     "1",
@@ -64,7 +68,9 @@ function buildDepartureExample(params: {
     const doctorName = params.doctorName?.trim() || "Nome Sobrenome";
     const target = params.target?.trim() || "IT30";
     const time = params.time?.trim() || "07:50";
-    return `${doctorName} saindo ${target} ${time} porque fui liberado pela chefia`;
+    // Sem justificativa no exemplo genérico: saída normal não precisa de motivo
+    // (auditoria comunicação §3.1#16).
+    return `${doctorName} saindo ${target} ${time}`;
 }
 
 function resolveLatestContext(recentMessages: TelegramRecentSenderMessage[]) {
@@ -74,7 +80,7 @@ function resolveLatestContext(recentMessages: TelegramRecentSenderMessage[]) {
             return "recip" as const;
         }
 
-        if ((entry.parsedAction ?? "").startsWith("meal_break") || normalized.includes("ALMOCO") || normalized.includes("JANTAR")) {
+        if ((entry.parsedAction ?? "").startsWith("meal_break") || MEAL_BREAK_KEYWORDS.test(normalized)) {
             return "meal_break" as const;
         }
 
@@ -170,11 +176,11 @@ function suggestCorrection(text: string, recentMessages: TelegramRecentSenderMes
 function suggestMealBreak(text: string, recentMessages: TelegramRecentSenderMessage[]): TelegramCommandSuggestionResult {
     const normalized = normalizeFreeText(text);
     const recentText = recentMessages.map((entry) => normalizeFreeText(entry.rawText)).join(" ");
-    const isNight = normalized.includes("JANTAR") || recentText.includes("JANTAR");
+    const isNight = DINNER_KEYWORD.test(normalized) || DINNER_KEYWORD.test(recentText);
     const command = isNight ? "/jantar" : "/almoço";
     return {
         kind: "meal_break",
-        intro: "Isso parece uma tentativa de resposta do fluxo de refeição, mas fora do formato esperado.",
+        intro: "Parece resposta da divisão de refeição, mas fora do formato.",
         suggestions: [
             {
                 label: "Abrir novamente a divisão atual",
@@ -205,7 +211,7 @@ function suggestShortReply(text: string, recentMessages: TelegramRecentSenderMes
 
     return {
         kind: "short_reply",
-        intro: "Isso parece uma resposta curta de fluxo pendente, mas não encontrei pendência aberta agora.",
+        intro: "Parece resposta a uma pergunta minha, mas não encontrei pendência aberta agora.",
         suggestions: [
             {
                 label: "Ver o relato do turno atual",
@@ -251,7 +257,7 @@ export function suggestTelegramCommandHelp(params: {
         return suggestDeparture(text, recentMessages);
     }
 
-    if (normalized.includes("ALMOCO") || normalized.includes("JANTAR") || normalized.startsWith("/CANCELAR")) {
+    if (MEAL_BREAK_KEYWORDS.test(normalized) || normalized.startsWith("/CANCELAR")) {
         return suggestMealBreak(text, recentMessages);
     }
 
@@ -262,9 +268,18 @@ export function suggestTelegramCommandHelp(params: {
     return null;
 }
 
+// Emoji semântico por tipo de sugestão (auditoria §2): 🍽️ refeição, ⚠️ ação do usuário.
+const SUGGESTION_PREFIX: Record<TelegramCommandSuggestionResult["kind"], string> = {
+    recip: "⚠️",
+    departure: "⚠️",
+    correction: "⚠️",
+    meal_break: "🍽️",
+    short_reply: "⚠️",
+};
+
 export function buildTelegramCommandSuggestionReply(result: TelegramCommandSuggestionResult) {
     const lines = [
-        `⚠️ ${result.intro}`,
+        `${SUGGESTION_PREFIX[result.kind] ?? "⚠️"} ${result.intro}`,
         "",
         "Se era isso que você quis dizer, use um destes formatos:",
     ];

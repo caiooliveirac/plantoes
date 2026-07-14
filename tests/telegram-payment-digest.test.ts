@@ -157,7 +157,7 @@ test("buildPaymentDigestMessages agrupa por médico, ordena por nome e inclui ca
     const messages = buildPaymentDigestMessages(board, NOON_SP);
     assert.equal(messages.length, 1);
     const [message] = messages;
-    assert.match(message, /📋 Fechamento provisório — Junho 2026/);
+    assert.match(message, /💰 Fechamento provisório — Junho 2026/);
     assert.match(message, /Gerado 07\/06 12:05/);
     // Ana antes de Zé.
     assert.ok(message.indexOf("Ana Paula") < message.indexOf("Zé da Silva"));

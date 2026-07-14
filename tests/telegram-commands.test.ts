@@ -55,6 +55,7 @@ import {
     shouldTreatTelegramArrivalAsImplicitReassignment,
     buildTelegramContinuationSourceHint,
     buildPublicTelegramCommandHelpReply,
+    suggestTelegramCommandForTypo,
     shouldRouteToDepartureJustification,
     shouldForceTelegramTakeoverOnContinuationConflict,
     resolveTelegramForcedTakeoverAt,
@@ -154,7 +155,42 @@ test("buildPublicTelegramCommandHelpReply lista somente comandos publicos didati
     assert.match(reply, /\/plantao/);
     assert.match(reply, /\/resumo/);
     assert.match(reply, /\/saidas/);
+    assert.match(reply, /\/ajuda/);
     assert.doesNotMatch(reply, /\/medico|\/banco|\/desfazer|\/ativar|\/desativar|\/remover/);
+});
+
+test("suggestTelegramCommandForTypo mapeia aliases de refeicao e prioridade de saida", () => {
+    assert.equal(suggestTelegramCommandForTypo("/janta"), "/jantar");
+    assert.equal(suggestTelegramCommandForTypo("/JANTA"), "/jantar");
+    assert.equal(suggestTelegramCommandForTypo("/jantando"), "/jantar");
+    assert.equal(suggestTelegramCommandForTypo("/refazerjantar"), "/jantar");
+    assert.equal(suggestTelegramCommandForTypo("/ordemdesaida"), "/prioridadesaida");
+    assert.equal(suggestTelegramCommandForTypo("/ordem"), "/prioridadesaida");
+    assert.equal(suggestTelegramCommandForTypo("/prioridadesaidas"), "/prioridadesaida");
+    assert.equal(suggestTelegramCommandForTypo("/plantoa"), "/plantao");
+});
+
+test("suggestTelegramCommandForTypo sugere por distancia de edicao ate 2", () => {
+    assert.equal(suggestTelegramCommandForTypo("/pagamnto"), "/pagamento");
+    assert.equal(suggestTelegramCommandForTypo("/resumoo"), "/resumo");
+    assert.equal(suggestTelegramCommandForTypo("/xyzabc"), null);
+});
+
+test("suggestTelegramCommandForTypo nao sugere para comando real nem mapeia /saida", () => {
+    // /saida é alias documentado de /retirar — nunca sugerir /prioridadesaida.
+    assert.equal(suggestTelegramCommandForTypo("/saida"), null);
+    assert.equal(suggestTelegramCommandForTypo("/saidas"), null);
+    assert.equal(suggestTelegramCommandForTypo("/plantao"), null);
+    assert.equal(suggestTelegramCommandForTypo("/ajuda@MeuBot"), null);
+    assert.equal(suggestTelegramCommandForTypo("nao é comando"), null);
+});
+
+test("parseTelegramCommand aceita sufixo @bot no nome do comando", () => {
+    const parsed = parseTelegramCommand("/corrigir@MeuBot PM04 20:00");
+
+    assert.equal(parsed?.name, "corrigir");
+    assert.equal(parsed?.targetCode, "PM04");
+    assert.equal(parsed?.time, "20:00");
 });
 
 test("suggestTelegramCommandHelp sugere RECIP com duas opcoes no maximo", () => {
@@ -177,7 +213,9 @@ test("suggestTelegramCommandHelp sugere sintaxe de saida e corrigirsaida para li
 
     assert.equal(result?.kind, "departure");
     assert.equal(result?.suggestions.length, 2);
-    assert.match(result?.suggestions[0]?.usage ?? "", /saindo IT30 07:50 porque fui liberado pela chefia/i);
+    // Exemplo genérico de saída não traz mais justificativa (auditoria §3.1#16).
+    assert.match(result?.suggestions[0]?.usage ?? "", /saindo IT30 07:50/i);
+    assert.doesNotMatch(result?.suggestions[0]?.usage ?? "", /porque fui liberado/i);
     assert.match(result?.suggestions[1]?.usage ?? "", /\/corrigirsaida .* IT30/i);
 });
 
@@ -1529,12 +1567,13 @@ test("buildTelegramShiftReport separates confirmed rows from previous-shift carr
 
     assert.match(report, /Plantão SN/);
     assert.match(report, /✅ PM04 - Ana \| chegada 19:00 \| SN/);
-    assert.match(report, /🔴 BR05 - Joao \| SD desde 07:18/);
+    assert.match(report, /🟡 BR05 - Joao \| SD desde 07:18/);
     assert.match(report, /sem confirmação para SN/);
     assert.match(report, /🔴 IT30/);
     assert.match(report, /✅ 2031 - Bruno \| chegada 19:02 \| SN/);
     assert.match(report, /🟡 2032 - Marina/);
     assert.match(report, /🔴 2033/);
+    assert.match(report, /🟡 herança do turno anterior · 🔴 sem aviso/);
 });
 
 test("buildTelegramShiftReport reports disabled intervention bases outside the pending bucket", () => {
@@ -1690,7 +1729,7 @@ test("buildTelegramShiftReport shows null shiftLabel from previous shift as carr
     });
 
     assert.match(report, /Plantão SD/);
-    assert.match(report, /🔴 PM04 - Joana \| turno anterior desde 19:30 \| sem confirmação para SD/);
+    assert.match(report, /🟡 PM04 - Joana \| turno anterior desde 19:30 \| sem confirmação para SD/);
     assert.match(report, /🟡 2032 - Paulo \| turno anterior desde 19:00/);
 });
 
@@ -2026,7 +2065,7 @@ test("pickTelegramReply uses dedicated wording for explicit P arrival", () => {
         time: "07:00",
     });
 
-    assert.match(reply, /^🔵🔁/u);
+    assert.match(reply, /^🔁/u);
     assert.match(reply, /chegada em P|entrada em P|tudo certo com o P|P registrado/i);
     assert.match(reply, /próximo|seguinte/i);
 });
@@ -2040,7 +2079,7 @@ test("pickTelegramReply describes continuation without resetting arrival", () =>
 
     assert.match(reply, /continua|continuidade/i);
     assert.match(reply, /já estava|preservei|desde 07:12|mesmo plantão/i);
-    assert.match(reply, /^🔵🔁/u);
+    assert.match(reply, /^🔁/u);
 });
 
 test("pickTelegramReply renders half-shift assumption with dedicated emoji and wording", () => {
@@ -2050,8 +2089,8 @@ test("pickTelegramReply renders half-shift assumption with dedicated emoji and w
         time: "11:34",
     });
 
-    assert.match(reply, /^🟠🌓/u);
-    assert.match(reply, /supus que voce esta no meio plantao da tarde/i);
+    assert.match(reply, /^☀️/u);
+    assert.match(reply, /supus que você está no meio plantão da tarde/i);
     assert.match(reply, /MEIO/i);
     assert.match(reply, /17:00/);
 });
@@ -2881,7 +2920,7 @@ test("buildTakeoverWarningReply: avisa ocupante, pede confirmação curta 'confi
     assert.match(reply, /desde \*07:00\*/);
     assert.match(reply, /responda só/);
     assert.match(reply, /`confirmo 2153`/);
-    assert.match(reply, /horário de chegada dele fica preservado/);
+    assert.match(reply, /horário de chegada preservado/);
 });
 
 test("parseTakeoverConfirmShortcut: reconhece 'confirmo NNNN' e variações, ignora o resto", () => {
@@ -2909,9 +2948,11 @@ test("buildTakeoverDisplacedAnnouncement: anuncia deslocamento com chegada prese
         arrivingName: "Maria", occupantName: "Fulano", targetLabel: "2153", sinceTime: "07:00",
     });
     assert.match(msg, /\*Maria\* assumiu \*2153\*/);
-    assert.match(msg, /\*Fulano\* foi deslocado/);
+    // Forma neutra (sem particípio flexionado) + exemplo de redeclaração (§3.1#18).
+    assert.match(msg, /\*Fulano\* ficou fora do quadro/);
     assert.match(msg, /chegada preservada desde \*07:00\*/);
     assert.match(msg, /declarar uma nova posição/);
+    assert.match(msg, /Ex\.: _Fulano <ramal ou base destino>_/);
 });
 
 test("resolveTelegramSuccessReplyKind can force reassignment wording for implicit remanejamento", () => {
@@ -3185,7 +3226,7 @@ test("pickTelegramReply confirms that the late-departure justification was attac
         time: "19:20",
     });
 
-    assert.match(reply, /^📝✅/u);
+    assert.match(reply, /^✅/u);
     assert.match(reply, /justificativa|motivo/i);
     assert.match(reply, /coordenação/i);
     assert.match(reply, /pagamento|banco de horas/i);
@@ -3518,17 +3559,17 @@ test("buildTelegramArrivalConflictMessage cobre erros genéricos sem alterar o t
     assert.ok(!msg.includes("/retirar"), "erro genérico não deve ter instrução /retirar");
 });
 
-test("buildForcedTakeoverHint retorna aviso 🚨 com nome do médico deslocado", () => {
+test("buildForcedTakeoverHint retorna aviso 🔁 com nome do médico deslocado", () => {
     const hint = buildForcedTakeoverHint({
         displacedDoctorName: "João Silva",
         baseCode: "PM04",
     });
 
-    assert.ok(hint.includes("🚨"), "hint deve ter emoji de alerta");
-    assert.ok(hint.includes("João Silva"), "hint deve citar o médico que foi retirado");
+    // 🔁 substitui o 🚨 *ATENÇÃO* (auditoria comunicação §2).
+    assert.ok(hint.includes("🔁"), "hint deve ter emoji de remanejo/troca");
+    assert.ok(hint.includes("João Silva"), "hint deve citar o médico retirado do quadro");
     assert.ok(hint.includes("PM04"), "hint deve citar a base");
     assert.ok(hint.includes("automaticamente"), "hint deve deixar claro que a retirada foi automática");
-    assert.ok(hint.includes("ATENÇÃO"), "hint deve ter ATENÇÃO visível");
 });
 
 test("buildForcedTakeoverHint retorna string vazia quando nenhum médico foi deslocado", () => {

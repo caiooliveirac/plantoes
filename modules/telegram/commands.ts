@@ -107,7 +107,7 @@ export function parseTelegramDepartureCorrectionCommand(text: string): ParsedTel
 }
 
 export function parseTelegramCommand(text: string): ParsedTelegramCommand | null {
-    const match = text.trim().match(/^\/(corrigir|retirar|remover|ramal|ativar|desativar|saiu|saindo|saida|saída|ontem|hoje)\b\s*([\s\S]*)$/i);
+    const match = text.trim().match(/^\/(corrigir|retirar|remover|ramal|ativar|desativar|saiu|saindo|saida|saída|ontem|hoje)(?:@\w+)?\b\s*([\s\S]*)$/i);
     if (!match) {
         return null;
     }

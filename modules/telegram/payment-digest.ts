@@ -127,7 +127,7 @@ export function buildPaymentDigestMessages(board: ChiefPayableBoardModel, refere
 
     const parts = getSaoPauloParts(referenceDate);
     const stamp = `${pad2(parts.day)}/${pad2(parts.month)} ${pad2(parts.hour)}:${pad2(parts.minute)}`;
-    const header = `📋 Fechamento provisório — ${board.monthLabel}\n`
+    const header = `💰 Fechamento provisório — ${board.monthLabel}\n`
         + `Gerado ${stamp} · confira com cada plantonista antes de subir p/ pagamento`;
 
     return packMessages(header, blocks);

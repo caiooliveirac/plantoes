@@ -48,8 +48,10 @@ function normalizeDateToken(value: string | null | undefined, reference = new Da
     return null;
 }
 
-export const TELEGRAM_PAYMENT_REPORT_USAGE = "/pagamento conferir [YYYY-MM-DD] [SD|SN]";
-export const TELEGRAM_PAYMENT_CORRECTION_USAGE = "/pagamento corrigir alvo | Nome Completo | [YYYY-MM-DD] | [SD|SN] | [motivo]";
+// Usages como exemplos preenchidos, prontos para copiar. No corrigir, o "|" tem um
+// único significado: separar os campos do comando.
+export const TELEGRAM_PAYMENT_REPORT_USAGE = "/pagamento conferir 2026-04-07 SD (data e turno opcionais — turno é SD ou SN)";
+export const TELEGRAM_PAYMENT_CORRECTION_USAGE = "/pagamento corrigir PM04 | Ana Souza | 2026-04-07 | SD | motivo da correção (data, turno e motivo opcionais — turno é SD ou SN)";
 export const TELEGRAM_PAYMENT_DIGEST_USAGE = "/pagamento [mês] (ex.: /pagamento, /pagamento 05, /pagamento maio)";
 
 const MONTH_NAMES_PT: Record<string, number> = {
