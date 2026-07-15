@@ -26,8 +26,8 @@ import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
 import { isRemoteOperationalRole, isRemotePriorityRegulationCode, normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { getSaoPauloParts, resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import type { TelegramUpdate } from "@/modules/telegram/api";
-import { buildChoiceKeyboard, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
+import type { TelegramFormatOptions, TelegramUpdate } from "@/modules/telegram/api";
+import { buildChoiceKeyboard, escapeTelegramMarkdown, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds } from "@/modules/telegram/config";
 import { getOperationalBoard } from "@/services/board.service";
 
@@ -248,6 +248,49 @@ export interface MealBreakActionResult {
     session: MealBreakSession;
     messages: string[];
     status: "started" | "reported" | "updated" | "completed" | "invalid";
+    /**
+     * Quando true, o remetente NÃO deve reanexar o reply keyboard da vez a esta
+     * resposta (ex.: "fora da vez" e dedupe — o teclado pertence a outra pessoa).
+     */
+    suppressKeyboard?: boolean;
+}
+
+/**
+ * Opções de formatação dos balões de refeição: todos os textos deste módulo já
+ * escapam interpolações (nomes) via escapeTelegramMarkdown, então o callsite de
+ * envio pode ligar Markdown com segurança. Exportado para o service usar no
+ * dispatcher sem precisar conhecer o detalhe.
+ */
+export const MEAL_BREAK_FORMAT_OPTIONS: TelegramFormatOptions = { parseMode: "Markdown" };
+
+/**
+ * Erro de negócio "user-facing" do fluxo de refeição: a mensagem é curada em
+ * pt-BR e pode ir direto ao grupo. Qualquer outro Error é tratado como falha
+ * técnica (mensagem genérica no grupo; detalhe só para o admin/log).
+ */
+export class MealBreakUserError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "MealBreakUserError";
+    }
+}
+
+export function isMealBreakUserFacingError(error: unknown): boolean {
+    return error instanceof MealBreakUserError || isMealBreakConsistencyError(error);
+}
+
+/**
+ * Detalhe técnico de um erro NÃO user-facing, para alerta privado ao admin.
+ * Devolve null para erros de negócio (que já foram respondidos no grupo).
+ */
+export function resolveMealBreakTechnicalErrorDetail(error: unknown): string | null {
+    if (isMealBreakUserFacingError(error)) {
+        return null;
+    }
+    if (error instanceof Error) {
+        return `${error.name}: ${error.message}`;
+    }
+    return String(error);
 }
 
 const SESSION_NOTICE_STAGE = "meal_break_flow";
@@ -394,9 +437,32 @@ function resolveEligibilityNoticeKey(operationalDate: string, mode: MealBreakMod
     return `${PRIORITY_NOTICE_CHAT_ID}:meal_break:eligibility:${operationalDate}:${mode}`;
 }
 
+// Nome pronto para interpolação nos balões: os envios deste módulo usam
+// parse_mode Markdown (MEAL_BREAK_FORMAT_OPTIONS), então TODO nome interpolado
+// passa por escapeTelegramMarkdown aqui, no choke point de renderização.
+// O roster/sessão continua guardando o nome cru.
 function resolveDoctorName(value: { name: string }) {
-    return value.name.trim() || "Médico";
+    return escapeTelegramMarkdown(value.name.trim() || "Médico");
 }
+
+// Referência ao painel operacional nos balões: com AUTH_URL definido vira
+// "painel (https://...)" — o cliente do Telegram auto-linka a URL; sem env,
+// fica só "painel" (texto sem link).
+export function resolveMealBreakPanelLabel() {
+    const raw = process.env.AUTH_URL?.trim();
+    if (!raw) {
+        return "painel";
+    }
+    return `painel (${escapeTelegramMarkdown(raw.replace(/\/+$/, ""))})`;
+}
+
+// Glosas de jargão (1ª ocorrência por balão): o repo não define as expansões
+// das siglas, então traduzimos pelo EFEITO operacional, que é verificável no
+// código deste módulo (RECIP almoça 11:30/descansa 18:00; MRVs almoçam
+// 12:30/13:30; COI é a dupla 1367/1368 que não pode parar junta).
+const RECIP_GLOSS = "RECIP (função fixa: almoço 11:30 e descanso 18:00)";
+const MRV_GLOSS = "MRV (função fixa de almoço 12:30/13:30)";
+const COI_GLOSS = "COI (dupla 1367/1368)";
 
 function isMealBreakEligibilityOverrideRecord(value: unknown): value is MealBreakEligibilityOverrideRecord {
     if (!value || typeof value !== "object") {
@@ -557,11 +623,12 @@ function buildAutomaticPriorityReasons(params: {
     }
 
     if (isRemoteOperationalRole(params.doctor.roleLabel) && params.priorityStartedAt !== arrivalStartedAt) {
-        reasons.push(`RMT fixo, entra como ${formatHour(params.priorityStartedAt)}`);
+        // Jargão traduzido na fonte (camada de refeição): RMT = cobre remoto.
+        reasons.push(`função remota (RMT): entra na fila como ${formatHour(params.priorityStartedAt)}`);
     }
 
     if (params.doctor.roleLabel === "IES" && isRemotePriorityRegulationCode(params.doctor.ramal)) {
-        reasons.push("IES declarado, tratado como presencial");
+        reasons.push("IES declarado: conta como presencial na fila");
     }
 
     return reasons;
@@ -1250,20 +1317,24 @@ function buildSessionSummary(session: MealBreakSession) {
     ].join("\n");
 }
 
+function formatAvailableSlotEntry(slot: string, remaining: number) {
+    return `*${slot}* (${remaining} vaga${remaining > 1 ? "s" : ""})`;
+}
+
 function buildAvailableLunchText(session: MealBreakSession) {
     const remaining = resolveRemainingLunchSlots(session);
     return LUNCH_SLOTS
         .filter((slot) => remaining[slot] > 0)
-        .map((slot) => `${slot} (${remaining[slot]} vaga${remaining[slot] > 1 ? "s" : ""})`)
-        .join(", ");
+        .map((slot) => formatAvailableSlotEntry(slot, remaining[slot]))
+        .join(" · ");
 }
 
 function buildAvailableRestText(session: MealBreakSession) {
     const remaining = resolveRemainingRestChoiceSlots(session);
     return (["15:30", "16:30"] as const)
         .filter((slot) => remaining[slot] > 0)
-        .map((slot) => `${slot} (${remaining[slot]} vaga${remaining[slot] > 1 ? "s" : ""})`)
-        .join(", ");
+        .map((slot) => formatAvailableSlotEntry(slot, remaining[slot]))
+        .join(" · ");
 }
 
 function resolveRemainingNightWorkSlots(session: MealBreakSession) {
@@ -1309,16 +1380,16 @@ function buildAvailableNightWorkText(session: MealBreakSession) {
     const remaining = resolveRemainingNightWorkSlots(session);
     return NIGHT_WORK_SLOTS
         .filter((slot) => remaining[slot] > 0)
-        .map((slot) => `${slot} (${remaining[slot]} vaga${remaining[slot] > 1 ? "s" : ""})`)
-        .join(", ");
+        .map((slot) => formatAvailableSlotEntry(slot, remaining[slot]))
+        .join(" · ");
 }
 
 function buildAvailableDinnerText(session: MealBreakSession) {
     const remaining = resolveRemainingDinnerChoiceSlots(session);
     return DINNER_CHOICE_SLOTS
         .filter((slot) => remaining[slot] > 0)
-        .map((slot) => `${slot} (${remaining[slot]} vaga${remaining[slot] > 1 ? "s" : ""})`)
-        .join(", ");
+        .map((slot) => formatAvailableSlotEntry(slot, remaining[slot]))
+        .join(" · ");
 }
 
 export function buildMealBreakStageKeyboard(session: MealBreakSession): TelegramReplyMarkup | null {
@@ -1412,24 +1483,7 @@ export function buildMealBreakStageKeyboard(session: MealBreakSession): Telegram
 }
 
 function buildDayStartPrompt() {
-    return "Primeiro, informem o RAMAL ou nome do médico RECIP.";
-}
-
-// Frases bem-humoradas para deixar claro de quem e a vez. Variam de forma
-// deterministica (pela posicao na fila) para nao deixar os testes flaky.
-const MEAL_BREAK_TURN_QUIPS = [
-    "bora que a fila tá voando! 😄",
-    "todo mundo de olho em você 👀",
-    "rufem os tambores... 🥁",
-    "a galera tá com fome, hein 😅",
-    "sem estresse, só caprichar na escolha 😎",
-    "é rapidinho, prometo 🤙",
-];
-
-function pickMealBreakQuip(seed: number) {
-    const size = MEAL_BREAK_TURN_QUIPS.length;
-    const index = ((seed % size) + size) % size;
-    return MEAL_BREAK_TURN_QUIPS[index];
+    return `Primeiro, informem o RAMAL ou nome do médico ${RECIP_GLOSS}.`;
 }
 
 // Chamadas de reforco quando a pessoa da vez nao respondeu e o bot precisa
@@ -1452,44 +1506,146 @@ function buildMealBreakTurnNudgeMessage(session: MealBreakSession, count: number
     return `${pickMealBreakNudgeLead(count)}\n${buildCurrentPrompt(session)}`;
 }
 
-// Anuncio padrao "e a vez de FULANO do ramal X escolher", com horarios livres,
-// exemplo de resposta e quantos faltam na fila.
+/**
+ * Slot de exemplo da convocação/recusa: varia de forma DETERMINÍSTICA pela
+ * posição da fila (seed % vagas) para não induzir aglomeração no primeiro
+ * horário — sem aleatoriedade, então os testes não ficam flaky.
+ */
+export function pickMealBreakExampleSlot<TSlot extends string>(availableSlots: readonly TSlot[], seed: number): TSlot | null {
+    if (availableSlots.length === 0) {
+        return null;
+    }
+    const size = availableSlots.length;
+    const index = ((seed % size) + size) % size;
+    return availableSlots[index] ?? null;
+}
+
+// Anúncio "é a vez de FULANO": nome na 1ª linha (a dor nº1 do fluxo era o nome
+// da vez enterrado), horários livres preservados (o teclado atual depende do
+// payload "RAMAL HH:MM" — os botões NÃO mudam) e prévia de quem vem depois.
 function buildTurnAnnouncement(params: {
     ramal: string;
     name: string;
-    actionLabel: string;
-    afterAction?: string;
+    mealLabel: string;
     emoji: string;
     available: string;
     exampleSlot: string | null;
+    nextName: string | null;
     remainingInQueue: number;
 }) {
-    const { ramal, name, actionLabel, afterAction, emoji, available, exampleSlot, remainingInQueue } = params;
+    const { ramal, name, mealLabel, emoji, available, exampleSlot, nextName, remainingInQueue } = params;
     const lines = [
-        `${emoji} É a vez de ${name} · ramal ${ramal} escolher o ${actionLabel}${afterAction ?? ""}!`,
-        `🔔 ${name}, ${pickMealBreakQuip(remainingInQueue)}`,
+        `${emoji} *É a vez de ${name}* — ramal *${ramal}*`,
+        exampleSlot
+            ? `Escolha o ${mealLabel} nos botões, ou responda: \`${ramal} ${exampleSlot}\``
+            : `Escolha o ${mealLabel} nos botões.`,
     ];
     if (available) {
-        lines.push(`🕐 Horários livres: ${available}`);
+        lines.push(`Livres: ${available}`);
     }
-    if (exampleSlot) {
-        lines.push(`👉 Responda assim: ${ramal} ${exampleSlot}`);
-    }
-    lines.push(remainingInQueue > 1 ? `⏭️ Ainda faltam ${remainingInQueue} na fila.` : "🎉 Falta só você na fila!");
+    lines.push(
+        remainingInQueue > 1 && nextName
+            ? `⏭️ Depois: ${nextName} · faltam ${remainingInQueue - 1}`
+            : "⏭️ Falta só você na fila.",
+    );
     return lines.join("\n");
 }
 
-// Mensagem amigavel para quem mandou a escolha fora da vez. Mantem a frase
-// "chamado atual e para o ramal X" e deixa explicito de quem e a vez agora.
-function buildWaitYourTurnMessage(session: MealBreakSession, currentRamal: string | null) {
+/**
+ * Posição (1-based) de um ramal na fila do estágio atual da sessão, calculada
+ * pelo RAMAL digitado (não há vínculo telegram↔médico). Null quando o ramal
+ * não está na fila desta etapa.
+ */
+export function resolveMealBreakQueuePosition(session: MealBreakSession, ramal: string): number | null {
+    const queue = resolveStageChoiceQueue(session);
+    const index = queue.indexOf(normalizeRamal(ramal));
+    return index >= 0 ? index + 1 : null;
+}
+
+// Resposta para escolha fora da vez: diz quem é a vez AGORA e a posição de quem
+// digitou (pelo ramal informado), com fallback claro quando o ramal não está na
+// fila. Enviada SEM teclado (suppressKeyboard) — o teclado pertence à vez atual.
+function buildWaitYourTurnMessage(session: MealBreakSession, currentRamal: string | null, attemptedRamal?: string | null) {
     if (!currentRamal) {
         return "Calma! A divisão está sendo finalizada, já te aviso.";
     }
     const name = resolveDoctorCompactName(findDoctor(session, currentRamal) ?? { name: currentRamal });
-    return [
-        `⏳ Opa, ainda não é a sua vez! Agora é a vez de ${name} · ramal ${currentRamal} escolher.`,
-        `O chamado atual é para o ramal ${currentRamal}. Aguarde sua vez.`,
-    ].join("\n");
+    const lead = `⛔ Ainda não é sua vez — agora é *${name}* (${currentRamal}).`;
+    const position = attemptedRamal ? resolveMealBreakQueuePosition(session, attemptedRamal) : null;
+    if (position && position > 1) {
+        return `${lead} Você é o *${position}º* da fila; eu te chamo.`;
+    }
+    if (attemptedRamal) {
+        return `${lead} O ramal ${normalizeRamal(attemptedRamal)} não está na fila desta etapa — confira o número ou fale com a chefia.`;
+    }
+    return `${lead} Eu te chamo quando chegar a sua vez.`;
+}
+
+/**
+ * Escolha idêntica já registrada (mesmo ramal → mesmo horário) em qualquer fase
+ * do modo atual. Base do ack de dedupe: repetição não pode virar silêncio nem
+ * vazar para o parser de chegada.
+ */
+export function findMealBreakDuplicateChoice(
+    session: MealBreakSession,
+    ramal: string,
+    slot: string,
+): { kind: "lunch" | "rest" | "night_work" | "dinner" } | null {
+    const normalizedRamal = normalizeRamal(ramal);
+    if (session.mode === "day") {
+        if (session.lunchAssignments[normalizedRamal] === slot) {
+            return { kind: "lunch" };
+        }
+        if (session.restAssignments[normalizedRamal] === slot) {
+            return { kind: "rest" };
+        }
+        return null;
+    }
+    if (session.nightWorkAssignments[normalizedRamal] === slot) {
+        return { kind: "night_work" };
+    }
+    if (session.dinnerAssignments[normalizedRamal] === slot) {
+        return { kind: "dinner" };
+    }
+    return null;
+}
+
+function buildMealBreakDuplicateChoiceReply(ramal: string, slot: string) {
+    return `✅ Já anotei *${normalizeRamal(ramal)} → ${slot}*. Não precisa reenviar.`;
+}
+
+/**
+ * Recusas de escolha em 2 moldes fixos, sempre com o ramal REAL da vez e um
+ * horário livre copiável. Distingue formato inválido, horário que não existe
+ * nesta fase e horário lotado.
+ */
+export function buildMealBreakChoiceRejection(params: {
+    kind: "format" | "slot_not_in_phase" | "slot_full";
+    slot?: string | null;
+    queueHead: string | null;
+    queueLength: number;
+    availableText: string;
+    availableSlots: readonly string[];
+}): string {
+    const example = pickMealBreakExampleSlot(params.availableSlots, params.queueLength);
+    const replyHint = params.queueHead && example ? `Responda: \`${params.queueHead} ${example}\`` : null;
+    if (params.kind === "format") {
+        return ["⛔ Não entendi.", replyHint].filter(Boolean).join(" ");
+    }
+    const slotLabel = params.slot ? `*${params.slot}*` : "Esse horário";
+    const freeSuffix = params.availableText ? ` Livres: ${params.availableText}.` : "";
+    const lead = params.kind === "slot_full"
+        ? `⛔ ${slotLabel} lotou.${freeSuffix}`
+        : `⛔ ${slotLabel} não vale nesta fase.${freeSuffix}`;
+    return [lead, replyHint].filter(Boolean).join(" ");
+}
+
+function resolveQueueNextName(session: MealBreakSession, queue: string[]) {
+    const nextRamal = queue[1] ?? null;
+    if (!nextRamal) {
+        return null;
+    }
+    return resolveDoctorCompactName(findDoctor(session, nextRamal) ?? { name: nextRamal });
 }
 
 function buildNightWorkQueuePrompt(session: MealBreakSession) {
@@ -1501,14 +1657,15 @@ function buildNightWorkQueuePrompt(session: MealBreakSession) {
     const doctor = findDoctor(session, currentRamal);
     const name = resolveDoctorCompactName(doctor ?? { name: currentRamal });
     const remaining = resolveRemainingNightWorkSlots(session);
-    const exampleSlot = NIGHT_WORK_SLOTS.find((slot) => remaining[slot] > 0) ?? null;
+    const availableSlots = NIGHT_WORK_SLOTS.filter((slot) => remaining[slot] > 0);
     return buildTurnAnnouncement({
         ramal: currentRamal,
         name,
-        actionLabel: "TRABALHO NOTURNO",
+        mealLabel: "trabalho noturno",
         emoji: "🌙",
         available: buildAvailableNightWorkText(session),
-        exampleSlot,
+        exampleSlot: pickMealBreakExampleSlot(availableSlots, session.nightWorkQueue.length),
+        nextName: resolveQueueNextName(session, session.nightWorkQueue),
         remainingInQueue: session.nightWorkQueue.length,
     });
 }
@@ -1523,15 +1680,15 @@ function buildNightDinnerQueuePrompt(session: MealBreakSession) {
     const name = resolveDoctorCompactName(doctor ?? { name: currentRamal });
     const duration = session.dinnerDurationAssignments[currentRamal] === "one_hour" ? "1h" : "30min";
     const remaining = resolveRemainingDinnerChoiceSlots(session);
-    const exampleSlot = DINNER_CHOICE_SLOTS.find((slot) => remaining[slot] > 0) ?? null;
+    const availableSlots = DINNER_CHOICE_SLOTS.filter((slot) => remaining[slot] > 0);
     return buildTurnAnnouncement({
         ramal: currentRamal,
         name,
-        actionLabel: "JANTAR",
-        afterAction: ` (${duration})`,
+        mealLabel: `jantar (${duration})`,
         emoji: "🍽️",
         available: buildAvailableDinnerText(session),
-        exampleSlot,
+        exampleSlot: pickMealBreakExampleSlot(availableSlots, session.dinnerQueue.length),
+        nextName: resolveQueueNextName(session, session.dinnerQueue),
         remainingInQueue: session.dinnerQueue.length,
     });
 }
@@ -1558,14 +1715,15 @@ function buildLunchQueuePrompt(session: MealBreakSession) {
     const doctor = findDoctor(session, currentRamal);
     const name = resolveDoctorCompactName(doctor ?? { name: currentRamal });
     const remaining = resolveRemainingLunchSlots(session);
-    const exampleSlot = LUNCH_SLOTS.find((slot) => remaining[slot] > 0) ?? null;
+    const availableSlots = LUNCH_SLOTS.filter((slot) => remaining[slot] > 0);
     return buildTurnAnnouncement({
         ramal: currentRamal,
         name,
-        actionLabel: "ALMOÇO",
+        mealLabel: "almoço",
         emoji: "🍽️",
         available: buildAvailableLunchText(session),
-        exampleSlot,
+        exampleSlot: pickMealBreakExampleSlot(availableSlots, session.lunchQueue.length),
+        nextName: resolveQueueNextName(session, session.lunchQueue),
         remainingInQueue: session.lunchQueue.length,
     });
 }
@@ -1579,14 +1737,15 @@ function buildRestQueuePrompt(session: MealBreakSession) {
     const doctor = findDoctor(session, currentRamal);
     const name = resolveDoctorCompactName(doctor ?? { name: currentRamal });
     const remaining = resolveRemainingRestChoiceSlots(session);
-    const exampleSlot = (["15:30", "16:30"] as const).find((slot) => remaining[slot] > 0) ?? null;
+    const availableSlots = (["15:30", "16:30"] as const).filter((slot) => remaining[slot] > 0);
     return buildTurnAnnouncement({
         ramal: currentRamal,
         name,
-        actionLabel: "DESCANSO",
+        mealLabel: "descanso",
         emoji: "😴",
         available: buildAvailableRestText(session),
-        exampleSlot,
+        exampleSlot: pickMealBreakExampleSlot(availableSlots, session.restQueue.length),
+        nextName: resolveQueueNextName(session, session.restQueue),
         remainingInQueue: session.restQueue.length,
     });
 }
@@ -1652,7 +1811,7 @@ function buildConfirmationPrompt(session: MealBreakSession) {
         ...presentialNotice,
         "",
         `Confirme para iniciar a divisão de ${label}.`,
-        `Se os horários de chegada estão errados, ajuste pelo site e mande ${restartCmd}.`,
+        `Se os horários de chegada estão errados, ajuste pelo ${resolveMealBreakPanelLabel()} e mande ${restartCmd}.`,
     ].join("\n");
 }
 
@@ -1686,8 +1845,8 @@ function buildCurrentPrompt(session: MealBreakSession) {
                 ]
                 : [];
             return [
-                `⚠️ Não identifiquei os 2 MRVs ativos. Falta${missingCount > 1 ? "m" : ""} ${missingCount}.`,
-                "Adicione no painel e mande /almoco reiniciar, ou responda com o RAMAL do MRV faltante.",
+                `⚠️ Não identifiquei os 2 ${MRV_GLOSS} ativos. Falta${missingCount > 1 ? "m" : ""} ${missingCount}.`,
+                `Adicione no ${resolveMealBreakPanelLabel()} e mande /almoco reiniciar, ou responda com o RAMAL do MRV faltante.`,
                 "",
                 ...knownMrvs,
                 "Responda com um RAMAL ativo para registrar como MRV.",
@@ -1698,7 +1857,7 @@ function buildCurrentPrompt(session: MealBreakSession) {
             return `${ramal} · ${resolveDoctorCompactName(doc ?? { name: ramal })}`;
         });
         return [
-            "🍽️ Qual MRV almoça 12:30?",
+            `🍽️ Qual ${MRV_GLOSS} almoça *12:30*?`,
             "",
             ...doctors.map((d) => `• ${d}`),
         ].join("\n");
@@ -2133,11 +2292,11 @@ function buildMealBreakRosterEntries(
     const operationalDate = formatOperationalDate(referenceAt);
     const shiftWindow = resolveOperationalShiftWindow(referenceAt);
     if (mode === "day" && shiftWindow.shiftLabel !== "SD") {
-        throw new Error("Fluxo de almoço vale apenas no plantão diurno.");
+        throw new MealBreakUserError("Fluxo de almoço vale apenas no plantão diurno.");
     }
 
     if (mode === "night" && shiftWindow.shiftLabel !== "SN") {
-        throw new Error("Fluxo de jantar vale apenas no plantão noturno.");
+        throw new MealBreakUserError("Fluxo de jantar vale apenas no plantão noturno.");
     }
 
     const regulation = board.regulation
@@ -2626,7 +2785,7 @@ export async function updateMealBreakPriorityOrder(params: {
 }) {
     const notes = params.notes.trim();
     if (!notes) {
-        throw new Error("A justificativa do ajuste de prioridade é obrigatória.");
+        throw new MealBreakUserError("A justificativa do ajuste de prioridade é obrigatória.");
     }
 
     const context = await buildMealBreakPriorityContext({
@@ -2636,11 +2795,11 @@ export async function updateMealBreakPriorityOrder(params: {
     });
     const currentIndex = context.entries.findIndex((entry) => entry.doctor.ramal === normalizeRamal(params.ramal));
     if (currentIndex < 0) {
-        throw new Error("Não encontrei esse ramal na fila atual de prioridade.");
+        throw new MealBreakUserError("Não encontrei esse ramal na fila atual de prioridade.");
     }
 
     if (!Number.isInteger(params.targetIndex) || params.targetIndex < 0 || params.targetIndex >= context.entries.length) {
-        throw new Error("Posição de prioridade inválida para a fila atual.");
+        throw new MealBreakUserError("Posição de prioridade inválida para a fila atual.");
     }
 
     const movingDoctorId = context.entries[currentIndex].doctor.doctorId;
@@ -3115,11 +3274,16 @@ export function shouldPreferMealBreakReplyForSession(session: MealBreakSession, 
         // escolha da divisao. Se o ramal esta na fila ativa mas ainda nao e a vez
         // dele, interceptamos mesmo assim para o handler responder "aguarde sua
         // vez" — em vez de deixar vazar para o parser de chegada e o robo
-        // responder outra coisa no meio do almoco/jantar.
+        // responder outra coisa no meio do almoco/jantar. O mesmo vale para a
+        // escolha IDENTICA ja registrada (dedupe): a repeticao ganha um ack em
+        // vez de virar tentativa de chegada silenciosa.
         if (
             !MEAL_BREAK_AMBIGUOUS_ARRIVAL_CUES.test(text)
             && !MEAL_BREAK_AMBIGUOUS_DEPARTURE_CUES.test(text)
-            && resolveStageChoiceQueue(session).includes(strictChoice.ramal)
+            && (
+                resolveStageChoiceQueue(session).includes(strictChoice.ramal)
+                || findMealBreakDuplicateChoice(session, strictChoice.ramal, strictChoice.slot) !== null
+            )
         ) {
             return true;
         }
@@ -3354,62 +3518,27 @@ function autoAssignRemainingDinnerIfSingleOption(session: MealBreakSession, refe
     }, referenceAt);
 }
 
-function buildLunchClosedMessages(session: MealBreakSession) {
+// Transição de fase em 1 balão: status curto + convocação seguinte na sequência.
+// O detalhamento (quem caiu no 14:30 automático, 18:00 fixo etc.) sai apenas no
+// resumo final, que mantém a lista nominal em cada bloco de horário.
+function buildPhaseTransitionMessage(closedLabel: string, prompt: string) {
+    return [`✅ *${closedLabel}* — resumo completo no fim.`, "", prompt].join("\n");
+}
+
+// Resumo final da divisão: lista nominal por horário (buildSessionSummary),
+// legenda das regras fixas e — só aqui, no fim — a dica de reinício (antes ela
+// aparecia 1 segundo depois da confirmação).
+function buildCompletedSummary(session: MealBreakSession) {
+    const restartCmd = session.mode === "night" ? "/jantar reiniciar" : "/almoco reiniciar";
+    const legend = session.mode === "day"
+        ? "ℹ️ 14:30: descanso automático de quem almoçou 13:30 · 18:00: fixo de RECIP, MRV e PSIQ."
+        : "ℹ️ Quem trabalha às 03:00 janta no último horário: 22:00 (1h) ou 22:30 (30min).";
     return [
-        "Almoço fechado.",
+        "✅ *Divisão fechada!*",
         buildSessionSummary(session),
+        legend,
+        `Se precisar refazer: ${restartCmd}`,
     ].join("\n\n");
-}
-
-function buildNightWorkClosedMessages(session: MealBreakSession) {
-    return [
-        "Trabalho da noite fechado.",
-        buildSessionSummary(session),
-    ].join("\n\n");
-}
-
-function buildRestIntro(session: MealBreakSession) {
-    const automatic1430 = Object.entries(session.restAssignments)
-        .filter(([, slot]) => slot === "14:30")
-        .map(([ramal]) => renderDoctorCompactSummary(session, ramal))
-        .join(", ");
-    const fixed1800 = Object.entries(session.restAssignments)
-        .filter(([, slot]) => slot === "18:00")
-        .map(([ramal]) => renderDoctorCompactSummary(
-            session,
-            ramal,
-            session.recipRamal === ramal ? "RECIP" : session.mrvRamals.includes(ramal) ? "MRV" : undefined,
-        ))
-        .join(", ");
-
-    const blocks = ["😴 Descanso:"];
-    if (automatic1430) {
-        blocks.push(`14:30 auto: ${automatic1430}`);
-    }
-    if (fixed1800) {
-        blocks.push(`18:00 fixo: ${fixed1800}`);
-    }
-
-    return blocks.join("\n");
-}
-
-function buildNightDinnerIntro(session: MealBreakSession) {
-    const autoLateDinner = Object.entries(session.nightWorkAssignments)
-        .filter(([, slot]) => slot === "03:00")
-        .map(([ramal]) => {
-            const dinnerSlot = session.dinnerAssignments[ramal] ?? resolveDefaultNightDinnerSlot(session.dinnerDurationAssignments[ramal] ?? "half_hour");
-            const duration = session.dinnerDurationAssignments[ramal] === "one_hour" ? "1h" : "30min";
-            return `${renderDoctorCompactSummary(session, ramal)} ${dinnerSlot} (${duration})`;
-        })
-        .join(", ");
-
-    const blocks = ["🍽️ Jantar:"];
-    if (autoLateDinner) {
-        blocks.push(`03:00 janta por último: ${autoLateDinner}`);
-    }
-    blocks.push(`Vagas: ${buildAvailableDinnerText(session)}`);
-
-    return blocks.join("\n");
 }
 
 function completeSession(session: MealBreakSession, referenceAt: Date, actorTelegramId: string | null) {
@@ -3457,7 +3586,6 @@ export function applyMealBreakReply(params: {
             return null;
         }
 
-        const restartCmd = session.mode === "night" ? "/jantar reiniciar" : "/almoco reiniciar";
         const nextStage: MealBreakStage = session.mode === "night" ? "awaiting_night_work_choice" : "awaiting_recip";
         let confirmed = withEvent({
             ...session,
@@ -3472,10 +3600,11 @@ export function applyMealBreakReply(params: {
             ? syncNightSessionState(confirmed)
             : syncDaySessionState(confirmed);
 
+        // A dica de reinício NÃO aparece aqui (acabou de confirmar) — ela vive
+        // no fim do resumo final (buildCompletedSummary).
         const startMsg = session.mode === "night"
             ? [
                 `✅ Confirmado!`,
-                `Reiniciar: ${restartCmd}`,
                 "",
                 buildNightStartPrompt(confirmed),
             ].join("\n")
@@ -3484,7 +3613,6 @@ export function applyMealBreakReply(params: {
             // para anunciar a etapa real em vez de pedir o RECIP de novo.
             : [
                 `✅ Confirmado!`,
-                `Reiniciar: ${restartCmd}`,
                 "",
                 buildCurrentPrompt(confirmed),
             ].join("\n");
@@ -3503,21 +3631,40 @@ export function applyMealBreakReply(params: {
         if (activeSession.stage === "awaiting_night_work_choice") {
             const parsed = parseChoiceReply(text);
             const currentRamal = activeSession.nightWorkQueue[0] ?? null;
+            const availableNightWork = resolveRemainingNightWorkSlots(activeSession);
+            const availableNightWorkSlots = NIGHT_WORK_SLOTS.filter((slot) => availableNightWork[slot] > 0);
             if (!parsed.ramal || !parsed.slot) {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: ["⛔ Formato inválido. Responda: RAMAL HORÁRIO."],
+                    messages: [buildMealBreakChoiceRejection({
+                        kind: "format",
+                        queueHead: currentRamal,
+                        queueLength: activeSession.nightWorkQueue.length,
+                        availableText: buildAvailableNightWorkText(activeSession),
+                        availableSlots: availableNightWorkSlots,
+                    })],
                     status: "invalid",
                 };
             }
 
             if (!currentRamal || parsed.ramal !== currentRamal) {
+                const duplicate = findMealBreakDuplicateChoice(activeSession, parsed.ramal, parsed.slot);
+                if (duplicate) {
+                    return {
+                        handled: true,
+                        session: activeSession,
+                        messages: [buildMealBreakDuplicateChoiceReply(parsed.ramal, parsed.slot)],
+                        status: "reported",
+                        suppressKeyboard: true,
+                    };
+                }
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [buildWaitYourTurnMessage(session, currentRamal)],
+                    messages: [buildWaitYourTurnMessage(activeSession, currentRamal, parsed.ramal)],
                     status: "invalid",
+                    suppressKeyboard: true,
                 };
             }
 
@@ -3525,7 +3672,14 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [`⛔ Horário inválido. Disponíveis agora: ${buildAvailableNightWorkText(activeSession)}.`],
+                    messages: [buildMealBreakChoiceRejection({
+                        kind: "slot_not_in_phase",
+                        slot: parsed.slot,
+                        queueHead: currentRamal,
+                        queueLength: activeSession.nightWorkQueue.length,
+                        availableText: buildAvailableNightWorkText(activeSession),
+                        availableSlots: availableNightWorkSlots,
+                    })],
                     status: "invalid",
                 };
             }
@@ -3540,7 +3694,7 @@ export function applyMealBreakReply(params: {
                     return {
                         handled: true,
                         session: activeSession,
-                        messages: [`⛔ Outro COI já está em ${chosenSlot}. Use ${otherSlot}.`],
+                        messages: [`⛔ O outro ${COI_GLOSS} já está em *${chosenSlot}*. Use *${otherSlot}*.`],
                         status: "invalid",
                     };
                 }
@@ -3555,7 +3709,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: forcedSession,
-                    messages: [`⚠️ COI não pode coincidir. Aloquei ${renderDoctorCompactSummary(activeSession, parsed.ramal)} em ${otherSlot} automaticamente.`],
+                    messages: [`⚠️ ${COI_GLOSS} não pode coincidir. Aloquei ${renderDoctorCompactSummary(activeSession, parsed.ramal)} em *${otherSlot}* automaticamente.`],
                     status: "updated",
                 };
             }
@@ -3572,7 +3726,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: forcedSession,
-                    messages: [`⚠️ Trabalho alocado em ${otherSlot} para garantir separação dos COIs.`],
+                    messages: [`⚠️ Trabalho alocado em *${otherSlot}* para garantir a separação dos COIs (dupla 1367/1368).`],
                     status: "updated",
                 };
             }
@@ -3596,7 +3750,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: forcedSession,
-                    messages: [`⚠️ Trabalho alocado em ${presentialUncovered} para garantir pelo menos 1 presencial em cada horário noturno.`],
+                    messages: [`⚠️ Trabalho alocado em *${presentialUncovered}* para garantir pelo menos 1 presencial em cada horário noturno.`],
                     status: "updated",
                 };
             }
@@ -3605,7 +3759,14 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [`⛔ Esse horário já completou as vagas. Disponíveis agora: ${buildAvailableNightWorkText(activeSession)}.`],
+                    messages: [buildMealBreakChoiceRejection({
+                        kind: "slot_full",
+                        slot: chosenSlot,
+                        queueHead: currentRamal,
+                        queueLength: activeSession.nightWorkQueue.length,
+                        availableText: buildAvailableNightWorkText(activeSession),
+                        availableSlots: NIGHT_WORK_SLOTS.filter((slot) => remaining[slot] > 0),
+                    })],
                     status: "invalid",
                 };
             }
@@ -3628,15 +3789,18 @@ export function applyMealBreakReply(params: {
             nextSession = autoAssignRemainingNightWorkIfSingleOption(nextSession, referenceAt, senderTelegramId);
 
             const compactName = renderDoctorCompactSummary(nextSession, parsed.ramal);
+            // Ack SEPARADO da convocação seguinte: o balão do ✅ é só de quem
+            // escolheu; a convocação do próximo sai em outro balão (o dispatcher
+            // anexa o teclado apenas à última mensagem).
             const workMessage = chosenSlot === "03:00"
-                ? `✅ ${compactName} → ${chosenSlot} (jantar ${nextSession.dinnerAssignments[parsed.ramal] ?? resolveDefaultNightDinnerSlot(dinnerDuration)})`
-                : `✅ ${compactName} → ${chosenSlot}`;
+                ? `✅ *${compactName}* → trabalho *${chosenSlot}* (jantar *${nextSession.dinnerAssignments[parsed.ramal] ?? resolveDefaultNightDinnerSlot(dinnerDuration)}*)`
+                : `✅ *${compactName}* → trabalho *${chosenSlot}*`;
 
             if (nextSession.stage === "awaiting_night_work_choice") {
                 return {
                     handled: true,
                     session: nextSession,
-                    messages: [[workMessage, buildCurrentPrompt(nextSession)].join("\n")],
+                    messages: [workMessage, buildCurrentPrompt(nextSession)],
                     status: "updated",
                 };
             }
@@ -3646,7 +3810,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: dinnerPhase,
-                    messages: [buildNightWorkClosedMessages(nextSession), buildSessionSummary(dinnerPhase)],
+                    messages: [workMessage, buildCompletedSummary(dinnerPhase)],
                     status: "completed",
                 };
             }
@@ -3654,7 +3818,7 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session: dinnerPhase,
-                messages: [buildNightWorkClosedMessages(nextSession), buildNightDinnerIntro(dinnerPhase), buildCurrentPrompt(dinnerPhase)],
+                messages: [workMessage, buildPhaseTransitionMessage("Trabalho da noite fechado", buildCurrentPrompt(dinnerPhase))],
                 status: "updated",
             };
         }
@@ -3662,21 +3826,40 @@ export function applyMealBreakReply(params: {
         if (activeSession.stage === "awaiting_dinner_choice") {
             const parsed = parseChoiceReply(text);
             const currentRamal = activeSession.dinnerQueue[0] ?? null;
+            const availableDinner = resolveRemainingDinnerChoiceSlots(activeSession);
+            const availableDinnerSlots = DINNER_CHOICE_SLOTS.filter((slot) => availableDinner[slot] > 0);
             if (!parsed.ramal || !parsed.slot) {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: ["⛔ Formato inválido. Responda: RAMAL HORÁRIO."],
+                    messages: [buildMealBreakChoiceRejection({
+                        kind: "format",
+                        queueHead: currentRamal,
+                        queueLength: activeSession.dinnerQueue.length,
+                        availableText: buildAvailableDinnerText(activeSession),
+                        availableSlots: availableDinnerSlots,
+                    })],
                     status: "invalid",
                 };
             }
 
             if (!currentRamal || parsed.ramal !== currentRamal) {
+                const duplicate = findMealBreakDuplicateChoice(activeSession, parsed.ramal, parsed.slot);
+                if (duplicate) {
+                    return {
+                        handled: true,
+                        session: activeSession,
+                        messages: [buildMealBreakDuplicateChoiceReply(parsed.ramal, parsed.slot)],
+                        status: "reported",
+                        suppressKeyboard: true,
+                    };
+                }
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [buildWaitYourTurnMessage(session, currentRamal)],
+                    messages: [buildWaitYourTurnMessage(activeSession, currentRamal, parsed.ramal)],
                     status: "invalid",
+                    suppressKeyboard: true,
                 };
             }
 
@@ -3684,7 +3867,14 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [`⛔ Horário inválido. Disponíveis agora: ${buildAvailableDinnerText(activeSession)}.`],
+                    messages: [buildMealBreakChoiceRejection({
+                        kind: "slot_not_in_phase",
+                        slot: parsed.slot,
+                        queueHead: currentRamal,
+                        queueLength: activeSession.dinnerQueue.length,
+                        availableText: buildAvailableDinnerText(activeSession),
+                        availableSlots: availableDinnerSlots,
+                    })],
                     status: "invalid",
                 };
             }
@@ -3707,7 +3897,7 @@ export function applyMealBreakReply(params: {
                         return {
                             handled: true,
                             session: forcedSession,
-                            messages: [`⚠️ COI não pode coincidir. Aloquei ${renderDoctorCompactSummary(activeSession, parsed.ramal)} em ${forcedAlt} automaticamente.`],
+                            messages: [`⚠️ ${COI_GLOSS} não pode coincidir. Aloquei ${renderDoctorCompactSummary(activeSession, parsed.ramal)} em *${forcedAlt}* automaticamente.`],
                             status: forcedSession.stage === "completed" ? "completed" : "updated",
                         };
                     }
@@ -3715,7 +3905,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [`⛔ Outro COI já está em ${chosenSlot}. Escolha outro: ${available.join(" ou ")}.`],
+                    messages: [`⛔ O outro ${COI_GLOSS} já está em *${chosenSlot}*. Escolha outro: ${available.map((s) => `*${s}*`).join(" ou ")}.`],
                     status: "invalid",
                 };
             }
@@ -3733,7 +3923,7 @@ export function applyMealBreakReply(params: {
                     return {
                         handled: true,
                         session: forcedSession,
-                        messages: [`⚠️ Jantar alocado em ${forcedSlot} para garantir separação dos COIs.`],
+                        messages: [`⚠️ Jantar alocado em *${forcedSlot}* para garantir a separação dos COIs (dupla 1367/1368).`],
                         status: forcedSession.stage === "completed" ? "completed" : "updated",
                     };
                 }
@@ -3743,7 +3933,14 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: activeSession,
-                    messages: [`⛔ Esse horário já completou as vagas. Disponíveis agora: ${buildAvailableDinnerText(activeSession)}.`],
+                    messages: [buildMealBreakChoiceRejection({
+                        kind: "slot_full",
+                        slot: chosenSlot,
+                        queueHead: currentRamal,
+                        queueLength: activeSession.dinnerQueue.length,
+                        availableText: buildAvailableDinnerText(activeSession),
+                        availableSlots: DINNER_CHOICE_SLOTS.filter((slot) => remaining[slot] > 0),
+                    })],
                     status: "invalid",
                 };
             }
@@ -3771,20 +3968,21 @@ export function applyMealBreakReply(params: {
                     handled: true,
                     session: updatedSession,
                     messages: [
-                        `✅ ${compactDinnerName} → ${chosenSlot} (${duration})`,
-                        buildSessionSummary(updatedSession),
+                        `✅ *${compactDinnerName}* → jantar *${chosenSlot}* (${duration})`,
+                        buildCompletedSummary(updatedSession),
                     ],
                     status: "completed",
                 };
             }
 
+            // Ack separado da convocação seguinte (2 balões).
             return {
                 handled: true,
                 session: updatedSession,
-                messages: [[
-                    `✅ ${compactDinnerName} → ${chosenSlot} (${duration})`,
+                messages: [
+                    `✅ *${compactDinnerName}* → jantar *${chosenSlot}* (${duration})`,
                     buildCurrentPrompt(updatedSession),
-                ].join("\n")],
+                ],
                 status: "updated",
             };
         }
@@ -3859,12 +4057,8 @@ export function applyMealBreakReply(params: {
             handled: true,
             session: nextSession,
             messages: [
-                [
-                    `✅ RECIP: ${resolveDoctorCompactName(doctor)} · ${resolvedRamal}`,
-                    "Almoço 11:30 · Descanso 18:00",
-                    "",
-                    buildCurrentPrompt(nextSession),
-                ].join("\n"),
+                `✅ RECIP: *${resolveDoctorCompactName(doctor)}* · *${resolvedRamal}*\nAlmoço *11:30* · Descanso *18:00*`,
+                buildCurrentPrompt(nextSession),
             ],
             status: "updated",
         };
@@ -3887,8 +4081,8 @@ export function applyMealBreakReply(params: {
                 handled: true,
                 session,
                 messages: [session.mrvRamals.length < 2
-                    ? "⛔ Não reconheci o MRV faltante. Atualize no painel e mande /almoco reiniciar, ou envie o RAMAL de um médico ativo."
-                    : "⛔ Não reconheci. Clique ou envie o RAMAL ou nome do MRV que ficará com 12:30."],
+                    ? `⛔ Não reconheci o MRV faltante. Atualize no ${resolveMealBreakPanelLabel()} e mande /almoco reiniciar, ou envie o RAMAL de um médico ativo.`
+                    : "⛔ Não reconheci. Clique ou envie o RAMAL ou nome do MRV que ficará com *12:30*."],
                 status: "invalid",
             };
         }
@@ -3917,7 +4111,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session,
-                    messages: ["⛔ Não reconheci esse ramal na lista ativa. Atualize no painel e mande /almoco reiniciar, ou informe outro ramal."],
+                    messages: [`⛔ Não reconheci esse ramal na lista ativa. Atualize no ${resolveMealBreakPanelLabel()} e mande /almoco reiniciar, ou informe outro ramal.`],
                     status: "invalid",
                 };
             }
@@ -3948,11 +4142,10 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session: syncedSession,
-                messages: [[
-                    `✅ MRV registrado: ${resolveDoctorCompactName(doctor)} · ${choiceResult.ramal}`,
-                    "",
+                messages: [
+                    `✅ MRV registrado: *${resolveDoctorCompactName(doctor)}* · *${choiceResult.ramal}*`,
                     buildCurrentPrompt(syncedSession),
-                ].join("\n")],
+                ],
                 status: "updated",
             };
         }
@@ -3987,15 +4180,14 @@ export function applyMealBreakReply(params: {
         }, referenceAt, senderTelegramId);
         const autoPreparedSession = autoAssignRemainingLunchIfSingleOption(preparedSession, referenceAt, senderTelegramId);
 
-        const mrvMsg = otherMrv
-            ? `✅ MRV 12:30: ${renderDoctorCompactSummary(autoPreparedSession, selectedRamal)} · MRV 13:30: ${renderDoctorCompactSummary(autoPreparedSession, otherMrv)}`
-            : `✅ MRV 12:30: ${renderDoctorCompactSummary(autoPreparedSession, selectedRamal)}`;
-        const messages = [[
-            mrvMsg,
-            `Vagas: 11:30 (${autoPreparedSession.lunchCapacities["11:30"]}), 12:30 (${autoPreparedSession.lunchCapacities["12:30"]}), 13:30 (${autoPreparedSession.lunchCapacities["13:30"]})`,
-            "",
-            buildCurrentPrompt(autoPreparedSession),
-        ].join("\n")];
+        // Ack do MRV separado da convocação seguinte: o balão que abre com
+        // "✅ MRV ..." não carrega mais o chamado do próximo médico.
+        const mrvMsg = [
+            otherMrv
+                ? `✅ MRV 12:30: *${renderDoctorCompactSummary(autoPreparedSession, selectedRamal)}* · MRV 13:30: *${renderDoctorCompactSummary(autoPreparedSession, otherMrv)}*`
+                : `✅ MRV 12:30: *${renderDoctorCompactSummary(autoPreparedSession, selectedRamal)}*`,
+            `Vagas: 11:30 (${autoPreparedSession.lunchCapacities["11:30"]}) · 12:30 (${autoPreparedSession.lunchCapacities["12:30"]}) · 13:30 (${autoPreparedSession.lunchCapacities["13:30"]})`,
+        ].join("\n");
 
         if (autoPreparedSession.lunchQueue.length === 0) {
             const restPhase = buildRestPhase(autoPreparedSession, referenceAt, senderTelegramId);
@@ -4004,7 +4196,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: completed,
-                    messages: [buildLunchClosedMessages(autoPreparedSession), buildSessionSummary(completed)],
+                    messages: [mrvMsg, buildCompletedSummary(completed)],
                     status: "completed",
                 };
             }
@@ -4012,7 +4204,7 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session: restPhase,
-                messages: [buildLunchClosedMessages(autoPreparedSession), buildRestIntro(restPhase), buildCurrentPrompt(restPhase)],
+                messages: [mrvMsg, buildPhaseTransitionMessage("Almoço fechado", buildCurrentPrompt(restPhase))],
                 status: "updated",
             };
         }
@@ -4020,7 +4212,7 @@ export function applyMealBreakReply(params: {
         return {
             handled: true,
             session: autoPreparedSession,
-            messages,
+            messages: [mrvMsg, buildCurrentPrompt(autoPreparedSession)],
             status: "updated",
         };
     }
@@ -4028,21 +4220,40 @@ export function applyMealBreakReply(params: {
     if (session.stage === "awaiting_lunch_choice") {
         const parsed = parseChoiceReply(text);
         const currentRamal = session.lunchQueue[0] ?? null;
+        const availableLunch = resolveRemainingLunchSlots(session);
+        const availableLunchSlots = LUNCH_SLOTS.filter((slot) => availableLunch[slot] > 0);
         if (!parsed.ramal || !parsed.slot) {
             return {
                 handled: true,
                 session,
-                messages: ["⛔ Formato inválido. Responda: RAMAL HORÁRIO."],
+                messages: [buildMealBreakChoiceRejection({
+                    kind: "format",
+                    queueHead: currentRamal,
+                    queueLength: session.lunchQueue.length,
+                    availableText: buildAvailableLunchText(session),
+                    availableSlots: availableLunchSlots,
+                })],
                 status: "invalid",
             };
         }
 
         if (!currentRamal || parsed.ramal !== currentRamal) {
+            const duplicate = findMealBreakDuplicateChoice(session, parsed.ramal, parsed.slot);
+            if (duplicate) {
+                return {
+                    handled: true,
+                    session,
+                    messages: [buildMealBreakDuplicateChoiceReply(parsed.ramal, parsed.slot)],
+                    status: "reported",
+                    suppressKeyboard: true,
+                };
+            }
             return {
                 handled: true,
                 session,
-                messages: [buildWaitYourTurnMessage(session, currentRamal)],
+                messages: [buildWaitYourTurnMessage(session, currentRamal, parsed.ramal)],
                 status: "invalid",
+                suppressKeyboard: true,
             };
         }
 
@@ -4050,7 +4261,14 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session,
-                messages: [`⛔ Horário inválido. Disponíveis agora: ${buildAvailableLunchText(session)}.`],
+                messages: [buildMealBreakChoiceRejection({
+                    kind: "slot_not_in_phase",
+                    slot: parsed.slot,
+                    queueHead: currentRamal,
+                    queueLength: session.lunchQueue.length,
+                    availableText: buildAvailableLunchText(session),
+                    availableSlots: availableLunchSlots,
+                })],
                 status: "invalid",
             };
         }
@@ -4075,7 +4293,7 @@ export function applyMealBreakReply(params: {
                     return {
                         handled: true,
                         session: updatedSession,
-                        messages: [`⚠️ COI não pode coincidir. Aloquei ${renderDoctorCompactSummary(session, parsed.ramal)} em ${forcedAlt} automaticamente.`],
+                        messages: [`⚠️ ${COI_GLOSS} não pode coincidir. Aloquei ${renderDoctorCompactSummary(session, parsed.ramal)} em *${forcedAlt}* automaticamente.`],
                         status: "updated",
                     };
                 }
@@ -4083,7 +4301,7 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session,
-                messages: [`⛔ Outro COI já está em ${chosenSlot}. Escolha outro: ${available.join(" ou ")}.`],
+                messages: [`⛔ O outro ${COI_GLOSS} já está em *${chosenSlot}*. Escolha outro: ${available.map((s) => `*${s}*`).join(" ou ")}.`],
                 status: "invalid",
             };
         }
@@ -4103,7 +4321,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: updatedSession,
-                    messages: [`⚠️ Almoço alocado em ${forcedSlot} para garantir separação dos COIs.`],
+                    messages: [`⚠️ Almoço alocado em *${forcedSlot}* para garantir a separação dos COIs (dupla 1367/1368).`],
                     status: "updated",
                 };
             }
@@ -4113,7 +4331,14 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session,
-                messages: [`⛔ Esse horário já completou as vagas. Disponíveis agora: ${buildAvailableLunchText(session)}.`],
+                messages: [buildMealBreakChoiceRejection({
+                    kind: "slot_full",
+                    slot: chosenSlot,
+                    queueHead: currentRamal,
+                    queueLength: session.lunchQueue.length,
+                    availableText: buildAvailableLunchText(session),
+                    availableSlots: LUNCH_SLOTS.filter((slot) => remaining[slot] > 0),
+                })],
                 status: "invalid",
             };
         }
@@ -4135,15 +4360,14 @@ export function applyMealBreakReply(params: {
         }, referenceAt);
         updatedSession = autoAssignRemainingLunchIfSingleOption(updatedSession, referenceAt, senderTelegramId);
 
-        const compactLunchName = renderDoctorCompactSummary(updatedSession, parsed.ramal);
+        // Ack SEPARADO da convocação: balão 1 é só o ✅ de quem escolheu; a
+        // convocação do próximo (ou a transição de fase) sai no balão seguinte.
+        const lunchAck = `✅ *${renderDoctorCompactSummary(updatedSession, parsed.ramal)}* → almoço *${chosenSlot}*`;
         if (updatedSession.lunchQueue.length > 0) {
             return {
                 handled: true,
                 session: updatedSession,
-                messages: [[
-                    `✅ ${compactLunchName} → ${chosenSlot}`,
-                    buildCurrentPrompt(updatedSession),
-                ].join("\n")],
+                messages: [lunchAck, buildCurrentPrompt(updatedSession)],
                 status: "updated",
             };
         }
@@ -4154,7 +4378,7 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session: completed,
-                messages: [buildLunchClosedMessages(updatedSession), buildSessionSummary(completed)],
+                messages: [lunchAck, buildCompletedSummary(completed)],
                 status: "completed",
             };
         }
@@ -4162,7 +4386,7 @@ export function applyMealBreakReply(params: {
         return {
             handled: true,
             session: restPhase,
-            messages: [buildLunchClosedMessages(updatedSession), buildRestIntro(restPhase), buildCurrentPrompt(restPhase)],
+            messages: [lunchAck, buildPhaseTransitionMessage("Almoço fechado", buildCurrentPrompt(restPhase))],
             status: "updated",
         };
     }
@@ -4170,21 +4394,40 @@ export function applyMealBreakReply(params: {
     if (session.stage === "awaiting_rest_choice") {
         const parsed = parseChoiceReply(text);
         const currentRamal = session.restQueue[0] ?? null;
+        const availableRest = resolveRemainingRestChoiceSlots(session);
+        const availableRestSlots = (["15:30", "16:30"] as const).filter((slot) => availableRest[slot] > 0);
         if (!parsed.ramal || !parsed.slot) {
             return {
                 handled: true,
                 session,
-                messages: ["⛔ Formato inválido. Responda: RAMAL HORÁRIO."],
+                messages: [buildMealBreakChoiceRejection({
+                    kind: "format",
+                    queueHead: currentRamal,
+                    queueLength: session.restQueue.length,
+                    availableText: buildAvailableRestText(session),
+                    availableSlots: availableRestSlots,
+                })],
                 status: "invalid",
             };
         }
 
         if (!currentRamal || parsed.ramal !== currentRamal) {
+            const duplicate = findMealBreakDuplicateChoice(session, parsed.ramal, parsed.slot);
+            if (duplicate) {
+                return {
+                    handled: true,
+                    session,
+                    messages: [buildMealBreakDuplicateChoiceReply(parsed.ramal, parsed.slot)],
+                    status: "reported",
+                    suppressKeyboard: true,
+                };
+            }
             return {
                 handled: true,
                 session,
-                messages: [buildWaitYourTurnMessage(session, currentRamal)],
+                messages: [buildWaitYourTurnMessage(session, currentRamal, parsed.ramal)],
                 status: "invalid",
+                suppressKeyboard: true,
             };
         }
 
@@ -4192,7 +4435,14 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session,
-                messages: [`⛔ Nesse momento só posso usar 15:30 ou 16:30. Disponíveis agora: ${buildAvailableRestText(session)}.`],
+                messages: [buildMealBreakChoiceRejection({
+                    kind: "slot_not_in_phase",
+                    slot: parsed.slot,
+                    queueHead: currentRamal,
+                    queueLength: session.restQueue.length,
+                    availableText: buildAvailableRestText(session),
+                    availableSlots: availableRestSlots,
+                })],
                 status: "invalid",
             };
         }
@@ -4208,7 +4458,7 @@ export function applyMealBreakReply(params: {
                     return {
                         handled: true,
                         session,
-                        messages: [`⛔ Outro COI já está em ${chosenSlot}. Use ${otherSlot}.`],
+                        messages: [`⛔ O outro ${COI_GLOSS} já está em *${chosenSlot}*. Use *${otherSlot}*.`],
                         status: "invalid",
                     };
                 }
@@ -4221,12 +4471,12 @@ export function applyMealBreakReply(params: {
                 }, { type: "rest_selected", actorTelegramId: senderTelegramId, ramal: parsed.ramal, slot: otherSlot }, referenceAt);
                 updatedSession = autoAssignRemainingRestIfSingleOption(updatedSession, referenceAt, senderTelegramId);
                 const completedMsg = updatedSession.stage === "completed"
-                    ? buildSessionSummary(completeSession(updatedSession, referenceAt, senderTelegramId))
+                    ? buildCompletedSummary(completeSession(updatedSession, referenceAt, senderTelegramId))
                     : buildCurrentPrompt(updatedSession);
                 return {
                     handled: true,
                     session: updatedSession.stage === "completed" ? completeSession(updatedSession, referenceAt, senderTelegramId) : updatedSession,
-                    messages: [`⚠️ COI não pode coincidir. Aloquei ${renderDoctorCompactSummary(session, parsed.ramal)} em ${otherSlot} automaticamente.`, completedMsg],
+                    messages: [`⚠️ ${COI_GLOSS} não pode coincidir. Aloquei ${renderDoctorCompactSummary(session, parsed.ramal)} em *${otherSlot}* automaticamente.`, completedMsg],
                     status: updatedSession.stage === "completed" ? "completed" : "updated",
                 };
             }
@@ -4243,12 +4493,12 @@ export function applyMealBreakReply(params: {
             }, { type: "rest_selected", actorTelegramId: senderTelegramId, ramal: parsed.ramal, slot: otherSlot }, referenceAt);
             updatedSession = autoAssignRemainingRestIfSingleOption(updatedSession, referenceAt, senderTelegramId);
             const completedMsg = updatedSession.stage === "completed"
-                ? buildSessionSummary(completeSession(updatedSession, referenceAt, senderTelegramId))
+                ? buildCompletedSummary(completeSession(updatedSession, referenceAt, senderTelegramId))
                 : buildCurrentPrompt(updatedSession);
             return {
                 handled: true,
                 session: updatedSession.stage === "completed" ? completeSession(updatedSession, referenceAt, senderTelegramId) : updatedSession,
-                messages: [`⚠️ Descanso alocado em ${otherSlot} para garantir separação dos COIs.`, completedMsg],
+                messages: [`⚠️ Descanso alocado em *${otherSlot}* para garantir a separação dos COIs (dupla 1367/1368).`, completedMsg],
                 status: updatedSession.stage === "completed" ? "completed" : "updated",
             };
         }
@@ -4257,7 +4507,14 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session,
-                messages: [`⛔ Esse horário já completou as vagas. Disponíveis agora: ${buildAvailableRestText(session)}.`],
+                messages: [buildMealBreakChoiceRejection({
+                    kind: "slot_full",
+                    slot: chosenSlot,
+                    queueHead: currentRamal,
+                    queueLength: session.restQueue.length,
+                    availableText: buildAvailableRestText(session),
+                    availableSlots: (["15:30", "16:30"] as const).filter((slot) => remaining[slot] > 0),
+                })],
                 status: "invalid",
             };
         }
@@ -4279,27 +4536,25 @@ export function applyMealBreakReply(params: {
         }, referenceAt);
 
         updatedSession = autoAssignRemainingRestIfSingleOption(updatedSession, referenceAt, senderTelegramId);
-        const compactRestName = renderDoctorCompactSummary(updatedSession, parsed.ramal);
+        const restAck = `✅ *${renderDoctorCompactSummary(updatedSession, parsed.ramal)}* → descanso *${chosenSlot}*`;
         if (updatedSession.stage === "completed") {
             const completed = completeSession(updatedSession, referenceAt, senderTelegramId);
             return {
                 handled: true,
                 session: completed,
                 messages: [
-                    `✅ ${compactRestName} → ${chosenSlot}`,
-                    buildSessionSummary(completed),
+                    restAck,
+                    buildCompletedSummary(completed),
                 ],
                 status: "completed",
             };
         }
 
+        // Ack separado da convocação seguinte (2 balões).
         return {
             handled: true,
             session: updatedSession,
-            messages: [[
-                `✅ ${compactRestName} → ${chosenSlot}`,
-                buildCurrentPrompt(updatedSession),
-            ].join("\n")],
+            messages: [restAck, buildCurrentPrompt(updatedSession)],
             status: "updated",
         };
     }
@@ -4511,19 +4766,28 @@ export async function runTelegramMealBreakExcludeCommand(params: {
     };
 }
 
+// Cabeçalho neutro: a ordem NÃO é só de chegada (continuidade, RMT e ajuste
+// manual da chefia também pesam), então "ordem de prioridade" em vez de fila.
+function buildMealBreakPriorityTitle(view: MealBreakPriorityView) {
+    return view.mode === "night" ? "📋 Ordem de prioridade — jantar" : "📋 Ordem de prioridade — almoço";
+}
+
+// 1 entrada por linha, sem tabela de pipes (ilegível no mobile): posição em
+// negrito, ramal entre parênteses e a hora REAL de chegada; ajustes (RMT,
+// continuidade, chefia) aparecem como explicação traduzida na mesma linha.
+function buildMealBreakPriorityLine(entry: MealBreakPriorityEntry) {
+    const base = `${entry.rank}º *${resolveDoctorCompactName({ name: entry.name })}* (${entry.ramal}) — chegou ${formatHour(entry.actualStartedAt)}`;
+    return entry.explanation ? `${base} · ${escapeTelegramMarkdown(entry.explanation)}` : base;
+}
+
 export function buildMealBreakPriorityReply(view: MealBreakPriorityView) {
+    const title = buildMealBreakPriorityTitle(view);
     if (view.entries.length === 0) {
-        return view.mode === "night"
-            ? "🌙 PRIORIDADES DO JANTAR\nSem médicos elegíveis na fila atual."
-            : "☀️ PRIORIDADES DO ALMOÇO\nSem médicos elegíveis na fila atual.";
+        return `${title}\nSem médicos elegíveis na fila atual.`;
     }
 
-    const title = view.mode === "night" ? "🌙 PRIORIDADES DO JANTAR" : "☀️ PRIORIDADES DO ALMOÇO";
-    const warnings = view.warnings.map((warning) => `⚠️ ${warning.message}`);
-    const lines = view.entries.map((entry) => {
-        const base = `${entry.rank}. ${resolveDoctorCompactName({ name: entry.name })} | ${entry.ramal} | ${formatHour(entry.priorityStartedAt)}`;
-        return entry.explanation ? `${base} | ${entry.explanation}` : base;
-    });
+    const warnings = view.warnings.map((warning) => `⚠️ ${escapeTelegramMarkdown(warning.message)}`);
+    const lines = view.entries.map((entry) => buildMealBreakPriorityLine(entry));
 
     return [title, ...warnings, ...lines].join("\n");
 }
@@ -4534,11 +4798,8 @@ export function buildMealBreakPriorityReplyMessages(view: MealBreakPriorityView,
         return [singleReply];
     }
 
-    const title = view.mode === "night" ? "🌙 PRIORIDADES DO JANTAR" : "☀️ PRIORIDADES DO ALMOÇO";
-    const lines = view.entries.map((entry) => {
-        const base = `${entry.rank}. ${resolveDoctorCompactName({ name: entry.name })} | ${entry.ramal} | ${formatHour(entry.priorityStartedAt)}`;
-        return entry.explanation ? `${base} | ${entry.explanation}` : base;
-    });
+    const title = buildMealBreakPriorityTitle(view);
+    const lines = view.entries.map((entry) => buildMealBreakPriorityLine(entry));
     const messages: string[] = [];
     let current = title;
 
@@ -4767,10 +5028,10 @@ export async function updateNightMealBreakAssignment(params: {
     const chatId = resolvedState?.chatId ?? null;
     const baseSession = resolvedState?.session ?? null;
     if (!baseSession) {
-        throw new Error("Não existe sessão noturna ativa para este plantão.");
+        throw new MealBreakUserError("Não existe sessão noturna ativa para este plantão.");
     }
     if (!chatId) {
-        throw new Error("Não consegui identificar o chat ativo da divisão noturna.");
+        throw new MealBreakUserError("Não consegui identificar o chat ativo da divisão noturna.");
     }
 
     const ramal = normalizeRamal(params.ramal);
@@ -4781,7 +5042,7 @@ export async function updateNightMealBreakAssignment(params: {
         referenceAt: params.referenceAt,
     });
     if (!session) {
-        throw new Error(resolveMealBreakOutOfDivisionMessage(ramal));
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(ramal));
     }
 
     const hasNightWorkPatch = Object.prototype.hasOwnProperty.call(params, "nightWorkSlot");
@@ -4811,12 +5072,12 @@ export async function updateNightMealBreakAssignment(params: {
     const effectiveNightWorkSlot = nightWorkAssignments[ramal] ?? null;
     if (hasDinnerPatch) {
         if (!effectiveNightWorkSlot) {
-            throw new Error("Defina primeiro o trabalho da noite antes do jantar.");
+            throw new MealBreakUserError("Defina primeiro o trabalho da noite antes do jantar.");
         }
 
         if (effectiveNightWorkSlot === "03:00") {
             if (params.dinnerSlot && params.dinnerSlot !== defaultLateDinner) {
-                throw new Error("Quem trabalha às 03:00 deve jantar no último horário permitido.");
+                throw new MealBreakUserError("Quem trabalha às 03:00 deve jantar no último horário permitido.");
             }
 
             dinnerAssignments[ramal] = defaultLateDinner;
@@ -4827,7 +5088,7 @@ export async function updateNightMealBreakAssignment(params: {
                 delete dinnerAssignments[ramal];
             } else {
                 if (!DINNER_CHOICE_SLOTS.includes(nextDinnerSlot as (typeof DINNER_CHOICE_SLOTS)[number])) {
-                    throw new Error("Quem trabalha às 23:00 só pode jantar entre 20:30 e 21:30.");
+                    throw new MealBreakUserError("Quem trabalha às 23:00 só pode jantar entre 20:30 e 21:30.");
                 }
 
                 dinnerAssignments[ramal] = nextDinnerSlot;
@@ -4863,7 +5124,7 @@ export async function updateDayMealBreakEligibility(params: {
         !Object.prototype.hasOwnProperty.call(params, "lunchExcluded")
         && !Object.prototype.hasOwnProperty.call(params, "restExcluded")
     ) {
-        throw new Error("Nenhuma mudança de almoço ou descanso foi informada.");
+        throw new MealBreakUserError("Nenhuma mudança de almoço ou descanso foi informada.");
     }
 
     const operationalDate = formatOperationalDate(params.referenceAt);
@@ -4875,7 +5136,7 @@ export async function updateDayMealBreakEligibility(params: {
     // Sem isso (posto vazio/inativo) nao da para gravar uma exclusao que acompanhe alguem.
     const targetDoctorId = doctorIdByRamal.get(normalizedRamal) ?? null;
     if (!targetDoctorId) {
-        throw new Error(resolveMealBreakOutOfDivisionMessage(normalizedRamal));
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(normalizedRamal));
     }
 
     const previous = await loadMealBreakEligibilityOverrides(operationalDate, "day");
@@ -4941,7 +5202,7 @@ export async function updateDayMealBreakEligibility(params: {
         referenceAt: params.referenceAt,
     });
     if (!session) {
-        throw new Error(resolveMealBreakOutOfDivisionMessage(normalizedRamal));
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(normalizedRamal));
     }
 
     const nextSession = syncDaySessionState(withEvent({
@@ -4970,7 +5231,7 @@ export async function updateDayMealBreakAssignment(params: {
     const hasLunchPatch = Object.prototype.hasOwnProperty.call(params, "lunchSlot");
     const hasRestPatch = Object.prototype.hasOwnProperty.call(params, "restSlot");
     if (!hasLunchPatch && !hasRestPatch) {
-        throw new Error("Nenhuma mudança de almoço ou descanso foi informada.");
+        throw new MealBreakUserError("Nenhuma mudança de almoço ou descanso foi informada.");
     }
 
     const operationalDate = formatOperationalDate(params.referenceAt);
@@ -4980,10 +5241,10 @@ export async function updateDayMealBreakAssignment(params: {
     const chatId = resolvedState?.chatId ?? null;
     const baseSession = resolvedState?.session ?? null;
     if (!baseSession) {
-        throw new Error("Não existe sessão diurna ativa para este plantão.");
+        throw new MealBreakUserError("Não existe sessão diurna ativa para este plantão.");
     }
     if (!chatId) {
-        throw new Error("Não consegui identificar o chat ativo da divisão diurna.");
+        throw new MealBreakUserError("Não consegui identificar o chat ativo da divisão diurna.");
     }
 
     const ramal = normalizeRamal(params.ramal);
@@ -4994,7 +5255,7 @@ export async function updateDayMealBreakAssignment(params: {
         referenceAt: params.referenceAt,
     });
     if (!session) {
-        throw new Error(resolveMealBreakOutOfDivisionMessage(ramal));
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(ramal));
     }
 
     const lunchAssignments = { ...session.lunchAssignments };
@@ -5194,7 +5455,7 @@ export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()
         }
 
         try {
-            await sendMessage(chatId, buildMealBreakTurnNudgeMessage(session, action.count));
+            await sendMessage(chatId, buildMealBreakTurnNudgeMessage(session, action.count), undefined, undefined, MEAL_BREAK_FORMAT_OPTIONS);
             await saveMealBreakTurnNudgeRecord(chatId, operationalDate, mode, {
                 ramal: head,
                 at: referenceDate.toISOString(),
@@ -5214,6 +5475,8 @@ export async function sendTelegramMealBreakMessages(params: {
     messages: string[];
     replyToMessageId?: number;
     replyMarkup?: TelegramReplyMarkup;
+    /** Formatação por callsite (ex.: MEAL_BREAK_FORMAT_OPTIONS para os balões deste módulo). */
+    options?: TelegramFormatOptions;
 }) {
     const lastIndex = params.messages.length - 1;
     for (const [index, text] of params.messages.entries()) {
@@ -5223,22 +5486,23 @@ export async function sendTelegramMealBreakMessages(params: {
             text,
             index === 0 ? params.replyToMessageId : undefined,
             isLast ? params.replyMarkup : undefined,
+            params.options,
         );
     }
 }
 
+// Erros por CLASSE, não por substring: MealBreakUserError (e o erro de
+// consistência) carregam copies curadas que podem ir ao grupo; qualquer outro
+// Error vira mensagem genérica curta — o detalhe técnico fica no log e no
+// alerta privado do admin (resolveMealBreakTechnicalErrorDetail).
 export function buildMealBreakErrorReply(error: unknown) {
-    const message = error instanceof Error ? error.message : "Falha inesperada.";
-    if (message.includes("inconsistência")) {
+    if (isMealBreakConsistencyError(error)) {
         return "Há inconsistência na lista de médicos ativos. Preciso da lista atualizada para continuar.";
     }
-    if (message.includes("diurno")) {
-        return "Esse fluxo vale só para o plantão diurno.";
+    if (error instanceof MealBreakUserError) {
+        return error.message;
     }
-    if (message.includes("noturno")) {
-        return "Esse fluxo vale só para o plantão noturno.";
-    }
-    return `Não consegui organizar a divisão agora. ${message}`;
+    return "⛔ Não consegui organizar a divisão agora. Tente de novo em instantes — o detalhe técnico já foi registrado.";
 }
 
 export function resolveMealBreakLogDetails(session: MealBreakSession | null) {

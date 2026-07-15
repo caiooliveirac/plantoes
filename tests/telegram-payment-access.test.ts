@@ -166,7 +166,7 @@ function makeRow(shifts: PayableShift[]): ChiefPayableDoctorRow {
     return {
         doctorId: "doc-123", doctorName: "Acácio Junio de Almeida", displayName: null,
         paymentStatus: "ready_for_payment", totalSD: 0, totalSN: 0, total: shifts.length,
-        totalDue: 2489.74, paymentProfile: "generalist", pendingCount: 0,
+        totalDue: 2489.74, paymentProfile: "generalist", pendingCount: 0, attestedAt: null,
         cells: [{ day: "01", shifts }],
     };
 }
@@ -180,18 +180,33 @@ function makeBoard(): ChiefPayableBoardModel {
     };
 }
 
-test("buildDoctorPayrollMessages inclui R$ por linha, total e link", () => {
+test("buildDoctorPayrollMessages inclui R$ por linha, total no CABEÇALHO e link", () => {
     const row = makeRow([makeShift({})]);
     const url = "https://plantoes.mnrs.com.br/folha-ponto/doc-123/2026/06?t=abc.def";
     const [message] = buildDoctorPayrollMessages(row, makeBoard(), url);
     assert.match(message, /💰 Seu pagamento — Junho 2026/);
     assert.match(message, /01\/06 Seg SD PR03 \(Dia útil\) · R\$\s?1\.244,87/);
-    assert.match(message, /Total: R\$\s?2\.489,74/);
+    // Auditoria §3.4#7: total no topo, não espremido acima da URL.
+    assert.match(message, /Total do mês: R\$\s?2\.489,74/);
+    assert.ok(
+        message.indexOf("Total do mês") < message.indexOf("01/06"),
+        "total deve vir no cabeçalho, antes das linhas",
+    );
     assert.match(message, /📄 Folha de ponto: https:\/\/plantoes/);
 });
 
-test("buildDoctorPayrollMessages: sem plantões, mensagem amigável", () => {
+test("buildDoctorPayrollMessages acrescenta legenda de MEIO quando há meio plantão", () => {
+    const row = makeRow([makeShift({ paymentTag: "MEIO", paymentUnit: 0.5 })]);
+    const [message] = buildDoctorPayrollMessages(row, makeBoard(), "https://x/y");
+    assert.match(message, /MEIO = meio plantão/);
+
+    const [semMeio] = buildDoctorPayrollMessages(makeRow([makeShift({})]), makeBoard(), "https://x/y");
+    assert.ok(!semMeio.includes("MEIO = meio plantão"), "sem meio plantão, sem legenda");
+});
+
+test("buildDoctorPayrollMessages: sem plantões, variante vazia unificada SEM link", () => {
     const row = makeRow([]);
     const [message] = buildDoctorPayrollMessages(row, makeBoard(), "https://x/y");
-    assert.match(message, /Nenhum plantão registrado/);
+    assert.match(message, /nenhum plantão registrado/i);
+    assert.ok(!message.includes("https://"), "variante vazia não deve levar link de folha vazia");
 });

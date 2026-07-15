@@ -1,5 +1,6 @@
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
+import { escapeTelegramMarkdown } from "@/modules/telegram/api";
 import {
     sortTelegramInterventionCodes,
     sortTelegramInterventionTargetRows,
@@ -7,6 +8,11 @@ import {
     sortTelegramRegulationTargetRows,
 } from "@/modules/telegram/presentation-order";
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
+
+// Os relatórios saem com parseMode Markdown: toda interpolação passa por md().
+function md(value: string) {
+    return escapeTelegramMarkdown(value);
+}
 
 const OPERATIONAL_LOCAL_OFFSET_MINUTES = -180;
 
@@ -149,22 +155,23 @@ function resolveBankHoursLabel(row: PaymentAllocationRow) {
 
 function buildDepartureReportLine(row: PaymentAllocationRow) {
     if (!row.occupancyId) {
-        return `⚪ ${row.targetCode} | --:-- | sem ocupação definida | --:-- | BH pendente`;
+        return `⚪ ${md(row.targetCode)} | --:-- | sem ocupação definida | --:-- | BH pendente`;
     }
 
-    const name = formatDoctorSurfaceName({
+    const name = md(formatDoctorSurfaceName({
         fullName: row.doctorName,
         displayName: row.displayName,
         fallback: "médico não identificado",
-    });
+    }));
     const visibleIssues = row.continuesBeyondShift
         ? row.issues.filter((issue) => !/sem saida consolidada/i.test(issue))
         : row.issues;
+    // 🔎 = precisa de revisão da chefia (tabela de emojis §2; era ⚠️).
     const prefix = row.continuesBeyondShift
         ? "🔁"
-        : row.paymentStatus === "ready_for_payment" ? "✅" : "⚠️";
+        : row.paymentStatus === "ready_for_payment" ? "✅" : "🔎";
     const reviewSuffix = visibleIssues.length > 0
-        ? ` | revisar: ${summarizeIssues(visibleIssues)}`
+        ? ` | revisar: ${md(summarizeIssues(visibleIssues))}`
         : "";
     const disabledSuffix = row.disabledDuringShift && row.disabledAt
         ? ` | base desativada ${formatHour(row.disabledAt)}`
@@ -172,13 +179,13 @@ function buildDepartureReportLine(row: PaymentAllocationRow) {
             ? " | base desativada no turno"
             : "";
 
-    return `${prefix} ${row.targetCode} | ${formatHour(resolveArrivalAt(row))} | ${name} | ${formatHour(resolveExitAt(row))} | ${resolveBankHoursLabel(row)}${reviewSuffix}${disabledSuffix}`;
+    return `${prefix} ${md(row.targetCode)} | ${formatHour(resolveArrivalAt(row))} | ${name} | ${formatHour(resolveExitAt(row))} | ${resolveBankHoursLabel(row)}${reviewSuffix}${disabledSuffix}`;
 }
 
 function buildDisabledDepartureLine(row: PaymentAllocationRow) {
     const disabledAt = row.disabledAt ? formatHour(row.disabledAt) : "--:--";
-    const reason = row.disabledReason?.trim() ? ` | ${row.disabledReason.trim()}` : "";
-    return `⚫ ${row.targetCode} | ${disabledAt} | base desativada para o turno${reason}`;
+    const reason = row.disabledReason?.trim() ? ` | ${md(row.disabledReason.trim())}` : "";
+    return `⚫ ${md(row.targetCode)} | ${disabledAt} | base desativada para o turno${reason}`;
 }
 
 export function resolveTelegramDepartureReportRequest(params: {
@@ -209,35 +216,27 @@ export function resolveTelegramDepartureReportRequest(params: {
     };
 }
 
-export function buildTelegramDepartureReport(board: PaymentAllocationBoard) {
+interface DepartureReportModel {
+    regulationAssigned: PaymentAllocationRow[];
+    interventionAssigned: PaymentAllocationRow[];
+    needsReviewRows: PaymentAllocationRow[];
+    emptyTargets: string[];
+    disabledTargets: PaymentAllocationRow[];
+    totalCredit: number;
+    totalDebit: number;
+    totalNet: number;
+}
+
+function resolveDepartureReportModel(board: PaymentAllocationBoard): DepartureReportModel {
     const regulationAssigned = sortTelegramRegulationTargetRows(board.regulation.filter((row) => row.occupancyId));
     const interventionAssigned = sortTelegramInterventionTargetRows(board.intervention.filter((row) => row.occupancyId));
-    const assignedNeedsReviewCount = [...regulationAssigned, ...interventionAssigned]
-        .filter((row) => row.paymentStatus === "needs_review" && !row.continuesBeyondShift).length;
+    const needsReviewRows = [...regulationAssigned, ...interventionAssigned]
+        .filter((row) => row.paymentStatus === "needs_review" && !row.continuesBeyondShift);
     const emptyTargets = [
         ...sortTelegramRegulationCodes(board.regulation.filter((row) => !row.occupancyId && !row.disabledEntireShift).map((row) => row.targetCode)),
         ...sortTelegramInterventionCodes(board.intervention.filter((row) => !row.occupancyId && !row.disabledEntireShift).map((row) => row.targetCode)),
     ];
     const disabledTargets = sortTelegramInterventionTargetRows(board.intervention.filter((row) => row.disabledEntireShift));
-
-    const header = [
-        `📤 Saídas ${formatDateLabel(board.operationalDate)} ${board.shiftLabel}.`,
-        "Formato: alvo | chegada real | nome | saída | banco.",
-        `Alocados ${board.summary.assignedCount}/${board.summary.totalTargets} | revisar ${assignedNeedsReviewCount} | vazios ${board.summary.unassignedCount} | desativadas ${board.summary.disabledCount ?? 0}`,
-    ];
-
-    const regulationBlock = regulationAssigned.length > 0
-        ? ["", "Regulação:", regulationAssigned.map(buildDepartureReportLine).join("\n")]
-        : [];
-    const interventionBlock = interventionAssigned.length > 0
-        ? ["", "Intervenção:", interventionAssigned.map(buildDepartureReportLine).join("\n")]
-        : [];
-    const emptyBlock = emptyTargets.length > 0
-        ? ["", `Vazios (${emptyTargets.length}): ${emptyTargets.join(", ")}`]
-        : [];
-    const disabledBlock = disabledTargets.length > 0
-        ? ["", "Desativadas:", disabledTargets.map(buildDisabledDepartureLine).join("\n")]
-        : [];
 
     const allAssigned = [...regulationAssigned, ...interventionAssigned];
     const totalCredit = allAssigned.reduce((sum, row) => {
@@ -250,8 +249,84 @@ export function buildTelegramDepartureReport(board: PaymentAllocationBoard) {
         const balance = bh.balanceMinutes ?? 0;
         return balance < 0 ? sum + balance : sum;
     }, 0);
-    const totalNet = totalCredit + totalDebit;
-    const bhFooter = ["", `BH turno: ${formatDuration(totalCredit, true)} crédito, ${formatDuration(totalDebit, true)} débito, saldo ${formatDuration(totalNet, true)}`];
+
+    return {
+        regulationAssigned,
+        interventionAssigned,
+        needsReviewRows,
+        emptyTargets,
+        disabledTargets,
+        totalCredit,
+        totalDebit,
+        totalNet: totalCredit + totalDebit,
+    };
+}
+
+/**
+ * Íntegra do /saidas — pensada para o PRIVADO de quem pediu (auditoria §3.3#9).
+ * O grupo recebe só o resumo (buildTelegramDepartureReportSummary). Texto pronto
+ * para envio com parseMode "Markdown" (interpolações escapadas).
+ */
+export function buildTelegramDepartureReport(board: PaymentAllocationBoard) {
+    const model = resolveDepartureReportModel(board);
+
+    const header = [
+        `📋 *Saídas ${formatDateLabel(board.operationalDate)} ${board.shiftLabel}* — íntegra.`,
+        "Formato: alvo | chegada real | nome | saída | banco.",
+        `Alocados *${board.summary.assignedCount}/${board.summary.totalTargets}* | revisar *${model.needsReviewRows.length}* | vazios *${board.summary.unassignedCount}* | desativadas *${board.summary.disabledCount ?? 0}*`,
+    ];
+
+    const regulationBlock = model.regulationAssigned.length > 0
+        ? ["", "Regulação:", model.regulationAssigned.map(buildDepartureReportLine).join("\n")]
+        : [];
+    const interventionBlock = model.interventionAssigned.length > 0
+        ? ["", "Intervenção:", model.interventionAssigned.map(buildDepartureReportLine).join("\n")]
+        : [];
+    const emptyBlock = model.emptyTargets.length > 0
+        ? ["", `Vazios (${model.emptyTargets.length}): ${model.emptyTargets.map(md).join(", ")}`]
+        : [];
+    const disabledBlock = model.disabledTargets.length > 0
+        ? ["", "Desativadas:", model.disabledTargets.map(buildDisabledDepartureLine).join("\n")]
+        : [];
+
+    const bhFooter = ["", `BH turno: ${formatDuration(model.totalCredit, true)} crédito, ${formatDuration(model.totalDebit, true)} débito, saldo *${formatDuration(model.totalNet, true)}*`];
 
     return [...header, ...regulationBlock, ...interventionBlock, ...emptyBlock, ...disabledBlock, ...bhFooter].join("\n");
+}
+
+const SUMMARY_REVIEW_TARGET_CAP = 5;
+
+/**
+ * Resumo de 3 linhas do /saidas para o GRUPO (auditoria §3.3#9). A íntegra vai
+ * no privado de quem pediu (buildTelegramDepartureReport); quando o envio privado
+ * falha (ex.: 403 porque a pessoa nunca abriu o bot), chame com
+ * `privateDelivered: false` — a última linha instrui a abrir o privado.
+ * Texto pronto para envio com parseMode "Markdown".
+ */
+export function buildTelegramDepartureReportSummary(
+    board: PaymentAllocationBoard,
+    options?: { privateDelivered?: boolean },
+) {
+    const model = resolveDepartureReportModel(board);
+    const shownReview = model.needsReviewRows.slice(0, SUMMARY_REVIEW_TARGET_CAP);
+    const remainderReview = model.needsReviewRows.length - shownReview.length;
+    const reviewLine = model.needsReviewRows.length > 0
+        ? `🔎 Revisar: ${shownReview.map((row) => {
+            const name = formatDoctorSurfaceName({
+                fullName: row.doctorName,
+                displayName: row.displayName,
+                fallback: "sem médico",
+            });
+            return `${md(row.targetCode)} (${md(name)})`;
+        }).join(", ")}${remainderReview > 0 ? ` +${remainderReview}` : ""}`
+        : "✅ Nenhum plantão para revisar.";
+    const deliveryLine = options?.privateDelivered
+        ? "📬 Mandei a íntegra no privado de quem pediu."
+        : "Não consegui te enviar a íntegra: me chame no privado e mande /saidas para a íntegra";
+
+    return [
+        `📋 *Saídas ${formatDateLabel(board.operationalDate)} ${board.shiftLabel}*: alocados *${board.summary.assignedCount}/${board.summary.totalTargets}* · vazios *${board.summary.unassignedCount}* · BH saldo *${formatDuration(model.totalNet, true)}*`,
+        reviewLine,
+        deliveryLine,
+    ].join("\n");
 }

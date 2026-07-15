@@ -130,7 +130,7 @@ import {
     TELEGRAM_PAYMENT_REPORT_USAGE,
     TELEGRAM_RESET_CODINOME_USAGE,
 } from "@/modules/telegram/payment-commands";
-import { buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
+import { buildDoctorPayrollEmptyMessage, buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
 import {
     ATTEMPT_LIMIT,
     checkAttemptLock,
@@ -143,7 +143,7 @@ import {
 } from "@/modules/telegram/payment-access";
 import { createFolhaToken } from "@/lib/folha-ponto/token";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
-import { buildTelegramDepartureReport, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
+import { buildTelegramDepartureReport, buildTelegramDepartureReportSummary, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
 import { buildTelegramSlotAuditMessages } from "@/modules/telegram/slot-audit-report";
 import { buildTelegramSummaryReport } from "@/modules/telegram/summary-report";
 import {
@@ -157,6 +157,8 @@ import {
     buildMealBreakStageKeyboard,
     getCurrentOperationalMealBreakSession,
     handleTelegramMealBreakReply,
+    MEAL_BREAK_FORMAT_OPTIONS,
+    resolveMealBreakTechnicalErrorDetail,
     isTelegramMealBreakCommandText,
     isTelegramMealBreakExcludeCommandText,
     isTelegramMealBreakPriorityCommandText,
@@ -185,14 +187,55 @@ import {
 } from "@/modules/telegram/commands";
 import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp, type TelegramRecentSenderMessage } from "@/modules/telegram/command-suggestions";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeMealBreakMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines, type ParsedMessage } from "@/modules/telegram/parser";
-import type { TelegramCallbackQuery, TelegramUpdate } from "@/modules/telegram/api";
-import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, REMOVE_KEYBOARD, sendMessage } from "@/modules/telegram/api";
+import type { TelegramCallbackQuery, TelegramFormatOptions, TelegramUpdate } from "@/modules/telegram/api";
+import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, escapeTelegramMarkdown, getBotUsername, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
+import {
+    formatTelegramErrorForUser,
+    resolveTelegramErrorText,
+    TelegramUserFacingError,
+} from "@/modules/telegram/errors";
 import {
     buildContinuityRevertCallbackData,
     type ContinuityRevertDomain,
     evaluateContinuityRevert,
     parseContinuityRevertCallbackData,
 } from "@/modules/telegram/continuity-revert";
+import {
+    buildCoiRamalKeyboard,
+    buildCoiRamalPromptText,
+    buildDepartureJustificationKeyboard,
+    buildDestinationSelectionKeyboard,
+    buildExpiredPendingAlertText,
+    buildNameSelectionKeyboard,
+    buildPiamShiftKeyboard,
+    buildPiamShiftPromptText,
+    buildResetAllConfirmationKeyboard,
+    buildResetAllConfirmationPromptText,
+    buildShiftSelectionKeyboard,
+    buildShiftSelectionPromptText,
+    buildTakeoverDecisionKeyboard,
+    buildThirdPartyPressAlertText,
+    buildUnknownDestinationReplyText,
+    classifyPendingShortReply,
+    classifyPiamShiftTextReply,
+    parseCoiRamalCallbackData,
+    parseDepartureJustificationCallbackData,
+    parseDestinationSelectionCallbackData,
+    parseNameSelectionCallbackData,
+    parsePiamShiftCallbackData,
+    parseResetAllCallbackData,
+    parseShiftSelectionCallbackData,
+    parseTakeoverDecisionCallbackData,
+    PENDING_REOPEN_WINDOW_MS,
+    replaceUnknownTargetToken,
+    RESET_ALL_CONFIRM_TTL_MS,
+    resolvePendingPresserPermission,
+    resolvePendingReopenState,
+    sanitizeTelegramCodeSpan,
+    suggestNearestTargetCodes,
+    type ExpiredPendingKind,
+    type PendingShiftChoice,
+} from "@/modules/telegram/pending-buttons";
 
 /** Botão "Foi só esta noite" para reverter um P forward noturno. Null = sem botão. */
 type ForwardContinuityPrompt = { occupancyId: string; domain: ContinuityRevertDomain } | null;
@@ -281,6 +324,54 @@ interface PendingCruCoiRamalData {
     originalEventAt: string;
     originalReferenceAt?: string;
     senderName: string | null;
+}
+
+// F6 sem turno (auditoria §3.1#1): chegada com nome+local mas sem SD/SN/P vira
+// pendência com botões em vez de rejeição seca. O parse fica salvo aqui e o
+// callback/resposta curta completa o registro pelo MESMO caminho do fluxo normal.
+interface PendingShiftSelectionData {
+    kind: "shift_selection";
+    parsed: OperationalParsedEntry;
+    doctorQuery: string | null;
+    senderName: string | null;
+    senderTelegramId: string;
+    originalText: string;
+    originalReferenceAt: string;
+}
+
+// PIAM SD/SN (auditoria §3.1#12): a pergunta binária vira pendência com botões;
+// o médico já foi resolvido antes do erro, então guardamos a referência dele.
+interface PendingPiamShiftData {
+    kind: "piam_shift";
+    parsed: OperationalParsedEntry;
+    resolvedDoctor: ResolvedTelegramDoctorRef;
+    senderTelegramId: string;
+    originalText: string;
+    originalReferenceAt: string;
+    /** message_id do balão-pergunta: permite responder "SD"/"SN" como reply. */
+    promptMessageId?: number;
+}
+
+// Destino desconhecido (auditoria §3.1#9 / §5#7): a chegada falhou porque o token
+// não é ramal/base conhecido, mas nome+turno estavam presentes — vira pendência com
+// botões dos códigos REAIS mais próximos (query ao banco, nunca hardcode).
+interface PendingDestinationSelectionData {
+    kind: "destination_selection";
+    token: string;
+    suggestions: string[];
+    senderTelegramId: string;
+    senderName: string | null;
+    originalText: string;
+    originalReferenceAt: string;
+}
+
+// Reset geral de codinomes (auditoria §3.4#15): confirmação destrutiva com botões,
+// TTL curto de 5 min e re-validação de admin no callback.
+interface PendingResetAllConfirmationData {
+    kind: "reset_all_confirmation";
+    count: number;
+    senderTelegramId: string;
+    requestedAt: string;
 }
 
 interface PendingBatchConfirmationEntry {
@@ -374,6 +465,7 @@ type TelegramReviewReason =
     | "arrival_missing_name_or_shift"
     | "late_arrival_acknowledgement_required"
     | "no_operational_match"
+    | "unknown_destination"
     | "pending_name_selection";
 
 const TELEGRAM_REVIEW_QUEUE = "telegram_input_format_review";
@@ -1552,43 +1644,144 @@ async function sendTelegramDepartureFailureReply(params: {
     );
 }
 
+// Ocupante ativo com titularidade de quadro num ramal/base — usado só para
+// ENRIQUECER a mensagem de conflito de chegada (auditoria §3.1#7: mostrar QUEM
+// ocupa e desde quando). Sem filtro de turno: o conflito pode ser cross-turno.
+async function findActiveBoardOccupantOnTarget(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    targetCode: string;
+}): Promise<{ doctorName: string; sinceTime: string } | null> {
+    const db = getDb();
+    if (params.sector === "REGULATION") {
+        const post = await db.query.regulationPosts.findFirst({ where: eq(regulationPosts.code, params.targetCode) });
+        if (!post) {
+            return null;
+        }
+        const occ = await db.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, post.id),
+                isNull(regulationOccupancies.endedAt),
+                isNotNull(regulationOccupancies.boardStartedAt),
+            ),
+            orderBy: [desc(regulationOccupancies.boardStartedAt)],
+        });
+        if (!occ) {
+            return null;
+        }
+        const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
+        return {
+            doctorName: resolveTelegramDoctorSurfaceName(doc),
+            sinceTime: formatTelegramReplyTime(occ.boardStartedAt ?? occ.startedAt),
+        };
+    }
+    const base = await db.query.interventionBases.findFirst({ where: eq(interventionBases.code, params.targetCode) });
+    if (!base) {
+        return null;
+    }
+    const occ = await db.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.baseId, base.id),
+            isNull(interventionOccupancies.endedAt),
+            isNotNull(interventionOccupancies.boardStartedAt),
+        ),
+        orderBy: [desc(interventionOccupancies.boardStartedAt)],
+    });
+    if (!occ) {
+        return null;
+    }
+    const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
+    return {
+        doctorName: resolveTelegramDoctorSurfaceName(doc),
+        sinceTime: formatTelegramReplyTime(occ.boardStartedAt ?? occ.startedAt),
+    };
+}
+
+function isTelegramPrivilegedSender(senderTelegramId: string | null | undefined) {
+    if (!senderTelegramId) {
+        return false;
+    }
+    const normalized = String(senderTelegramId);
+    return getTelegramAdminUserIds().includes(normalized) || getTelegramChiefUserIds().includes(normalized);
+}
+
 async function sendTelegramArrivalFailureReply(params: {
     chatId: number;
     replyToMessageId: number;
     parsed: OperationalParsedEntry;
     errorMessage: string;
+    /** Autor da mensagem (quando conhecido): médico comum não recebe dica de /retirar. */
+    senderTelegramId?: string | null;
 }) {
     if (params.parsed.isDeparture) {
         return;
     }
 
+    // Conflito de ocupação: mostra QUEM ocupa e desde quando (auditoria §3.1#7).
+    let occupant: { name: string; sinceTime: string } | null = null;
+    if (
+        params.errorMessage === "arrival_conflicts_with_active_occupancy"
+        && !params.parsed.isContinuation
+        && params.parsed.baseCode
+        && params.parsed.sector
+    ) {
+        try {
+            const found = await findActiveBoardOccupantOnTarget({
+                sector: params.parsed.sector,
+                targetCode: params.parsed.baseCode,
+            });
+            occupant = found ? { name: found.doctorName, sinceTime: found.sinceTime } : null;
+        } catch {
+            occupant = null;
+        }
+    }
+
     const userMessage = buildTelegramArrivalConflictMessage({
         parsed: params.parsed,
         errorMessage: params.errorMessage,
+        occupant,
+        senderIsPrivileged: isTelegramPrivilegedSender(params.senderTelegramId),
     });
 
     await sendMessage(
         params.chatId,
         userMessage,
         params.replyToMessageId,
+        undefined,
+        { parseMode: "Markdown" },
     );
 }
 
-/** Constrói o texto de erro para chegada conflitante. Função pura — testável sem I/O. */
+/**
+ * Constrói o texto de erro para chegada que falhou. Função pura — testável sem I/O.
+ * Erros técnicos desconhecidos NÃO vazam cru: passam pela tabela de tradução /
+ * allowlist (auditoria §3.1#11); conflito de ocupação mostra o ocupante quando
+ * conhecido e a dica de /retirar sai só para chefe/admin (auditoria §3.1#7).
+ * Interpolações escapadas — a mensagem sobe com parseMode Markdown.
+ */
 export function buildTelegramArrivalConflictMessage(params: {
     parsed: Pick<OperationalParsedEntry, "baseCode" | "isDeparture" | "isContinuation">;
     errorMessage: string;
+    occupant?: { name: string; sinceTime: string } | null;
+    senderIsPrivileged?: boolean;
 }): string {
     if (params.errorMessage !== "arrival_conflicts_with_active_occupancy") {
-        return `⚠️ Não consegui registrar essa chegada. ${params.errorMessage}`;
+        return `⚠️ Não consegui registrar essa chegada. ${escapeTelegramMarkdown(formatTelegramErrorForUser(params.errorMessage))}`;
     }
     const isContinuationConflict = shouldForceTelegramTakeoverOnContinuationConflict({
         parsed: params.parsed,
         errorMessage: params.errorMessage,
     });
-    return isContinuationConflict
-        ? `⚠️ Sua continuidade em *${params.parsed.baseCode}* entrou em conflito de horário e não consegui concluir a troca automática agora. Reenvie a mensagem em instantes para eu retirar o ocupante atual e te colocar no posto.`
-        : `⚠️ Já há alguém ativo em *${params.parsed.baseCode}* com horário igual ou posterior. Use /retirar ${params.parsed.baseCode} antes de registrar nova chegada.`;
+    if (isContinuationConflict) {
+        return `⚠️ Sua continuidade em *${escapeTelegramMarkdown(params.parsed.baseCode)}* entrou em conflito de horário e não consegui concluir a troca automática agora. Reenvie a mensagem em instantes para eu retirar o ocupante atual e te colocar no posto.`;
+    }
+    const target = escapeTelegramMarkdown(params.parsed.baseCode ?? "esse destino");
+    const occupantLine = params.occupant
+        ? `⛔ *${target}* já está com *${escapeTelegramMarkdown(params.occupant.name)}* desde *${params.occupant.sinceTime}*, com horário igual ou posterior ao seu.`
+        : `⛔ Já há alguém ativo em *${target}* com horário igual ou posterior.`;
+    const action = params.senderIsPrivileged
+        ? `\nSe for assumir mesmo, use /retirar ${params.parsed.baseCode ?? ""} antes de registrar a nova chegada.`
+        : "\nConfira o número — se estiver certo e você for assumir, chame a chefia (o /retirar é restrito a chefe/admin).";
+    return `${occupantLine}${action}`;
 }
 
 /** Constrói o aviso de substituição forçada para inserção no reply de sucesso. Função pura — testável sem I/O. */
@@ -2922,7 +3115,7 @@ async function handleOperationalBaseStateCommand(params: {
                 targetId: target.id,
             },
         });
-        await sendMessage(message.chat.id, `⛔ Não consegui ${command.name} ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+        await sendMessage(message.chat.id, `⛔ Não consegui ${command.name} ${command.targetCode}. ${resolveTelegramErrorText(error)}`, message.message_id);
         return { ok: true, ignored: true };
     }
 }
@@ -3718,7 +3911,8 @@ export function resolveLatestClosedShiftRequest(referenceAt: Date, targetShiftLa
         probe = new Date(window.startedAt.getTime() - 60000);
     }
 
-    throw new Error(`Nao encontrei um plantao ${targetShiftLabel} encerrado para revisar o banco.`);
+    // User-facing por definição (auditoria §3.4#6): o mold do /banco pode ecoar.
+    throw new TelegramUserFacingError(`Nao encontrei um plantao ${targetShiftLabel} encerrado para revisar o banco.`);
 }
 
 async function sendTelegramReplyBatch(
@@ -3726,13 +3920,26 @@ async function sendTelegramReplyBatch(
     texts: string[],
     replyToMessageId?: number,
     session?: Parameters<typeof buildMealBreakStageKeyboard>[0] | null,
+    options?: TelegramFormatOptions,
 ) {
     await sendTelegramMealBreakMessages({
         chatId,
         messages: texts,
         replyToMessageId,
         replyMarkup: session ? (buildMealBreakStageKeyboard(session) ?? undefined) : undefined,
+        options,
     });
+}
+
+// Falha TÉCNICA no fluxo de refeição (não é erro de negócio user-facing): o
+// grupo já recebeu a mensagem genérica curta; o detalhe cru vai só para o
+// privado dos admins.
+async function alertAdminsOnMealBreakTechnicalError(context: string, error: unknown) {
+    const technicalDetail = resolveMealBreakTechnicalErrorDetail(error);
+    if (!technicalDetail) {
+        return;
+    }
+    await sendPrivateAdminAlert(`⚠️ Falha técnica no fluxo de refeição (${context}): ${technicalDetail}`);
 }
 
 async function sendPrivateAdminAlert(text: string, excludeChatIds: string[] = []) {
@@ -3742,6 +3949,29 @@ async function sendPrivateAdminAlert(text: string, excludeChatIds: string[] = []
     }
 
     await Promise.allSettled(adminChatIds.map((chatId) => sendMessage(chatId, text)));
+}
+
+// Aviso no privado da CHEFIA (TELEGRAM_CHIEF_IDS), mesmo padrão do sendPrivateAdminAlert.
+// Só chega a chefe que já abriu conversa com o bot — limitação conhecida do Telegram.
+async function sendPrivateChiefAlert(text: string, options?: TelegramFormatOptions) {
+    const chiefChatIds = [...new Set(getTelegramChiefUserIds())].filter(Boolean);
+    if (chiefChatIds.length === 0) {
+        return;
+    }
+
+    await Promise.allSettled(chiefChatIds.map((chatId) => sendMessage(chatId, text, undefined, undefined, options)));
+}
+
+// Botão-url para o privado do bot (auditoria §3.4#9): usado nos redirecionamentos
+// de /pagamento e /resetcodinome no grupo. Null quando o username não está
+// disponível (sem env e getMe falhou) — aí o texto atual segue sozinho.
+async function buildOpenBotPrivateChatKeyboard(): Promise<TelegramReplyMarkup | undefined> {
+    try {
+        const username = await getBotUsername();
+        return buildInlineKeyboard([[{ text: "💬 Abrir o privado do bot", url: `https://t.me/${username}` }]]);
+    } catch {
+        return undefined;
+    }
 }
 
 function normalizePaymentTargetCode(value: string) {
@@ -3812,13 +4042,14 @@ export function shouldDeferPendingDepartureCorrectionToFreshParsing(text: string
     return parseMessageMulti(cleaned).some(isOperationalParsedEntry);
 }
 
-function buildPaymentAllocationReportLine(row: PaymentAllocationRow) {
+export function buildPaymentAllocationReportLine(row: PaymentAllocationRow, domainTag?: string) {
+    const tag = domainTag ? `${domainTag} ` : "";
     if (row.disabledEntireShift) {
-        return `DSV ${row.targetCode} - base desativada`;
+        return `DSV ${tag}${row.targetCode} - desativada`;
     }
 
     if (!row.occupancyId) {
-        return `VAZ ${row.targetCode} - sem ocupação`;
+        return `VAZ ${tag}${row.targetCode} - sem ocupação`;
     }
 
     const name = formatDoctorSurfaceName({
@@ -3831,26 +4062,50 @@ function buildPaymentAllocationReportLine(row: PaymentAllocationRow) {
         ? ` | conflito titulares: ${row.conflictCandidateLabels.join(" x ")}`
         : "";
     if (row.paymentStatus === "ready_for_payment") {
-        return `OK ${row.targetCode} - ${name}${halfTag}`;
+        return `OK ${tag}${row.targetCode} - ${name}${halfTag}`;
     }
 
-    return `REV ${row.targetCode} - ${name}${halfTag} | ${summarizePaymentAllocationIssues(row.issues)}${conflictDetail}`;
+    return `REV ${tag}${row.targetCode} - ${name}${halfTag} | ${summarizePaymentAllocationIssues(row.issues)}${conflictDetail}`;
 }
 
-function buildPaymentAllocationReportReply(board: PaymentAllocationBoard) {
+// Conferência de pagamento REV-first (auditoria §3.4#8): o que precisa de ação vem
+// PRIMEIRO, com legenda dos códigos e chunking ≤3.500. Mantém 1 linha por entrada
+// pronta com nome + [MEIO] (é o dado que o comando confere) e o bucket de desativadas.
+export function buildPaymentAllocationReportMessages(board: PaymentAllocationBoard): string[] {
+    const rows = [
+        ...board.regulation.map((row) => ({ row, domainTag: "☎️" })),
+        ...board.intervention.map((row) => ({ row, domainTag: "🚑" })),
+    ];
+    const review = rows.filter(({ row }) => !row.disabledEntireShift && row.occupancyId && row.paymentStatus !== "ready_for_payment");
+    const ready = rows.filter(({ row }) => !row.disabledEntireShift && row.occupancyId && row.paymentStatus === "ready_for_payment");
+    const empty = rows.filter(({ row }) => !row.disabledEntireShift && !row.occupancyId);
+    const disabled = rows.filter(({ row }) => row.disabledEntireShift);
+
     const header = [
-        `✅ Conferência de pagamento ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}.`,
-        `Prontos ${board.summary.readyForPaymentCount} | revisar ${board.summary.needsReviewCount} | vazios ${board.summary.unassignedCount} | desativadas ${board.summary.disabledCount ?? 0}`,
+        `🔎 Conferência de pagamento ${formatPaymentAllocationDateLabel(board.operationalDate)} ${board.shiftLabel}`,
+        `Revisar ${board.summary.needsReviewCount} | prontos ${board.summary.readyForPaymentCount} | vazios ${board.summary.unassignedCount} | desativadas ${board.summary.disabledCount ?? 0}`,
+        "Legenda: REV = revisar antes de pagar · OK = pronto · VAZ = sem ocupação · DSV = desativada · [MEIO] = meio plantão · ☎️ regulação · 🚑 intervenção",
     ].join("\n");
 
-    const regulationBlock = board.regulation.length > 0
-        ? `\n\nRegulacao:\n${board.regulation.map(buildPaymentAllocationReportLine).join("\n")}`
-        : "";
-    const interventionBlock = board.intervention.length > 0
-        ? `\n\nIntervencao:\n${board.intervention.map(buildPaymentAllocationReportLine).join("\n")}`
-        : "";
+    const lines: string[] = [];
+    if (review.length > 0) {
+        lines.push("", `REVISAR PRIMEIRO (${review.length}):`);
+        lines.push(...review.map(({ row, domainTag }) => buildPaymentAllocationReportLine(row, domainTag)));
+    }
+    if (ready.length > 0) {
+        lines.push("", `Prontos (${ready.length}):`);
+        lines.push(...ready.map(({ row, domainTag }) => buildPaymentAllocationReportLine(row, domainTag)));
+    }
+    if (empty.length > 0) {
+        lines.push("", `Sem ocupação (${empty.length}):`);
+        lines.push(...empty.map(({ row, domainTag }) => buildPaymentAllocationReportLine(row, domainTag)));
+    }
+    if (disabled.length > 0) {
+        lines.push("", `Desativadas (${disabled.length}):`);
+        lines.push(...disabled.map(({ row, domainTag }) => buildPaymentAllocationReportLine(row, domainTag)));
+    }
 
-    return `${header}${regulationBlock}${interventionBlock}`;
+    return chunkTelegramLines(header, lines);
 }
 
 function findPaymentAllocationRow(board: PaymentAllocationBoard, targetCode: string) {
@@ -3984,7 +4239,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     resultStatus: result.status,
                 },
             });
-            await sendTelegramReplyBatch(message.chat.id, result.messages, message.message_id);
+            await sendTelegramReplyBatch(message.chat.id, result.messages, message.message_id, undefined, MEAL_BREAK_FORMAT_OPTIONS);
             return { ok: true, mealBreakExclude: true };
         } catch (error) {
             await markTelegramProcessed(logId, {
@@ -3994,6 +4249,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 resolutionData: { rawCommand: message.text },
             });
             await sendMessage(message.chat.id, buildMealBreakErrorReply(error), message.message_id);
+            await alertAdminsOnMealBreakTechnicalError("/excluir|/incluir", error);
             return { ok: true, ignored: true };
         }
     }
@@ -4027,7 +4283,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     updatedAt: result.view.updatedAt,
                 },
             });
-            await sendTelegramReplyBatch(message.chat.id, result.messages, message.message_id);
+            await sendTelegramReplyBatch(message.chat.id, result.messages, message.message_id, undefined, MEAL_BREAK_FORMAT_OPTIONS);
             return { ok: true, mealBreakPriority: true };
         } catch (error) {
             await markTelegramProcessed(logId, {
@@ -4049,6 +4305,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 );
             }
             await sendMessage(message.chat.id, buildMealBreakErrorReply(error), message.message_id);
+            await alertAdminsOnMealBreakTechnicalError("/prioridade", error);
             return { ok: true, ignored: true };
         }
     }
@@ -4105,7 +4362,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     ...resolveMealBreakLogDetails(result.session),
                 },
             });
-            await sendTelegramReplyBatch(message.chat.id, result.messages, message.message_id, result.session);
+            await sendTelegramReplyBatch(message.chat.id, result.messages, message.message_id, result.session, MEAL_BREAK_FORMAT_OPTIONS);
             return { ok: true, mealBreak: true };
         } catch (error) {
             await markTelegramProcessed(logId, {
@@ -4115,6 +4372,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 resolutionData: { rawCommand: message.text },
             });
             await sendMessage(message.chat.id, buildMealBreakErrorReply(error), message.message_id);
+            await alertAdminsOnMealBreakTechnicalError("/almoco|/jantar", error);
             return { ok: true, ignored: true };
         }
     }
@@ -4316,7 +4574,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
             await sendMessage(
                 message.chat.id,
-                `⛔ Não consegui atualizar esse médico. ${error instanceof Error ? error.message : "Falha inesperada."}`,
+                `⛔ Não consegui atualizar esse médico. ${resolveTelegramErrorText(error)}`,
                 message.message_id,
             );
             return { ok: true, ignored: true };
@@ -4449,7 +4707,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
             await sendMessage(
                 message.chat.id,
-                `⛔ Não consegui aplicar /piam. ${error instanceof Error ? error.message : "Falha inesperada."}`,
+                `⛔ Não consegui aplicar /piam. ${resolveTelegramErrorText(error)}`,
                 message.message_id,
             );
             return { ok: true, ignored: true };
@@ -4459,7 +4717,13 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     if (isTelegramResetCodinomeCommandText(message.text)) {
         if (message.chat.type !== "private") {
             await markTelegramProcessed(logId, { status: "ignored", errorMessage: "reset_codinome_private_only", parsedAction: "reset_codinome" });
-            await sendMessage(message.chat.id, "⛔ /resetcodinome fica no privado do bot.", message.message_id);
+            // Botão-url para o privado (auditoria §3.4#9); sem username, só o texto.
+            await sendMessage(
+                message.chat.id,
+                "⛔ /resetcodinome fica no privado do bot.",
+                message.message_id,
+                await buildOpenBotPrivateChatKeyboard(),
+            );
             return { ok: true, ignored: true };
         }
         const actor = await resolveTelegramCommandActor(message);
@@ -4506,7 +4770,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 errorMessage: error instanceof Error ? error.message : "reset_codinome_failed",
                 parsedAction: "reset_codinome",
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui resetar o codinome. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui resetar o codinome. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -4520,7 +4784,13 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: paymentCommand?.name ?? "payment_command",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, "⛔ Conferência de pagamento fica no privado do bot, para não poluir o grupo operacional.", message.message_id);
+            // Botão-url para o privado (auditoria §3.4#9); sem username, só o texto.
+            await sendMessage(
+                message.chat.id,
+                "⛔ /pagamento fica no privado do bot, para não poluir o grupo operacional.",
+                message.message_id,
+                await buildOpenBotPrivateChatKeyboard(),
+            );
             return { ok: true, ignored: true };
         }
 
@@ -4586,7 +4856,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
                 const row = board.doctors.find((doctor) => doctor.doctorId === selfDoctorId);
                 if (!row) {
-                    await sendMessage(message.chat.id, `💰 Seu pagamento — ${board.monthLabel}: nenhum plantão registrado neste mês ainda.\n📄 Folha de ponto: ${folhaUrl}`, message.message_id);
+                    // Variante vazia unificada (auditoria §3.4#7): sem link de folha vazia.
+                    await sendMessage(message.chat.id, buildDoctorPayrollEmptyMessage(board.monthLabel), message.message_id);
                     return { ok: true, reported: true };
                 }
 
@@ -4601,7 +4872,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     errorMessage: error instanceof Error ? error.message : "payment_self_failed",
                     parsedAction: "payment_self",
                 });
-                await sendMessage(message.chat.id, `⛔ Não consegui montar o seu pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui montar o seu pagamento. ${resolveTelegramErrorText(error)}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4624,7 +4895,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 return { ok: true, reported: true };
             } catch (error) {
                 await markTelegramProcessed(logId, { status: "error", errorMessage: error instanceof Error ? error.message : "payment_list_failed", parsedAction: "payment_list" });
-                await sendMessage(message.chat.id, `⛔ Não consegui listar os codinomes. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui listar os codinomes. ${resolveTelegramErrorText(error)}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4637,9 +4908,35 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 return { ok: true, ignored: true };
             }
             if (!resetAllCommand.confirmed) {
-                await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_reset_all_unconfirmed", parsedAction: "payment_reset_all" });
-                await sendMessage(message.chat.id, "⚠️ Isso gera codinomes NOVOS para TODOS os médicos ativos e invalida os atuais de uma vez.\nPara confirmar, envie: /pagamento resetar-todos CONFIRMO", message.message_id);
-                return { ok: true, ignored: true };
+                // Confirmação destrutiva com botões + contagem (auditoria §3.4#15):
+                // expira em 5 min, re-valida admin no callback e marca consumo antes
+                // de executar. O fallback textual CONFIRMO continua valendo.
+                const resetSenderId = message.from?.id ? String(message.from.id) : null;
+                if (!resetSenderId) {
+                    await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_reset_all_unconfirmed", parsedAction: "payment_reset_all" });
+                    await sendMessage(message.chat.id, "⚠️ Isso gera codinomes NOVOS para TODOS os médicos ativos e invalida os atuais de uma vez.\nPara confirmar, envie: /pagamento resetar-todos CONFIRMO", message.message_id);
+                    return { ok: true, ignored: true };
+                }
+                const activeDoctorCount = (await listDoctorCodenames()).length;
+                await markTelegramProcessed(logId, {
+                    status: "pending_reset_all_confirmation",
+                    errorMessage: "payment_reset_all_unconfirmed",
+                    parsedAction: "payment_reset_all",
+                    resolutionData: {
+                        kind: "reset_all_confirmation",
+                        count: activeDoctorCount,
+                        senderTelegramId: resetSenderId,
+                        requestedAt: new Date().toISOString(),
+                    } satisfies PendingResetAllConfirmationData,
+                });
+                await sendMessage(
+                    message.chat.id,
+                    buildResetAllConfirmationPromptText(activeDoctorCount),
+                    message.message_id,
+                    buildResetAllConfirmationKeyboard(activeDoctorCount, logId),
+                    { parseMode: "Markdown" },
+                );
+                return { ok: true, ignored: true, pending: true };
             }
             try {
                 const results = await resetAllDoctorCodenames();
@@ -4648,7 +4945,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: "payment_reset_all",
                     resolutionData: { actorRoles: actor.roles, count: results.length },
                 });
-                const header = `🔐 Codinomes resetados — ${results.length} médicos. Os anteriores não valem mais.`;
+                const header = `🔐 Codinomes resetados — ${results.length} médicos. Os anteriores não valem mais.\nEntregue cada codinome no privado do médico.`;
                 const lines = results.map((r) => `${r.fullName} — ${r.codename}`);
                 const messages = chunkTelegramLines(header, lines);
                 for (const [index, text] of messages.entries()) {
@@ -4661,7 +4958,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     errorMessage: error instanceof Error ? error.message : "payment_reset_all_failed",
                     parsedAction: "payment_reset_all",
                 });
-                await sendMessage(message.chat.id, `⛔ Não consegui resetar os codinomes. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui resetar os codinomes. ${resolveTelegramErrorText(error)}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4702,7 +4999,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: codenameCommand.name,
                     resolutionData: { rawCommand: message.text },
                 });
-                await sendMessage(message.chat.id, `⛔ Não consegui gerar o codinome. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui gerar o codinome. ${resolveTelegramErrorText(error)}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4741,7 +5038,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                         parsedAction: "payment_digest",
                         resolutionData: { rawCommand: message.text },
                     });
-                    await sendMessage(message.chat.id, `⛔ Não consegui montar o relatório mensal. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                    await sendMessage(message.chat.id, `⛔ Não consegui montar o relatório mensal. ${resolveTelegramErrorText(error)}`, message.message_id);
                     return { ok: true, ignored: true };
                 }
             }
@@ -4767,7 +5064,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                         });
                         const row = board.doctors.find((doctor) => doctor.doctorId === adminDoctorId);
                         if (!row) {
-                            await sendMessage(message.chat.id, `💰 Pagamento — ${board.monthLabel}: nenhum plantão registrado neste mês ainda.\n📄 Folha de ponto: ${folhaUrl}`, message.message_id);
+                            // Variante vazia unificada (auditoria §3.4#7): sem link de folha vazia.
+                            await sendMessage(message.chat.id, buildDoctorPayrollEmptyMessage(board.monthLabel), message.message_id);
                             return { ok: true, reported: true };
                         }
                         const messages = buildDoctorPayrollMessages(row, board, folhaUrl);
@@ -4781,7 +5079,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                             errorMessage: error instanceof Error ? error.message : "payment_self_admin_failed",
                             parsedAction: "payment_self_admin",
                         });
-                        await sendMessage(message.chat.id, `⛔ Não consegui montar o pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                        await sendMessage(message.chat.id, `⛔ Não consegui montar o pagamento. ${resolveTelegramErrorText(error)}`, message.message_id);
                         return { ok: true, ignored: true };
                     }
                 }
@@ -4816,7 +5114,10 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                         unassignedCount: board.summary.unassignedCount,
                     },
                 });
-                await sendMessage(message.chat.id, buildPaymentAllocationReportReply(board), message.message_id);
+                const reportMessages = buildPaymentAllocationReportMessages(board);
+                for (const [index, text] of reportMessages.entries()) {
+                    await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
+                }
                 return { ok: true, reported: true };
             } catch (error) {
                 await markTelegramProcessed(logId, {
@@ -4825,7 +5126,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     parsedAction: paymentCommand.name,
                     resolutionData: { rawCommand: message.text },
                 });
-                await sendMessage(message.chat.id, `⛔ Não consegui montar a conferência de pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não consegui montar a conferência de pagamento. ${resolveTelegramErrorText(error)}`, message.message_id);
                 return { ok: true, ignored: true };
             }
         }
@@ -4942,7 +5243,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: paymentCommand.name,
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui corrigir essa alocação de pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui corrigir essa alocação de pagamento. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -5051,7 +5352,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedDoctorName: resolvedDoctor.doctor.fullName,
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui ajustar o banco. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui ajustar o banco. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -5083,6 +5384,21 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
             const report = buildTelegramDepartureReport(board);
 
+            // Auditoria §3.3#9: no GRUPO sai só o resumo de 3 linhas; a íntegra
+            // (~1.870 chars de dados financeiros) vai ao privado de quem pediu.
+            // Se o privado falhar (403 — nunca abriu o bot), o resumo instrui a
+            // chamar no privado. No privado, a íntegra sai direto, como antes.
+            const isGroupChat = message.chat.type !== "private";
+            let privateDelivered = false;
+            if (isGroupChat && message.from?.id) {
+                try {
+                    await sendMessage(message.from.id, report, undefined, undefined, { parseMode: "Markdown" });
+                    privateDelivered = true;
+                } catch {
+                    privateDelivered = false;
+                }
+            }
+
             await markTelegramProcessed(logId, {
                 status: "accepted",
                 parsedAction: departureReportCommand.name,
@@ -5091,9 +5407,16 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     shiftLabel: board.shiftLabel,
                     assignedCount: board.summary.assignedCount,
                     needsReviewCount: board.summary.needsReviewCount,
+                    ...(isGroupChat ? { departureReportPrivateDelivered: privateDelivered } : {}),
                 },
             });
-            await sendMessage(message.chat.id, report, message.message_id);
+            await sendMessage(
+                message.chat.id,
+                isGroupChat ? buildTelegramDepartureReportSummary(board, { privateDelivered }) : report,
+                message.message_id,
+                undefined,
+                { parseMode: "Markdown" },
+            );
             return { ok: true, reported: true };
         } catch (error) {
             await markTelegramProcessed(logId, {
@@ -5102,7 +5425,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "departure_report",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui montar o relatório de saídas. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui montar o relatório de saídas. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -5143,7 +5466,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "departure_priority",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui montar a prioridade de saída. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui montar a prioridade de saída. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -5187,7 +5510,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "shift_report",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui montar o relato do plantão. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui montar o relato do plantão. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -5251,7 +5574,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "summary_report",
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui montar o resumo. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui montar o resumo. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -6072,7 +6395,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui corrigir ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui corrigir ${command.targetCode}. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -6177,7 +6500,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui corrigir ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui corrigir ${command.targetCode}. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -6307,7 +6630,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
-            await sendMessage(message.chat.id, `⛔ Não consegui atualizar a função em ${command.targetCode}. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Não consegui atualizar a função em ${command.targetCode}. ${resolveTelegramErrorText(error)}`, message.message_id);
             return { ok: true, ignored: true };
         }
     }
@@ -6594,7 +6917,15 @@ async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
                 ...resolveMealBreakLogDetails(result.session),
             },
         });
-        await sendTelegramReplyBatch(message.chat.id, result.messages, message.message_id, result.session);
+        await sendTelegramReplyBatch(
+            message.chat.id,
+            result.messages,
+            message.message_id,
+            // "Fora da vez"/dedupe saem SEM teclado: o teclado da vez pertence a
+            // outra pessoa e reanexá-lo aqui era o que gerava toques errados.
+            result.suppressKeyboard ? null : result.session,
+            MEAL_BREAK_FORMAT_OPTIONS,
+        );
         return { ok: true, mealBreak: true };
     } catch (error) {
         await markTelegramProcessed(logId, {
@@ -6603,6 +6934,7 @@ async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
             errorMessage: error instanceof Error ? error.message : "meal_break_reply_failed",
         });
         await sendMessage(message.chat.id, buildMealBreakErrorReply(error), message.message_id);
+        await alertAdminsOnMealBreakTechnicalError("resposta de divisão", error);
         return { ok: true, ignored: true };
     }
 }
@@ -6629,12 +6961,14 @@ async function expireAllStalePendingsGlobal() {
                 "pending_departure_justification",
                 "pending_departure_correction",
                 "pending_cru_coi_ramal",
+                "pending_shift_selection",
+                "pending_piam_shift",
             ]),
             lt(telegramIngestedMessages.createdAt, cutoff),
         ));
 }
 
-async function findPendingRamalSelection(chatId: string, senderTelegramId: string) {
+async function findPendingRamalSelection(chatId: string, senderTelegramId: string, includeExpired = false) {
     const db = getDb();
     const cutoff = new Date(Date.now() - PENDING_TTL_MS);
     const fresh = await db.query.telegramIngestedMessages.findFirst({
@@ -6646,16 +6980,20 @@ async function findPendingRamalSelection(chatId: string, senderTelegramId: strin
         ),
         orderBy: [desc(telegramIngestedMessages.createdAt)],
     });
-    if (!fresh) {
-        await expireStalependings(chatId, senderTelegramId, "pending_cru_coi_ramal");
+    if (fresh) {
+        return fresh;
     }
-    return fresh ?? null;
+    await expireStalependings(chatId, senderTelegramId, "pending_cru_coi_ramal");
+    if (!includeExpired) {
+        return null;
+    }
+    return findExpiredReopenablePending(chatId, senderTelegramId, (row) => isPendingCruCoiRamalData(row.resolutionData), new Date());
 }
 
 async function expireStalependings(
     chatId: string,
     senderTelegramId: string,
-    status: "pending_name_selection" | "pending_departure_justification" | "pending_departure_correction" | "pending_cru_coi_ramal",
+    status: "pending_name_selection" | "pending_departure_justification" | "pending_departure_correction" | "pending_cru_coi_ramal" | "pending_shift_selection" | "pending_piam_shift",
 ) {
     const db = getDb();
     const cutoff = new Date(Date.now() - PENDING_TTL_MS);
@@ -6673,7 +7011,7 @@ async function expireStalependings(
         ));
 }
 
-async function findPendingNameSelection(chatId: string, senderTelegramId: string) {
+async function findPendingNameSelection(chatId: string, senderTelegramId: string, includeExpired = false) {
     const db = getDb();
     const cutoff = new Date(Date.now() - PENDING_TTL_MS);
     const fresh = await db.query.telegramIngestedMessages.findFirst({
@@ -6685,10 +7023,93 @@ async function findPendingNameSelection(chatId: string, senderTelegramId: string
         ),
         orderBy: [desc(telegramIngestedMessages.createdAt)],
     });
+    if (fresh) {
+        return fresh;
+    }
+    await expireStalependings(chatId, senderTelegramId, "pending_name_selection");
+    if (!includeExpired) {
+        return null;
+    }
+    return findExpiredReopenablePending(chatId, senderTelegramId, (row) => isPendingResolutionData(row.resolutionData), new Date());
+}
+
+async function findPendingShiftSelection(chatId: string, senderTelegramId: string) {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    const fresh = await db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "pending_shift_selection"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+    });
     if (!fresh) {
-        await expireStalependings(chatId, senderTelegramId, "pending_name_selection");
+        await expireStalependings(chatId, senderTelegramId, "pending_shift_selection");
     }
     return fresh ?? null;
+}
+
+async function findPendingPiamShift(chatId: string, senderTelegramId: string) {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    const fresh = await db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "pending_piam_shift"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+    });
+    if (!fresh) {
+        await expireStalependings(chatId, senderTelegramId, "pending_piam_shift");
+    }
+    return fresh ?? null;
+}
+
+// PIAM: acha a pendência do chat cujo balão-pergunta é o alvo do reply. Permite
+// que a chefia (ou o próprio autor) responda "SD"/"SN" citando a pergunta.
+async function findPendingPiamShiftByPrompt(chatId: string, promptMessageId: number) {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    const rows = await db.query.telegramIngestedMessages.findMany({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.status, "pending_piam_shift"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+        limit: 5,
+    });
+    return rows.find((row) => isPendingPiamShiftData(row.resolutionData)
+        && row.resolutionData.promptMessageId === promptMessageId) ?? null;
+}
+
+// Reabertura por resposta curta (auditoria §5#6): pendência já EXPIRADA (virou
+// superseded/pending_expired) do mesmo autor no mesmo chat, dentro da janela de
+// 2h. A aplicação sempre revalida contra o estado atual do quadro.
+async function findExpiredReopenablePending(
+    chatId: string,
+    senderTelegramId: string,
+    matches: (row: { resolutionData: unknown }) => boolean,
+    now: Date,
+) {
+    const db = getDb();
+    const cutoff = new Date(now.getTime() - PENDING_REOPEN_WINDOW_MS);
+    const rows = await db.query.telegramIngestedMessages.findMany({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "superseded"),
+            eq(telegramIngestedMessages.errorMessage, "pending_expired"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+        limit: 5,
+    });
+    return rows.find(matches) ?? null;
 }
 
 async function findPendingDepartureJustification(chatId: string, senderTelegramId: string) {
@@ -6709,7 +7130,7 @@ async function findPendingDepartureJustification(chatId: string, senderTelegramI
     return fresh ?? null;
 }
 
-async function findPendingDepartureCorrection(chatId: string, senderTelegramId: string) {
+async function findPendingDepartureCorrection(chatId: string, senderTelegramId: string, includeExpired = false) {
     const db = getDb();
     const cutoff = new Date(Date.now() - PENDING_TTL_MS);
     const fresh = await db.query.telegramIngestedMessages.findFirst({
@@ -6721,10 +7142,14 @@ async function findPendingDepartureCorrection(chatId: string, senderTelegramId: 
         ),
         orderBy: [desc(telegramIngestedMessages.createdAt)],
     });
-    if (!fresh) {
-        await expireStalependings(chatId, senderTelegramId, "pending_departure_correction");
+    if (fresh) {
+        return fresh;
     }
-    return fresh ?? null;
+    await expireStalependings(chatId, senderTelegramId, "pending_departure_correction");
+    if (!includeExpired) {
+        return null;
+    }
+    return findExpiredReopenablePending(chatId, senderTelegramId, (row) => isPendingDepartureCorrectionData(row.resolutionData), new Date());
 }
 
 async function supersedePendingDepartureJustification(chatId: string, senderTelegramId: string, reason = "departure_justification_superseded") {
@@ -6805,6 +7230,54 @@ function isPendingCruCoiRamalData(value: unknown): value is PendingCruCoiRamalDa
     );
 }
 
+function isPendingShiftSelectionData(value: unknown): value is PendingShiftSelectionData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    return candidate.kind === "shift_selection"
+        && Boolean(candidate.parsed)
+        && typeof candidate.senderTelegramId === "string"
+        && typeof candidate.originalText === "string"
+        && typeof candidate.originalReferenceAt === "string";
+}
+
+function isPendingPiamShiftData(value: unknown): value is PendingPiamShiftData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    return candidate.kind === "piam_shift"
+        && Boolean(candidate.parsed)
+        && Boolean(candidate.resolvedDoctor)
+        && typeof candidate.senderTelegramId === "string"
+        && typeof candidate.originalReferenceAt === "string";
+}
+
+function isPendingDestinationSelectionData(value: unknown): value is PendingDestinationSelectionData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    return candidate.kind === "destination_selection"
+        && typeof candidate.token === "string"
+        && Array.isArray(candidate.suggestions)
+        && typeof candidate.senderTelegramId === "string"
+        && typeof candidate.originalText === "string"
+        && typeof candidate.originalReferenceAt === "string";
+}
+
+function isPendingResetAllConfirmationData(value: unknown): value is PendingResetAllConfirmationData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const candidate = value as Record<string, unknown>;
+    return candidate.kind === "reset_all_confirmation"
+        && typeof candidate.count === "number"
+        && typeof candidate.senderTelegramId === "string"
+        && typeof candidate.requestedAt === "string";
+}
+
 async function queuePendingDepartureJustification(params: {
     logId: string;
     message: TelegramUpdate["message"];
@@ -6869,6 +7342,9 @@ async function queuePendingDepartureJustification(params: {
         },
     });
 
+    // Botões [🚑 Ocorrência] [🧼 Higienização] [Sem motivo] (auditoria §3.1#6) —
+    // só quando o motivo ainda está em aberto; se já sabemos que é ocorrência sem
+    // número, o balão pede apenas os 4 dígitos e botão nenhum ajuda.
     await sendMessage(
         params.message!.chat.id,
         pickTelegramReply(occurrenceNumberRequired ? "departure_occurrence_number_required" : "departure_justification_required", params.message!.message_id, {
@@ -6878,6 +7354,7 @@ async function queuePendingDepartureJustification(params: {
             example: departureExample,
         }),
         params.message!.message_id,
+        occurrenceNumberRequired ? undefined : buildDepartureJustificationKeyboard(params.logId),
     );
 }
 
@@ -6992,8 +7469,9 @@ async function queuePendingNameSelection(
         })
         : "";
 
-    const candidateButtons = candidates.slice(0, 3).map((_, i) => `${i + 1}`);
-    const keyboard = buildChoiceKeyboard([candidateButtons]);
+    // Candidatos como botões inline com o nome completo (auditoria §3.1#5).
+    // Resposta textual 1/2/3 continua valendo como fallback.
+    const keyboard = buildNameSelectionKeyboard(candidates, logId);
 
     await sendMessage(
         message!.chat.id,
@@ -7001,6 +7479,131 @@ async function queuePendingNameSelection(
         message!.message_id,
         keyboard,
     );
+}
+
+// F6 sem turno vira pendência com botões [☀️ SD] [🌙 SN] [🕐 P 24h] em vez de
+// rejeição seca (auditoria §3.1#1 — 138 casos/mês). O parse fica salvo e o botão
+// (ou resposta curta "SD"/"SN"/"P") completa o registro pelo MESMO caminho do
+// fluxo normal, com as mesmas validações de tomada/conflito.
+async function queuePendingShiftSelection(params: {
+    logId: string;
+    message: NonNullable<TelegramUpdate["message"]>;
+    parsed: ParsedMessage & OperationalParsedEntry;
+    senderTelegramId: string;
+}) {
+    const senderName = [params.message.from?.first_name, params.message.from?.last_name].filter(Boolean).join(" ") || null;
+    const doctorQuery = params.parsed.extractedNames[0] ?? null;
+    const snapshot: OperationalParsedEntry = {
+        sector: params.parsed.sector,
+        baseCode: params.parsed.baseCode,
+        arrivalTime: params.parsed.arrivalTime,
+        shiftType: null,
+        roleFunction: params.parsed.roleFunction,
+        isShadow: params.parsed.isShadow ?? false,
+        isDeparture: params.parsed.isDeparture,
+        isContinuation: params.parsed.isContinuation,
+        isReassignment: params.parsed.isReassignment ?? false,
+    };
+    const data: PendingShiftSelectionData = {
+        kind: "shift_selection",
+        parsed: snapshot,
+        doctorQuery,
+        senderName,
+        senderTelegramId: params.senderTelegramId,
+        originalText: params.message.text ?? "",
+        originalReferenceAt: new Date(params.message.date * 1000).toISOString(),
+    };
+
+    await markTelegramProcessed(params.logId, {
+        status: "pending_shift_selection",
+        parsedDomain: snapshot.sector,
+        parsedTargetCode: snapshot.baseCode,
+        parsedAction: "arrival",
+        errorMessage: null,
+        resolutionData: {
+            ...buildTelegramReviewLogData({
+                reason: "arrival_missing_name_or_shift",
+                parsed: snapshot,
+                doctorQuery,
+                trainingCandidate: true,
+            }),
+            ...data,
+        },
+    });
+
+    await sendMessage(
+        params.message.chat.id,
+        buildShiftSelectionPromptText({
+            doctorLabel: doctorQuery ?? senderName ?? "o médico",
+            targetLabel: snapshot.baseCode,
+        }),
+        params.message.message_id,
+        buildShiftSelectionKeyboard(params.logId),
+        { parseMode: "Markdown" },
+    );
+}
+
+// PIAM SD/SN vira pendência com botões [☀️ SD 07h–19h] [🌙 SN 19h–07h]
+// (auditoria §3.1#12). Também aceita "SD"/"SN" por texto — solto (pendência do
+// mesmo autor) ou como reply ao balão-pergunta (promptMessageId).
+async function queuePendingPiamShift(params: {
+    logId: string;
+    parsed: OperationalParsedEntry;
+    resolvedDoctor: ResolvedTelegramDoctorRef;
+    senderTelegramId: string;
+    originalText: string;
+    referenceAt: Date;
+    delivery:
+        | { via: "message"; chatId: number; replyToMessageId: number }
+        | { via: "edit"; chatId: number; messageId: number; callbackQueryId: string };
+}) {
+    const snapshot: OperationalParsedEntry = {
+        sector: params.parsed.sector,
+        baseCode: params.parsed.baseCode,
+        arrivalTime: params.parsed.arrivalTime,
+        shiftType: null,
+        roleFunction: params.parsed.roleFunction,
+        isShadow: params.parsed.isShadow ?? false,
+        isDeparture: params.parsed.isDeparture,
+        isContinuation: params.parsed.isContinuation,
+        isReassignment: params.parsed.isReassignment ?? false,
+    };
+    const data: PendingPiamShiftData = {
+        kind: "piam_shift",
+        parsed: snapshot,
+        resolvedDoctor: params.resolvedDoctor,
+        senderTelegramId: params.senderTelegramId,
+        originalText: params.originalText,
+        originalReferenceAt: params.referenceAt.toISOString(),
+    };
+
+    await markTelegramProcessed(params.logId, {
+        status: "pending_piam_shift",
+        parsedDomain: snapshot.sector,
+        parsedTargetCode: snapshot.baseCode,
+        parsedAction: resolveTelegramParsedAction(snapshot),
+        parsedDoctorName: params.resolvedDoctor.fullName,
+        errorMessage: null,
+        resolutionData: { ...data },
+    });
+
+    const promptText = buildPiamShiftPromptText(resolveTelegramDoctorSurfaceName(params.resolvedDoctor));
+    const keyboard = buildPiamShiftKeyboard(params.logId);
+    let promptMessageId: number | null = null;
+    if (params.delivery.via === "message") {
+        const sent = await sendMessage(params.delivery.chatId, promptText, params.delivery.replyToMessageId, keyboard, { parseMode: "Markdown" });
+        promptMessageId = sent && typeof sent === "object" ? sent.message_id : null;
+    } else {
+        await editMessageText(params.delivery.chatId, params.delivery.messageId, promptText, keyboard, { parseMode: "Markdown" });
+        await answerCallbackQuery(params.delivery.callbackQueryId, "PIAM: confirme o turno (SD ou SN).");
+        promptMessageId = params.delivery.messageId;
+    }
+
+    if (promptMessageId) {
+        await markTelegramProcessed(params.logId, {
+            resolutionData: { ...data, promptMessageId },
+        });
+    }
 }
 
 // ── Conflito de destino no remanejamento ──────────────────────────────────────────
@@ -7194,8 +7797,13 @@ type TakeoverPendingData = {
     occupantDoctorId: string;
     occupantOccupancyId: string;
     // Texto original da chegada que disparou a tomada. Permite confirmar com o atalho
-    // curto "confirmo NNNN" reprocessando exatamente a intenção original.
+    // curto "confirmo NNNN" (ou o botão ✅) reprocessando exatamente a intenção original.
     arrivingMessageText?: string;
+    // Autor da chegada que disparou a tomada — valida quem toca no botão
+    // (autor ou chefia/admin; terceiro leva alert). Aditivo (auditoria §3.1#4).
+    senderTelegramId?: string;
+    // Quem confirmou/cancelou via botão (auditoria — pode ser chefia, não o autor).
+    pressedByTelegramId?: string;
 };
 
 function isTakeoverPendingData(value: unknown): value is TakeoverPendingData {
@@ -7220,17 +7828,21 @@ export function isWithinTakeoverConfirmationWindow(pendingCreatedAt: Date, refer
     return referenceAt.getTime() - pendingCreatedAt.getTime() <= TAKEOVER_CONFIRMATION_WINDOW_MS;
 }
 
+// Balão de tomada (auditoria §3.1#4): botões + janela de *30 min* explícita, com os
+// fallbacks textuais preservados (`confirmo NNNN` e reenvio exato). Enviado com
+// parseMode Markdown — TODA interpolação passa por escapeTelegramMarkdown.
 export function buildTakeoverWarningReply(params: {
     occupantName: string;
     targetLabel: string;
     shiftLabel: string | null;
     sinceTime: string;
 }) {
-    const turno = params.shiftLabel ? ` (turno *${params.shiftLabel}*)` : "";
-    return `⚠️ *${params.targetLabel}* já está ocupado por *${params.occupantName}*${turno}, desde *${params.sinceTime}*.`
-        + `\n\nConfere se é isso mesmo. Se você *realmente* vai assumir e *desativar ${params.occupantName}* dessa posição, responda só:`
-        + `\n\`confirmo ${params.targetLabel}\``
-        + `\n\n🔁 ${params.occupantName} sai do quadro nesse ramal com o horário de chegada preservado — dá para declarar uma nova posição depois sem contar atraso.`;
+    const occupant = escapeTelegramMarkdown(params.occupantName);
+    const target = escapeTelegramMarkdown(params.targetLabel);
+    const turno = params.shiftLabel ? ` (${escapeTelegramMarkdown(params.shiftLabel)})` : "";
+    return `⚠️ *${target}* já está ocupado por *${occupant}*${turno}, desde *${params.sinceTime}*.`
+        + `\nVai assumir no lugar? Toque abaixo — ou responda \`confirmo ${sanitizeTelegramCodeSpan(params.targetLabel)}\` (ou reenvie a chegada exata) em até *30 min*.`
+        + `\n🔁 A chegada de ${occupant} fica preservada: dá para declarar uma nova posição depois, sem contar atraso.`;
 }
 
 export function buildTakeoverDisplacedAnnouncement(params: {
@@ -7240,9 +7852,13 @@ export function buildTakeoverDisplacedAnnouncement(params: {
     sinceTime: string;
 }) {
     // Forma neutra ("ficou fora do quadro", não "foi deslocado") + exemplo de como
-    // declarar a nova posição (auditoria §3.1#18).
-    return `🔁 *${params.arrivingName}* assumiu *${params.targetLabel}*. *${params.occupantName}* ficou fora do quadro (chegada preservada desde *${params.sinceTime}*) e precisa declarar uma nova posição.`
-        + `\nEx.: _${params.occupantName} <ramal ou base destino>_`;
+    // declarar a nova posição (auditoria §3.1#18). Interpolações escapadas —
+    // enviado com parseMode Markdown, como reply da mensagem que confirmou.
+    const arriving = escapeTelegramMarkdown(params.arrivingName);
+    const occupant = escapeTelegramMarkdown(params.occupantName);
+    const target = escapeTelegramMarkdown(params.targetLabel);
+    return `🔁 *${arriving}* assumiu *${target}*. *${occupant}* ficou fora do quadro (chegada preservada desde *${params.sinceTime}*) e precisa declarar uma nova posição.`
+        + `\nEx.: _${occupant} <ramal ou base destino>_`;
 }
 
 async function findActiveSameTurnoBoardCarrierOnTarget(params: {
@@ -7324,6 +7940,101 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         startedAt: occupancyAnchorAt,
         shiftLabel: occ.shiftLabel,
     };
+}
+
+// Códigos REAIS ativos de ramais e bases — fonte para as sugestões de destino
+// desconhecido (auditoria §3.1#9: nunca hardcode na copy).
+async function listActiveTargetCodes(): Promise<string[]> {
+    const db = getDb();
+    const posts = await db
+        .select({ code: regulationPosts.code })
+        .from(regulationPosts)
+        .where(eq(regulationPosts.isActive, true));
+    const bases = await db
+        .select({ code: interventionBases.code })
+        .from(interventionBases)
+        .where(eq(interventionBases.isActive, true));
+    return [...posts, ...bases].map((row) => row.code);
+}
+
+// Destino desconhecido com diagnóstico (auditoria §3.1#9 / §5#7): nomeia o token
+// rejeitado e sugere até 3 códigos reais próximos. Com nome+turno presentes, as
+// sugestões viram botões que completam o registro (senão encadearia com o F6 —
+// nesse caso, só texto). Retorna null quando não há candidato a destino.
+async function respondUnknownDestination(params: {
+    logId: string;
+    message: NonNullable<TelegramUpdate["message"]>;
+    rawPartial: ParsedMessage;
+}) {
+    const token = params.rawPartial.unknownTargetToken?.trim().toUpperCase();
+    if (!token) {
+        return null;
+    }
+    const { message, rawPartial } = params;
+
+    const suggestions = suggestNearestTargetCodes(token, await listActiveTargetCodes());
+    const senderTelegramId = message.from?.id ? String(message.from.id) : null;
+    const hasShift = Boolean(rawPartial.shiftType);
+    const hasName = rawPartial.extractedNames.length > 0;
+
+    // Botões só quando a reconstrução com o código sugerido volta a parsear —
+    // sugestão que o parser não conhece não pode virar botão (completaria em erro).
+    const interactive: string[] = [];
+    if (hasShift && hasName && senderTelegramId) {
+        for (const code of suggestions) {
+            const reconstructed = replaceUnknownTargetToken(message.text!, token, code);
+            if (!reconstructed) {
+                continue;
+            }
+            const reparsed = parseMessageMulti(reconstructed).find((entry) => !entry.isDeparture);
+            if (reparsed?.baseCode === code && reparsed.sector) {
+                interactive.push(code);
+            }
+        }
+    }
+
+    if (interactive.length > 0 && senderTelegramId) {
+        await markTelegramProcessed(params.logId, {
+            status: "pending_destination_selection",
+            parsedAction: "arrival",
+            errorMessage: "unknown_destination",
+            resolutionData: {
+                kind: "destination_selection",
+                token,
+                suggestions: interactive,
+                senderTelegramId,
+                senderName: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null,
+                originalText: message.text!,
+                originalReferenceAt: new Date(message.date * 1000).toISOString(),
+            } satisfies PendingDestinationSelectionData,
+        });
+        await sendMessage(
+            message.chat.id,
+            buildUnknownDestinationReplyText({ token, suggestions: interactive, interactive: true }),
+            message.message_id,
+            buildDestinationSelectionKeyboard(interactive, params.logId),
+            { parseMode: "Markdown" },
+        );
+        return { ok: true, ignored: true, pending: true };
+    }
+
+    await markTelegramProcessed(params.logId, {
+        status: "ignored",
+        errorMessage: "unknown_destination",
+        resolutionData: {
+            ...buildTelegramReviewLogData({ reason: "unknown_destination", trainingCandidate: true }),
+            unknownDestinationToken: token,
+            suggestions,
+        },
+    });
+    await sendMessage(
+        message.chat.id,
+        buildUnknownDestinationReplyText({ token, suggestions, interactive: false }),
+        message.message_id,
+        undefined,
+        { parseMode: "Markdown" },
+    );
+    return { ok: true, ignored: true };
 }
 
 async function findPendingTakeoverConfirmation(chatId: string, senderTelegramId: string) {
@@ -8532,13 +9243,13 @@ export function hasTelegramOperationalJustification(text: string, fragments: Arr
     return meaningfulTokens.length >= 2 || /MOTIVO/i.test(normalized);
 }
 
-async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: string) {
+async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: string, options?: { includeExpired?: boolean }) {
     const message = update.message;
     if (!message?.text || !message.from?.id) {
         return null;
     }
 
-    const pending = await findPendingNameSelection(String(message.chat.id), String(message.from.id));
+    const pending = await findPendingNameSelection(String(message.chat.id), String(message.from.id), options?.includeExpired ?? false);
     if (!pending || !isPendingResolutionData(pending.resolutionData)) {
         return null;
     }
@@ -8717,6 +9428,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
             replyToMessageId: message.message_id,
             parsed: pending.resolutionData.parsed,
             errorMessage,
+            senderTelegramId: message.from?.id ? String(message.from.id) : null,
         });
         return { ok: true, ignored: true, processingError: true };
     }
@@ -8786,15 +9498,16 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             errorMessage: "departure_justification_pending",
             resolutionData: { pendingJustificationKept: true },
         });
+        // Mensagem casual durante a pendência → lembrete de 1 linha, não o balão
+        // inteiro de novo (auditoria §3.1#6; mesmo padrão da pendência de nome).
         await sendMessage(
             message.chat.id,
-            pickTelegramReply(promptKind, message.message_id, {
-                name: pending.resolutionData.resolvedDoctor.fullName,
-                target: pending.resolutionData.parsed.baseCode,
-                time: replyTime,
-                example: replyExample,
-            }),
+            occurrenceNumberPending
+                ? "⚠️ Ainda falta o *número da ocorrência* — responda só os *4 dígitos* (ex.: `4521`)."
+                : `⚠️ Ainda falta o *motivo* da saída de *${escapeTelegramMarkdown(resolveTelegramDoctorSurfaceName(pending.resolutionData.resolvedDoctor))}* em *${escapeTelegramMarkdown(pending.resolutionData.parsed.baseCode)}* — toque num botão acima ou responda o motivo.`,
             message.message_id,
+            undefined,
+            { parseMode: "Markdown" },
         );
         return { ok: true, ignored: true, pending: true };
     }
@@ -9233,13 +9946,13 @@ async function applyPendingDepartureCorrection(params: {
     };
 }
 
-async function tryHandlePendingDepartureCorrection(update: TelegramUpdate, logId: string) {
+async function tryHandlePendingDepartureCorrection(update: TelegramUpdate, logId: string, options?: { includeExpired?: boolean }) {
     const message = update.message;
     if (!message?.text || !message.from?.id) {
         return null;
     }
 
-    const pending = await findPendingDepartureCorrection(String(message.chat.id), String(message.from.id));
+    const pending = await findPendingDepartureCorrection(String(message.chat.id), String(message.from.id), options?.includeExpired ?? false);
     if (!pending || !isPendingDepartureCorrectionData(pending.resolutionData)) {
         return null;
     }
@@ -9388,13 +10101,13 @@ async function tryHandlePendingDepartureCorrection(update: TelegramUpdate, logId
     }
 }
 
-async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: string) {
+async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: string, options?: { includeExpired?: boolean }) {
     const message = update.message;
     if (!message?.text || !message.from?.id) {
         return null;
     }
 
-    const pending = await findPendingRamalSelection(String(message.chat.id), String(message.from.id));
+    const pending = await findPendingRamalSelection(String(message.chat.id), String(message.from.id), options?.includeExpired ?? false);
     if (!pending || !isPendingCruCoiRamalData(pending.resolutionData)) {
         return null;
     }
@@ -9553,9 +10266,1361 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
     }
 }
 
+// ── Completação de pendências com botões (Onda 2 §6) ──────────────────────────────
+// As pendências F6/PIAM/COI/nome podem ser completadas por botão inline (callback)
+// ou por resposta curta de texto (inclusive reabrindo pendência expirada ≤2h).
+// O contexto abaixo abstrai só o CANAL da resposta; a aplicação passa sempre pelo
+// mesmo caminho do fluxo normal (resolução de médico, tomada, applyParsedEntry).
+
+type TelegramIngestedMessageRow = typeof telegramIngestedMessages.$inferSelect;
+
+type PendingButtonCompletionCtx =
+    | { via: "text"; message: NonNullable<TelegramUpdate["message"]>; logId: string }
+    | { via: "callback"; callbackQueryId: string; chatId: number; promptMessageId: number };
+
+// Texto compacto de sucesso usado ao EDITAR o balão-prompt após um callback.
+// (No canal de texto usamos o sendSuccessReply completo, como no fluxo normal.)
+function buildCallbackSuccessEditText(params: {
+    parsed: OperationalParsedEntry;
+    doctorName: string;
+    timeAt: Date;
+    effectiveShiftType?: string | null;
+    piamAutoAllocated?: boolean;
+}) {
+    const time = formatTelegramReplyTime(params.timeAt);
+    const kind = resolveTelegramSuccessReplyKind({ parsed: params.parsed, successKind: "standard" });
+    const base = pickTelegramReply(kind, params.parsed.baseCode ?? "pending", {
+        name: escapeTelegramMarkdown(params.doctorName),
+        target: escapeTelegramMarkdown(params.parsed.baseCode ?? "plantão"),
+        time,
+    });
+    const shift = params.effectiveShiftType ?? params.parsed.shiftType;
+    const shiftHint = shift && kind !== "arrival_p_recorded"
+        ? `\n📋 Turno: *${shift === "SD" ? "SD (diurno)" : shift === "SN" ? "SN (noturno)" : "P (plantão 24h)"}*`
+        : "";
+    const piamHint = params.piamAutoAllocated ? "\n🩺 Alocado como *PIAM*." : "";
+    return `${base}${shiftHint}${piamHint}`;
+}
+
+// Falha genérica na completação: reusa as MESMAS replies de falha do fluxo de
+// texto (chegada/saída), ancoradas na mensagem original do autor.
+async function notifyPendingCompletionFailure(params: {
+    ctx: PendingButtonCompletionCtx;
+    pending: TelegramIngestedMessageRow;
+    parsedEntry: OperationalParsedEntry;
+    doctorName: string;
+    errorMessage: string;
+}) {
+    if (params.ctx.via === "text") {
+        await sendTelegramDepartureFailureReply({
+            chatId: params.ctx.message.chat.id,
+            replyToMessageId: params.ctx.message.message_id,
+            seed: params.ctx.message.message_id,
+            parsed: params.parsedEntry,
+            doctorName: params.doctorName,
+            errorMessage: params.errorMessage,
+        });
+        await sendTelegramArrivalFailureReply({
+            chatId: params.ctx.message.chat.id,
+            replyToMessageId: params.ctx.message.message_id,
+            parsed: params.parsedEntry,
+            errorMessage: params.errorMessage,
+            senderTelegramId: params.ctx.message.from?.id ? String(params.ctx.message.from.id) : params.pending.senderTelegramId,
+        });
+        return;
+    }
+
+    const anchorMessageId = params.pending.telegramMessageId ?? params.ctx.promptMessageId;
+    await editMessageText(
+        params.ctx.chatId,
+        params.ctx.promptMessageId,
+        "⛔ Não consegui concluir o registro por aqui — detalhes abaixo.",
+    );
+    await sendTelegramDepartureFailureReply({
+        chatId: params.ctx.chatId,
+        replyToMessageId: anchorMessageId,
+        seed: anchorMessageId,
+        parsed: params.parsedEntry,
+        doctorName: params.doctorName,
+        errorMessage: params.errorMessage,
+    });
+    await sendTelegramArrivalFailureReply({
+        chatId: params.ctx.chatId,
+        replyToMessageId: anchorMessageId,
+        parsed: params.parsedEntry,
+        errorMessage: params.errorMessage,
+        senderTelegramId: params.pending.senderTelegramId,
+    });
+    await answerCallbackQuery(params.ctx.callbackQueryId, "Não consegui registrar.");
+}
+
+// Núcleo compartilhado de F6 (turno escolhido) e COI (ramal escolhido): resolve o
+// médico, aplica as MESMAS validações de tomada do fluxo normal e grava via
+// applyParsedEntry — revalidando conflito mesmo quando a pendência foi reaberta.
+async function completeArrivalFromPendingSelection(params: {
+    pending: TelegramIngestedMessageRow;
+    parsedEntry: OperationalParsedEntry;
+    doctorQuery: string | null;
+    senderName: string | null;
+    reconstructedText: string;
+    referenceAt: Date;
+    supersededErrorPrefix: string;
+    resolutionExtra?: Record<string, unknown>;
+    ctx: PendingButtonCompletionCtx;
+}) {
+    const { pending, parsedEntry, ctx } = params;
+    const chatIdStr = pending.chatId;
+    const chatIdNum = ctx.via === "text" ? ctx.message.chat.id : ctx.chatId;
+    const senderTelegramId = pending.senderTelegramId;
+    const anchorMessageId = ctx.via === "text"
+        ? ctx.message.message_id
+        : (pending.telegramMessageId ?? ctx.promptMessageId);
+
+    const { doctor: resolvedDoctor, candidates, matchedBy } = await resolveOperationalDoctor({
+        parsed: parsedEntry,
+        doctorQuery: params.doctorQuery,
+        senderName: params.senderName,
+        messageText: params.reconstructedText,
+        chatId: chatIdStr,
+        senderTelegramId,
+        referenceAt: params.referenceAt,
+    });
+
+    const isGenuineArrival = !parsedEntry.isDeparture && !parsedEntry.isContinuation && !parsedEntry.isReassignment;
+    const eventAt = resolveArrivalEventTimeForPhase(params.referenceAt, parsedEntry.arrivalTime, isGenuineArrival);
+
+    if (!resolvedDoctor) {
+        if (candidates.length > 0) {
+            // Vira pendência de nome (com botões) — mesma mecânica do fluxo CRU/COI.
+            if (ctx.via === "text") {
+                await markTelegramProcessed(pending.id, {
+                    status: "superseded",
+                    errorMessage: `${params.supersededErrorPrefix}_resolved_pending_name`,
+                });
+                await queuePendingNameSelection(ctx.logId, ctx.message, parsedEntry, params.doctorQuery, params.referenceAt, eventAt, candidates);
+            } else {
+                const syntheticMessage = {
+                    message_id: anchorMessageId,
+                    chat: { id: chatIdNum, type: "group" },
+                    date: Math.floor(params.referenceAt.getTime() / 1000),
+                    text: params.reconstructedText,
+                } as NonNullable<TelegramUpdate["message"]>;
+                await queuePendingNameSelection(pending.id, syntheticMessage, parsedEntry, params.doctorQuery, params.referenceAt, eventAt, candidates);
+                await editMessageText(ctx.chatId, ctx.promptMessageId, "⚠️ Falta confirmar o *nome* do médico — veja a mensagem abaixo.", undefined, { parseMode: "Markdown" });
+                await answerCallbackQuery(ctx.callbackQueryId, "Falta confirmar o nome do médico.");
+            }
+            return { ok: true, ignored: true, pending: true };
+        }
+
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: `${params.supersededErrorPrefix}_doctor_not_resolved`,
+        });
+        if (ctx.via === "text") {
+            await markTelegramProcessed(ctx.logId, {
+                status: "ignored",
+                parsedDomain: parsedEntry.sector,
+                parsedTargetCode: parsedEntry.baseCode,
+                parsedAction: resolveTelegramParsedAction(parsedEntry),
+                errorMessage: "doctor_not_resolved",
+                resolutionData: buildTelegramReviewLogData({
+                    reason: "doctor_not_resolved",
+                    parsed: parsedEntry,
+                    doctorQuery: params.doctorQuery || params.senderName,
+                    trainingCandidate: true,
+                }),
+            });
+            await sendMessage(ctx.message.chat.id, buildNameUnresolvedReply(ctx.message.message_id, []), ctx.message.message_id);
+        } else {
+            await editMessageText(ctx.chatId, ctx.promptMessageId, buildNameUnresolvedReply(ctx.promptMessageId, []));
+            await answerCallbackQuery(ctx.callbackQueryId, "Não reconheci o nome do médico.");
+        }
+        return { ok: true, ignored: true };
+    }
+
+    // Mesma validação de tomada do fluxo normal: destino ocupado no mesmo turno
+    // NÃO desloca automaticamente — vira pendência de confirmação.
+    const wantsBoard = !parsedEntry.isDeparture
+        && !parsedEntry.isContinuation
+        && !parsedEntry.isShadow
+        && Boolean(parsedEntry.baseCode);
+    if (wantsBoard && senderTelegramId && parsedEntry.baseCode) {
+        const occupant = await findActiveSameTurnoBoardCarrierOnTarget({
+            sector: parsedEntry.sector,
+            targetCode: parsedEntry.baseCode,
+            eventAt,
+            excludeDoctorId: resolvedDoctor.id,
+        });
+        if (occupant) {
+            await markTelegramProcessed(pending.id, {
+                status: "pending_takeover_confirmation",
+                parsedDomain: parsedEntry.sector,
+                parsedTargetCode: parsedEntry.baseCode,
+                parsedAction: resolveTelegramParsedAction(parsedEntry),
+                parsedDoctorName: resolvedDoctor.fullName,
+                errorMessage: "takeover_confirmation_required",
+                resolutionData: {
+                    kind: "takeover_confirmation",
+                    sector: parsedEntry.sector,
+                    targetCode: parsedEntry.baseCode,
+                    arrivingDoctorId: resolvedDoctor.id,
+                    occupantDoctorId: occupant.doctorId,
+                    occupantOccupancyId: occupant.occupancyId,
+                    arrivingMessageText: params.reconstructedText,
+                    ...(senderTelegramId ? { senderTelegramId } : {}),
+                } satisfies TakeoverPendingData,
+            });
+            const warning = buildTakeoverWarningReply({
+                occupantName: occupant.doctorName,
+                targetLabel: parsedEntry.baseCode,
+                shiftLabel: occupant.shiftLabel,
+                sinceTime: formatTelegramReplyTime(occupant.startedAt),
+            });
+            const takeoverKeyboard = buildTakeoverDecisionKeyboard(parsedEntry.baseCode, pending.id);
+            if (ctx.via === "text") {
+                await markTelegramProcessed(ctx.logId, {
+                    status: "ignored",
+                    parsedDomain: parsedEntry.sector,
+                    parsedTargetCode: parsedEntry.baseCode,
+                    parsedAction: resolveTelegramParsedAction(parsedEntry),
+                    parsedDoctorName: resolvedDoctor.fullName,
+                    errorMessage: "takeover_confirmation_required",
+                });
+                await sendMessage(ctx.message.chat.id, warning, ctx.message.message_id, takeoverKeyboard, { parseMode: "Markdown" });
+            } else {
+                await editMessageText(ctx.chatId, ctx.promptMessageId, warning, takeoverKeyboard, { parseMode: "Markdown" });
+                await answerCallbackQuery(ctx.callbackQueryId, `${parsedEntry.baseCode} já está ocupado — confirme para assumir.`);
+            }
+            return { ok: true, ignored: true, pending: true };
+        }
+    }
+
+    try {
+        const result = await applyParsedEntry({
+            parsed: parsedEntry,
+            resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
+            eventAt,
+            referenceAt: params.referenceAt,
+            messageText: params.reconstructedText,
+        });
+
+        if (senderTelegramId) {
+            await supersedePendingDepartureJustification(chatIdStr, senderTelegramId);
+        }
+
+        const acceptedPatch = {
+            status: "accepted",
+            parsedDomain: parsedEntry.sector,
+            parsedTargetCode: parsedEntry.baseCode,
+            parsedAction: resolveTelegramParsedAction(parsedEntry),
+            parsedDoctorName: resolvedDoctor.fullName,
+            relatedOccupancyId: result.occupancyId,
+            errorMessage: null,
+            resolutionData: {
+                continuationMode: resolveTelegramContinuationMode(parsedEntry),
+                ...params.resolutionExtra,
+            },
+        } satisfies Partial<typeof telegramIngestedMessages.$inferInsert>;
+
+        await markTelegramProcessed(pending.id, acceptedPatch);
+
+        const doctorSurfaceName = resolveTelegramDoctorSurfaceName(resolvedDoctor);
+        if (ctx.via === "text") {
+            await markTelegramProcessed(ctx.logId, acceptedPatch);
+            await sendSuccessReply(
+                ctx.message.chat.id,
+                ctx.message.message_id,
+                ctx.message.message_id,
+                parsedEntry,
+                doctorSurfaceName,
+                eventAt,
+                result.successKind,
+                matchedBy === "candidate"
+                    ? buildApproximateMatchHint({ doctorQuery: params.doctorQuery, doctorName: doctorSurfaceName })
+                    : "",
+                result.treatedAsContinuation,
+                result.replyTimeAt,
+                result.autoReactivated,
+                result.effectiveShiftType,
+                result.reassignedFrom,
+                result.assumedHalfShift,
+                result.continuationFrom,
+                result.piamAutoAllocated,
+                result.piamOriginalCode,
+                result.extendedLongShift,
+                result.displacedDoctorName,
+                params.referenceAt,
+                parsedEntry.arrivalTime,
+            );
+            await maybeSendContinuityForwardPrompt(ctx.message.chat.id, ctx.message.message_id, result.forwardContinuityPrompt);
+        } else {
+            await editMessageText(
+                ctx.chatId,
+                ctx.promptMessageId,
+                buildCallbackSuccessEditText({
+                    parsed: parsedEntry,
+                    doctorName: doctorSurfaceName,
+                    timeAt: result.replyTimeAt ?? eventAt,
+                    effectiveShiftType: result.effectiveShiftType,
+                    piamAutoAllocated: result.piamAutoAllocated,
+                }),
+                undefined,
+                { parseMode: "Markdown" },
+            );
+            await answerCallbackQuery(ctx.callbackQueryId, "✅ Registrado!");
+            await maybeSendContinuityForwardPrompt(ctx.chatId, anchorMessageId, result.forwardContinuityPrompt);
+        }
+        return { ok: true, occupancyId: result.occupancyId };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+
+        if (isTelegramPiamShiftRequiredError(errorMessage)) {
+            // Médico PIAM escolheu P (só SD/SN valem): transiciona para a pergunta
+            // binária do PIAM em vez de morrer em erro.
+            if (senderTelegramId) {
+                await queuePendingPiamShift({
+                    logId: pending.id,
+                    parsed: { ...parsedEntry, shiftType: null },
+                    resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
+                    senderTelegramId,
+                    originalText: params.reconstructedText,
+                    referenceAt: params.referenceAt,
+                    delivery: ctx.via === "text"
+                        ? { via: "message", chatId: ctx.message.chat.id, replyToMessageId: ctx.message.message_id }
+                        : { via: "edit", chatId: ctx.chatId, messageId: ctx.promptMessageId, callbackQueryId: ctx.callbackQueryId },
+                });
+                if (ctx.via === "text") {
+                    await markTelegramProcessed(ctx.logId, {
+                        status: "ignored",
+                        errorMessage: "piam_shift_selection_pending",
+                    });
+                }
+                return { ok: true, ignored: true, pending: true };
+            }
+        }
+
+        const errorPatch = {
+            status: "error",
+            parsedDomain: parsedEntry.sector,
+            parsedTargetCode: parsedEntry.baseCode,
+            parsedAction: resolveTelegramParsedAction(parsedEntry),
+            parsedDoctorName: resolvedDoctor.fullName,
+            errorMessage,
+        } satisfies Partial<typeof telegramIngestedMessages.$inferInsert>;
+        await markTelegramProcessed(pending.id, errorPatch);
+        if (ctx.via === "text") {
+            await markTelegramProcessed(ctx.logId, errorPatch);
+        }
+        await notifyPendingCompletionFailure({
+            ctx,
+            pending,
+            parsedEntry,
+            doctorName: resolvedDoctor.fullName,
+            errorMessage,
+        });
+        return { ok: true, ignored: true, processingError: true };
+    }
+}
+
+// F6: aplica o turno escolhido (botão ou resposta curta) ao parse salvo.
+async function completeShiftSelectionPending(params: {
+    pending: TelegramIngestedMessageRow;
+    data: PendingShiftSelectionData;
+    shift: PendingShiftChoice;
+    ctx: PendingButtonCompletionCtx;
+}) {
+    const parsedEntry: OperationalParsedEntry = { ...params.data.parsed, shiftType: params.shift };
+    return completeArrivalFromPendingSelection({
+        pending: params.pending,
+        parsedEntry,
+        doctorQuery: params.data.doctorQuery,
+        senderName: params.data.senderName,
+        reconstructedText: `${params.data.originalText} ${params.shift}`.trim(),
+        referenceAt: new Date(params.data.originalReferenceAt),
+        supersededErrorPrefix: "shift_selection",
+        resolutionExtra: { shiftResolvedFromPending: params.shift },
+        ctx: params.ctx,
+    });
+}
+
+// PIAM: aplica SD/SN escolhido (botão, resposta solta ou reply à pergunta). O
+// médico já estava resolvido quando a pendência nasceu — não re-resolve nome.
+async function completePiamShiftPending(params: {
+    pending: TelegramIngestedMessageRow;
+    data: PendingPiamShiftData;
+    shift: "SD" | "SN";
+    ctx: PendingButtonCompletionCtx;
+}) {
+    const { pending, data, ctx } = params;
+    const parsedEntry: OperationalParsedEntry = { ...data.parsed, shiftType: params.shift };
+    const referenceAt = new Date(data.originalReferenceAt);
+    const isGenuineArrival = !parsedEntry.isDeparture && !parsedEntry.isContinuation && !parsedEntry.isReassignment;
+    const eventAt = resolveArrivalEventTimeForPhase(referenceAt, parsedEntry.arrivalTime, isGenuineArrival);
+    const doctorSurfaceName = resolveTelegramDoctorSurfaceName(data.resolvedDoctor);
+
+    try {
+        const result = await applyParsedEntry({
+            parsed: parsedEntry,
+            resolvedDoctor: data.resolvedDoctor,
+            eventAt,
+            referenceAt,
+            messageText: data.originalText,
+        });
+
+        if (pending.senderTelegramId) {
+            await supersedePendingDepartureJustification(pending.chatId, pending.senderTelegramId);
+        }
+
+        const acceptedPatch = {
+            status: "accepted",
+            parsedDomain: parsedEntry.sector,
+            parsedTargetCode: parsedEntry.baseCode,
+            parsedAction: resolveTelegramParsedAction(parsedEntry),
+            parsedDoctorName: data.resolvedDoctor.fullName,
+            relatedOccupancyId: result.occupancyId,
+            errorMessage: null,
+            resolutionData: {
+                continuationMode: resolveTelegramContinuationMode(parsedEntry),
+                piamShiftResolved: params.shift,
+            },
+        } satisfies Partial<typeof telegramIngestedMessages.$inferInsert>;
+        await markTelegramProcessed(pending.id, acceptedPatch);
+
+        if (ctx.via === "text") {
+            await markTelegramProcessed(ctx.logId, acceptedPatch);
+            await sendSuccessReply(
+                ctx.message.chat.id,
+                ctx.message.message_id,
+                ctx.message.message_id,
+                parsedEntry,
+                doctorSurfaceName,
+                eventAt,
+                result.successKind,
+                "",
+                result.treatedAsContinuation,
+                result.replyTimeAt,
+                result.autoReactivated,
+                result.effectiveShiftType,
+                result.reassignedFrom,
+                result.assumedHalfShift,
+                result.continuationFrom,
+                result.piamAutoAllocated,
+                result.piamOriginalCode,
+                result.extendedLongShift,
+                result.displacedDoctorName,
+            );
+            await maybeSendContinuityForwardPrompt(ctx.message.chat.id, ctx.message.message_id, result.forwardContinuityPrompt);
+        } else {
+            await editMessageText(
+                ctx.chatId,
+                ctx.promptMessageId,
+                buildCallbackSuccessEditText({
+                    parsed: parsedEntry,
+                    doctorName: doctorSurfaceName,
+                    timeAt: result.replyTimeAt ?? eventAt,
+                    effectiveShiftType: result.effectiveShiftType,
+                    piamAutoAllocated: result.piamAutoAllocated,
+                }),
+                undefined,
+                { parseMode: "Markdown" },
+            );
+            await answerCallbackQuery(ctx.callbackQueryId, "✅ Registrado!");
+            await maybeSendContinuityForwardPrompt(ctx.chatId, pending.telegramMessageId ?? ctx.promptMessageId, result.forwardContinuityPrompt);
+        }
+        return { ok: true, occupancyId: result.occupancyId };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        const errorPatch = {
+            status: "error",
+            parsedDomain: parsedEntry.sector,
+            parsedTargetCode: parsedEntry.baseCode,
+            parsedAction: resolveTelegramParsedAction(parsedEntry),
+            parsedDoctorName: data.resolvedDoctor.fullName,
+            errorMessage,
+        } satisfies Partial<typeof telegramIngestedMessages.$inferInsert>;
+        await markTelegramProcessed(pending.id, errorPatch);
+        if (ctx.via === "text") {
+            await markTelegramProcessed(ctx.logId, errorPatch);
+        }
+        await notifyPendingCompletionFailure({
+            ctx,
+            pending,
+            parsedEntry,
+            doctorName: data.resolvedDoctor.fullName,
+            errorMessage,
+        });
+        return { ok: true, ignored: true, processingError: true };
+    }
+}
+
+// Candidato de nome escolhido por BOTÃO (o caminho textual 1/2/3 continua em
+// tryHandlePendingNameSelection). Mesmo miolo: applyParsedEntry + rotas de erro.
+async function completeNameSelectionFromCallback(params: {
+    pending: TelegramIngestedMessageRow;
+    data: PendingNameResolutionData;
+    selected: PendingNameResolutionData["candidates"][number];
+    ctx: { callbackQueryId: string; chatId: number; promptMessageId: number };
+}) {
+    const { pending, data, selected, ctx } = params;
+    const firstMsgAt = new Date(data.originalReferenceAt ?? data.originalEventAt);
+    const isArrival = !data.parsed.isDeparture && !data.parsed.isContinuation && !data.parsed.isReassignment;
+    const eventAt = resolveArrivalEventTimeForPhase(firstMsgAt, data.parsed.arrivalTime, isArrival);
+    const anchorMessageId = pending.telegramMessageId ?? ctx.promptMessageId;
+    const resolvedDoctor: ResolvedTelegramDoctorRef = {
+        id: selected.id,
+        fullName: selected.fullName,
+        displayName: selected.displayName ?? null,
+    };
+
+    try {
+        const result = await applyParsedEntry({
+            parsed: data.parsed,
+            resolvedDoctor,
+            eventAt,
+            referenceAt: firstMsgAt,
+            messageText: data.originalText,
+        });
+
+        if (pending.senderTelegramId) {
+            await supersedePendingDepartureJustification(pending.chatId, pending.senderTelegramId);
+        }
+
+        await markTelegramProcessed(pending.id, {
+            status: "accepted",
+            parsedDoctorName: selected.fullName,
+            relatedOccupancyId: result.occupancyId,
+            errorMessage: null,
+        });
+        await editMessageText(
+            ctx.chatId,
+            ctx.promptMessageId,
+            buildCallbackSuccessEditText({
+                parsed: data.parsed,
+                doctorName: resolveTelegramDoctorSurfaceName(selected),
+                timeAt: result.replyTimeAt ?? eventAt,
+                effectiveShiftType: result.effectiveShiftType,
+                piamAutoAllocated: result.piamAutoAllocated,
+            }),
+            undefined,
+            { parseMode: "Markdown" },
+        );
+        await answerCallbackQuery(ctx.callbackQueryId, "✅ Registrado!");
+        await maybeSendContinuityForwardPrompt(ctx.chatId, anchorMessageId, result.forwardContinuityPrompt);
+        return { ok: true, occupancyId: result.occupancyId };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        if (shouldRouteToDepartureJustification(errorMessage, data.parsed)) {
+            // Saída tardia exige justificativa POR TEXTO: transiciona a pendência e
+            // manda o prompt de justificativa ancorado na mensagem original.
+            const syntheticMessage = {
+                message_id: anchorMessageId,
+                chat: { id: ctx.chatId, type: "group" },
+                date: Math.floor(Date.now() / 1000),
+                ...(pending.senderTelegramId ? { from: { id: Number(pending.senderTelegramId), first_name: pending.senderName ?? "" } } : {}),
+                text: data.originalText,
+            } as NonNullable<TelegramUpdate["message"]>;
+            await queuePendingDepartureJustification({
+                logId: pending.id,
+                message: syntheticMessage,
+                parsed: data.parsed,
+                resolvedDoctor,
+                eventAt,
+                referenceAt: firstMsgAt,
+                originalText: data.originalText,
+            });
+            await editMessageText(ctx.chatId, ctx.promptMessageId, "⚠️ Nome confirmado — falta a *justificativa* da saída (veja abaixo).", undefined, { parseMode: "Markdown" });
+            await answerCallbackQuery(ctx.callbackQueryId, "Falta a justificativa da saída.");
+            return { ok: true, ignored: true, pending: true };
+        }
+
+        await markTelegramProcessed(pending.id, {
+            status: "error",
+            parsedDomain: data.parsed.sector,
+            parsedTargetCode: data.parsed.baseCode,
+            parsedAction: resolveTelegramParsedAction(data.parsed),
+            parsedDoctorName: selected.fullName,
+            errorMessage,
+        });
+        await notifyPendingCompletionFailure({
+            ctx: { via: "callback", callbackQueryId: ctx.callbackQueryId, chatId: ctx.chatId, promptMessageId: ctx.promptMessageId },
+            pending,
+            parsedEntry: data.parsed,
+            doctorName: selected.fullName,
+            errorMessage,
+        });
+        return { ok: true, ignored: true, processingError: true };
+    }
+}
+
+// Carrega e valida a pendência apontada por um callback_data: registro existe,
+// pertence ao chat do botão, está no status esperado, dentro do TTL, e quem tocou
+// é o autor ou chefia/admin (auditoria — validação de presser).
+async function loadPendingForCallback(params: {
+    logId: string;
+    expectedStatus: string;
+    chatId: number;
+    presserTelegramId: string;
+    /** TTL específico da pendência (default: PENDING_TTL_MS de 30 min). */
+    ttlMs?: number;
+}): Promise<
+    | { outcome: "ok"; pending: TelegramIngestedMessageRow }
+    | { outcome: "denied" | "expired" | "already_resolved" | "not_found" }
+> {
+    const db = getDb();
+    const row = await db.query.telegramIngestedMessages.findFirst({
+        where: eq(telegramIngestedMessages.id, params.logId),
+    });
+    if (!row || row.chatId !== String(params.chatId)) {
+        return { outcome: "not_found" };
+    }
+    if (row.status === "accepted") {
+        return { outcome: "already_resolved" };
+    }
+    if (row.status !== params.expectedStatus) {
+        return { outcome: "expired" };
+    }
+    const permission = resolvePendingPresserPermission({
+        presserTelegramId: params.presserTelegramId,
+        pendingSenderTelegramId: row.senderTelegramId,
+        chiefTelegramIds: getTelegramChiefUserIds(),
+        adminTelegramIds: getTelegramAdminUserIds(),
+    });
+    if (permission === "denied") {
+        return { outcome: "denied" };
+    }
+    if (resolvePendingReopenState({ createdAt: row.createdAt, now: new Date(), ttlMs: params.ttlMs ?? PENDING_TTL_MS }) !== "active") {
+        await markTelegramProcessed(row.id, { status: "superseded", errorMessage: "pending_expired" });
+        return { outcome: "expired" };
+    }
+    return { outcome: "ok", pending: row };
+}
+
+async function answerPendingCallbackShortfall(
+    callbackQueryId: string,
+    outcome: "denied" | "expired" | "already_resolved" | "not_found",
+    kind: ExpiredPendingKind,
+) {
+    if (outcome === "denied") {
+        await answerCallbackQuery(callbackQueryId, buildThirdPartyPressAlertText(), true);
+    } else if (outcome === "already_resolved") {
+        await answerCallbackQuery(callbackQueryId, "✅ Esse registro já foi concluído.");
+    } else {
+        await answerCallbackQuery(callbackQueryId, buildExpiredPendingAlertText(kind), true);
+    }
+    return { ok: true, ignored: true };
+}
+
+async function handleShiftSelectionCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parseShiftSelectionCallbackData>>,
+) {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: "pending_shift_selection",
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "shift_selection");
+    }
+    if (!isPendingShiftSelectionData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "shift_selection");
+    }
+    return completeShiftSelectionPending({
+        pending: loaded.pending,
+        data: loaded.pending.resolutionData,
+        shift: parsed.shift,
+        ctx: { via: "callback", callbackQueryId: callbackQuery.id, chatId: chat.id, promptMessageId },
+    });
+}
+
+async function handleNameSelectionCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parseNameSelectionCallbackData>>,
+) {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: "pending_name_selection",
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "name_selection");
+    }
+    if (!isPendingResolutionData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "name_selection");
+    }
+    const selected = loaded.pending.resolutionData.candidates[parsed.position - 1];
+    if (!selected) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "name_selection");
+    }
+    return completeNameSelectionFromCallback({
+        pending: loaded.pending,
+        data: loaded.pending.resolutionData,
+        selected,
+        ctx: { callbackQueryId: callbackQuery.id, chatId: chat.id, promptMessageId },
+    });
+}
+
+async function handlePiamShiftCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parsePiamShiftCallbackData>>,
+) {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: "pending_piam_shift",
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "piam_shift");
+    }
+    if (!isPendingPiamShiftData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "piam_shift");
+    }
+    return completePiamShiftPending({
+        pending: loaded.pending,
+        data: loaded.pending.resolutionData,
+        shift: parsed.shift,
+        ctx: { via: "callback", callbackQueryId: callbackQuery.id, chatId: chat.id, promptMessageId },
+    });
+}
+
+async function handleCoiRamalCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parseCoiRamalCallbackData>>,
+) {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: "pending_cru_coi_ramal",
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "coi_ramal");
+    }
+    if (!isPendingCruCoiRamalData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "coi_ramal");
+    }
+
+    const data = loaded.pending.resolutionData;
+    const reconstructedText = data.originalText.replace(new RegExp(`\\b${data.location}\\b`, "i"), parsed.ramal);
+    const parsedEntries = parseMessageMulti(reconstructedText);
+    const firstParsed = parsedEntries.find((entry) => !entry.isDeparture) ?? parsedEntries[0];
+    if (!firstParsed?.baseCode || !firstParsed.sector) {
+        await answerCallbackQuery(
+            callbackQuery.id,
+            `⚠️ Não consegui montar o registro com o ramal ${parsed.ramal}. Reenvie a mensagem completa.`,
+            true,
+        );
+        return { ok: true, ignored: true };
+    }
+    const parsedEntry = { ...firstParsed, sector: firstParsed.sector } as OperationalParsedEntry;
+    const referenceAt = new Date(data.originalReferenceAt ?? data.originalEventAt);
+    return completeArrivalFromPendingSelection({
+        pending: loaded.pending,
+        parsedEntry,
+        doctorQuery: firstParsed.extractedNames[0] ?? null,
+        senderName: data.senderName,
+        reconstructedText,
+        referenceAt,
+        supersededErrorPrefix: "cru_coi_ramal",
+        resolutionExtra: { ramalResolvedFrom: data.location },
+        ctx: { via: "callback", callbackQueryId: callbackQuery.id, chatId: chat.id, promptMessageId },
+    });
+}
+
+// Update sintético para reprocessar a INTENÇÃO original de uma pendência a partir
+// de um callback: mesmo padrão do atalho "confirmo NNNN" (que reescreve o texto e
+// deixa o fluxo normal seguir). O from é o AUTOR da pendência — mesmo quando quem
+// tocou foi a chefia — para os finders por (chat, sender) casarem. O message_id é
+// o do balão-prompt do bot (id real no chat, nunca logado antes), então o registro
+// de auditoria em telegram_ingested_messages não colide com mensagem existente.
+function buildSyntheticPendingReplyUpdate(params: {
+    chat: NonNullable<TelegramUpdate["message"]>["chat"];
+    messageId: number;
+    senderTelegramId: string;
+    senderName: string | null;
+    text: string;
+}): TelegramUpdate {
+    return {
+        update_id: 0,
+        message: {
+            message_id: params.messageId,
+            chat: params.chat,
+            date: Math.floor(Date.now() / 1000),
+            from: { id: Number(params.senderTelegramId), first_name: params.senderName ?? "" },
+            text: params.text,
+        },
+    };
+}
+
+// Resultado genérico de um handler que reprocessa via processTelegramUpdate —
+// anotação explícita para quebrar o ciclo de inferência (recursão de tipos).
+type TelegramCallbackHandlerResult = { ok: boolean; [key: string]: unknown };
+
+// Botões da tomada de ramal/base (auditoria §3.1#4): [✅ Assumir NNNN] confirma
+// reprocessando a chegada original (mesmo caminho do "confirmo NNNN"); [❌ Era
+// outro ramal] cancela a pendência. Fallbacks textuais continuam valendo.
+async function handleTakeoverDecisionCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parseTakeoverDecisionCallbackData>>,
+): Promise<TelegramCallbackHandlerResult> {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: "pending_takeover_confirmation",
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "takeover");
+    }
+    if (!isTakeoverPendingData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "takeover");
+    }
+    const data = loaded.pending.resolutionData as TakeoverPendingData;
+    const targetLabel = escapeTelegramMarkdown(data.targetCode);
+
+    if (parsed.decision === "reject") {
+        await markTelegramProcessed(loaded.pending.id, {
+            status: "superseded",
+            errorMessage: "takeover_cancelled_by_button",
+            resolutionData: buildResolutionData(data, { pressedByTelegramId: String(callbackQuery.from.id) }),
+        });
+        await editMessageText(
+            chat.id,
+            promptMessageId,
+            `⛔ Tomada de *${targetLabel}* cancelada — nada mudou no quadro.\nOk, reenvie a chegada com o ramal certo.`,
+            undefined,
+            { parseMode: "Markdown" },
+        );
+        await answerCallbackQuery(callbackQuery.id, "Cancelado — reenvie a chegada com o ramal certo.");
+        return { ok: true, ignored: true };
+    }
+
+    const senderTelegramId = data.senderTelegramId ?? loaded.pending.senderTelegramId;
+    if (!data.arrivingMessageText || !senderTelegramId) {
+        await answerCallbackQuery(callbackQuery.id, "Não achei a chegada original — reenvie a mensagem completa.", true);
+        return { ok: true, ignored: true };
+    }
+
+    // Registra quem confirmou ANTES do reprocesso (o fluxo normal só troca status).
+    await markTelegramProcessed(loaded.pending.id, {
+        resolutionData: buildResolutionData(data, { pressedByTelegramId: String(callbackQuery.from.id) }),
+    });
+
+    // Mesmo caminho da confirmação textual: reprocessa a chegada original; o fluxo
+    // reencontra a pendência, desloca o ocupante e registra quem assumiu.
+    const result = await processTelegramUpdate(buildSyntheticPendingReplyUpdate({
+        chat,
+        messageId: promptMessageId,
+        senderTelegramId,
+        senderName: loaded.pending.senderName,
+        text: data.arrivingMessageText,
+    }));
+
+    // Copy neutra: se a aplicação falhou, o balão logo abaixo explica o motivo.
+    await editMessageText(
+        chat.id,
+        promptMessageId,
+        `✅ Confirmação de *${targetLabel}* recebida — veja o registro abaixo.`,
+        undefined,
+        { parseMode: "Markdown" },
+    );
+    await answerCallbackQuery(callbackQuery.id, `Confirmação de ${data.targetCode} recebida.`);
+    return result;
+}
+
+// Fecha a saída tardia SEM crédito automático (semântica do manual_review) a partir
+// do botão [Sem motivo] — e avisa a chefia no privado (auditoria §3.1#6: hoje
+// ninguém era avisado).
+async function completeDepartureJustificationWithoutReason(params: {
+    pending: TelegramIngestedMessageRow;
+    data: PendingDepartureJustificationData;
+    pressedByTelegramId: string;
+    chatId: number;
+    promptMessageId: number;
+    callbackQueryId: string;
+}) {
+    const { pending, data } = params;
+    const eventAt = new Date(data.originalEventAt);
+    const mergedText = buildTelegramJustificationFollowUpText(data.originalText, "[botão] sem motivo");
+
+    try {
+        let relatedOccupancyId: string;
+        if (data.parsed.sector === "REGULATION") {
+            const post = await getDb().query.regulationPosts.findFirst({
+                where: eq(regulationPosts.code, data.parsed.baseCode),
+            });
+            if (!post) {
+                throw new Error("Regulation post not found.");
+            }
+            const recentClosed = await findRecentClosedRegulationOccupancy({
+                postId: post.id,
+                doctorId: data.resolvedDoctor.id,
+                eventAt,
+            });
+            if (!recentClosed) {
+                throw new Error("No active regulation occupancy found for this doctor/post.");
+            }
+            relatedOccupancyId = (await correctRegulationOccupancy(recentClosed.id, {
+                notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida sem motivo declarado - sem credito automatico", mergedText),
+            }, null)).id;
+        } else {
+            const base = await getDb().query.interventionBases.findFirst({
+                where: eq(interventionBases.code, data.parsed.baseCode),
+            });
+            if (!base) {
+                throw new Error("Intervention base not found.");
+            }
+            const recentClosed = await findRecentClosedInterventionOccupancy({
+                baseId: base.id,
+                doctorId: data.resolvedDoctor.id,
+                eventAt,
+            });
+            if (!recentClosed) {
+                throw new Error("No active intervention occupancy found for this doctor/base.");
+            }
+            relatedOccupancyId = (await correctInterventionOccupancy(recentClosed.id, {
+                notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida sem motivo declarado - sem credito automatico", mergedText),
+            }, null)).id;
+        }
+
+        await markTelegramProcessed(pending.id, {
+            status: "accepted",
+            relatedOccupancyId,
+            errorMessage: null,
+            resolutionData: buildResolutionData(data, {
+                justificationButtonChoice: "none",
+                pressedByTelegramId: params.pressedByTelegramId,
+                automaticCreditGranted: false,
+                manualReviewOnly: true,
+            }),
+        });
+
+        const doctorName = resolveTelegramDoctorSurfaceName(data.resolvedDoctor);
+        await editMessageText(
+            params.chatId,
+            params.promptMessageId,
+            pickTelegramReply("departure_justification_manual_review", params.promptMessageId, {
+                name: doctorName,
+                target: data.parsed.baseCode,
+                time: formatTelegramReplyTime(eventAt),
+            }),
+        );
+        await answerCallbackQuery(params.callbackQueryId, "Fechei sem crédito automático — a chefia foi avisada.");
+
+        // Aviso à chefia no privado — hoje ninguém era avisado quando a saída
+        // tardia ficava sem motivo.
+        await sendPrivateChiefAlert(
+            `🔎 Saída tardia sem motivo: *${escapeTelegramMarkdown(doctorName)}* em *${escapeTelegramMarkdown(data.parsed.baseCode)}* às *${formatTelegramReplyTime(eventAt)}* fechou sem crédito automático (escolheu "Sem motivo" no grupo). Se os minutos extras valerem, lance manualmente.`,
+            { parseMode: "Markdown" },
+        );
+        return { ok: true, occupancyId: relatedOccupancyId };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        await markTelegramProcessed(pending.id, { status: "error", errorMessage });
+        await answerCallbackQuery(params.callbackQueryId, formatTelegramErrorForUser(errorMessage), true);
+        return { ok: true, ignored: true, processingError: true };
+    }
+}
+
+// Botões da justificativa de saída tardia (auditoria §3.1#6): 🚑 pede só os 4
+// dígitos, 🧼 credita higienização pelo MESMO caminho do texto, [Sem motivo]
+// fecha em manual_review + aviso privado à chefia. Texto livre continua valendo.
+async function handleDepartureJustificationCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parseDepartureJustificationCallbackData>>,
+): Promise<TelegramCallbackHandlerResult> {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: "pending_departure_justification",
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "departure_justification");
+    }
+    if (!isPendingDepartureJustificationData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "departure_justification");
+    }
+    const data = loaded.pending.resolutionData;
+
+    if (parsed.choice === "none") {
+        return completeDepartureJustificationWithoutReason({
+            pending: loaded.pending,
+            data,
+            pressedByTelegramId: String(callbackQuery.from.id),
+            chatId: chat.id,
+            promptMessageId,
+            callbackQueryId: callbackQuery.id,
+        });
+    }
+
+    if (parsed.choice === "occurrence") {
+        // Marca o motivo como ocorrência e passa a cobrar SÓ o número (4 dígitos).
+        // O "[botão] estava em ocorrência" anexado ao texto original faz o merge
+        // com a resposta numérica resolver o claim pelo caminho normal.
+        await markTelegramProcessed(loaded.pending.id, {
+            errorMessage: "departure_occurrence_number_required",
+            resolutionData: buildResolutionData(data, {
+                occurrenceNumberRequired: true,
+                originalText: `${data.originalText}\n[botão] estava em ocorrência`,
+                justificationButtonChoice: "occurrence",
+                pressedByTelegramId: String(callbackQuery.from.id),
+            }),
+        });
+        await editMessageText(
+            chat.id,
+            promptMessageId,
+            "🚑 Ocorrência — agora só falta o número dela: responda com os *4 dígitos*. Ex.: `4521`",
+            undefined,
+            { parseMode: "Markdown" },
+        );
+        await answerCallbackQuery(callbackQuery.id, "Me responda só os 4 dígitos da ocorrência.");
+        return { ok: true, ignored: true, pending: true };
+    }
+
+    // 🧼 Higienização: reprocessa como se o autor tivesse respondido o motivo por
+    // texto — cai em tryHandlePendingDepartureJustification e credita pelo mesmo
+    // caminho (registro de auditoria incluso).
+    const senderTelegramId = loaded.pending.senderTelegramId;
+    if (!senderTelegramId) {
+        await answerCallbackQuery(callbackQuery.id, "Não achei o autor da pendência — responda o motivo por texto.", true);
+        return { ok: true, ignored: true };
+    }
+    await markTelegramProcessed(loaded.pending.id, {
+        resolutionData: buildResolutionData(data, {
+            justificationButtonChoice: "hygienization",
+            pressedByTelegramId: String(callbackQuery.from.id),
+        }),
+    });
+    const result = await processTelegramUpdate(buildSyntheticPendingReplyUpdate({
+        chat,
+        messageId: promptMessageId,
+        senderTelegramId,
+        senderName: loaded.pending.senderName,
+        text: "[botão] estava higienizando a viatura",
+    }));
+    // Copy neutra: se a aplicação falhou, o balão logo abaixo explica o motivo.
+    await editMessageText(
+        chat.id,
+        promptMessageId,
+        "🧼 Higienização — veja o resultado abaixo.",
+    );
+    await answerCallbackQuery(callbackQuery.id, "Anotado: higienização.");
+    return result;
+}
+
+// Botões de destino desconhecido (auditoria §3.1#9): completa a chegada trocando o
+// token rejeitado pelo código real escolhido — mesmo caminho do COI (reconstrução
+// + completeArrivalFromPendingSelection, que revalida conflito/tomada).
+async function handleDestinationSelectionCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parseDestinationSelectionCallbackData>>,
+) {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: "pending_destination_selection",
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "destination_selection");
+    }
+    if (!isPendingDestinationSelectionData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "destination_selection");
+    }
+    const data = loaded.pending.resolutionData;
+    if (!data.suggestions.some((code) => code.trim().toUpperCase() === parsed.code)) {
+        // callback_data forjado com código fora das sugestões gravadas: ignora.
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "destination_selection");
+    }
+
+    const reconstructedText = replaceUnknownTargetToken(data.originalText, data.token, parsed.code);
+    if (!reconstructedText) {
+        await answerCallbackQuery(callbackQuery.id, "Não consegui montar o registro — reenvie a mensagem completa.", true);
+        return { ok: true, ignored: true };
+    }
+    const parsedEntries = parseMessageMulti(reconstructedText);
+    const firstParsed = parsedEntries.find((entry) => !entry.isDeparture) ?? parsedEntries[0];
+    if (!firstParsed?.baseCode || !firstParsed.sector) {
+        await answerCallbackQuery(callbackQuery.id, `Não consegui montar o registro com ${parsed.code}. Reenvie a mensagem completa.`, true);
+        return { ok: true, ignored: true };
+    }
+    const parsedEntry = { ...firstParsed, sector: firstParsed.sector } as OperationalParsedEntry;
+    return completeArrivalFromPendingSelection({
+        pending: loaded.pending,
+        parsedEntry,
+        doctorQuery: firstParsed.extractedNames[0] ?? null,
+        senderName: data.senderName,
+        reconstructedText,
+        referenceAt: new Date(data.originalReferenceAt),
+        supersededErrorPrefix: "destination_selection",
+        resolutionExtra: { destinationResolvedFrom: data.token },
+        ctx: { via: "callback", callbackQueryId: callbackQuery.id, chatId: chat.id, promptMessageId },
+    });
+}
+
+// Botões do reset geral de codinomes (auditoria §3.4#15): TTL de 5 min, re-validação
+// de ADMIN no callback e consumo marcado ANTES de executar (anti double-tap).
+async function handleResetAllCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parseResetAllCallbackData>>,
+) {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: "pending_reset_all_confirmation",
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+        ttlMs: RESET_ALL_CONFIRM_TTL_MS,
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "reset_all");
+    }
+    if (!isPendingResetAllConfirmationData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "reset_all");
+    }
+    // Re-validação: reset geral é EXCLUSIVO de admin — chefia não confirma.
+    if (!getTelegramAdminUserIds().includes(String(callbackQuery.from.id))) {
+        await answerCallbackQuery(callbackQuery.id, "⛔ Só admin do bot pode confirmar esse reset.", true);
+        return { ok: true, ignored: true };
+    }
+    const data = loaded.pending.resolutionData;
+
+    if (parsed.decision === "cancel") {
+        await markTelegramProcessed(loaded.pending.id, {
+            status: "ignored",
+            errorMessage: "payment_reset_all_cancelled",
+            resolutionData: buildResolutionData(data, { pressedByTelegramId: String(callbackQuery.from.id) }),
+        });
+        await editMessageText(chat.id, promptMessageId, "OK — cancelado. Nenhum codinome foi alterado.");
+        await answerCallbackQuery(callbackQuery.id, "Cancelado.");
+        return { ok: true, ignored: true };
+    }
+
+    // Anti double-tap: consome a pendência ANTES de executar — o segundo toque
+    // encontra status accepted e recebe "já foi concluído".
+    await markTelegramProcessed(loaded.pending.id, {
+        status: "accepted",
+        parsedAction: "payment_reset_all",
+        errorMessage: "payment_reset_all_confirmed_button",
+        resolutionData: buildResolutionData(data, { pressedByTelegramId: String(callbackQuery.from.id) }),
+    });
+
+    try {
+        const results = await resetAllDoctorCodenames();
+        await editMessageText(
+            chat.id,
+            promptMessageId,
+            `🔐 Codinomes resetados — *${results.length}* médicos. Os anteriores não valem mais.\nEntregue cada codinome no privado do médico.`,
+            undefined,
+            { parseMode: "Markdown" },
+        );
+        const header = `🔐 Codinomes novos (${results.length}):`;
+        const lines = results.map((r) => `${r.fullName} — ${r.codename}`);
+        for (const text of chunkTelegramLines(header, lines)) {
+            await sendMessage(chat.id, text);
+        }
+        await answerCallbackQuery(callbackQuery.id, "Reset concluído.");
+        return { ok: true, reported: true };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "payment_reset_all_failed";
+        await markTelegramProcessed(loaded.pending.id, { status: "error", errorMessage });
+        await editMessageText(chat.id, promptMessageId, "⛔ Não consegui resetar os codinomes. Envie /pagamento resetar-todos para tentar de novo.");
+        await answerCallbackQuery(callbackQuery.id, "Falhou — tente de novo.", true);
+        return { ok: true, ignored: true, processingError: true };
+    }
+}
+
+// Resposta textual "SD"/"SN" (ou "dia"/"noite") para a pergunta do PIAM: vale a
+// pendência do próprio autor, ou o reply de chefia/admin ao balão-pergunta.
+async function tryHandlePendingPiamShiftReply(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id) {
+        return null;
+    }
+    const choice = classifyPiamShiftTextReply(message.text);
+    if (!choice) {
+        return null;
+    }
+
+    const chatId = String(message.chat.id);
+    const senderId = String(message.from.id);
+    let pending = await findPendingPiamShift(chatId, senderId);
+
+    if (!pending && message.reply_to_message?.message_id) {
+        const byPrompt = await findPendingPiamShiftByPrompt(chatId, message.reply_to_message.message_id);
+        if (byPrompt) {
+            const permission = resolvePendingPresserPermission({
+                presserTelegramId: senderId,
+                pendingSenderTelegramId: byPrompt.senderTelegramId,
+                chiefTelegramIds: getTelegramChiefUserIds(),
+                adminTelegramIds: getTelegramAdminUserIds(),
+            });
+            if (permission === "denied") {
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "piam_shift_reply_denied",
+                });
+                await sendMessage(message.chat.id, buildThirdPartyPressAlertText(), message.message_id);
+                return { ok: true, ignored: true };
+            }
+            pending = byPrompt;
+        }
+    }
+
+    if (!pending || !isPendingPiamShiftData(pending.resolutionData)) {
+        return null;
+    }
+
+    return completePiamShiftPending({
+        pending,
+        data: pending.resolutionData,
+        shift: choice,
+        ctx: { via: "text", message, logId },
+    });
+}
+
+// Reabertura de pendência por resposta curta órfã (auditoria §5#6): "SD"/"SN"/"P",
+// "1/2/3", ramal de 4 dígitos ou "HH:MM" do MESMO autor no MESMO chat encontram a
+// pendência recente (ativa ou expirada ≤2h) em vez de morrer em no_operational_match.
+// A aplicação revalida contra o estado atual (tomada/conflito) — se falhar, sai o
+// erro normal do fluxo.
+async function tryHandleShortReplyToRecentPending(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id) {
+        return null;
+    }
+    const reply = classifyPendingShortReply(message.text);
+    if (!reply) {
+        return null;
+    }
+
+    const chatId = String(message.chat.id);
+    const senderId = String(message.from.id);
+    const now = new Date(message.date * 1000);
+
+    if (reply.kind === "shift") {
+        const activeShift = await findPendingShiftSelection(chatId, senderId);
+        if (activeShift && isPendingShiftSelectionData(activeShift.resolutionData)) {
+            return completeShiftSelectionPending({
+                pending: activeShift,
+                data: activeShift.resolutionData,
+                shift: reply.shift,
+                ctx: { via: "text", message, logId },
+            });
+        }
+        const expiredShift = await findExpiredReopenablePending(
+            chatId,
+            senderId,
+            (row) => isPendingShiftSelectionData(row.resolutionData),
+            now,
+        );
+        if (expiredShift && isPendingShiftSelectionData(expiredShift.resolutionData)) {
+            return completeShiftSelectionPending({
+                pending: expiredShift,
+                data: expiredShift.resolutionData,
+                shift: reply.shift,
+                ctx: { via: "text", message, logId },
+            });
+        }
+        if (reply.shift !== "P") {
+            const expiredPiam = await findExpiredReopenablePending(
+                chatId,
+                senderId,
+                (row) => isPendingPiamShiftData(row.resolutionData),
+                now,
+            );
+            if (expiredPiam && isPendingPiamShiftData(expiredPiam.resolutionData)) {
+                return completePiamShiftPending({
+                    pending: expiredPiam,
+                    data: expiredPiam.resolutionData,
+                    shift: reply.shift,
+                    ctx: { via: "text", message, logId },
+                });
+            }
+        }
+        return null;
+    }
+
+    if (reply.kind === "option") {
+        return tryHandlePendingNameSelection(update, logId, { includeExpired: true });
+    }
+
+    if (reply.kind === "ramal") {
+        return tryHandlePendingRamalSelection(update, logId, { includeExpired: true });
+    }
+
+    // "HH:MM" órfão: única pendência que consome hora solta é a correção de saída.
+    return tryHandlePendingDepartureCorrection(update, logId, { includeExpired: true });
+}
+
+// Dispatcher único de callback_query, com dispatch por PREFIXO do callback_data
+// (padrão parseContinuityRevertCallbackData): pSN = reverter P→SN; f6 = turno da
+// chegada F6; nm = candidato de nome; pi = PIAM SD/SN; coi = ramal do COI;
+// tk = tomada de ramal; dj = justificativa de saída; dst = destino desconhecido;
+// rta = reset geral de codinomes.
 async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery) {
+    const shiftSelection = parseShiftSelectionCallbackData(callbackQuery.data);
+    const nameSelection = parseNameSelectionCallbackData(callbackQuery.data);
+    const piamShift = parsePiamShiftCallbackData(callbackQuery.data);
+    const coiRamal = parseCoiRamalCallbackData(callbackQuery.data);
+    const takeoverDecision = parseTakeoverDecisionCallbackData(callbackQuery.data);
+    const departureJustification = parseDepartureJustificationCallbackData(callbackQuery.data);
+    const destinationSelection = parseDestinationSelectionCallbackData(callbackQuery.data);
+    const resetAll = parseResetAllCallbackData(callbackQuery.data);
     const parsed = parseContinuityRevertCallbackData(callbackQuery.data);
-    if (!parsed) {
+    if (!parsed && !shiftSelection && !nameSelection && !piamShift && !coiRamal
+        && !takeoverDecision && !departureJustification && !destinationSelection && !resetAll) {
         // Callback desconhecido: encerra o "loading" do cliente e ignora.
         await answerCallbackQuery(callbackQuery.id);
         return { ok: true, ignored: true };
@@ -9572,6 +11637,35 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
         } as TelegramUpdate["message"])
         : false;
     if (!allowed) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+
+    if (shiftSelection) {
+        return handleShiftSelectionCallback(callbackQuery, shiftSelection);
+    }
+    if (nameSelection) {
+        return handleNameSelectionCallback(callbackQuery, nameSelection);
+    }
+    if (piamShift) {
+        return handlePiamShiftCallback(callbackQuery, piamShift);
+    }
+    if (coiRamal) {
+        return handleCoiRamalCallback(callbackQuery, coiRamal);
+    }
+    if (takeoverDecision) {
+        return handleTakeoverDecisionCallback(callbackQuery, takeoverDecision);
+    }
+    if (departureJustification) {
+        return handleDepartureJustificationCallback(callbackQuery, departureJustification);
+    }
+    if (destinationSelection) {
+        return handleDestinationSelectionCallback(callbackQuery, destinationSelection);
+    }
+    if (resetAll) {
+        return handleResetAllCallback(callbackQuery, resetAll);
+    }
+    if (!parsed) {
         await answerCallbackQuery(callbackQuery.id);
         return { ok: true, ignored: true };
     }
@@ -9677,6 +11771,13 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     return pendingRamalResult;
                 }
 
+                // "SD"/"SN" (ou "dia"/"noite") respondendo a pergunta do PIAM —
+                // solto (pendência do autor) ou como reply ao balão-pergunta.
+                const pendingPiamShiftResult = await tryHandlePendingPiamShiftReply(update, log.id);
+                if (pendingPiamShiftResult) {
+                    return pendingPiamShiftResult;
+                }
+
                 const pendingDepartureCorrectionResult = await tryHandlePendingDepartureCorrection(update, log.id);
                 if (pendingDepartureCorrectionResult) {
                     return pendingDepartureCorrectionResult;
@@ -9692,6 +11793,14 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 const pendingResult = await tryHandlePendingNameSelection(update, log.id);
                 if (pendingResult) {
                     return pendingResult;
+                }
+
+                // Reabertura por resposta curta (auditoria §5#6): DEPOIS dos handlers
+                // de meal-break (colisão "12:30" com slot) e das pendências ativas;
+                // ANTES da guarda de dígito solto e do parser operacional.
+                const shortReplyResult = await tryHandleShortReplyToRecentPending(update, log.id);
+                if (shortReplyResult) {
+                    return shortReplyResult;
                 }
             }
 
@@ -10044,16 +12153,24 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                             } satisfies PendingCruCoiRamalData
                             : buildTelegramReviewLogData({ reason: "location_without_ramal", trainingCandidate: true }),
                     });
+                    // COI = escolha binária (1367/1368): balão curto + botões que
+                    // completam o pending_cru_coi_ramal via callback (auditoria
+                    // §3.1#10). CRU tem muitos ramais e continua digitado.
+                    const coiButtons = Boolean(message.from?.id) && locationHint.location === "COI";
                     await sendMessage(
                         message.chat.id,
-                        buildLocationWithoutRamalReply({
-                            senderName: rawParsed?.extractedNames[0] ?? senderName ?? "",
-                            location: locationHint.location,
-                            shiftLabel: rawParsed?.shiftType ?? null,
-                            time: rawParsed?.arrivalTime ?? null,
-                            interactive: Boolean(message.from?.id),
-                        }),
+                        coiButtons
+                            ? buildCoiRamalPromptText()
+                            : buildLocationWithoutRamalReply({
+                                senderName: rawParsed?.extractedNames[0] ?? senderName ?? "",
+                                location: locationHint.location,
+                                shiftLabel: rawParsed?.shiftType ?? null,
+                                time: rawParsed?.arrivalTime ?? null,
+                                interactive: Boolean(message.from?.id),
+                            }),
                         message.message_id,
+                        coiButtons ? buildCoiRamalKeyboard(log.id) : undefined,
+                        coiButtons ? { parseMode: "Markdown" } : undefined,
                     );
                     return { ok: true, ignored: true };
                 }
@@ -10119,6 +12236,21 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     );
                 } else {
                     const rawPartial = parseMessage(message.text);
+
+                    // Destino desconhecido (auditoria §3.1#9): antes do "não entendi"
+                    // genérico, diagnostica o código rejeitado e sugere os reais.
+                    if (rawPartial.unknownTargetToken
+                        && (rawPartial.extractedNames.length > 0 || rawPartial.shiftType || rawPartial.arrivalTime)) {
+                        const unknownDestinationResult = await respondUnknownDestination({
+                            logId: log.id,
+                            message,
+                            rawPartial,
+                        });
+                        if (unknownDestinationResult) {
+                            return unknownDestinationResult;
+                        }
+                    }
+
                     const partialParts: string[] = [];
                     if (rawPartial.baseCode) partialParts.push(`base/ramal *${rawPartial.baseCode}*`);
                     if (rawPartial.arrivalTime) partialParts.push(`horário *${rawPartial.arrivalTime}*`);
@@ -10161,6 +12293,22 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 // de origem em handleTelegramReassignment.
                 const shiftRequired = !firstParsed.isReassignment;
                 if (isBareButtonPayload || !hasName || (shiftRequired && !hasShift)) {
+                    // Finding 1 (138 casos/mês — o maior bucket de chegada rejeitada):
+                    // nome+local presentes e faltou SÓ o turno → vira pendência com
+                    // botões [☀️ SD] [🌙 SN] [🕐 P 24h] em vez de rejeição seca. O
+                    // caminho de meio plantão (arrivalHalfShiftSatisfiesShiftGate) já
+                    // liberou hasShift antes e não passa por aqui.
+                    const shiftSelectionSenderId = message.from?.id ? String(message.from.id) : null;
+                    if (!isBareButtonPayload && hasName && shiftRequired && !hasShift && shiftSelectionSenderId) {
+                        await queuePendingShiftSelection({
+                            logId: log.id,
+                            message,
+                            parsed: firstParsed,
+                            senderTelegramId: shiftSelectionSenderId,
+                        });
+                        return { ok: true, ignored: true, pending: true };
+                    }
+
                     const reason: TelegramReviewReason = isBareButtonPayload
                         ? "meal_break_button_outside_flow"
                         : "arrival_missing_name_or_shift";
@@ -10311,6 +12459,20 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     return { ok: true, ignored: true, pending: true };
                 }
 
+                // Auditoria §3.3#15: typo que o resolver rejeitou ainda pode ter
+                // candidatos fuzzy próximos — em vez do beco doctor_not_resolved,
+                // oferece-os como pendência com botões (cap 3, mesmo fluxo do
+                // candidate_prompt). Só com nome explícito na mensagem: não vale
+                // adivinhar pelo perfil do remetente.
+                if (doctorQuery) {
+                    const directory = await listDirectoryEntries();
+                    const nearbyCandidates = resolveDoctorCandidates(doctorQuery, directory as TelegramDoctorDirectoryEntry[], 3);
+                    if (nearbyCandidates.length > 0) {
+                        await queuePendingNameSelection(log.id, message, firstParsed, doctorQuery, new Date(message.date * 1000), eventAt, nearbyCandidates);
+                        return { ok: true, ignored: true, pending: true };
+                    }
+                }
+
                 const looksLikeDeparture = firstParsed.isDeparture || looksLikeDepartureMessage(message.text);
                 const departureExample = looksLikeDeparture
                     ? buildTelegramDepartureExample({
@@ -10398,6 +12560,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 occupantDoctorId: occupant.doctorId,
                                 occupantOccupancyId: occupant.occupancyId,
                                 arrivingMessageText: message.text,
+                                senderTelegramId: takeoverSenderId,
                             } satisfies TakeoverPendingData,
                         });
                         await sendMessage(
@@ -10409,6 +12572,8 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                                 sinceTime: formatTelegramReplyTime(occupant.startedAt),
                             }),
                             message.message_id,
+                            buildTakeoverDecisionKeyboard(firstParsed.baseCode, log.id),
+                            { parseMode: "Markdown" },
                         );
                         return { ok: true, ignored: true, pending: true };
                     }
@@ -10508,8 +12673,10 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, forwardContinuityPrompt);
 
                 if (takeoverDisplaced) {
-                    // Avisa o grupo que o ocupante foi deslocado e precisa redeclarar
-                    // posição (chegada preservada) para a chefia não esquecê-lo.
+                    // Avisa o grupo que o ocupante ficou fora do quadro e precisa
+                    // redeclarar posição (chegada preservada). Sai como REPLY da
+                    // mensagem que confirmou a tomada, para dar contexto de quem
+                    // assumiu (auditoria §3.1#4).
                     await sendMessage(
                         message.chat.id,
                         buildTakeoverDisplacedAnnouncement({
@@ -10518,6 +12685,9 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                             targetLabel: takeoverDisplaced.targetLabel,
                             sinceTime: takeoverDisplaced.sinceTime,
                         }),
+                        message.message_id,
+                        undefined,
+                        { parseMode: "Markdown" },
                     );
                 }
 
@@ -10562,6 +12732,22 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 }
 
                 if (isTelegramPiamShiftRequiredError(errorMessage)) {
+                    // Auditoria §3.1#12: a pergunta binária vira PENDÊNCIA com botões
+                    // [☀️ SD] [🌙 SN]; "SD"/"SN" por texto (solto ou como reply)
+                    // continua valendo via tryHandlePendingPiamShiftReply.
+                    if (message.from?.id) {
+                        await queuePendingPiamShift({
+                            logId: log.id,
+                            parsed: firstParsed,
+                            resolvedDoctor: { id: resolvedDoctor.id, fullName: resolvedDoctor.fullName, displayName: resolvedDoctor.displayName ?? null },
+                            senderTelegramId: String(message.from.id),
+                            originalText: message.text,
+                            referenceAt: new Date(message.date * 1000),
+                            delivery: { via: "message", chatId: message.chat.id, replyToMessageId: message.message_id },
+                        });
+                        return { ok: true, ignored: true, pending: true };
+                    }
+
                     await markTelegramProcessed(log.id, {
                         status: "ignored",
                         parsedDomain: firstParsed.sector,
@@ -10602,6 +12788,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     replyToMessageId: message.message_id,
                     parsed: firstParsed,
                     errorMessage,
+                    senderTelegramId: message.from?.id ? String(message.from.id) : null,
                 });
                 return { ok: true, ignored: true, processingError: true };
             }

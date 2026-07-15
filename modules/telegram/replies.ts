@@ -179,7 +179,9 @@ export function buildCandidatePromptReply(seed: string | number, candidates: Nam
     if (context?.shift) contextParts.push(`turno ${context.shift}`);
     const contextLine = contextParts.length > 0 ? `\n\nDetectei: ${contextParts.join(" · ")}` : "";
     // TTL real da pendência: 30 min (PENDING_TTL_MS em service.ts).
-    return `${intro}${contextLine}\n\nMais próximos:\n${list}\n\nResponda com 1, 2 ou 3, ou redigite nome e sobrenome.\nEssa confirmação expira em 30 min.`;
+    // O balão sai com botões inline (um por candidato); o texto preserva os
+    // fallbacks 1/2/3 e redigitação (auditoria §3.1#5).
+    return `${intro}${contextLine}\n\nMais próximos:\n${list}\n\nToque no nome abaixo — ou:\nResponda com 1, 2 ou 3, ou redigite nome e sobrenome.\nEssa confirmação expira em 30 min.`;
 }
 
 export function buildNameUnresolvedReply(seed: string | number, candidates: NamedCandidate[] = []) {

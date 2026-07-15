@@ -14,7 +14,7 @@ import {
     parseTelegramDeparturePriorityCommand,
 } from "@/modules/telegram/departure-priority";
 import { isTelegramDepartureReportCommandText, parseTelegramDepartureReportCommand } from "@/modules/telegram/departure-report-commands";
-import { buildTelegramDepartureReport, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
+import { buildTelegramDepartureReport, buildTelegramDepartureReportSummary, resolveTelegramDepartureReportRequest } from "@/modules/telegram/departure-report";
 import { isTelegramBankHoursCommandText, parseTelegramBankHoursCommand } from "@/modules/telegram/bank-hours-commands";
 import { parseTelegramPaymentAdminCommand } from "@/modules/telegram/payment-commands";
 import { isTelegramShiftReportCommandText, parseTelegramShiftReportCommand } from "@/modules/telegram/shift-report-commands";
@@ -67,8 +67,10 @@ import {
     buildTakeoverWarningReply,
     buildTakeoverDisplacedAnnouncement,
     parseTakeoverConfirmShortcut,
+    buildPaymentAllocationReportLine,
+    buildPaymentAllocationReportMessages,
 } from "@/modules/telegram/service";
-import type { InterventionBoardRow, RegulationBoardRow } from "@/services/board.service";
+import type { InterventionBoardRow, PaymentAllocationBoard, PaymentAllocationRow, RegulationBoardRow } from "@/services/board.service";
 
 function makeInterventionPriorityRow(overrides: Partial<InterventionBoardRow> = {}): InterventionBoardRow {
     return {
@@ -654,11 +656,12 @@ test("getCurrentDeparturePriorityView lista so regulacao SD elegivel e separa co
     assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
 
     const reply = buildDeparturePriorityReply(view);
-    assert.match(reply, /Lista de reguladores no DIURNO/);
-    assert.match(reply, /Fora da lista principal: CP, MRV, RECIP, PIAM, NUCLEO, MEIO, quem chegou ha menos de 4h e quem est[aá] em P\/continua\./);
-    assert.match(reply, /1\. Bruno \| 2035 \| 07:05/);
-    assert.match(reply, /Fora por estarem em P \(continua\):/);
-    assert.match(reply, /- Diego \| 2154 \| 06:45/);
+    const replyLines = reply.split("\n");
+    assert.match(replyLines[0] ?? "", /^👋 \*Prioridade de saída DIURNO\*/);
+    // Ranking começa na linha 2; regras colapsadas em 1 linha no rodapé.
+    assert.match(replyLines[1] ?? "", /^1\. Bruno \| 2035 \| 07:05$/);
+    assert.match(replyLines[replyLines.length - 1] ?? "", /^Regras: fora da lista CP, MRV, RECIP, PIAM, NUCLEO, MEIO, quem chegou há menos de 4h e quem está em P\/continua\.$/);
+    assert.match(reply, /🔁 Em P \(continuam\): Diego \(2154 06:45\)/);
     assert.doesNotMatch(reply, /Ana \| PM04/);
     assert.doesNotMatch(reply, /Marina Costa/);
     assert.doesNotMatch(reply, /Renata Lima/);
@@ -755,7 +758,7 @@ test("getCurrentDeparturePriorityView no SN aplica piso 19:15 para RMT e exclui 
 
     const reply = buildDeparturePriorityReply(view);
     assert.match(reply, /NOTURNO/);
-    assert.match(reply, /RMT recebe piso 19:15/);
+    assert.match(reply, /RMT tem piso 19:15/);
     assert.match(reply, /1\. Diego \| 2153 \| 16:20/);
     assert.match(reply, /2\. Ana \| 2035 \| 19:10/);
     assert.match(reply, /3\. Erika \| 2032 \| 19:11/);
@@ -872,7 +875,7 @@ test("getCurrentDeparturePriorityView no SN filtra por turma 23:00 antes de 03:0
 
     assert.equal(beforeThree.activeNightWorkSlot, "23:00");
     assert.deepEqual(beforeThree.entries.map((entry) => entry.targetCode), ["2035"]);
-    assert.match(buildDeparturePriorityReply(beforeThree), /Janela ativa da divisao de jantar: 23:00\./);
+    assert.match(buildDeparturePriorityReply(beforeThree), /🍽️ Janela ativa da divisão de jantar: 23:00\./);
 
     const afterThree = await getCurrentDeparturePriorityView({
         referenceAt: new Date("2026-03-31T03:10:00-03:00"),
@@ -882,7 +885,7 @@ test("getCurrentDeparturePriorityView no SN filtra por turma 23:00 antes de 03:0
 
     assert.equal(afterThree.activeNightWorkSlot, "03:00");
     assert.deepEqual(afterThree.entries.map((entry) => entry.targetCode), ["2036"]);
-    assert.match(buildDeparturePriorityReply(afterThree), /Janela ativa da divisao de jantar: 03:00\./);
+    assert.match(buildDeparturePriorityReply(afterThree), /🍽️ Janela ativa da divisão de jantar: 03:00\./);
 });
 
 test("getCurrentDeparturePriorityView na janela 16-21h lista saida das 19h (SD + P invertido)", async () => {
@@ -951,7 +954,7 @@ test("getCurrentDeparturePriorityView na janela 16-21h lista saida das 19h (SD +
     assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
 
     const reply = buildDeparturePriorityReply(view);
-    assert.match(reply, /Janela atual: lista quem está previsto para sair às 19h\./);
+    assert.match(reply, /^👋 \*Prioridade de saída DIURNO\* — sai às 19h/);
     assert.doesNotMatch(reply, /Caroline SN/);
 });
 
@@ -1021,7 +1024,7 @@ test("getCurrentDeparturePriorityView na janela 02-09h lista saida das 07h (SN +
     assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
 
     const reply = buildDeparturePriorityReply(view);
-    assert.match(reply, /Janela atual: lista quem está previsto para sair às 07h\./);
+    assert.match(reply, /^👋 \*Prioridade de saída NOTURNO\* — sai às 07h/);
     assert.doesNotMatch(reply, /Diego SD/);
 });
 
@@ -1122,6 +1125,9 @@ test("buildTelegramDepartureReport lists arrival, departure and bank-hours impac
                 ramalLabel: "2031",
                 source: "telegram",
                 candidateCount: 1,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
                 paymentStatus: "ready_for_payment",
                 issues: [],
                 arrivalDelayMinutes: 0,
@@ -1153,6 +1159,9 @@ test("buildTelegramDepartureReport lists arrival, departure and bank-hours impac
                 ramalLabel: null,
                 source: "telegram",
                 candidateCount: 1,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
                 paymentStatus: "needs_review",
                 issues: ["saída ajustada depois da rendição"],
                 arrivalDelayMinutes: 10,
@@ -1182,6 +1191,9 @@ test("buildTelegramDepartureReport lists arrival, departure and bank-hours impac
                 ramalLabel: null,
                 source: null,
                 candidateCount: 0,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
                 paymentStatus: "needs_review",
                 issues: ["sem ocupação"],
                 arrivalDelayMinutes: null,
@@ -1194,11 +1206,11 @@ test("buildTelegramDepartureReport lists arrival, departure and bank-hours impac
         ],
     });
 
-    assert.match(report, /Saídas 28\/03\/2026 SN/);
+    assert.match(report, /📋 \*Saídas 28\/03\/2026 SN\* — íntegra\./);
     assert.match(report, /Formato: alvo \| chegada real \| nome \| saída \| banco/);
-    assert.match(report, /Alocados 2\/3 \| revisar 1 \| vazios 1/);
+    assert.match(report, /Alocados \*2\/3\* \| revisar \*1\* \| vazios \*1\*/);
     assert.match(report, /✅ 2031 \| 19:00 \| Ana \| 07:20 \| BH \+0h00 \(extra/);
-    assert.match(report, /⚠️ PM04 \| 19:10 \| Bruno \| 07:45 \| BH \+0h35/);
+    assert.match(report, /🔎 PM04 \| 19:10 \| Bruno \| 07:45 \| BH \+0h35/);
     assert.match(report, /revisar: saída ajustada depois da rendição/);
     assert.match(report, /Vazios \(1\): IT30/);
 });
@@ -1238,6 +1250,9 @@ test("buildTelegramDepartureReport shows CONTINUA for carried P coverage and pre
                 ramalLabel: "2031",
                 source: "telegram",
                 candidateCount: 1,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
                 paymentStatus: "needs_review",
                 issues: ["Plantao sem saida consolidada"],
                 arrivalDelayMinutes: 1,
@@ -1275,6 +1290,9 @@ test("buildTelegramDepartureReport shows CONTINUA for carried P coverage and pre
                 ramalLabel: null,
                 source: "telegram",
                 candidateCount: 1,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
                 paymentStatus: "ready_for_payment",
                 issues: [],
                 arrivalDelayMinutes: 0,
@@ -1293,7 +1311,7 @@ test("buildTelegramDepartureReport shows CONTINUA for carried P coverage and pre
         ],
     });
 
-    assert.match(report, /Alocados 2\/2 \| revisar 0 \| vazios 0/);
+    assert.match(report, /Alocados \*2\/2\* \| revisar \*0\* \| vazios \*0\*/);
     assert.match(report, /🔁 2031 \| 07:01 \| João Perrone \| 19:00 \| CONTINUA/);
     assert.doesNotMatch(report, /2031.*Plantão sem saída consolidada/);
     assert.match(report, /✅ CZ50 \| 07:00 \| Laisse Melo \| 19:12 \| BH 0/);
@@ -1335,6 +1353,9 @@ test("buildTelegramDepartureReport uses carried P bank-hours once the final exit
                 ramalLabel: null,
                 source: "telegram",
                 candidateCount: 1,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
                 paymentStatus: "ready_for_payment",
                 issues: [],
                 arrivalDelayMinutes: 0,
@@ -1400,6 +1421,9 @@ test("buildTelegramDepartureReport uses source bank-hours for a single-slot SN w
                 ramalLabel: null,
                 source: "telegram",
                 candidateCount: 1,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
                 paymentStatus: "ready_for_payment",
                 issues: [],
                 arrivalDelayMinutes: 0,
@@ -1565,14 +1589,19 @@ test("buildTelegramShiftReport separates confirmed rows from previous-shift carr
         },
     });
 
-    assert.match(report, /Plantão SN/);
-    assert.match(report, /✅ PM04 - Ana \| chegada 19:00 \| SN/);
-    assert.match(report, /🟡 BR05 - Joao \| SD desde 07:18/);
-    assert.match(report, /sem confirmação para SN/);
-    assert.match(report, /🔴 IT30/);
-    assert.match(report, /✅ 2031 - Bruno \| chegada 19:02 \| SN/);
-    assert.match(report, /🟡 2032 - Marina/);
-    assert.match(report, /🔴 2033/);
+    assert.match(report, /📋 \*Plantão SN\*/);
+    assert.match(report, /Herança do turno anterior = pendência, não entrada confirmada\./);
+    // Pendências antes dos confirmados em cada bloco.
+    assert.ok(report.indexOf("🟡 BR05") < report.indexOf("✅ PM04"));
+    assert.ok(report.indexOf("🟡 2032") < report.indexOf("✅ 2031"));
+    assert.match(report, /🟡 BR05 - Joao \| veio de SD 07:18 — continua no SN\?/);
+    assert.match(report, /Para continuar: `Joao Santana BR05 continuando SN`/);
+    assert.match(report, /🔴 Sem aviso \(1\): IT30/);
+    assert.match(report, /✅ PM04 - Ana \| 19:00 SN/);
+    assert.match(report, /✅ 2031 - Bruno \| 19:02 SN/);
+    assert.match(report, /🟡 2032 - Marina \| veio de SD 07:05 — continua no SN\?/);
+    assert.match(report, /Para continuar: `Marina Costa 2032 continuando SN`/);
+    assert.match(report, /🔴 Sem aviso \(1\): 2033/);
     assert.match(report, /🟡 herança do turno anterior · 🔴 sem aviso/);
 });
 
@@ -1675,10 +1704,10 @@ test("buildTelegramShiftReport treats null shiftLabel with current-shift boardSt
     });
 
     assert.match(report, /Plantão SD/);
-    assert.match(report, /✅ SM01 - Carlos \| chegada 07:05 \| SD/);
-    assert.match(report, /✅ 2031 - Felipe \| chegada 07:10 \| SD/);
+    assert.match(report, /✅ SM01 - Carlos \| 07:05 SD/);
+    assert.match(report, /✅ 2031 - Felipe \| 07:10 SD/);
     assert.doesNotMatch(report, /Herança/);
-    assert.doesNotMatch(report, /sem confirmação/);
+    assert.doesNotMatch(report, /continua no SD\?/);
 });
 
 test("buildTelegramShiftReport shows null shiftLabel from previous shift as carryover for regulation and awaiting for intervention", () => {
@@ -1729,8 +1758,8 @@ test("buildTelegramShiftReport shows null shiftLabel from previous shift as carr
     });
 
     assert.match(report, /Plantão SD/);
-    assert.match(report, /🟡 PM04 - Joana \| turno anterior desde 19:30 \| sem confirmação para SD/);
-    assert.match(report, /🟡 2032 - Paulo \| turno anterior desde 19:00/);
+    assert.match(report, /🟡 PM04 - Joana \| veio do turno anterior 19:30 — continua no SD\?/);
+    assert.match(report, /🟡 2032 - Paulo \| veio do turno anterior 19:00 — continua no SD\?/);
 });
 
 test("buildTelegramDepartureReport lists disabled bases separately from empty targets", () => {
@@ -1774,6 +1803,9 @@ test("buildTelegramDepartureReport lists disabled bases separately from empty ta
                 ramalLabel: null,
                 source: null,
                 candidateCount: 0,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
                 paymentStatus: "ready_for_payment",
                 issues: ["Base desativada para este turno"],
                 arrivalDelayMinutes: null,
@@ -1787,10 +1819,77 @@ test("buildTelegramDepartureReport lists disabled bases separately from empty ta
         ],
     });
 
-    assert.match(report, /desativadas 1/);
+    assert.match(report, /desativadas \*1\*/);
     assert.match(report, /Desativadas:/);
     assert.match(report, /⚫ PP20 \| 05:30 \| base desativada para o turno \| USA recolhida/);
     assert.doesNotMatch(report, /Vazios: PP20/);
+});
+
+test("buildTelegramDepartureReportSummary produz resumo de 3 linhas com fallback quando o privado falha", () => {
+    const board = {
+        generatedAt: new Date("2026-03-29T00:30:00-03:00").toISOString(),
+        operationalDate: new Date("2026-03-28T12:00:00-03:00").toISOString(),
+        shiftLabel: "SN" as const,
+        startedAt: new Date("2026-03-28T19:00:00-03:00").toISOString(),
+        endedAt: new Date("2026-03-29T07:00:00-03:00").toISOString(),
+        summary: {
+            totalTargets: 2,
+            assignedCount: 1,
+            readyForPaymentCount: 0,
+            needsReviewCount: 1,
+            unassignedCount: 1,
+        },
+        regulation: [
+            {
+                domain: "regulation" as const,
+                targetCode: "2031",
+                targetLabel: "2031",
+                sortOrder: 31,
+                defaultRole: "MR",
+                occupancyId: "reg-1",
+                doctorId: "doc-1",
+                doctorName: "Ana Souza",
+                displayName: "Ana",
+                startedAt: "2026-03-28T22:00:00.000Z",
+                endedAt: "2026-03-29T10:20:00.000Z",
+                actualEndedAt: "2026-03-29T10:20:00.000Z",
+                scheduledStartAt: "2026-03-28T22:00:00.000Z",
+                scheduledEndAt: "2026-03-29T10:15:00.000Z",
+                shiftLabel: "SN" as const,
+                roleLabel: "MR",
+                ramalLabel: "2031",
+                source: "telegram",
+                candidateCount: 1,
+                candidateLabels: [] as string[],
+                conflictCandidateLabels: [] as string[],
+                hasDoctorOverlapConflict: false,
+                paymentStatus: "needs_review" as const,
+                issues: ["saída ajustada depois da rendição"],
+                arrivalDelayMinutes: 0,
+                overtimeMinutes: 35,
+                creditedOvertimeMinutes: 35,
+                balanceMinutes: 35,
+                ruleCode: "LATE_SIMPLE_OVERTIME",
+                bankHoursExplanation: "ok",
+                continuesBeyondShift: false,
+            },
+        ],
+        intervention: [],
+    };
+
+    const summary = buildTelegramDepartureReportSummary(board);
+    const lines = summary.split("\n");
+    assert.equal(lines.length, 3);
+    assert.match(lines[0] ?? "", /^📋 \*Saídas 28\/03\/2026 SN\*: alocados \*1\/2\* · vazios \*1\* · BH saldo \*\+0h35\*$/);
+    assert.match(lines[1] ?? "", /^🔎 Revisar: 2031 \(Ana\)$/);
+    assert.match(lines[2] ?? "", /me chame no privado e mande \/saidas para a íntegra$/);
+
+    const delivered = buildTelegramDepartureReportSummary(board, { privateDelivered: true });
+    assert.match(delivered, /📬 Mandei a íntegra no privado de quem pediu\./);
+    assert.doesNotMatch(delivered, /me chame no privado/);
+
+    // A íntegra continua existindo separada, pensada para o privado.
+    assert.match(buildTelegramDepartureReport(board), /— íntegra\./);
 });
 
 test("buildTelegramSummaryReport returns a copy-friendly day summary with exits first and regulation meal-break columns", () => {
@@ -1831,6 +1930,9 @@ test("buildTelegramSummaryReport returns a copy-friendly day summary with exits 
                         ramalLabel: null,
                         source: "telegram",
                         candidateCount: 1,
+                        candidateLabels: [],
+                        conflictCandidateLabels: [],
+                        hasDoctorOverlapConflict: false,
                         paymentStatus: "ready_for_payment",
                         issues: [],
                         arrivalDelayMinutes: 0,
@@ -1863,6 +1965,9 @@ test("buildTelegramSummaryReport returns a copy-friendly day summary with exits 
                         ramalLabel: "2032",
                         source: "telegram",
                         candidateCount: 1,
+                        candidateLabels: [],
+                        conflictCandidateLabels: [],
+                        hasDoctorOverlapConflict: false,
                         paymentStatus: "ready_for_payment",
                         issues: [],
                         arrivalDelayMinutes: 0,
@@ -2207,45 +2312,29 @@ test("shouldRouteToDepartureJustification never treats a continuation warning as
 });
 
 test("shouldForceTelegramTakeoverOnContinuationConflict só libera takeover em continuidade com conflito de ocupação", () => {
+    const continuationParsed = {
+        sector: "INTERVENTION" as const,
+        baseCode: "PM04",
+        arrivalTime: null,
+        shiftType: "SN" as const,
+        roleFunction: null,
+        isDeparture: false,
+        isContinuation: true,
+        isReassignment: false,
+    };
+
     assert.equal(shouldForceTelegramTakeoverOnContinuationConflict({
-        parsed: {
-            sector: "INTERVENTION",
-            baseCode: "PM04",
-            arrivalTime: null,
-            shiftType: "SN",
-            roleFunction: null,
-            isDeparture: false,
-            isContinuation: true,
-            isReassignment: false,
-        },
+        parsed: continuationParsed,
         errorMessage: "arrival_conflicts_with_active_occupancy",
     }), true);
 
     assert.equal(shouldForceTelegramTakeoverOnContinuationConflict({
-        parsed: {
-            sector: "INTERVENTION",
-            baseCode: "PM04",
-            arrivalTime: null,
-            shiftType: "SN",
-            roleFunction: null,
-            isDeparture: false,
-            isContinuation: false,
-            isReassignment: false,
-        },
+        parsed: { ...continuationParsed, isContinuation: false },
         errorMessage: "arrival_conflicts_with_active_occupancy",
     }), false);
 
     assert.equal(shouldForceTelegramTakeoverOnContinuationConflict({
-        parsed: {
-            sector: "INTERVENTION",
-            baseCode: "PM04",
-            arrivalTime: null,
-            shiftType: "SN",
-            roleFunction: null,
-            isDeparture: false,
-            isContinuation: true,
-            isReassignment: false,
-        },
+        parsed: continuationParsed,
         errorMessage: "Intervention base not found.",
     }), false);
 });
@@ -2908,19 +2997,31 @@ test("isWithinTakeoverConfirmationWindow: confirma dentro de 30min, expira depoi
     assert.equal(isWithinTakeoverConfirmationWindow(base, new Date("2026-06-09T12:45:00Z")), false);
 });
 
-test("buildTakeoverWarningReply: avisa ocupante, pede confirmação curta 'confirmo NNNN' e garante preservação da chegada", () => {
+test("buildTakeoverWarningReply: avisa ocupante, cita a janela de 30 min e mantém o fallback 'confirmo NNNN'", () => {
     const reply = buildTakeoverWarningReply({
         occupantName: "Fulano",
         targetLabel: "2153",
         shiftLabel: "SD",
         sinceTime: "07:00",
     });
-    assert.match(reply, /já está ocupado por \*Fulano\*/);
-    assert.match(reply, /turno \*SD\*/);
+    assert.match(reply, /já está ocupado por \*Fulano\* \(SD\)/);
     assert.match(reply, /desde \*07:00\*/);
-    assert.match(reply, /responda só/);
+    // Janela explícita de 30 min (auditoria §3.1#4) + fallback textual preservado.
+    assert.match(reply, /\*30 min\*/);
     assert.match(reply, /`confirmo 2153`/);
-    assert.match(reply, /horário de chegada preservado/);
+    assert.match(reply, /reenvie a chegada exata/);
+    assert.match(reply, /chegada de Fulano fica preservada/);
+    assert.match(reply, /sem contar atraso/);
+});
+
+test("buildTakeoverWarningReply escapa markdown nas interpolações (nome com asterisco)", () => {
+    const reply = buildTakeoverWarningReply({
+        occupantName: "Ana*Beatriz",
+        targetLabel: "2153",
+        shiftLabel: null,
+        sinceTime: "07:00",
+    });
+    assert.ok(reply.includes("*Ana\\*Beatriz*"), "nome interpolado deve ser escapado");
 });
 
 test("parseTakeoverConfirmShortcut: reconhece 'confirmo NNNN' e variações, ignora o resto", () => {
@@ -3531,7 +3632,34 @@ test("buildTelegramArrivalConflictMessage dá instrução de retry para conflito
     assert.ok(msg.includes("PM04"), "mensagem deve citar a base conflitante");
 });
 
-test("buildTelegramArrivalConflictMessage mantém instrução /retirar para chegada normal com conflito", () => {
+test("buildTelegramArrivalConflictMessage: /retirar só para chefe/admin; médico comum é orientado à chefia", () => {
+    const paraChefe = buildTelegramArrivalConflictMessage({
+        parsed: {
+            baseCode: "CC70",
+            isDeparture: false,
+            isContinuation: false,
+        },
+        errorMessage: "arrival_conflicts_with_active_occupancy",
+        senderIsPrivileged: true,
+    });
+    assert.ok(paraChefe.includes("/retirar CC70"), "chefe/admin deve receber a dica de /retirar");
+
+    const paraMedico = buildTelegramArrivalConflictMessage({
+        parsed: {
+            baseCode: "CC70",
+            isDeparture: false,
+            isContinuation: false,
+        },
+        errorMessage: "arrival_conflicts_with_active_occupancy",
+        senderIsPrivileged: false,
+    });
+    // Auditoria §3.1#7: médico comum não pode usar /retirar — beco sem saída.
+    assert.ok(!paraMedico.includes("Use /retirar"), "médico comum não deve ser mandado usar /retirar");
+    assert.match(paraMedico, /chame a chefia/);
+    assert.ok(paraMedico.includes("CC70"), "mensagem deve citar a base conflitante");
+});
+
+test("buildTelegramArrivalConflictMessage mostra QUEM ocupa e desde quando (auditoria §3.1#7)", () => {
     const msg = buildTelegramArrivalConflictMessage({
         parsed: {
             baseCode: "CC70",
@@ -3539,14 +3667,13 @@ test("buildTelegramArrivalConflictMessage mantém instrução /retirar para cheg
             isContinuation: false,
         },
         errorMessage: "arrival_conflicts_with_active_occupancy",
+        occupant: { name: "Kêmylla", sinceTime: "07:02" },
     });
-
-    assert.ok(msg.includes("/retirar"), "chegada normal conflitante deve pedir /retirar");
-    assert.ok(msg.includes("CC70"), "mensagem deve citar a base conflitante");
+    assert.match(msg, /\*CC70\* já está com \*Kêmylla\* desde \*07:02\*/);
 });
 
-test("buildTelegramArrivalConflictMessage cobre erros genéricos sem alterar o texto base", () => {
-    const msg = buildTelegramArrivalConflictMessage({
+test("buildTelegramArrivalConflictMessage traduz erro técnico conhecido e não vaza erro desconhecido cru", () => {
+    const traduzido = buildTelegramArrivalConflictMessage({
         parsed: {
             baseCode: "PM04",
             isDeparture: false,
@@ -3554,9 +3681,20 @@ test("buildTelegramArrivalConflictMessage cobre erros genéricos sem alterar o t
         },
         errorMessage: "Intervention base not found.",
     });
+    // Auditoria §3.1#11: nada de errorMessage cru em inglês no grupo.
+    assert.ok(!traduzido.includes("Intervention base not found."), "erro técnico não deve vazar cru");
+    assert.match(traduzido, /Não encontrei essa base no cadastro/);
 
-    assert.ok(msg.includes("Intervention base not found."), "erro genérico deve aparecer na mensagem");
-    assert.ok(!msg.includes("/retirar"), "erro genérico não deve ter instrução /retirar");
+    const desconhecido = buildTelegramArrivalConflictMessage({
+        parsed: {
+            baseCode: "PM04",
+            isDeparture: false,
+            isContinuation: true,
+        },
+        errorMessage: 'insert into "operations_v2" violates constraint xyz',
+    });
+    assert.ok(!desconhecido.includes("violates constraint"), "erro desconhecido vira mensagem fixa");
+    assert.match(desconhecido, /detalhe técnico ficou registrado/);
 });
 
 test("buildForcedTakeoverHint retorna aviso 🔁 com nome do médico deslocado", () => {
@@ -3588,4 +3726,135 @@ test("buildForcedTakeoverHint retorna string vazia para string vazia de nome", (
     });
 
     assert.equal(hint, "", "nome vazio também não deve gerar hint");
+});
+// ─── /pagamento conferir REV-first (auditoria §3.4#8) ────────────────────────
+
+function makePaymentAllocationRow(overrides: Partial<PaymentAllocationRow> = {}): PaymentAllocationRow {
+    return {
+        domain: "regulation",
+        targetCode: "2031",
+        targetLabel: "2031",
+        sortOrder: 1,
+        defaultRole: null,
+        occupancyId: "occ-1",
+        doctorId: "doc-1",
+        doctorName: "Ana Souza",
+        displayName: null,
+        startedAt: "2026-07-14T10:00:00.000Z",
+        endedAt: null,
+        actualEndedAt: null,
+        scheduledStartAt: "2026-07-14T10:00:00.000Z",
+        scheduledEndAt: "2026-07-14T22:00:00.000Z",
+        shiftLabel: "SD",
+        roleLabel: null,
+        ramalLabel: null,
+        source: "telegram",
+        candidateCount: 1,
+        candidateLabels: [],
+        conflictCandidateLabels: [],
+        hasDoctorOverlapConflict: false,
+        paymentStatus: "ready_for_payment",
+        issues: [],
+        arrivalDelayMinutes: null,
+        overtimeMinutes: null,
+        creditedOvertimeMinutes: null,
+        balanceMinutes: null,
+        ruleCode: null,
+        bankHoursExplanation: null,
+        ...overrides,
+    };
+}
+
+function makePaymentAllocationBoard(params: {
+    regulation: PaymentAllocationRow[];
+    intervention: PaymentAllocationRow[];
+}): PaymentAllocationBoard {
+    const rows = [...params.regulation, ...params.intervention];
+    return {
+        generatedAt: "2026-07-14T15:00:00.000Z",
+        operationalDate: "2026-07-14T10:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-07-14T10:00:00.000Z",
+        endedAt: "2026-07-14T22:00:00.000Z",
+        summary: {
+            totalTargets: rows.length,
+            assignedCount: rows.filter((row) => row.occupancyId).length,
+            readyForPaymentCount: rows.filter((row) => row.occupancyId && !row.disabledEntireShift && row.paymentStatus === "ready_for_payment").length,
+            needsReviewCount: rows.filter((row) => row.occupancyId && !row.disabledEntireShift && row.paymentStatus !== "ready_for_payment").length,
+            unassignedCount: rows.filter((row) => !row.occupancyId && !row.disabledEntireShift).length,
+            disabledCount: rows.filter((row) => row.disabledEntireShift).length,
+        },
+        regulation: params.regulation,
+        intervention: params.intervention,
+    };
+}
+
+test("buildPaymentAllocationReportMessages: REV vem primeiro, com legenda e nome+[MEIO] nas prontas", () => {
+    const board = makePaymentAllocationBoard({
+        regulation: [
+            makePaymentAllocationRow({ targetCode: "2031", doctorName: "Ana Souza" }),
+            makePaymentAllocationRow({
+                targetCode: "2035",
+                doctorName: "Bruno Lima",
+                paymentStatus: "needs_review",
+                issues: ["saída sem confirmação"],
+            }),
+            makePaymentAllocationRow({ targetCode: "2152", occupancyId: null, doctorId: null, doctorName: null }),
+        ],
+        intervention: [
+            makePaymentAllocationRow({
+                domain: "intervention",
+                targetCode: "PM04",
+                doctorName: "Carla Dias",
+                roleLabel: "MEIO",
+            }),
+            makePaymentAllocationRow({
+                domain: "intervention",
+                targetCode: "IT30",
+                occupancyId: null,
+                doctorId: null,
+                doctorName: null,
+                disabledEntireShift: true,
+            }),
+        ],
+    });
+
+    const messages = buildPaymentAllocationReportMessages(board);
+    assert.equal(messages.length, 1);
+    const [message] = messages;
+
+    // REV primeiro: o bloco de revisão aparece antes dos prontos.
+    assert.ok(
+        message.indexOf("REVISAR PRIMEIRO (1)") < message.indexOf("Prontos (2)"),
+        "bloco REV deve vir antes dos prontos",
+    );
+    assert.match(message, /REV ☎️ 2035 - Bruno Lima \| saída sem confirmação/);
+    // 1 linha por entrada pronta com nome + [MEIO] preservados (não colapsar).
+    assert.match(message, /OK ☎️ 2031 - Ana Souza/);
+    assert.match(message, /OK 🚑 PM04 - Carla Dias \[MEIO\]/);
+    // Bucket de desativadas e legenda dos códigos.
+    assert.match(message, /DSV 🚑 IT30 - desativada/);
+    assert.match(message, /Legenda: REV = revisar antes de pagar/);
+    assert.match(message, /VAZ ☎️ 2152 - sem ocupação/);
+});
+
+test("buildPaymentAllocationReportMessages faz chunking ≤3500 com mensagens numeradas", () => {
+    const regulation = Array.from({ length: 120 }, (_, index) => makePaymentAllocationRow({
+        targetCode: `20${String(index).padStart(2, "0")}`,
+        doctorName: `Doutor Com Nome Bem Comprido ${String(index).padStart(3, "0")}`,
+        paymentStatus: "needs_review",
+        issues: ["chegada sem confirmação da chefia no fechamento do turno"],
+    }));
+    const messages = buildPaymentAllocationReportMessages(makePaymentAllocationBoard({ regulation, intervention: [] }));
+    assert.ok(messages.length > 1, "volume alto deve quebrar em várias mensagens");
+    for (const message of messages) {
+        assert.ok(message.length <= 3600, `mensagem dentro do limite (${message.length})`);
+        assert.match(message, /^\(\d+\/\d+\)/);
+    }
+});
+
+test("buildPaymentAllocationReportLine aceita marcador de domínio sem quebrar o formato antigo", () => {
+    const row = makePaymentAllocationRow({ targetCode: "2031", doctorName: "Ana Souza" });
+    assert.equal(buildPaymentAllocationReportLine(row), "OK 2031 - Ana Souza");
+    assert.equal(buildPaymentAllocationReportLine(row, "☎️"), "OK ☎️ 2031 - Ana Souza");
 });
