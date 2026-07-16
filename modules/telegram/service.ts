@@ -7302,6 +7302,41 @@ async function queuePendingNameSelection(
     );
 }
 
+// ── Conflito de destino no remanejamento ──────────────────────────────────────────
+// Fim de cobertura de um ocupante do destino: scheduledEndAt quando existe, senão a
+// expiração implícita do turno (SD/SN = próxima virada; P = 07:00 do dia seguinte).
+export function resolveReassignmentConflictCoverageEndAt(params: {
+    startedAt: Date;
+    boardStartedAt: Date | null;
+    scheduledEndAt: Date | null;
+    shiftLabel: string | null;
+}): Date | null {
+    if (params.scheduledEndAt) {
+        return params.scheduledEndAt;
+    }
+    const anchor = params.boardStartedAt ?? params.startedAt;
+    const shiftLabel: OccupancyShiftLabel = params.shiftLabel === "P" || params.shiftLabel === "SD" || params.shiftLabel === "SN"
+        ? params.shiftLabel
+        : null;
+    return resolveImplicitOccupancyExpiry(anchor, shiftLabel);
+}
+
+// Ocupante cuja cobertura já venceu (ex.: P da véspera que o painel esconde às 07:15
+// mas nunca fecha) é um fantasma: rendemos automaticamente em vez de bloquear o
+// remanejamento — mesmo tratamento que uma chegada comum dá ao carry-over.
+export function isExpiredReassignmentConflict(coverageEndAt: Date | null, eventAt: Date) {
+    return Boolean(coverageEndAt && coverageEndAt.getTime() <= eventAt.getTime());
+}
+
+// Mensagem curta para conflito real (ocupante com cobertura vigente). Vai atrás do
+// prefixo "Não consegui registrar essa chegada." em sendTelegramArrivalFailureReply.
+export function buildReassignmentTargetOccupiedMessage(params: {
+    occupantName: string;
+    targetLabel: string;
+}) {
+    return `Encontrei *${params.occupantName}* em *${params.targetLabel}*. Se essa pessoa já saiu, declare a saída dela (ex.: \`${params.occupantName} saiu ${params.targetLabel}\`) e depois reenvie sua chegada.`;
+}
+
 async function handleTelegramReassignment(params: {
     parsed: OperationalParsedEntry;
     resolvedDoctor: ResolvedTelegramDoctorRef;
@@ -7340,6 +7375,7 @@ async function handleTelegramReassignment(params: {
 
     // Step 3: Check if the target has a conflicting occupancy from another doctor
     let destination: { domain: "regulation" | "intervention"; targetId: number };
+    let renderedGhostDoctorName: string | null = null;
     if (parsed.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({
             where: eq(regulationPosts.code, targetCode),
@@ -7359,7 +7395,16 @@ async function handleTelegramReassignment(params: {
             ),
         });
         if (targetConflict && targetConflict.doctorId !== resolvedDoctor.id) {
-            throw new Error(`Ramal ${targetCode} ja esta ocupado por outro medico. Resolva o conflito pelo site da chefia.`);
+            const coverageEndAt = resolveReassignmentConflictCoverageEndAt(targetConflict);
+            const occupantDoc = await db.query.doctors.findFirst({ where: eq(doctors.id, targetConflict.doctorId) });
+            const occupantName = resolveTelegramDoctorSurfaceName(occupantDoc);
+            if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)) {
+                throw new Error(buildReassignmentTargetOccupiedMessage({ occupantName, targetLabel: targetCode }));
+            }
+            // Cobertura vencida: rendição automática. endRegulationOccupancy capa o
+            // endedAt no scheduledEndAt do fantasma (ex.: P da véspera fecha às 07:15).
+            await endRegulationOccupancy(targetConflict.id, { endedAt: eventAt, handoffClosure: true });
+            renderedGhostDoctorName = occupantName;
         }
         destination = {
             domain: "regulation",
@@ -7381,7 +7426,17 @@ async function handleTelegramReassignment(params: {
             ),
         });
         if (targetConflict && targetConflict.doctorId !== resolvedDoctor.id) {
-            throw new Error(`Base ${targetCode} ja esta ocupada por outro medico. Resolva o conflito pelo site da chefia.`);
+            const coverageEndAt = resolveReassignmentConflictCoverageEndAt(targetConflict);
+            const occupantDoc = await db.query.doctors.findFirst({ where: eq(doctors.id, targetConflict.doctorId) });
+            const occupantName = resolveTelegramDoctorSurfaceName(occupantDoc);
+            if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)) {
+                throw new Error(buildReassignmentTargetOccupiedMessage({ occupantName, targetLabel: targetCode }));
+            }
+            // Cobertura vencida: rendição automática, fechando no fim da cobertura do
+            // fantasma (endInterventionOccupancy não capa sozinho no scheduledEndAt).
+            const ghostEndedAt = coverageEndAt && coverageEndAt.getTime() < eventAt.getTime() ? coverageEndAt : eventAt;
+            await endInterventionOccupancy(targetConflict.id, { endedAt: ghostEndedAt, handoffClosure: true });
+            renderedGhostDoctorName = occupantName;
         }
         destination = {
             domain: "intervention",
@@ -7413,7 +7468,7 @@ async function handleTelegramReassignment(params: {
         reassignedFrom: sourceCode,
         assumedHalfShift: false,
         continuationFrom: null as string | null,
-        displacedDoctorName: null as string | null,
+        displacedDoctorName: renderedGhostDoctorName,
         extendedLongShift: false,
         continuityInterpretation: null as ContinuityInterpretation | null,
         piamAutoAllocated: piamRouting.applied,

@@ -912,9 +912,11 @@ export async function expireStaleRegulationOccupancies(referenceAt = new Date())
                 continue;
             }
 
-            if (occupancy.shiftLabel === "P") {
-                continue;
-            }
+            // Plantões "P" também expiram: o scheduledEndAt de um P já cobre as 24h
+            // (07:15 do dia seguinte). Poupá-los deixava a ocupação aberta para sempre —
+            // o painel escondia o médico às 07:15, mas o registro seguia como board
+            // carrier e bloqueava chegadas/remanejos no ramal (fantasma). Continuidade
+            // declarada estende o scheduledEndAt e continua protegida.
 
             if (occupancy.scheduledEndAt.getTime() > referenceAt.getTime()) {
                 continue;
