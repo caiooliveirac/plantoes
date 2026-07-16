@@ -147,20 +147,30 @@ function doctorShiftDue(row: ChiefPayableDoctorRow, shift: PayableShift) {
     });
 }
 
-// Mensagem de autoatendimento do médico: linhas com R$, total do mês e link assinado
-// para a folha de ponto. Quebra por linhas se passar do limite, mantendo o rodapé
-// (total + link) na última mensagem.
+// Variante vazia única (auditoria §3.4#7): sem link — folha vazia não ajuda ninguém.
+export function buildDoctorPayrollEmptyMessage(monthLabel: string) {
+    return `💰 Pagamento — ${monthLabel}: nenhum plantão registrado neste mês ainda.`;
+}
+
+// Mensagem de autoatendimento do médico: TOTAL no cabeçalho (auditoria §3.4#7 — antes
+// ficava no fim, espremido acima de uma URL de ~150 chars), linhas com R$, legenda de
+// MEIO quando aparece, e link assinado da folha no rodapé. Quebra por linhas se passar
+// do limite, mantendo o rodapé (link) na última mensagem.
 export function buildDoctorPayrollMessages(row: ChiefPayableDoctorRow, board: ChiefPayableBoardModel, folhaUrl: string): string[] {
     const shifts = row.cells.flatMap((cell) => cell.shifts);
-    const header = `💰 Seu pagamento — ${board.monthLabel} (prévia, sujeita a conferência)`;
 
     if (shifts.length === 0) {
-        return [`${header}\n\nNenhum plantão registrado neste mês ainda.`];
+        return [buildDoctorPayrollEmptyMessage(board.monthLabel)];
     }
 
-    const lines = shifts.map((shift) => `${formatShiftLine(shift)} · ${formatBRL(doctorShiftDue(row, shift))}`);
     const total = row.totalDue ?? shifts.reduce((sum, shift) => sum + doctorShiftDue(row, shift), 0);
-    const footer = `Total: ${formatBRL(total)}\n📄 Folha de ponto: ${folhaUrl}`;
+    const hasMeio = shifts.some((shift) => shift.paymentTag);
+    const header = `💰 Seu pagamento — ${board.monthLabel} (prévia, sujeita a conferência)`
+        + `\nTotal do mês: ${formatBRL(total)}`
+        + (hasMeio ? "\nMEIO = meio plantão" : "");
+
+    const lines = shifts.map((shift) => `${formatShiftLine(shift)} · ${formatBRL(doctorShiftDue(row, shift))}`);
+    const footer = `📄 Folha de ponto: ${folhaUrl}`;
 
     // Caminho comum: cabe tudo numa mensagem.
     const full = [header, "", ...lines, "", footer].join("\n");

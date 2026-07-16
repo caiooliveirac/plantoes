@@ -3,21 +3,29 @@ import test from "node:test";
 import {
     applyMealBreakContinuityStarts,
     applyMealBreakReply,
+    buildMealBreakChoiceRejection,
     buildMealBreakConsistencyAdminReply,
+    buildMealBreakErrorReply,
     buildMealBreakPriorityReply,
     buildMealBreakPriorityReplyMessages,
     buildMealBreakRoster,
     buildMealBreakStageKeyboard,
     createMealBreakSession,
+    findMealBreakDuplicateChoice,
     getCurrentMealBreakPriorityView,
     isTelegramMealBreakCommandText,
     isTelegramMealBreakExcludeCommandText,
     isTelegramMealBreakPriorityCommandText,
+    MealBreakUserError,
     parseTelegramMealBreakCommand,
     parseTelegramMealBreakExcludeCommand,
     parseTelegramMealBreakPriorityCommand,
+    pickMealBreakExampleSlot,
     resolveMealBreakContinuityStartedAt,
     resolveMealBreakLunchCapacities,
+    resolveMealBreakPanelLabel,
+    resolveMealBreakQueuePosition,
+    resolveMealBreakTechnicalErrorDetail,
     reconcileMealBreakSessionRamalsWithBoard,
     resolveMealBreakEligibilityExclusions,
     reconcileNightMealBreakSessionWithBoard,
@@ -609,10 +617,14 @@ test("buildMealBreakPriorityReply resume motivos apenas quando fogem da ordem si
         ],
     });
 
-    assert.match(reply, /1\. Leo Marins \| 2033 \| 07:00 \| continua desde 07:00 em outro plantao/);
-    assert.match(reply, /2\. Remoto Fixo \| 1361 \| 19:15 \| chefia: mantido abaixo dos presenciais; RMT fixo, entra como 19:15/);
-    assert.match(reply, /3\. Chegada Simples \| 2036 \| 23:05/);
-    assert.doesNotMatch(reply, /3\. Chegada Simples .*\| .*chefia:/);
+    // Novo formato: cabeçalho neutro, 1 entrada por linha sem pipes, nome em
+    // negrito, hora REAL de chegada e explicação traduzida na mesma linha.
+    assert.match(reply, /^📋 Ordem de prioridade — jantar\n/);
+    assert.match(reply, /1º \*Leo Marins\* \(2033\) — chegou 19:00 · continua desde 07:00 em outro plantao/);
+    assert.match(reply, /2º \*Remoto Fixo\* \(1361\) — chegou 19:00 · chefia: mantido abaixo dos presenciais; RMT fixo, entra como 19:15/);
+    assert.match(reply, /3º \*Chegada Simples\* \(2036\) — chegou 23:05/);
+    assert.doesNotMatch(reply, /3º \*Chegada Simples\*.*chefia:/);
+    assert.doesNotMatch(reply, /\|/);
 });
 
 test("buildMealBreakPriorityReplyMessages quebra a fila longa em blocos menores para o Telegram", () => {
@@ -642,7 +654,7 @@ test("buildMealBreakPriorityReplyMessages quebra a fila longa em blocos menores 
     assert.ok(messages.length > 1);
     for (const message of messages) {
         assert.ok(message.length <= 700);
-        assert.match(message, /PRIORIDADES DO ALMOÇO/);
+        assert.match(message, /📋 Ordem de prioridade — almoço/);
     }
 });
 
@@ -722,7 +734,7 @@ test("getCurrentMealBreakPriorityView usa so o quadro atual e aplica piso remoto
     const remote = view.entries.find((entry) => entry.ramal === "1361");
     assert.equal(remote?.continuityStartedAt, null);
     assert.equal(remote?.priorityStartedAt, "2026-03-29T10:15:00.000Z");
-    assert.deepEqual(remote?.automaticReasons, ["RMT fixo, entra como 07:15"]);
+    assert.deepEqual(remote?.automaticReasons, ["função remota (RMT): entra na fila como 07:15"]);
     assert.equal(view.entries.some((entry) => entry.automaticReasons.some((reason) => reason.includes("continua desde"))), false);
 });
 
@@ -1749,7 +1761,11 @@ test("applyMealBreakReply conduz almoco e descanso ate o fechamento", () => {
     });
     assert.ok(outOfTurn);
     assert.equal(outOfTurn?.status, "invalid");
-    assert.match(outOfTurn?.messages[0] ?? "", /chamado atual é para o ramal 2036/i);
+    // Fora da vez: diz quem é a vez agora e a posição na fila do ramal digitado,
+    // sem reanexar o teclado (que pertence à vez atual).
+    assert.match(outOfTurn?.messages[0] ?? "", /⛔ Ainda não é sua vez — agora é \*Bia\* \(2036\)/);
+    assert.match(outOfTurn?.messages[0] ?? "", /Você é o \*2º\* da fila; eu te chamo\./);
+    assert.equal(outOfTurn?.suppressKeyboard, true);
 
     const lunch1 = applyMealBreakReply({
         session: mrv!.session,
@@ -3364,4 +3380,188 @@ test("resolveMealBreakTurnNudgeAction reinicia a contagem quando a vez passa par
         resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous, nowMs: baseMs + TWO_MIN }),
         { send: true, count: 1 },
     );
+});
+
+// ─── Onda 2 (refeição sem migração de teclado): helpers puros novos ─────────
+
+// Reconstroi o fluxo diurno padrao ate a fila do almoco: RECIP 2035, MRV 12:30
+// em 2032, fila restante ["2036", "2037", "2038", "2039"].
+function buildDaySessionAtLunchQueue() {
+    const referenceAt = new Date("2026-03-29T09:05:00-03:00");
+    const roster = buildMealBreakRoster(makeBoard(), referenceAt);
+    const session = createMealBreakSession({
+        roster: roster.roster,
+        chiefRamal: roster.chiefRamal,
+        mrvRamals: roster.mrvRamals,
+        referenceAt,
+        trigger: "manual",
+        restarted: false,
+        actorTelegramId: "100",
+    });
+    const confirmed = applyMealBreakReply({ session, text: "✅ Confirmar", senderTelegramId: "100", referenceAt });
+    assert.ok(confirmed);
+    const recip = applyMealBreakReply({ session: confirmed.session, text: "2035", senderTelegramId: "100", referenceAt });
+    assert.ok(recip);
+    const mrv = applyMealBreakReply({ session: recip.session, text: "2032", senderTelegramId: "101", referenceAt });
+    assert.ok(mrv);
+    assert.equal(mrv.session.stage, "awaiting_lunch_choice");
+    return { referenceAt, mrv };
+}
+
+test("pickMealBreakExampleSlot varia o exemplo pela posicao da fila, sem aleatoriedade", () => {
+    const slots = ["11:30", "12:30", "13:30"] as const;
+    assert.equal(pickMealBreakExampleSlot(slots, 0), "11:30");
+    assert.equal(pickMealBreakExampleSlot(slots, 1), "12:30");
+    assert.equal(pickMealBreakExampleSlot(slots, 2), "13:30");
+    assert.equal(pickMealBreakExampleSlot(slots, 3), "11:30");
+    // deterministico: mesma entrada, mesma saida
+    assert.equal(pickMealBreakExampleSlot(slots, 4), pickMealBreakExampleSlot(slots, 4));
+    assert.equal(pickMealBreakExampleSlot([], 2), null);
+});
+
+test("convocacao nova: nome na 1ª linha, exemplo copiavel, horarios livres e previa da fila", () => {
+    const { mrv } = buildDaySessionAtLunchQueue();
+    const prompt = mrv.messages[mrv.messages.length - 1] ?? "";
+    assert.match(prompt, /^🍽️ \*É a vez de Bia\* — ramal \*2036\*\n/);
+    assert.match(prompt, /Escolha o almoço nos botões, ou responda: `2036 (?:11:30|12:30|13:30)`/);
+    assert.match(prompt, /\nLivres: /);
+    assert.match(prompt, /⏭️ Depois: Marcos · faltam 3/);
+    // sem a piada sorteada da versao antiga
+    assert.doesNotMatch(prompt, /🔔/);
+});
+
+test("ack separado da convocacao: escolha de almoco gera 2 baloes (✅ primeiro, chamado depois)", () => {
+    const { referenceAt, mrv } = buildDaySessionAtLunchQueue();
+    const lunch1 = applyMealBreakReply({ session: mrv.session, text: "2036 11:30", senderTelegramId: "102", referenceAt });
+    assert.ok(lunch1);
+    assert.equal(lunch1.messages.length, 2);
+    assert.equal(lunch1.messages[0], "✅ *Bia* → almoço *11:30*");
+    assert.match(lunch1.messages[1] ?? "", /^🍽️ \*É a vez de Marcos\* — ramal \*2037\*/);
+});
+
+test("dedupe: escolha identica repetida ganha ack e nao vira silencio nem chegada", () => {
+    const { referenceAt, mrv } = buildDaySessionAtLunchQueue();
+    const lunch1 = applyMealBreakReply({ session: mrv.session, text: "2036 11:30", senderTelegramId: "102", referenceAt });
+    assert.ok(lunch1);
+
+    // o texto repetido continua interceptado pelo fluxo de refeicao (nao vaza pro parser)
+    assert.equal(shouldPreferMealBreakReplyForSession(lunch1.session, "2036 11:30"), true);
+    assert.equal(findMealBreakDuplicateChoice(lunch1.session, "2036", "11:30")?.kind, "lunch");
+    assert.equal(findMealBreakDuplicateChoice(lunch1.session, "2036", "12:30"), null);
+
+    const repeat = applyMealBreakReply({ session: lunch1.session, text: "2036 11:30", senderTelegramId: "102", referenceAt });
+    assert.ok(repeat);
+    assert.equal(repeat.status, "reported");
+    assert.equal(repeat.suppressKeyboard, true);
+    assert.deepEqual(repeat.messages, ["✅ Já anotei *2036 → 11:30*. Não precisa reenviar."]);
+    // estado nao muda
+    assert.deepEqual(repeat.session.lunchAssignments, lunch1.session.lunchAssignments);
+});
+
+test("posicao na fila calculada pelo ramal digitado; fora da fila ganha fallback claro", () => {
+    const { referenceAt, mrv } = buildDaySessionAtLunchQueue();
+    assert.equal(resolveMealBreakQueuePosition(mrv.session, "2036"), 1);
+    assert.equal(resolveMealBreakQueuePosition(mrv.session, "2038"), 3);
+    assert.equal(resolveMealBreakQueuePosition(mrv.session, "2035"), null);
+
+    // 2038 esta na fila (3º) mas nao e a vez dele: resposta nomeia a vez atual
+    // e informa a posicao de quem digitou, SEM reanexar o teclado.
+    const outOfTurn = applyMealBreakReply({ session: mrv.session, text: "2038 11:30", senderTelegramId: "999", referenceAt });
+    assert.ok(outOfTurn);
+    assert.equal(outOfTurn.status, "invalid");
+    assert.equal(outOfTurn.suppressKeyboard, true);
+    assert.match(outOfTurn.messages[0] ?? "", /⛔ Ainda não é sua vez — agora é \*Bia\* \(2036\)\./);
+    assert.match(outOfTurn.messages[0] ?? "", /Você é o \*3º\* da fila; eu te chamo\./);
+
+    // "2035 12:30" (RECIP fora da fila, sem ser escolha duplicada) segue NAO
+    // interceptado — vies conservador: pode ser registro operacional legitimo.
+    assert.equal(shouldPreferMealBreakReplyForSession(mrv.session, "2035 12:30"), false);
+    assert.equal(applyMealBreakReply({ session: mrv.session, text: "2035 12:30", senderTelegramId: "999", referenceAt }), null);
+});
+
+test("recusas: formato, horario fora da fase e horario lotado com exemplo copiavel do ramal da vez", () => {
+    assert.equal(
+        buildMealBreakChoiceRejection({ kind: "format", queueHead: "1363", queueLength: 3, availableText: "*11:30* (1 vaga)", availableSlots: ["11:30"] }),
+        "⛔ Não entendi. Responda: `1363 11:30`",
+    );
+    const notInPhase = buildMealBreakChoiceRejection({
+        kind: "slot_not_in_phase",
+        slot: "14:00",
+        queueHead: "1363",
+        queueLength: 1,
+        availableText: "*15:30* (1 vaga) · *16:30* (2 vagas)",
+        availableSlots: ["15:30", "16:30"],
+    });
+    assert.match(notInPhase, /^⛔ \*14:00\* não vale nesta fase\. Livres: \*15:30\* \(1 vaga\) · \*16:30\* \(2 vagas\)\./);
+    assert.match(notInPhase, /Responda: `1363 (?:15:30|16:30)`$/);
+    const full = buildMealBreakChoiceRejection({
+        kind: "slot_full",
+        slot: "12:30",
+        queueHead: "1363",
+        queueLength: 2,
+        availableText: "*11:30* (1 vaga)",
+        availableSlots: ["11:30"],
+    });
+    assert.equal(full, "⛔ *12:30* lotou. Livres: *11:30* (1 vaga). Responda: `1363 11:30`");
+    // sem vaga nenhuma: sem exemplo forjado
+    assert.equal(
+        buildMealBreakChoiceRejection({ kind: "format", queueHead: "1363", queueLength: 2, availableText: "", availableSlots: [] }),
+        "⛔ Não entendi.",
+    );
+});
+
+test("transicao de fase em 1 balao e resumo final com legenda + dica de reinicio no fim", () => {
+    const { referenceAt, mrv } = buildDaySessionAtLunchQueue();
+    const lunch1 = applyMealBreakReply({ session: mrv.session, text: "2036 11:30", senderTelegramId: "102", referenceAt });
+    const lunch2 = applyMealBreakReply({ session: lunch1!.session, text: "2037 11:30", senderTelegramId: "103", referenceAt });
+    const lunch3 = applyMealBreakReply({ session: lunch2!.session, text: "2038 12:30", senderTelegramId: "104", referenceAt });
+    assert.ok(lunch3);
+    assert.equal(lunch3.session.stage, "awaiting_rest_choice");
+    // 2 baloes: ack do ultimo escolhedor + (fase fechada + convocacao do descanso juntos)
+    assert.equal(lunch3.messages.length, 2);
+    assert.match(lunch3.messages[0] ?? "", /^✅ \*Igor\* → almoço \*12:30\*$/);
+    assert.match(lunch3.messages[1] ?? "", /^✅ \*Almoço fechado\* — resumo completo no fim\.\n\n😴 \*É a vez de /);
+    // o resumo intermediario gigante sumiu da transicao
+    assert.doesNotMatch(lunch3.messages[1] ?? "", /🍽️ ALMOÇO/);
+
+    const rest1 = applyMealBreakReply({ session: lunch3.session, text: "2036 15:30", senderTelegramId: "106", referenceAt });
+    const rest2 = applyMealBreakReply({ session: rest1!.session, text: "2037 16:30", senderTelegramId: "107", referenceAt });
+    const rest3 = applyMealBreakReply({ session: rest2!.session, text: "2038 16:30", senderTelegramId: "108", referenceAt });
+    assert.ok(rest3);
+    assert.equal(rest3.status, "completed");
+    const finalSummary = rest3.messages[1] ?? "";
+    assert.match(finalSummary, /^✅ \*Divisão fechada!\*\n\n/);
+    // lista nominal preservada + legenda das regras fixas + dica de reinicio no FIM
+    assert.match(finalSummary, /14:30\n• Patricia/);
+    assert.match(finalSummary, /18:00\n• Marina \(MRV\)\n• Carlos \(MRV\)\n• Renata \(RECIP\)/);
+    assert.match(finalSummary, /ℹ️ 14:30: descanso automático de quem almoçou 13:30 · 18:00: fixo de RECIP, MRV e PSIQ\./);
+    assert.match(finalSummary, /Se precisar refazer: \/almoco reiniciar$/);
+});
+
+test("erros por classe: user-facing vai ao grupo, tecnico vira generico + detalhe para admin", () => {
+    const userError = new MealBreakUserError("O posto 1379 (PIAM/NUCLEO) não entra na divisão de almoço/jantar por regra fixa.");
+    assert.equal(buildMealBreakErrorReply(userError), userError.message);
+    assert.equal(resolveMealBreakTechnicalErrorDetail(userError), null);
+
+    const technical = new TypeError("Cannot read properties of undefined (reading 'ramal')");
+    const genericReply = buildMealBreakErrorReply(technical);
+    assert.doesNotMatch(genericReply, /Cannot read properties/);
+    assert.match(genericReply, /^⛔ Não consegui organizar a divisão agora\./);
+    assert.equal(resolveMealBreakTechnicalErrorDetail(technical), "TypeError: Cannot read properties of undefined (reading 'ramal')");
+});
+
+test("resolveMealBreakPanelLabel usa AUTH_URL quando presente e cai para texto puro sem env", () => {
+    const previous = process.env.AUTH_URL;
+    try {
+        process.env.AUTH_URL = "https://plantoes.example.com/";
+        assert.equal(resolveMealBreakPanelLabel(), "painel (https://plantoes.example.com)");
+        delete process.env.AUTH_URL;
+        assert.equal(resolveMealBreakPanelLabel(), "painel");
+    } finally {
+        if (previous === undefined) {
+            delete process.env.AUTH_URL;
+        } else {
+            process.env.AUTH_URL = previous;
+        }
+    }
 });

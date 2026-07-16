@@ -186,6 +186,38 @@ const OPERATIONAL_META_KEYWORDS = [
 ];
 
 const OPERATIONAL_META_TARGET_CUES = /\b(?:\d{4}|[A-Z]{2}[\s-]?\d{2}|CRU|COI|NUCLEO|PIAM)\b/i;
+
+// Pares de letras que casam com o padrão XX99 mas nunca são tentativa de base
+// ("AS 07", "SD 07", "DA 60"...). Usado só no diagnóstico de destino desconhecido.
+const UNKNOWN_TARGET_LETTER_STOPWORDS = new Set([
+    "AS", "AO", "DA", "DE", "DO", "NA", "NO", "EM", "SD", "SN", "HS", "HR",
+    "JA", "AH", "EH", "TO", "AT", "ATE",
+]);
+
+// Candidato a destino que o parser NÃO reconheceu: 4 dígitos que não são ramal
+// (nem o horário já extraído) ou XX99 que não é base. Diagnóstico apenas — nunca
+// vira registro sozinho.
+function extractUnknownTargetToken(source: string, arrivalTime: string | null): string | null {
+    const timeDigits = arrivalTime ? arrivalTime.replace(":", "") : null;
+    const timeDigitsUnpadded = arrivalTime ? arrivalTime.replace(/^0/, "").replace(":", "") : null;
+
+    for (const match of source.matchAll(/(?<![\d:.,/-])(\d{4})(?![\d:.,/hH])/g)) {
+        const token = match[1];
+        if (token === timeDigits || token === timeDigitsUnpadded) {
+            continue;
+        }
+        return token;
+    }
+
+    for (const match of source.matchAll(/\b([A-Z]{2})[\s-]?(\d{2})\b/g)) {
+        if (UNKNOWN_TARGET_LETTER_STOPWORDS.has(match[1])) {
+            continue;
+        }
+        return `${match[1]}${match[2]}`;
+    }
+
+    return null;
+}
 const OPERATIONAL_META_QUESTION_CUES = /[?]|\b(?:QUEM|ALGU[ÉE]M|TEM|TA|ESTA|ESTÁ|CADE|CAD[EÊ]|FALTA|PRECISA)\b/i;
 
 export interface ParsedMessage {
@@ -200,6 +232,13 @@ export interface ParsedMessage {
     isContinuation: boolean;
     isReassignment: boolean;
     extractedNames: string[];
+    /**
+     * Token que PARECE um destino (4 dígitos ou XX99) mas não é ramal/base
+     * conhecido — preenchido só quando nenhum baseCode foi resolvido. Permite
+     * diagnóstico "não conheço *2376*" + sugestões por distância de edição
+     * (auditoria comunicação §3.1#9). Campo aditivo: ausente = sem candidato.
+     */
+    unknownTargetToken?: string | null;
 }
 
 export interface ParsedBatchMessageLine {
@@ -402,6 +441,11 @@ export function parseMessage(text: string): ParsedMessage {
         confidence = "MEDIUM";
     }
 
+    // Diagnóstico de destino desconhecido (auditoria §3.1#9): só quando NENHUM
+    // ramal/base foi resolvido — expõe o token rejeitado para o serviço sugerir
+    // códigos reais próximos.
+    const unknownTargetToken = baseCode ? null : extractUnknownTargetToken(baseExtractionSource, arrivalTime);
+
     return {
         sector,
         baseCode,
@@ -414,6 +458,7 @@ export function parseMessage(text: string): ParsedMessage {
         isContinuation,
         isReassignment,
         extractedNames,
+        unknownTargetToken,
     };
 }
 

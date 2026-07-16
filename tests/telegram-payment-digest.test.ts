@@ -63,6 +63,7 @@ function makeDoctor(doctorName: string, shifts: PayableShift[]): ChiefPayableDoc
         totalSN: 0,
         total: shifts.length,
         pendingCount: 0,
+        attestedAt: null,
         cells: [...byDay.entries()]
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([day, dayShifts]) => ({ day, shifts: dayShifts })),

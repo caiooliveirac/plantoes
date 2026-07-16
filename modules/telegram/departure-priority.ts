@@ -1,5 +1,6 @@
 import { isBeforeCurrentOperationalShift, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
+import { escapeTelegramMarkdown } from "@/modules/telegram/api";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { isRemoteOperationalRole, normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { compareTelegramRegulationCodes } from "@/modules/telegram/presentation-order";
@@ -330,43 +331,34 @@ export function parseTelegramDeparturePriorityCommand(text: string): TelegramDep
     };
 }
 
+/**
+ * Reply do /prioridadesaida (auditoria §3.3#10): ranking começa na linha 2,
+ * regras colapsadas em 1 linha no rodapé, janela do jantar do SN preservada.
+ * Texto pronto para envio com parseMode "Markdown" (interpolações escapadas).
+ */
 export function buildDeparturePriorityReply(view: DeparturePriorityView) {
     const isNight = view.shiftLabel === "SN";
-    const header = ["📤 PRIORIDADE DE SAIDA"];
-
-    if (isNight) {
-        header.push("Lista de reguladores no NOTURNO que realmente saem no fechamento.");
-        header.push("RMT recebe piso 19:15 (perde prioridade para presencial que chegou ate +15min).");
-        if (view.activeNightWorkSlot) {
-            header.push(`Janela ativa da divisao de jantar: ${view.activeNightWorkSlot}.`);
-        }
-    } else {
-        header.push("Lista de reguladores no DIURNO que realmente saem no fechamento.");
-    }
-
-    if (view.departureBoundary) {
-        header.push(`Janela atual: lista quem está previsto para sair às ${view.departureBoundary}.`);
-    }
-
-    header.push("Fora da lista principal: CP, MRV, RECIP, PIAM, NUCLEO, MEIO, quem chegou ha menos de 4h e quem está em P/continua.");
-
-    const lines: string[] = [];
+    const shiftName = isNight ? "NOTURNO" : "DIURNO";
+    const boundarySuffix = view.departureBoundary ? ` — sai às ${view.departureBoundary}` : "";
+    const lines = [`👋 *Prioridade de saída ${shiftName}*${boundarySuffix}`];
 
     if (view.entries.length === 0) {
-        lines.push("Sem reguladores elegiveis no quadro agora.");
+        lines.push("Sem reguladores elegíveis no quadro agora.");
     } else {
-        lines.push(...view.entries.map((entry) => `${entry.rank}. ${entry.name} | ${entry.targetCode} | ${formatHour(entry.startedAt)}`));
+        lines.push(...view.entries.map((entry) => `${entry.rank}. ${escapeTelegramMarkdown(entry.name)} | ${escapeTelegramMarkdown(entry.targetCode)} | ${formatHour(entry.startedAt)}`));
     }
 
-    lines.push("");
-    lines.push("🔁 Fora por estarem em P (continua):");
-    if (view.excludedContinuations.length === 0) {
-        lines.push("- Nenhum no momento.");
-    } else {
-        lines.push(...view.excludedContinuations.map((entry) => `- ${entry.name} | ${entry.targetCode} | ${formatHour(entry.startedAt)}`));
+    if (view.activeNightWorkSlot) {
+        lines.push(`🍽️ Janela ativa da divisão de jantar: ${view.activeNightWorkSlot}.`);
     }
 
-    return [...header, ...lines].join("\n");
+    if (view.excludedContinuations.length > 0) {
+        lines.push(`🔁 Em P (continuam): ${view.excludedContinuations.map((entry) => `${escapeTelegramMarkdown(entry.name)} (${escapeTelegramMarkdown(entry.targetCode)} ${formatHour(entry.startedAt)})`).join(", ")}`);
+    }
+
+    lines.push(`Regras: fora da lista CP, MRV, RECIP, PIAM, NUCLEO, MEIO, quem chegou há menos de 4h e quem está em P/continua${isNight ? "; RMT tem piso 19:15" : ""}.`);
+
+    return lines.join("\n");
 }
 
 export async function getCurrentDeparturePriorityView(params?: {
