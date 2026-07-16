@@ -8048,6 +8048,78 @@ button.chief-payable-tag:focus-visible {
         linear-gradient(180deg, rgba(12, 19, 29, 0.98), rgba(8, 12, 18, 0.98));
 }
 
+.ops-retro-header.collapsed {
+    padding: 8px 12px;
+    border-radius: 18px;
+}
+
+.ops-retro-header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+}
+
+.ops-retro-collapse-toggle {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(145, 170, 205, 0.2);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--muted-strong);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    touch-action: manipulation;
+    transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.ops-retro-collapse-toggle:hover,
+.ops-retro-collapse-toggle:focus-visible {
+    border-color: rgba(145, 170, 205, 0.32);
+    background: rgba(255, 255, 255, 0.09);
+    color: var(--text);
+    outline: none;
+}
+
+.ops-retro-compact-nav {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.ops-retro-nav-button.compact {
+    min-height: 34px;
+    min-width: 38px;
+    padding: 0;
+    font-size: 1.1rem;
+    line-height: 1;
+}
+
+.ops-retro-compact-current {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ops-retro-compact-current strong {
+    font-size: 0.92rem;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .ops-retro-heading {
     display: grid;
     gap: 4px;
@@ -8565,6 +8637,12 @@ button.chief-payable-tag:focus-visible {
 
 @media (max-width: 820px) {
 
+    /* Expandido, o cabeçalho é mais alto que a tela: deixa de grudar e rola
+       junto; só a barra compacta (recolhida) permanece sticky. */
+    .ops-retro-header:not(.collapsed) {
+        position: static;
+    }
+
     .ops-retro-header,
     .ops-retro-pending-panel,
     .ops-retro-domain-panel,
@@ -8609,6 +8687,24 @@ button.chief-payable-tag:focus-visible {
 }
 
 @media (max-width: 640px) {
+    .ops-retro-header.collapsed {
+        padding: 8px 10px;
+    }
+
+    .ops-retro-compact-current .ops-retro-mode-pill {
+        display: none;
+    }
+
+    .ops-retro-collapse-toggle {
+        min-width: 38px;
+        padding: 0;
+        justify-content: center;
+    }
+
+    .ops-retro-header.collapsed .ops-retro-collapse-label {
+        display: none;
+    }
+
     .ops-retro-row {
         grid-template-columns: 62px 68px minmax(0, 1fr) 62px;
     }

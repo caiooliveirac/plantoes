@@ -155,6 +155,12 @@ function formatPendingPriorityLabel(priority: "critical" | "warning") {
     return priority === "critical" ? "Crítico" : "Atenção";
 }
 
+function isSmallViewport() {
+    // innerWidth 0 = viewport ainda sem layout; nesse caso não dá para afirmar
+    // que é tela pequena (e matchMedia de max-width casaria com largura 0).
+    return window.innerWidth > 0 && window.matchMedia("(max-width: 820px)").matches;
+}
+
 export function OperationalHistoryPanel({ session, doctors, onReturnLive }: Props) {
     const canViewHistory = Boolean(session?.canManage && !session.mustChangePassword);
     const canEditHistory = Boolean(session?.roles.includes("admin") && !session.mustChangePassword);
@@ -185,6 +191,14 @@ export function OperationalHistoryPanel({ session, doctors, onReturnLive }: Prop
     });
     const [doctorQuery, setDoctorQuery] = useState("");
     const deferredDoctorQuery = useDeferredValue(doctorQuery);
+    const [headerCollapsed, setHeaderCollapsed] = useState(false);
+
+    useEffect(() => {
+        // Em telas pequenas o cabeçalho completo cobre a tabela; começa recolhido.
+        if (isSmallViewport()) {
+            setHeaderCollapsed(true);
+        }
+    }, []);
 
     const loadBoard = useEffectEvent(async (
         params?: { date?: string; shift?: HistoricalShiftLabel },
@@ -354,6 +368,11 @@ export function OperationalHistoryPanel({ session, doctors, onReturnLive }: Prop
         setFeedbackMessage(null);
         setLoadError(null);
         await loadBoard({ date: slotSelection.date, shift: slotSelection.shift }, { preferCache: true });
+
+        // No mobile, depois de abrir o turno escolhido, o foco volta para a tabela.
+        if (isSmallViewport()) {
+            setHeaderCollapsed(true);
+        }
     }
 
     async function handleDirectShiftSelection(shift: HistoricalShiftLabel) {
@@ -558,19 +577,60 @@ export function OperationalHistoryPanel({ session, doctors, onReturnLive }: Prop
     return (
         <>
             <section className={`ops-retro-shell ${showSkeletonOverlay ? "loading" : ""}`.trim()}>
-                <header className="ops-retro-header">
-                    <div className="ops-retro-heading">
-                        <p className="ops-kicker">Histórico operacional</p>
-                        <strong className="ops-retro-inline-title">Cobertura retrospectiva</strong>
-                        <p className="ops-retro-inline-summary">
-                            {board.summary.relevantPending.totalItems} pendências relevantes
-                            {` • `}
-                            Regulação {board.summary.relevantPending.regulationOccupiedCount}/{board.summary.relevantPending.regulationExpectedCount}
-                            {` • `}
-                            Intervenção {board.summary.relevantPending.interventionOccupiedCount}/{board.summary.relevantPending.interventionExpectedCount}
-                        </p>
+                <header className={`ops-retro-header ${headerCollapsed ? "collapsed" : ""}`.trim()}>
+                    <div className="ops-retro-header-bar">
+                        {headerCollapsed ? (
+                            <div className="ops-retro-compact-nav" aria-label="Navegação histórica por turno">
+                                <button
+                                    type="button"
+                                    className="ops-retro-nav-button compact"
+                                    onClick={() => { void handleNavigate(board.previousSlot.operationalDate, board.previousSlot.shiftLabel); }}
+                                    disabled={areNavigationControlsDisabled}
+                                    aria-label="Turno anterior"
+                                >
+                                    ‹
+                                </button>
+                                <div className="ops-retro-compact-current">
+                                    <span className="ops-retro-mode-pill">Histórico</span>
+                                    <strong>{formatShiftDateLabel(board.dateKey)} • {board.shiftLabel}</strong>
+                                </div>
+                                <button
+                                    type="button"
+                                    className="ops-retro-nav-button compact"
+                                    onClick={() => { void handleNavigate(board.nextSlot.operationalDate, board.nextSlot.shiftLabel); }}
+                                    disabled={areNavigationControlsDisabled}
+                                    aria-label="Próximo turno"
+                                >
+                                    ›
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="ops-retro-heading">
+                                <p className="ops-kicker">Histórico operacional</p>
+                                <strong className="ops-retro-inline-title">Cobertura retrospectiva</strong>
+                                <p className="ops-retro-inline-summary">
+                                    {board.summary.relevantPending.totalItems} pendências relevantes
+                                    {` • `}
+                                    Regulação {board.summary.relevantPending.regulationOccupiedCount}/{board.summary.relevantPending.regulationExpectedCount}
+                                    {` • `}
+                                    Intervenção {board.summary.relevantPending.interventionOccupiedCount}/{board.summary.relevantPending.interventionExpectedCount}
+                                </p>
+                            </div>
+                        )}
+
+                        <button
+                            type="button"
+                            className="ops-retro-collapse-toggle"
+                            onClick={() => setHeaderCollapsed((current) => !current)}
+                            aria-expanded={!headerCollapsed}
+                            aria-label={headerCollapsed ? "Mostrar controles do histórico" : "Recolher controles do histórico"}
+                        >
+                            <span aria-hidden="true">{headerCollapsed ? "▾" : "▴"}</span>
+                            <span className="ops-retro-collapse-label">{headerCollapsed ? "Controles" : "Recolher"}</span>
+                        </button>
                     </div>
 
+                    {!headerCollapsed && (
                     <div className="ops-retro-controls">
                         <div className="ops-retro-nav" aria-label="Navegação histórica por turno">
                             <button
@@ -652,6 +712,7 @@ export function OperationalHistoryPanel({ session, doctors, onReturnLive }: Prop
                             </AdminGlobalNavigationLinks>
                         )}
                     </div>
+                    )}
                 </header>
 
                 {(loadError || feedbackMessage) && (
