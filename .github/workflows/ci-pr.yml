@@ -1,0 +1,57 @@
+name: CI (PR)
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Lint, typecheck, tests and build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: plantoes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d plantoes_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/plantoes_test?options=-csearch_path%3Doperations_v2
+      AUTH_SECRET: ci-local-auth-secret-not-for-production
+      AUTH_URL: http://127.0.0.1:3000
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations in CI database
+        run: npm run db:migrate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm run test:deploy
+
+      - name: Tests (meal-breaks regression, non-blocking)
+        continue-on-error: true
+        run: node --test --import tsx --test-isolation=none tests/telegram-meal-breaks.test.ts
+
+      - name: Build
+        run: npm run build

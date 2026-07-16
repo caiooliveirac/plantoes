@@ -16,9 +16,10 @@ const LOG_ID = "0d9e4f6a-1b2c-4d3e-8f90-a1b2c3d4e5f6";
 // ── Parser expõe o token de destino rejeitado (auditoria §3.1#9, campo aditivo) ────
 
 test("parseMessage expõe unknownTargetToken para ramal de 4 dígitos desconhecido", () => {
-    const parsed = parseMessage("Luan Sampaio 2376 SD 07:00");
+    // 2378 não existe na RAMAIS_REGULACAO (2376/2377 viraram ramais reais no PR #80).
+    const parsed = parseMessage("Luan Sampaio 2378 SD 07:00");
     assert.equal(parsed.baseCode, null);
-    assert.equal(parsed.unknownTargetToken, "2376");
+    assert.equal(parsed.unknownTargetToken, "2378");
     assert.equal(parsed.shiftType, "SD");
     assert.deepEqual(parsed.extractedNames, ["Luan Sampaio"]);
 });
