@@ -142,8 +142,10 @@ export async function resolveDoctorIdByCodename(code: string): Promise<string | 
 }
 
 // Reseta o codinome de um médico e devolve nome + novo codinome + o anterior em claro
-// (se conhecido), para uma resposta verbosa.
-export async function resetDoctorCodename(doctorId: string): Promise<{ fullName: string; codename: string; previous: string | null }> {
+// (se conhecido), para uma resposta verbosa. `hadPrevious` distingue "nunca teve
+// codinome" de "tinha um (mesmo que só o hash)" — a copy só avisa que o anterior
+// parou de valer quando houve anterior.
+export async function resetDoctorCodename(doctorId: string): Promise<{ fullName: string; codename: string; previous: string | null; hadPrevious: boolean }> {
     const db = getDb();
     const [doctor] = await db
         .select({ fullName: doctors.fullName })
@@ -156,7 +158,7 @@ export async function resetDoctorCodename(doctorId: string): Promise<{ fullName:
         .where(eq(doctorPaymentAccess.doctorId, doctorId))
         .limit(1);
     const codename = await upsertDoctorCodename(doctorId);
-    return { fullName: doctor?.fullName ?? "médico", codename, previous: existing?.codename ?? null };
+    return { fullName: doctor?.fullName ?? "médico", codename, previous: existing?.codename ?? null, hadPrevious: Boolean(existing) };
 }
 
 // Lista todos os médicos ativos com o codinome em claro conhecido (null se a linha
@@ -191,7 +193,8 @@ export async function checkAttemptLock(telegramUserId: string, now = new Date())
 }
 
 // Registra uma tentativa errada; trava ao atingir o limite dentro da janela.
-export async function registerFailedAttempt(telegramUserId: string, now = new Date()): Promise<AttemptLockState> {
+// Devolve também `failedCount` para a copy comunicar "tentativa n de 5".
+export async function registerFailedAttempt(telegramUserId: string, now = new Date()): Promise<AttemptLockState & { failedCount: number }> {
     const db = getDb();
     const [existing] = await db
         .select({
@@ -211,7 +214,7 @@ export async function registerFailedAttempt(telegramUserId: string, now = new Da
             set: { failedCount, windowStartedAt, lockedUntil, updatedAt: now },
         });
 
-    return { locked: Boolean(lockedUntil), lockedUntil };
+    return { locked: Boolean(lockedUntil), lockedUntil, failedCount };
 }
 
 export async function clearAttempts(telegramUserId: string) {

@@ -54,18 +54,14 @@ export async function maybeSendInterventionLateArrivalOrientation(params: {
     const doctorSurfaceName = doctor.displayName ?? doctor.fullName;
 
     const lines = [
-        "📋 *Regra da coordenacao: chegada apos 9h em intervencao*",
-        "━━━━━━━━━━━━━━━━━━━━",
-        `*${doctorSurfaceName}* registrou chegada em *${base.code}* as *${formatLocalTime(startedAt)}*.`,
+        `⚠️ *Chegada após ${LATE_HALF_SHIFT_CUTOFF_HOUR}h em intervenção SD*`,
+        `*${doctorSurfaceName}* chegou em *${base.code}* às *${formatLocalTime(startedAt)}*.`,
         "",
-        `Pela regra atual da coordenacao, chegadas a partir das *${LATE_HALF_SHIFT_CUTOFF_HOUR}h* em intervencao SD passam a contar como *MEIO PLANTAO* para pagamento (janela *${LATE_HALF_SHIFT_PAY_START_HOUR}:00*–*${LATE_HALF_SHIFT_PAY_END_HOUR}:00*).`,
+        `Pela regra da coordenação, o plantão *pode* virar *MEIO PLANTÃO* (pagamento *${LATE_HALF_SHIFT_PAY_START_HOUR}:00*–*${LATE_HALF_SHIFT_PAY_END_HOUR}:00*) — só vale depois que o *chefe* ou *admin* reconhecer, via \`/meioplantao ${base.code}\` ou pelo quadro operacional.`,
         "",
         carryoverMinutes > 0
-            ? `O tempo trabalhado entre *${formatLocalTime(startedAt)}* e *${LATE_HALF_SHIFT_PAY_START_HOUR}:00* (${carryoverLabel}) sera creditado no *banco de horas* assim que o chefe ou admin reconhecer a conversao.`
-            : `Como a chegada foi as ${formatLocalTime(startedAt)} (apos as ${LATE_HALF_SHIFT_PAY_START_HOUR}:00), nao havera carryover de banco — apenas o pagamento do meio plantao.`,
-        "",
-        "👉 O *chefe* ou *admin* faz o reconhecimento via comando `/meioplantao <base>` no Telegram ou pelo botão no quadro operacional.",
-        "📌 Esta mensagem e orientativa: a conversao so se efetiva apos o reconhecimento.",
+            ? `Se reconhecida, o tempo entre *${formatLocalTime(startedAt)}* e *${LATE_HALF_SHIFT_PAY_START_HOUR}:00* (${carryoverLabel}) vira crédito no banco de horas.`
+            : `Como a chegada foi depois das *${LATE_HALF_SHIFT_PAY_START_HOUR}:00*, não há crédito no banco de horas — conta apenas o pagamento do meio plantão.`,
     ];
 
     await sendMessage(String(params.chatId), lines.join("\n"), params.replyToMessageId);
@@ -85,19 +81,19 @@ export function buildLateArrivalAcknowledgementAnnouncement(params: {
         params.source === "telegram_command" ? "via comando /meioplantao no Telegram"
         : "via quadro operacional";
     const actorRole = params.markedByChefe ? "chefe" : "admin";
-    const carryoverLabel = formatCarryoverLabel(params.carryoverMinutes);
+    const carryoverLabel = params.carryoverMinutes > 0
+        ? formatCarryoverLabel(params.carryoverMinutes)
+        : `sem crédito (chegada após as ${LATE_HALF_SHIFT_PAY_START_HOUR}:00)`;
     return [
-        "🟡 *MEIO PLANTAO POR ATRASO RECONHECIDO* 🟡",
-        "━━━━━━━━━━━━━━━━━━━━",
-        `*Medico:* ${params.doctorName}`,
+        "✅ *Meio plantão por atraso reconhecido*",
+        `*Médico:* ${params.doctorName}`,
         `*Base:* ${params.baseCode}`,
         `*Chegada efetiva:* ${params.actualStartLabel}`,
-        `*Pagamento:* MEIO PLANTAO (${LATE_HALF_SHIFT_PAY_START_HOUR}:00–${LATE_HALF_SHIFT_PAY_END_HOUR}:00)`,
-        `*Carryover banco de horas:* ${carryoverLabel}`,
+        `*Pagamento:* MEIO PLANTÃO (${LATE_HALF_SHIFT_PAY_START_HOUR}:00–${LATE_HALF_SHIFT_PAY_END_HOUR}:00)`,
+        `*Crédito no banco de horas:* ${carryoverLabel}`,
         `*Reconhecido por:* ${params.markedByLabel} (${actorRole})`,
         `*Como:* ${sourceLabel}`,
-        "━━━━━━━━━━━━━━━━━━━━",
-        "📋 Este aviso fica registrado no historico publico e pode ser auditado pela chefia a qualquer momento.",
+        "Este aviso fica registrado no histórico público e pode ser auditado pela chefia a qualquer momento.",
     ].join("\n");
 }
 

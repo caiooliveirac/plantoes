@@ -508,7 +508,7 @@ export function looksLikeOperationalMetaConversation(text: string) {
 // Note: normalizeTelegramText strips accents, so ALMOÇO → ALMOCO, ALOMOÇO → ALOMOCO etc.
 // Tolerant to typos: covers almoco/alomoco/almço/almuço/almoçando/almoçar/almocei,
 // jantar/janta/jantando, descanso/descansar/descansando, refeicao/refeições.
-const MEAL_BREAK_KEYWORDS = /\b(?:AL(?:MO|OM|MU|MC)\w{0,8}|JANT\w{0,5}|DESCANS\w{0,6}|REFEI[CK]\w{0,5})\b/;
+export const MEAL_BREAK_KEYWORDS = /\b(?:AL(?:MO|OM|MU|MC)\w{0,8}|JANT\w{0,5}|DESCANS\w{0,6}|REFEI[CK]\w{0,5})\b/;
 
 export function looksLikeMealBreakMessage(text: string): boolean {
     return MEAL_BREAK_KEYWORDS.test(normalizeTelegramText(text));

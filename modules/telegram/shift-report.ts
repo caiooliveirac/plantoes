@@ -145,7 +145,8 @@ function buildInterventionAwaitingNewsLine(item: ShiftReportInterventionRow, cur
     const name = compactDoctorName({ fullName: item.row.doctorName, displayName: item.row.displayName, fallback: "médico não identificado" });
     const lastShiftLabel = item.row.shiftLabel ?? "turno anterior";
     const since = item.row.startedAt ? ` desde ${formatHour(item.row.startedAt)}` : "";
-    return `🔴 ${item.row.baseCode} - ${name} | ${lastShiftLabel}${since} | sem confirmação para ${currentShiftLabel}`;
+    // 🟡 = herança do turno anterior (mesmo semáforo da regulação); 🔴 fica só para "sem aviso".
+    return `🟡 ${item.row.baseCode} - ${name} | ${lastShiftLabel}${since} | sem confirmação para ${currentShiftLabel}`;
 }
 
 function buildInterventionDisabledLine(item: ShiftReportInterventionRow) {
@@ -201,6 +202,7 @@ export function buildTelegramShiftReport(params: {
     const interventionOperationalTotal = model.intervention.length - disabledIntervention.length;
 
     const hasCarryover = awaitingNewsIntervention.length > 0 || carryoverRegulation.length > 0;
+    const hasWaiting = waitingIntervention.length > 0 || waitingRegulation.length > 0;
 
     return [
         `📋 Plantão ${model.shiftLabel} — ${formatDateTime(model.generatedAt)}`,
@@ -251,6 +253,9 @@ export function buildTelegramShiftReport(params: {
                 `Sem aviso (${waitingRegulation.length}):`,
                 `🔴 ${listWaitingCodes(waitingRegulation)}`,
             ]
+            : []),
+        ...(hasCarryover || hasWaiting
+            ? ["", "🟡 herança do turno anterior · 🔴 sem aviso"]
             : []),
     ].join("\n");
 }
