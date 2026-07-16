@@ -38,4 +38,4 @@ t { eq, gte, sql } = require('drizzle-orm');
 nomesmedicos.csv
 
 # TypeScript incremental build info
-tsconfig.tsbuildinfo
+*.tsbuildinfo
