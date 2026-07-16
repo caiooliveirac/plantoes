@@ -43,13 +43,13 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Ajustei a saída real de {name} em {target} para {time}.\nO painel segue com quem assumiu; pagamento e banco de horas ficaram com o horário real.",
     ],
     half_shift_already_closed: [
-        "Eu já tinha tirado {name} do painel às 17:00 em {target}.\nEsse meio plantão fecha automático no horário e já foi registrado como MEIO para pagamento.\nPor enquanto não tem banco de horas para essa função: a saída prevista era 17:00, distribuindo as ocorrências.",
+        "{name} já tinha saído do painel às 17:00 em {target} — meio plantão fecha automático e já está registrado como MEIO para pagamento (sem banco de horas: a saída prevista era 17:00).",
     ],
     departure_justification_required: [
-        "Entendi a saída tardia de {name} em {target}, mas aqui já havia rendição e só considero minutos extras para pagamento e banco de horas com motivo válido por escrito.\n\n🚑 Em ocorrência\nEx.: estava em ocorrência 0729\n\n🧼 Higienizando\nEx.: estava higienizando a viatura\n\nSe o horário {time} está certo, responda só com um desses motivos. Se o horário mudou, reenvie a saída completa assim: {example}",
+        "Saída tardia de {name} em {target} anotada. Como já havia rendição, o extra só entra no pagamento e banco de horas com motivo por escrito — responda só o motivo: _estava em ocorrência 0729_ ou _estava higienizando a viatura_.\nSe o horário mudou, reenvie: {example}",
     ],
     departure_justification_retry: [
-        "Ainda não consegui reconhecer um motivo válido para crédito automático dessa saída tardia de {name} em {target}.\n\n🚑 Em ocorrência\nEx.: estava em ocorrência 0729\n\n🧼 Higienizando\nEx.: estava higienizando a viatura\n\nPode tentar explicar mais uma vez só com o motivo. Se eu ainda não conseguir confirmar ocorrência ou higienização, deixo a justificativa salva para coordenação, mas sem crédito automático e só a chefia poderá lançar esses minutos extras.",
+        "Não reconheci o motivo. Vale: _em ocorrência NNNN_ ou _higienizando a viatura_ — pode tentar de novo.\nSem isso, guardo a justificativa para a coordenação e o extra fica sem crédito automático (só a chefia lança).",
     ],
     departure_occurrence_number_required: [
         "Entendi que {name} saiu tarde de {target} por ocorrência. Para creditar esses minutos no banco de horas eu preciso saber QUAL ocorrência — me responda só com o número dela (4 dígitos).\n\nEx.: ocorrência 4521\n\nSe o horário {time} mudou, reenvie a saída completa assim: {example}",
@@ -61,7 +61,7 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Justificativa recebida. Anexei o motivo à saída de {name} em {target} às {time}. Isso já ficou registrado para a coordenação, pagamento e banco de horas.",
     ],
     departure_justification_manual_review: [
-        "Guardei a justificativa da saída de {name} em {target} às {time} para coordenação, mas não consegui validar ocorrência ou higienização com segurança. Por isso, os minutos extras ficaram sem crédito automático. Se esse extra precisar entrar, só a chefia de plantão poderá lançar.",
+        "Justificativa de {name} ({target}, {time}) guardada para a coordenação. Não validei ocorrência/higienização, então o extra ficou sem crédito automático — a chefia pode lançar se couber.",
     ],
     departure_not_found: [
         "Entendi a saída de {name} em {target}, mas não achei ocupação compatível para fechar por aqui. Se a saída real foi diferente da rendição, reenvie assim: {example}",
@@ -79,7 +79,7 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Falta só confirmar o nome do médico.",
     ],
     name_unresolved: [
-        "Não consegui confirmar o nome do médico com segurança.",
+        "Não tive certeza de quem é.",
     ],
     command_forbidden: [
         "Esse comando fica restrito à chefia e administração. Se precisar, chame um chefe para ajustar por aqui.",
@@ -179,9 +179,9 @@ export function buildCandidatePromptReply(seed: string | number, candidates: Nam
     if (context?.shift) contextParts.push(`turno ${context.shift}`);
     const contextLine = contextParts.length > 0 ? `\n\nDetectei: ${contextParts.join(" · ")}` : "";
     // TTL real da pendência: 30 min (PENDING_TTL_MS em service.ts).
-    // O balão sai com botões inline (um por candidato); o texto preserva os
-    // fallbacks 1/2/3 e redigitação (auditoria §3.1#5).
-    return `${intro}${contextLine}\n\nMais próximos:\n${list}\n\nToque no nome abaixo — ou:\nResponda com 1, 2 ou 3, ou redigite nome e sobrenome.\nEssa confirmação expira em 30 min.`;
+    // O balão sai com botões inline (um por candidato); 1/2/3 segue valendo
+    // como fallback digitado, mas a instrução fica em 1 linha só.
+    return `${intro}${contextLine}\n${list}\nToque no nome certo — ou responda 1, 2 ou 3. Vale por 30 min.`;
 }
 
 export function buildNameUnresolvedReply(seed: string | number, candidates: NamedCandidate[] = []) {
@@ -189,7 +189,7 @@ export function buildNameUnresolvedReply(seed: string | number, candidates: Name
     const suggestionBlock = candidates.length > 0
         ? `\n\nMais próximos:\n${formatCandidateList(candidates)}`
         : "";
-    return `${intro}${suggestionBlock}\n\nPor favor, redigite o nome com nome e sobrenome.\nSe puder, mande junto a base ou o ramal.`;
+    return `${intro}${suggestionBlock}\nManda de novo com mais um sobrenome que eu acho.`;
 }
 
 export function buildGroupCorrectionAnnouncement(seed: string | number, params: Record<string, string>) {

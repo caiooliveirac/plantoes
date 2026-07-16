@@ -1486,24 +1486,16 @@ function buildDayStartPrompt() {
     return `Primeiro, informem o RAMAL ou nome do médico ${RECIP_GLOSS}.`;
 }
 
-// Chamadas de reforco quando a pessoa da vez nao respondeu e o bot precisa
-// cutucar de novo. Variam pela contagem de cutucoes ja enviados.
-const MEAL_BREAK_NUDGE_LEADS = [
-    "⏰ Ó, ainda tô te esperando, hein!",
-    "⏰ Repetindo porque ninguém respondeu ainda…",
-    "⏰ Tá devagar pra escolher, a fila parou! Bora?",
-    "⏰ Alô, alô! Cadê a resposta?",
-    "⏰ A galera com fome cobrando aqui, viu?",
-];
-
-function pickMealBreakNudgeLead(count: number) {
-    const size = MEAL_BREAK_NUDGE_LEADS.length;
-    const index = ((Math.max(1, count) - 1) % size + size) % size;
-    return MEAL_BREAK_NUDGE_LEADS[index];
-}
-
-function buildMealBreakTurnNudgeMessage(session: MealBreakSession, count: number) {
-    return `${pickMealBreakNudgeLead(count)}\n${buildCurrentPrompt(session)}`;
+// Cobrança quando a pessoa da vez não respondeu: 1 linha, sem piada e sem
+// reenviar o balão inteiro — o teclado da vez vai junto (via dispatcher) para
+// a escolha continuar a um toque de distância.
+function buildMealBreakTurnNudgeMessage(session: MealBreakSession) {
+    const currentRamal = resolveStageChoiceQueue(session)[0];
+    if (!currentRamal) {
+        return buildCurrentPrompt(session);
+    }
+    const name = resolveDoctorCompactName(findDoctor(session, currentRamal) ?? { name: currentRamal });
+    return `⏰ ${name} (${currentRamal}), a fila da refeição está esperando você — escolhe um horário aí.`;
 }
 
 /**
@@ -1797,7 +1789,7 @@ function buildConfirmationPrompt(session: MealBreakSession) {
                 "",
                 `🛡️ Cobertura presencial — ${presenciais.length} ${presenciais.length === 1 ? "presencial" : "presenciais"} (não COI, não RMT, não IES):`,
                 presList,
-                "Vou garantir pelo menos 1 presencial no trabalho 23:00 e 1 no 03:00, independente da ordem de chegada — se a escolha quebrar essa cobertura, eu redireciono automaticamente para o outro horário.",
+                "Garanto 1 presencial em cada horário (23:00 e 03:00) — se uma escolha quebrar isso, eu remanejo.",
             );
         }
     }
@@ -5455,7 +5447,13 @@ export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()
         }
 
         try {
-            await sendMessage(chatId, buildMealBreakTurnNudgeMessage(session, action.count), undefined, undefined, MEAL_BREAK_FORMAT_OPTIONS);
+            await sendMessage(
+                chatId,
+                buildMealBreakTurnNudgeMessage(session),
+                undefined,
+                buildMealBreakStageKeyboard(session) ?? undefined,
+                MEAL_BREAK_FORMAT_OPTIONS,
+            );
             await saveMealBreakTurnNudgeRecord(chatId, operationalDate, mode, {
                 ramal: head,
                 at: referenceDate.toISOString(),

@@ -54,14 +54,11 @@ export async function maybeSendInterventionLateArrivalOrientation(params: {
     const doctorSurfaceName = doctor.displayName ?? doctor.fullName;
 
     const lines = [
-        `⚠️ *Chegada após ${LATE_HALF_SHIFT_CUTOFF_HOUR}h em intervenção SD*`,
-        `*${doctorSurfaceName}* chegou em *${base.code}* às *${formatLocalTime(startedAt)}*.`,
-        "",
-        `Pela regra da coordenação, o plantão *pode* virar *MEIO PLANTÃO* (pagamento *${LATE_HALF_SHIFT_PAY_START_HOUR}:00*–*${LATE_HALF_SHIFT_PAY_END_HOUR}:00*) — só vale depois que o *chefe* ou *admin* reconhecer, via \`/meioplantao ${base.code}\` ou pelo quadro operacional.`,
-        "",
+        `⚠️ *${doctorSurfaceName}* chegou em *${base.code}* às *${formatLocalTime(startedAt)}* — depois das ${LATE_HALF_SHIFT_CUTOFF_HOUR}h.`,
+        `Pode virar *meio plantão* (${LATE_HALF_SHIFT_PAY_START_HOUR}:00–${LATE_HALF_SHIFT_PAY_END_HOUR}:00) se chefe/admin reconhecer: \`/meioplantao ${base.code}\`.`,
         carryoverMinutes > 0
-            ? `Se reconhecida, o tempo entre *${formatLocalTime(startedAt)}* e *${LATE_HALF_SHIFT_PAY_START_HOUR}:00* (${carryoverLabel}) vira crédito no banco de horas.`
-            : `Como a chegada foi depois das *${LATE_HALF_SHIFT_PAY_START_HOUR}:00*, não há crédito no banco de horas — conta apenas o pagamento do meio plantão.`,
+            ? `Reconhecendo, ${carryoverLabel} antes das ${LATE_HALF_SHIFT_PAY_START_HOUR}:00 viram crédito no banco de horas.`
+            : `Sem crédito de banco de horas (chegada depois das ${LATE_HALF_SHIFT_PAY_START_HOUR}:00).`,
     ];
 
     await sendMessage(String(params.chatId), lines.join("\n"), params.replyToMessageId);
