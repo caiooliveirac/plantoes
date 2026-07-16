@@ -3300,9 +3300,7 @@ test("pickTelegramReply teaches how to justify a late departure", () => {
     assert.match(reply, /pagamento|banco de horas/i);
     assert.match(reply, /ocorrência 0729|em ocorrência/i);
     assert.match(reply, /higienizando|higienização/i);
-    assert.match(reply, /\n\n🚑/u);
-    assert.match(reply, /\n\n🧼/u);
-    assert.match(reply, /responda só com um desses motivos|responda apenas o motivo|responda aqui só com o motivo/i);
+    assert.match(reply, /responda só o motivo/i);
     assert.match(reply, /PR03/);
 });
 

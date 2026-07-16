@@ -1039,27 +1039,11 @@ export function buildLocationWithoutRamalReply(params: {
     const time = params.time || "07:00";
 
     return [
-        `⚠️🏢 Recebi sua mensagem, mas "${params.location}" sozinho não é suficiente para eu registrar.`,
-        ``,
-        `O ${locationFull} tem vários ramais.`,
-        `Eu preciso saber *exatamente em qual ramal* o médico vai ficar.`,
-        ``,
-        `🚫 Assim NÃO funciona:`,
-        `  _${name} ${params.location} ${shift} ${time}_`,
-        ``,
-        `✅ Assim FUNCIONA:`,
-        `  _${name} ${exampleRamal} ${shift} ${time}_`,
-        ``,
-        `📋 Ramais do ${params.location}:`,
-        ...exampleRamais.map((r) => `  • ${r}`),
-        ``,
-        `👉 TARM ou chefia: perguntem ao médico em qual ramal ele está sentado e reenviem a mensagem com o número do ramal no lugar de "${params.location}".`,
-        ``,
-        `Exemplo pronto para copiar e ajustar:`,
-        `_${name} ${exampleRamal} ${shift} ${time}_`,
-        ...(params.interactive
-            ? [``, `💡 Ou responda *apenas* com o número do ramal (ex: _${exampleRamal}_) que eu completo o registro automaticamente.`]
-            : []),
+        `⚠️ ${locationFull} tem mais de um ramal — em qual ${name} está?`,
+        `Ramais: ${exampleRamais.join(" · ")}`,
+        params.interactive
+            ? `Responda só o número (ex.: _${exampleRamal}_) que eu completo o registro.`
+            : `Reenvie com o ramal no lugar de "${params.location}". Ex.: _${name} ${exampleRamal} ${shift} ${time}_`,
     ].join("\n");
 }
 
@@ -12823,17 +12807,13 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
 
                     const missing: string[] = [];
                     if (!hasName) missing.push("*nome do médico*");
-                    if (shiftRequired && !hasShift) missing.push("*turno* (SD, SN, P — ou *meio plantão* / *meio turno* / *meia jornada* / *tarde* / *vespertino*)");
+                    if (shiftRequired && !hasShift) missing.push("*turno* (SD, SN ou P)");
 
                     let body: string;
                     if (isBareButtonPayload) {
                         body = [
-                            "⛔ Esse formato `ramal HH:MM` é o botão da divisão de almoço — fora do fluxo do `/almoco` ele não pode virar chegada.",
-                            "",
-                            "Se a intenção era *registrar chegada* de alguém no ramal, mande o nome + ramal + turno + horário, por exemplo:",
-                            `  _${exampleArrival}_`,
-                            "",
-                            "Se a intenção era *escolher o horário de almoço*, peça pra chefia reabrir com `/almoco` — o botão só funciona enquanto a divisão está em curso.",
+                            "⛔ `ramal HH:MM` é o botão da divisão de almoço, e ela não está em curso agora.",
+                            `Pra registrar chegada, mande nome + ramal + turno + horário. Ex.: _${exampleArrival}_`,
                         ].join("\n");
                     } else {
                         const detectedLine = detected.length > 0
@@ -12841,14 +12821,8 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                             : "Não consegui montar a chegada com o que veio.";
                         const missingLine = `Faltou: ${missing.join(" e ")}.`;
                         body = [
-                            "⚠️ Quase lá — pra registrar a *chegada* eu preciso de *nome + ramal + turno + horário*, todos na mesma mensagem.",
-                            "O turno pode ser *SD*, *SN*, *P* — ou *meio plantão* (também vale dizer *tarde* ou *meio turno*).",
-                            "",
-                            detectedLine,
-                            missingLine,
-                            "",
-                            "Exemplo no seu caso:",
-                            `  _${exampleArrival}_`,
+                            `⚠️ ${detectedLine} ${missingLine}`,
+                            `Manda tudo numa mensagem só. Ex.: _${exampleArrival}_`,
                         ].join("\n");
                     }
 

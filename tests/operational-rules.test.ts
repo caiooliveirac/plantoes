@@ -1591,9 +1591,8 @@ test("buildLocationWithoutRamalReply includes sender name, ramal list, and copy-
     assert.ok(reply.includes("1368"));
     assert.ok(reply.includes("SN"));
     assert.ok(reply.includes("19:14"));
-    assert.ok(reply.includes("NÃO funciona"));
-    assert.ok(reply.includes("FUNCIONA"));
-    assert.ok(reply.includes("TARM"));
+    assert.ok(reply.includes("mais de um ramal"));
+    assert.ok(reply.includes("Reenvie"));
 
     const cruReply = buildLocationWithoutRamalReply({
         senderName: "Ananda Andrade",

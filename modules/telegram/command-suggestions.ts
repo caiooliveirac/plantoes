@@ -278,15 +278,10 @@ const SUGGESTION_PREFIX: Record<TelegramCommandSuggestionResult["kind"], string>
 };
 
 export function buildTelegramCommandSuggestionReply(result: TelegramCommandSuggestionResult) {
-    const lines = [
-        `${SUGGESTION_PREFIX[result.kind] ?? "⚠️"} ${result.intro}`,
-        "",
-        "Se era isso que você quis dizer, use um destes formatos:",
-    ];
+    const lines = [`${SUGGESTION_PREFIX[result.kind] ?? "⚠️"} ${result.intro}`];
 
-    for (const [index, suggestion] of result.suggestions.slice(0, 2).entries()) {
-        lines.push(`${index + 1}. ${suggestion.label}`);
-        lines.push(`   ${suggestion.usage}`);
+    for (const suggestion of result.suggestions.slice(0, 2)) {
+        lines.push(`• ${suggestion.label}: ${suggestion.usage}`);
     }
 
     return lines.join("\n");

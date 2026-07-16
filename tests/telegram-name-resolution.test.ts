@@ -216,7 +216,7 @@ test("buildLocationWithoutRamalReply inclui dica interativa quando interactive=t
         time: "07:00",
         interactive: true,
     });
-    assert.match(reply, /responda.*apenas.*n[úu]mero do ramal/i);
+    assert.match(reply, /responda só o n[úu]mero/i);
 });
 
 test("buildLocationWithoutRamalReply sem dica interativa quando interactive=false", () => {
@@ -294,8 +294,8 @@ test("buildCandidatePromptReply lists numbered candidates and asks for redigitac
     ]);
 
     assert.match(reply, /1\. Ana Souza/);
-    assert.match(reply, /Responda com 1, 2 ou 3/);
-    assert.match(reply, /redigite nome e sobrenome/i);
+    assert.match(reply, /responda 1, 2 ou 3/i);
+    assert.match(reply, /Vale por 30 min/i);
 });
 
 test("buildNameUnresolvedReply shows suggestions and asks to redigite", () => {
@@ -306,7 +306,7 @@ test("buildNameUnresolvedReply shows suggestions and asks to redigite", () => {
 
     assert.match(reply, /Mais próximos/);
     assert.match(reply, /Bruno/);
-    assert.match(reply, /redigite o nome/i);
+    assert.match(reply, /mais um sobrenome/i);
 });
 
 test("buildTelegramBatchReviewReply asks for confirmation when all entries are ready", () => {
