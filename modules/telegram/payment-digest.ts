@@ -5,7 +5,7 @@ import { telegramBotNotices } from "@/db/schema";
 import { formatDoctorBackofficeName } from "@/modules/doctors/directory";
 import { getSaoPauloParts } from "@/modules/operational/board-rules";
 import { isSamuHolidayDate, isWeekendDate } from "@/modules/operational/holidays";
-import { sendMessage } from "@/modules/telegram/api";
+import { sendDocument } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import type {
     ChiefPayableBoardModel,
@@ -19,7 +19,6 @@ const WEEKDAY_LABELS_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"] as 
 
 // Margem de segurança abaixo do limite de 4096 chars por mensagem do Telegram.
 const MAX_MESSAGE_CHARS = 3500;
-const BLOCK_SEPARATOR = "\n\n";
 
 const STAGE = "payment_digest";
 
@@ -53,84 +52,66 @@ function doctorDisplayName(row: ChiefPayableDoctorRow) {
     return formatDoctorBackofficeName({ fullName: row.doctorName, displayName: row.displayName });
 }
 
-// Bloco de um médico: cabeçalho com nome + contagem, seguido das linhas de plantão.
-// Retorna null quando o médico não tem nenhum plantão no período (não entra no digest).
+// Bloco markdown de um médico: heading com nome + contagem, uma linha de lista por
+// plantão. Retorna null quando o médico não tem nenhum plantão no período.
 export function formatDoctorBlock(row: ChiefPayableDoctorRow) {
     const shifts = collectDoctorShifts(row);
     if (shifts.length === 0) {
         return null;
     }
     const count = shifts.length;
-    const header = `👤 ${doctorDisplayName(row)} — ${count} ${count === 1 ? "plantão" : "plantões"}`;
-    return [header, ...shifts.map(formatShiftLine)].join("\n");
+    const header = `## 👤 ${doctorDisplayName(row)} — ${count} ${count === 1 ? "plantão" : "plantões"}`;
+    return [header, "", ...shifts.map((shift) => `- ${formatShiftLine(shift)}`)].join("\n");
 }
 
-// Fallback raríssimo: um único bloco maior que o limite — parte por linhas.
-function splitBlockByLines(block: string) {
-    const chunks: string[] = [];
-    let current = "";
-    for (const line of block.split("\n")) {
-        const candidate = current ? `${current}\n${line}` : line;
-        if (candidate.length <= MAX_MESSAGE_CHARS) {
-            current = candidate;
-            continue;
-        }
-        if (current) {
-            chunks.push(current);
-        }
-        current = line;
-    }
-    if (current) {
-        chunks.push(current);
-    }
-    return chunks;
+export interface PaymentDigestDocument {
+    filename: string;
+    content: string;
+    caption: string;
 }
 
-function packMessages(header: string, blocks: string[]) {
-    const chunks: string[] = [];
-    let current = header;
-    for (const block of blocks) {
-        const candidate = `${current}${BLOCK_SEPARATOR}${block}`;
-        if (candidate.length <= MAX_MESSAGE_CHARS) {
-            current = candidate;
-            continue;
-        }
-        chunks.push(current);
-        if (block.length <= MAX_MESSAGE_CHARS) {
-            current = block;
-            continue;
-        }
-        const split = splitBlockByLines(block);
-        chunks.push(...split.slice(0, -1));
-        current = split[split.length - 1] ?? "";
-    }
-    chunks.push(current);
-
-    if (chunks.length === 1) {
-        return chunks;
-    }
-    const total = chunks.length;
-    return chunks.map((chunk, index) => `(${index + 1}/${total})\n${chunk}`);
-}
-
-// Monta as mensagens do digest do mês corrente, agrupadas por médico.
-// Retorna [] quando não há nenhum plantão (evita mandar mensagem vazia).
-export function buildPaymentDigestMessages(board: ChiefPayableBoardModel, referenceDate: Date) {
-    const blocks = [...board.doctors]
-        .sort((a, b) => doctorDisplayName(a).localeCompare(doctorDisplayName(b), "pt-BR"))
+// Monta o digest do mês como UM arquivo markdown (o volume de um mês inteiro não
+// cabe em mensagens de 4096 chars — antes eram ~15 mensagens numeradas no privado).
+// Retorna null quando não há nenhum plantão (evita mandar arquivo vazio).
+export function buildPaymentDigestDocument(
+    board: ChiefPayableBoardModel,
+    referenceDate: Date,
+): PaymentDigestDocument | null {
+    const rows = [...board.doctors]
+        .sort((a, b) => doctorDisplayName(a).localeCompare(doctorDisplayName(b), "pt-BR"));
+    const blocks = rows
         .map(formatDoctorBlock)
         .filter((block): block is string => Boolean(block));
 
     if (blocks.length === 0) {
-        return [];
+        return null;
     }
 
+    const shifts = rows.flatMap(collectDoctorShifts);
+    const meioCount = shifts.filter((shift) => shift.paymentTag).length;
     const parts = getSaoPauloParts(referenceDate);
     const stamp = `${pad2(parts.day)}/${pad2(parts.month)} ${pad2(parts.hour)}:${pad2(parts.minute)}`;
-    const header = `💰 Fechamento provisório — ${board.monthLabel}\n`
-        + `Gerado ${stamp} · confira com cada plantonista antes de subir p/ pagamento`;
+    const summary = `${blocks.length} médicos · ${shifts.length} plantões`
+        + (meioCount > 0 ? ` (${meioCount} MEIO)` : "");
 
-    return packMessages(header, blocks);
+    const content = [
+        `# 💰 Fechamento provisório — ${board.monthLabel}`,
+        "",
+        `Gerado ${stamp} · confira com cada plantonista antes de subir p/ pagamento.`,
+        "",
+        summary,
+        "",
+        blocks.join("\n\n"),
+        "",
+    ].join("\n");
+
+    return {
+        filename: `fechamento-provisorio-${board.monthKey}.md`,
+        content,
+        caption: `💰 Fechamento provisório — ${board.monthLabel}\n`
+            + `Gerado ${stamp} · ${summary}\n`
+            + "Confira com cada plantonista antes de subir p/ pagamento.",
+    };
 }
 
 const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -249,8 +230,8 @@ export async function sendTelegramPaymentDigestCycle(referenceDate = new Date())
     }
 
     const board = await getChiefPayableShiftsBoard();
-    const messages = buildPaymentDigestMessages(board, referenceDate);
-    if (messages.length === 0) {
+    const document = buildPaymentDigestDocument(board, referenceDate);
+    if (!document) {
         return { sent: 0, evaluated: 0 };
     }
 
@@ -266,9 +247,7 @@ export async function sendTelegramPaymentDigestCycle(referenceDate = new Date())
         }
 
         try {
-            for (const message of messages) {
-                await sendMessage(chatId, message);
-            }
+            await sendDocument(chatId, document);
             sent += 1;
         } catch (error) {
             await rollbackDigestNotice(noticeKey, chatId);

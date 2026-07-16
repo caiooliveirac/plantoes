@@ -7,7 +7,7 @@ import type {
     PayableShift,
 } from "@/modules/reporting/payable-shifts";
 import {
-    buildPaymentDigestMessages,
+    buildPaymentDigestDocument,
     formatDoctorBlock,
     formatShiftLine,
     shouldSendPaymentDigest,
@@ -127,15 +127,16 @@ test("formatDoctorBlock retorna null quando médico não tem plantão", () => {
     assert.equal(formatDoctorBlock(makeDoctor("Sem Plantão", [])), null);
 });
 
-test("formatDoctorBlock lista cabeçalho com contagem e linhas em ordem de dia", () => {
+test("formatDoctorBlock lista heading com contagem e linhas em ordem de dia", () => {
     const block = formatDoctorBlock(makeDoctor("Acácio Junio de Almeida", [
         makeShift({ operationalDate: "2026-06-02", shiftLabel: "SN", targetCode: "BR60" }),
         makeShift({ operationalDate: "2026-06-01", shiftLabel: "SD", targetCode: "PR03" }),
     ]));
     assert.equal(block, [
-        "👤 Acácio Junio de Almeida — 2 plantões",
-        "01/06 Seg SD PR03 (Dia útil)",
-        "02/06 Ter SN BR60 (Dia útil)",
+        "## 👤 Acácio Junio de Almeida — 2 plantões",
+        "",
+        "- 01/06 Seg SD PR03 (Dia útil)",
+        "- 02/06 Ter SN BR60 (Dia útil)",
     ].join("\n"));
 });
 
@@ -145,23 +146,31 @@ test("shouldSendPaymentDigest abre só na janela das 12:00 (SP)", () => {
     assert.equal(shouldSendPaymentDigest(new Date("2026-06-07T15:10:00.000Z")), false); // 12:10 SP
 });
 
-test("buildPaymentDigestMessages retorna [] para board sem plantões", () => {
+test("buildPaymentDigestDocument retorna null para board sem plantões", () => {
     const board = makeBoard([makeDoctor("Fulano", []), makeDoctor("Beltrano", [])]);
-    assert.deepEqual(buildPaymentDigestMessages(board, NOON_SP), []);
+    assert.equal(buildPaymentDigestDocument(board, NOON_SP), null);
 });
 
-test("buildPaymentDigestMessages agrupa por médico, ordena por nome e inclui cabeçalho", () => {
+test("buildPaymentDigestDocument agrupa por médico, ordena por nome e inclui cabeçalho", () => {
     const board = makeBoard([
         makeDoctor("Zé da Silva", [makeShift({ operationalDate: "2026-06-03", shiftLabel: "SD", targetCode: "CRU" })]),
-        makeDoctor("Ana Paula", [makeShift({ operationalDate: "2026-06-01", shiftLabel: "SD", targetCode: "PR03" })]),
+        makeDoctor("Ana Paula", [
+            makeShift({ operationalDate: "2026-06-01", shiftLabel: "SD", targetCode: "PR03" }),
+            makeShift({ operationalDate: "2026-06-02", shiftLabel: "SN", targetCode: "BR60", paymentTag: "MEIO" }),
+        ]),
     ]);
-    const messages = buildPaymentDigestMessages(board, NOON_SP);
-    assert.equal(messages.length, 1);
-    const [message] = messages;
-    assert.match(message, /💰 Fechamento provisório — Junho 2026/);
-    assert.match(message, /Gerado 07\/06 12:05/);
+    const document = buildPaymentDigestDocument(board, NOON_SP);
+    assert.ok(document);
+    assert.equal(document.filename, "fechamento-provisorio-2026-06.md");
+    assert.match(document.content, /^# 💰 Fechamento provisório — Junho 2026/);
+    assert.match(document.content, /Gerado 07\/06 12:05/);
+    assert.match(document.content, /2 médicos · 3 plantões \(1 MEIO\)/);
     // Ana antes de Zé.
-    assert.ok(message.indexOf("Ana Paula") < message.indexOf("Zé da Silva"));
+    assert.ok(document.content.indexOf("Ana Paula") < document.content.indexOf("Zé da Silva"));
+    // Caption curta traz mês, stamp e resumo.
+    assert.match(document.caption, /Junho 2026/);
+    assert.match(document.caption, /2 médicos · 3 plantões/);
+    assert.ok(document.caption.length <= 1024, "caption dentro do limite do Telegram");
 });
 
 // Referência: 07/06/2026 12:00 SP (junho).
@@ -198,23 +207,22 @@ test("parseTelegramPaymentDigestCommand aceita bare e mês, rejeita subcomandos"
     assert.equal(parseTelegramPaymentDigestCommand("/pagamento maio junho", JUN_REF), null);
 });
 
-test("buildPaymentDigestMessages quebra em várias mensagens sem partir bloco de médico", () => {
+test("buildPaymentDigestDocument gera arquivo único mesmo com volume de mês inteiro", () => {
     const doctors: ChiefPayableDoctorRow[] = [];
-    for (let i = 0; i < 80; i++) {
+    for (let i = 0; i < 160; i++) {
         const name = `Doutor ${String(i).padStart(3, "0")}`;
         doctors.push(makeDoctor(name, [
             makeShift({ doctorName: name, operationalDate: "2026-06-01", shiftLabel: "SD", targetCode: "PR03" }),
             makeShift({ doctorName: name, operationalDate: "2026-06-02", shiftLabel: "SN", targetCode: "BR60" }),
         ]));
     }
-    const messages = buildPaymentDigestMessages(makeBoard(doctors), NOON_SP);
-    assert.ok(messages.length > 1, "deve quebrar em mais de uma mensagem");
-    for (const message of messages) {
-        assert.ok(message.length <= 3600, `mensagem dentro do limite (${message.length})`);
-        assert.match(message, /^\(\d+\/\d+\)/, "mensagens numeradas quando há quebra");
-    }
-    // Nenhum cabeçalho de médico fica órfão (sem ao menos uma linha de plantão logo após).
-    const joined = messages.join("\n");
-    const blockHeaders = joined.match(/👤 Doutor \d{3}/g) ?? [];
-    assert.equal(blockHeaders.length, 80, "todos os 80 médicos presentes");
+    const document = buildPaymentDigestDocument(makeBoard(doctors), NOON_SP);
+    assert.ok(document);
+    assert.match(document.content, /160 médicos · 320 plantões/);
+    const blockHeaders = document.content.match(/## 👤 Doutor \d{3}/g) ?? [];
+    assert.equal(blockHeaders.length, 160, "todos os 160 médicos presentes");
+    // Médico sem plantão não entra no arquivo.
+    const withEmpty = buildPaymentDigestDocument(makeBoard([...doctors, makeDoctor("Zé Sem Plantão", [])]), NOON_SP);
+    assert.ok(withEmpty);
+    assert.ok(!withEmpty.content.includes("Zé Sem Plantão"));
 });

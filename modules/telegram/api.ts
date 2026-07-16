@@ -74,16 +74,19 @@ export type TelegramReplyMarkup =
     | TelegramReplyKeyboardRemove
     | TelegramInlineKeyboardMarkup;
 
-async function callApi<T>(method: string, body: Record<string, unknown>) {
+async function callApi<T>(method: string, body: Record<string, unknown> | FormData) {
     const maxAttempts = 3;
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
+            // FormData (upload de arquivo): o fetch define o Content-Type multipart
+            // com boundary sozinho — não fixar o header manualmente.
             const response = await fetch(`${getBaseUrl()}/${method}`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
+                ...(body instanceof FormData
+                    ? { body }
+                    : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
                 signal: AbortSignal.timeout(10_000),
             });
 
@@ -178,6 +181,36 @@ export async function sendMessage(
         }
         throw error;
     }
+}
+
+export interface TelegramDocumentInput {
+    /** Nome do arquivo como aparece no chat (ex.: "fechamento-provisorio-2026-06.md"). */
+    filename: string;
+    /** Conteúdo textual do arquivo (UTF-8). */
+    content: string;
+    /** MIME type; default text/markdown. */
+    contentType?: string;
+    /** Legenda curta exibida junto ao arquivo (limite do Telegram: 1024 chars). */
+    caption?: string;
+    replyToMessageId?: number;
+}
+
+/** Envia um arquivo gerado em memória via sendDocument (multipart). */
+export async function sendDocument(chatId: string | number, input: TelegramDocumentInput) {
+    const form = new FormData();
+    form.set("chat_id", String(Number(chatId)));
+    form.set(
+        "document",
+        new Blob([input.content], { type: input.contentType ?? "text/markdown" }),
+        input.filename,
+    );
+    if (input.caption) {
+        form.set("caption", input.caption);
+    }
+    if (input.replyToMessageId) {
+        form.set("reply_to_message_id", String(input.replyToMessageId));
+    }
+    return callApi<TelegramMessage>("sendDocument", form);
 }
 
 export function buildChoiceKeyboard(rows: string[][]): TelegramReplyKeyboardMarkup {

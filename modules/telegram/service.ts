@@ -132,7 +132,7 @@ import {
     TELEGRAM_PAYMENT_REPORT_USAGE,
     TELEGRAM_RESET_CODINOME_USAGE,
 } from "@/modules/telegram/payment-commands";
-import { buildDoctorPayrollEmptyMessage, buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/modules/telegram/payment-digest";
+import { buildDoctorPayrollEmptyMessage, buildDoctorPayrollMessages, buildPaymentDigestDocument } from "@/modules/telegram/payment-digest";
 import {
     ATTEMPT_LIMIT,
     checkAttemptLock,
@@ -195,7 +195,7 @@ import {
 import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp, type TelegramRecentSenderMessage } from "@/modules/telegram/command-suggestions";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeMealBreakMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines, type ParsedMessage } from "@/modules/telegram/parser";
 import type { TelegramCallbackQuery, TelegramFormatOptions, TelegramUpdate } from "@/modules/telegram/api";
-import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, escapeTelegramMarkdown, getBotUsername, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
+import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, escapeTelegramMarkdown, getBotUsername, REMOVE_KEYBOARD, sendDocument, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
 import {
     formatTelegramErrorForUser,
     resolveTelegramErrorText,
@@ -5142,7 +5142,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             if (digestCommand) {
                 try {
                     const board = await getChiefPayableShiftsBoard(digestCommand.monthKey);
-                    const messages = buildPaymentDigestMessages(board, new Date());
+                    const digestDocument = buildPaymentDigestDocument(board, new Date());
 
                     await markTelegramProcessed(logId, {
                         status: "accepted",
@@ -5151,18 +5151,16 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                             actorRoles: actor.roles,
                             monthKey: board.monthKey,
                             doctorCount: board.summary.doctorCount,
-                            messageCount: messages.length,
+                            deliveredAs: digestDocument ? "document" : "empty",
                         },
                     });
 
-                    if (messages.length === 0) {
+                    if (!digestDocument) {
                         await sendMessage(message.chat.id, `✅ Nenhum plantão registrado em ${board.monthLabel} ainda.`, message.message_id);
                         return { ok: true, reported: true };
                     }
 
-                    for (const [index, text] of messages.entries()) {
-                        await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
-                    }
+                    await sendDocument(message.chat.id, { ...digestDocument, replyToMessageId: message.message_id });
                     return { ok: true, reported: true };
                 } catch (error) {
                     await markTelegramProcessed(logId, {
