@@ -104,21 +104,15 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://SEU
 
 ## CI/CD
 
-Push para `main` dispara automaticamente o pipeline `.github/workflows/deploy.yml` em um runner self-hosted instalado no servidor de producao:
-
-1. `npm ci` + `npm test` (testes devem passar antes do deploy)
-2. `npx tsc --noEmit` (type check)
-3. `npm run build` + `npm run deploy:production` (PM2 restart com `--update-env`)
-4. Validacao do `/api/health` no upstream local e no host publico
-5. Summary com commit sha, runtime guard e webhook status
-
-Nao e necessario configurar secrets SSH no repositorio — o runner roda diretamente no servidor.
+- Pull requests usam `.github/workflows/ci-pr.yml` em `ubuntu-latest` e executam lint, typecheck, testes e build sem acessar producao.
+- Merge em `main` usa `.github/workflows/release-deploy.yml` em `ubuntu-latest`, valida novamente, gera imagem Docker `linux/arm64`, publica no GHCR e faz deploy remoto por `image@sha256`.
+- Producao nao compila nem instala dependencias Node; apenas faz pull/promocao/rollback de container.
 
 ## Deploy de producao
 
-- ver [DEPLOY.md](DEPLOY.md) antes de qualquer push com restart
-- a regra critica e: carregar `.env.production` antes do build e reiniciar os dois processos PM2 com `--update-env`, porque o worker pode perder `DATABASE_URL` se o deploy for feito de forma incompleta
-- preferir sempre `npm run deploy:production`
+- ver [DEPLOY.md](DEPLOY.md) para o fluxo container por digest
+- deploy oficial do host: `sudo /usr/local/sbin/deploy-plantoes <image@sha256:...>`
+- `npm run deploy:production` foi desativado para bloquear deploy legado com build no host
 
 ## Principios arquiteturais
 
@@ -187,9 +181,9 @@ Esta primeira iteracao prioriza:
 
 ## Deploy de producao
 
-- ver [DEPLOY.md](DEPLOY.md) antes de qualquer push com restart
-- a regra critica e: carregar `.env.production` antes do build e reiniciar os dois processos PM2 com `--update-env`, porque o worker pode perder `DATABASE_URL` se o deploy for feito de forma incompleta
-- preferir sempre `npm run deploy:production`
+- ver [DEPLOY.md](DEPLOY.md) para o fluxo container por digest
+- deploy oficial do host: `sudo /usr/local/sbin/deploy-plantoes <image@sha256:...>`
+- `npm run deploy:production` foi desativado para bloquear deploy legado com build no host
 
 ## Principios arquiteturais
 

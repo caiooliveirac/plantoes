@@ -831,10 +831,10 @@ test("buildPaymentAllocationBoardModel does not carry a regulation P without dep
     assert.match(board.regulation[0]?.issues[0] ?? "", /Sem ocupacao identificada/i);
 });
 
-test("buildPaymentAllocationBoardModel carries SN P-shift with no exit into the immediately following SD slot (boundary equality)", () => {
-    // Guilherme scenario: doctor arrived in SN (e.g. 20:30 SP = 23:30 UTC), said "P"
-    // (continues). The P-shift's implicitExpiry = 07:00 SP next day = exactly the SD
-    // slot start. Must be included in the SD payment slot.
+test("buildPaymentAllocationBoardModel does not carry SN P-shift into SD on boundary equality", () => {
+    // A igualdade exata na fronteira (07:00) nao deve mais carregar cobertura para o
+    // slot seguinte de pagamento. O plantao precisa cobrir tempo estritamente dentro
+    // do slot alvo para ser contado.
     const board = buildPaymentAllocationBoardModel({
         targets: [makeTarget({ targetCode: "PM40", targetLabel: "PM40", sortOrder: 40 })],
         rawRows: [makeRow({
@@ -862,9 +862,9 @@ test("buildPaymentAllocationBoardModel carries SN P-shift with no exit into the 
         generatedAt: "2026-04-12T12:00:00.000Z",
     });
 
-    assert.equal(board.intervention[0]?.doctorName, "Guilherme Rabelo");
-    assert.equal(board.intervention[0]?.occupancyId, "occ-guilherme");
-    assert.match(board.intervention[0]?.issues.join(" ") ?? "", /sem saida consolidada/i);
+    assert.equal(board.intervention[0]?.doctorName, null);
+    assert.equal(board.intervention[0]?.occupancyId, null);
+    assert.match(board.intervention[0]?.issues.join(" ") ?? "", /Sem ocupacao identificada/i);
 });
 
 test("buildPaymentAllocationBoardModel does not let a backdated telegram ghost truncate the displaced doctor (continuation-bug defense)", () => {
@@ -1000,7 +1000,7 @@ test("um P noturno NÃO cria SD fantasma no dia seguinte quando o médico já te
     );
 });
 
-test("um P noturno SEM SD no mesmo dia continua cobrindo o SD seguinte (forward legítimo)", () => {
+test("um P noturno sem declaração no slot seguinte não cobre SD automaticamente", () => {
     const board = buildPaymentAllocationBoardModel({
         targets: [
             makeTarget({ domain: "regulation", targetCode: "2033", targetLabel: "2033", sortOrder: 33 }),
@@ -1030,8 +1030,7 @@ test("um P noturno SEM SD no mesmo dia continua cobrindo o SD seguinte (forward 
     });
 
     const carlaRow = board.regulation.find((row) => row.doctorName === "Carla Nunes");
-    assert.ok(carlaRow, "Carla deveria continuar cobrindo o SD seguinte: P noturno sem SD no dia é forward legítimo");
-    assert.equal(carlaRow?.targetCode, "2033");
+    assert.equal(carlaRow, undefined, "Sem declaração explícita no SD seguinte, a cobertura não deve ser carregada para pagamento");
 });
 
 test("o P noturno suprimido não desloca o SD real do médico em outro ramal", () => {

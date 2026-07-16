@@ -9,10 +9,14 @@
         "dev": "next dev",
         "build": "next build",
         "start": "next start",
+        "lint": "next typegen && tsc --noEmit -p tsconfig.deploy.json",
+        "typecheck": "next typegen && tsc --noEmit -p tsconfig.deploy.json",
         "test:deploy": "node --test --import tsx $(find tests -name '*.test.ts' ! -name 'telegram-meal-breaks.test.ts' -print)",
         "test:full": "node --test --import tsx tests/**/*.test.ts",
         "test": "node --test --import tsx tests/**/*.test.ts",
         "bank-hours:rebuild": "tsx scripts/rebuild-bank-hours.ts",
+        "bank-hours:legacy:matching-report": "tsx scripts/report-legacy-bank-hours-matching.ts",
+        "bank-hours:legacy:seed": "tsx scripts/seed-legacy-bank-hours.ts",
         "regulation:arrival": "tsx scripts/register-regulation-arrival.ts",
         "scheduled-windows:repair": "tsx scripts/repair-scheduled-windows.ts",
         "telegram:continuity:repair": "tsx scripts/repair-telegram-continuity.ts",
@@ -44,6 +48,7 @@
         "react": "19.2.4",
         "react-dom": "19.2.4",
         "sonner": "^2.0.7",
+        "tsx": "^4.21.0",
         "zod": "^4.3.6"
     },
     "devDependencies": {
@@ -51,7 +56,6 @@
         "@types/react": "^19.2.2",
         "@types/react-dom": "^19.2.2",
         "drizzle-kit": "^0.31.10",
-        "tsx": "^4.21.0",
         "typescript": "^5.9.3"
     }
 }

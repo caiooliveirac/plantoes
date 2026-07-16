@@ -133,7 +133,27 @@ export function parseTelegramPaymentDigestCommand(text: string, reference = new 
 
 export const TELEGRAM_PAYMENT_CODENAME_USAGE = "/pagamento codinome Nome Completo";
 export const TELEGRAM_PAYMENT_SELF_SERVICE_USAGE = "/pagamento <seu codinome> [mês]";
+export const TELEGRAM_PAYMENT_PROFILE_SETUP_USAGE = "/pagamento cadastro [seu codinome]";
 export const TELEGRAM_PAYMENT_RESET_ALL_USAGE = "/pagamento resetar-todos CONFIRMO";
+
+export type TelegramPaymentProfileSetupCommand = {
+    name: "payment_profile_setup";
+    codename: string | null;
+};
+
+// Autoatendimento para preencher razao social e CNPJ usados na folha de ponto.
+// Aceita "/pagamento cadastro" (pergunta o codinome) ou
+// "/pagamento cadastro <codinome>" (vai direto para o formulario guiado).
+export function parseTelegramPaymentProfileSetupCommand(text: string): TelegramPaymentProfileSetupCommand | null {
+    const match = text.trim().match(/^\/pagamento(?:@\w+)?\s+(?:cadastro|cadastrar|empresa)\b\s*([\s\S]*)$/i);
+    if (!match) {
+        return null;
+    }
+
+    const rest = (match[1] ?? "").trim();
+    const codename = rest ? rest.split(/\s+/)[0] : null;
+    return { name: "payment_profile_setup", codename };
+}
 
 export type TelegramPaymentResetAllCommand = {
     name: "payment_reset_all";

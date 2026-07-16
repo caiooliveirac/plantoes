@@ -87,7 +87,7 @@ export default async function FolhaPontoPage({
     const data: DadosFolhaPonto = {
         medico: {
             id: doctor.id,
-            nome: doctor.displayName ?? doctor.fullName,
+            nome: doctor.fullName,
             cnpj,
             razaoSocial,
         },

@@ -12,19 +12,21 @@ import {
     getPaymentAttestationSlotView,
     refreshPaymentAttestationSlot,
     reopenPaymentAttestationSlot,
+    setDoctorEmploymentType,
     setDoctorPaymentSpecialistProfile,
 } from "@/services/payment-attestation.service";
 
 const actionSchema = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     shift: z.enum(["SD", "SN"]).optional(),
-    action: z.enum(["refresh", "approve", "reopen", "manual_assign", "manual_disable", "manual_remove", "set_doctor_payment_profile"]),
+    action: z.enum(["refresh", "approve", "reopen", "manual_assign", "manual_disable", "manual_remove", "set_doctor_payment_profile", "set_doctor_employment_type"]),
     domain: z.enum(["regulation", "intervention"]).optional(),
     targetCode: z.string().trim().min(1).max(32).optional(),
     doctorName: z.string().trim().min(3).max(255).optional(),
     disabledReason: z.string().trim().min(3).max(255).optional(),
     doctorId: z.string().uuid().optional(),
     isSpecialist: z.boolean().optional(),
+    employmentType: z.enum(["pj", "estatutario"]).optional(),
     occupancyId: z.string().uuid().optional(),
 });
 
@@ -121,7 +123,33 @@ export async function POST(request: NextRequest) {
         }
     }
 
+    if (parsed.data.action === "set_doctor_employment_type") {
+        if (!parsed.data.doctorId || !parsed.data.employmentType) {
+            return NextResponse.json({ error: "Para atualizar vinculo informe medico e o tipo (pj/estatutario)." }, { status: 400 });
+        }
+    }
+
     try {
+        if (parsed.data.action === "set_doctor_employment_type") {
+            const doctor = await setDoctorEmploymentType({
+                doctorId: parsed.data.doctorId as string,
+                employmentType: parsed.data.employmentType as "pj" | "estatutario",
+            });
+
+            await getDb().insert(auditLogs).values({
+                actorUserId: session.user.id,
+                action: `payment_attestation.${parsed.data.action}`,
+                entityType: "doctor",
+                entityId: doctor.id,
+                details: {
+                    doctorName: doctor.fullName,
+                    employmentType: doctor.employmentType,
+                },
+            });
+
+            return NextResponse.json({ ok: true, doctor });
+        }
+
         if (parsed.data.action === "set_doctor_payment_profile") {
             const doctor = await setDoctorPaymentSpecialistProfile({
                 doctorId: parsed.data.doctorId as string,

@@ -121,12 +121,14 @@ import {
     parseTelegramPaymentCodenameAdminCommand,
     parseTelegramPaymentDigestCommand,
     parseTelegramPaymentListCommand,
+    parseTelegramPaymentProfileSetupCommand,
     parseTelegramPaymentResetAllCommand,
     parseTelegramPaymentSelfServiceCommand,
     parseTelegramResetCodinomeCommand,
     TELEGRAM_PAYMENT_CODENAME_USAGE,
     TELEGRAM_PAYMENT_CORRECTION_USAGE,
     TELEGRAM_PAYMENT_DIGEST_USAGE,
+    TELEGRAM_PAYMENT_PROFILE_SETUP_USAGE,
     TELEGRAM_PAYMENT_REPORT_USAGE,
     TELEGRAM_RESET_CODINOME_USAGE,
 } from "@/modules/telegram/payment-commands";
@@ -134,11 +136,15 @@ import { buildDoctorPayrollMessages, buildPaymentDigestMessages } from "@/module
 import {
     checkAttemptLock,
     clearAttempts,
+    isLikelyValidCnpj,
     listDoctorCodenames,
+    normalizeCnpj,
+    normalizeCompanyName,
     registerFailedAttempt,
     resetAllDoctorCodenames,
     resetDoctorCodename,
     resolveDoctorIdByCodename,
+    upsertDoctorFiscalProfile,
     upsertDoctorCodename,
 } from "@/modules/telegram/payment-access";
 import { createFolhaToken } from "@/lib/folha-ponto/token";
@@ -191,6 +197,11 @@ import {
     evaluateContinuityRevert,
     parseContinuityRevertCallbackData,
 } from "@/modules/telegram/continuity-revert";
+import {
+    buildFiscalSuggestionCallbackData,
+    parseFiscalSuggestionCallbackData,
+    resolveFiscalSuggestion,
+} from "@/modules/telegram/fiscal-confirmation";
 
 /** Botão "Foi só esta noite" para reverter um P forward noturno. Null = sem botão. */
 type ForwardContinuityPrompt = { occupancyId: string; domain: ContinuityRevertDomain } | null;
@@ -278,6 +289,15 @@ interface PendingCruCoiRamalData {
     originalEventAt: string;
     originalReferenceAt?: string;
     senderName: string | null;
+}
+
+interface PendingPaymentProfileData {
+    stage: "awaiting_codename" | "awaiting_company_name" | "awaiting_cnpj" | "awaiting_suggestion_confirmation";
+    doctorId?: string;
+    companyName?: string;
+    /** Só presente no estágio awaiting_suggestion_confirmation (sugestão importada da planilha oficial). */
+    suggestedRazaoSocial?: string;
+    suggestedCnpj?: string;
 }
 
 interface PendingBatchConfirmationEntry {
@@ -2575,6 +2595,16 @@ async function isTelegramMessageAllowed(message: TelegramUpdate["message"]) {
         return true;
     }
 
+    // Cadastro guiado de empresa/CNPJ (/pagamento cadastro) segue com respostas em
+    // texto livre (codinome, razão social, CNPJ) que não batem no regex acima — sem
+    // isto, um médico comum é barrado no meio do fluxo e cai no fallback do tutorial.
+    if (message.from?.id) {
+        const pendingProfile = await findPendingPaymentProfile(String(message.chat.id), String(message.from.id));
+        if (pendingProfile) {
+            return true;
+        }
+    }
+
     const actor = await resolveTelegramCommandActor(message);
     return Boolean(actor && actor.roles.some((role) => role === "admin" || role === "chief"));
 }
@@ -3485,6 +3515,9 @@ function buildPaymentSelfServiceTutorial() {
         "",
         "Você recebe seus plantões, o total em R$ e o link da folha de ponto. 📄",
         "",
+        "Para cadastrar/atualizar empresa e CNPJ da folha:",
+        "   /pagamento cadastro",
+        "",
         "🔑 Não tem o codinome? Peça à coordenação.",
     ].join("\n");
 }
@@ -3496,6 +3529,9 @@ function buildPaymentCommandUsageReply(isAdmin: boolean) {
         "📊 Relatório do mês por médico",
         "   /pagamento",
         "   /pagamento 05   (ou: /pagamento maio)",
+        "",
+        "🧾 Cadastrar dados da folha (empresa + CNPJ)",
+        `   ${TELEGRAM_PAYMENT_PROFILE_SETUP_USAGE}`,
         "",
         "🔎 Conferir um turno",
         "   /pagamento conferir",
@@ -4433,6 +4469,68 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 return { ok: true, ignored: true };
             }
 
+            const profileSetupCommand = parseTelegramPaymentProfileSetupCommand(message.text);
+            if (profileSetupCommand) {
+                await supersedePendingPaymentProfile(String(message.chat.id), fromId, "payment_profile_restarted");
+
+                if (profileSetupCommand.codename) {
+                    const lock = await checkAttemptLock(fromId);
+                    if (lock.locked) {
+                        await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_locked", parsedAction: "payment_profile_setup" });
+                        await sendMessage(message.chat.id, ":/ Muitas tentativas com codinome incorreto. Aguarde um pouco e tente de novo, ou peça um novo codinome à coordenação.", message.message_id);
+                        return { ok: true, ignored: true };
+                    }
+
+                    const doctorId = await resolveDoctorIdByCodename(profileSetupCommand.codename);
+                    if (!doctorId) {
+                        const next = await registerFailedAttempt(fromId);
+                        await markTelegramProcessed(logId, {
+                            status: "pending_payment_profile",
+                            parsedAction: "payment_profile_setup",
+                            errorMessage: "payment_profile_codename_invalid",
+                            resolutionData: { stage: "awaiting_codename" },
+                        });
+                        const suffix = next.locked ? " Você excedeu as tentativas; aguarde antes de tentar de novo." : "";
+                        await sendMessage(message.chat.id, `:/ Codinome não confere.${suffix}\nEnvie seu codinome para continuar.`, message.message_id);
+                        return { ok: true, ignored: true, pending: true };
+                    }
+
+                    await clearAttempts(fromId);
+                    const companyStepPrompt = await buildCompanyNameStepPrompt(doctorId);
+                    await markTelegramProcessed(logId, {
+                        status: "pending_payment_profile",
+                        parsedAction: "payment_profile_setup",
+                        errorMessage: null,
+                        resolutionData: {
+                            stage: companyStepPrompt.stage,
+                            doctorId,
+                            ...companyStepPrompt.extra,
+                        },
+                    });
+                    await sendMessage(message.chat.id, companyStepPrompt.text, message.message_id, companyStepPrompt.replyMarkup);
+                    return { ok: true, pending: true };
+                }
+
+                await markTelegramProcessed(logId, {
+                    status: "pending_payment_profile",
+                    parsedAction: "payment_profile_setup",
+                    errorMessage: null,
+                    resolutionData: {
+                        stage: "awaiting_codename",
+                    },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    [
+                        "🙂 Vamos cadastrar os dados da sua folha de ponto.",
+                        "Responda com seu *codinome* para eu identificar seu cadastro.",
+                        "Se quiser cancelar, envie CANCELAR.",
+                    ].join("\n"),
+                    message.message_id,
+                );
+                return { ok: true, pending: true };
+            }
+
             const lock = await checkAttemptLock(fromId);
             if (lock.locked) {
                 await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_self_locked", parsedAction: "payment_self" });
@@ -4492,6 +4590,56 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 await sendMessage(message.chat.id, `:/ Nao consegui montar o seu pagamento. ${error instanceof Error ? error.message : "Falha inesperada."}`, message.message_id);
                 return { ok: true, ignored: true };
             }
+        }
+
+        const profileSetupCommand = parseTelegramPaymentProfileSetupCommand(message.text);
+        if (profileSetupCommand) {
+            if (!profileSetupCommand.codename) {
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "payment_profile_admin_missing_codename",
+                    parsedAction: "payment_profile_setup",
+                    resolutionData: { actorRoles: actor.roles },
+                });
+                await sendMessage(
+                    message.chat.id,
+                    `:/ Para cadastro fiscal como admin, use ${TELEGRAM_PAYMENT_PROFILE_SETUP_USAGE}. Ex.: /pagamento cadastro falcao-jade-734`,
+                    message.message_id,
+                );
+                return { ok: true, ignored: true };
+            }
+
+            const doctorId = await resolveDoctorIdByCodename(profileSetupCommand.codename);
+            if (!doctorId) {
+                await markTelegramProcessed(logId, {
+                    status: "ignored",
+                    errorMessage: "payment_profile_codename_invalid",
+                    parsedAction: "payment_profile_setup",
+                    resolutionData: { actorRoles: actor.roles },
+                });
+                await sendMessage(message.chat.id, ":/ Codinome não confere. Confirme o codinome do médico e tente novamente.", message.message_id);
+                return { ok: true, ignored: true };
+            }
+
+            const senderId = message.from?.id ? String(message.from.id) : null;
+            if (senderId) {
+                await supersedePendingPaymentProfile(String(message.chat.id), senderId, "payment_profile_restarted");
+            }
+
+            const adminCompanyStepPrompt = await buildCompanyNameStepPrompt(doctorId);
+            await markTelegramProcessed(logId, {
+                status: "pending_payment_profile",
+                parsedAction: "payment_profile_setup",
+                errorMessage: null,
+                resolutionData: {
+                    actorRoles: actor.roles,
+                    stage: adminCompanyStepPrompt.stage,
+                    doctorId,
+                    ...adminCompanyStepPrompt.extra,
+                },
+            });
+            await sendMessage(message.chat.id, adminCompanyStepPrompt.text, message.message_id, adminCompanyStepPrompt.replyMarkup);
+            return { ok: true, pending: true };
         }
 
         if (parseTelegramPaymentListCommand(message.text)) {
@@ -6529,6 +6677,7 @@ async function expireAllStalePendingsGlobal() {
                 "pending_departure_justification",
                 "pending_departure_correction",
                 "pending_cru_coi_ramal",
+                "pending_payment_profile",
             ]),
             lt(telegramIngestedMessages.createdAt, cutoff),
         ));
@@ -6555,7 +6704,7 @@ async function findPendingRamalSelection(chatId: string, senderTelegramId: strin
 async function expireStalependings(
     chatId: string,
     senderTelegramId: string,
-    status: "pending_name_selection" | "pending_departure_justification" | "pending_departure_correction" | "pending_cru_coi_ramal",
+    status: "pending_name_selection" | "pending_departure_justification" | "pending_departure_correction" | "pending_cru_coi_ramal" | "pending_payment_profile",
 ) {
     const db = getDb();
     const cutoff = new Date(Date.now() - PENDING_TTL_MS);
@@ -6571,6 +6720,24 @@ async function expireStalependings(
             eq(telegramIngestedMessages.status, status),
             lt(telegramIngestedMessages.createdAt, cutoff),
         ));
+}
+
+async function findPendingPaymentProfile(chatId: string, senderTelegramId: string) {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - PENDING_TTL_MS);
+    const fresh = await db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, chatId),
+            eq(telegramIngestedMessages.senderTelegramId, senderTelegramId),
+            eq(telegramIngestedMessages.status, "pending_payment_profile"),
+            gte(telegramIngestedMessages.createdAt, cutoff),
+        ),
+        orderBy: [desc(telegramIngestedMessages.createdAt)],
+    });
+    if (!fresh) {
+        await expireStalependings(chatId, senderTelegramId, "pending_payment_profile");
+    }
+    return fresh ?? null;
 }
 
 async function findPendingNameSelection(chatId: string, senderTelegramId: string) {
@@ -6651,6 +6818,18 @@ async function supersedePendingDepartureCorrection(chatId: string, senderTelegra
     });
 }
 
+async function supersedePendingPaymentProfile(chatId: string, senderTelegramId: string, reason = "payment_profile_superseded") {
+    const pending = await findPendingPaymentProfile(chatId, senderTelegramId);
+    if (!pending) {
+        return;
+    }
+
+    await markTelegramProcessed(pending.id, {
+        status: "superseded",
+        errorMessage: reason,
+    });
+}
+
 function isPendingResolutionData(value: unknown): value is PendingNameResolutionData {
     if (!value || typeof value !== "object") {
         return false;
@@ -6703,6 +6882,226 @@ function isPendingCruCoiRamalData(value: unknown): value is PendingCruCoiRamalDa
         && typeof candidate.originalText === "string"
         && typeof candidate.originalEventAt === "string",
     );
+}
+
+function isPendingPaymentProfileData(value: unknown): value is PendingPaymentProfileData {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+    const stage = candidate.stage;
+    return stage === "awaiting_codename" || stage === "awaiting_company_name" || stage === "awaiting_cnpj" || stage === "awaiting_suggestion_confirmation";
+}
+
+/**
+ * Monta o próximo passo do wizard depois do codinome confirmado: se já existe
+ * uma sugestão de razão social/CNPJ importada da planilha oficial (e o médico
+ * ainda não confirmou dados fiscais antes), oferece botões "Está certo?" em vez
+ * de pedir para digitar do zero.
+ */
+async function buildCompanyNameStepPrompt(doctorId: string): Promise<{
+    stage: "awaiting_company_name" | "awaiting_suggestion_confirmation";
+    extra: Partial<PendingPaymentProfileData>;
+    text: string;
+    replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
+}> {
+    const [doctor] = await getDb()
+        .select({ metadata: doctors.metadata })
+        .from(doctors)
+        .where(eq(doctors.id, doctorId))
+        .limit(1);
+
+    const suggestion = resolveFiscalSuggestion(doctor?.metadata);
+    if (suggestion) {
+        return {
+            stage: "awaiting_suggestion_confirmation",
+            extra: { suggestedRazaoSocial: suggestion.razaoSocial, suggestedCnpj: suggestion.cnpj },
+            text: [
+                "✅ Codinome confirmado.",
+                "Já tenho estes dados fiscais no cadastro da prefeitura:",
+                `🏢 Empresa: ${suggestion.razaoSocial}`,
+                `🧾 CNPJ: ${suggestion.cnpj}`,
+                "Está correto?",
+            ].join("\n"),
+            replyMarkup: buildInlineKeyboard([[
+                { text: "✅ Está certo", callback_data: buildFiscalSuggestionCallbackData(true) },
+                { text: "✏️ Corrigir", callback_data: buildFiscalSuggestionCallbackData(false) },
+            ]]),
+        };
+    }
+
+    return {
+        stage: "awaiting_company_name",
+        extra: {},
+        text: "✅ Codinome confirmado.\nAgora me diga o *nome completo da empresa* (razão social).",
+    };
+}
+
+async function tryHandlePendingPaymentProfile(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id || message.chat.type !== "private") {
+        return null;
+    }
+
+    const chatId = String(message.chat.id);
+    const senderTelegramId = String(message.from.id);
+    const pending = await findPendingPaymentProfile(chatId, senderTelegramId);
+    if (!pending || !isPendingPaymentProfileData(pending.resolutionData)) {
+        return null;
+    }
+
+    const input = message.text.trim();
+    if (!input) {
+        return { ok: true, ignored: true };
+    }
+
+    if (isBatchCancelKeyword(input)) {
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: "payment_profile_cancelled",
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "payment_profile_setup_cancelled",
+        });
+        await sendMessage(message.chat.id, ":| Cadastro cancelado. Se quiser retomar, envie /pagamento cadastro.", message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    const data = pending.resolutionData;
+
+    if (data.stage === "awaiting_suggestion_confirmation") {
+        await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_awaiting_button", parsedAction: "payment_profile_setup" });
+        await sendMessage(message.chat.id, ":/ Toque em um dos botões da mensagem anterior para confirmar ou corrigir os dados.", message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    if (data.stage === "awaiting_codename") {
+        const lock = await checkAttemptLock(senderTelegramId);
+        if (lock.locked) {
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_locked", parsedAction: "payment_profile_setup" });
+            await sendMessage(message.chat.id, ":/ Muitas tentativas com codinome incorreto. Aguarde um pouco e tente de novo, ou peça um novo codinome à coordenação.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const doctorId = await resolveDoctorIdByCodename(input);
+        if (!doctorId) {
+            const next = await registerFailedAttempt(senderTelegramId);
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_codename_invalid", parsedAction: "payment_profile_setup" });
+            const suffix = next.locked ? " Você excedeu as tentativas; aguarde antes de tentar de novo." : "";
+            await sendMessage(message.chat.id, `:/ Codinome não confere.${suffix}`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        await clearAttempts(senderTelegramId);
+        const codenameCompanyStepPrompt = await buildCompanyNameStepPrompt(doctorId);
+        await markTelegramProcessed(pending.id, {
+            status: "pending_payment_profile",
+            parsedAction: "payment_profile_setup",
+            resolutionData: {
+                stage: codenameCompanyStepPrompt.stage,
+                doctorId,
+                ...codenameCompanyStepPrompt.extra,
+            },
+            errorMessage: null,
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "payment_profile_setup",
+            resolutionData: { stage: codenameCompanyStepPrompt.stage },
+        });
+        await sendMessage(message.chat.id, codenameCompanyStepPrompt.text, message.message_id, codenameCompanyStepPrompt.replyMarkup);
+        return { ok: true, pending: true };
+    }
+
+    if (data.stage === "awaiting_company_name") {
+        const companyName = normalizeCompanyName(input);
+        if (companyName.length < 3) {
+            await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_company_invalid", parsedAction: "payment_profile_setup" });
+            await sendMessage(message.chat.id, ":/ Nome de empresa muito curto. Envie a razão social completa, por favor.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        await markTelegramProcessed(pending.id, {
+            status: "pending_payment_profile",
+            parsedAction: "payment_profile_setup",
+            resolutionData: {
+                stage: "awaiting_cnpj",
+                doctorId: data.doctorId,
+                companyName,
+            },
+            errorMessage: null,
+        });
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "payment_profile_setup",
+            resolutionData: { stage: "awaiting_cnpj" },
+        });
+        await sendMessage(message.chat.id, "Perfeito.\nAgora envie o *CNPJ* (com ou sem pontuação).", message.message_id);
+        return { ok: true, pending: true };
+    }
+
+    if (!data.doctorId || !data.companyName) {
+        await markTelegramProcessed(pending.id, {
+            status: "superseded",
+            errorMessage: "payment_profile_missing_context",
+        });
+        return null;
+    }
+
+    if (!isLikelyValidCnpj(input)) {
+        await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_cnpj_invalid", parsedAction: "payment_profile_setup" });
+        await sendMessage(message.chat.id, ":/ CNPJ inválido. Envie os 14 dígitos (com ou sem pontuação).", message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    const normalizedCnpj = normalizeCnpj(input);
+    if (!normalizedCnpj) {
+        await markTelegramProcessed(logId, { status: "ignored", errorMessage: "payment_profile_cnpj_invalid", parsedAction: "payment_profile_setup" });
+        await sendMessage(message.chat.id, ":/ CNPJ inválido. Envie os 14 dígitos (com ou sem pontuação).", message.message_id);
+        return { ok: true, ignored: true };
+    }
+
+    const saved = await upsertDoctorFiscalProfile({
+        doctorId: data.doctorId,
+        razaoSocial: data.companyName,
+        cnpj: normalizedCnpj,
+    });
+
+    await markTelegramProcessed(pending.id, {
+        status: "accepted",
+        parsedAction: "payment_profile_setup",
+        parsedDoctorName: saved.fullName,
+        resolutionData: {
+            doctorId: saved.doctorId,
+            companyName: saved.razaoSocial,
+            cnpj: saved.cnpj,
+        },
+        errorMessage: null,
+    });
+    await markTelegramProcessed(logId, {
+        status: "accepted",
+        parsedAction: "payment_profile_setup",
+        parsedDoctorName: saved.fullName,
+        resolutionData: {
+            doctorId: saved.doctorId,
+            companyName: saved.razaoSocial,
+            cnpj: saved.cnpj,
+        },
+    });
+    await sendMessage(
+        message.chat.id,
+        [
+            "✅ Cadastro fiscal atualizado.",
+            `👤 Médico: ${saved.fullName}`,
+            `🏢 Empresa: ${saved.razaoSocial}`,
+            `🧾 CNPJ: ${saved.cnpj}`,
+            "A folha de ponto já vai sair com esses dados.",
+        ].join("\n"),
+        message.message_id,
+    );
+    return { ok: true, reported: true };
 }
 
 async function queuePendingDepartureJustification(params: {
@@ -9440,7 +9839,85 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
     }
 }
 
+async function handleFiscalSuggestionCallback(callbackQuery: TelegramCallbackQuery, confirm: boolean) {
+    const chat = callbackQuery.message?.chat;
+    const messageId = callbackQuery.message?.message_id;
+    const allowed = chat
+        ? await isTelegramMessageAllowed({
+            message_id: messageId ?? 0,
+            chat,
+            from: callbackQuery.from,
+            date: 0,
+        } as TelegramUpdate["message"])
+        : false;
+    if (!chat || !allowed) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+
+    const chatId = String(chat.id);
+    const senderTelegramId = String(callbackQuery.from.id);
+    const pending = await findPendingPaymentProfile(chatId, senderTelegramId);
+    if (!pending || !isPendingPaymentProfileData(pending.resolutionData) || pending.resolutionData.stage !== "awaiting_suggestion_confirmation") {
+        await answerCallbackQuery(callbackQuery.id, "Esse cadastro já não está mais em andamento. Envie /pagamento cadastro para recomeçar.", true);
+        return { ok: true, ignored: true };
+    }
+
+    const data = pending.resolutionData;
+    if (!data.doctorId || !data.suggestedRazaoSocial || !data.suggestedCnpj) {
+        await markTelegramProcessed(pending.id, { status: "superseded", errorMessage: "payment_profile_missing_suggestion_context" });
+        await answerCallbackQuery(callbackQuery.id, "Deu ruim aqui — envie /pagamento cadastro para recomeçar.", true);
+        return { ok: true, ignored: true };
+    }
+
+    if (confirm) {
+        const saved = await upsertDoctorFiscalProfile({
+            doctorId: data.doctorId,
+            razaoSocial: data.suggestedRazaoSocial,
+            cnpj: data.suggestedCnpj,
+        });
+        await markTelegramProcessed(pending.id, {
+            status: "accepted",
+            parsedAction: "payment_profile_setup",
+            parsedDoctorName: saved.fullName,
+            resolutionData: { doctorId: saved.doctorId, companyName: saved.razaoSocial, cnpj: saved.cnpj },
+            errorMessage: null,
+        });
+        await answerCallbackQuery(callbackQuery.id, "Confirmado!");
+        if (messageId) {
+            await editMessageText(
+                chat.id,
+                messageId,
+                [
+                    "✅ Cadastro fiscal confirmado.",
+                    `🏢 Empresa: ${saved.razaoSocial}`,
+                    `🧾 CNPJ: ${saved.cnpj}`,
+                    "A folha de ponto já vai sair com esses dados.",
+                ].join("\n"),
+            );
+        }
+        return { ok: true, reported: true };
+    }
+
+    await markTelegramProcessed(pending.id, {
+        status: "pending_payment_profile",
+        parsedAction: "payment_profile_setup",
+        resolutionData: { stage: "awaiting_company_name", doctorId: data.doctorId },
+        errorMessage: null,
+    });
+    await answerCallbackQuery(callbackQuery.id);
+    if (messageId) {
+        await editMessageText(chat.id, messageId, "Sem problema. Me diga o *nome completo da empresa* (razão social) correto.");
+    }
+    return { ok: true, pending: true };
+}
+
 async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery) {
+    const fiscalConfirm = parseFiscalSuggestionCallbackData(callbackQuery.data);
+    if (fiscalConfirm !== null) {
+        return handleFiscalSuggestionCallback(callbackQuery, fiscalConfirm);
+    }
+
     const parsed = parseContinuityRevertCallbackData(callbackQuery.data);
     if (!parsed) {
         // Callback desconhecido: encerra o "loading" do cliente e ignora.
@@ -9557,6 +10034,11 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 const pendingBatchResult = await tryHandlePendingBatchConfirmation(update, log.id);
                 if (pendingBatchResult) {
                     return pendingBatchResult;
+                }
+
+                const pendingPaymentProfileResult = await tryHandlePendingPaymentProfile(update, log.id);
+                if (pendingPaymentProfileResult) {
+                    return pendingPaymentProfileResult;
                 }
 
                 const pendingRamalResult = await tryHandlePendingRamalSelection(update, log.id);
@@ -10059,7 +10541,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
 
                     const missing: string[] = [];
                     if (!hasName) missing.push("*nome do médico*");
-                    if (shiftRequired && !hasShift) missing.push("*turno* (SD, SN, P — ou *meio plantão* / *tarde* / *meio turno*)");
+                    if (shiftRequired && !hasShift) missing.push("*turno* (SD, SN, P — ou *meio plantão* / *meio turno* / *meia jornada* / *tarde* / *vespertino*)");
 
                     let body: string;
                     if (isBareButtonPayload) {
@@ -10078,7 +10560,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         const missingLine = `Faltou: ${missing.join(" e ")}.`;
                         body = [
                             "👀 Quase lá — pra registrar a *chegada* eu preciso de *nome + ramal + turno + horário*, todos na mesma mensagem.",
-                            "O turno pode ser *SD*, *SN*, *P* — ou *meio plantão* (também vale dizer *tarde* ou *meio turno*).",
+                            "O turno pode ser *SD*, *SN*, *P* — ou *meio plantão* (também vale dizer *meio turno*, *meia jornada*, *tarde* ou *vespertino*).",
                             "",
                             detectedLine,
                             missingLine,
@@ -10227,9 +10709,10 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             // chegada dele). Vale para chegada nova e para move (remanejamento).
             let takeoverDisplaced: { occupantName: string; targetLabel: string; sinceTime: string } | null = null;
             const takeoverSenderId = message.from?.id ? String(message.from.id) : null;
+            const isShadowTakeoverInput = resolveTelegramShadowFlag(firstParsed, message.text);
             const takeoverWantsBoard = !firstParsed.isDeparture
                 && !firstParsed.isContinuation
-                && !firstParsed.isShadow
+                && !isShadowTakeoverInput
                 && Boolean(firstParsed.baseCode);
             if (takeoverWantsBoard && takeoverSenderId && firstParsed.baseCode) {
                 const occupant = await findActiveSameTurnoBoardCarrierOnTarget({

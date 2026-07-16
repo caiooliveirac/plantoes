@@ -122,64 +122,35 @@ ssh plantoes-prod 'pg_dump -Fc -d plantoes' > /tmp/plantoes_$(date +%F).dump
 
 ## 4. Deploy
 
-### 4.1 Fluxo atual (build no EC2, já protegido)
+### 4.1 Fluxo atual (sem build no EC2)
 
-O deploy oficial roda no servidor e compila lá. Está blindado contra OOM
-(`ensure_memory_headroom` + build atômico com rollback), mas ainda consome ~2GB no
-build — então **não deve coincidir com sessão de IDE aberta no servidor**.
+Deploy de produção é feito por imagem Docker imutável (`image@sha256`) gerada no
+GitHub-hosted runner (ARM64). O host **não compila** e **não instala dependências Node**.
 
-```bash
-# 1. Garanta que o commit final está em main (ou na tag a deployar) e pushado.
-# 2. No servidor, o working tree deve estar limpo no commit alvo:
-ssh plantoes-prod 'cd ~/plantoes && git fetch && git checkout <commit-ou-tag> && git status --short'
-# 3. Conferir memória antes:
-ssh plantoes-prod 'free -h'
-# 4. Rodar o deploy oficial:
-ssh plantoes-prod 'cd ~/plantoes && npm run deploy:production'
-```
+Fluxo:
 
-O script faz: pre-checks de runtime único → `rm`/preserva `.next` → `next build`
-(guard de memória) → restart PM2 → reconfigura webhook do Telegram → healthchecks →
-`pm2 save`. Em falha de build, faz rollback automático para o build anterior (produção
-nunca fica sem `.next`).
-
-### 4.2 Meta futura (build fora da produção)
-
-O ideal é a produção **não compilar**: buildar no Mac ou em runner hospedado no GitHub
-e enviar só o artefato (`.next` + deps), deixando o EC2 apenas reiniciar o PM2. Isso
-elimina de vez o pico de memória do build no servidor. (Não implementado ainda.)
-
-### 4.3 Migrations — passo MANUAL (o deploy NÃO aplica)
-
-⚠️ Nem o CI (`deploy.yml`) nem `deploy-production.sh` rodam `npm run db:migrate`. Logo,
-**toda PR que adiciona um `db/migrations/NNNN_*.sql` exige aplicar a migration à mão no
-banco de produção** — senão a página/feature que consulta a tabela nova quebra (500)
-assim que o código novo sobe.
-
-O túnel do Mac usa o papel **read-only** (`plantoes_ro`, §3) e **não cria tabela**. O
-papel read-write vive só no `.env.production` **do servidor**, então a migration roda
-**no servidor**. Procedimento verificado (26/jun, migrations 0024+0025), feito **antes
-do merge** para zero-downtime (migrations aditivas são inócuas ao código antigo):
+1. PR: `.github/workflows/ci-pr.yml` valida lint/typecheck/test/build em `ubuntu-latest`.
+2. Merge em `main`: `.github/workflows/release-deploy.yml` valida novamente, faz
+  buildx `linux/arm64`, publica no GHCR e resolve digest.
+3. O workflow conecta via SSH e chama script fixo no host:
 
 ```bash
-# 1. Copiar os .sql novos para o servidor (ainda não versionados lá).
-scp db/migrations/00NN_*.sql plantoes-prod:'~/plantoes/db/migrations/'
-
-# 2. Aplicar com o DATABASE_URL read-write do .env.production. NUNCA printar o segredo:
-#    'set -a; . ./.env.production; set +a' exporta o env (apply-migrations.ts não carrega dotenv).
-ssh plantoes-prod 'cd ~/plantoes && set -a && . ./.env.production && set +a && npm run db:migrate'
-
-# 3. Verificar a(s) tabela(s) e LIMPAR os arquivos temporários — o deploy barra tree sujo.
-ssh plantoes-prod 'cd ~/plantoes && rm -f db/migrations/00NN_*.sql && git status --porcelain'  # deve sair VAZIO
-
-# 4. Só então mergear o PR → o CI deploya o commit (que re-traz os .sql já versionados;
-#    o migrate já está registrado em schema_migrations e é pulado).
+sudo /usr/local/sbin/deploy-plantoes <image@sha256:...>
 ```
 
-Pré-requisitos no servidor (já presentes): `node_modules/.bin/tsx`, `node_modules/postgres`,
-`psql` v16. `apply-migrations.ts` rastreia o que já rodou em `schema_migrations` (idempotente).
-Alternativa sem zero-downtime: mergear primeiro e rodar o passo 2 logo após o deploy —
-há uma janela de 500 na página afetada até o migrate terminar.
+Esse script faz pull, valida arquitetura arm64, sobe candidato, checa health,
+promove e faz rollback automático em falha.
+
+### 4.2 Migrations — etapa explícita
+
+Migração não roda em PR e não roda durante build de imagem. Quando necessário,
+execute explicitamente com a própria imagem já publicada:
+
+```bash
+sudo /usr/local/sbin/deploy-plantoes <image@sha256:...> --run-migrations
+```
+
+Isso mantém o princípio: zero build/test/install Node na EC2.
 
 ---
 
@@ -187,7 +158,7 @@ há uma janela de 500 na página afetada até o migrate terminar.
 
 - **Produção serve, não compila nem edita.** Dev e build pesado moram no Mac.
 - **Read-only por padrão** ao inspecionar produção (papel `plantoes_ro`, dumps).
-- **Working tree de produção sempre limpo**, deployado a partir de um commit/tag.
+- **Deploy por digest imutável**, sem depender de working tree git no host.
 - **Segredos nunca no repo.** Use aliases SSH e variáveis de ambiente locais.
 - **Cheque memória antes de qualquer operação no servidor** (`free -h`).
 
@@ -195,10 +166,6 @@ há uma janela de 500 na página afetada até o migrate terminar.
 
 ## 6. Incidente de memória (contexto)
 
-Em 31/05/2026 um deploy derrubou o EC2: `next build` (heap 2GB) somado a **~2.4GB de
-tooling de IDE rodando no próprio servidor** (VSCode Remote + 2 sessões Claude Code +
-tsservers) estourou os 8GB → a máquina travou em swap e **rebootou**, interrompendo o
-build (`.next` sem `BUILD_ID`) e derrubando o agente junto. Mitigações aplicadas: swap
-de 4GB permanente, guard de memória e build atômico com rollback no deploy. **A
-correção definitiva é não usar o servidor como máquina de desenvolvimento** — daí este
-runbook.
+Em 31/05/2026 um deploy derrubou o EC2 por build local (`next build`) sob pressão de
+memória. O modelo atual remove essa classe de incidente ao eliminar build/test/install
+Node no host de produção e adotar deploy por imagem ARM64 já pronta.
