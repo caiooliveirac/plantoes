@@ -8,7 +8,7 @@ const RAMAIS_REGULACAO = new Set([
     "1476",
     "2031", "2032", "2033", "2034", "2035",
     "2151", "2152", "2153", "2154",
-    "2377",
+    "2376", "2377",
 ]);
 
 const BASES_INTERVENCAO = new Set([

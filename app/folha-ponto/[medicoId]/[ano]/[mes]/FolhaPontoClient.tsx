@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { montarLinhasFrequencia, montarRelatorio } from "@/lib/folha-ponto/montar";
 import type { DadosFolhaPonto } from "@/lib/folha-ponto/types";
+import prefeituraLogo from "@/components/prefeitura-de-salvador.jpg";
+import samuLogo from "@/components/samu192.png";
 import "./folha-ponto.css";
 
 const MESES_PT = [
@@ -41,17 +43,31 @@ function storageKey(medicoId: string) {
     return `folhaPonto:${medicoId}`;
 }
 
+function preferStoredValue(stored: unknown, fallback: string) {
+    if (typeof stored !== "string") {
+        return fallback;
+    }
+
+    const normalized = stored.trim();
+    return normalized.length > 0 ? normalized : fallback;
+}
+
 function loadCampos(medicoId: string, fallback: CamposEditaveis): CamposEditaveis {
     if (typeof window === "undefined") return fallback;
     try {
         const raw = window.localStorage.getItem(storageKey(medicoId));
-        if (!raw) return fallback;
-        const parsed = JSON.parse(raw) as Partial<CamposEditaveis>;
+        const parsed = raw ? (JSON.parse(raw) as Partial<CamposEditaveis>) : {};
         return {
-            empresa: parsed.empresa ?? fallback.empresa,
-            cnpj: parsed.cnpj ?? fallback.cnpj,
-            razaoSocial: parsed.razaoSocial ?? fallback.razaoSocial,
-            localData: parsed.localData ?? fallback.localData,
+            // Empresa/CNPJ/razão social são confirmados pelo médico no bot do
+            // Telegram — uma vez que o banco já tem o dado, ele manda sempre.
+            // O cache local só serve de rascunho enquanto ainda não há
+            // confirmação (fallback vazio); senão um valor salvo neste
+            // navegador antes da confirmação (inclusive vazio/placeholder de
+            // teste) ficaria escondendo o dado real para sempre.
+            empresa: fallback.empresa || preferStoredValue(parsed.empresa, fallback.empresa),
+            cnpj: fallback.cnpj || preferStoredValue(parsed.cnpj, fallback.cnpj),
+            razaoSocial: fallback.razaoSocial || preferStoredValue(parsed.razaoSocial, fallback.razaoSocial),
+            localData: preferStoredValue(parsed.localData, fallback.localData),
         };
     } catch {
         return fallback;
@@ -131,14 +147,16 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
                 <header className="fp-cabecalho">
                     <div className="fp-cabecalho-esq">
                         <div className="fp-cabecalho-secretaria">Secretaria da Saúde</div>
-                        {/* TODO: substituir placeholder por <img src="/assets/folha-ponto/logo-salvador.png" alt="Logo Salvador" /> */}
-                        <div className="fp-cabecalho-logo-salvador">Logo Salvador</div>
+                        <img
+                            src={prefeituraLogo.src}
+                            alt="Logo da Prefeitura de Salvador"
+                            className="fp-cabecalho-logo-salvador"
+                        />
                     </div>
                     <h1 className="fp-titulo">
                         Frequência – <strong>{mesLabel}/{data.ano}</strong>
                     </h1>
-                    {/* TODO: substituir placeholder por <img src="/assets/folha-ponto/logo-samu192.png" alt="Logo SAMU 192" /> */}
-                    <div className="fp-cabecalho-logo-samu">Logo SAMU 192</div>
+                    <img src={samuLogo.src} alt="Logo SAMU 192" className="fp-cabecalho-logo-samu" />
                 </header>
 
                 <section className="fp-meta-pg1">
@@ -233,8 +251,12 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
             </section>
 
             <section className="folha-ponto-page">
-                <header className="fp-cabecalho-pg2">
-                    <span>Atestados por:</span>
+                <header className="fp-cabecalho-pg2 fp-cabecalho-pg2-logo">
+                    <img
+                        src={prefeituraLogo.src}
+                        alt="Logo da Prefeitura de Salvador"
+                        className="fp-cabecalho-logo-relatorio"
+                    />
                 </header>
 
                 <div className="fp-titulo-bar">

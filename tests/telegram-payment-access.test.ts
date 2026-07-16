@@ -8,7 +8,9 @@ import {
     computeNextAttempt,
     generateCodename,
     hashCodename,
+    isLikelyValidCnpj,
     isAttemptLocked,
+    normalizeCnpj,
     normalizeCodename,
 } from "@/modules/telegram/payment-access";
 import {
@@ -20,6 +22,7 @@ import {
 import {
     parseTelegramPaymentCodenameAdminCommand,
     parseTelegramPaymentListCommand,
+    parseTelegramPaymentProfileSetupCommand,
     parseTelegramPaymentResetAllCommand,
     parseTelegramPaymentSelfServiceCommand,
     parseTelegramResetCodinomeCommand,
@@ -127,6 +130,32 @@ test("parseTelegramPaymentSelfServiceCommand: codinome e mês opcional", () => {
     assert.deepEqual(parseTelegramPaymentSelfServiceCommand("/pagamento", ref), { name: "payment_self", codename: null, monthKey: null });
 });
 
+test("parseTelegramPaymentProfileSetupCommand: inicia wizard com ou sem codinome", () => {
+    assert.deepEqual(parseTelegramPaymentProfileSetupCommand("/pagamento cadastro"), {
+        name: "payment_profile_setup",
+        codename: null,
+    });
+    assert.deepEqual(parseTelegramPaymentProfileSetupCommand("/pagamento cadastro falcao-jade-734"), {
+        name: "payment_profile_setup",
+        codename: "falcao-jade-734",
+    });
+    assert.deepEqual(parseTelegramPaymentProfileSetupCommand("/pagamento empresa tigre-azul-958"), {
+        name: "payment_profile_setup",
+        codename: "tigre-azul-958",
+    });
+    assert.equal(parseTelegramPaymentProfileSetupCommand("/pagamento maio"), null);
+});
+
+test("CNPJ helpers: normaliza e valida formato básico", () => {
+    assert.equal(normalizeCnpj("04252011000110"), "04.252.011/0001-10");
+    assert.equal(normalizeCnpj("04.252.011/0001-10"), "04.252.011/0001-10");
+    assert.equal(normalizeCnpj("123"), null);
+
+    assert.equal(isLikelyValidCnpj("04.252.011/0001-10"), true);
+    assert.equal(isLikelyValidCnpj("00.000.000/0000-00"), false);
+    assert.equal(isLikelyValidCnpj("123"), false);
+});
+
 test("parseTelegramPaymentResetAllCommand: pede confirmação e reconhece CONFIRMO", () => {
     assert.deepEqual(parseTelegramPaymentResetAllCommand("/pagamento resetar-todos"), { name: "payment_reset_all", confirmed: false });
     assert.deepEqual(parseTelegramPaymentResetAllCommand("/pagamento resetar-todos CONFIRMO"), { name: "payment_reset_all", confirmed: true });
@@ -167,6 +196,7 @@ function makeRow(shifts: PayableShift[]): ChiefPayableDoctorRow {
         doctorId: "doc-123", doctorName: "Acácio Junio de Almeida", displayName: null,
         paymentStatus: "ready_for_payment", totalSD: 0, totalSN: 0, total: shifts.length,
         totalDue: 2489.74, paymentProfile: "generalist", pendingCount: 0,
+        employmentType: "pj",
         cells: [{ day: "01", shifts }],
     };
 }
@@ -175,7 +205,14 @@ function makeBoard(): ChiefPayableBoardModel {
     return {
         allDoctorNames: [], monthKey: "2026-06", monthLabel: "Junho 2026", presetMonths: [],
         range: { startIso: "", endIso: "" }, days: [],
-        summary: { doctorCount: 1, payableShiftCount: 0, payableUnitCount: 0, readyCount: 0, needsReviewCount: 0, segmentCount: 0, discardedSegmentCount: 0, disabledTargetCount: 0, uncoveredTargetCount: 0 },
+        summary: {
+            doctorCount: 1, payableShiftCount: 0, payableUnitCount: 0, readyCount: 0, needsReviewCount: 0,
+            segmentCount: 0, discardedSegmentCount: 0, disabledTargetCount: 0, uncoveredTargetCount: 0,
+            byEmploymentType: {
+                pj: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+                estatutario: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+            },
+        },
         targetOptions: [], doctors: [], payableShifts: [], disabledTargets: [], uncoveredTargets: [], attestationSegments: [],
     };
 }

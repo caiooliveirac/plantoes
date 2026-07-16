@@ -57,6 +57,10 @@ function normalizeSearch(value: string) {
         .trim();
 }
 
+function formatSignedMinutes(value: number) {
+    return `${value > 0 ? "+" : ""}${formatMinutesForHumans(value)}`;
+}
+
 function shiftBalanceClass(value: number | null) {
     if (value === null || value === 0) {
         return "neutral";
@@ -375,6 +379,39 @@ export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
                                     <strong>{formatDateTime(selectedDoctor.lastShiftAt)}</strong>
                                 </article>
                             </section>
+
+                            {selectedDoctor.legacy ? (
+                                <section className="hours-settlements">
+                                    <p className="reports-summary-label">Composição do saldo</p>
+                                    <ul className="hours-composition-list">
+                                        <li className="hours-composition-row">
+                                            <span className="hours-composition-label">Saldo até 30/abr/2025</span>
+                                            <span className="hours-composition-origin">{selectedDoctor.legacy.source}</span>
+                                            <span className={`hours-balance-pill ${shiftBalanceClass(selectedDoctor.legacy.preMay2025Minutes)}`}>{formatSignedMinutes(selectedDoctor.legacy.preMay2025Minutes)}</span>
+                                        </li>
+                                        <li className="hours-composition-row">
+                                            <span className="hours-composition-label">Saldo mai/2025 → mai/2026</span>
+                                            <span className="hours-composition-origin">{selectedDoctor.legacy.source}</span>
+                                            <span className={`hours-balance-pill ${shiftBalanceClass(selectedDoctor.legacy.spreadsheetPeriodMinutes)}`}>{formatSignedMinutes(selectedDoctor.legacy.spreadsheetPeriodMinutes)}</span>
+                                        </li>
+                                        <li className="hours-composition-row">
+                                            <span className="hours-composition-label">Saldo apurado pela aplicação (desde o corte)</span>
+                                            <span className="hours-composition-origin">Registros da aplicação, incluindo acertos do fechamento</span>
+                                            <span className={`hours-balance-pill ${shiftBalanceClass(selectedDoctor.applicationBalanceMinutes)}`}>{formatSignedMinutes(selectedDoctor.applicationBalanceMinutes)}</span>
+                                        </li>
+                                        <li className="hours-composition-row total">
+                                            <span className="hours-composition-label">Saldo final</span>
+                                            <span className="hours-composition-origin">Planilha ({selectedDoctor.legacy.spreadsheetName}) + aplicação</span>
+                                            <span className={`hours-balance-pill ${shiftBalanceClass(selectedDoctor.balanceMinutes)}`}>{formatSignedMinutes(selectedDoctor.balanceMinutes)}</span>
+                                        </li>
+                                    </ul>
+                                    {selectedDoctor.legacy.notes ? (
+                                        <p className="hours-settlement-hint" title={selectedDoctor.legacy.notes}>
+                                            Observação da auditoria da planilha: {selectedDoctor.legacy.notes}
+                                        </p>
+                                    ) : null}
+                                </section>
+                            ) : null}
 
                             {selectedDoctor.settlements.length > 0 ? (
                                 <section className="hours-settlements">
