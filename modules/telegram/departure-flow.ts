@@ -176,6 +176,12 @@ export function resolveTelegramEligibleLateDepartureReason(
         return { code: "occurrence", normalizedText: normalized };
     }
 
+    // Abreviação real de campo: "oc 0772", "OC. 0839" (a pontuação já virou espaço
+    // na normalização). Só vale com dígitos logo depois, para "OC" solto não virar motivo.
+    if (/\bOCO?\b\s*\d{3,4}\b/.test(normalized)) {
+        return { code: "occurrence", normalizedText: normalized };
+    }
+
     if (/\b(?:HIGIEN\w*|LIMP\w*|LAVAND\w*|DESINF\w*|DESCONTAMIN\w*)\b/.test(normalized)) {
         return { code: "hygienization", normalizedText: normalized };
     }
@@ -266,7 +272,7 @@ export function extractTelegramOccurrenceNumber(
         .replace(/\s+/g, " ")
         .trim();
 
-    const keyed = reduced.match(/(?:OCORR\w*|CHAMAD\w*|ATEND\w*|NUMERO|N)\D{0,6}(\d{4})(?!\d)/);
+    const keyed = reduced.match(/(?:OCORR\w*|CHAMAD\w*|ATEND\w*|NUMERO|OC\b|N)\D{0,6}(\d{4})(?!\d)/);
     if (keyed) {
         return keyed[1];
     }

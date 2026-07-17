@@ -1075,3 +1075,55 @@ test("'/recip' written as short code also maps to RECIP", () => {
     assert.equal(parsed.roleFunction, "RECIP");
 });
 
+
+// ================================================================
+// Incidente CN10/IT30 (16/jul/2026) — saídas reais de produção
+// ================================================================
+
+test("parses Nadyja's verbose late departure with reason tail (CN10 incident)", () => {
+    const parsed = parseMessage("Nadyja Elis carneiro oliveira saiu da CN 10 às 20:09 h pq estava em ocorrência");
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "CN10");
+    assert.equal(parsed.isDeparture, true);
+    assert.equal(parsed.arrivalTime, "20:09");
+    assert.ok(parsed.extractedNames[0]?.includes("Nadyja"));
+    // O rabo de justificativa não pode contaminar a query de nome.
+    assert.ok(!/ocorr/i.test(parsed.extractedNames[0] ?? ""));
+});
+
+test("parses 'Viviane Alves sd saido' — typo 'saido' is a departure signal", () => {
+    const parsed = parseMessage("Viviane Alves sd saido");
+    assert.equal(parsed.isDeparture, true);
+    assert.equal(parsed.shiftType, "SD");
+    assert.ok(parsed.extractedNames[0]?.includes("Viviane"));
+});
+
+test("parses 'Décia saindo da CZ50 19:50 oc 0772' — abbreviated occurrence does not leak into name", () => {
+    const parsed = parseMessage("Décia saindo da CZ50 19:50 oc 0772");
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "CZ50");
+    assert.equal(parsed.isDeparture, true);
+    assert.equal(parsed.arrivalTime, "19:50");
+    assert.equal(parsed.extractedNames[0], "Décia");
+});
+
+test("parses Emily's verbose departure with protocol tail — name stops at 'devido'", () => {
+    const parsed = parseMessage("Emily Thays jardim Santos saindo 20:30 devido oc 0839 protocolo AVC/Roberto Santos");
+    assert.equal(parsed.isDeparture, true);
+    assert.equal(parsed.arrivalTime, "20:30");
+    assert.equal(parsed.extractedNames[0], "Emily Thays jardim Santos");
+});
+
+test("parses Willy's departure with occurrence justification (IT30 incident)", () => {
+    const parsed = parseMessage("Willy rivera\nSaída IT 30\nEstava em ocorrência 0886");
+    const entries = parseMessageMulti("Willy rivera\nSaída IT 30\nEstava em ocorrência 0886");
+    const departure = entries.find((entry) => entry.isDeparture) ?? parsed;
+    assert.equal(departure.baseCode, "IT30");
+    assert.equal(departure.isDeparture, true);
+});
+
+test("fuzzy departure still catches wild spellings", () => {
+    assert.equal(parseMessage("Fulano CB02 sahida 19:20").isDeparture, true);
+    assert.equal(parseMessage("Fulana PR03 encerando plantao 19:30").isDeparture, true);
+    assert.equal(parseMessage("Beltrano BR05 finalizou as 19:40").isDeparture, true);
+});

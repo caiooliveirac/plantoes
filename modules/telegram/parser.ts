@@ -70,7 +70,7 @@ const CONTINUATION_SIGNALS = [
 ];
 
 const DEPARTURE_SIGNALS = [
-    /\b(?:SAINDO|SAIU|SAI|SAIDA|SAÍDA|ENCERRANDO|ENCERREI|ENCERRADO|FINALIZANDO|FINALIZEI|LIBEREI|LIBERADO|LIBERADA|DESCENDO|DESCI|BAIXANDO|BAIXEI|TERMINEI|TERMINOU)\b/i,
+    /\b(?:SAINDO|SAIU|SAI|SAIDA|SAÍDA|SAIDO|ENCERRANDO|ENCERREI|ENCERRADO|ENCERROU|FINALIZANDO|FINALIZEI|FINALIZOU|FINALIZAD[OA]|LIBEREI|LIBERADO|LIBERADA|DESCENDO|DESCI|BAIXANDO|BAIXEI|TERMINEI|TERMINOU|TERMINANDO|ACABEI|ACABOU)\b/i,
     /\b(?:RETIRAR|RETIRO|RETIRANDO|RETIRADA|RETIRADO|RETIREI)\b/i,
     /\b(?:FIM|FINAL)\s+DE\s+PLANTAO\b/i,
     /\b(?:INDO|FUI|VOU)\s+EMBORA\b/i,
@@ -79,9 +79,9 @@ const DEPARTURE_SIGNALS = [
 
 // F4: Fuzzy departure keywords — catch common typos like "aaindo", "saimo", "saiindo"
 const DEPARTURE_FUZZY_KEYWORDS = [
-    "SAINDO", "SAIU", "SAIDA", "ENCERRANDO", "ENCERREI", "ENCERRADO",
-    "FINALIZANDO", "FINALIZEI",
-    "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU",
+    "SAINDO", "SAIU", "SAIDA", "SAIDO", "ENCERRANDO", "ENCERREI", "ENCERRADO", "ENCERROU",
+    "FINALIZANDO", "FINALIZEI", "FINALIZOU", "FINALIZADO", "FINALIZADA",
+    "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU", "TERMINANDO",
 ];
 
 function hasFuzzyDepartureSignal(normalized: string): boolean {
@@ -113,6 +113,10 @@ const NAME_NOISE_TOKENS = new Set([
     "HORÁRIO", "JA", "JÁ", "LOGIN", "NA", "NAS", "NO", "NOITE", "NOS", "OLA", "OLA", "OI", "PARA", "PERMANECE", "PERMANECENDO", "PERMANECER", "POR", "PRESENTE",
     "PROSSIGO", "PROSSEGUINDO", "PROSSEGUIR", "RENDENDO", "RENDI", "RENDIDA", "RENDIDO", "SAI", "SAIU", "SAIDA", "SAÍDA", "SAINDO", "ENCERRANDO", "ENCERREI", "FINALIZANDO", "FINALIZEI", "LIBEREI", "SEGUE", "SEGUI", "SEGUIR", "SEGUINDO", "SIGO", "SO", "SOMBRA", "SÓ", "TO",
     "LIBERADO", "LIBERADA", "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU", "VOU", "VAI", "VAMOS",
+    // Vocabulário de saída ampliado + conectores de justificativa (incidente CN10/IT30, jul/2026):
+    // "Viviane Alves sd saido", "Emily ... saindo 20:30 devido oc 0839 protocolo AVC".
+    "SAIDO", "ENCERROU", "ENCERRADO", "FINALIZOU", "FINALIZADO", "FINALIZADA", "TERMINANDO",
+    "ACABEI", "ACABOU", "PQ", "DEVIDO", "OC", "PROTOCOLO", "MOTIVO", "JUSTIFICATIVA",
     "CHEFIA", "SISTEMA", "TARDE", "TÔ", "TUDO", "BEM", "AGORA", "AI", "AÍ",
     // Tokens operacionais que contaminavam a query de nomes (audit 2026-04)
     "MUDANDO", "MUDOU", "MUDEI", "TROCANDO", "TROCOU", "TROQUEI", "LOGADA", "LOGADO", "LOGOU",
@@ -572,6 +576,15 @@ function extractNames(text: string, options?: { departureSplit?: boolean; reassi
         const splitMatch = text.match(/\b(?:rendid[oa]|substituíd[oa]|trocad[oa])\s+(?:por|pelo|pela)\b/i);
         if (splitMatch && splitMatch.index !== undefined) {
             nameSource = text.slice(0, splitMatch.index);
+        }
+
+        // Saídas verbosas carregam a justificativa no mesmo balão ("... pq estava
+        // em ocorrência", "... devido oc 0839 protocolo AVC"). Tudo depois do
+        // conector de motivo é justificativa, nunca nome — cortar evita contaminar
+        // a query de nome com "devido oc protocolo AVC Roberto Santos".
+        const reasonMatch = nameSource.match(/\b(?:pq|porque|pois|devido|motivo|justificativa|estava|apos|após|oc|ocorr[eê]nc\w*|atendendo|atendimento|chamado|higien\w*)\b/i);
+        if (reasonMatch && reasonMatch.index !== undefined && reasonMatch.index > 0) {
+            nameSource = nameSource.slice(0, reasonMatch.index);
         }
     }
 

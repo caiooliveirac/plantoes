@@ -46,16 +46,16 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "{name} já tinha saído do painel às 17:00 em {target} — meio plantão fecha automático e já está registrado como MEIO para pagamento (sem banco de horas: a saída prevista era 17:00).",
     ],
     departure_justification_required: [
-        "Saída tardia de {name} em {target} anotada. Como já havia rendição, o extra só entra no pagamento e banco de horas com motivo por escrito — responda só o motivo: _estava em ocorrência 0729_ ou _estava higienizando a viatura_.\nSe o horário mudou, reenvie: {example}",
+        "Saída tardia de {name} em {target} anotada. Saída mais de 15 min após a janela do plantão precisa de justificativa: a coordenação pede o motivo por escrito para ficar registrado no sistema — responda só o motivo: _estava em ocorrência 0729_ ou _estava higienizando a viatura_.\nSem isso o extra não entra automático no pagamento e banco de horas.\nSe o horário mudou, reenvie: {example}",
     ],
     departure_justification_retry: [
         "Não reconheci o motivo. Vale: _em ocorrência NNNN_ ou _higienizando a viatura_ — pode tentar de novo.\nSem isso, guardo a justificativa para a coordenação e o extra fica sem crédito automático (só a chefia lança).",
     ],
     departure_occurrence_number_required: [
-        "Entendi que {name} saiu tarde de {target} por ocorrência. Para creditar esses minutos no banco de horas eu preciso saber QUAL ocorrência — me responda só com o número dela (4 dígitos).\n\nEx.: ocorrência 4521\n\nSe o horário {time} mudou, reenvie a saída completa assim: {example}",
+        "Entendi que {name} saiu tarde de {target} por ocorrência. A coordenação pede o número da ocorrência para a justificativa da saída tardia ficar registrada no sistema — me responda só com o número dela (4 dígitos).\n\nEx.: ocorrência 4521\n\nCom o número, os minutos extras entram no banco de horas. Se o horário {time} mudou, reenvie a saída completa assim: {example}",
     ],
     departure_occurrence_number_retry: [
-        "Ainda não recebi o número da ocorrência (4 dígitos) de {name} em {target}. Responda só com o número.\n\nEx.: 4521\n\nSe eu continuar sem o número, deixo a saída registrada para a chefia revisar, mas sem crédito automático no banco de horas.",
+        "Ainda não recebi o número da ocorrência (4 dígitos) de {name} em {target} — a coordenação precisa dele registrado como justificativa da saída tardia. Responda só com o número.\n\nEx.: 4521\n\nSe eu continuar sem o número, deixo a saída para a chefia revisar, mas sem crédito automático no banco de horas.",
     ],
     departure_justification_recorded: [
         "Justificativa recebida. Anexei o motivo à saída de {name} em {target} às {time}. Isso já ficou registrado para a coordenação, pagamento e banco de horas.",
@@ -67,7 +67,7 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "Entendi a saída de {name} em {target}, mas não achei ocupação compatível para fechar por aqui. Se a saída real foi diferente da rendição, reenvie assim: {example}",
     ],
     departure_time_conflict: [
-        "Entendi a saída de {name} em {target}, mas esse horário ficou antes da chegada registrada. Reenvie com o horário certo. Ex.: {example}",
+        "Entendi a saída de {name} em {target}, mas esse horário ficou antes da chegada registrada. Se o horário estiver certo e a chegada registrada é que estiver errada (ex.: registro duplicado), peça para a chefia ajustar com /corrigir. Senão, reenvie com o horário certo. Ex.: {example}",
     ],
     departure_missing_context: [
         "Entendi que você quis registrar uma saída, mas faltou base ou horário. Reenvie assim: {example}",

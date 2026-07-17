@@ -3856,3 +3856,40 @@ test("buildPaymentAllocationReportLine aceita marcador de domínio sem quebrar o
     assert.equal(buildPaymentAllocationReportLine(row), "OK 2031 - Ana Souza");
     assert.equal(buildPaymentAllocationReportLine(row, "☎️"), "OK ☎️ 2031 - Ana Souza");
 });
+
+// ── Incidente CN10/IT30 (16/jul/2026): abreviação "oc" na justificativa ─────────
+
+test("resolveTelegramEligibleLateDepartureReason aceita a abreviação 'oc NNNN'", () => {
+    assert.equal(
+        resolveTelegramEligibleLateDepartureReason("Décia saindo da CZ50 19:50 oc 0772", ["Décia", "CZ50", "19:50"])?.code,
+        "occurrence",
+    );
+    assert.equal(
+        resolveTelegramEligibleLateDepartureReason("saindo 20:30 devido oc 0839 protocolo AVC/Roberto Santos", ["20:30"])?.code,
+        "occurrence",
+    );
+    // "OC" solto, sem dígitos, não vira motivo.
+    assert.equal(resolveTelegramEligibleLateDepartureReason("saindo oc"), null);
+});
+
+test("extractTelegramOccurrenceNumber recupera o número da forma abreviada 'oc'", () => {
+    assert.equal(
+        extractTelegramOccurrenceNumber("Décia saindo da CZ50 19:50 oc 0772", ["Décia", "CZ50", "19:50"]),
+        "0772",
+    );
+    assert.equal(
+        extractTelegramOccurrenceNumber("saindo 20:30 devido oc 0839 protocolo AVC/Roberto Santos", ["20:30"]),
+        "0839",
+    );
+});
+
+test("resolveTelegramLateDepartureClaim cobra o número quando o médico só diz que estava em ocorrência", () => {
+    // Mensagem real da Nadyja (16/jul/2026): motivo reconhecido, número ausente.
+    const claim = resolveTelegramLateDepartureClaim(
+        "Nadyja Elis carneiro oliveira saiu da CN 10 às 20:09 h pq estava em ocorrência",
+        ["Nadyja Elis carneiro oliveira", "CN10", "20:09"],
+    );
+    assert.equal(claim?.code, "occurrence");
+    assert.equal(claim?.occurrenceNumber, null);
+    assert.equal(claim?.missingOccurrenceNumber, true);
+});
