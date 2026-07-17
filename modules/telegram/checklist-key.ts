@@ -29,6 +29,28 @@ export function buildChecklistKeyHint(baseCode: string, key: string): string {
     ].join("\n");
 }
 
+const ARRIVAL_REPLY_KINDS = new Set([
+    "arrival_recorded",
+    "arrival_p_recorded",
+    "continuation_recorded",
+    "half_shift_assumed",
+    "reassignment_recorded",
+]);
+
+/**
+ * Decide + busca o hint para QUALQUER confirmação que registre ocupação de
+ * intervenção — fluxo normal, completação por botão (turno/destino/candidato)
+ * ou correção. Regra: TODO caminho que confirma chegada em USA entrega a chave.
+ */
+export async function checklistHintForConfirmation(
+    parsed: { sector?: string | null; isDeparture?: boolean; baseCode?: string | null },
+    replyKind: string,
+): Promise<string> {
+    if (parsed.sector === "REGULATION" || parsed.isDeparture) return "";
+    if (!ARRIVAL_REPLY_KINDS.has(replyKind)) return "";
+    return fetchChecklistKeyHint(parsed.baseCode);
+}
+
 /**
  * Busca a chave do dia no serviço do checklist (mesmo host, porta local).
  * Retorna o hint pronto ou "" (sem chave / serviço indisponível / não configurado).

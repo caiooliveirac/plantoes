@@ -43,3 +43,19 @@ test("fetchChecklistKeyHint: serviço fora do ar devolve vazio (fail-soft)", asy
         else delete process.env.CHECKLIST_INTERNAL_TOKEN;
     }
 });
+
+test("checklistHintForConfirmation: só chegada em intervenção recebe a chave", async () => {
+    const { checklistHintForConfirmation } = await import("@/modules/telegram/checklist-key");
+    const prevUrl = process.env.CHECKLIST_API_URL;
+    delete process.env.CHECKLIST_API_URL; // fetch devolve "" — aqui testamos só o gating
+    try {
+        // regulação, saída e replies não-chegada nunca buscam chave
+        assert.equal(await checklistHintForConfirmation({ sector: "REGULATION", baseCode: "1363" }, "arrival_recorded"), "");
+        assert.equal(await checklistHintForConfirmation({ sector: "INTERVENTION", isDeparture: true, baseCode: "SM01" }, "arrival_recorded"), "");
+        assert.equal(await checklistHintForConfirmation({ sector: "INTERVENTION", baseCode: "SM01" }, "departure_recorded"), "");
+        // chegada em intervenção passa pelo gate (fetch sem env devolve "")
+        assert.equal(await checklistHintForConfirmation({ sector: "INTERVENTION", baseCode: "SM01" }, "arrival_recorded"), "");
+    } finally {
+        if (prevUrl !== undefined) process.env.CHECKLIST_API_URL = prevUrl;
+    }
+});
