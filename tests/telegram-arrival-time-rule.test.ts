@@ -113,8 +113,8 @@ test("buildArrivalRuleReply: FASE 2 registra a hora do aviso e mostra a declarad
             isPcoverage: false,
         });
         assert.match(reply, /✅ Ana na SM01 desde 07:30/);
-        assert.match(reply, /Não aceitamos mais aviso de chegada anterior/);
-        assert.match(reply, /você avisou 06:00/);
+        assert.match(reply, /Vale a hora do aviso/);
+        assert.match(reply, /você citou 06:00/);
     });
 });
 
@@ -128,7 +128,7 @@ test("buildArrivalRuleReply: FASE 2 sem declarado não cita hora informada", () 
             isPcoverage: false,
         });
         assert.match(reply, /desde 07:30/);
-        assert.doesNotMatch(reply, /você avisou/);
+        assert.doesNotMatch(reply, /você citou/);
     });
 });
 

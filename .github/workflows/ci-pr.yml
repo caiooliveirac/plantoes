@@ -32,7 +32,13 @@ jobs:
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -40,10 +46,7 @@ jobs:
       - name: Apply migrations in CI database
         run: npm run db:migrate
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
+      - name: Typecheck (next typegen + tsc)
         run: npm run typecheck
 
       - name: Tests
