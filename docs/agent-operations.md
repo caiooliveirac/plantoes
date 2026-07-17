@@ -122,35 +122,24 @@ ssh plantoes-prod 'pg_dump -Fc -d plantoes' > /tmp/plantoes_$(date +%F).dump
 
 ## 4. Deploy
 
-### 4.1 Fluxo atual (sem build no EC2)
+### 4.1 Fluxo atual (magalu · PM2 · build no servidor antes do restart)
 
-Deploy de produção é feito por imagem Docker imutável (`image@sha256`) gerada no
-GitHub-hosted runner (ARM64). O host **não compila** e **não instala dependências Node**.
+Deploy é automatizado: merge em `main` roda `.github/workflows/release-deploy.yml`
+(valida typecheck+testes num Postgres de CI) e executa `scripts/deploy-magalu.sh`
+no servidor via SSH. O script faz `git reset --hard` ao SHA validado, `npm ci`
+só se o lockfile mudou, `next build` (com `nice`, ANTES do restart — falha de
+build não derruba produção) e `pm2 startOrRestart ecosystem.config.cjs`, com
+healthcheck local e público. Detalhes e rollback: [DEPLOY.md](../DEPLOY.md).
 
-Fluxo:
-
-1. PR: `.github/workflows/ci-pr.yml` valida lint/typecheck/test/build em `ubuntu-latest`.
-2. Merge em `main`: `.github/workflows/release-deploy.yml` valida novamente, faz
-  buildx `linux/arm64`, publica no GHCR e resolve digest.
-3. O workflow conecta via SSH e chama script fixo no host:
-
-```bash
-sudo /usr/local/sbin/deploy-plantoes <image@sha256:...>
-```
-
-Esse script faz pull, valida arquitetura arm64, sobe candidato, checa health,
-promove e faz rollback automático em falha.
+O servidor magalu tem 15GB de RAM — o `next build` local é seguro (a proibição
+histórica de build valia para o EC2 de 8GB; ver §6).
 
 ### 4.2 Migrations — etapa explícita
 
-Migração não roda em PR e não roda durante build de imagem. Quando necessário,
-execute explicitamente com a própria imagem já publicada:
-
-```bash
-sudo /usr/local/sbin/deploy-plantoes <image@sha256:...> --run-migrations
-```
-
-Isso mantém o princípio: zero build/test/install Node na EC2.
+Migração não roda em PR nem no deploy normal. Quando necessário:
+GitHub → Actions → Release and Deploy → Run workflow → `run_migrations: true`.
+O script faz backup (`pg_dump` em `/home/ubuntu/backups/plantoes-predeploy/`)
+antes de aplicar `npm run db:migrate`.
 
 ---
 

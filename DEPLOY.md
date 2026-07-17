@@ -1,96 +1,58 @@
-# Deploy de produção (modelo container por digest)
+# Deploy de produção (magalu · PM2)
 
-## Regra principal
+> Modelo antigo (EC2 + container por digest) foi aposentado na migração de
+> julho/2026 — histórico em `docs/deploy-audit-ec2-before-after.md`.
 
-A EC2 de produção **não executa**:
+## Visão geral
 
-- `npm ci`, `npm install`, `pnpm install`, `yarn install`
-- `next build`, `vite build`, `tsc`
-- testes (`npm test`, `node --test`)
-- `git pull`, `git checkout`
-- `docker build`
-
-A EC2 apenas:
-
-- recebe `image@sha256:...`
-- faz `docker pull`
-- valida arquitetura `arm64`
-- sobe candidato
-- checa health
-- promove ou faz rollback
+Produção roda no servidor **magalu** (x86_64, 15GB RAM) como checkout git de
+`main` em `/home/ubuntu/plantoes`, com **PM2** (processos `plantoes` web na
+porta 3004 e `plantoes-telegram-worker`). O nginx do host roteia
+`plantoes.mnrs.com.br → 127.0.0.1:3004`.
 
 ## Pipeline
 
-1. Pull Request
-- Runner: `ubuntu-latest` (GitHub-hosted)
-- Executa: lint, typecheck, testes, build
-- Não publica imagem
-- Não acessa EC2
-
-2. Merge em `main`
-- Runner: `ubuntu-latest` (GitHub-hosted)
-- Executa validações novamente
-- Buildx `linux/arm64`
-- Push para GHCR com tag imutável `sha-<commit>`
-- Resolve digest e faz deploy remoto por digest
-
-3. Host EC2
-- Script fixo: `/usr/local/sbin/deploy-plantoes`
-- Entrada: `ghcr.io/...@sha256:...`
-- Rollback automático em falha de health
-
-## Script remoto oficial
-
-Arquivo versionado no repositório:
-
-- `scripts/deploy-plantoes-container.sh`
-
-Ele é instalado pelo workflow em:
-
-- `/usr/local/sbin/deploy-plantoes`
-
-Uso no host (manual, emergência):
-
-```bash
-sudo /usr/local/sbin/deploy-plantoes ghcr.io/<org>/<repo>/plantoes@sha256:<digest>
-```
-
-Migração explícita (opcional):
-
-```bash
-sudo /usr/local/sbin/deploy-plantoes ghcr.io/<org>/<repo>/plantoes@sha256:<digest> --run-migrations
-```
-
-## Segredos e ambiente
-
-- Segredos continuam fora da imagem e fora do Git.
-- Arquivo de ambiente no host: `/home/ubuntu/plantoes/.env.production`.
-- Credencial GHCR do host deve ser **read-only** (`packages:read`) via:
-  - `GHCR_USERNAME`
-  - `GHCR_READ_TOKEN`
-  - ou login Docker pré-configurado no host.
-
-## Health check
-
-- Candidato: `http://127.0.0.1:3904/api/health`
-- Ativo: `http://127.0.0.1:3004/api/health`
-- Público: `https://plantoes.mnrs.com.br/api/health`
-
-Endpoint adicional estável para orquestração:
-
-- `GET /healthz`
+1. **Pull Request** — `.github/workflows/ci-pr.yml`: typecheck (next typegen +
+   tsc), testes com Postgres de serviço e build. Não toca no servidor.
+2. **Merge em `main`** — `.github/workflows/release-deploy.yml`:
+   - `validate`: typecheck + `test:deploy` (com migrações num Postgres de CI);
+   - `deploy`: envia `scripts/deploy-magalu.sh` por scp e executa via SSH.
+3. **No servidor** (`scripts/deploy-magalu.sh`):
+   - `git fetch && git reset --hard <sha>` (working tree de produção fica limpo);
+   - `npm ci` **somente se o package-lock mudou**;
+   - migrações **apenas** com `--run-migrations` (workflow_dispatch), com
+     `pg_dump` de backup antes;
+   - `next build` com `nice` — roda **antes** do restart: se falhar, o `.next`
+     antigo continua servindo e nada é reiniciado;
+   - `pm2 startOrRestart ecosystem.config.cjs --update-env` + `pm2 save`;
+   - healthcheck local (30s) e, de volta no runner, healthcheck público.
 
 ## Rollback
 
-- O script salva digest atual e anterior em `/var/lib/plantoes-deploy/`.
-- Se falhar health após promoção, ele reinicia a versão anterior e retorna código não-zero.
-- Logs de deploy ficam no stdout/stderr do comando remoto e no resumo do GitHub Actions.
+```bash
+ssh magalu
+bash /home/ubuntu/plantoes/scripts/deploy-magalu.sh <sha-anterior>
+```
 
-## Workflows
+(ou re-rode o workflow num commit anterior via workflow_dispatch)
 
-- PR CI: `.github/workflows/ci-pr.yml`
-- Release/Deploy: `.github/workflows/release-deploy.yml`
+## Migrações
 
-## Observação
+Deploy normal **não** roda migrações. Quando precisar:
+GitHub → Actions → Release and Deploy → Run workflow → `run_migrations: true`.
+O script faz `pg_dump` para `/home/ubuntu/backups/plantoes-predeploy/`
+(mantém os 5 mais recentes) antes de aplicar.
 
-`npm run deploy:production` foi mantido apenas como bloqueio explícito para impedir uso do fluxo legado de build no host.
+## Segredos e ambiente
+
+- Nada de segredo no Git nem no runner além da chave SSH de deploy.
+- Ambiente do app: `/home/ubuntu/plantoes/.env.production` (o Next carrega
+  nativamente com `NODE_ENV=production`).
+- Secrets do repositório: `PROD_SSH_HOST`, `PROD_SSH_USER`, `PROD_SSH_KEY`
+  (chave ed25519 dedicada de CI, sem sudo).
+
+## Regras que continuam valendo
+
+- Não desenvolver dentro do servidor: o working tree de produção deve ficar
+  sempre limpo (o deploy usa `git reset --hard`).
+- Testes e experimentos: sempre no macOS local / CI.

@@ -1,12 +1,16 @@
 name: Release and Deploy
 
+# Deploy no servidor magalu (PM2, sem containers): valida rápido no runner e
+# faz git reset + build no próprio servidor via scripts/deploy-magalu.sh.
+# O build roda ANTES do restart — se falhar, a produção antiga segue no ar.
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
       run_migrations:
-        description: "Run db:migrate explicitly during deploy"
+        description: "Rodar db:migrate no deploy (faz backup antes)"
         required: false
         default: false
         type: boolean
@@ -20,8 +24,9 @@ permissions:
 
 jobs:
   validate:
-    name: Validate on hosted runner
+    name: Typecheck e testes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16
@@ -42,164 +47,69 @@ jobs:
       AUTH_URL: http://127.0.0.1:3000
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
-      - name: Checkout
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
         run: npm ci
 
-      - name: Apply migrations in CI database
+      - name: Migrações no banco de CI
         run: npm run db:migrate
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
+      - name: Typecheck (next typegen + tsc)
         run: npm run typecheck
 
-      - name: Tests
+      - name: Testes
         run: npm run test:deploy
 
-      - name: Build
-        run: npm run build
-
-  build_and_push:
-    name: Build and publish ARM64 image
-    runs-on: ubuntu-latest
-    needs: validate
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      image_repo: ${{ steps.meta.outputs.image_repo }}
-      image_tag: ${{ steps.meta.outputs.image_tag }}
-      image_digest: ${{ steps.meta.outputs.image_digest }}
-      image_ref: ${{ steps.meta.outputs.image_ref }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
-
-      - name: Login to GHCR
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-
-      - name: Prepare Buildx for linux/arm64
-        run: |
-          docker run --privileged --rm tonistiigi/binfmt --install arm64
-          docker buildx create --name plantoes-builder --driver docker-container --use
-          docker buildx inspect --bootstrap
-
-      - name: Build and push image
-        id: build
-        run: |
-          set -euo pipefail
-          IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}/plantoes"
-          IMAGE_TAG="${IMAGE_REPO}:sha-${GITHUB_SHA}"
-          docker buildx build \
-            --platform linux/arm64 \
-            --tag "${IMAGE_TAG}" \
-            --cache-from type=registry,ref="${IMAGE_REPO}:buildcache" \
-            --cache-to type=registry,ref="${IMAGE_REPO}:buildcache",mode=max \
-            --iidfile /tmp/plantoes-image.iid \
-            --push \
-            .
-          echo "IMAGE_REPO=${IMAGE_REPO}" >> "$GITHUB_ENV"
-          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
-
-      - name: Resolve immutable digest
-        id: meta
-        run: |
-          set -euo pipefail
-          IMAGE_DIGEST="$(cat /tmp/plantoes-image.iid)"
-          IMAGE_REF="${IMAGE_REPO}@${IMAGE_DIGEST}"
-          echo "image_repo=${IMAGE_REPO}" >> "$GITHUB_OUTPUT"
-          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "image_digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
-
   deploy:
-    name: Deploy digest to EC2
+    name: Deploy no magalu (git + build no servidor + pm2)
+    needs: validate
     runs-on: ubuntu-latest
-    needs: build_and_push
-    permissions:
-      contents: read
-      # packages: read permite usar o GITHUB_TOKEN efêmero deste run para o
-      # docker login do HOST (imagem GHCR é privada) — sem PAT permanente.
-      packages: read
+    timeout-minutes: 20
     env:
-      DEPLOY_HOST: ${{ secrets.PROD_SSH_HOST }}
-      DEPLOY_USER: ${{ secrets.PROD_SSH_USER }}
-      DEPLOY_PORT: ${{ secrets.PROD_SSH_PORT }}
+      REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
       RUN_MIGRATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.run_migrations || false }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - uses: actions/checkout@v4
 
-      - name: Configure SSH key
+      - name: Setup SSH
         run: |
-          set -euo pipefail
           mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "${DEPLOY_PORT}" -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Install fixed deploy script on host
-        run: |
-          set -euo pipefail
-          scp -P "${DEPLOY_PORT}" scripts/deploy-plantoes-container.sh "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/deploy-plantoes-container.sh"
-          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "sudo install -o root -g root -m 0755 /tmp/deploy-plantoes-container.sh /usr/local/sbin/deploy-plantoes && rm -f /tmp/deploy-plantoes-container.sh"
-
-      - name: Login Docker do host no GHCR (token efêmero do run)
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # A imagem GHCR é privada (contém código-fonte). Em vez de manter um
-          # PAT permanente no host, logamos com o GITHUB_TOKEN deste run — que
-          # expira ao fim do job. O token viaja por stdin (não aparece em ps).
-          printf '%s' "${GHCR_TOKEN}" | ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "sudo docker login ghcr.io -u '${GITHUB_ACTOR}' --password-stdin"
-
-      - name: Deploy immutable digest
+      - name: Deploy (script do repo, executado no servidor)
         run: |
           set -euo pipefail
           MIGRATION_FLAG=""
           if [[ "${RUN_MIGRATIONS}" == "true" ]]; then
             MIGRATION_FLAG=" --run-migrations"
           fi
-          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "sudo /usr/local/sbin/deploy-plantoes '${{ needs.build_and_push.outputs.image_ref }}'${MIGRATION_FLAG}"
+          scp -i ~/.ssh/id_ed25519 scripts/deploy-magalu.sh "${REMOTE}:/tmp/deploy-magalu.sh"
+          ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=90 -i ~/.ssh/id_ed25519 \
+            "${REMOTE}" "bash /tmp/deploy-magalu.sh ${GITHUB_SHA}${MIGRATION_FLAG} && rm -f /tmp/deploy-magalu.sh"
 
-      - name: Validate upstream local health
-        id: local_health
+      - name: Healthcheck público
         run: |
-          set -euo pipefail
-          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "curl -fsS http://127.0.0.1:3004/api/health"
+          code="$(curl -sk -o /tmp/health.json -w '%{http_code}' https://plantoes.mnrs.com.br/api/health)"
+          cat /tmp/health.json || true
+          echo
+          echo "HTTP ${code}"
+          [ "${code}" = "200" ]
 
-      - name: Validate public health
-        id: public_health
-        run: |
-          set -euo pipefail
-          HEALTH_CODE="$(curl -sk -o /tmp/public-health.json -w '%{http_code}' https://plantoes.mnrs.com.br/api/health)"
-          echo "code=${HEALTH_CODE}" >> "$GITHUB_OUTPUT"
-          [[ "${HEALTH_CODE}" == "200" ]]
-
-      - name: Deployment summary
+      - name: Resumo
         if: always()
         run: |
           {
-            echo "### Container Deploy Summary"
-            echo "- Commit: ${{ github.sha }}"
-            echo "- Image tag: ${{ needs.build_and_push.outputs.image_tag }}"
-            echo "- Image digest: ${{ needs.build_and_push.outputs.image_digest }}"
-            echo "- Image ref: ${{ needs.build_and_push.outputs.image_ref }}"
-            echo "- Local upstream health: http://127.0.0.1:3004/api/health (checked via SSH)"
-            echo "- Public health URL: https://plantoes.mnrs.com.br/api/health"
-            echo "- Public health HTTP: ${{ steps.public_health.outputs.code }}"
+            echo "### Deploy plantoes.mnrs.com.br (magalu/PM2)"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Migrações: ${RUN_MIGRATIONS}"
+            echo "- Upstream local: http://127.0.0.1:3004/api/health"
+            echo "- Público: https://plantoes.mnrs.com.br/api/health"
           } >> "$GITHUB_STEP_SUMMARY"

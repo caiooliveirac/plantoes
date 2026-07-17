@@ -7,6 +7,7 @@ test("buildChecklistKeyHint: monta bloco com base, chave e link", () => {
     assert.match(hint, /Checklist da \*SM01\*/);
     assert.match(hint, /chave de hoje: \*1234\*/);
     assert.match(hint, /checklist\.mnrs\.com\.br\/b\/SM01/);
+    assert.match(hint, /@samu_checklists_bot/, "orienta o /start no privado do bot do checklist");
     assert.ok(hint.startsWith("\n\n"), "separa da confirmação com linha em branco");
 });
 

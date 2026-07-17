@@ -25,6 +25,7 @@ export function buildChecklistKeyHint(baseCode: string, key: string): string {
         "",
         `📋 Checklist da *${baseCode}* — chave de hoje: *${key}*`,
         `checklist.mnrs.com.br/b/${baseCode}`,
+        "🤖 Depois toque em @samu_checklists_bot e mande /start — em breve os avisos do checklist virão por ele.",
     ].join("\n");
 }
 

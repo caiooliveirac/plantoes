@@ -9485,22 +9485,22 @@ async function sendSuccessReply(
         const shiftStartTime = targetShiftWindow.startedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
         const delayMs = eventAt.getTime() - targetShiftWindow.startedAt.getTime();
         const delayMin = Math.round(delayMs / 60000);
-        if (delayMin < 0) {
-            // Arrived BEFORE the target shift start — early arrival, no delay hint needed
-            timeContextHint = `\n\n⏱ Registrado às *${time}* — ${Math.abs(delayMin)}min antes do início do turno ${targetShiftWindow.shiftLabel} (${shiftStartTime}).`;
-        } else if (delayMin > 0) {
+        if (delayMin > 0) {
             const target = parsed.baseCode ?? "RAMAL/BASE";
-            timeContextHint = `\n\n⏱ Registrado às *${time}* — ${delayMin}min após o início do turno (${shiftStartTime}).`
-                + `\nSe está *continuando* do turno anterior, corrija:`
-                + `\n_${doctorName} continuando ${target}_`;
+            timeContextHint = `\n\n⏱ ${delayMin}min após o início do turno (${shiftStartTime}) — se é continuação do plantão anterior, responda "continuando ${target}".`;
         }
     }
 
     const resolvedShift = effectiveShiftType ?? parsed.shiftType;
     // arrival_p_recorded (e o pNote da regra de chegada) já explicam o P no corpo do
     // balão — repetir "P (plantão 24h)" aqui era a frase duplicada no ✅ (auditoria §3.1#19).
+    const shiftLabelFull = resolvedShift === "SD" ? "SD (diurno)" : resolvedShift === "SN" ? "SN (noturno)" : "P (plantão 24h)";
+    // Turno explícito na mensagem: só confirma. Turno inferido: confirma e abre
+    // espaço para o médico corrigir respondendo SD/SN/P.
     const shiftHint = resolvedShift && replyKind !== "arrival_p_recorded"
-        ? `\n📋 Turno: *${resolvedShift === "SD" ? "SD (diurno)" : resolvedShift === "SN" ? "SN (noturno)" : "P (plantão 24h)"}*`
+        ? parsed.shiftType
+            ? `\nTurno: *${shiftLabelFull}*`
+            : `\nTurno: *${shiftLabelFull}* — se for outro, responda SD, SN ou P.`
         : "";
 
     // A variante half_shift_assumed já explica o meio plantão no corpo do balão —
@@ -9514,7 +9514,7 @@ async function sendSuccessReply(
         : "";
 
     const reassignmentHint = reassignedFrom
-        ? `\n\n🔀 Percebi que já havia um aviso de chegada em *${reassignedFrom}* — registrei como remanejamento para *${parsed.baseCode}*, sem contar atraso. Ocupação anterior encerrada.`
+        ? `\n\n🔀 Remanejamento: *${reassignedFrom}* → *${parsed.baseCode}* (chegada original mantida, sem atraso).`
         : "";
     const forcedTakeoverHint = buildForcedTakeoverHint({
         displacedDoctorName,
@@ -9527,9 +9527,9 @@ async function sendSuccessReply(
         isContinuationReply: replyKind === "continuation_recorded" || forceContinuation,
     });
 
-    const arrivalHint = (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !timeContextHint && !autoReactivated && !useArrivalRuleCopy
-        ? "\n\n💡 Se for o mesmo médico mudando de ramal/base, pode mandar só o novo destino que registro como remanejamento sem mexer na chegada original."
-        : "";
+    // Dica permanente de remanejamento removida — bloco de chegada agora é enxuto:
+    // confirmação + turno + chave do checklist (auditoria de UX 2026-07-17).
+    const arrivalHint = "";
     const shadowHint = parsed.isShadow && !parsed.isDeparture
         ? "\n\n🫥 Cobertura marcada como *sombra*. Titular atual mantido no quadro."
         : "";
@@ -9618,13 +9618,11 @@ export function buildArrivalRuleReply(params: {
             + `⚠️ A partir de amanhã vamos considerar a HORA DO AVISO, não a hora que você diz.${pNote}`;
     }
 
-    // FASE 2
+    // FASE 2 — confirmação direta, sem sermão: vale a hora do aviso e ponto.
     const ignoredNote = hasDeclared
-        ? `\n(você avisou ${declared}, mas considerei a hora do aviso)`
+        ? `\n⏱ Vale a hora do aviso (você citou ${declared}).`
         : "";
-    return `Oi, ${params.name} 👋\n`
-        + `✅ ${params.name} na ${params.base} desde ${msgTime}\n`
-        + `❗ Não aceitamos mais aviso de chegada anterior. Vale a hora do aviso.${ignoredNote}${pNote}`;
+    return `✅ ${params.name} na ${params.base} desde ${msgTime}${ignoredNote}${pNote}`;
 }
 
 export function hasTelegramOperationalJustification(text: string, fragments: Array<string | null | undefined>) {

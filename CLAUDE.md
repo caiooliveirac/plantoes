@@ -8,10 +8,12 @@ O runbook operacional completo (acesso a logs/DB de produção, deploy) está em
 
 **Regra de ouro: NÃO desenvolva dentro do servidor de produção.**
 
-O `plantoes` roda num EC2 `m8g.large` (8GB / 2 vCPU) **compartilhado com ~10 outros
-projetos + bancos + ~20 containers**. Esse box é apertado. Rodar editor + Claude Code
-+ `next build` lá dentro já derrubou o servidor inteiro por falta de memória (OOM →
-reboot). Histórico do incidente: este arquivo + `docs/agent-operations.md`.
+O `plantoes` roda no servidor **magalu** (x86_64, 15GB RAM) **compartilhado com
+~10 outros projetos + bancos + containers**. O `next build` do deploy automatizado
+roda lá com segurança (via `scripts/deploy-magalu.sh`, sempre ANTES do restart),
+mas o servidor não é lugar de desenvolvimento: nada de editor, experimentos ou
+working tree sujo (o deploy usa `git reset --hard`). O incidente histórico de OOM
+no EC2 antigo está registrado em `docs/agent-operations.md`.
 
 Fluxo correto:
 
@@ -19,10 +21,10 @@ Fluxo correto:
    Code deve fazer mudanças, rodar testes e validar.
 2. **Commitar em feature branch** e abrir PR. O working tree de produção deve ficar
    **sempre limpo** (sem experimentos não commitados rodando ao vivo).
-3. **Deploy** leva apenas o commit/tag final para o EC2. Detalhes em
-   [docs/agent-operations.md](docs/agent-operations.md).
+3. **Deploy**: merge na `main` dispara o workflow que valida e aplica o commit
+   final no servidor (git reset + build + pm2). Detalhes em [DEPLOY.md](DEPLOY.md).
 
-Um agente rodando **no Mac** pode fazer quase tudo sem tocar no EC2: alterar código,
+Um agente rodando **no Mac** pode fazer quase tudo sem tocar no servidor: alterar código,
 rodar a suíte de testes, e até **consultar logs e banco de produção remotamente**
 (read-only via túnel SSH) — ver o runbook.
 
