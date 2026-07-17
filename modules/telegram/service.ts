@@ -44,7 +44,7 @@ import {
 import { applyBankHoursBalanceOverride, syncBankHoursByContinuityGroup } from "@/modules/bank-hours/service";
 import { extractDoctorAliases, extractDoctorPreferredOperationalRole, formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
-import { fetchChecklistKeyHint } from "@/modules/telegram/checklist-key";
+import { checklistHintForConfirmation, fetchChecklistKeyHint } from "@/modules/telegram/checklist-key";
 import {
     createDoctorDirectoryEntry,
     listDoctorsByPreferredOperationalRole,
@@ -6504,7 +6504,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 target: command.targetCode,
                 name: doctor.fullName,
                 time: formatTelegramReplyTime(eventAt),
-            }), message.message_id);
+            }) + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode)), message.message_id);
 
             if (message.chat.type === "private") {
                 await announcePrivateCorrectionToGroups(message.message_id, {
@@ -6609,7 +6609,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 target: command.targetCode,
                 name: doctor.fullName,
                 time: formatTelegramReplyTime(eventAt),
-            }), message.message_id);
+            }) + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode)), message.message_id);
 
             if (message.chat.type === "private") {
                 await announcePrivateCorrectionToGroups(message.message_id, {
@@ -9552,15 +9552,7 @@ async function sendSuccessReply(
         : "";
     // Chegada em base de intervenção (USA): anexa a chave do dia do checklist
     // (checklist.mnrs.com.br). Fail-soft — sem config/serviço, segue sem a chave.
-    const checklistKeyHint = parsed.sector !== "REGULATION"
-        && !parsed.isDeparture
-        && (replyKind === "arrival_recorded"
-            || replyKind === "arrival_p_recorded"
-            || replyKind === "continuation_recorded"
-            || replyKind === "half_shift_assumed"
-            || replyKind === "reassignment_recorded")
-        ? await fetchChecklistKeyHint(parsed.baseCode)
-        : "";
+    const checklistKeyHint = await checklistHintForConfirmation(parsed, replyKind);
     await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}${checklistKeyHint}`, replyToMessageId);
 }
 
@@ -10674,7 +10666,7 @@ type PendingButtonCompletionCtx =
 
 // Texto compacto de sucesso usado ao EDITAR o balão-prompt após um callback.
 // (No canal de texto usamos o sendSuccessReply completo, como no fluxo normal.)
-function buildCallbackSuccessEditText(params: {
+async function buildCallbackSuccessEditText(params: {
     parsed: OperationalParsedEntry;
     doctorName: string;
     timeAt: Date;
@@ -10690,10 +10682,13 @@ function buildCallbackSuccessEditText(params: {
     });
     const shift = params.effectiveShiftType ?? params.parsed.shiftType;
     const shiftHint = shift && kind !== "arrival_p_recorded"
-        ? `\n📋 Turno: *${shift === "SD" ? "SD (diurno)" : shift === "SN" ? "SN (noturno)" : "P (plantão 24h)"}*`
+        ? `\nTurno: *${shift === "SD" ? "SD (diurno)" : shift === "SN" ? "SN (noturno)" : "P (plantão 24h)"}*`
         : "";
     const piamHint = params.piamAutoAllocated ? "\n🩺 Alocado como *PIAM*." : "";
-    return `${base}${shiftHint}${piamHint}`;
+    // Completação por botão também é confirmação de chegada — entrega a chave
+    // do checklist igual ao fluxo de texto (caso Taiane/SB02, 2026-07-17).
+    const checklistHint = await checklistHintForConfirmation(params.parsed, kind);
+    return `${base}${shiftHint}${piamHint}${checklistHint}`;
 }
 
 // Falha genérica na completação: reusa as MESMAS replies de falha do fluxo de
@@ -10951,7 +10946,7 @@ async function completeArrivalFromPendingSelection(params: {
             await editMessageText(
                 ctx.chatId,
                 ctx.promptMessageId,
-                buildCallbackSuccessEditText({
+                await buildCallbackSuccessEditText({
                     parsed: parsedEntry,
                     doctorName: doctorSurfaceName,
                     timeAt: result.replyTimeAt ?? eventAt,
@@ -11108,7 +11103,7 @@ async function completePiamShiftPending(params: {
             await editMessageText(
                 ctx.chatId,
                 ctx.promptMessageId,
-                buildCallbackSuccessEditText({
+                await buildCallbackSuccessEditText({
                     parsed: parsedEntry,
                     doctorName: doctorSurfaceName,
                     timeAt: result.replyTimeAt ?? eventAt,
@@ -11188,7 +11183,7 @@ async function completeNameSelectionFromCallback(params: {
         await editMessageText(
             ctx.chatId,
             ctx.promptMessageId,
-            buildCallbackSuccessEditText({
+            await buildCallbackSuccessEditText({
                 parsed: data.parsed,
                 doctorName: resolveTelegramDoctorSurfaceName(selected),
                 timeAt: result.replyTimeAt ?? eventAt,
