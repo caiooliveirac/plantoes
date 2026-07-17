@@ -44,6 +44,7 @@ import {
 import { applyBankHoursBalanceOverride, syncBankHoursByContinuityGroup } from "@/modules/bank-hours/service";
 import { extractDoctorAliases, extractDoctorPreferredOperationalRole, formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
+import { fetchChecklistKeyHint } from "@/modules/telegram/checklist-key";
 import {
     createDoctorDirectoryEntry,
     listDoctorsByPreferredOperationalRole,
@@ -9549,7 +9550,18 @@ async function sendSuccessReply(
     const longShiftHint = extendedLongShift
         ? "\n\n⏰ Entendi que você está *emendando mais um turno* — plantão prolongado (*~36h*), já que estava de plantão nos dois turnos anteriores. A cobertura segue estendida. Se não for o caso, avise para corrigir."
         : "";
-    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}`, replyToMessageId);
+    // Chegada em base de intervenção (USA): anexa a chave do dia do checklist
+    // (checklist.mnrs.com.br). Fail-soft — sem config/serviço, segue sem a chave.
+    const checklistKeyHint = parsed.sector !== "REGULATION"
+        && !parsed.isDeparture
+        && (replyKind === "arrival_recorded"
+            || replyKind === "arrival_p_recorded"
+            || replyKind === "continuation_recorded"
+            || replyKind === "half_shift_assumed"
+            || replyKind === "reassignment_recorded")
+        ? await fetchChecklistKeyHint(parsed.baseCode)
+        : "";
+    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}${checklistKeyHint}`, replyToMessageId);
 }
 
 function formatTelegramReplyTime(value: Date) {
