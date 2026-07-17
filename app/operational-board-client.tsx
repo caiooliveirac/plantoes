@@ -20,7 +20,9 @@ import {
     requiresOvertimeJustification,
     resolveInterventionLineState,
     resolveOccupancyDirection,
+    resolveOperationalShiftWindow,
 } from "@/modules/operational/board-rules";
+import type { ExpectedDoctor, ExpectedScheduleData } from "@/modules/operational/expected-schedule";
 import type {
     BoardShadowOccupant,
     InterventionBoardRow,
@@ -98,6 +100,7 @@ interface OperationalBoardClientProps {
     initialViewMode?: ViewMode;
     pendingDepartures?: PendingDepartureConfirmation[];
     recentHandoffs?: RecentHandoff[];
+    expectedSchedule?: ExpectedScheduleData | null;
 }
 
 interface FormState {
@@ -502,6 +505,69 @@ function displayDoctorName(card: BoardCard) {
     }
 
     return card.displayName || card.doctorName || "Aguardando confirmação";
+}
+
+/* --- "Aguardando fulano…" (escala externa) --------------------------------
+   A escala sabe quem é o esperado do turno; o quadro mostra isso discreto:
+   desde 1 h antes da fronteira como sub-linha do ocupante atual e, num posto
+   vago, no lugar de "Aguardando cobertura". Toggle da chefia desliga tudo. */
+
+const EXPECTED_HINTS_STORAGE_KEY = "plantoes:expected-schedule-hints";
+const PRE_SHIFT_HINT_MINUTES = 60;
+
+function normalizeDoctorKey(value: string | null | undefined) {
+    return (value ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .replace(/[^A-Z ]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+/** O nome da escala e o do quadro raramente são idênticos (abreviações,
+    nome do meio): considera chegada quando batem por inteiro, por
+    primeiro+último nome ou por continência. */
+function matchesExpectedDoctor(expected: ExpectedDoctor, ...candidates: (string | null | undefined)[]) {
+    const expectedKey = normalizeDoctorKey(expected.nome);
+    if (!expectedKey) {
+        return false;
+    }
+    const expectedParts = expectedKey.split(" ");
+    for (const candidate of candidates) {
+        const key = normalizeDoctorKey(candidate);
+        if (!key) {
+            continue;
+        }
+        if (key === expectedKey || key.includes(expectedKey) || expectedKey.includes(key)) {
+            return true;
+        }
+        const parts = key.split(" ");
+        if (parts[0] === expectedParts[0] && parts[parts.length - 1] === expectedParts[expectedParts.length - 1]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Embaralha com semente textual (data+turno): a distribuição dos reguladores
+    entre os ramais é "aleatória", mas estável entre clientes e refreshes. */
+function seededShuffle<T>(items: T[], seedText: string): T[] {
+    let seed = 0;
+    for (let i = 0; i < seedText.length; i++) {
+        seed = (seed * 31 + seedText.charCodeAt(i)) >>> 0;
+    }
+    const result = [...items];
+    for (let i = result.length - 1; i > 0; i--) {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        const j = seed % (i + 1);
+        [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+}
+
+function expectedAwaitingLabel(doctors: ExpectedDoctor[]) {
+    return doctors.slice(0, 2).map((doctor) => doctor.nomeCurto || doctor.nome).join(" · ");
 }
 
 function canEditActiveCard(card: BoardCard) {
@@ -972,7 +1038,7 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [] } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], expectedSchedule = null } = props;
     // Admin abre tudo; payment_closing_limited (ex.: Iasmin) só enxerga o fechamento
     // de pagamento para visualizar e lançar NF/processo — sem editar o quadro.
     const canOpenPaymentClosing = Boolean(
@@ -989,6 +1055,23 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [boardRoleFilter, setBoardRoleFilter] = useState<BoardRoleFilter>("all");
     const [boardStatusFilter, setBoardStatusFilter] = useState<BoardStatusFilter>("all");
     const [expandedCardKey, setExpandedCardKey] = useState<string | null>(null);
+    // "Aguardando fulano…": preferência persistida no navegador; o relógio só
+    // liga após montar (no SSR fica 0 → sem hint, evitando hidratação divergente).
+    const [expectedHintsOn, setExpectedHintsOn] = useState(true);
+    const [expectedHintsNowMs, setExpectedHintsNowMs] = useState(0);
+    useEffect(() => {
+        setExpectedHintsOn(window.localStorage.getItem(EXPECTED_HINTS_STORAGE_KEY) !== "off");
+        setExpectedHintsNowMs(Date.now());
+        const timer = window.setInterval(() => setExpectedHintsNowMs(Date.now()), 30_000);
+        return () => window.clearInterval(timer);
+    }, []);
+    function toggleExpectedHints() {
+        setExpectedHintsOn((on) => {
+            const next = !on;
+            window.localStorage.setItem(EXPECTED_HINTS_STORAGE_KEY, next ? "on" : "off");
+            return next;
+        });
+    }
     const quickConfirmDeparture = useQuickConfirmDeparture();
     const [priorityDrawerOpen, setPriorityDrawerOpen] = useState(false);
     const [authEmail, setAuthEmail] = useState("");
@@ -1377,6 +1460,118 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const filteredInterventionCards = visibleInterventionCards.filter(cardMatchesFilters);
     const filteredMatchedCount = filteredRegulationCards.length + filteredInterventionCards.length;
     const totalBoardCount = visibleRegulationCards.length + visibleInterventionCards.length;
+
+    // --- "Aguardando fulano…" (escala externa) -----------------------------
+    // Alvo = turno corrente; na janela de 60 min antes da fronteira, o SEGUINTE.
+    // Se o snapshot ainda é do turno anterior (virada), some até o refresh.
+    const expectedTarget = (() => {
+        if (!expectedSchedule || !expectedHintsOn || expectedHintsNowMs === 0) {
+            return null;
+        }
+        const shiftWindow = resolveOperationalShiftWindow(new Date(expectedHintsNowMs));
+        const msToBoundary = shiftWindow.nextBoundaryAt.getTime() - expectedHintsNowMs;
+        const preShift = msToBoundary > 0 && msToBoundary <= PRE_SHIFT_HINT_MINUTES * 60_000;
+        const board = preShift ? expectedSchedule.upcoming : expectedSchedule.current;
+        const wantedLabel = preShift ? (shiftWindow.shiftLabel === "SD" ? "SN" : "SD") : shiftWindow.shiftLabel;
+        if (!board || board.shiftLabel !== wantedLabel) {
+            return null;
+        }
+        return { board, preShift };
+    })();
+
+    // Quem a escala espera em cada card. Intervenção: por código da base.
+    // Regulação: CP←chefia, COI←coi; o pool da CRU é sorteado (semente =
+    // data+turno) entre os ramais gerais na ordem do quadro — não dá para
+    // estipular ramal, então a distribuição é ilustrativa e estável. Quem já
+    // chegou (bate com um ocupante ativo) sai do pool; PSIQ/PIAM/NUCLEO ficam
+    // fora porque a escala externa não os modela.
+    const expectedByCardKey = new Map<string, ExpectedDoctor[]>();
+    if (expectedTarget) {
+        const targetBoard = expectedTarget.board;
+        for (const card of visibleInterventionCards) {
+            if (card.status === "disabled") {
+                continue;
+            }
+            const pool = targetBoard.intervention[card.baseCode.toUpperCase()] ?? [];
+            if (pool.length === 0) {
+                continue;
+            }
+            if (card.status === "active" && pool.some((expected) => matchesExpectedDoctor(expected, card.doctorName, card.displayName))) {
+                continue;
+            }
+            const chegadaPrimeiro = [...pool].sort((a, b) =>
+                (a.codigo === targetBoard.shiftLabel ? 0 : 1) - (b.codigo === targetBoard.shiftLabel ? 0 : 1));
+            expectedByCardKey.set(`intervention-${card.baseCode}`, chegadaPrimeiro);
+        }
+
+        const activeRegulationOccupants = visibleRegulationCards
+            .filter((card) => card.status === "active")
+            .map((card) => ({ doctorName: card.doctorName, displayName: card.displayName }));
+        const notArrived = (expected: ExpectedDoctor) =>
+            !activeRegulationOccupants.some((occupant) => matchesExpectedDoctor(expected, occupant.doctorName, occupant.displayName));
+        const cruPool = seededShuffle(targetBoard.regulation, `${targetBoard.operationalDate}|${targetBoard.shiftLabel}`).filter(notArrived);
+        const chiefPool = targetBoard.chief.filter(notArrived);
+        const coiPool = targetBoard.coi.filter(notArrived);
+
+        let cruIndex = 0;
+        for (const card of visibleRegulationCards) {
+            if (card.status === "disabled" || isPiamRegulationPost(card.postCode) || isNucleoRegulationPost(card.postCode)) {
+                continue;
+            }
+            const role = resolveCardRoleLabel(card);
+            if (role === "PSIQ") {
+                continue;
+            }
+            let pool: ExpectedDoctor[] = [];
+            if (role === "CP") {
+                pool = chiefPool;
+            } else if (role === "COI") {
+                pool = coiPool;
+            } else if (cruIndex < cruPool.length) {
+                pool = [cruPool[cruIndex++]];
+            }
+            if (pool.length === 0) {
+                continue;
+            }
+            expectedByCardKey.set(`regulation-${card.postCode}`, pool);
+        }
+    }
+
+    function expectedDoctorsFor(card: BoardCard) {
+        return expectedByCardKey.get(`${card.domain}-${cardCode(card)}`) ?? null;
+    }
+
+    // Nome principal do card: posto VAGO com esperado vira "Aguardando Fulano"
+    // — mesmo elemento, mesma fonte do nome de sempre.
+    function primaryDoctorLabel(card: BoardCard) {
+        if (card.status === "waiting") {
+            const expected = expectedDoctorsFor(card);
+            if (expected && expected.length > 0) {
+                return `Aguardando ${expectedAwaitingLabel(expected)}`;
+            }
+        }
+        return displayDoctorName(card);
+    }
+
+    // Sub-linha discreta sob o ocupante ATIVO: só na janela pré-turno ou
+    // enquanto ele está SAINDO — sem apagar nem mudar a fonte do nome atual.
+    function renderExpectedHintLine(card: BoardCard, isLeaving: boolean) {
+        if (!expectedTarget || card.status !== "active") {
+            return null;
+        }
+        if (!expectedTarget.preShift && !isLeaving) {
+            return null;
+        }
+        const expected = expectedDoctorsFor(card);
+        if (!expected || expected.length === 0) {
+            return null;
+        }
+        return (
+            <div className="ops-inline-flags subtle">
+                <span className="ops-doctor-note expected-arrival">aguardando {expectedAwaitingLabel(expected)}…</span>
+            </div>
+        );
+    }
     const previousShiftSections = previousShift.sections.map((section) => ({
         ...section,
         entries: section.entries
@@ -2588,7 +2783,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <div role="cell" className="ops-grid-cell column-name">
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
-                            <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
+                            <strong title={primaryDoctorLabel(card)}>{primaryDoctorLabel(card)}</strong>
                             {renderCardIdentityTags(card)}
                             {isDisabledRegulation && <span className="ops-inline-flag disabled">Desativado</span>}
                         </div>
@@ -2607,6 +2802,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             });
                         })}
                         {renderDisplacedOccupantLines(card.displacedOccupants)}
+                        {renderExpectedHintLine(card, isLeaving)}
                         {isDisabledRegulation ? (
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
@@ -2759,7 +2955,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <div role="cell" className="ops-grid-cell column-name">
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
-                            <strong title={displayDoctorName(card)}>{displayDoctorName(card)}</strong>
+                            <strong title={primaryDoctorLabel(card)}>{primaryDoctorLabel(card)}</strong>
                             {renderCardIdentityTags(card)}
                             {isDisabledIntervention && <span className="ops-inline-flag disabled">Desativada</span>}
                         </div>
@@ -2778,6 +2974,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             });
                         })}
                         {renderDisplacedOccupantLines(card.displacedOccupants)}
+                        {renderExpectedHintLine(card, isLeaving)}
                         {isDisabledIntervention ? (
                             <div className="ops-inline-flags subtle">
                                 {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
@@ -3437,6 +3634,20 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 matchedCount={filteredMatchedCount}
                                 totalCount={totalBoardCount}
                             />
+                        )}
+
+                        {expectedSchedule && (
+                            <div className="ops-expected-toggle-row">
+                                <button
+                                    type="button"
+                                    className={`ops-expected-toggle ${expectedHintsOn ? "is-on" : ""}`.trim()}
+                                    onClick={toggleExpectedHints}
+                                    aria-pressed={expectedHintsOn}
+                                    title="Desde 1 h antes do turno, mostra em letras discretas o médico esperado pela escala (aguardando fulano…). Na regulação a distribuição entre ramais é ilustrativa."
+                                >
+                                    Previsão da escala · {expectedHintsOn ? "visível" : "oculta"}
+                                </button>
+                            </div>
                         )}
 
                         <section className="ops-main-grid">

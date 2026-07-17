@@ -2,6 +2,7 @@ import { hasDatabaseUrl } from "@/db";
 import { readAuthenticatedSession } from "@/lib/auth/server";
 import { OperationalBoardClient } from "@/app/operational-board-client";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
+import { getExpectedSchedule } from "@/modules/operational/expected-schedule";
 import { getCurrentOperationalMealBreakSession, getCurrentMealBreakEligibilityOverrides } from "@/modules/telegram/meal-breaks";
 import { getOperationalBoard, getPreviousOperationalBoard } from "@/services/board.service";
 import { listDoctorsForChiefInvite } from "@/services/chief-access.service";
@@ -38,7 +39,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         session?.user.roles.some((role) => role === "admin" || role === "chief")
         && !session.user.mustChangePassword,
     );
-    const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility] = await Promise.all([
+    const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility, expectedSchedule] = await Promise.all([
         getOperationalBoard(),
         // Dashboard mantem a visao legada (dia operacional anterior completo,
         // tudo editavel) independente do turno corrente. A pivotagem shift-aware
@@ -47,6 +48,9 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         canManage ? listDoctorsForChiefInvite() : Promise.resolve([]),
         getCurrentOperationalMealBreakSession(),
         getCurrentMealBreakEligibilityOverrides(),
+        // Nomes previstos da escala externa seguem a mesma regra das faltas
+        // nominais: leitura da chefia — anônimo continua vendo o quadro puro.
+        canManage ? getExpectedSchedule() : Promise.resolve(null),
     ]);
 
     return (
@@ -62,6 +66,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
             initialViewMode={initialViewMode}
             pendingDepartures={board.pendingDepartures ?? []}
             recentHandoffs={board.recentHandoffs ?? []}
+            expectedSchedule={expectedSchedule}
             session={session ? {
                 email: session.user.email,
                 roles: session.user.roles,
