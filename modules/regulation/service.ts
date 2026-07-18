@@ -8,7 +8,7 @@ import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/ba
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 
 export interface StartRegulationOccupancyInput {
@@ -70,10 +70,6 @@ export function resolveHistoricalAdminCorrectionEndAt(params: {
 
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
-// Continuidade anunciada na reta final da janela coberta (ex.: "continua" às 06:41
-// para um SN que encerra 07:15) é declaração de que o médico segue no próximo turno,
-// não reforço — precisa estender o scheduledEndAt, senão o expiry fecha no boundary.
-export const CONTINUATION_NEAR_WINDOW_END_MS = 2 * 60 * 60 * 1000;
 
 export function isRegulationPostDeactivationActive(params: {
     deactivatedAt: Date;
@@ -302,47 +298,30 @@ export function resolveRegulationContinuationScheduledEndAt(params: {
         explicitScheduledEndAt: params.explicitScheduledEndAt ?? null,
     }).scheduledEndAt;
 
-    const fromContinuation = inferRegulationCoverageWindow({
-        startedAt: params.continuationAt,
-        shiftLabel: "P",
-        postCode: params.postCode ?? null,
-        explicitScheduledStartAt: null,
-        explicitScheduledEndAt: null,
-    }).scheduledEndAt;
+    // Regra canonica (ver modules/operational/rules.ts): o aviso referencia a
+    // virada de turno mais proxima da mensagem, e a cobertura passa a incluir o
+    // bloco SEGUINTE a essa virada — um unico bloco discreto. Se o bloco ja
+    // estava coberto, o aviso e apenas reforco (caso Manuella: "continua" as
+    // 19h de um P 07h→07h nao infla para 36h). Independe de o medico avisar
+    // antes ou depois da virada (casos Uenderson 06:41/08:12, jul/2026).
+    const referenceBoundary = resolveContinuationReferenceBoundary(params.continuationAt);
+    const blockAfterReference = new Date(referenceBoundary.getTime() + 60000);
+    const requiredEndAt = inferRegulationScheduledEndAt(
+        blockAfterReference,
+        resolveOperationalShiftWindow(blockAfterReference).shiftLabel,
+        null,
+    );
 
     if (!fromExisting) {
-        return fromContinuation;
+        return requiredEndAt;
     }
 
-    if (!fromContinuation) {
+    if (!requiredEndAt) {
         return fromExisting;
     }
 
-    // Uma mensagem de continuidade DENTRO da janela ja coberta pelo plantao
-    // (ex.: medico de P desde 07h mandando "P" de novo as 19h apenas
-    // reforcando) e so um reforco — nao estende a cobertura. Mas continuidade
-    // anunciada na RETA FINAL da janela (ultimas 2h, ex.: "continua" as 06:41
-    // de um SN que encerra 07:15) e a forma normal de declarar que o medico
-    // segue no proximo turno: essa emenda UM bloco discreto apos o fim ja
-    // coberto (nunca mais que um) — senao o expiry fecha no boundary e a
-    // proxima mensagem recria a ocupacao com chegada = hora da mensagem.
-    if (params.continuationAt.getTime() < fromExisting.getTime()) {
-        if (params.continuationAt.getTime() >= fromExisting.getTime() - CONTINUATION_NEAR_WINDOW_END_MS) {
-            const extendedReference = new Date(fromExisting.getTime() + 60000);
-            const extendedScheduledEndAt = inferRegulationScheduledEndAt(
-                extendedReference,
-                resolveOperationalShiftWindow(extendedReference).shiftLabel,
-                null,
-            );
-            if (extendedScheduledEndAt && extendedScheduledEndAt.getTime() > fromExisting.getTime()) {
-                return extendedScheduledEndAt;
-            }
-        }
-        return fromExisting;
-    }
-
-    return fromContinuation.getTime() > fromExisting.getTime()
-        ? fromContinuation
+    return requiredEndAt.getTime() > fromExisting.getTime()
+        ? requiredEndAt
         : fromExisting;
 }
 

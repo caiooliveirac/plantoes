@@ -230,43 +230,51 @@ export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: stri
 //
 // Regra canônica — ver resolveRegulationContinuationScheduledEndAt (regulação)
 // e resolveInterventionContinuationScheduledEndAt (intervenção):
-//   • Continuidade DENTRO da janela já coberta = apenas reforço. Não estende.
-//   • Continuidade avisada na RETA FINAL da janela (últimas 2h) ou APÓS o fim =
-//     emenda do próximo bloco discreto (turno seguinte). Anunciar "continua"
-//     ANTES da virada é a forma normal de declarar continuidade — sem estender,
-//     o expiry/rendição fecha no boundary e a próxima mensagem recria a
-//     ocupação com chegada = hora da mensagem (casos Uenderson/Luiz, jul/2026).
-//   • Continuidade nunca encurta a cobertura e nunca pula mais de um bloco.
+//   • Um aviso de continuidade referencia a VIRADA DE TURNO mais próxima da
+//     mensagem (resolveContinuationReferenceBoundary), nunca a hora em que a
+//     mensagem foi enviada: "continua" às 06:41, 07:30 ou 10:15 fala da virada
+//     das 07:00; às 17:00 ou 19:30, da das 19:00.
+//   • A cobertura passa a incluir o bloco SEGUINTE à virada referenciada — um
+//     único bloco discreto, nunca mais que um.
+//   • Se esse bloco já estava coberto, o aviso é apenas reforço (caso Manuella
+//     2026-05: "continua" às 19:00 de um P 07h→07h não infla para 36h).
+//   • Continuidade nunca encurta uma cobertura já agendada mais distante.
 //   • Cobertura > 25h aciona o alerta de plantão prolongado (isExtendedLongShift
 //     em modules/telegram/service.ts) para um humano confirmar/corrigir.
 
-export const CONTINUATION_NEAR_BOUNDARY_EXTENSION_MS = 2 * 60 * 60 * 1000;
+/**
+ * A virada de turno que um aviso de continuidade referencia: a mais próxima da
+ * mensagem (empate → a anterior). Toda a semântica de continuidade (extensão de
+ * cobertura, vínculo com plantão anterior, âncora) deriva desta fronteira, para
+ * que o resultado NÃO dependa de o médico avisar antes ou depois da virada
+ * (casos Uenderson 06:41/08:12 e Luiz Alvarez 10:15, jul/2026).
+ */
+export function resolveContinuationReferenceBoundary(eventAt: Date): Date {
+    const window = resolveOperationalShiftWindow(eventAt);
+    const toPreviousMs = eventAt.getTime() - window.startedAt.getTime();
+    const toNextMs = window.nextBoundaryAt.getTime() - eventAt.getTime();
+    return toNextMs < toPreviousMs ? window.nextBoundaryAt : window.startedAt;
+}
 
 /**
  * Fim agendado de uma continuação de intervenção.
  *
  * Extraído da lógica inline de continueInterventionOccupancy para dar paridade
  * estrutural e testabilidade ao lado de resolveRegulationContinuationScheduledEndAt.
- * A cobertura é emendada até a PRÓXIMA virada de turno após o aviso (bloco
- * discreto) — e, quando o aviso chega na reta final do bloco corrente (a virada
- * imediata não acrescentaria cobertura), até a virada SEGUINTE. Nunca encurta
- * um fim já agendado mais distante.
+ * A cobertura é emendada até o fim do bloco seguinte à virada referenciada pelo
+ * aviso (um bloco discreto, nunca além). Nunca encurta um fim já agendado mais
+ * distante.
  */
 export function resolveInterventionContinuationScheduledEndAt(params: {
     existingScheduledEndAt: Date | null;
     continuationAt: Date;
 }): Date {
-    let continuationBoundary = resolveOperationalShiftWindow(params.continuationAt).nextBoundaryAt;
-    const existingEndMs = params.existingScheduledEndAt?.getTime() ?? null;
-    const nearBoundary = continuationBoundary.getTime() - params.continuationAt.getTime() <= CONTINUATION_NEAR_BOUNDARY_EXTENSION_MS;
-    const boundaryAddsNothing = existingEndMs === null || existingEndMs >= continuationBoundary.getTime();
-    if (nearBoundary && boundaryAddsNothing) {
-        continuationBoundary = resolveOperationalShiftWindow(continuationBoundary).nextBoundaryAt;
-    }
+    const referenceBoundary = resolveContinuationReferenceBoundary(params.continuationAt);
+    const requiredEndAt = resolveOperationalShiftWindow(referenceBoundary).nextBoundaryAt;
     return params.existingScheduledEndAt
-        && params.existingScheduledEndAt.getTime() > continuationBoundary.getTime()
+        && params.existingScheduledEndAt.getTime() > requiredEndAt.getTime()
         ? params.existingScheduledEndAt
-        : continuationBoundary;
+        : requiredEndAt;
 }
 
 export function resolveRegulationBoardEndAt(proposedEndAt: Date, scheduledEndAt?: Date | null) {
