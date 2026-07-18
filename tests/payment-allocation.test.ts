@@ -1100,3 +1100,33 @@ test("o P noturno suprimido não desloca o SD real do médico em outro ramal", (
     assert.equal(row1368?.doctorName, "Reinaldo Lima", "o SD real de terça na 1368 deve ser pago");
     assert.notEqual(row2033?.doctorName, "Reinaldo Lima", "a 2033 não deve receber o fantasma de terça");
 });
+
+test("buildPaymentAllocationBoardModel: base diurna (dayOnly) entra no SD e some do SN", () => {
+    const goaTarget = makeTarget({ targetCode: "GOA", targetLabel: "GOA", sortOrder: 130, dayOnly: true });
+    const normalTarget = makeTarget();
+
+    const sdBoard = buildPaymentAllocationBoardModel({
+        targets: [normalTarget, goaTarget],
+        rawRows: [makeRow({ targetCode: "GOA", targetLabel: "GOA" })],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        generatedAt: "2026-03-28T23:00:00.000Z",
+    });
+    const goaRow = sdBoard.intervention.find((row) => row.targetCode === "GOA");
+    assert.equal(goaRow?.doctorName, "Ana Souza", "chegada na GOA durante o dia deve virar linha pagável do SD");
+
+    const snBoard = buildPaymentAllocationBoardModel({
+        targets: [normalTarget, goaTarget],
+        rawRows: [],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SN",
+        startedAt: "2026-03-28T22:00:00.000Z",
+        endedAt: "2026-03-29T10:00:00.000Z",
+        generatedAt: "2026-03-29T11:00:00.000Z",
+    });
+    const snCodes = snBoard.intervention.map((row) => row.targetCode);
+    assert.ok(!snCodes.includes("GOA"), "base diurna não é alvo no SN — não pode contar como furo noturno");
+    assert.ok(snCodes.includes("PM04"), "base normal continua aparecendo no SN");
+});

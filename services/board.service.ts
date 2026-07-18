@@ -168,6 +168,8 @@ export interface PaymentAllocationTargetDefinition {
   targetLabel: string;
   sortOrder: number;
   defaultRole: string | null;
+  /** Base diurna (07-19): só é alvo de cobertura/pagamento no turno SD. */
+  dayOnly?: boolean;
   disabledAt?: string | null;
   reactivatedAt?: string | null;
   disabledReason?: string | null;
@@ -1806,6 +1808,12 @@ export async function listInterventionBoard() {
       on ad.base_id = ib.id
      and ad.row_rank = 1
     where ib.is_active = true
+      -- base diurna (07-19) some do painel à noite: fora da janela ela não é
+      -- furo, é uma base fechada por definição (ver day_only na migration 0035)
+      and (
+        ib.day_only = false
+        or (now() at time zone 'America/Sao_Paulo')::time between time '07:00' and time '18:59:59'
+      )
     order by ib.sort_order asc, ib.code asc
   `);
 
@@ -2495,6 +2503,7 @@ function resolvePaymentAllocationTarget(row: Record<string, unknown>): PaymentAl
     targetLabel: String(row.targetLabel),
     sortOrder: Number(row.sortOrder ?? 0),
     defaultRole: (row.defaultRole ?? null) as string | null,
+    dayOnly: Boolean(row.dayOnly ?? false),
     disabledAt: (row.disabledAt ?? null) as string | null,
     reactivatedAt: (row.reactivatedAt ?? null) as string | null,
     disabledReason: (row.disabledReason ?? null) as string | null,
@@ -2513,6 +2522,10 @@ function isNucleoPaymentTarget(target: PaymentAllocationTargetDefinition) {
 
 function shouldIncludePaymentAllocationTarget(target: PaymentAllocationTargetDefinition, shiftLabel: "SD" | "SN") {
   if (isNucleoPaymentTarget(target)) {
+    return shiftLabel === "SD";
+  }
+
+  if (target.domain === "intervention" && target.dayOnly) {
     return shiftLabel === "SD";
   }
 
@@ -3829,6 +3842,7 @@ async function loadPaymentAllocationSourceData(
       rp.label as "targetLabel",
       rp.sort_order as "sortOrder",
       rp.default_role as "defaultRole",
+      false as "dayOnly",
       rpd.deactivated_at as "disabledAt",
       rpd.reactivated_at as "reactivatedAt",
       rpd.notes as "disabledReason",
@@ -3863,6 +3877,7 @@ async function loadPaymentAllocationSourceData(
       ib.label as "targetLabel",
       ib.sort_order as "sortOrder",
       null::text as "defaultRole",
+      ib.day_only as "dayOnly",
       ibd.deactivated_at as "disabledAt",
       ibd.reactivated_at as "reactivatedAt",
       ibd.notes as "disabledReason",

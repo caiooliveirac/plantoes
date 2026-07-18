@@ -231,6 +231,27 @@ export function resolveStaleShadowInterventionEndedAt(params: {
     return params.scheduledEndAt;
 }
 
+// Base diurna (day_only): fecha QUALQUER ocupação aberta (titular ou sombra) assim
+// que o horário programado (07-19) termina — diferente de resolveStaleShadowInterventionEndedAt,
+// que só fecha sombra. É isso que garante que a base some do painel à noite e nunca
+// chegue a ser continuada (continueInterventionOccupancy exige !endedAt).
+export function resolveDayOnlyBaseAutoCloseEndedAt(params: {
+    dayOnly: boolean;
+    scheduledEndAt?: Date | null;
+    endedAt?: Date | null;
+    referenceAt: Date;
+}) {
+    if (!params.dayOnly || params.endedAt || !params.scheduledEndAt) {
+        return null;
+    }
+
+    if (params.referenceAt.getTime() < params.scheduledEndAt.getTime()) {
+        return null;
+    }
+
+    return params.scheduledEndAt;
+}
+
 export function shouldCloseInterventionBoardCarrierOnArrival(params: {
     currentCarrierDoctorId: string;
     arrivingDoctorId: string;
@@ -866,15 +887,27 @@ export async function endInterventionOccupancy(
 
 export async function expireStaleShadowInterventionOccupancies(referenceAt: Date, updatedByUserId?: string | null) {
     const db = getDb();
-    const openOccupancies = await db.query.interventionOccupancies.findMany({
-        where: isNull(interventionOccupancies.endedAt),
-        orderBy: [asc(interventionOccupancies.scheduledEndAt), asc(interventionOccupancies.startedAt)],
-    });
+    const [openOccupancies, dayOnlyBaseRows] = await Promise.all([
+        db.query.interventionOccupancies.findMany({
+            where: isNull(interventionOccupancies.endedAt),
+            orderBy: [asc(interventionOccupancies.scheduledEndAt), asc(interventionOccupancies.startedAt)],
+        }),
+        db.query.interventionBases.findMany({
+            where: eq(interventionBases.dayOnly, true),
+            columns: { id: true },
+        }),
+    ]);
+    const dayOnlyBaseIds = new Set(dayOnlyBaseRows.map((row) => row.id));
 
     let expiredCount = 0;
     for (const occupancy of openOccupancies) {
         const endedAt = resolveStaleShadowInterventionEndedAt({
             notes: occupancy.notes,
+            scheduledEndAt: occupancy.scheduledEndAt,
+            endedAt: occupancy.endedAt,
+            referenceAt,
+        }) ?? resolveDayOnlyBaseAutoCloseEndedAt({
+            dayOnly: dayOnlyBaseIds.has(occupancy.baseId),
             scheduledEndAt: occupancy.scheduledEndAt,
             endedAt: occupancy.endedAt,
             referenceAt,
@@ -915,6 +948,14 @@ export async function continueInterventionOccupancy(
 
         if (existing.endedAt) {
             throw new Error("Only active intervention occupancies can be continued.");
+        }
+
+        const base = await tx.query.interventionBases.findFirst({
+            where: eq(interventionBases.id, existing.baseId),
+            columns: { dayOnly: true },
+        });
+        if (base?.dayOnly) {
+            throw new Error("Base diurna não gera plantão contínuo (P); a chegada seguinte deve ser um novo plantão SD.");
         }
 
         const nextNotes = input?.notes?.trim()
