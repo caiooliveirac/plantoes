@@ -115,6 +115,41 @@ test("resolveOccupancyDirection: classifica saindo vs entrando na virada das 19h
     }).status, "entrando");
 });
 
+test("REGRESSAO Caio 2152: chegada adiantada declarada SD nao vira VERIFICAR/Retirar as 07:00", () => {
+    // Caso real 2026-07-18: "Caio 2152 SD" as 05:07 (alem dos 60 min de tolerancia
+    // pre-turno), agendado inferido 07:00→19:15. O quadro marcava "saindo" na
+    // virada — como se ele fosse sobra do SN — e a chefia chegou a remove-lo.
+    // Label explicito do turno corrente + cobertura agendada = titular do SD.
+    const caio = {
+        startedAt: "2026-07-18T05:07:20-03:00",
+        scheduledEndAt: "2026-07-18T19:15:00-03:00",
+        shiftLabel: "SD" as const,
+    };
+
+    // Nao importa a hora do aviso: as 07:05, 09:00 ou 15:00, ele e o titular.
+    for (const reference of ["2026-07-18T07:05:00-03:00", "2026-07-18T09:00:00-03:00", "2026-07-18T15:00:00-03:00"]) {
+        assert.equal(resolveOccupancyDirection({ ...caio, reference }).status, "entrando", `saindo indevido as ${reference}`);
+        assert.equal(resolveInterventionLineState({ ...caio, boardStartedAt: caio.startedAt, reference }).kind, "none");
+    }
+
+    // O caso oposto segue protegido: um SD de ONTEM ainda aberto hoje de manha
+    // tem o mesmo label do turno corrente, mas cobertura vencida → "saindo".
+    assert.equal(resolveOccupancyDirection({
+        startedAt: "2026-07-17T06:58:00-03:00",
+        scheduledEndAt: "2026-07-17T19:15:00-03:00",
+        shiftLabel: "SD",
+        reference: "2026-07-18T08:00:00-03:00",
+    }).status, "saindo");
+
+    // E a sobra real do SN na virada da manha continua "saindo".
+    assert.equal(resolveOccupancyDirection({
+        startedAt: "2026-07-17T18:57:00-03:00",
+        scheduledEndAt: "2026-07-18T07:15:00-03:00",
+        shiftLabel: "SN",
+        reference: "2026-07-18T07:20:00-03:00",
+    }).status, "saindo");
+});
+
 test("resolveInterventionLineState: CONTINUA so para quem comecou em turno anterior e atravessou a virada", () => {
     // Cenario Leo Morais: chegou ontem 19:01 (SN), continuou para o SD de hoje
     // (scheduledEndAt = hoje 19:00). Agora 08:13 (SD): atravessou a virada -> CONTINUA.
