@@ -96,3 +96,24 @@ test("override vazio mantem a ordem automatica (sem prioridade manual)", () => {
     assert.deepEqual(orderOf(applied), ["doc-ana", "doc-bruno"]);
     assert.equal(applied.every((entry) => entry.manualJustification === null), true);
 });
+
+test("REGRESSAO 2026-07-18: painel descobre sessao de refeicao pelos notices do banco, nao so pelo env", async () => {
+    // Com TELEGRAM_ALLOWED_CHAT_IDS vazio (magalu pos-migracao), o bot rodava o
+    // /almoco no grupo mas painel e lembretes nao enxergavam a sessao persistida.
+    // A descoberta agora considera os chats com sessao gravada no banco.
+    const { filterMealBreakSessionNoticeChatIds } = await import("@/modules/telegram/meal-breaks");
+
+    const rows = [
+        { noticeKey: "-1001591556887:meal_break:session:day", chatId: "-1001591556887" },
+        { noticeKey: "-1001591556887:meal_break:session:night", chatId: "-1001591556887" },
+        { noticeKey: "-2009999999999:meal_break:session", chatId: "-2009999999999" }, // legado (sem sufixo de modo)
+        { noticeKey: "-1001591556887:meal_break:priority:day", chatId: "-1001591556887" }, // outro stage, ignorar
+        { noticeKey: "123:meal_break:session:day", chatId: null }, // sem chatId, ignorar
+    ];
+
+    assert.deepEqual(
+        filterMealBreakSessionNoticeChatIds(rows, "day").sort(),
+        ["-1001591556887", "-2009999999999"].sort(),
+    );
+    assert.deepEqual(filterMealBreakSessionNoticeChatIds(rows, "night"), ["-1001591556887"]);
+});
