@@ -8,7 +8,7 @@ import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/ba
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 
 export interface StartRegulationOccupancyInput {
@@ -298,33 +298,30 @@ export function resolveRegulationContinuationScheduledEndAt(params: {
         explicitScheduledEndAt: params.explicitScheduledEndAt ?? null,
     }).scheduledEndAt;
 
-    const fromContinuation = inferRegulationCoverageWindow({
-        startedAt: params.continuationAt,
-        shiftLabel: "P",
-        postCode: params.postCode ?? null,
-        explicitScheduledStartAt: null,
-        explicitScheduledEndAt: null,
-    }).scheduledEndAt;
+    // Regra canonica (ver modules/operational/rules.ts): o aviso referencia a
+    // virada de turno mais proxima da mensagem, e a cobertura passa a incluir o
+    // bloco SEGUINTE a essa virada — um unico bloco discreto. Se o bloco ja
+    // estava coberto, o aviso e apenas reforco (caso Manuella: "continua" as
+    // 19h de um P 07h→07h nao infla para 36h). Independe de o medico avisar
+    // antes ou depois da virada (casos Uenderson 06:41/08:12, jul/2026).
+    const referenceBoundary = resolveContinuationReferenceBoundary(params.continuationAt);
+    const blockAfterReference = new Date(referenceBoundary.getTime() + 60000);
+    const requiredEndAt = inferRegulationScheduledEndAt(
+        blockAfterReference,
+        resolveOperationalShiftWindow(blockAfterReference).shiftLabel,
+        null,
+    );
 
     if (!fromExisting) {
-        return fromContinuation;
+        return requiredEndAt;
     }
 
-    if (!fromContinuation) {
+    if (!requiredEndAt) {
         return fromExisting;
     }
 
-    // Uma mensagem de continuidade DENTRO da janela ja coberta pelo plantao
-    // (ex.: medico de P desde 07h mandando "P" de novo as 19h apenas
-    // reforcando) e so um reforco — nao estende a cobertura. A extensao para
-    // 36h+ so acontece quando a continuidade ocorre no fim da janela ou
-    // depois: atraso/reforco nao significa um novo turno.
-    if (params.continuationAt.getTime() < fromExisting.getTime()) {
-        return fromExisting;
-    }
-
-    return fromContinuation.getTime() > fromExisting.getTime()
-        ? fromContinuation
+    return requiredEndAt.getTime() > fromExisting.getTime()
+        ? requiredEndAt
         : fromExisting;
 }
 

@@ -156,6 +156,29 @@ export function hasPlannedInterventionCoverageForCurrentShift(params: {
     return new Date(params.scheduledEndAt).getTime() > currentShiftStart.getTime();
 }
 
+/**
+ * Chegada adiantada declarada para o TURNO ATUAL (caso Caio 2152, jul/2026:
+ * "Caio 2152 SD" às 05:07). O label explícito do turno corrente + cobertura
+ * agendada que entra no turno corrente fazem dele o titular do turno — por mais
+ * cedo que tenha chegado, ele NÃO é sobra da virada: nada de "VERIFICAR"/Retirar
+ * às 07:00. A exigência de scheduledEndAt dentro do turno protege o caso oposto
+ * (um SD de ONTEM ainda aberto às 08:00 de hoje tem o mesmo label do turno
+ * corrente, mas cobertura vencida → segue "saindo").
+ */
+export function isDeclaredCurrentShiftArrival(params: {
+    shiftLabel: OccupancyShiftLabel;
+    scheduledEndAt?: string | Date | null;
+    reference: string | Date;
+}) {
+    if (!params.shiftLabel || params.shiftLabel === "P" || !params.scheduledEndAt) {
+        return false;
+    }
+
+    const window = resolveOperationalShiftWindow(params.reference);
+    return params.shiftLabel === window.shiftLabel
+        && new Date(params.scheduledEndAt).getTime() > window.startedAt.getTime();
+}
+
 export type OccupancyDirection = "entrando" | "saindo";
 
 /**
@@ -185,6 +208,7 @@ export function resolveOccupancyDirection(params: {
 
     const leaving = startedAt != null
         && isBeforeCurrentOperationalShift(startedAt, reference)
+        && !isDeclaredCurrentShiftArrival({ shiftLabel, scheduledEndAt, reference })
         && !hasPlannedInterventionCoverageForCurrentShift({ shiftLabel, scheduledEndAt, reference });
 
     return {
@@ -227,6 +251,12 @@ export function resolveInterventionLineState(params: {
     const anchor = boardStartedAt ?? startedAt;
 
     if (anchor == null || !isBeforeCurrentOperationalShift(anchor, reference)) {
+        return { kind: "none" };
+    }
+
+    // Chegada adiantada declarada para o turno atual ("2152 SD" às 05:07): é o
+    // titular do turno corrente, não carry-over — nem "continua" nem "saindo".
+    if (isDeclaredCurrentShiftArrival({ shiftLabel, scheduledEndAt, reference })) {
         return { kind: "none" };
     }
 

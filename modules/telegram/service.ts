@@ -57,7 +57,7 @@ import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
-import { resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
+import { resolveContinuationReferenceBoundary, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
@@ -450,6 +450,10 @@ interface TelegramOperationalContinuityOccupancy {
 
 const TELEGRAM_CONTINUITY_LINK_WINDOW_MS = 18 * 60 * 60 * 1000;
 const TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS = 2 * 60 * 60 * 1000;
+// Tolerância de fechamento da fonte de continuidade explícita: rendição, expiry
+// e saída antecipada fecham a ocupação do bloco anterior de ~2h antes da virada
+// até depois dela — o médico ainda "estava lá na virada" para fins de vínculo.
+const TELEGRAM_CONTINUATION_SOURCE_CLOSURE_TOLERANCE_MS = 2 * 60 * 60 * 1000;
 const TELEGRAM_FORCED_TAKEOVER_MIN_DURATION_MS = 60 * 1000;
 const TELEGRAM_HALF_SHIFT_AUTO_END_HHMM = "17:00";
 // Hora esperada de chegada do meio plantão da tarde. É o piso a partir do qual o
@@ -1305,6 +1309,7 @@ async function listTelegramDoctorOperationalOccupancies(doctorId: string) {
 async function findTelegramContinuityContext(params: {
     doctorId: string;
     eventAt: Date;
+    explicitContinuation?: boolean;
 }) {
     const occupancies = await listTelegramDoctorOperationalOccupancies(params.doctorId);
     const eligible = occupancies.filter((occupancy) => occupancy.startedAt.getTime() <= params.eventAt.getTime() + 900000);
@@ -1319,10 +1324,24 @@ async function findTelegramContinuityContext(params: {
     const recentClosed = eligible
         .filter((occupancy) => {
             const endedAt = resolveTelegramOperationalEndedAt(occupancy);
-            return Boolean(
-                endedAt
-                && shouldLinkRecentClosedTelegramContinuity(params.eventAt, endedAt),
-            );
+            if (!endedAt) {
+                return false;
+            }
+
+            // Continuidade explícita usa a regra da fronteira (independe da hora do
+            // aviso); a saída-e-volta-rápida implícita continua valendo em paralelo.
+            if (
+                params.explicitContinuation
+                && shouldLinkExplicitContinuationClosedSource({
+                    eventAt: params.eventAt,
+                    sourceStartedAt: occupancy.startedAt,
+                    sourceEndedAt: endedAt,
+                })
+            ) {
+                return true;
+            }
+
+            return shouldLinkRecentClosedTelegramContinuity(params.eventAt, endedAt);
         })
         .sort(compareTelegramContinuitySource);
     const source = activeOccupancies[0] ?? recentClosed[0] ?? null;
@@ -1373,6 +1392,32 @@ export function shouldLinkActiveTelegramContinuitySource(params: {
     return params.eventAt.getTime() < expiry.getTime();
 }
 
+/**
+ * Vínculo de continuidade EXPLÍCITA ("continua"/"continuando") com um plantão já
+ * fechado. Deriva da virada de turno que a mensagem referencia (a mais próxima),
+ * não da hora do aviso: a fonte é a ocupação que cobria o bloco ANTERIOR à
+ * virada — começou antes dela e permaneceu até perto dela (fechamentos por
+ * rendição/expiry/saída acontecem de ~2h antes da virada até depois).
+ *
+ * Vale para qualquer par origem→destino, inclusive entre domínios (ramal 2032 →
+ * base CB02 e vice-versa): a listagem de fontes cobre regulação e intervenção.
+ * Caso Luiz Alvarez (jul/2026): SN na BR05 rendido 07:20, "continuando na cb02"
+ * às 10:15 — referencia a virada das 07:00 e linka, ganhando o badge Continua e
+ * a âncora de prioridade da véspera.
+ */
+export function shouldLinkExplicitContinuationClosedSource(params: {
+    eventAt: Date;
+    sourceStartedAt: Date;
+    sourceEndedAt: Date;
+}) {
+    const referenceBoundary = resolveContinuationReferenceBoundary(params.eventAt);
+    if (params.sourceStartedAt.getTime() >= referenceBoundary.getTime()) {
+        return false;
+    }
+
+    return params.sourceEndedAt.getTime() >= referenceBoundary.getTime() - TELEGRAM_CONTINUATION_SOURCE_CLOSURE_TOLERANCE_MS;
+}
+
 export function shouldLinkRecentClosedTelegramContinuity(eventAt: Date, endedAt: Date) {
     const elapsedMs = eventAt.getTime() - endedAt.getTime();
     if (elapsedMs < 0) {
@@ -1381,7 +1426,8 @@ export function shouldLinkRecentClosedTelegramContinuity(eventAt: Date, endedAt:
 
     // Linkar "recent closed" só vale enquanto ainda dá pra entender como saída-e-volta-rápida
     // dentro do mesmo turno. Se um turno operacional inteiro passou com o medico fora do quadro,
-    // a próxima chegada é plantão novo — quem realmente esticou precisa mandar "continuando".
+    // a próxima chegada é plantão novo — quem realmente esticou precisa mandar "continuando"
+    // (aí vale a regra da fronteira: shouldLinkExplicitContinuationClosedSource).
     if (elapsedMs > TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS) {
         return false;
     }
@@ -2041,7 +2087,12 @@ async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageT
     let recoveredShiftLabel: string | null = activeOcc?.shiftLabel ?? null;
 
     if (!recoveredBaseCode) {
-        const continuityContext = await findTelegramContinuityContext({ doctorId: resolvedDoctor.id, eventAt });
+        // rawParsed.isContinuation é garantido true aqui (guard no topo da função).
+        const continuityContext = await findTelegramContinuityContext({
+            doctorId: resolvedDoctor.id,
+            eventAt,
+            explicitContinuation: true,
+        });
         const source = continuityContext?.source;
         if (!source) {
             return null;
@@ -8734,7 +8785,11 @@ async function applyParsedEntry(params: {
                 const halfShiftScheduledStartAt = assumedHalfShift ? resolveHalfShiftScheduledStartAt(eventAt) : null;
                 const continuityContext = parsed.isDeparture
                     ? null
-                    : await findTelegramContinuityContext({ doctorId: resolvedDoctor.id, eventAt });
+                    : await findTelegramContinuityContext({
+                        doctorId: resolvedDoctor.id,
+                        eventAt,
+                        explicitContinuation: Boolean(parsed.isContinuation),
+                    });
                 const sourceShiftLabelForLink = continuityContext?.source
                     ? (continuityContext.source.shiftLabel
                         ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
@@ -8802,13 +8857,17 @@ async function applyParsedEntry(params: {
                 //
                 // The cross-shift expiry guard remains for same-target continuations whose
                 // anchor falls in an already-expired P window.
+                // Âncora numa janela P já expirada: o started_at não pode retroagir ao
+                // plantão anterior, mas também não é a hora da mensagem — a continuidade
+                // diz que o médico está no posto desde o início do turno corrente
+                // (caso Uenderson 08:12, jul/2026: mensagem das 08:12 não é chegada).
                 const crossShiftExpiry = shouldUseContinuityContext
                     ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
                     : null;
                 const effectiveContinuationStartedAt = isCrossTargetContinuation
                     ? eventAt
                     : (crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
-                        ? eventAt
+                        ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
                         : continuationStartedAt);
 
                 const createRegulationArrival = (startedAtOverride?: Date) => startRegulationOccupancy({
@@ -9002,7 +9061,11 @@ async function applyParsedEntry(params: {
             } else {
                 const continuityContext = parsed.isDeparture
                     ? null
-                    : await findTelegramContinuityContext({ doctorId: resolvedDoctor.id, eventAt });
+                    : await findTelegramContinuityContext({
+                        doctorId: resolvedDoctor.id,
+                        eventAt,
+                        explicitContinuation: Boolean(parsed.isContinuation),
+                    });
                 const sourceShiftLabelForLink = continuityContext?.source
                     ? (continuityContext.source.shiftLabel
                         ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
@@ -9061,13 +9124,15 @@ async function applyParsedEntry(params: {
                 // Cross-target continuation: same rationale as the regulation branch above.
                 // startedAt = eventAt (real arrival at this base); boardStartedAt holds the
                 // historical anchor for panel display, priority ordering and bank hours.
+                // Âncora numa janela P já expirada: mesmo racional da regulação — a
+                // continuidade ancora no início do turno corrente, não na hora da mensagem.
                 const crossShiftExpiryIntv = shouldUseContinuityContext
                     ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
                     : null;
                 const effectiveContinuationStartedAtIntv = isCrossTargetContinuation
                     ? eventAt
                     : (crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
-                        ? eventAt
+                        ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
                         : continuationStartedAt);
 
                 const createInterventionArrival = (startedAtOverride?: Date) => startInterventionOccupancy({

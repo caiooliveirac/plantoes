@@ -41,6 +41,7 @@ import {
     resolveLatestClosedShiftRequest,
     resolveTelegramSuccessReplyKind,
     shouldLinkActiveTelegramContinuitySource,
+    shouldLinkExplicitContinuationClosedSource,
     shouldLinkRecentClosedTelegramContinuity,
     shouldDeferPendingDepartureCorrectionToFreshParsing,
     shouldUseTelegramSenderNameFallback,
@@ -2652,6 +2653,75 @@ test("shouldLinkRecentClosedTelegramContinuity só linka saída-e-volta-rápida 
             new Date("2026-05-03T19:09:59-03:00"),
             new Date("2026-05-03T07:33:28-03:00"),
         ),
+        false,
+    );
+});
+
+test("REGRESSAO Luiz Alvarez: 'continuando' explicito linka pelo bloco anterior a virada referenciada", () => {
+    // Caso real 2026-07-18: BR05 (SN da vespera, chegada 19:05) fechada por
+    // rendicao as 07:20; "Luiz continuando na cb02" as 10:15. O aviso referencia
+    // a virada das 07:00; a BR05 cobria o bloco anterior → linka (cross-base).
+    const source = {
+        sourceStartedAt: new Date("2026-07-17T19:05:39-03:00"),
+        sourceEndedAt: new Date("2026-07-18T07:20:56-03:00"),
+    };
+
+    // Sem intencao explicita o link implicito continua restrito (gap > 2h nao linka).
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(new Date("2026-07-18T10:15:41-03:00"), source.sourceEndedAt),
+        false,
+    );
+
+    // Explicito: linka independente da hora do aviso dentro do bloco continuado.
+    for (const eventAt of ["2026-07-18T07:05:00-03:00", "2026-07-18T08:12:21-03:00", "2026-07-18T10:15:41-03:00", "2026-07-18T12:59:00-03:00"]) {
+        assert.equal(
+            shouldLinkExplicitContinuationClosedSource({ eventAt: new Date(eventAt), ...source }),
+            true,
+            `deveria linkar com aviso as ${eventAt}`,
+        );
+    }
+
+    // "Continuando" mandado ja perto/dentro do SN (>= 13:00 referencia a virada
+    // das 19:00): a BR05 nao cobria o bloco anterior a ESSA virada → plantao novo.
+    assert.equal(
+        shouldLinkExplicitContinuationClosedSource({ eventAt: new Date("2026-07-18T19:30:00-03:00"), ...source }),
+        false,
+    );
+});
+
+test("shouldLinkExplicitContinuationClosedSource: rendicao antecipada antes da virada ainda linka; fonte do proprio bloco nao", () => {
+    // Fonte fechada 06:45 (sucessor chegou cedo) e "continua" as 08:00 — cruzava
+    // janelas operacionais (SN→SD) e a regra antiga de recem-fechado rejeitava.
+    // Pela fronteira: fechou a 15 min da virada das 07:00 → estava la na virada → linka.
+    assert.equal(
+        shouldLinkExplicitContinuationClosedSource({
+            eventAt: new Date("2026-07-18T08:00:00-03:00"),
+            sourceStartedAt: new Date("2026-07-17T19:02:00-03:00"),
+            sourceEndedAt: new Date("2026-07-18T06:45:00-03:00"),
+        }),
+        true,
+    );
+
+    // Fonte que comecou DEPOIS da virada referenciada (plantao do proprio bloco,
+    // ex.: chegou 09:00 e saiu 09:30) nao e continuidade de virada — o link
+    // implicito de saida-e-volta-rapida cobre esse caso em paralelo.
+    assert.equal(
+        shouldLinkExplicitContinuationClosedSource({
+            eventAt: new Date("2026-07-18T11:00:00-03:00"),
+            sourceStartedAt: new Date("2026-07-18T09:00:00-03:00"),
+            sourceEndedAt: new Date("2026-07-18T09:30:00-03:00"),
+        }),
+        false,
+    );
+
+    // Fonte que abandonou o quadro horas antes da virada (saiu 23:00) nao linka:
+    // o medico nao estava la na virada das 07:00.
+    assert.equal(
+        shouldLinkExplicitContinuationClosedSource({
+            eventAt: new Date("2026-07-18T09:00:00-03:00"),
+            sourceStartedAt: new Date("2026-07-17T19:00:00-03:00"),
+            sourceEndedAt: new Date("2026-07-17T23:00:00-03:00"),
+        }),
         false,
     );
 });

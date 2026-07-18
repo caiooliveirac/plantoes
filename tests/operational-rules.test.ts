@@ -17,7 +17,7 @@ import {
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationContinuationScheduledEndAt } from "@/modules/regulation/service";
 import { dedupeOperationalIdentityLabels, describeFixedRoleTransferImpact, isOperationalRoleRemovalSentinel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
-import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveContinuationReferenceBoundary, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
 
@@ -113,6 +113,41 @@ test("resolveOccupancyDirection: classifica saindo vs entrando na virada das 19h
         shiftLabel: "SN",
         reference,
     }).status, "entrando");
+});
+
+test("REGRESSAO Caio 2152: chegada adiantada declarada SD nao vira VERIFICAR/Retirar as 07:00", () => {
+    // Caso real 2026-07-18: "Caio 2152 SD" as 05:07 (alem dos 60 min de tolerancia
+    // pre-turno), agendado inferido 07:00→19:15. O quadro marcava "saindo" na
+    // virada — como se ele fosse sobra do SN — e a chefia chegou a remove-lo.
+    // Label explicito do turno corrente + cobertura agendada = titular do SD.
+    const caio = {
+        startedAt: "2026-07-18T05:07:20-03:00",
+        scheduledEndAt: "2026-07-18T19:15:00-03:00",
+        shiftLabel: "SD" as const,
+    };
+
+    // Nao importa a hora do aviso: as 07:05, 09:00 ou 15:00, ele e o titular.
+    for (const reference of ["2026-07-18T07:05:00-03:00", "2026-07-18T09:00:00-03:00", "2026-07-18T15:00:00-03:00"]) {
+        assert.equal(resolveOccupancyDirection({ ...caio, reference }).status, "entrando", `saindo indevido as ${reference}`);
+        assert.equal(resolveInterventionLineState({ ...caio, boardStartedAt: caio.startedAt, reference }).kind, "none");
+    }
+
+    // O caso oposto segue protegido: um SD de ONTEM ainda aberto hoje de manha
+    // tem o mesmo label do turno corrente, mas cobertura vencida → "saindo".
+    assert.equal(resolveOccupancyDirection({
+        startedAt: "2026-07-17T06:58:00-03:00",
+        scheduledEndAt: "2026-07-17T19:15:00-03:00",
+        shiftLabel: "SD",
+        reference: "2026-07-18T08:00:00-03:00",
+    }).status, "saindo");
+
+    // E a sobra real do SN na virada da manha continua "saindo".
+    assert.equal(resolveOccupancyDirection({
+        startedAt: "2026-07-17T18:57:00-03:00",
+        scheduledEndAt: "2026-07-18T07:15:00-03:00",
+        shiftLabel: "SN",
+        reference: "2026-07-18T07:20:00-03:00",
+    }).status, "saindo");
 });
 
 test("resolveInterventionLineState: CONTINUA so para quem comecou em turno anterior e atravessou a virada", () => {
@@ -1462,9 +1497,11 @@ test("resolveRegulationContinuationScheduledEndAt does NOT extend when continuat
     assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-04-28T07:15:00-03:00").toISOString());
 });
 
-test("resolveRegulationContinuationScheduledEndAt extends to 36h only when continuation happens after the covered window ends", () => {
-    // Continuidade genuina: o medico avisa apos o fim da janela (manha seguinte),
-    // assumindo um terceiro turno. So aqui a cobertura se estende.
+test("resolveRegulationContinuationScheduledEndAt: continuidade apos o fim da janela emenda UM bloco discreto", () => {
+    // Continuidade genuina: o medico avisa apos o fim da janela (07:40 da manha
+    // seguinte). O aviso referencia a virada das 07:00 → cobertura ate o fim do
+    // bloco SD (19:15). Um bloco discreto por aviso, nunca dois — para seguir a
+    // noite, um novo "continua" perto da virada das 19:00 emenda o proximo.
     const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
         existingStartedAt: new Date("2026-04-27T06:48:00-03:00"),
         continuationAt: new Date("2026-04-28T07:40:00-03:00"),
@@ -1473,7 +1510,7 @@ test("resolveRegulationContinuationScheduledEndAt extends to 36h only when conti
         explicitScheduledEndAt: null,
     });
 
-    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-04-29T07:15:00-03:00").toISOString());
+    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-04-28T19:15:00-03:00").toISOString());
 });
 
 test("REGRESSAO Manuella Barreto: 'continua' dentro da janela P nao infla o plantao para 36h", () => {
@@ -1495,6 +1532,72 @@ test("REGRESSAO Manuella Barreto: 'continua' dentro da janela P nao infla o plan
     assert.ok(coverageHours <= 25, `cobertura inflada: ${coverageHours}h (esperado <= 25h)`);
 });
 
+test("REGRESSAO Uenderson 1361: 'continua' estende para o turno seguinte independente da hora do aviso", () => {
+    // Caso real 2026-07-18: SN desde 18:57 da vespera, "continuando 1361" as 06:41
+    // e "continua" as 08:12. A regra antiga tratava o aviso pre-virada como reforco
+    // e mantinha 07:15 — o expiry fechava a ocupacao e a proxima mensagem recriava
+    // o plantao com chegada 08:12. Ambos os avisos referenciam a virada das 07:00
+    // e devem produzir a MESMA cobertura (fim do bloco SD, 19:15).
+    const base = {
+        existingStartedAt: new Date("2026-07-17T18:57:15-03:00"),
+        postCode: "1361",
+        inferredScheduledStartAt: new Date("2026-07-17T19:00:00-03:00"),
+        explicitScheduledEndAt: new Date("2026-07-18T07:15:00-03:00"),
+    };
+
+    const beforeBoundary = resolveRegulationContinuationScheduledEndAt({
+        ...base,
+        continuationAt: new Date("2026-07-18T06:41:36-03:00"),
+    });
+    const afterBoundary = resolveRegulationContinuationScheduledEndAt({
+        ...base,
+        continuationAt: new Date("2026-07-18T08:12:21-03:00"),
+    });
+
+    assert.equal(beforeBoundary?.toISOString(), new Date("2026-07-18T19:15:00-03:00").toISOString());
+    assert.equal(afterBoundary?.toISOString(), beforeBoundary?.toISOString());
+});
+
+test("resolveContinuationReferenceBoundary: o aviso referencia a virada mais proxima", () => {
+    // Madrugada/manha → virada das 07:00, nao importa se antes ou depois dela.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-18T06:41:00-03:00")).toISOString(),
+        new Date("2026-07-18T07:00:00-03:00").toISOString(),
+    );
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-18T10:15:00-03:00")).toISOString(),
+        new Date("2026-07-18T07:00:00-03:00").toISOString(),
+    );
+    // Tarde/inicio da noite → virada das 19:00.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-18T17:00:00-03:00")).toISOString(),
+        new Date("2026-07-18T19:00:00-03:00").toISOString(),
+    );
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-18T22:00:00-03:00")).toISOString(),
+        new Date("2026-07-18T19:00:00-03:00").toISOString(),
+    );
+    // Empate exato (13:00, meio do SD) → a virada anterior (comportamento conservador).
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-18T13:00:00-03:00")).toISOString(),
+        new Date("2026-07-18T07:00:00-03:00").toISOString(),
+    );
+});
+
+test("resolveRegulationContinuationScheduledEndAt: reforco no MEIO da janela segue sem estender", () => {
+    // Mesmo com a regra da reta final, um "continua" com 12h+ de cobertura restante
+    // (P desde 07h reforcado as 19h) continua sendo apenas reforco.
+    const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
+        existingStartedAt: new Date("2026-07-17T07:00:00-03:00"),
+        continuationAt: new Date("2026-07-17T19:00:00-03:00"),
+        postCode: "1367",
+        inferredScheduledStartAt: new Date("2026-07-17T07:00:00-03:00"),
+        explicitScheduledEndAt: null,
+    });
+
+    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-07-18T07:15:00-03:00").toISOString());
+});
+
 test("resolveInterventionContinuationScheduledEndAt: continuidade dentro da janela so reforca (nao estende)", () => {
     // P de intervencao desde 07:00, fim agendado 07:00 do dia seguinte. "continua"
     // as 19:00 cai dentro da janela: a proxima virada coincide com o fim atual.
@@ -1513,6 +1616,31 @@ test("resolveInterventionContinuationScheduledEndAt: continuidade apos a janela 
         continuationAt: new Date("2026-05-15T19:30:00-03:00"),
     });
     assert.equal(nextScheduledEndAt.toISOString(), new Date("2026-05-16T07:00:00-03:00").toISOString());
+});
+
+test("resolveInterventionContinuationScheduledEndAt: aviso pre-virada emenda o bloco seguinte a virada referenciada", () => {
+    // SN com fim agendado 07:00; "continuando" as 06:41 referencia a virada das
+    // 07:00 → cobertura ate o fim do bloco seguinte (19:00).
+    const nearMorning = resolveInterventionContinuationScheduledEndAt({
+        existingScheduledEndAt: new Date("2026-07-18T07:00:00-03:00"),
+        continuationAt: new Date("2026-07-18T06:41:00-03:00"),
+    });
+    assert.equal(nearMorning.toISOString(), new Date("2026-07-18T19:00:00-03:00").toISOString());
+
+    // SD com fim 19:00; "continua" as 18:30 referencia a virada das 19:00 →
+    // emenda ate 07:00 do dia seguinte.
+    const nearEvening = resolveInterventionContinuationScheduledEndAt({
+        existingScheduledEndAt: new Date("2026-07-18T19:00:00-03:00"),
+        continuationAt: new Date("2026-07-18T18:30:00-03:00"),
+    });
+    assert.equal(nearEvening.toISOString(), new Date("2026-07-19T07:00:00-03:00").toISOString());
+
+    // Aviso DEPOIS da virada produz a mesma cobertura que o aviso antes dela.
+    const afterBoundary = resolveInterventionContinuationScheduledEndAt({
+        existingScheduledEndAt: new Date("2026-07-18T07:00:00-03:00"),
+        continuationAt: new Date("2026-07-18T10:15:40-03:00"),
+    });
+    assert.equal(afterBoundary.toISOString(), nearMorning.toISOString());
 });
 
 test("resolveInterventionContinuationScheduledEndAt: nunca encurta um fim agendado mais distante", () => {
