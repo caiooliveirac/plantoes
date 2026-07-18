@@ -28,6 +28,7 @@ import { isRemoteOperationalRole, isRemotePriorityRegulationCode, normalizeOpera
 import { getSaoPauloParts, resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import type { TelegramFormatOptions, TelegramUpdate } from "@/modules/telegram/api";
 import { buildChoiceKeyboard, escapeTelegramMarkdown, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
+import { publishBoardUpdate } from "@/lib/board-live";
 import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds } from "@/modules/telegram/config";
 import { getOperationalBoard } from "@/services/board.service";
 
@@ -2564,6 +2565,8 @@ async function saveMealBreakPriorityOverrides(overrides: MealBreakPriorityOverri
                 payload: overrides,
             },
         });
+
+    publishBoardUpdate(`meal-break:priority:${overrides.mode}`);
 }
 
 async function saveMealBreakEligibilityOverrides(overrides: MealBreakEligibilityOverrideRecord) {
@@ -2581,6 +2584,8 @@ async function saveMealBreakEligibilityOverrides(overrides: MealBreakEligibility
                 payload: overrides,
             },
         });
+
+    publishBoardUpdate(`meal-break:eligibility:${overrides.mode}`);
 }
 
 function buildMealBreakPriorityEntries(params: {
@@ -4593,9 +4598,39 @@ function getMealBreakVisibleChatIds() {
     return [...new Set([...getTelegramAdminUserIds(), ...getTelegramAnnouncementChatIds()])];
 }
 
+/**
+ * Chats candidatos a ter sessão de refeição, a partir das sessões PERSISTIDAS no
+ * banco (uma linha por chat+modo, upsert). Complementa a lista do env: com
+ * TELEGRAM_ALLOWED_CHAT_IDS vazio (caso magalu pós-migração, jul/2026) o bot
+ * funciona no grupo mas painel e lembretes ficavam cegos — a sessão existia no
+ * banco e ninguém a descobria. loadMealBreakSession valida operationalDate/modo,
+ * então chats com sessão antiga são filtrados naturalmente.
+ */
+export function filterMealBreakSessionNoticeChatIds(
+    rows: Array<{ noticeKey: string; chatId: string | null }>,
+    mode: MealBreakMode,
+) {
+    const suffixes = mode === "day"
+        ? [":meal_break:session:day", ":meal_break:session"]
+        : [":meal_break:session:night"];
+    return [...new Set(rows
+        .filter((row) => suffixes.some((suffix) => row.noticeKey.endsWith(suffix)))
+        .map((row) => row.chatId)
+        .filter((chatId): chatId is string => Boolean(chatId)))];
+}
+
+async function resolveMealBreakDiscoveryChatIds(mode: MealBreakMode) {
+    const envChatIds = getMealBreakVisibleChatIds();
+    const rows = await getDb().query.telegramBotNotices.findMany({
+        where: eq(telegramBotNotices.stage, SESSION_NOTICE_STAGE),
+        columns: { noticeKey: true, chatId: true },
+    });
+    return [...new Set([...envChatIds, ...filterMealBreakSessionNoticeChatIds(rows, mode)])];
+}
+
 async function resolveCurrentOperationalMealBreakState(referenceAt: Date, mode: MealBreakMode) {
     const operationalDate = formatOperationalDate(referenceAt);
-    const chatIds = getMealBreakVisibleChatIds();
+    const chatIds = await resolveMealBreakDiscoveryChatIds(mode);
     if (chatIds.length === 0) {
         return null;
     }
@@ -4630,6 +4665,11 @@ async function saveMealBreakSession(chatId: string, session: MealBreakSession) {
                 payload: session,
             },
         });
+
+    // O painel assina /api/board/stream e faz router.refresh() a cada evento —
+    // sem publicar aqui, o almoço/descanso registrado no bot só aparecia no
+    // próximo refresh casual do quadro, nunca "em tempo real".
+    publishBoardUpdate(`meal-break:session:${session.mode}`);
 }
 
 async function reserveMealBreakAutoNotice(chatId: string, operationalDate: string, mode: MealBreakMode) {
@@ -5417,7 +5457,7 @@ export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()
 
     const mode = resolveMealBreakModeFromReference(referenceDate);
     const operationalDate = formatOperationalDate(referenceDate);
-    const chatIds = getMealBreakVisibleChatIds();
+    const chatIds = await resolveMealBreakDiscoveryChatIds(mode);
     let sent = 0;
     let evaluated = 0;
 
