@@ -2656,6 +2656,33 @@ test("shouldLinkRecentClosedTelegramContinuity só linka saída-e-volta-rápida 
     );
 });
 
+test("REGRESSAO Luiz Alvarez: 'continuando' explicito amplia a janela de link com plantao recem-fechado", () => {
+    // Caso real 2026-07-18: BR05 (SN da vespera) fechada por rendicao as 07:20;
+    // "Luiz continuando na cb02" as 10:15 — gap de 2h54, mesmo turno SD.
+    const endedAt = new Date("2026-07-18T07:20:56-03:00");
+    const eventAt = new Date("2026-07-18T10:15:41-03:00");
+
+    // Sem intencao explicita: gap > 2h nao linka (comportamento preservado).
+    assert.equal(shouldLinkRecentClosedTelegramContinuity(eventAt, endedAt), false);
+
+    // Com "continuando" explicito: linka — a continuidade foi declarada.
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(eventAt, endedAt, { explicitContinuation: true }),
+        true,
+    );
+
+    // Mesmo explicito, nao cruza para outro turno operacional: fechou no SD,
+    // "continuando" mandado ja no SN (19:30) e plantao novo.
+    assert.equal(
+        shouldLinkRecentClosedTelegramContinuity(
+            new Date("2026-07-18T19:30:00-03:00"),
+            endedAt,
+            { explicitContinuation: true },
+        ),
+        false,
+    );
+});
+
 test("shouldLinkRecentClosedTelegramContinuity rejeita gap negativo (endedAt no futuro)", () => {
     assert.equal(
         shouldLinkRecentClosedTelegramContinuity(

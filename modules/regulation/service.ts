@@ -8,7 +8,7 @@ import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/ba
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 
 export interface StartRegulationOccupancyInput {
@@ -70,6 +70,10 @@ export function resolveHistoricalAdminCorrectionEndAt(params: {
 
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
+// Continuidade anunciada na reta final da janela coberta (ex.: "continua" às 06:41
+// para um SN que encerra 07:15) é declaração de que o médico segue no próximo turno,
+// não reforço — precisa estender o scheduledEndAt, senão o expiry fecha no boundary.
+export const CONTINUATION_NEAR_WINDOW_END_MS = 2 * 60 * 60 * 1000;
 
 export function isRegulationPostDeactivationActive(params: {
     deactivatedAt: Date;
@@ -316,10 +320,24 @@ export function resolveRegulationContinuationScheduledEndAt(params: {
 
     // Uma mensagem de continuidade DENTRO da janela ja coberta pelo plantao
     // (ex.: medico de P desde 07h mandando "P" de novo as 19h apenas
-    // reforcando) e so um reforco — nao estende a cobertura. A extensao para
-    // 36h+ so acontece quando a continuidade ocorre no fim da janela ou
-    // depois: atraso/reforco nao significa um novo turno.
+    // reforcando) e so um reforco — nao estende a cobertura. Mas continuidade
+    // anunciada na RETA FINAL da janela (ultimas 2h, ex.: "continua" as 06:41
+    // de um SN que encerra 07:15) e a forma normal de declarar que o medico
+    // segue no proximo turno: essa emenda UM bloco discreto apos o fim ja
+    // coberto (nunca mais que um) — senao o expiry fecha no boundary e a
+    // proxima mensagem recria a ocupacao com chegada = hora da mensagem.
     if (params.continuationAt.getTime() < fromExisting.getTime()) {
+        if (params.continuationAt.getTime() >= fromExisting.getTime() - CONTINUATION_NEAR_WINDOW_END_MS) {
+            const extendedReference = new Date(fromExisting.getTime() + 60000);
+            const extendedScheduledEndAt = inferRegulationScheduledEndAt(
+                extendedReference,
+                resolveOperationalShiftWindow(extendedReference).shiftLabel,
+                null,
+            );
+            if (extendedScheduledEndAt && extendedScheduledEndAt.getTime() > fromExisting.getTime()) {
+                return extendedScheduledEndAt;
+            }
+        }
         return fromExisting;
     }
 

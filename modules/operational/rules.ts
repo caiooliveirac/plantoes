@@ -231,26 +231,38 @@ export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: stri
 // Regra canônica — ver resolveRegulationContinuationScheduledEndAt (regulação)
 // e resolveInterventionContinuationScheduledEndAt (intervenção):
 //   • Continuidade DENTRO da janela já coberta = apenas reforço. Não estende.
-//   • Continuidade avisada APÓS o fim da janela = emenda do próximo bloco
-//     discreto (turno seguinte). Só aqui a cobertura se estende.
+//   • Continuidade avisada na RETA FINAL da janela (últimas 2h) ou APÓS o fim =
+//     emenda do próximo bloco discreto (turno seguinte). Anunciar "continua"
+//     ANTES da virada é a forma normal de declarar continuidade — sem estender,
+//     o expiry/rendição fecha no boundary e a próxima mensagem recria a
+//     ocupação com chegada = hora da mensagem (casos Uenderson/Luiz, jul/2026).
 //   • Continuidade nunca encurta a cobertura e nunca pula mais de um bloco.
 //   • Cobertura > 25h aciona o alerta de plantão prolongado (isExtendedLongShift
 //     em modules/telegram/service.ts) para um humano confirmar/corrigir.
+
+export const CONTINUATION_NEAR_BOUNDARY_EXTENSION_MS = 2 * 60 * 60 * 1000;
 
 /**
  * Fim agendado de uma continuação de intervenção.
  *
  * Extraído da lógica inline de continueInterventionOccupancy para dar paridade
  * estrutural e testabilidade ao lado de resolveRegulationContinuationScheduledEndAt.
- * Comportamento idêntico ao anterior: a cobertura é emendada apenas até a
- * PRÓXIMA virada de turno após o aviso (bloco discreto), nunca além — e nunca
- * encurta um fim já agendado mais distante.
+ * A cobertura é emendada até a PRÓXIMA virada de turno após o aviso (bloco
+ * discreto) — e, quando o aviso chega na reta final do bloco corrente (a virada
+ * imediata não acrescentaria cobertura), até a virada SEGUINTE. Nunca encurta
+ * um fim já agendado mais distante.
  */
 export function resolveInterventionContinuationScheduledEndAt(params: {
     existingScheduledEndAt: Date | null;
     continuationAt: Date;
 }): Date {
-    const continuationBoundary = resolveOperationalShiftWindow(params.continuationAt).nextBoundaryAt;
+    let continuationBoundary = resolveOperationalShiftWindow(params.continuationAt).nextBoundaryAt;
+    const existingEndMs = params.existingScheduledEndAt?.getTime() ?? null;
+    const nearBoundary = continuationBoundary.getTime() - params.continuationAt.getTime() <= CONTINUATION_NEAR_BOUNDARY_EXTENSION_MS;
+    const boundaryAddsNothing = existingEndMs === null || existingEndMs >= continuationBoundary.getTime();
+    if (nearBoundary && boundaryAddsNothing) {
+        continuationBoundary = resolveOperationalShiftWindow(continuationBoundary).nextBoundaryAt;
+    }
     return params.existingScheduledEndAt
         && params.existingScheduledEndAt.getTime() > continuationBoundary.getTime()
         ? params.existingScheduledEndAt

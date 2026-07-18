@@ -1495,6 +1495,36 @@ test("REGRESSAO Manuella Barreto: 'continua' dentro da janela P nao infla o plan
     assert.ok(coverageHours <= 25, `cobertura inflada: ${coverageHours}h (esperado <= 25h)`);
 });
 
+test("REGRESSAO Uenderson 1361: 'continua' na reta final do SN estende para o turno seguinte", () => {
+    // Caso real 2026-07-18: SN desde 18:57 da vespera, "continuando 1361" as 06:41
+    // (34 min antes do fim 07:15). A regra antiga tratava como reforco e mantinha
+    // 07:15 — o expiry fechava a ocupacao e a proxima mensagem recriava o plantao
+    // com chegada 08:12. Continuidade na reta final (<= 2h do fim) ESTENDE.
+    const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
+        existingStartedAt: new Date("2026-07-17T18:57:15-03:00"),
+        continuationAt: new Date("2026-07-18T06:41:36-03:00"),
+        postCode: "1361",
+        inferredScheduledStartAt: new Date("2026-07-17T19:00:00-03:00"),
+        explicitScheduledEndAt: new Date("2026-07-18T07:15:00-03:00"),
+    });
+
+    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-07-18T19:15:00-03:00").toISOString());
+});
+
+test("resolveRegulationContinuationScheduledEndAt: reforco no MEIO da janela segue sem estender", () => {
+    // Mesmo com a regra da reta final, um "continua" com 12h+ de cobertura restante
+    // (P desde 07h reforcado as 19h) continua sendo apenas reforco.
+    const nextScheduledEndAt = resolveRegulationContinuationScheduledEndAt({
+        existingStartedAt: new Date("2026-07-17T07:00:00-03:00"),
+        continuationAt: new Date("2026-07-17T19:00:00-03:00"),
+        postCode: "1367",
+        inferredScheduledStartAt: new Date("2026-07-17T07:00:00-03:00"),
+        explicitScheduledEndAt: null,
+    });
+
+    assert.equal(nextScheduledEndAt?.toISOString(), new Date("2026-07-18T07:15:00-03:00").toISOString());
+});
+
 test("resolveInterventionContinuationScheduledEndAt: continuidade dentro da janela so reforca (nao estende)", () => {
     // P de intervencao desde 07:00, fim agendado 07:00 do dia seguinte. "continua"
     // as 19:00 cai dentro da janela: a proxima virada coincide com o fim atual.
@@ -1513,6 +1543,24 @@ test("resolveInterventionContinuationScheduledEndAt: continuidade apos a janela 
         continuationAt: new Date("2026-05-15T19:30:00-03:00"),
     });
     assert.equal(nextScheduledEndAt.toISOString(), new Date("2026-05-16T07:00:00-03:00").toISOString());
+});
+
+test("resolveInterventionContinuationScheduledEndAt: 'continua' na reta final do bloco emenda o bloco SEGUINTE", () => {
+    // SN com fim agendado 07:00; "continuando" as 06:41 (19 min antes da virada).
+    // A virada imediata (07:00) nao acrescentaria cobertura — a intencao e o
+    // proximo turno: emenda ate 19:00.
+    const nearMorning = resolveInterventionContinuationScheduledEndAt({
+        existingScheduledEndAt: new Date("2026-07-18T07:00:00-03:00"),
+        continuationAt: new Date("2026-07-18T06:41:00-03:00"),
+    });
+    assert.equal(nearMorning.toISOString(), new Date("2026-07-18T19:00:00-03:00").toISOString());
+
+    // SD com fim 19:00; "continua" as 18:30 → emenda ate 07:00 do dia seguinte.
+    const nearEvening = resolveInterventionContinuationScheduledEndAt({
+        existingScheduledEndAt: new Date("2026-07-18T19:00:00-03:00"),
+        continuationAt: new Date("2026-07-18T18:30:00-03:00"),
+    });
+    assert.equal(nearEvening.toISOString(), new Date("2026-07-19T07:00:00-03:00").toISOString());
 });
 
 test("resolveInterventionContinuationScheduledEndAt: nunca encurta um fim agendado mais distante", () => {
