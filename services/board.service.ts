@@ -3352,6 +3352,27 @@ function isSuppressedBackwardContinuityCarry(
   return doctorsWithSdOnSnDay.has(candidate.doctorId);
 }
 
+/**
+ * Pré-processamento de candidatos que NÃO depende do slot: limpeza de fantasmas,
+ * mapa de sucessores, resumo de continuidade e mapeamento lógico. O fechamento
+ * mensal monta ~60 boards (um por slot de 12h) sobre as MESMAS linhas cruas —
+ * calcular isso uma vez por intervalo (em vez de uma vez por slot) removeu o
+ * maior custo de CPU da tela de payment-closing. Os candidatos resultantes são
+ * tratados como imutáveis pelos consumidores (nenhum estágio muta in-place).
+ */
+export function preparePaymentAllocationCandidateContext(rawRows: PaymentAllocationRawRow[]) {
+  const cleanRows = rawRows.filter((row) => !isTrueZeroDurationPhantom(row));
+  const successorStartMap = resolveSuccessorStartMap(cleanRows);
+  const continuitySourceSummaryByOccupancyId = buildContinuitySourceSummaryMap(cleanRows);
+  const mappedCandidates = cleanRows
+    .map(mapLogicalShiftCandidate)
+    .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null));
+
+  return { continuitySourceSummaryByOccupancyId, mappedCandidates };
+}
+
+export type PaymentAllocationCandidateContext = ReturnType<typeof preparePaymentAllocationCandidateContext>;
+
 export function buildPaymentAllocationBoardModel(params: {
   targets: PaymentAllocationTargetDefinition[];
   rawRows: PaymentAllocationRawRow[];
@@ -3361,14 +3382,12 @@ export function buildPaymentAllocationBoardModel(params: {
   endedAt: string;
   bankHoursBalanceOverridesByContinuityGroupId?: Map<string, BankHoursBalanceOverrideSummary>;
   generatedAt?: string;
+  /** Contexto pré-computado por intervalo (ver preparePaymentAllocationCandidateContext). */
+  candidateContext?: PaymentAllocationCandidateContext;
 }) {
-  const cleanRows = params.rawRows.filter((row) => !isTrueZeroDurationPhantom(row));
-  const successorStartMap = resolveSuccessorStartMap(cleanRows);
-  const continuitySourceSummaryByOccupancyId = buildContinuitySourceSummaryMap(cleanRows);
+  const { continuitySourceSummaryByOccupancyId, mappedCandidates } =
+    params.candidateContext ?? preparePaymentAllocationCandidateContext(params.rawRows);
   const eligibleTargets = params.targets.filter((target) => shouldIncludePaymentAllocationTarget(target, params.shiftLabel));
-  const mappedCandidates = cleanRows
-    .map(mapLogicalShiftCandidate)
-    .map((candidate) => applyEffectiveEndedAt(candidate, successorStartMap.get(candidate.occupancyId) ?? null));
   // Calculado ANTES do filtro de cobertura: o SD do dia anterior não cobre este
   // slot SD, então some do pipeline — mas precisamos saber que ele existe.
   const doctorsWithSdOnSnDay = buildDoctorsWithSdOnSnDay(mappedCandidates, params.startedAt, params.shiftLabel);

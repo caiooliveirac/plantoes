@@ -181,17 +181,27 @@ function collapseContinuityHistoryShifts(shifts: RawBankHoursHistoryShift[]) {
     });
 }
 
+// Formatters cacheados: construir Intl.DateTimeFormat por chamada dominava o
+// CPU do fechamento mensal (perfil de 2026-07). Reuso é seguro — são imutáveis.
+const LOCAL_TIME_FORMAT = new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: SAO_PAULO_TIME_ZONE,
+});
+
+const LOCAL_DATE_TIME_FORMAT = new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: SAO_PAULO_TIME_ZONE,
+});
+
 function formatLocalTime(value: string | null) {
     if (!value) {
         return "--";
     }
 
-    return new Intl.DateTimeFormat("pt-BR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-        timeZone: SAO_PAULO_TIME_ZONE,
-    }).format(new Date(value));
+    return LOCAL_TIME_FORMAT.format(new Date(value));
 }
 
 function formatLocalDateTime(value: string | null) {
@@ -199,11 +209,7 @@ function formatLocalDateTime(value: string | null) {
         return "--";
     }
 
-    return new Intl.DateTimeFormat("pt-BR", {
-        dateStyle: "short",
-        timeStyle: "short",
-        timeZone: SAO_PAULO_TIME_ZONE,
-    }).format(new Date(value));
+    return LOCAL_DATE_TIME_FORMAT.format(new Date(value));
 }
 
 function sameInstant(left: string | null, right: string | null) {
@@ -473,11 +479,22 @@ function compareDoctors(left: BankHoursDoctorHistory, right: BankHoursDoctorHist
     return left.doctorName.localeCompare(right.doctorName, "pt-BR");
 }
 
+// Proof neutro para o modo balances-only: as provas textuais são caras de
+// montar (Intl + métricas recalculadas por plantão) e servem só à exibição do
+// histórico — nunca entram no cálculo de balanceMinutes.
+const EMPTY_BANK_HOURS_PROOF: BankHoursProof = {
+    summary: "",
+    items: [],
+    mode: "pending",
+};
+
 export function buildBankHoursHistoryModel(
     shifts: RawBankHoursHistoryShift[],
     settlementsByDoctor: Map<string, BankHoursSettlementSummary[]> = new Map(),
     legacyByDoctor: Map<string, BankHoursLegacyDoctorRecord> = new Map(),
+    options?: { includeProofs?: boolean },
 ): BankHoursHistoryModel {
+    const includeProofs = options?.includeProofs !== false;
     const normalizedShifts: BankHoursHistoryShift[] = collapseContinuityHistoryShifts(shifts)
         .map((shift) => {
             const countedStartAt = resolveCountedStartAt(shift);
@@ -503,7 +520,7 @@ export function buildBankHoursHistoryModel(
                 workedMinutes: computeWorkedMinutes(shift.startedAt, shift.effectiveEndedAt),
                 countedStartAt,
                 countedEndAt,
-                proof: buildBankHoursProof(resolvedShift),
+                proof: includeProofs ? buildBankHoursProof(resolvedShift) : EMPTY_BANK_HOURS_PROOF,
                 flags: {
                     hasCorrectionHistory,
                     hasHandoffOverride: Boolean(shift.actualEndedAt && countedEndAt && !sameInstant(shift.actualEndedAt, countedEndAt)),

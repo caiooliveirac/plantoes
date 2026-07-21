@@ -173,7 +173,14 @@ async function loadAuditTrailByOccupancy(shifts: RawBankHoursHistoryShift[]) {
     return grouped;
 }
 
-export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
+/**
+ * balancesOnly: pula o audit trail (query sobre audit_logs inteira) e as provas
+ * textuais por plantão — ambos são exclusivamente de exibição e não entram no
+ * cálculo de balanceMinutes. É o modo usado pelo payment-closing, que só
+ * precisa do saldo efetivo por médico.
+ */
+export async function getBankHoursHistory(options?: { balancesOnly?: boolean }): Promise<BankHoursHistoryModel> {
+    const balancesOnly = options?.balancesOnly === true;
     const db = getDb();
     const result = await db.execute(sql`
         with regulation_history as (
@@ -267,7 +274,7 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
     const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor] = await Promise.all([
-        loadAuditTrailByOccupancy(rows),
+        balancesOnly ? new Map<string, MonthlyReportAuditEntry[]>() : loadAuditTrailByOccupancy(rows),
         loadAllBankHoursSettlements(),
         loadLegacyBalancesByDoctor(),
     ]);
@@ -281,7 +288,9 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
         auditTrail: auditTrailByOccupancy.get(`${row.domain === "regulation" ? "regulation_occupancy" : "intervention_occupancy"}:${row.occupancyId}`) ?? [],
     }));
 
-    return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor);
+    return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor, {
+        includeProofs: !balancesOnly,
+    });
 }
 
 /**
@@ -292,7 +301,7 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
  */
 export async function getDoctorBankHoursEffectiveBalances(): Promise<Map<string, number>> {
     const [history, settlementDelta] = await Promise.all([
-        getBankHoursHistory(),
+        getBankHoursHistory({ balancesOnly: true }),
         loadBankHoursSettlementDeltaByDoctor(),
     ]);
 

@@ -30,11 +30,21 @@ export interface LateArrivalAcknowledgementResult {
     acknowledgedByUserId: string | null;
 }
 
+// Formatters cacheados (mesma razão de modules/bank-hours/window.ts): a
+// construção do Intl.DateTimeFormat por chamada é cara e o objeto é imutável.
+const BAHIA_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bahia",
+    year: "numeric", month: "2-digit", day: "2-digit",
+});
+
+const BAHIA_HOUR_FORMAT = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bahia",
+    hour: "2-digit",
+    hour12: false,
+});
+
 function bahiaDateParts(date: Date): { year: number; month: number; day: number } {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/Bahia",
-        year: "numeric", month: "2-digit", day: "2-digit",
-    }).formatToParts(date);
+    const parts = BAHIA_DATE_FORMAT.formatToParts(date);
     const y = Number(parts.find((p) => p.type === "year")?.value);
     const m = Number(parts.find((p) => p.type === "month")?.value);
     const d = Number(parts.find((p) => p.type === "day")?.value);
@@ -65,11 +75,7 @@ export function resolveLateHalfShiftWindowFor(startedAt: Date): {
 /** Bahia-local hour at which the intervention started (used to decide if
  *  the >= 9h cutoff was hit). */
 export function resolveBahiaHour(date: Date): number {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/Bahia",
-        hour: "2-digit",
-        hour12: false,
-    }).formatToParts(date);
+    const parts = BAHIA_HOUR_FORMAT.formatToParts(date);
     const hourPart = parts.find((p) => p.type === "hour")?.value ?? "0";
     return Number(hourPart);
 }
