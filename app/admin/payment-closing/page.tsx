@@ -1,6 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { ChiefPaymentViewClient } from "@/app/admin/payment-attestation/chief-payment-view-client";
+import { toChiefPayableClientBoard } from "@/modules/reporting/payable-shifts";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 
@@ -47,5 +48,8 @@ export default async function AdminPaymentClosingPage({
     const board = await getChiefPayableShiftsBoard(month ?? null);
     const canManageClosing = Boolean(session.user.roles.includes("admin"));
 
-    return <ChiefPaymentViewClient board={board} canManageClosing={canManageClosing} />;
+    // O client component recebe o board ENXUTO: sem a lista plana duplicada de
+    // payableShifts (derivável das células) nem os attestationSegments inteiros
+    // — isso cortava ~2/3 do payload RSC serializado no HTML.
+    return <ChiefPaymentViewClient board={toChiefPayableClientBoard(board)} canManageClosing={canManageClosing} />;
 }

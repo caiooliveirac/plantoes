@@ -1,14 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
-import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
+import type { ChiefPayableClientBoard, PayableShift } from "@/modules/reporting/payable-shifts";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
 
 interface Props {
-    board: ChiefPayableBoardModel;
+    board: ChiefPayableClientBoard;
     canManageClosing?: boolean;
 }
 
@@ -236,6 +235,150 @@ function dayKindClassName(operationalDate: string) {
     return "weekday";
 }
 
+/** Linha enriquecida pelo pipeline de filtros do componente (valores por dia útil/fim de semana). */
+type FilteredDoctor = ChiefPayableClientBoard["doctors"][number] & {
+    weekdayShiftCount: number;
+    weekendShiftCount: number;
+    weekdayDue: number;
+    weekendDue: number;
+    totalDue: number;
+    pendingCount: number;
+};
+
+/**
+ * Linha do médico memoizada: com ~160 linhas × ~37 células, re-renderizar a
+ * grade inteira a cada tecla/toggle era o maior custo de interação da tela.
+ * As props são primitivas ou callbacks estáveis — estados que não afetam a
+ * linha (modal aberto, drafts, formulários) não a re-renderizam mais.
+ */
+const DoctorRow = memo(function DoctorRow({
+    doctor,
+    attested,
+    canManageClosing,
+    employmentBusy,
+    profileBusy,
+    attestBusy,
+    highlightKey,
+    pendingRemovals,
+    onSelectDoctor,
+    onToggleEmploymentType,
+    onToggleSpecialist,
+    onToggleAttestation,
+    onShiftClick,
+}: {
+    doctor: FilteredDoctor;
+    attested: boolean;
+    canManageClosing: boolean;
+    employmentBusy: boolean;
+    profileBusy: boolean;
+    attestBusy: boolean;
+    highlightKey: string | null;
+    pendingRemovals: Set<string>;
+    onSelectDoctor: (doctorId: string) => void;
+    onToggleEmploymentType: (doctorId: string, employmentType: DoctorEmploymentType) => void;
+    onToggleSpecialist: (doctorId: string, isSpecialist: boolean) => void;
+    onToggleAttestation: (doctorId: string, attested: boolean) => void;
+    onShiftClick: (shift: PayableShift, day: string, doctorName: string) => void;
+}) {
+    const doctorProfile = (doctor.paymentProfile ?? "generalist") as DoctorProfile;
+    const profileBadge = paymentProfileBadge(doctorProfile);
+    const doctorEmploymentType = (doctor.employmentType ?? "pj") as DoctorEmploymentType;
+
+    return (
+        <tr className={attested ? "chief-payable-row-attested" : undefined}>
+            <td className="sticky-col doctor">
+                <div className="chief-payable-doctor-cell">
+                    <div className="chief-payable-doctor-main">
+                        <button
+                            type="button"
+                            className="chief-payable-doctor-button"
+                            onClick={() => onSelectDoctor(doctor.doctorId)}
+                        >
+                            <strong>{doctor.doctorName}</strong>
+                        </button>
+                        {profileBadge ? (
+                            <span className={`chief-payable-profile-badge ${doctorProfile}`.trim()}>{profileBadge}</span>
+                        ) : null}
+                        <span className={`chief-payable-profile-badge ${doctorEmploymentType}`.trim()} title="Vínculo com a prefeitura">
+                            {employmentTypeLabel(doctorEmploymentType)}
+                        </span>
+                    </div>
+
+                    <label className="chief-payable-specialist-toggle" title="Estatutário/REDA não gera valor a pagar por plantão">
+                        <input
+                            type="checkbox"
+                            checked={doctorEmploymentType === "estatutario"}
+                            onChange={(event) => {
+                                onToggleEmploymentType(doctor.doctorId, event.target.checked ? "estatutario" : "pj");
+                            }}
+                            disabled={!canManageClosing || employmentBusy}
+                        />
+                        <span>Estatutário</span>
+                    </label>
+
+                    {doctorProfile !== "psychiatry" ? (
+                        <label className="chief-payable-specialist-toggle">
+                            <input
+                                type="checkbox"
+                                checked={doctorProfile === "specialist"}
+                                onChange={(event) => {
+                                    onToggleSpecialist(doctor.doctorId, event.target.checked);
+                                }}
+                                disabled={!canManageClosing || profileBusy}
+                            />
+                            <span>ESP</span>
+                        </label>
+                    ) : null}
+
+                    <label className={`chief-payable-attest-toggle ${attested ? "on" : ""}`.trim()} title="Conferido e assinado">
+                        <input
+                            type="checkbox"
+                            checked={attested}
+                            onChange={(event) => {
+                                onToggleAttestation(doctor.doctorId, event.target.checked);
+                            }}
+                            disabled={!canManageClosing || attestBusy}
+                        />
+                        <span>{attested ? "✓ assinado" : "assinar"}</span>
+                    </label>
+                </div>
+            </td>
+
+            {doctor.cells.map((cell) => (
+                <td key={`${doctor.doctorId}-${cell.day}`}>
+                    <div className="chief-payable-cell-tags">
+                        {cell.shifts.map((shift) => {
+                            if (pendingRemovals.has(shift.payableShiftId)) return null;
+                            const isFlashTarget = highlightKey === `${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}|assign`;
+                            return (
+                                <button
+                                    key={shift.payableShiftId}
+                                    type="button"
+                                    data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
+                                    className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
+                                    title={shift.source === "admin_extra"
+                                        ? `${shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.shiftLabel} · ${shift.doctorName}`
+                                        : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
+                                    onClick={() => onShiftClick(shift, cell.day, doctor.doctorName)}
+                                >
+                                    {shift.paymentTag ? `${shift.paymentTag} ${shift.tagCode}` : shift.tagCode}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </td>
+            ))}
+
+            <td>{formatUnits(doctor.weekdayShiftCount)}</td>
+            <td>{formatUnits(doctor.weekendShiftCount)}</td>
+            <td>{formatUnits(doctor.total)}</td>
+            <td>{formatCurrency(doctor.weekdayDue)}</td>
+            <td>{formatCurrency(doctor.weekendDue)}</td>
+            <td className="chief-payable-final-value">{formatCurrency(doctor.totalDue)}</td>
+        </tr>
+    );
+});
+
 export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props) {
     const router = useRouter();
     const [, startRefreshTransition] = useTransition();
@@ -349,8 +492,19 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     useEffect(() => {
         setAttestationOverrides({});
     }, [board]);
-    const normalized = normalize(search);
-    const normalizedTarget = normalize(targetSearch);
+    // Digitação nos campos de busca não bloqueia o teclado: o input atualiza na
+    // hora e a refiltragem da grade (cara) roda como render adiável.
+    const deferredSearch = useDeferredValue(search);
+    const deferredTargetSearch = useDeferredValue(targetSearch);
+    const normalized = normalize(deferredSearch);
+    const normalizedTarget = normalize(deferredTargetSearch);
+
+    // Lista plana derivada das células (o servidor não envia mais a duplicata).
+    // São os mesmos objetos PayableShift que povoam a grade.
+    const payableShifts = useMemo(
+        () => board.doctors.flatMap((doctor) => doctor.cells.flatMap((cell) => cell.shifts)),
+        [board.doctors],
+    );
 
     const targetPills = useMemo(() => {
         const filtered = board.targetOptions.filter((target) => {
@@ -389,7 +543,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     }, [targetPills]);
 
     const filterSummary = useMemo(() => {
-        const visiblePayableShifts = board.payableShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
+        const visiblePayableShifts = payableShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
         const readyDoctors = board.doctors.filter((doctor) => doctor.paymentStatus === "ready_for_payment").length;
         const reviewDoctors = board.doctors.length - readyDoctors;
         const sdCount = visiblePayableShifts
@@ -413,11 +567,11 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             halfCount,
             fullCount,
         };
-    }, [board.doctors, board.payableShifts, pendingRemovals]);
+    }, [board.doctors, payableShifts, pendingRemovals]);
 
     const dayLoad = useMemo(() => {
         const counts = new Map<string, number>();
-        for (const shift of board.payableShifts) {
+        for (const shift of payableShifts) {
             if (pendingRemovals.has(shift.payableShiftId)) {
                 continue;
             }
@@ -426,7 +580,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         }
 
         return board.days.map((day) => ({ day, count: counts.get(day) ?? 0 }));
-    }, [board.days, board.payableShifts, pendingRemovals]);
+    }, [board.days, payableShifts, pendingRemovals]);
 
     const dueAmountByEmploymentType = useMemo(() => {
         const totalsCents: Record<DoctorEmploymentType, number> = { pj: 0, estatutario: 0 };
@@ -1298,17 +1452,56 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         }
     }
 
+    // Callbacks estáveis para as linhas memoizadas (DoctorRow): o ref sempre
+    // aponta para a versão mais recente dos handlers, e os wrappers têm
+    // identidade fixa — re-render de uma linha só quando os DADOS dela mudam.
+    const rowActionsRef = useRef({ toggleDoctorEmploymentType, toggleDoctorSpecialistProfile, toggleDoctorAttestation });
+    rowActionsRef.current = { toggleDoctorEmploymentType, toggleDoctorSpecialistProfile, toggleDoctorAttestation };
+    const handleSelectDoctor = useCallback((doctorId: string) => {
+        setSelectedDoctorId(doctorId);
+    }, []);
+    const handleToggleEmploymentType = useCallback((doctorId: string, employmentType: DoctorEmploymentType) => {
+        void rowActionsRef.current.toggleDoctorEmploymentType(doctorId, employmentType);
+    }, []);
+    const handleToggleSpecialist = useCallback((doctorId: string, isSpecialist: boolean) => {
+        void rowActionsRef.current.toggleDoctorSpecialistProfile(doctorId, isSpecialist);
+    }, []);
+    const handleToggleAttestation = useCallback((doctorId: string, attested: boolean) => {
+        void rowActionsRef.current.toggleDoctorAttestation(doctorId, attested);
+    }, []);
+    const handleShiftClick = useCallback((shift: PayableShift, day: string, doctorName: string) => {
+        setShiftActionError(null);
+        setShiftActionDraft({
+            payableShiftId: shift.payableShiftId,
+            occupancyId: shift.occupancyId,
+            domain: shift.domain,
+            targetCode: shift.targetCode,
+            targetLabel: shift.targetLabel,
+            day,
+            shiftLabel: shift.shiftLabel,
+            doctorName,
+            source: shift.source,
+        });
+    }, []);
+
     const selectedDoctor = useMemo(
         () => filteredDoctors.find((doctor) => doctor.doctorId === selectedDoctorId) ?? null,
         [filteredDoctors, selectedDoctorId],
     );
 
     const allocationConflictShifts = useMemo(() => {
-        const uniqueBySlot = new Map<string, typeof board.payableShifts[number]>();
+        const uniqueBySlot = new Map<string, PayableShift>();
 
-        for (const shift of board.payableShifts
+        // Ordenação determinística antes do dedup: a lista plana agora é derivada
+        // das células (ordem por médico), não mais da geração por slot.
+        const conflictShifts = payableShifts
             .filter((shift) => shift.issues.some((issue) => issue === "Mais de um medico candidato no mesmo alvo/turno"))
-            .slice()) {
+            .slice()
+            .sort((left, right) => left.operationalDate.localeCompare(right.operationalDate)
+                || left.shiftLabel.localeCompare(right.shiftLabel)
+                || left.targetCode.localeCompare(right.targetCode, "pt-BR")
+                || left.doctorName.localeCompare(right.doctorName, "pt-BR"));
+        for (const shift of conflictShifts) {
             const key = [shift.operationalDate, shift.shiftLabel, shift.domain, shift.targetCode].join("|");
             if (!uniqueBySlot.has(key)) {
                 uniqueBySlot.set(key, shift);
@@ -1322,7 +1515,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 if (left.shiftLabel !== right.shiftLabel) return left.shiftLabel === "SD" ? -1 : 1;
                 return left.targetCode.localeCompare(right.targetCode, "pt-BR");
             });
-    }, [board.payableShifts]);
+    }, [payableShifts]);
 
     const selectedDoctorDisplacedConflictSegments = useMemo(() => {
         if (!selectedDoctor) {
@@ -1343,9 +1536,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             conflictBySlot.set(key, shift);
         }
 
-        const matches = board.attestationSegments
+        const matches = board.displacedCandidateSegments
             .filter((segment) => segment.doctorId === selectedDoctor.doctorId)
-            .filter((segment) => segment.discardReason === "not_selected_for_payment")
             .map((segment) => {
                 const operationalDate = resolveOperationalDateFromIso(segment.startedAt);
                 const shiftLabel = resolveSegmentShiftLabel(segment);
@@ -1382,7 +1574,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             if (left.domain !== right.domain) return left.domain === "regulation" ? -1 : 1;
             return left.targetCode.localeCompare(right.targetCode, "pt-BR");
         });
-    }, [allocationConflictShifts, board.attestationSegments, selectedDoctor]);
+    }, [allocationConflictShifts, board.displacedCandidateSegments, selectedDoctor]);
 
     const selectedDoctorConflictCount = selectedDoctorDisplacedConflictSegments.length;
 
@@ -1788,16 +1980,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                         </thead>
 
                         <tbody>
-                            <AnimatePresence mode="popLayout">
-                                <motion.tr
-                                    key="disabled-row"
-                                    layout
-                                    initial={{ opacity: 0, y: 6 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -6 }}
-                                    transition={{ duration: 0.16 }}
-                                    className="chief-payable-disabled-row"
-                                >
+                                <tr key="disabled-row" className="chief-payable-disabled-row">
                                     <td className="sticky-col doctor">
                                         <strong>Desativadas</strong>
                                         <span>Fontes sem médico por desativação do turno</span>
@@ -1846,17 +2029,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                     <td>-</td>
                                     <td>-</td>
                                     <td>-</td>
-                                </motion.tr>
+                                </tr>
 
-                                <motion.tr
-                                    key="uncovered-row"
-                                    layout
-                                    initial={{ opacity: 0, y: 6 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -6 }}
-                                    transition={{ duration: 0.16 }}
-                                    className="chief-payable-uncovered-row"
-                                >
+                                <tr key="uncovered-row" className="chief-payable-uncovered-row">
                                     <td className="sticky-col doctor">
                                         <strong>Sem médico</strong>
                                         <span>Sem cobertura e sem desativação no turno</span>
@@ -1904,145 +2079,34 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                     <td>-</td>
                                     <td>-</td>
                                     <td>-</td>
-                                </motion.tr>
+                                </tr>
 
-                                {filteredDoctors.map((doctor, index) => {
-                                    const doctorProfile = (doctor.paymentProfile ?? "generalist") as DoctorProfile;
-                                    const profileBadge = paymentProfileBadge(doctorProfile);
-                                    const doctorEmploymentType = (doctor.employmentType ?? "pj") as DoctorEmploymentType;
-
-                                    return (
-                                    <motion.tr
+                                {filteredDoctors.map((doctor) => (
+                                    <DoctorRow
                                         key={doctor.doctorId}
-                                        layout
-                                        initial={{ opacity: 0, y: 6 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -6 }}
-                                        transition={{ duration: 0.2, delay: Math.min(index * 0.018, 0.18) }}
-                                        className={isDoctorAttested(doctor) ? "chief-payable-row-attested" : undefined}
-                                    >
-                                        <td className="sticky-col doctor">
-                                            <div className="chief-payable-doctor-cell">
-                                                <div className="chief-payable-doctor-main">
-                                                    <button
-                                                        type="button"
-                                                        className="chief-payable-doctor-button"
-                                                        onClick={() => setSelectedDoctorId(doctor.doctorId)}
-                                                    >
-                                                        <strong>{doctor.doctorName}</strong>
-                                                    </button>
-                                                    {profileBadge ? (
-                                                        <span className={`chief-payable-profile-badge ${doctorProfile}`.trim()}>{profileBadge}</span>
-                                                    ) : null}
-                                                    <span className={`chief-payable-profile-badge ${doctorEmploymentType}`.trim()} title="Vínculo com a prefeitura">
-                                                        {employmentTypeLabel(doctorEmploymentType)}
-                                                    </span>
-                                                </div>
-
-                                                <label className="chief-payable-specialist-toggle" title="Estatutário/REDA não gera valor a pagar por plantão">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={doctorEmploymentType === "estatutario"}
-                                                        onChange={(event) => {
-                                                            void toggleDoctorEmploymentType(doctor.doctorId, event.target.checked ? "estatutario" : "pj");
-                                                        }}
-                                                        disabled={!canManageClosing || employmentTypeBusyDoctorId === doctor.doctorId}
-                                                    />
-                                                    <span>Estatutário</span>
-                                                </label>
-
-                                                {doctorProfile !== "psychiatry" ? (
-                                                    <label className="chief-payable-specialist-toggle">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={doctorProfile === "specialist"}
-                                                            onChange={(event) => {
-                                                                void toggleDoctorSpecialistProfile(doctor.doctorId, event.target.checked);
-                                                            }}
-                                                            disabled={!canManageClosing || profileBusyDoctorId === doctor.doctorId}
-                                                        />
-                                                        <span>ESP</span>
-                                                    </label>
-                                                ) : null}
-
-                                                <label className={`chief-payable-attest-toggle ${isDoctorAttested(doctor) ? "on" : ""}`.trim()} title="Conferido e assinado">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={isDoctorAttested(doctor)}
-                                                        onChange={(event) => {
-                                                            void toggleDoctorAttestation(doctor.doctorId, event.target.checked);
-                                                        }}
-                                                        disabled={!canManageClosing || attestBusyDoctorId === doctor.doctorId}
-                                                    />
-                                                    <span>{isDoctorAttested(doctor) ? "✓ assinado" : "assinar"}</span>
-                                                </label>
-                                            </div>
-                                        </td>
-
-                                        {doctor.cells.map((cell) => (
-                                            <td key={`${doctor.doctorId}-${cell.day}`}>
-                                                <div className="chief-payable-cell-tags">
-                                                    {cell.shifts.map((shift) => {
-                                                        if (pendingRemovals.has(shift.payableShiftId)) return null;
-                                                        const isFlashTarget = highlightKey === `${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}|assign`;
-                                                        return (
-                                                        <motion.button
-                                                            key={shift.payableShiftId}
-                                                            type="button"
-                                                            data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
-                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
-                                                            title={shift.source === "admin_extra"
-                                                                ? `${shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.shiftLabel} · ${shift.doctorName}`
-                                                                : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
-                                                            initial={{ opacity: 0, scale: 0.92 }}
-                                                            animate={{ opacity: 1, scale: 1 }}
-                                                            transition={{ duration: 0.15 }}
-                                                            onClick={() => {
-                                                                setShiftActionError(null);
-                                                                setShiftActionDraft({
-                                                                    payableShiftId: shift.payableShiftId,
-                                                                    occupancyId: shift.occupancyId,
-                                                                    domain: shift.domain,
-                                                                    targetCode: shift.targetCode,
-                                                                    targetLabel: shift.targetLabel,
-                                                                    day: cell.day,
-                                                                    shiftLabel: shift.shiftLabel,
-                                                                    doctorName: doctor.doctorName,
-                                                                    source: shift.source,
-                                                                });
-                                                            }}
-                                                        >
-                                                            {shift.paymentTag ? `${shift.paymentTag} ${shift.tagCode}` : shift.tagCode}
-                                                        </motion.button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </td>
-                                        ))}
-
-                                        <td>{formatUnits(doctor.weekdayShiftCount)}</td>
-                                        <td>{formatUnits(doctor.weekendShiftCount)}</td>
-                                        <td>{formatUnits(doctor.total)}</td>
-                                        <td>{formatCurrency(doctor.weekdayDue)}</td>
-                                        <td>{formatCurrency(doctor.weekendDue)}</td>
-                                        <td className="chief-payable-final-value">{formatCurrency(doctor.totalDue)}</td>
-                                    </motion.tr>
-                                    );
-                                })}
+                                        doctor={doctor}
+                                        attested={isDoctorAttested(doctor)}
+                                        canManageClosing={canManageClosing}
+                                        employmentBusy={employmentTypeBusyDoctorId === doctor.doctorId}
+                                        profileBusy={profileBusyDoctorId === doctor.doctorId}
+                                        attestBusy={attestBusyDoctorId === doctor.doctorId}
+                                        highlightKey={highlightKey}
+                                        pendingRemovals={pendingRemovals}
+                                        onSelectDoctor={handleSelectDoctor}
+                                        onToggleEmploymentType={handleToggleEmploymentType}
+                                        onToggleSpecialist={handleToggleSpecialist}
+                                        onToggleAttestation={handleToggleAttestation}
+                                        onShiftClick={handleShiftClick}
+                                    />
+                                ))}
 
                                 {filteredDoctors.length === 0 ? (
-                                    <motion.tr
-                                        key="empty"
-                                        initial={{ opacity: 0 }}
-                                        animate={{ opacity: 1 }}
-                                        exit={{ opacity: 0 }}
-                                    >
+                                    <tr key="empty">
                                         <td className="chief-payable-empty" colSpan={board.days.length + 8}>
                                             Nenhum médico encontrado com os filtros atuais.
                                         </td>
-                                    </motion.tr>
+                                    </tr>
                                 ) : null}
-                            </AnimatePresence>
                         </tbody>
                     </table>
                 </div>

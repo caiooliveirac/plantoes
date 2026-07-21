@@ -305,6 +305,51 @@ export interface ChiefPayableBoardModel {
     attestationSegments: AttestationSegment[];
 }
 
+/**
+ * Recorte compacto de um AttestationSegment descartado por
+ * "not_selected_for_payment" — os únicos segmentos que a tela de fechamento
+ * usa (alerta de possível deslocamento no modal do médico). O array completo
+ * tinha ~800 KiB por mês e ia inteiro no payload RSC.
+ */
+export interface DisplacedCandidateSegment {
+    segmentId: string;
+    doctorId: string;
+    domain: "regulation" | "intervention";
+    targetCode: string;
+    targetLabel: string;
+    startedAt: string;
+    shiftLabel: "SD" | "SN" | "P" | null;
+}
+
+/**
+ * Board enxuto que atravessa a fronteira server→client no payment-closing.
+ * `payableShifts` é derivável 1:1 de doctors[].cells[].shifts (o modelo completo
+ * monta as duas estruturas com os MESMOS objetos), então não trafega duplicado;
+ * attestationSegments viram o recorte acima. O modelo completo continua sendo a
+ * fonte para XLSX e demais consumidores server-side.
+ */
+export type ChiefPayableClientBoard = Omit<ChiefPayableBoardModel, "payableShifts" | "attestationSegments"> & {
+    displacedCandidateSegments: DisplacedCandidateSegment[];
+};
+
+export function toChiefPayableClientBoard(board: ChiefPayableBoardModel): ChiefPayableClientBoard {
+    const { payableShifts: _payableShifts, attestationSegments, ...rest } = board;
+    return {
+        ...rest,
+        displacedCandidateSegments: attestationSegments
+            .filter((segment) => segment.status === "discarded" && segment.discardReason === "not_selected_for_payment")
+            .map((segment) => ({
+                segmentId: segment.segmentId,
+                doctorId: segment.doctorId,
+                domain: segment.domain,
+                targetCode: segment.targetCode,
+                targetLabel: segment.targetLabel,
+                startedAt: segment.startedAt,
+                shiftLabel: segment.shiftLabel,
+            })),
+    };
+}
+
 function toSaoPauloClock(dateIso: string) {
     return new Date(new Date(dateIso).getTime() + (SAO_PAULO_OFFSET_MINUTES * 60000));
 }

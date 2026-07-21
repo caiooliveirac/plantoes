@@ -4708,6 +4708,18 @@ button.ops-doctor-line.shadow.clickable:hover {
     justify-content: center;
 }
 
+/* Entrada suave das linhas/tags (substitui as animações framer-motion, que
+   custavam layout forçado por linha na hidratação e a cada re-render). Só
+   opacity — transform quebraria o position: sticky da coluna de médicos. */
+@keyframes chief-payable-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.chief-payable-table tbody tr {
+    animation: chief-payable-fade-in 0.18s ease both;
+}
+
 .chief-payable-tag {
     display: inline-flex;
     align-items: center;
