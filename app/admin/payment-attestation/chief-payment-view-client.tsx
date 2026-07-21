@@ -1,9 +1,11 @@
 "use client";
 
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
-import type { ChiefPayableClientBoard, PayableShift } from "@/modules/reporting/payable-shifts";
+import type { ChiefPayableClientBoard, ClientPayableShift } from "@/modules/reporting/payable-shifts";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
 
 interface Props {
@@ -253,6 +255,8 @@ type FilteredDoctor = ChiefPayableClientBoard["doctors"][number] & {
  */
 const DoctorRow = memo(function DoctorRow({
     doctor,
+    rowIndex,
+    measureElement,
     attested,
     canManageClosing,
     employmentBusy,
@@ -267,6 +271,9 @@ const DoctorRow = memo(function DoctorRow({
     onShiftClick,
 }: {
     doctor: FilteredDoctor;
+    /** Índice na lista filtrada — o virtualizador usa para medir a altura real da linha. */
+    rowIndex: number;
+    measureElement?: (element: HTMLTableRowElement | null) => void;
     attested: boolean;
     canManageClosing: boolean;
     employmentBusy: boolean;
@@ -278,14 +285,14 @@ const DoctorRow = memo(function DoctorRow({
     onToggleEmploymentType: (doctorId: string, employmentType: DoctorEmploymentType) => void;
     onToggleSpecialist: (doctorId: string, isSpecialist: boolean) => void;
     onToggleAttestation: (doctorId: string, attested: boolean) => void;
-    onShiftClick: (shift: PayableShift, day: string, doctorName: string) => void;
+    onShiftClick: (shift: ClientPayableShift, day: string, doctorName: string) => void;
 }) {
     const doctorProfile = (doctor.paymentProfile ?? "generalist") as DoctorProfile;
     const profileBadge = paymentProfileBadge(doctorProfile);
     const doctorEmploymentType = (doctor.employmentType ?? "pj") as DoctorEmploymentType;
 
     return (
-        <tr className={attested ? "chief-payable-row-attested" : undefined}>
+        <tr ref={measureElement} data-index={rowIndex} className={attested ? "chief-payable-row-attested" : undefined}>
             <td className="sticky-col doctor">
                 <div className="chief-payable-doctor-cell">
                     <div className="chief-payable-doctor-main">
@@ -850,6 +857,54 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         return sorted;
     }, [board.doctors, coverageFilter, doctorProfileOverrides, doctorEmploymentTypeOverrides, doctorMetaOverrides, domainFilter, employmentTypeFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
 
+    // Virtualização das linhas de médico: só ~25 linhas montadas por vez em vez
+    // de ~160 × ~37 células. O scroll vertical da página é a janela; as duas
+    // linhas especiais (Desativadas / Sem médico) ficam fora, sempre montadas.
+    const tableBodyRef = useRef<HTMLTableSectionElement | null>(null);
+    const [virtualScrollMargin, setVirtualScrollMargin] = useState(0);
+    useEffect(() => {
+        const element = tableBodyRef.current;
+        if (!element) return;
+        const update = () => {
+            setVirtualScrollMargin(element.getBoundingClientRect().top + window.scrollY);
+        };
+        update();
+        window.addEventListener("resize", update);
+        return () => window.removeEventListener("resize", update);
+    }, []);
+    const rowVirtualizer = useWindowVirtualizer({
+        count: filteredDoctors.length,
+        estimateSize: () => 56,
+        overscan: 12,
+        scrollMargin: virtualScrollMargin,
+    });
+    const virtualRows = rowVirtualizer.getVirtualItems();
+    // SSR e primeiro render do client (antes do virtualizador medir a janela)
+    // caem no mesmo fallback — evita hydration mismatch e garante conteúdo
+    // acima da dobra no HTML. No SSR o fallback é um recorte de 30 linhas;
+    // depois do mount, se o virtualizador não produzir itens (ambiente sem
+    // ResizeObserver/rAF ativos, ex. aba oculta), renderiza TUDO: a
+    // virtualização é progressive enhancement, nunca pode esconder médicos.
+    const [isMounted, setIsMounted] = useState(false);
+    useEffect(() => {
+        setIsMounted(true);
+    }, []);
+    const virtualizationActive = virtualRows.length > 0;
+    const virtualPaddingTop = virtualizationActive
+        ? Math.max(0, (virtualRows[0]?.start ?? 0) - virtualScrollMargin)
+        : 0;
+    const virtualPaddingBottom = virtualizationActive
+        ? Math.max(0, rowVirtualizer.getTotalSize() - ((virtualRows[virtualRows.length - 1]?.end ?? 0) - virtualScrollMargin))
+        : 0;
+    const visibleDoctors: Array<{ virtualIndex: number; doctor: FilteredDoctor }> = virtualizationActive
+        ? virtualRows.flatMap((row) => {
+            const doctor = filteredDoctors[row.index];
+            return doctor ? [{ virtualIndex: row.index, doctor }] : [];
+        })
+        : (isMounted ? filteredDoctors : filteredDoctors.slice(0, 30)).map((doctor, index) => ({ virtualIndex: index, doctor }));
+    const filteredDoctorsRef = useRef(filteredDoctors);
+    filteredDoctorsRef.current = filteredDoctors;
+
     useEffect(() => {
         // Reconcile optimistic removals with server truth: if a payableShiftId
         // is no longer present in the refreshed board, drop it from the set.
@@ -925,6 +980,22 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 window.setTimeout(() => setHighlightKey(null), 4500);
                 return true;
             }
+            // Com a grade virtualizada a linha alvo pode nem estar montada:
+            // acha o médico dono da célula na lista filtrada e rola até o índice
+            // para o virtualizador montá-la — a próxima tentativa encontra o nó.
+            if (flash.kind === "assign") {
+                const index = filteredDoctorsRef.current.findIndex((doctor) => doctor.cells.some((cell) => (
+                    cell.day === flash.day
+                    && cell.shifts.some((shift) => (
+                        shift.domain === flash.domain
+                        && shift.targetCode === flash.targetCode
+                        && shift.shiftLabel === flash.shiftLabel
+                    ))
+                )));
+                if (index >= 0) {
+                    rowVirtualizer.scrollToIndex(index, { align: "center" });
+                }
+            }
             return false;
         };
         const schedule = () => {
@@ -936,7 +1007,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         };
         requestAnimationFrame(schedule);
         return true;
-    }, [flash]);
+    }, [flash, rowVirtualizer]);
 
     const autoLocatedFlashRef = useRef<string | null>(null);
     useEffect(() => {
@@ -1469,7 +1540,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     const handleToggleAttestation = useCallback((doctorId: string, attested: boolean) => {
         void rowActionsRef.current.toggleDoctorAttestation(doctorId, attested);
     }, []);
-    const handleShiftClick = useCallback((shift: PayableShift, day: string, doctorName: string) => {
+    const handleShiftClick = useCallback((shift: ClientPayableShift, day: string, doctorName: string) => {
         setShiftActionError(null);
         setShiftActionDraft({
             payableShiftId: shift.payableShiftId,
@@ -1490,7 +1561,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     );
 
     const allocationConflictShifts = useMemo(() => {
-        const uniqueBySlot = new Map<string, PayableShift>();
+        const uniqueBySlot = new Map<string, ClientPayableShift>();
 
         // Ordenação determinística antes do dedup: a lista plana agora é derivada
         // das células (ordem por médico), não mais da geração por slot.
@@ -1616,13 +1687,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
 
             <section className="reports-presets">
                 {board.presetMonths.map((preset) => (
-                    <a
+                    <Link
                         key={preset.key}
                         href={`/admin/payment-closing?month=${preset.key}`}
                         className={`reports-month-chip ${preset.key === board.monthKey ? "active" : ""}`.trim()}
                     >
                         {preset.label}
-                    </a>
+                    </Link>
                 ))}
             </section>
 
@@ -2081,10 +2152,17 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                     <td>-</td>
                                 </tr>
 
-                                {filteredDoctors.map((doctor) => (
+                            </tbody>
+                            <tbody ref={tableBodyRef}>
+                                {virtualPaddingTop > 0 ? (
+                                    <tr aria-hidden className="chief-payable-virtual-spacer" style={{ height: virtualPaddingTop }} />
+                                ) : null}
+                                {visibleDoctors.map(({ virtualIndex, doctor }) => (
                                     <DoctorRow
                                         key={doctor.doctorId}
                                         doctor={doctor}
+                                        rowIndex={virtualIndex}
+                                        measureElement={rowVirtualizer.measureElement}
                                         attested={isDoctorAttested(doctor)}
                                         canManageClosing={canManageClosing}
                                         employmentBusy={employmentTypeBusyDoctorId === doctor.doctorId}
@@ -2099,6 +2177,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                         onShiftClick={handleShiftClick}
                                     />
                                 ))}
+                                {virtualPaddingBottom > 0 ? (
+                                    <tr aria-hidden className="chief-payable-virtual-spacer" style={{ height: virtualPaddingBottom }} />
+                                ) : null}
 
                                 {filteredDoctors.length === 0 ? (
                                     <tr key="empty">

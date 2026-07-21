@@ -4708,6 +4708,27 @@ button.ops-doctor-line.shadow.clickable:hover {
     justify-content: center;
 }
 
+/* Skeleton exibido durante a troca de mês (app/admin/payment-closing/loading.tsx). */
+.chief-payable-loading-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 26px;
+}
+
+.chief-payable-loading-bar {
+    height: 38px;
+    border-radius: 12px;
+    background: linear-gradient(90deg, rgba(216, 225, 236, 0.06) 25%, rgba(216, 225, 236, 0.14) 50%, rgba(216, 225, 236, 0.06) 75%);
+    background-size: 200% 100%;
+    animation: chief-payable-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes chief-payable-skeleton-shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+}
+
 /* Entrada suave das linhas/tags (substitui as animações framer-motion, que
    custavam layout forçado por linha na hidratação e a cada re-render). Só
    opacity — transform quebraria o position: sticky da coluna de médicos. */
@@ -4718,6 +4739,13 @@ button.ops-doctor-line.shadow.clickable:hover {
 
 .chief-payable-table tbody tr {
     animation: chief-payable-fade-in 0.18s ease both;
+}
+
+/* Espaçadores da virtualização: reservam a altura das linhas não montadas. */
+.chief-payable-table tbody tr.chief-payable-virtual-spacer {
+    animation: none;
+    padding: 0;
+    border: 0;
 }
 
 .chief-payable-tag {

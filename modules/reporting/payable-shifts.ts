@@ -322,20 +322,82 @@ export interface DisplacedCandidateSegment {
 }
 
 /**
+ * Shift compacto para o client: só os campos que a tela de fechamento consome
+ * (tag da grade, filtros, somatórios e o popover de remoção). Os demais campos
+ * do PayableShift (janelas ISO do slot, duração, auditStatus, roleLabel etc.)
+ * ficam no modelo completo do servidor — no payload eles eram ~40% dos bytes de
+ * `doctors` sem nenhum uso no navegador.
+ */
+export type ClientPayableShift = Pick<
+    PayableShift,
+    | "payableShiftId"
+    | "occupancyId"
+    | "domain"
+    | "doctorName"
+    | "targetCode"
+    | "targetLabel"
+    | "tagCode"
+    | "operationalDate"
+    | "shiftLabel"
+    | "paymentStatus"
+    | "issues"
+    | "source"
+    | "paymentUnit"
+    | "paymentTag"
+>;
+
+export interface ClientPayableCell {
+    day: string;
+    shifts: ClientPayableShift[];
+}
+
+export type ClientPayableDoctorRow = Omit<ChiefPayableDoctorRow, "cells"> & {
+    cells: ClientPayableCell[];
+};
+
+/**
  * Board enxuto que atravessa a fronteira server→client no payment-closing.
  * `payableShifts` é derivável 1:1 de doctors[].cells[].shifts (o modelo completo
  * monta as duas estruturas com os MESMOS objetos), então não trafega duplicado;
- * attestationSegments viram o recorte acima. O modelo completo continua sendo a
- * fonte para XLSX e demais consumidores server-side.
+ * attestationSegments viram o recorte acima e os shifts das células viram
+ * ClientPayableShift. O modelo completo continua sendo a fonte para XLSX e
+ * demais consumidores server-side.
  */
-export type ChiefPayableClientBoard = Omit<ChiefPayableBoardModel, "payableShifts" | "attestationSegments"> & {
+export type ChiefPayableClientBoard = Omit<ChiefPayableBoardModel, "payableShifts" | "attestationSegments" | "doctors"> & {
+    doctors: ClientPayableDoctorRow[];
     displacedCandidateSegments: DisplacedCandidateSegment[];
 };
 
+function toClientPayableShift(shift: PayableShift): ClientPayableShift {
+    return {
+        payableShiftId: shift.payableShiftId,
+        occupancyId: shift.occupancyId,
+        domain: shift.domain,
+        doctorName: shift.doctorName,
+        targetCode: shift.targetCode,
+        targetLabel: shift.targetLabel,
+        tagCode: shift.tagCode,
+        operationalDate: shift.operationalDate,
+        shiftLabel: shift.shiftLabel,
+        paymentStatus: shift.paymentStatus,
+        issues: shift.issues,
+        source: shift.source,
+        paymentUnit: shift.paymentUnit,
+        paymentTag: shift.paymentTag,
+    };
+}
+
 export function toChiefPayableClientBoard(board: ChiefPayableBoardModel): ChiefPayableClientBoard {
-    const { payableShifts: _payableShifts, attestationSegments, ...rest } = board;
+    const { payableShifts: _payableShifts, attestationSegments, doctors, ...rest } = board;
     return {
         ...rest,
+        doctors: doctors.map((doctor) => ({
+            ...doctor,
+            cells: doctor.cells.map((cell) => ({
+                day: cell.day,
+                shifts: cell.shifts.map(toClientPayableShift),
+            })),
+        })),
         displacedCandidateSegments: attestationSegments
             .filter((segment) => segment.status === "discarded" && segment.discardReason === "not_selected_for_payment")
             .map((segment) => ({
