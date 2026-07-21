@@ -2,10 +2,35 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
-import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
+import { isPremiumRateDate } from "@/modules/operational/holidays";
+import {
+    compactMonthLabel,
+    formatCurrency,
+    formatUnits,
+    normalize,
+    resolveAmountCentsByDayKind,
+    resolveOperationalDateFromIso,
+    resolveSegmentShiftLabel,
+    resolveShiftAmount,
+    shiftMonthKey,
+    targetComparator,
+    weekdayShortLabel,
+    type CoverageFilter,
+    type DoctorEmploymentType,
+    type DoctorProfile,
+    type DomainFilter,
+    type EmploymentTypeFilter,
+    type MatrixRowModel,
+    type PaymentStatusFilter,
+    type ShiftFilter,
+    type SortMode,
+} from "./chief-payment-shared";
+import { DoctorRow } from "./chief-payment-matrix-row";
+import { ManualCorrectionDialog, SlotActionPopover, type ManualDraft, type SlotActionDraft } from "./chief-payment-dialogs";
+import { DoctorDrawer, type DrawerConflictSegment } from "./chief-payment-doctor-drawer";
 
 interface Props {
     board: ChiefPayableBoardModel;
@@ -27,214 +52,9 @@ interface FlashRecord {
 
 const FLASH_STORAGE_KEY = "payment-closing.lastApplied.v1";
 const FLASH_TTL_MS = 10 * 60 * 1000;
-
-type PaymentStatusFilter = "all" | "ready_for_payment" | "needs_review";
-type ShiftFilter = "all" | "SD" | "SN";
-type DomainFilter = "all" | "regulation" | "intervention";
-type CoverageFilter = "all" | "half" | "full";
-type SortMode = "name" | "total" | "pending" | "weekday" | "weekend";
-type DoctorProfile = "generalist" | "specialist" | "psychiatry";
-type DoctorEmploymentType = "pj" | "estatutario";
-type EmploymentTypeFilter = "all" | DoctorEmploymentType;
-
-const MONEY_FORMATTER = new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-});
-
-function formatCurrency(value: number | null | undefined) {
-    const safeValue = Number.isFinite(value) ? Number(value) : 0;
-    return MONEY_FORMATTER.format(safeValue);
-}
-
-/** Minutos → "1 h 30" / "-45 min". Espelha formatMinutesForHumans do servidor. */
-function formatMinutesAsHours(minutes: number | null | undefined) {
-    if (minutes === null || minutes === undefined || !Number.isFinite(minutes)) {
-        return "--";
-    }
-    const sign = minutes < 0 ? "-" : "";
-    const absolute = Math.abs(minutes);
-    const hours = Math.floor(absolute / 60);
-    const remainder = absolute % 60;
-    if (hours === 0) {
-        return `${sign}${remainder} min`;
-    }
-    if (remainder === 0) {
-        return `${sign}${hours} h`;
-    }
-    return `${sign}${hours} h ${String(remainder).padStart(2, "0")}`;
-}
-
-/** Gatilho do acerto de banco de horas: ±12h em minutos. */
-const BANK_HOURS_THRESHOLD_MINUTES = 12 * 60;
-
-function paymentProfileLabel(profile: string | null | undefined) {
-    if (profile === "psychiatry") {
-        return "Psiquiatria";
-    }
-
-    if (profile === "specialist") {
-        return "Especialista";
-    }
-
-    return "Generalista";
-}
-
-function paymentProfileBadge(profile: DoctorProfile) {
-    if (profile === "specialist") {
-        return "ESP";
-    }
-
-    if (profile === "psychiatry") {
-        return "PSIQ";
-    }
-
-    return null;
-}
-
-const TARGET_PRIORITY_NUMBERS = [1, 2, 3, 4, 5, 10, 20] as const;
-
-const PROFILE_RATES: Record<DoctorProfile, { weekday: number; weekend: number }> = {
-    generalist: { weekday: 1244.87, weekend: 1381.10 },
-    specialist: { weekday: 1329.66, weekend: 1457.15 },
-    psychiatry: { weekday: 1299.82, weekend: 1411.47 },
-};
-
-const PROFILE_RATE_CENTS: Record<DoctorProfile, { weekday: number; weekend: number }> = {
-    generalist: { weekday: 124487, weekend: 138110 },
-    specialist: { weekday: 132966, weekend: 145715 },
-    psychiatry: { weekday: 129982, weekend: 141147 },
-};
-
-function isWeekendDate(operationalDate: string) {
-    return isPremiumRateDate(operationalDate);
-}
-
-function resolveShiftAmount(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile, employmentType: DoctorEmploymentType = "pj") {
-    return resolveShiftAmountCents(shift, profile, employmentType) / 100;
-}
-
-function resolveShiftAmountCents(shift: { operationalDate: string; paymentUnit: number }, profile: DoctorProfile, employmentType: DoctorEmploymentType = "pj") {
-    if (employmentType === "estatutario") {
-        return 0;
-    }
-    const rateCents = isWeekendDate(shift.operationalDate) ? PROFILE_RATE_CENTS[profile].weekend : PROFILE_RATE_CENTS[profile].weekday;
-    const unitMilli = Math.round(shift.paymentUnit * 1000);
-    return Math.round((rateCents * unitMilli) / 1000);
-}
-
-function resolveAmountCentsByDayKind(params: { profile: DoctorProfile; isWeekend: boolean; paymentUnit: number; employmentType?: DoctorEmploymentType }) {
-    if (params.employmentType === "estatutario") {
-        return 0;
-    }
-    const rateCents = params.isWeekend ? PROFILE_RATE_CENTS[params.profile].weekend : PROFILE_RATE_CENTS[params.profile].weekday;
-    const unitMilli = Math.round(params.paymentUnit * 1000);
-    return Math.round((rateCents * unitMilli) / 1000);
-}
-
-function employmentTypeLabel(employmentType: string | null | undefined) {
-    return employmentType === "estatutario" ? "Estatutário" : "PJ";
-}
-
-function parseTargetPriority(code: string) {
-    const match = code.match(/(\d{1,2})(?!.*\d)/);
-    if (!match) {
-        return Number.POSITIVE_INFINITY;
-    }
-
-    const value = Number(match[1]);
-    if (!Number.isFinite(value)) {
-        return Number.POSITIVE_INFINITY;
-    }
-
-    return value;
-}
-
-function targetCodeRank(code: string) {
-    const numeric = parseTargetPriority(code);
-    const priorityIndex = TARGET_PRIORITY_NUMBERS.findIndex((entry) => entry === numeric);
-
-    return {
-        priorityIndex: priorityIndex === -1 ? Number.POSITIVE_INFINITY : priorityIndex,
-        numeric,
-    };
-}
-
-function targetComparator(
-    left: { targetCode: string; targetLabel: string },
-    right: { targetCode: string; targetLabel: string },
-) {
-    const leftRank = targetCodeRank(left.targetCode);
-    const rightRank = targetCodeRank(right.targetCode);
-
-    if (leftRank.priorityIndex !== rightRank.priorityIndex) {
-        return leftRank.priorityIndex - rightRank.priorityIndex;
-    }
-
-    if (leftRank.numeric !== rightRank.numeric) {
-        return leftRank.numeric - rightRank.numeric;
-    }
-
-    return left.targetCode.localeCompare(right.targetCode, "pt-BR") || left.targetLabel.localeCompare(right.targetLabel, "pt-BR");
-}
-
-function normalize(value: string) {
-    return value
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .trim();
-}
-
-function formatUnits(value: number | null | undefined) {
-    const safeValue = Number.isFinite(value) ? Number(value) : 0;
-    return Number.isInteger(safeValue) ? String(safeValue) : safeValue.toFixed(1).replace(".", ",");
-}
-
-function cellAuditLink(monthKey: string, day: string, shift: "SD" | "SN") {
-    return `/admin/payment-attestation/audit?date=${monthKey}-${day}&shift=${shift}`;
-}
-
-const WEEKDAY_LABELS_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"] as const;
-
-function formatOperationalDate(operationalDate: string) {
-    const [year, month, day] = operationalDate.split("-");
-    const reference = new Date(`${operationalDate}T12:00:00-03:00`);
-    const weekday = WEEKDAY_LABELS_PT[reference.getUTCDay()];
-    return { dayMonth: `${day}/${month}/${year.slice(2)}`, weekday };
-}
-
-function resolveOperationalDateFromIso(iso: string) {
-    const local = new Date(new Date(iso).getTime() + (-180 * 60000));
-    const year = local.getUTCFullYear();
-    const month = String(local.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(local.getUTCDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-}
-
-function resolveSegmentShiftLabel(segment: { shiftLabel: "SD" | "SN" | "P" | null; startedAt: string }): "SD" | "SN" {
-    if (segment.shiftLabel === "SD" || segment.shiftLabel === "SN") {
-        return segment.shiftLabel;
-    }
-
-    const local = new Date(new Date(segment.startedAt).getTime() + (-180 * 60000));
-    const hour = local.getUTCHours();
-    return hour >= 19 || hour < 7 ? "SN" : "SD";
-}
-
-function dayKindLabel(operationalDate: string) {
-    if (isSamuHolidayDate(operationalDate)) return "Feriado";
-    if (isStrictWeekendDate(operationalDate)) return "Fim de semana";
-    return "Dia útil";
-}
-
-function dayKindClassName(operationalDate: string) {
-    if (isSamuHolidayDate(operationalDate)) return "holiday";
-    if (isStrictWeekendDate(operationalDate)) return "weekend";
-    return "weekday";
-}
+const KPIS_STORAGE_KEY = "payment-closing.kpisOpen.v1";
+const SEARCH_DEBOUNCE_MS = 150;
+const ESTIMATED_ROW_HEIGHT = 40;
 
 export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props) {
     const router = useRouter();
@@ -242,8 +62,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     const requestRouterRefresh = useCallback(() => {
         startRefreshTransition(() => { router.refresh(); });
     }, [router]);
+
+    // ── Filtros ─────────────────────────────────────────────────────────────
     const [search, setSearch] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
     const [targetSearch, setTargetSearch] = useState("");
+    const [debouncedTargetSearch, setDebouncedTargetSearch] = useState("");
     const [status, setStatus] = useState<PaymentStatusFilter>("all");
     const [employmentTypeFilter, setEmploymentTypeFilter] = useState<EmploymentTypeFilter>("all");
     const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("all");
@@ -251,53 +75,77 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("all");
     const [targetFilter, setTargetFilter] = useState("all");
     const [sortMode, setSortMode] = useState<SortMode>("name");
+    const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
+        return () => window.clearTimeout(timer);
+    }, [search]);
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => setDebouncedTargetSearch(targetSearch), SEARCH_DEBOUNCE_MS);
+        return () => window.clearTimeout(timer);
+    }, [targetSearch]);
+
+    // ── KPIs colapsáveis (persistidos) ──────────────────────────────────────
+    const [kpisOpen, setKpisOpen] = useState(true);
+    useEffect(() => {
+        try {
+            const stored = window.localStorage.getItem(KPIS_STORAGE_KEY);
+            if (stored !== null) {
+                setKpisOpen(stored !== "0");
+            }
+        } catch {}
+    }, []);
+    const toggleKpis = useCallback(() => {
+        setKpisOpen((previous) => {
+            const next = !previous;
+            try {
+                window.localStorage.setItem(KPIS_STORAGE_KEY, next ? "1" : "0");
+            } catch {}
+            return next;
+        });
+    }, []);
+
+    // ── Flash de correção aplicada ──────────────────────────────────────────
     const [flash, setFlash] = useState<FlashRecord | null>(null);
     const [highlightKey, setHighlightKey] = useState<string | null>(null);
-    const tableShellRef = useRef<HTMLDivElement | null>(null);
-    const [manualDraft, setManualDraft] = useState<{
-        domain: "regulation" | "intervention";
-        targetCode: string;
-        targetLabel: string;
-        day: string;
-        shiftLabel: "SD" | "SN";
-        sourceType: "disabled" | "uncovered";
-        reason: string | null;
-    } | null>(null);
+    const [coveragePanelOpen, setCoveragePanelOpen] = useState(false);
+
+    // ── Correção manual ─────────────────────────────────────────────────────
+    const [manualDraft, setManualDraft] = useState<ManualDraft | null>(null);
     const [manualDoctorName, setManualDoctorName] = useState("");
     const [manualDisableReason, setManualDisableReason] = useState("");
     const [manualMode, setManualMode] = useState<"assign" | "disable">("assign");
     const [manualBusy, setManualBusy] = useState(false);
     const [manualError, setManualError] = useState<string | null>(null);
     const [manualFeedback, setManualFeedback] = useState<string | null>(null);
+
+    // ── Overrides otimistas de perfil/vínculo/meta ──────────────────────────
     const [profileBusyDoctorId, setProfileBusyDoctorId] = useState<string | null>(null);
     const [doctorProfileOverrides, setDoctorProfileOverrides] = useState<Record<string, DoctorProfile>>({});
     const [employmentTypeBusyDoctorId, setEmploymentTypeBusyDoctorId] = useState<string | null>(null);
     const [doctorEmploymentTypeOverrides, setDoctorEmploymentTypeOverrides] = useState<Record<string, DoctorEmploymentType>>({});
     // Última NF/processo confirmados pelo servidor por médico — evita depender só do
-    // router.refresh() (assíncrono) para o modal mostrar o valor recém-salvo ao reabrir.
+    // router.refresh() (assíncrono) para o drawer mostrar o valor recém-salvo ao reabrir.
     const [doctorMetaOverrides, setDoctorMetaOverrides] = useState<Record<string, { invoiceNumber: string | null; paymentProcessNumber: string | null }>>({});
-    const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
-    // Espelha selectedDoctorId para leitura em callbacks assíncronos (ex.: resposta de
-    // save chegando depois que o admin já trocou/fechou o modal do médico).
-    const selectedDoctorIdRef = useRef<string | null>(null);
+
+    // ── Drawer do médico ────────────────────────────────────────────────────
+    const [drawerDoctorId, setDrawerDoctorId] = useState<string | null>(null);
+    // Espelha drawerDoctorId para leitura em callbacks assíncronos (ex.: resposta de
+    // save chegando depois que o admin já trocou/fechou o drawer do médico).
+    const drawerDoctorIdRef = useRef<string | null>(null);
     useEffect(() => {
-        selectedDoctorIdRef.current = selectedDoctorId;
-    }, [selectedDoctorId]);
-    const [shiftActionDraft, setShiftActionDraft] = useState<{
-        payableShiftId: string;
-        occupancyId: string;
-        domain: "regulation" | "intervention";
-        targetCode: string;
-        targetLabel: string;
-        day: string;
-        shiftLabel: "SD" | "SN";
-        doctorName: string;
-        source: string | null;
-    } | null>(null);
+        drawerDoctorIdRef.current = drawerDoctorId;
+    }, [drawerDoctorId]);
+
+    // ── Popover de ações do slot ────────────────────────────────────────────
+    const [slotPopover, setSlotPopover] = useState<SlotActionDraft | null>(null);
     const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(new Set());
     const [shiftActionBusy, setShiftActionBusy] = useState(false);
     const [shiftActionError, setShiftActionError] = useState<string | null>(null);
-    // Formulário "adicionar plantão extra" dentro do modal do médico.
+
+    // ── Formulário "adicionar plantão extra" dentro do drawer ───────────────
     const [extraDay, setExtraDay] = useState("");
     const [extraShift, setExtraShift] = useState<"SD" | "SN">("SD");
     const [extraCoverage, setExtraCoverage] = useState<"full" | "half">("full");
@@ -305,7 +153,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     const [extraBusy, setExtraBusy] = useState(false);
     const [extraError, setExtraError] = useState<string | null>(null);
     const [extraFeedback, setExtraFeedback] = useState<string | null>(null);
-    // Acompanhamento financeiro do modal: nota fiscal, processo, contrato, banco.
+
+    // ── Acompanhamento financeiro do drawer ─────────────────────────────────
     const [invoiceDraft, setInvoiceDraft] = useState("");
     const [processDraft, setProcessDraft] = useState("");
     const [metaBusy, setMetaBusy] = useState(false);
@@ -316,7 +165,17 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     const [contractError, setContractError] = useState<string | null>(null);
     const [bankBusy, setBankBusy] = useState(false);
     const [bankError, setBankError] = useState<string | null>(null);
-    // Limpa o formulário de plantão extra ao trocar de médico / fechar o modal.
+
+    // ── Atestação ───────────────────────────────────────────────────────────
+    const [attestationOverrides, setAttestationOverrides] = useState<Record<string, boolean>>({});
+    const [attestBusyDoctorId, setAttestBusyDoctorId] = useState<string | null>(null);
+    const [attestError, setAttestError] = useState<string | null>(null);
+    // Quando o board chega atualizado, descarta os estados otimistas de atestação.
+    useEffect(() => {
+        setAttestationOverrides({});
+    }, [board]);
+
+    // Limpa o formulário de plantão extra ao trocar de médico / fechar o drawer.
     useEffect(() => {
         setExtraDay("");
         setExtraShift("SD");
@@ -328,8 +187,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         // Semeia NF/processo a partir do que já está gravado para este médico. Prioriza
         // o override confirmado pelo servidor (última resposta de save) sobre o prop
         // `board`, que pode estar desatualizado se o router.refresh() ainda não voltou.
-        const baseDoctor = board.doctors.find((doctor) => doctor.doctorId === selectedDoctorId);
-        const metaOverride = selectedDoctorId ? doctorMetaOverrides[selectedDoctorId] : undefined;
+        const baseDoctor = board.doctors.find((doctor) => doctor.doctorId === drawerDoctorId);
+        const metaOverride = drawerDoctorId ? doctorMetaOverrides[drawerDoctorId] : undefined;
         setInvoiceDraft(metaOverride?.invoiceNumber ?? baseDoctor?.invoiceNumber ?? "");
         setProcessDraft(metaOverride?.paymentProcessNumber ?? baseDoctor?.paymentProcessNumber ?? "");
         setContractDraft("");
@@ -337,228 +196,32 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         setMetaFeedback(null);
         setContractError(null);
         setBankError(null);
-        // Semeado só ao (re)abrir o modal de um médico — não a cada refresh do board,
+        // Semeado só ao (re)abrir o drawer de um médico — não a cada refresh do board,
         // para não apagar o feedback de "salvos" nem o que o admin está digitando.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedDoctorId]);
-    // Atestação: "já conferi e assinei a produtividade deste médico no mês".
-    const [attestationOverrides, setAttestationOverrides] = useState<Record<string, boolean>>({});
-    const [attestBusyDoctorId, setAttestBusyDoctorId] = useState<string | null>(null);
-    const [attestError, setAttestError] = useState<string | null>(null);
-    // Quando o board chega atualizado, descarta os estados otimistas de atestação.
-    useEffect(() => {
-        setAttestationOverrides({});
-    }, [board]);
-    const normalized = normalize(search);
-    const normalizedTarget = normalize(targetSearch);
+    }, [drawerDoctorId]);
 
-    const targetPills = useMemo(() => {
-        const filtered = board.targetOptions.filter((target) => {
-            if (domainFilter !== "all" && target.domain !== domainFilter) {
-                return false;
-            }
+    const normalized = normalize(debouncedSearch);
+    const normalizedTarget = normalize(debouncedTargetSearch);
 
-            if (!normalizedTarget) {
-                return true;
-            }
+    function isDoctorAttested(target: { doctorId: string; attestedAt: string | null }) {
+        const override = attestationOverrides[target.doctorId];
+        return override !== undefined ? override : Boolean(target.attestedAt);
+    }
 
-            const haystack = normalize([target.targetCode, target.targetLabel].join(" "));
-            return haystack.includes(normalizedTarget);
-        });
-
-        return filtered;
-    }, [board.targetOptions, domainFilter, normalizedTarget]);
-
-    const targetSectors = useMemo(() => {
-        const base = targetPills
-            .map((target) => ({
-                ...target,
-                isUsa: normalize(`${target.targetCode} ${target.targetLabel}`).includes("usa"),
-            }))
-            .sort(targetComparator);
-
-        const usa = base.filter((target) => target.isUsa);
-        const regulation = base.filter((target) => target.domain === "regulation" && !target.isUsa);
-        const intervention = base.filter((target) => target.domain === "intervention" && !target.isUsa);
-
-        return [
-            { key: "usa", title: "USA", tone: "usa", targets: usa },
-            { key: "regulation", title: "Regulação", tone: "regulation", targets: regulation },
-            { key: "intervention", title: "Intervenção", tone: "intervention", targets: intervention },
-        ].filter((sector) => sector.targets.length > 0);
-    }, [targetPills]);
-
-    const filterSummary = useMemo(() => {
-        const visiblePayableShifts = board.payableShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
-        const readyDoctors = board.doctors.filter((doctor) => doctor.paymentStatus === "ready_for_payment").length;
-        const reviewDoctors = board.doctors.length - readyDoctors;
-        const sdCount = visiblePayableShifts
-            .filter((shift) => shift.shiftLabel === "SD")
-            .reduce((sum, shift) => sum + shift.paymentUnit, 0);
-        const snCount = visiblePayableShifts
-            .filter((shift) => shift.shiftLabel === "SN")
-            .reduce((sum, shift) => sum + shift.paymentUnit, 0);
-        const regulationCount = visiblePayableShifts.filter((shift) => shift.domain === "regulation").length;
-        const interventionCount = visiblePayableShifts.filter((shift) => shift.domain === "intervention").length;
-        const halfCount = visiblePayableShifts.filter((shift) => Boolean(shift.paymentTag)).length;
-        const fullCount = visiblePayableShifts.length - halfCount;
-
-        return {
-            readyDoctors,
-            reviewDoctors,
-            sdCount,
-            snCount,
-            regulationCount,
-            interventionCount,
-            halfCount,
-            fullCount,
-        };
-    }, [board.doctors, board.payableShifts, pendingRemovals]);
-
-    const dayLoad = useMemo(() => {
-        const counts = new Map<string, number>();
-        for (const shift of board.payableShifts) {
-            if (pendingRemovals.has(shift.payableShiftId)) {
-                continue;
-            }
-            const day = shift.operationalDate.slice(8, 10);
-            counts.set(day, (counts.get(day) ?? 0) + 1);
-        }
-
-        return board.days.map((day) => ({ day, count: counts.get(day) ?? 0 }));
-    }, [board.days, board.payableShifts, pendingRemovals]);
-
-    const dueAmountByEmploymentType = useMemo(() => {
-        const totalsCents: Record<DoctorEmploymentType, number> = { pj: 0, estatutario: 0 };
-        const doctorCounts: Record<DoctorEmploymentType, number> = { pj: 0, estatutario: 0 };
-
-        for (const doctor of board.doctors) {
-            const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
-            const employmentType = doctorEmploymentTypeOverrides[doctor.doctorId] ?? (doctor.employmentType ?? "pj") as DoctorEmploymentType;
-            const doctorShifts = doctor.cells
-                .flatMap((cell) => cell.shifts)
-                .filter((shift) => !pendingRemovals.has(shift.payableShiftId));
-
-            if (doctorShifts.length === 0) {
-                continue;
-            }
-
-            doctorCounts[employmentType] += 1;
-
-            const weekdayUnits = doctorShifts
-                .filter((shift) => !isWeekendDate(shift.operationalDate))
-                .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
-            const weekendUnits = doctorShifts
-                .filter((shift) => isWeekendDate(shift.operationalDate))
-                .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
-            const doctorDue = resolveAmountCentsByDayKind({
-                profile: paymentProfile,
-                isWeekend: false,
-                paymentUnit: weekdayUnits,
-                employmentType,
-            }) + resolveAmountCentsByDayKind({
-                profile: paymentProfile,
-                isWeekend: true,
-                paymentUnit: weekendUnits,
-                employmentType,
-            });
-            totalsCents[employmentType] += doctorDue;
-        }
-
-        return {
-            pj: { totalDue: totalsCents.pj / 100, doctorCount: doctorCounts.pj },
-            estatutario: { totalDue: totalsCents.estatutario / 100, doctorCount: doctorCounts.estatutario },
-        };
-    }, [board.doctors, doctorProfileOverrides, doctorEmploymentTypeOverrides, pendingRemovals]);
-
-    const visibleDisabledTargets = useMemo(() => board.disabledTargets.filter((item) => {
-        if (shiftFilter !== "all" && item.shiftLabel !== shiftFilter) {
-            return false;
-        }
-
-        if (domainFilter !== "all" && item.domain !== domainFilter) {
-            return false;
-        }
-
-        if (targetFilter !== "all") {
-            const [targetDomain, targetCode] = targetFilter.split("|");
-            if (item.domain !== targetDomain || item.targetCode !== targetCode) {
-                return false;
-            }
-        }
-
-        if (!normalizedTarget) {
-            return true;
-        }
-
-        const haystack = normalize([item.targetCode, item.targetLabel, item.disabledReason ?? ""].join(" "));
-        return haystack.includes(normalizedTarget);
-    }), [board.disabledTargets, domainFilter, normalizedTarget, shiftFilter, targetFilter]);
-
-    const disabledByDay = useMemo(() => {
-        const map = new Map<string, typeof visibleDisabledTargets>();
-        for (const item of visibleDisabledTargets) {
-            const key = item.day;
-            const bucket = map.get(key) ?? [];
-            bucket.push(item);
-            map.set(key, bucket);
-        }
-
-        return map;
-    }, [visibleDisabledTargets]);
-
-    const visibleUncoveredTargets = useMemo(() => board.uncoveredTargets.filter((item) => {
-        if (shiftFilter !== "all" && item.shiftLabel !== shiftFilter) {
-            return false;
-        }
-
-        if (domainFilter !== "all" && item.domain !== domainFilter) {
-            return false;
-        }
-
-        if (targetFilter !== "all") {
-            const [targetDomain, targetCode] = targetFilter.split("|");
-            if (item.domain !== targetDomain || item.targetCode !== targetCode) {
-                return false;
-            }
-        }
-
-        if (!normalizedTarget) {
-            return true;
-        }
-
-        const haystack = normalize([item.targetCode, item.targetLabel, item.reason ?? ""].join(" "));
-        return haystack.includes(normalizedTarget);
-    }), [board.uncoveredTargets, domainFilter, normalizedTarget, shiftFilter, targetFilter]);
-
-    const uncoveredByDay = useMemo(() => {
-        const map = new Map<string, typeof visibleUncoveredTargets>();
-        for (const item of visibleUncoveredTargets) {
-            const key = item.day;
-            const bucket = map.get(key) ?? [];
-            bucket.push(item);
-            map.set(key, bucket);
-        }
-
-        return map;
-    }, [visibleUncoveredTargets]);
-
-    const peakDay = useMemo(() => {
-        if (dayLoad.length === 0) {
-            return null;
-        }
-
-        return [...dayLoad].sort((left, right) => right.count - left.count)[0] ?? null;
-    }, [dayLoad]);
-
-    const maxDayLoad = useMemo(() => Math.max(...dayLoad.map((entry) => entry.count), 1), [dayLoad]);
-
-    const filteredDoctors = useMemo(() => {
-        const doctors = board.doctors
+    // ── Linhas da matriz (filtros + overrides + totais) ─────────────────────
+    const matrixRows = useMemo<MatrixRowModel[]>(() => {
+        const rows = board.doctors
             .map((doctor) => {
-                const nextCells = doctor.cells.map((cell) => ({
-                    ...cell,
+                const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
+                const employmentType = doctorEmploymentTypeOverrides[doctor.doctorId] ?? (doctor.employmentType ?? "pj") as DoctorEmploymentType;
+                const cells = doctor.cells.map((cell) => ({
+                    day: cell.day,
                     shifts: cell.shifts.filter((shift) => {
+                        if (pendingRemovals.has(shift.payableShiftId)) {
+                            return false;
+                        }
+
                         if (shiftFilter !== "all" && shift.shiftLabel !== shiftFilter) {
                             return false;
                         }
@@ -591,32 +254,23 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                     }),
                 }));
 
-                const visibleShifts = nextCells.flatMap((cell) => cell.shifts);
-                const effectiveVisibleShifts = visibleShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
+                const visibleShifts = cells.flatMap((cell) => cell.shifts);
                 const totalSD = Number(visibleShifts
-                    .filter((shift) => !pendingRemovals.has(shift.payableShiftId) && shift.shiftLabel === "SD")
+                    .filter((shift) => shift.shiftLabel === "SD")
                     .reduce((sum, shift) => sum + shift.paymentUnit, 0)
                     .toFixed(2));
                 const totalSN = Number(visibleShifts
-                    .filter((shift) => !pendingRemovals.has(shift.payableShiftId) && shift.shiftLabel === "SN")
-                    .reduce((sum, shift) => sum + shift.paymentUnit, 0)
-                    .toFixed(2));
-                const total = Number(effectiveVisibleShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2));
-                const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
-                const employmentType = doctorEmploymentTypeOverrides[doctor.doctorId] ?? (doctor.employmentType ?? "pj") as DoctorEmploymentType;
-                const totalSDDueCents = effectiveVisibleShifts
-                    .filter((shift) => shift.shiftLabel === "SD")
-                    .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile, employmentType), 0);
-                const totalSNDueCents = effectiveVisibleShifts
                     .filter((shift) => shift.shiftLabel === "SN")
-                    .reduce((sum, shift) => sum + resolveShiftAmountCents(shift, paymentProfile, employmentType), 0);
-                // Conta em UNIDADES de plantão: meio plantão vale 0,5 (não 1).
-                const weekdayShiftCount = Number(effectiveVisibleShifts
-                    .filter((shift) => !isWeekendDate(shift.operationalDate))
                     .reduce((sum, shift) => sum + shift.paymentUnit, 0)
                     .toFixed(2));
-                const weekendShiftCount = Number(effectiveVisibleShifts
-                    .filter((shift) => isWeekendDate(shift.operationalDate))
+                const total = Number(visibleShifts.reduce((sum, shift) => sum + shift.paymentUnit, 0).toFixed(2));
+                // Conta em UNIDADES de plantão: meio plantão vale 0,5 (não 1).
+                const weekdayShiftCount = Number(visibleShifts
+                    .filter((shift) => !isPremiumRateDate(shift.operationalDate))
+                    .reduce((sum, shift) => sum + shift.paymentUnit, 0)
+                    .toFixed(2));
+                const weekendShiftCount = Number(visibleShifts
+                    .filter((shift) => isPremiumRateDate(shift.operationalDate))
                     .reduce((sum, shift) => sum + shift.paymentUnit, 0)
                     .toFixed(2));
                 const weekdayDueCents = resolveAmountCentsByDayKind({
@@ -631,49 +285,62 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                     paymentUnit: weekendShiftCount,
                     employmentType,
                 });
-                const totalDueCents = weekdayDueCents + weekendDueCents;
-                const pendingCount = effectiveVisibleShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
+                const pendingCount = visibleShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
+                const attested = isDoctorAttested(doctor);
                 const metaOverride = doctorMetaOverrides[doctor.doctorId];
 
                 return {
-                    ...doctor,
-                    cells: nextCells,
+                    doctorId: doctor.doctorId,
+                    doctorName: doctor.doctorName,
+                    displayName: doctor.displayName,
+                    paymentProfile,
                     employmentType,
+                    paymentStatus: doctor.paymentStatus,
+                    attested,
+                    isReady: doctor.paymentStatus === "ready_for_payment" && attested,
+                    pendingCount,
                     totalSD,
                     totalSN,
                     total,
-                    totalSDDue: totalSDDueCents / 100,
-                    totalSNDue: totalSNDueCents / 100,
-                    totalDue: totalDueCents / 100,
                     weekdayShiftCount,
                     weekendShiftCount,
                     weekdayDue: weekdayDueCents / 100,
                     weekendDue: weekendDueCents / 100,
-                    pendingCount,
-                    invoiceNumber: metaOverride?.invoiceNumber ?? doctor.invoiceNumber,
-                    paymentProcessNumber: metaOverride?.paymentProcessNumber ?? doctor.paymentProcessNumber,
-                };
+                    totalDue: (weekdayDueCents + weekendDueCents) / 100,
+                    invoiceNumber: metaOverride?.invoiceNumber ?? doctor.invoiceNumber ?? null,
+                    paymentProcessNumber: metaOverride?.paymentProcessNumber ?? doctor.paymentProcessNumber ?? null,
+                    contractCeilingBrl: doctor.contractCeilingBrl ?? null,
+                    contractSeedMonth: doctor.contractSeedMonth ?? null,
+                    contractBalanceBrl: doctor.contractBalanceBrl ?? null,
+                    bankHoursMinutes: doctor.bankHoursMinutes ?? null,
+                    bankHoursSettlement: doctor.bankHoursSettlement ?? null,
+                    cells,
+                } satisfies MatrixRowModel;
             })
-            .filter((doctor) => {
-                if (status !== "all" && doctor.paymentStatus !== status) {
+            .filter((row) => {
+                if (status === "ready" && !row.isReady) {
                     return false;
                 }
 
-                if (employmentTypeFilter !== "all" && doctor.employmentType !== employmentTypeFilter) {
+                if (status === "review" && row.isReady) {
+                    return false;
+                }
+
+                if (employmentTypeFilter !== "all" && row.employmentType !== employmentTypeFilter) {
                     return false;
                 }
 
                 if (normalized) {
-                    const haystack = normalize([doctor.doctorName, doctor.displayName ?? ""].join(" "));
+                    const haystack = normalize([row.doctorName, row.displayName ?? ""].join(" "));
                     if (!haystack.includes(normalized)) {
                         return false;
                     }
                 }
 
-                return doctor.total > 0;
+                return row.total > 0;
             });
 
-        const sorted = [...doctors].sort((left, right) => {
+        return rows.sort((left, right) => {
             if (sortMode === "name") {
                 return left.doctorName.localeCompare(right.doctorName, "pt-BR");
             }
@@ -692,13 +359,202 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
 
             return right.pendingCount - left.pendingCount || right.total - left.total || left.doctorName.localeCompare(right.doctorName, "pt-BR");
         });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [attestationOverrides, board.doctors, coverageFilter, doctorEmploymentTypeOverrides, doctorMetaOverrides, doctorProfileOverrides, domainFilter, employmentTypeFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
 
-        return sorted;
-    }, [board.doctors, coverageFilter, doctorProfileOverrides, doctorEmploymentTypeOverrides, doctorMetaOverrides, domainFilter, employmentTypeFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
+    // Índice payableShiftId → linha/plantão visível, para abrir o popover por id.
+    const shiftIndex = useMemo(() => {
+        const index = new Map<string, { row: MatrixRowModel; shift: MatrixRowModel["cells"][number]["shifts"][number]; day: string }>();
+        for (const row of matrixRows) {
+            for (const cell of row.cells) {
+                for (const shift of cell.shifts) {
+                    index.set(shift.payableShiftId, { row, shift, day: cell.day });
+                }
+            }
+        }
+        return index;
+    }, [matrixRows]);
 
+    // ── Estatísticas board-wide (KPIs estáveis, só descontam remoções) ──────
+    const readyStats = useMemo(() => {
+        let ready = 0;
+        for (const doctor of board.doctors) {
+            if (doctor.paymentStatus === "ready_for_payment" && isDoctorAttested(doctor)) {
+                ready += 1;
+            }
+        }
+        return { ready, review: board.doctors.length - ready };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [attestationOverrides, board.doctors]);
+
+    const unitStats = useMemo(() => {
+        let sdUnits = 0;
+        let snUnits = 0;
+        for (const shift of board.payableShifts) {
+            if (pendingRemovals.has(shift.payableShiftId)) {
+                continue;
+            }
+            if (shift.shiftLabel === "SD") {
+                sdUnits += shift.paymentUnit;
+            } else {
+                snUnits += shift.paymentUnit;
+            }
+        }
+        return {
+            sdUnits: Number(sdUnits.toFixed(2)),
+            snUnits: Number(snUnits.toFixed(2)),
+            totalUnits: Number((sdUnits + snUnits).toFixed(2)),
+        };
+    }, [board.payableShifts, pendingRemovals]);
+
+    const dueAmountByEmploymentType = useMemo(() => {
+        const totalsCents: Record<DoctorEmploymentType, number> = { pj: 0, estatutario: 0 };
+        const doctorCounts: Record<DoctorEmploymentType, number> = { pj: 0, estatutario: 0 };
+
+        for (const doctor of board.doctors) {
+            const paymentProfile = doctorProfileOverrides[doctor.doctorId] ?? (doctor.paymentProfile ?? "generalist") as DoctorProfile;
+            const employmentType = doctorEmploymentTypeOverrides[doctor.doctorId] ?? (doctor.employmentType ?? "pj") as DoctorEmploymentType;
+            const doctorShifts = doctor.cells
+                .flatMap((cell) => cell.shifts)
+                .filter((shift) => !pendingRemovals.has(shift.payableShiftId));
+
+            if (doctorShifts.length === 0) {
+                continue;
+            }
+
+            doctorCounts[employmentType] += 1;
+
+            const weekdayUnits = doctorShifts
+                .filter((shift) => !isPremiumRateDate(shift.operationalDate))
+                .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
+            const weekendUnits = doctorShifts
+                .filter((shift) => isPremiumRateDate(shift.operationalDate))
+                .reduce((doctorSum, shift) => doctorSum + shift.paymentUnit, 0);
+            totalsCents[employmentType] += resolveAmountCentsByDayKind({
+                profile: paymentProfile,
+                isWeekend: false,
+                paymentUnit: weekdayUnits,
+                employmentType,
+            }) + resolveAmountCentsByDayKind({
+                profile: paymentProfile,
+                isWeekend: true,
+                paymentUnit: weekendUnits,
+                employmentType,
+            });
+        }
+
+        return {
+            pj: { totalDue: totalsCents.pj / 100, doctorCount: doctorCounts.pj },
+            estatutario: { totalDue: totalsCents.estatutario / 100, doctorCount: doctorCounts.estatutario },
+        };
+    }, [board.doctors, doctorProfileOverrides, doctorEmploymentTypeOverrides, pendingRemovals]);
+
+    const dayLoad = useMemo(() => {
+        const counts = new Map<string, number>();
+        for (const shift of board.payableShifts) {
+            if (pendingRemovals.has(shift.payableShiftId)) {
+                continue;
+            }
+            const day = shift.operationalDate.slice(8, 10);
+            counts.set(day, (counts.get(day) ?? 0) + 1);
+        }
+
+        return board.days.map((day) => ({ day, count: counts.get(day) ?? 0 }));
+    }, [board.days, board.payableShifts, pendingRemovals]);
+
+    const peakDay = useMemo(() => {
+        if (dayLoad.length === 0) {
+            return null;
+        }
+        return [...dayLoad].sort((left, right) => right.count - left.count)[0] ?? null;
+    }, [dayLoad]);
+
+    const maxDayLoad = useMemo(() => Math.max(...dayLoad.map((entry) => entry.count), 1), [dayLoad]);
+
+    // ── Pendências de cobertura (fora da matriz) ────────────────────────────
+    const coverageByDay = useMemo(() => {
+        const map = new Map<string, { uncovered: typeof board.uncoveredTargets; disabled: typeof board.disabledTargets }>();
+        for (const day of board.days) {
+            map.set(day, { uncovered: [], disabled: [] });
+        }
+        for (const item of board.uncoveredTargets) {
+            map.get(item.day)?.uncovered.push(item);
+        }
+        for (const item of board.disabledTargets) {
+            map.get(item.day)?.disabled.push(item);
+        }
+        return board.days
+            .map((day) => ({ day, ...map.get(day)! }))
+            .filter((entry) => entry.uncovered.length > 0 || entry.disabled.length > 0);
+    }, [board.days, board.disabledTargets, board.uncoveredTargets]);
+
+    // ── Alvos para o popover "Mais filtros" ─────────────────────────────────
+    const targetSectors = useMemo(() => {
+        const base = board.targetOptions
+            .map((target) => ({
+                ...target,
+                isUsa: normalize(`${target.targetCode} ${target.targetLabel}`).includes("usa"),
+            }))
+            .sort(targetComparator);
+
+        const usa = base.filter((target) => target.isUsa);
+        const regulation = base.filter((target) => target.domain === "regulation" && !target.isUsa);
+        const intervention = base.filter((target) => target.domain === "intervention" && !target.isUsa);
+
+        return [
+            { key: "usa", title: "USA", targets: usa },
+            { key: "regulation", title: "Regulação", targets: regulation },
+            { key: "intervention", title: "Intervenção", targets: intervention },
+        ].filter((sector) => sector.targets.length > 0);
+    }, [board.targetOptions]);
+
+    const advancedFilterCount = (domainFilter !== "all" ? 1 : 0)
+        + (coverageFilter !== "all" ? 1 : 0)
+        + (targetFilter !== "all" ? 1 : 0)
+        + (normalizedTarget ? 1 : 0)
+        + (sortMode !== "name" ? 1 : 0);
+
+    const clearAdvancedFilters = useCallback(() => {
+        setDomainFilter("all");
+        setCoverageFilter("all");
+        setTargetFilter("all");
+        setTargetSearch("");
+        setSortMode("name");
+    }, []);
+
+    // ── Dias premium + template da grade ────────────────────────────────────
+    const premiumDays = useMemo(
+        () => board.days.map((day) => isPremiumRateDate(`${board.monthKey}-${day}`)),
+        [board.days, board.monthKey],
+    );
+
+    const dayHeaders = useMemo(
+        () => board.days.map((day, index) => ({
+            day,
+            weekday: weekdayShortLabel(`${board.monthKey}-${day}`),
+            premium: premiumDays[index],
+        })),
+        [board.days, board.monthKey, premiumDays],
+    );
+
+    const gridTemplate = useMemo(
+        () => `var(--cmx-doc-w) repeat(${board.days.length}, var(--cmx-day-w)) var(--cmx-tot-w) var(--cmx-tot-w) var(--cmx-due-w)`,
+        [board.days.length],
+    );
+
+    // ── Virtualização das linhas ────────────────────────────────────────────
+    const matrixScrollRef = useRef<HTMLDivElement | null>(null);
+    const rowVirtualizer = useVirtualizer({
+        count: matrixRows.length,
+        getScrollElement: () => matrixScrollRef.current,
+        estimateSize: () => ESTIMATED_ROW_HEIGHT,
+        overscan: 8,
+        getItemKey: (index) => matrixRows[index]?.doctorId ?? index,
+    });
+    const virtualRows = rowVirtualizer.getVirtualItems();
+
+    // ── Reconciliação de remoções otimistas com a verdade do servidor ───────
     useEffect(() => {
-        // Reconcile optimistic removals with server truth: if a payableShiftId
-        // is no longer present in the refreshed board, drop it from the set.
         setPendingRemovals((prev) => {
             if (prev.size === 0) return prev;
             const present = new Set<string>();
@@ -717,6 +573,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         });
     }, [board]);
 
+    // ── Flash: carregar/persistir/localizar ─────────────────────────────────
     useEffect(() => {
         if (typeof window === "undefined") return;
         try {
@@ -750,6 +607,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         setHighlightKey(null);
     }, []);
 
+    const pendingLocateRef = useRef<FlashRecord | null>(null);
+    const [locateNonce, setLocateNonce] = useState(0);
+
     const locateFlashCell = useCallback(() => {
         if (!flash) return false;
         setStatus("all");
@@ -757,17 +617,51 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         setDomainFilter("all");
         setCoverageFilter("all");
         setTargetFilter("all");
+        setEmploymentTypeFilter("all");
         setSearch("");
+        setDebouncedSearch("");
         setTargetSearch("");
+        setDebouncedTargetSearch("");
 
-        const selector = `[data-flash-key="${flash.kind}|${flash.domain}|${flash.targetCode}|${flash.day}|${flash.shiftLabel}"]`;
+        if (flash.kind === "disable") {
+            // Slots desativados/removidos vivem no painel de pendências, não na matriz.
+            setCoveragePanelOpen(true);
+            setHighlightKey(`${flash.domain}|${flash.targetCode}|${flash.day}|${flash.shiftLabel}|disable`);
+            window.setTimeout(() => setHighlightKey(null), 4500);
+            window.scrollTo({ top: 0, behavior: "smooth" });
+            return true;
+        }
+
+        pendingLocateRef.current = flash;
+        setLocateNonce((nonce) => nonce + 1);
+        return true;
+    }, [flash]);
+
+    useEffect(() => {
+        const pending = pendingLocateRef.current;
+        if (!pending) return;
+        const index = matrixRows.findIndex((row) => row.cells.some((cell) => cell.day === pending.day
+            && cell.shifts.some((shift) => shift.domain === pending.domain
+                && shift.targetCode === pending.targetCode
+                && shift.shiftLabel === pending.shiftLabel)));
+        if (index === -1) {
+            // Ainda esperando o board refletir a correção (router.refresh em voo).
+            return;
+        }
+        pendingLocateRef.current = null;
+        rowVirtualizer.scrollToIndex(index, { align: "center" });
+
+        const selector = `[data-flash-key="assign|${pending.domain}|${pending.targetCode}|${pending.day}|${pending.shiftLabel}"]`;
         let attempts = 0;
         const tryLocate = () => {
-            const root = tableShellRef.current ?? document;
-            const el = root.querySelector<HTMLElement>(selector);
-            if (el) {
-                el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
-                setHighlightKey(`${flash.domain}|${flash.targetCode}|${flash.day}|${flash.shiftLabel}|${flash.kind}`);
+            const container = matrixScrollRef.current;
+            const element = container?.querySelector<HTMLElement>(selector);
+            if (element && container) {
+                const elementRect = element.getBoundingClientRect();
+                const containerRect = container.getBoundingClientRect();
+                const targetLeft = container.scrollLeft + (elementRect.left - containerRect.left) - (containerRect.width / 2) + (elementRect.width / 2);
+                container.scrollTo({ left: Math.max(0, targetLeft), behavior: "smooth" });
+                setHighlightKey(`${pending.domain}|${pending.targetCode}|${pending.day}|${pending.shiftLabel}|assign`);
                 window.setTimeout(() => setHighlightKey(null), 4500);
                 return true;
             }
@@ -776,13 +670,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         const schedule = () => {
             if (tryLocate()) return;
             attempts += 1;
-            if (attempts < 8) {
+            if (attempts < 10) {
                 window.setTimeout(schedule, 120);
             }
         };
         requestAnimationFrame(schedule);
-        return true;
-    }, [flash]);
+    }, [matrixRows, locateNonce, rowVirtualizer]);
 
     const autoLocatedFlashRef = useRef<string | null>(null);
     useEffect(() => {
@@ -798,6 +691,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         return () => window.clearTimeout(timer);
     }, [flash, locateFlashCell]);
 
+    // ── Ações remotas ───────────────────────────────────────────────────────
     async function submitManualCorrection() {
         if (!manualDraft) {
             return;
@@ -859,7 +753,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             // "Pendencias", a linha do medico atribuido seria invisivel apos o
             // refresh — impossivel de confirmar visualmente. Resetamos o filtro
             // de status para "all" para garantir que a atribuicao apareca.
-            if (status === "needs_review") {
+            if (status === "review") {
                 setStatus("all");
             }
             requestRouterRefresh();
@@ -930,12 +824,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     }
 
     async function submitShiftRemoval() {
-        if (!shiftActionDraft) return;
-        const draft = shiftActionDraft;
+        if (!slotPopover) return;
+        const draft = slotPopover;
         setShiftActionBusy(true);
         setShiftActionError(null);
 
-        // Optimistic: hide the cell immediately
+        // Otimista: esconde a célula imediatamente (todas as parcelas da mesma ocupação).
         const relatedPayableShiftIds = new Set<string>([draft.payableShiftId]);
         if (!draft.occupancyId.startsWith("extra:")) {
             for (const doctor of board.doctors) {
@@ -987,7 +881,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
 
             if (isExtra) {
                 setManualFeedback(`Plantão extra removido: dia ${draft.day} ${draft.shiftLabel} (${draft.doctorName}).`);
-                setShiftActionDraft(null);
+                setSlotPopover(null);
                 requestRouterRefresh();
                 return;
             }
@@ -1004,10 +898,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 ts: Date.now(),
             });
             setManualFeedback(`Removido: ${draft.targetCode} ${draft.shiftLabel} dia ${draft.day} (${draft.doctorName}).`);
-            setShiftActionDraft(null);
+            setSlotPopover(null);
             requestRouterRefresh();
         } catch (error) {
-            // Rollback optimistic
+            // Rollback do otimista.
             setPendingRemovals((prev) => {
                 const next = new Set(prev);
                 for (const id of relatedPayableShiftIds) {
@@ -1060,7 +954,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             setExtraFeedback(`Plantão extra adicionado: dia ${day} ${extraShift} (${coverageLabel}) → ${doctorName}.`);
             setExtraLabel("");
             // Se o filtro de status esconderia a linha, garante visibilidade.
-            if (status === "needs_review") {
+            if (status === "review") {
                 setStatus("all");
             }
             requestRouterRefresh();
@@ -1080,7 +974,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             || processDraft.trim() !== (doctor.paymentProcessNumber ?? "");
     }
 
-    // Auto-salva NF/processo ao sair do campo (blur) — inclui fechar o modal, pois
+    // Auto-salva NF/processo ao sair do campo (blur) — inclui fechar o drawer, pois
     // o blur dispara antes do clique de fechar. Assim o valor não se perde.
     function autoSavePaymentMeta(doctor: { doctorId: string; invoiceNumber?: string | null; paymentProcessNumber?: string | null }) {
         if (!metaBusy && isMetaDirty(doctor)) {
@@ -1112,15 +1006,15 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             }
             // Fonte da verdade passa a ser a resposta do servidor, não o router.refresh()
             // (assíncrono) — evita o campo "voltar" ao valor antigo se o médico reabrir
-            // o modal antes do refresh do board terminar.
+            // o drawer antes do refresh do board terminar.
             if (body?.meta) {
                 setDoctorMetaOverrides((prev) => ({
                     ...prev,
                     [doctorId]: { invoiceNumber: body.meta!.invoiceNumber, paymentProcessNumber: body.meta!.paymentProcessNumber },
                 }));
-                // Só escreve nos campos visíveis se o modal ainda for deste médico —
+                // Só escreve nos campos visíveis se o drawer ainda for deste médico —
                 // senão uma resposta atrasada pisa no que já foi digitado para outro.
-                if (selectedDoctorIdRef.current === doctorId) {
+                if (drawerDoctorIdRef.current === doctorId) {
                     setInvoiceDraft(body.meta.invoiceNumber ?? "");
                     setProcessDraft(body.meta.paymentProcessNumber ?? "");
                     setMetaFeedback("Nota fiscal / processo salvos.");
@@ -1174,7 +1068,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 throw new Error(body?.error ?? "Não foi possível lançar o acerto do banco de horas.");
             }
             // O plantão verde/vermelho pode estar fora do filtro atual — garante visibilidade.
-            if (status === "needs_review") {
+            if (status === "review") {
                 setStatus("all");
             }
             requestRouterRefresh();
@@ -1183,11 +1077,6 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         } finally {
             setBankBusy(false);
         }
-    }
-
-    function isDoctorAttested(target: { doctorId: string; attestedAt: string | null }) {
-        const override = attestationOverrides[target.doctorId];
-        return override !== undefined ? override : Boolean(target.attestedAt);
     }
 
     async function toggleDoctorAttestation(doctorId: string, attested: boolean) {
@@ -1298,9 +1187,85 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         }
     }
 
-    const selectedDoctor = useMemo(
-        () => filteredDoctors.find((doctor) => doctor.doctorId === selectedDoctorId) ?? null,
-        [filteredDoctors, selectedDoctorId],
+    // ── Abertura de drawer/popover a partir da matriz (delegação) ───────────
+    const openDoctorDrawer = useCallback((doctorId: string) => {
+        setDrawerDoctorId(doctorId);
+    }, []);
+
+    const openSlotPopover = useCallback((payableShiftId: string) => {
+        const entry = shiftIndex.get(payableShiftId);
+        if (!entry) {
+            return;
+        }
+        const { row, shift, day } = entry;
+        setShiftActionError(null);
+        setSlotPopover({
+            payableShiftId: shift.payableShiftId,
+            occupancyId: shift.occupancyId,
+            domain: shift.domain,
+            targetCode: shift.targetCode,
+            targetLabel: shift.targetLabel,
+            day,
+            shiftLabel: shift.shiftLabel,
+            doctorName: row.doctorName,
+            source: shift.source,
+            paymentTag: shift.paymentTag,
+            paymentUnit: shift.paymentUnit,
+            amountLabel: formatCurrency(resolveShiftAmount(shift, row.paymentProfile, row.employmentType)),
+        });
+    }, [shiftIndex]);
+
+    const startReassign = useCallback(() => {
+        if (!slotPopover) {
+            return;
+        }
+        setManualDraft({
+            domain: slotPopover.domain,
+            targetCode: slotPopover.targetCode,
+            targetLabel: slotPopover.targetLabel,
+            day: slotPopover.day,
+            shiftLabel: slotPopover.shiftLabel,
+            sourceType: "reassign",
+            reason: `atual: ${slotPopover.doctorName}`,
+        });
+        setManualDoctorName("");
+        setManualDisableReason("");
+        setManualMode("assign");
+        setManualError(null);
+        setSlotPopover(null);
+    }, [slotPopover]);
+
+    const openCoverageCorrection = useCallback((item: {
+        domain: "regulation" | "intervention";
+        targetCode: string;
+        targetLabel: string;
+        day: string;
+        shiftLabel: "SD" | "SN";
+        sourceType: "disabled" | "uncovered";
+        reason: string | null;
+    }) => {
+        if (!canManageClosing) {
+            return;
+        }
+        setManualDraft({
+            domain: item.domain,
+            targetCode: item.targetCode,
+            targetLabel: item.targetLabel,
+            day: item.day,
+            shiftLabel: item.shiftLabel,
+            sourceType: item.sourceType,
+            reason: item.reason,
+        });
+        setManualDoctorName("");
+        setManualDisableReason("");
+        setManualMode("assign");
+        setManualError(null);
+    }, [canManageClosing]);
+
+    // ── Drawer: médico selecionado + conflitos de alocação ──────────────────
+    const drawerDoctor = useMemo(
+        () => matrixRows.find((row) => row.doctorId === drawerDoctorId) ?? null,
+        [matrixRows, drawerDoctorId],
     );
 
     const allocationConflictShifts = useMemo(() => {
@@ -1315,26 +1280,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             }
         }
 
-        return Array.from(uniqueBySlot.values())
-            .sort((left, right) => {
-                const byDate = left.operationalDate.localeCompare(right.operationalDate);
-                if (byDate !== 0) return byDate;
-                if (left.shiftLabel !== right.shiftLabel) return left.shiftLabel === "SD" ? -1 : 1;
-                return left.targetCode.localeCompare(right.targetCode, "pt-BR");
-            });
+        return Array.from(uniqueBySlot.values());
     }, [board.payableShifts]);
 
-    const selectedDoctorDisplacedConflictSegments = useMemo(() => {
-        if (!selectedDoctor) {
-            return [] as Array<{
-                segmentId: string;
-                operationalDate: string;
-                shiftLabel: "SD" | "SN";
-                domain: "regulation" | "intervention";
-                targetCode: string;
-                targetLabel: string;
-                chosenDoctorName: string;
-            }>;
+    const drawerConflictSegments = useMemo<DrawerConflictSegment[]>(() => {
+        if (!drawerDoctor) {
+            return [];
         }
 
         const conflictBySlot = new Map<string, typeof allocationConflictShifts[number]>();
@@ -1344,7 +1295,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
         }
 
         const matches = board.attestationSegments
-            .filter((segment) => segment.doctorId === selectedDoctor.doctorId)
+            .filter((segment) => segment.doctorId === drawerDoctor.doctorId)
             .filter((segment) => segment.discardReason === "not_selected_for_payment")
             .map((segment) => {
                 const operationalDate = resolveOperationalDateFromIso(segment.startedAt);
@@ -1382,264 +1333,313 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
             if (left.domain !== right.domain) return left.domain === "regulation" ? -1 : 1;
             return left.targetCode.localeCompare(right.targetCode, "pt-BR");
         });
-    }, [allocationConflictShifts, board.attestationSegments, selectedDoctor]);
+    }, [allocationConflictShifts, board.attestationSegments, drawerDoctor]);
 
-    const selectedDoctorConflictCount = selectedDoctorDisplacedConflictSegments.length;
+    const uncoveredCount = board.uncoveredTargets.length;
+    const disabledCount = board.disabledTargets.length;
+    const monthTitle = compactMonthLabel(board.monthLabel);
 
+    // ── Render ──────────────────────────────────────────────────────────────
     return (
-        <main className="chief-payable-shell">
-            <section className="chief-payable-hero">
-                <div>
-                    <p className="reports-kicker">Fechamento mensal do chefe</p>
-                    <h1>Unidades pagáveis por médico e por dia</h1>
-                    <p className="chief-payable-subtitle">
-                        Esta visão mostra apenas o que vira pagamento. Resíduos técnicos, fragmentos e duplicações ficam na auditoria detalhada.
-                    </p>
-                    {!canManageClosing ? (
-                        <p className="chief-payable-subtitle">
-                            Perfil restrito: você pode visualizar todo o fechamento e salvar somente NF/processo.
-                        </p>
-                    ) : null}
-                </div>
-
-                <div className="chief-payable-peak-day" aria-live="polite">
-                    <span>Pico operacional do mês</span>
-                    <strong>{peakDay ? `${peakDay.day} · ${peakDay.count} unidades` : "sem dados"}</strong>
-                    <small>Use os filtros para refinar o fechamento por turno e domínio.</small>
-                </div>
-
-                <AdminGlobalNavigationLinks current="payment-closing" containerClassName="chief-payable-hero-actions">
-                    {canManageClosing ? (
-                        <>
-                            <a className="reports-primary-link" href={`/api/admin/reports/export?month=${board.monthKey}`}>
-                                Exportar XLSX (payable shifts)
-                            </a>
-                            <a className="reports-secondary-link" href="/admin/payment-attestation/audit">
-                                Abrir auditoria técnica
-                            </a>
-                        </>
-                    ) : null}
-                </AdminGlobalNavigationLinks>
-            </section>
-
-            <section className="reports-presets">
-                {board.presetMonths.map((preset) => (
+        <main className="chief-payable-shell chief-matrix-shell">
+            <div className="chief-matrix-toolbar">
+                <div className="chief-matrix-toolbar-month">
+                    <span className="chief-matrix-eyebrow">Fechamento</span>
                     <a
-                        key={preset.key}
-                        href={`/admin/payment-closing?month=${preset.key}`}
-                        className={`reports-month-chip ${preset.key === board.monthKey ? "active" : ""}`.trim()}
+                        className="chief-matrix-month-btn"
+                        href={`/admin/payment-closing?month=${shiftMonthKey(board.monthKey, -1)}`}
+                        aria-label="Mês anterior"
                     >
-                        {preset.label}
+                        ‹
                     </a>
-                ))}
-            </section>
-
-            <section className="chief-payable-summary">
-                <article className="chief-payable-summary-card">
-                    <span>Unidades pagáveis</span>
-                    <strong>{formatUnits(board.summary.payableUnitCount)}</strong>
-                </article>
-                <article className="chief-payable-summary-card ready">
-                    <span>Prontas</span>
-                    <strong>{board.summary.readyCount}</strong>
-                </article>
-                <button className="chief-payable-summary-card review actionable" type="button" onClick={() => setStatus("needs_review")}>
-                    <span>Pendências</span>
-                    <strong>{board.summary.needsReviewCount}</strong>
-                </button>
-                <article className="chief-payable-summary-card">
-                    <span>Médicos</span>
-                    <strong>{board.summary.doctorCount}</strong>
-                </article>
-                <article className="chief-payable-summary-card">
-                    <span>Valor devido (PJ · {dueAmountByEmploymentType.pj.doctorCount} médicos)</span>
-                    <strong>{formatCurrency(dueAmountByEmploymentType.pj.totalDue)}</strong>
-                </article>
-                <article className="chief-payable-summary-card">
-                    <span>Estatutário ({dueAmountByEmploymentType.estatutario.doctorCount} médicos · sem pagamento aqui)</span>
-                    <strong>{formatCurrency(dueAmountByEmploymentType.estatutario.totalDue)}</strong>
-                </article>
-                <article className="chief-payable-summary-card">
-                    <span>Desativadas</span>
-                    <strong>{visibleDisabledTargets.length}</strong>
-                </article>
-                <article className="chief-payable-summary-card warning-strong">
-                    <span>Sem médico</span>
-                    <strong>{visibleUncoveredTargets.length}</strong>
-                </article>
-            </section>
-
-            <section className="chief-payable-load-strip" aria-label="Ritmo mensal de unidades pagáveis">
-                {dayLoad.map((entry) => {
-                    const ratio = Math.max(entry.count / maxDayLoad, 0.12);
-                    return (
-                        <div key={entry.day} className="chief-payable-load-item" title={`Dia ${entry.day}: ${entry.count} unidades`}>
-                            <span>{entry.day}</span>
-                            <i style={{ transform: `scaleY(${ratio.toFixed(4)})` }} />
-                            <strong>{entry.count}</strong>
-                        </div>
-                    );
-                })}
-            </section>
-
-            <section className="chief-payable-control-grid">
-                <article className="chief-payable-control-card chief-payable-control-card-priority">
-                    <h3>Turno e domínio</h3>
-                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
-                        <button type="button" className={`chief-payable-chip ${shiftFilter === "all" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("all")}>
-                            SD + SN ({board.summary.payableShiftCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip day ${shiftFilter === "SD" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SD")}>
-                            SD ({formatUnits(filterSummary.sdCount)})
-                        </button>
-                        <button type="button" className={`chief-payable-chip night ${shiftFilter === "SN" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SN")}>
-                            SN ({formatUnits(filterSummary.snCount)})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${domainFilter === "all" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("all")}>
-                            Regulação + Intervenção
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${domainFilter === "regulation" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("regulation")}>
-                            Regulação ({filterSummary.regulationCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${domainFilter === "intervention" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("intervention")}>
-                            Intervenção ({filterSummary.interventionCount})
-                        </button>
-                    </div>
-
-                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
-                        <button
-                            type="button"
-                            className={`chief-payable-chip ${normalizedTarget === "usa" ? "active" : ""}`.trim()}
-                            onClick={() => setTargetSearch(normalizedTarget === "usa" ? "" : "USA")}
-                        >
-                            USA ({board.targetOptions.filter((target) => normalize([target.targetCode, target.targetLabel].join(" ")).includes("usa")).length})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${targetFilter === "all" ? "active" : ""}`.trim()} onClick={() => setTargetFilter("all")}>
-                            Todas as bases/ramais ({targetPills.length})
-                        </button>
-                    </div>
-
-                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
-                        <button type="button" className={`chief-payable-chip ${coverageFilter === "all" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("all")}>
-                            Cobertura completa + meio
-                        </button>
-                        <button type="button" className={`chief-payable-chip warning ${coverageFilter === "half" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("half")}>
-                            Somente MEIO ({filterSummary.halfCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${coverageFilter === "full" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("full")}>
-                            Sem MEIO ({filterSummary.fullCount})
-                        </button>
-                    </div>
-
-                    <div className="chief-payable-order-legend" aria-label="Ordem operacional prioritária">
-                        <span>Ordem rápida</span>
-                        <strong>01 · 02 · 03 · 04 · 05 · 10 · 20</strong>
-                    </div>
-
-                    <div className="chief-payable-target-sectors">
-                        {targetSectors.map((sector) => (
-                            <section key={sector.key} className={`chief-payable-target-sector ${sector.tone}`.trim()}>
-                                <header>
-                                    <h4>{sector.title}</h4>
-                                    <small>{sector.targets.length} unidades</small>
-                                </header>
-
-                                <div className="chief-payable-chip-row chief-payable-target-pills">
-                                    {sector.targets.map((target) => {
-                                        const value = `${target.domain}|${target.targetCode}`;
-                                        return (
-                                            <button
-                                                type="button"
-                                                key={value}
-                                                className={`chief-payable-chip ${targetFilter === value ? "active" : ""}`.trim()}
-                                                onClick={() => setTargetFilter(value)}
-                                                title={`${target.targetCode} · ${target.targetLabel}`}
-                                            >
-                                                {target.targetCode}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </section>
-                        ))}
-                    </div>
-                </article>
-            </section>
-
-            <section className="chief-payable-filter-bar">
-                <div className="chief-payable-inline-status" aria-label="Status de médicos">
-                    <span>Status</span>
-                    <div className="chief-payable-chip-row chief-payable-chip-row-inline">
-                        <button type="button" className={`chief-payable-chip ${status === "all" ? "active" : ""}`.trim()} onClick={() => setStatus("all")}>
-                            Todos ({board.summary.doctorCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${status === "ready_for_payment" ? "active" : ""}`.trim()} onClick={() => setStatus("ready_for_payment")}>
-                            Prontos ({filterSummary.readyDoctors})
-                        </button>
-                        <button type="button" className={`chief-payable-chip warning ${status === "needs_review" ? "active" : ""}`.trim()} onClick={() => setStatus("needs_review")}>
-                            Pendências ({filterSummary.reviewDoctors})
-                        </button>
-                    </div>
+                    <strong className="chief-matrix-month-label">{monthTitle}</strong>
+                    <a
+                        className="chief-matrix-month-btn"
+                        href={`/admin/payment-closing?month=${shiftMonthKey(board.monthKey, 1)}`}
+                        aria-label="Próximo mês"
+                    >
+                        ›
+                    </a>
                 </div>
 
-                <div className="chief-payable-inline-status" aria-label="Vínculo empregatício">
-                    <span>Vínculo</span>
-                    <div className="chief-payable-chip-row chief-payable-chip-row-inline">
-                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "all" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("all")}>
-                            Todos ({dueAmountByEmploymentType.pj.doctorCount + dueAmountByEmploymentType.estatutario.doctorCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "pj" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("pj")}>
-                            PJ ({dueAmountByEmploymentType.pj.doctorCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "estatutario" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("estatutario")}>
-                            Estatutário ({dueAmountByEmploymentType.estatutario.doctorCount})
-                        </button>
-                    </div>
-                </div>
-
-                <label className="chief-payable-filter-field chief-payable-search">
-                    <span>Filtrar médico</span>
+                <label className="chief-matrix-search">
+                    <span aria-hidden="true">⌕</span>
                     <input
                         type="search"
                         value={search}
                         onChange={(event) => setSearch(event.target.value)}
-                        placeholder="Digite nome ou apelido"
+                        placeholder="Buscar médico…"
+                        aria-label="Buscar médico"
                     />
                 </label>
 
-                <label className="chief-payable-filter-field chief-payable-target-search">
-                    <span>Filtrar alvo</span>
-                    <input
-                        type="search"
-                        value={targetSearch}
-                        onChange={(event) => setTargetSearch(event.target.value)}
-                        placeholder="Ex.: BR60, PM04, CRU"
-                    />
-                </label>
+                <div className="chief-matrix-pills" role="group" aria-label="Status">
+                    <button type="button" className={`chief-matrix-pill ${status === "all" ? "active" : ""}`.trim()} onClick={() => setStatus("all")}>
+                        Todos ({board.summary.doctorCount})
+                    </button>
+                    <button type="button" className={`chief-matrix-pill ${status === "ready" ? "active" : ""}`.trim()} onClick={() => setStatus("ready")}>
+                        Prontos ({readyStats.ready})
+                    </button>
+                    <button type="button" className={`chief-matrix-pill ${status === "review" ? "active" : ""}`.trim()} onClick={() => setStatus("review")}>
+                        Pendências ({readyStats.review})
+                    </button>
+                </div>
 
-                <label className="chief-payable-filter-field compact">
-                    <span>Ordenar por</span>
-                    <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
-                        <option value="pending">Pendências</option>
-                        <option value="total">Total</option>
-                        <option value="weekday">Dia útil</option>
-                        <option value="weekend">Fim de semana / feriado</option>
-                        <option value="name">Nome</option>
-                    </select>
-                </label>
+                <div className="chief-matrix-pills" role="group" aria-label="Turno">
+                    <button type="button" className={`chief-matrix-pill ${shiftFilter === "all" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("all")}>
+                        SD+SN
+                    </button>
+                    <button type="button" className={`chief-matrix-pill ${shiftFilter === "SD" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SD")}>
+                        SD
+                    </button>
+                    <button type="button" className={`chief-matrix-pill ${shiftFilter === "SN" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SN")}>
+                        SN
+                    </button>
+                </div>
 
-                <label className="chief-payable-filter-field compact">
-                    <span>Base/Ramal</span>
-                    <select value={targetFilter} onChange={(event) => setTargetFilter(event.target.value)}>
-                        <option value="all">Todos</option>
-                        {board.targetOptions.map((target) => (
-                            <option key={`${target.domain}|${target.targetCode}`} value={`${target.domain}|${target.targetCode}`}>
-                                {target.targetCode} · {target.domain === "regulation" ? "Regulação" : "Intervenção"}
-                            </option>
-                        ))}
-                    </select>
-                </label>
-            </section>
+                <div className="chief-matrix-pills" role="group" aria-label="Vínculo">
+                    <button type="button" className={`chief-matrix-pill ${employmentTypeFilter === "all" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("all")}>
+                        Todos
+                    </button>
+                    <button type="button" className={`chief-matrix-pill ${employmentTypeFilter === "pj" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("pj")}>
+                        PJ ({dueAmountByEmploymentType.pj.doctorCount})
+                    </button>
+                    <button type="button" className={`chief-matrix-pill ${employmentTypeFilter === "estatutario" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("estatutario")}>
+                        Estatutário ({dueAmountByEmploymentType.estatutario.doctorCount})
+                    </button>
+                </div>
+
+                <div className="chief-matrix-toolbar-anchor">
+                    <button
+                        type="button"
+                        className={`chief-matrix-btn ${advancedFilterCount > 0 ? "flagged" : ""}`.trim()}
+                        onClick={() => setMoreFiltersOpen((open) => !open)}
+                        aria-expanded={moreFiltersOpen}
+                    >
+                        Mais filtros{advancedFilterCount > 0 ? ` · ${advancedFilterCount}` : ""}
+                    </button>
+
+                    {moreFiltersOpen ? (
+                        <>
+                            <div className="chief-matrix-popover-backdrop" role="presentation" onClick={() => setMoreFiltersOpen(false)} />
+                            <section className="chief-matrix-filters-pop" role="dialog" aria-label="Mais filtros">
+                                <header>
+                                    <strong>Mais filtros</strong>
+                                    <div>
+                                        {advancedFilterCount > 0 ? (
+                                            <button type="button" className="chief-matrix-btn compact" onClick={clearAdvancedFilters}>
+                                                Limpar
+                                            </button>
+                                        ) : null}
+                                        <button type="button" className="chief-matrix-icon-btn" onClick={() => setMoreFiltersOpen(false)} aria-label="Fechar">✕</button>
+                                    </div>
+                                </header>
+
+                                <div className="chief-matrix-filters-pop-row" role="group" aria-label="Domínio">
+                                    <span>Domínio</span>
+                                    <div className="chief-matrix-pills">
+                                        <button type="button" className={`chief-matrix-pill ${domainFilter === "all" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("all")}>
+                                            Regulação + Intervenção
+                                        </button>
+                                        <button type="button" className={`chief-matrix-pill ${domainFilter === "regulation" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("regulation")}>
+                                            Regulação
+                                        </button>
+                                        <button type="button" className={`chief-matrix-pill ${domainFilter === "intervention" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("intervention")}>
+                                            Intervenção
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="chief-matrix-filters-pop-row" role="group" aria-label="Cobertura">
+                                    <span>Cobertura</span>
+                                    <div className="chief-matrix-pills">
+                                        <button type="button" className={`chief-matrix-pill ${coverageFilter === "all" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("all")}>
+                                            Completa + meio
+                                        </button>
+                                        <button type="button" className={`chief-matrix-pill ${coverageFilter === "half" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("half")}>
+                                            Somente meio
+                                        </button>
+                                        <button type="button" className={`chief-matrix-pill ${coverageFilter === "full" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("full")}>
+                                            Sem meio
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="chief-matrix-filters-pop-row">
+                                    <span>Ordenar por</span>
+                                    <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
+                                        <option value="name">Nome</option>
+                                        <option value="pending">Pendências</option>
+                                        <option value="total">Total</option>
+                                        <option value="weekday">Dia útil</option>
+                                        <option value="weekend">Fim de semana / feriado</option>
+                                    </select>
+                                </div>
+
+                                <div className="chief-matrix-filters-pop-row">
+                                    <span>Filtrar alvo</span>
+                                    <input
+                                        type="search"
+                                        value={targetSearch}
+                                        onChange={(event) => setTargetSearch(event.target.value)}
+                                        placeholder="Ex.: BR60, PM04, USA"
+                                    />
+                                </div>
+
+                                <div className="chief-matrix-filters-pop-targets">
+                                    <button
+                                        type="button"
+                                        className={`chief-matrix-pill ${targetFilter === "all" ? "active" : ""}`.trim()}
+                                        onClick={() => setTargetFilter("all")}
+                                    >
+                                        Todas as bases/ramais
+                                    </button>
+                                    {targetSectors.map((sector) => (
+                                        <div key={sector.key} className="chief-matrix-filters-pop-sector">
+                                            <span>{sector.title}</span>
+                                            <div className="chief-matrix-pills wrap">
+                                                {sector.targets.map((target) => {
+                                                    const value = `${target.domain}|${target.targetCode}`;
+                                                    return (
+                                                        <button
+                                                            type="button"
+                                                            key={value}
+                                                            className={`chief-matrix-pill compact ${targetFilter === value ? "active" : ""}`.trim()}
+                                                            onClick={() => setTargetFilter(targetFilter === value ? "all" : value)}
+                                                            title={`${target.targetCode} · ${target.targetLabel}`}
+                                                        >
+                                                            {target.targetCode}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <p className="chief-matrix-filters-pop-hint">Ordem rápida: 01 · 02 · 03 · 04 · 05 · 10 · 20</p>
+                            </section>
+                        </>
+                    ) : null}
+                </div>
+
+                <div className="chief-matrix-toolbar-spacer" />
+
+                <button type="button" className="chief-matrix-btn" onClick={toggleKpis}>
+                    {kpisOpen ? "Ocultar resumo" : "Mostrar resumo"}
+                </button>
+                {canManageClosing ? (
+                    <a className="chief-matrix-btn gold" href={`/api/admin/reports/export?month=${board.monthKey}`}>
+                        Exportar XLSX
+                    </a>
+                ) : null}
+            </div>
+
+            {kpisOpen ? (
+                <div className="chief-matrix-kpis">
+                    <div className="chief-matrix-kpi gold">
+                        <span>Total a pagar (PJ)</span>
+                        <strong>{formatCurrency(dueAmountByEmploymentType.pj.totalDue)}</strong>
+                        <small>{dueAmountByEmploymentType.pj.doctorCount} médicos PJ · {dueAmountByEmploymentType.estatutario.doctorCount} estatutários (R$ 0)</small>
+                    </div>
+                    <div className="chief-matrix-kpi">
+                        <span>Unidades no mês</span>
+                        <strong>{formatUnits(unitStats.totalUnits)}</strong>
+                        <small>{formatUnits(unitStats.sdUnits)} SD · {formatUnits(unitStats.snUnits)} SN</small>
+                    </div>
+                    <div className="chief-matrix-kpi ready">
+                        <span>Prontos p/ pagamento</span>
+                        <strong>{readyStats.ready}</strong>
+                        <small>atestados e sem pendência</small>
+                    </div>
+                    <button type="button" className="chief-matrix-kpi review actionable" onClick={() => setCoveragePanelOpen((open) => !open)} aria-expanded={coveragePanelOpen}>
+                        <span>Com pendências</span>
+                        <strong>{readyStats.review}</strong>
+                        <small>{uncoveredCount} posições sem cobertura · {disabledCount} desativadas</small>
+                    </button>
+                    <div className="chief-matrix-kpi bars">
+                        <span>Carga por dia · pico dia {peakDay ? peakDay.day : "--"}</span>
+                        <div className="chief-matrix-kpi-bars" aria-hidden="true">
+                            {dayLoad.map((entry, index) => (
+                                <i
+                                    key={entry.day}
+                                    className={premiumDays[index] ? "we" : undefined}
+                                    style={{ height: `${Math.max(8, Math.round((entry.count / maxDayLoad) * 100))}%` }}
+                                    title={`Dia ${entry.day}: ${entry.count} plantões`}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+
+            {coveragePanelOpen ? (
+                <section className="chief-matrix-coverage">
+                    <header>
+                        <div>
+                            <strong>Pendências de cobertura</strong>
+                            <small>
+                                {uncoveredCount} sem médico · {disabledCount} desativadas
+                                {canManageClosing ? " — clique numa posição para corrigir" : ""}
+                            </small>
+                        </div>
+                        <button type="button" className="chief-matrix-icon-btn" onClick={() => setCoveragePanelOpen(false)} aria-label="Fechar painel">✕</button>
+                    </header>
+                    {coverageByDay.length === 0 ? (
+                        <p className="chief-matrix-coverage-empty">Nenhuma posição pendente neste mês.</p>
+                    ) : (
+                        <div className="chief-matrix-coverage-days">
+                            {coverageByDay.map((entry) => (
+                                <div key={entry.day} className="chief-matrix-coverage-day">
+                                    <strong>{entry.day}</strong>
+                                    <div>
+                                        {entry.uncovered.map((item) => (
+                                            <button
+                                                key={item.snapshotId}
+                                                type="button"
+                                                className={`chief-matrix-coverage-chip uncovered ${item.shiftLabel === "SD" ? "sd" : "sn"} ${highlightKey === `${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}|disable` ? "flash" : ""}`.trim()}
+                                                data-flash-key={`disable|${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}`}
+                                                title={`Sem médico · ${item.targetCode} ${item.shiftLabel}${item.reason ? ` · ${item.reason}` : ""}`}
+                                                onClick={() => openCoverageCorrection({
+                                                    domain: item.domain,
+                                                    targetCode: item.targetCode,
+                                                    targetLabel: item.targetLabel,
+                                                    day: item.day,
+                                                    shiftLabel: item.shiftLabel,
+                                                    sourceType: "uncovered",
+                                                    reason: item.reason ?? null,
+                                                })}
+                                            >
+                                                {item.targetCode}{item.shiftLabel}
+                                            </button>
+                                        ))}
+                                        {entry.disabled.map((item) => (
+                                            <button
+                                                key={item.snapshotId}
+                                                type="button"
+                                                className={`chief-matrix-coverage-chip disabled ${item.shiftLabel === "SD" ? "sd" : "sn"} ${highlightKey === `${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}|disable` ? "flash" : ""}`.trim()}
+                                                data-flash-key={`disable|${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}`}
+                                                title={`Desativada · ${item.targetCode} ${item.shiftLabel}${item.disabledReason ? ` · ${item.disabledReason}` : ""}`}
+                                                onClick={() => openCoverageCorrection({
+                                                    domain: item.domain,
+                                                    targetCode: item.targetCode,
+                                                    targetLabel: item.targetLabel,
+                                                    day: item.day,
+                                                    shiftLabel: item.shiftLabel,
+                                                    sourceType: "disabled",
+                                                    reason: item.disabledReason ?? null,
+                                                })}
+                                            >
+                                                {item.targetCode}{item.shiftLabel}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+            ) : null}
 
             {(manualError || manualFeedback) ? (
                 <section className={`payment-inline-banner ${manualError ? "danger" : "ok"}`.trim()}>
@@ -1674,819 +1674,149 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                 </section>
             ) : null}
 
-            {canManageClosing && manualDraft ? (
-                <section className="payment-detail-card">
-                    <div className="payment-detail-card-header">
-                        <div>
-                            <span className="payment-eyebrow">Correção manual de pagamento</span>
-                            <strong>{manualDraft.targetCode} · {manualDraft.targetLabel} · {board.monthKey}-{manualDraft.day} · {manualDraft.shiftLabel}</strong>
-                            <p>
-                                Origem: {manualDraft.sourceType === "disabled" ? "Desativada" : "Sem médico"}
-                                {manualDraft.reason ? ` · ${manualDraft.reason}` : ""}
-                            </p>
+            <section className="chief-matrix-card">
+                <div className="chief-matrix-scroll" ref={matrixScrollRef}>
+                    <div className="chief-matrix-inner">
+                        <div className="chief-matrix-head" style={{ gridTemplateColumns: gridTemplate }} role="row">
+                            <div className="chief-matrix-corner">Médico ({matrixRows.length})</div>
+                            {dayHeaders.map((header) => (
+                                <div key={header.day} className={`chief-matrix-day ${header.premium ? "we" : ""}`.trim()}>
+                                    <span>{header.day}</span>
+                                    <small>{header.weekday}</small>
+                                </div>
+                            ))}
+                            <div className="chief-matrix-headcell sd">SD</div>
+                            <div className="chief-matrix-headcell sn">SN</div>
+                            <div className="chief-matrix-headcell due">Valor mês</div>
                         </div>
-                        <button
-                            type="button"
-                            className="payment-button"
-                            onClick={() => {
-                                setManualDraft(null);
-                                setManualDoctorName("");
-                                setManualDisableReason("");
-                                setManualError(null);
-                            }}
-                            disabled={manualBusy}
-                        >
-                            ✕
-                        </button>
-                    </div>
 
-                    <p className="payment-correction-note">
-                        ✅ Esta ação cria uma ocupação real no banco de dados, calcula banco de horas automaticamente e registra o pagamento. Use para médicos que trabalharam mas não foram capturados pelo bot.
-                    </p>
-
-                    <div className="payment-correction-tabs">
-                        <button
-                            type="button"
-                            className={`payment-correction-tab ${manualMode === "assign" ? "active" : ""}`.trim()}
-                            onClick={() => setManualMode("assign")}
-                            disabled={manualBusy}
-                        >
-                            Atribuir médico
-                        </button>
-                        {manualDraft.sourceType === "uncovered" && (
-                            <button
-                                type="button"
-                                className={`payment-correction-tab ${manualMode === "disable" ? "active" : ""}`.trim()}
-                                onClick={() => setManualMode("disable")}
-                                disabled={manualBusy}
-                            >
-                                Marcar como desativada
-                            </button>
-                        )}
-                    </div>
-
-                    {manualMode === "assign" ? (
-                        <div className="chief-payable-filter-bar" style={{ marginTop: "0.5rem" }}>
-                            <label className="chief-payable-filter-field chief-payable-search" style={{ minWidth: "320px" }}>
-                                <span>Médico para pagamento</span>
-                                <input
-                                    type="text"
-                                    list="chief-payment-doctor-names"
-                                    value={manualDoctorName}
-                                    onChange={(event) => setManualDoctorName(event.target.value)}
-                                    placeholder="Digite o nome do médico"
-                                    autoFocus
-                                />
-                            </label>
-                            <datalist id="chief-payment-doctor-names">
-                                {board.allDoctorNames.map((name) => (
-                                    <option key={name} value={name} />
-                                ))}
-                            </datalist>
-                            <div className="payment-filter-actions">
-                                <button type="button" className="payment-button primary" onClick={() => void submitManualCorrection()} disabled={manualBusy}>
-                                    {manualBusy ? "Salvando..." : "Salvar correção"}
-                                </button>
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="chief-payable-filter-bar" style={{ marginTop: "0.5rem" }}>
-                            <label className="chief-payable-filter-field" style={{ minWidth: "320px" }}>
-                                <span>Motivo da desativação</span>
-                                <input
-                                    type="text"
-                                    value={manualDisableReason}
-                                    onChange={(event) => setManualDisableReason(event.target.value)}
-                                    placeholder="Ex.: Sem demanda, veículo indisponível, escala reduzida"
-                                    autoFocus
-                                />
-                            </label>
-                            <div className="payment-filter-actions">
-                                <button type="button" className="payment-button warning" onClick={() => void submitManualDisable()} disabled={manualBusy}>
-                                    {manualBusy ? "Salvando..." : "Confirmar desativação"}
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                </section>
-            ) : null}
-
-            <section className="chief-payable-table-shell" ref={tableShellRef}>
-                <div className="chief-payable-table-scroll">
-                    <table className="chief-payable-table">
-                        <thead>
-                            <tr>
-                                <th className="sticky-col doctor">Médico</th>
-                                {board.days.map((day) => <th key={day}>{day}</th>)}
-                                <th>Dia útil</th>
-                                <th>Fim de semana / feriado</th>
-                                <th>Total</th>
-                                <th>Valor semana</th>
-                                <th>Valor fim de semana / feriado</th>
-                                <th>Valor final</th>
-                            </tr>
-                        </thead>
-
-                        <tbody>
-                            <AnimatePresence mode="popLayout">
-                                <motion.tr
-                                    key="disabled-row"
-                                    layout
-                                    initial={{ opacity: 0, y: 6 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -6 }}
-                                    transition={{ duration: 0.16 }}
-                                    className="chief-payable-disabled-row"
-                                >
-                                    <td className="sticky-col doctor">
-                                        <strong>Desativadas</strong>
-                                        <span>Fontes sem médico por desativação do turno</span>
-                                    </td>
-
-                                    {board.days.map((day) => (
-                                        <td key={`disabled-${day}`}>
-                                            <div className="chief-payable-cell-tags">
-                                                {(disabledByDay.get(day) ?? []).map((item) => (
-                                                    <button
-                                                        type="button"
-                                                        key={item.snapshotId}
-                                                        data-flash-key={`disable|${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}`}
-                                                        className={`chief-payable-tag disabled ${item.shiftLabel === "SD" ? "sd" : "sn"} ${highlightKey === `${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}|disable` ? "flash" : ""}`.trim()}
-                                                        title={`${item.targetCode} ${item.shiftLabel}${item.disabledReason ? ` · ${item.disabledReason}` : ""}`}
-                                                        onClick={() => {
-                                                            if (!canManageClosing) {
-                                                                return;
-                                                            }
-                                                            setManualDraft({
-                                                                domain: item.domain,
-                                                                targetCode: item.targetCode,
-                                                                targetLabel: item.targetLabel,
-                                                                day: item.day,
-                                                                shiftLabel: item.shiftLabel,
-                                                                sourceType: "disabled",
-                                                                reason: item.disabledReason ?? null,
-                                                            });
-                                                            setManualDoctorName("");
-                                                            setManualDisableReason("");
-                                                            setManualMode("assign");
-                                                            setManualError(null);
-                                                        }}
-                                                    >
-                                                        {item.targetCode}{item.shiftLabel}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </td>
-                                    ))}
-
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>{visibleDisabledTargets.length}</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                </motion.tr>
-
-                                <motion.tr
-                                    key="uncovered-row"
-                                    layout
-                                    initial={{ opacity: 0, y: 6 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -6 }}
-                                    transition={{ duration: 0.16 }}
-                                    className="chief-payable-uncovered-row"
-                                >
-                                    <td className="sticky-col doctor">
-                                        <strong>Sem médico</strong>
-                                        <span>Sem cobertura e sem desativação no turno</span>
-                                    </td>
-
-                                    {board.days.map((day) => (
-                                        <td key={`uncovered-${day}`}>
-                                            <div className="chief-payable-cell-tags">
-                                                {(uncoveredByDay.get(day) ?? []).map((item) => (
-                                                    <button
-                                                        type="button"
-                                                        key={item.snapshotId}
-                                                        className={`chief-payable-tag uncovered ${item.shiftLabel === "SD" ? "sd" : "sn"}`.trim()}
-                                                        title={`${item.targetCode} ${item.shiftLabel}${item.reason ? ` · ${item.reason}` : ""}`}
-                                                        onClick={() => {
-                                                            if (!canManageClosing) {
-                                                                return;
-                                                            }
-                                                            setManualDraft({
-                                                                domain: item.domain,
-                                                                targetCode: item.targetCode,
-                                                                targetLabel: item.targetLabel,
-                                                                day: item.day,
-                                                                shiftLabel: item.shiftLabel,
-                                                                sourceType: "uncovered",
-                                                                reason: item.reason ?? null,
-                                                            });
-                                                            setManualDoctorName("");
-                                                            setManualDisableReason("");
-                                                            setManualMode("assign");
-                                                            setManualError(null);
-                                                        }}
-                                                    >
-                                                        {item.targetCode}{item.shiftLabel}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </td>
-                                    ))}
-
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>{visibleUncoveredTargets.length}</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                </motion.tr>
-
-                                {filteredDoctors.map((doctor, index) => {
-                                    const doctorProfile = (doctor.paymentProfile ?? "generalist") as DoctorProfile;
-                                    const profileBadge = paymentProfileBadge(doctorProfile);
-                                    const doctorEmploymentType = (doctor.employmentType ?? "pj") as DoctorEmploymentType;
-
+                        {matrixRows.length === 0 ? (
+                            <p className="chief-matrix-empty">Nenhum médico encontrado com os filtros atuais.</p>
+                        ) : (
+                            <div className="chief-matrix-body" style={{ height: rowVirtualizer.getTotalSize() }}>
+                                {virtualRows.map((virtualRow) => {
+                                    const row = matrixRows[virtualRow.index];
+                                    if (!row) {
+                                        return null;
+                                    }
                                     return (
-                                    <motion.tr
-                                        key={doctor.doctorId}
-                                        layout
-                                        initial={{ opacity: 0, y: 6 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -6 }}
-                                        transition={{ duration: 0.2, delay: Math.min(index * 0.018, 0.18) }}
-                                        className={isDoctorAttested(doctor) ? "chief-payable-row-attested" : undefined}
-                                    >
-                                        <td className="sticky-col doctor">
-                                            <div className="chief-payable-doctor-cell">
-                                                <div className="chief-payable-doctor-main">
-                                                    <button
-                                                        type="button"
-                                                        className="chief-payable-doctor-button"
-                                                        onClick={() => setSelectedDoctorId(doctor.doctorId)}
-                                                    >
-                                                        <strong>{doctor.doctorName}</strong>
-                                                    </button>
-                                                    {profileBadge ? (
-                                                        <span className={`chief-payable-profile-badge ${doctorProfile}`.trim()}>{profileBadge}</span>
-                                                    ) : null}
-                                                    <span className={`chief-payable-profile-badge ${doctorEmploymentType}`.trim()} title="Vínculo com a prefeitura">
-                                                        {employmentTypeLabel(doctorEmploymentType)}
-                                                    </span>
-                                                </div>
-
-                                                <label className="chief-payable-specialist-toggle" title="Estatutário/REDA não gera valor a pagar por plantão">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={doctorEmploymentType === "estatutario"}
-                                                        onChange={(event) => {
-                                                            void toggleDoctorEmploymentType(doctor.doctorId, event.target.checked ? "estatutario" : "pj");
-                                                        }}
-                                                        disabled={!canManageClosing || employmentTypeBusyDoctorId === doctor.doctorId}
-                                                    />
-                                                    <span>Estatutário</span>
-                                                </label>
-
-                                                {doctorProfile !== "psychiatry" ? (
-                                                    <label className="chief-payable-specialist-toggle">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={doctorProfile === "specialist"}
-                                                            onChange={(event) => {
-                                                                void toggleDoctorSpecialistProfile(doctor.doctorId, event.target.checked);
-                                                            }}
-                                                            disabled={!canManageClosing || profileBusyDoctorId === doctor.doctorId}
-                                                        />
-                                                        <span>ESP</span>
-                                                    </label>
-                                                ) : null}
-
-                                                <label className={`chief-payable-attest-toggle ${isDoctorAttested(doctor) ? "on" : ""}`.trim()} title="Conferido e assinado">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={isDoctorAttested(doctor)}
-                                                        onChange={(event) => {
-                                                            void toggleDoctorAttestation(doctor.doctorId, event.target.checked);
-                                                        }}
-                                                        disabled={!canManageClosing || attestBusyDoctorId === doctor.doctorId}
-                                                    />
-                                                    <span>{isDoctorAttested(doctor) ? "✓ assinado" : "assinar"}</span>
-                                                </label>
-                                            </div>
-                                        </td>
-
-                                        {doctor.cells.map((cell) => (
-                                            <td key={`${doctor.doctorId}-${cell.day}`}>
-                                                <div className="chief-payable-cell-tags">
-                                                    {cell.shifts.map((shift) => {
-                                                        if (pendingRemovals.has(shift.payableShiftId)) return null;
-                                                        const isFlashTarget = highlightKey === `${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}|assign`;
-                                                        return (
-                                                        <motion.button
-                                                            key={shift.payableShiftId}
-                                                            type="button"
-                                                            data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
-                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
-                                                            title={shift.source === "admin_extra"
-                                                                ? `${shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.shiftLabel} · ${shift.doctorName}`
-                                                                : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
-                                                            initial={{ opacity: 0, scale: 0.92 }}
-                                                            animate={{ opacity: 1, scale: 1 }}
-                                                            transition={{ duration: 0.15 }}
-                                                            onClick={() => {
-                                                                setShiftActionError(null);
-                                                                setShiftActionDraft({
-                                                                    payableShiftId: shift.payableShiftId,
-                                                                    occupancyId: shift.occupancyId,
-                                                                    domain: shift.domain,
-                                                                    targetCode: shift.targetCode,
-                                                                    targetLabel: shift.targetLabel,
-                                                                    day: cell.day,
-                                                                    shiftLabel: shift.shiftLabel,
-                                                                    doctorName: doctor.doctorName,
-                                                                    source: shift.source,
-                                                                });
-                                                            }}
-                                                        >
-                                                            {shift.paymentTag ? `${shift.paymentTag} ${shift.tagCode}` : shift.tagCode}
-                                                        </motion.button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </td>
-                                        ))}
-
-                                        <td>{formatUnits(doctor.weekdayShiftCount)}</td>
-                                        <td>{formatUnits(doctor.weekendShiftCount)}</td>
-                                        <td>{formatUnits(doctor.total)}</td>
-                                        <td>{formatCurrency(doctor.weekdayDue)}</td>
-                                        <td>{formatCurrency(doctor.weekendDue)}</td>
-                                        <td className="chief-payable-final-value">{formatCurrency(doctor.totalDue)}</td>
-                                    </motion.tr>
+                                        <DoctorRow
+                                            key={virtualRow.key}
+                                            row={row}
+                                            premiumDays={premiumDays}
+                                            gridTemplate={gridTemplate}
+                                            virtualIndex={virtualRow.index}
+                                            start={virtualRow.start}
+                                            measureRef={rowVirtualizer.measureElement}
+                                            highlightKey={highlightKey}
+                                            onOpenDoctor={openDoctorDrawer}
+                                            onOpenSlot={openSlotPopover}
+                                        />
                                     );
                                 })}
-
-                                {filteredDoctors.length === 0 ? (
-                                    <motion.tr
-                                        key="empty"
-                                        initial={{ opacity: 0 }}
-                                        animate={{ opacity: 1 }}
-                                        exit={{ opacity: 0 }}
-                                    >
-                                        <td className="chief-payable-empty" colSpan={board.days.length + 8}>
-                                            Nenhum médico encontrado com os filtros atuais.
-                                        </td>
-                                    </motion.tr>
-                                ) : null}
-                            </AnimatePresence>
-                        </tbody>
-                    </table>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </section>
 
-            {shiftActionDraft ? (
-                <div className="chief-payable-modal-backdrop" role="presentation" onClick={() => !shiftActionBusy && setShiftActionDraft(null)}>
-                    <section className="chief-payable-action-popover" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-                        <header className="chief-payable-action-header">
-                            <span className="payment-eyebrow">Ações do plantão</span>
-                            <strong>
-                                {shiftActionDraft.targetCode} {shiftActionDraft.shiftLabel} · dia {shiftActionDraft.day}/{board.monthKey.slice(5,7)} · {shiftActionDraft.doctorName}
-                            </strong>
-                            {shiftActionDraft.source ? <small>Origem: {shiftActionDraft.source === "admin_extra" ? "plantão extra (admin)" : shiftActionDraft.source}</small> : null}
-                        </header>
+            <p className="chief-matrix-hint">
+                Clique no <strong>nome</strong> para abrir o resumo financeiro do médico (NF, contrato, banco de horas, folha de ponto) ·
+                clique num <strong>plantão</strong> para ações do slot. Colunas com fundo âmbar = fim de semana/feriado (tarifa cheia).
+                {!canManageClosing ? " Perfil restrito: você pode visualizar todo o fechamento e salvar somente NF/processo." : ""}
+            </p>
 
-                        {shiftActionError ? (
-                            <div className="payment-inline-banner danger">
-                                <strong>Falha ao remover</strong>
-                                <span>{shiftActionError}</span>
-                            </div>
-                        ) : null}
+            <AdminGlobalNavigationLinks current="payment-closing" containerClassName="chief-matrix-footer-nav">
+                <a className="reports-secondary-link" href="/admin/payment-attestation/audit">
+                    Abrir auditoria técnica
+                </a>
+            </AdminGlobalNavigationLinks>
 
-                        <div className="chief-payable-action-buttons">
-                            {canManageClosing ? (
-                                <button
-                                    type="button"
-                                    className="payment-button danger"
-                                    onClick={() => void submitShiftRemoval()}
-                                    disabled={shiftActionBusy}
-                                >
-                                    {shiftActionBusy ? "Removendo..." : `Remover ${shiftActionDraft.doctorName} deste plantão`}
-                                </button>
-                            ) : null}
-                            {shiftActionDraft.source === "admin_extra" ? null : (
-                                <a
-                                    className="payment-button"
-                                    href={cellAuditLink(board.monthKey, shiftActionDraft.day, shiftActionDraft.shiftLabel)}
-                                >
-                                    Abrir auditoria detalhada
-                                </a>
-                            )}
-                            <button
-                                type="button"
-                                className="payment-button"
-                                onClick={() => setShiftActionDraft(null)}
-                                disabled={shiftActionBusy}
-                            >
-                                Cancelar
-                            </button>
-                        </div>
-
-                        <p className="chief-payable-action-hint">
-                            {canManageClosing
-                                ? (shiftActionDraft.source === "admin_extra"
-                                    ? "Remover apaga este plantão extra adicionado pelo admin (sai do quadro e do valor a pagar)."
-                                    : (shiftActionDraft.source === "admin_correction" || shiftActionDraft.source === "manual"
-                                        ? "Remover apaga a correção manual deste plantão."
-                                        : "Remover encerra o plantão no início deste turno (recalcula banco de horas). Use quando o médico não estava de fato no plantão."))
-                                : "Perfil somente leitura para plantões: remoções e correções manuais ficam bloqueadas."}
-                        </p>
-                    </section>
-                </div>
+            {slotPopover ? (
+                <SlotActionPopover
+                    draft={slotPopover}
+                    monthKey={board.monthKey}
+                    busy={shiftActionBusy}
+                    error={shiftActionError}
+                    canManageClosing={canManageClosing}
+                    onReassign={startReassign}
+                    onRemove={() => void submitShiftRemoval()}
+                    onClose={() => setSlotPopover(null)}
+                />
             ) : null}
 
-            {selectedDoctor ? (
-                <div className="chief-payable-modal-backdrop" role="presentation" onClick={() => setSelectedDoctorId(null)}>
-                    <section className="chief-payable-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
-                        <header className="chief-payable-modal-header">
-                            <div>
-                                <span className="payment-eyebrow">Resumo do médico</span>
-                                <h3>{selectedDoctor.doctorName}</h3>
-                                <p>{paymentProfileLabel(selectedDoctor.paymentProfile)} · {employmentTypeLabel(selectedDoctor.employmentType)} · {board.monthLabel}</p>
-                            </div>
-                            <div className="chief-payable-modal-header-actions">
-                                <a
-                                    className="payment-button"
-                                    href={`/folha-ponto/${selectedDoctor.doctorId}/${board.monthKey.slice(0, 4)}/${board.monthKey.slice(5, 7)}`}
-                                    target="_blank"
-                                    rel="noopener"
-                                >
-                                    Gerar folha de ponto
-                                </a>
-                                <button type="button" className="payment-button" onClick={() => setSelectedDoctorId(null)}>Fechar</button>
-                            </div>
-                        </header>
+            {canManageClosing && manualDraft ? (
+                <ManualCorrectionDialog
+                    draft={manualDraft}
+                    monthKey={board.monthKey}
+                    mode={manualMode}
+                    busy={manualBusy}
+                    error={manualError}
+                    doctorName={manualDoctorName}
+                    disableReason={manualDisableReason}
+                    allDoctorNames={board.allDoctorNames}
+                    onModeChange={setManualMode}
+                    onDoctorNameChange={setManualDoctorName}
+                    onDisableReasonChange={setManualDisableReason}
+                    onSubmitAssign={() => void submitManualCorrection()}
+                    onSubmitDisable={() => void submitManualDisable()}
+                    onClose={() => {
+                        setManualDraft(null);
+                        setManualDoctorName("");
+                        setManualDisableReason("");
+                        setManualError(null);
+                    }}
+                />
+            ) : null}
 
-                        {selectedDoctorConflictCount > 0 ? (
-                            <section className="chief-payable-attest-card" style={{ borderColor: "#d97706", background: "#fff7ed", color: "#7c2d12" }}>
-                                <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
-                                    <strong>Possível deslocamento por conflito de alocação:</strong> {selectedDoctorConflictCount} caso(s) deste médico no mês.
-                                </p>
-                                <p className="chief-payable-attest-hint" style={{ marginBottom: "0.4rem" }}>
-                                    Este alerta só aparece para médico potencialmente deslocado (segmento descartado por sobreposição no mesmo dia/turno/alvo de um conflito).
-                                </p>
-                                {selectedDoctorDisplacedConflictSegments.length > 0 ? (
-                                    <div className="chief-payable-attest-hint" style={{ marginBottom: "0.5rem" }}>
-                                        <strong>Onde pode ter faltado plantão:</strong>
-                                        <ul style={{ margin: "0.35rem 0 0", paddingLeft: "1.1rem", fontSize: "0.92rem", lineHeight: 1.45 }}>
-                                            {selectedDoctorDisplacedConflictSegments.slice(0, 6).map((segment) => {
-                                                const day = segment.operationalDate.slice(8, 10);
-                                                const month = segment.operationalDate.slice(5, 7);
-                                                return (
-                                                    <li key={segment.segmentId}>
-                                                        <a href={cellAuditLink(board.monthKey, day, segment.shiftLabel)}>
-                                                            {day}/{month} {segment.shiftLabel} {segment.targetCode}
-                                                        </a>{" "}
-                                                        - escolhido no slot: {segment.chosenDoctorName}
-                                                    </li>
-                                                );
-                                            })}
-                                        </ul>
-                                        {selectedDoctorDisplacedConflictSegments.length > 6 ? (
-                                            <small>
-                                                +{selectedDoctorDisplacedConflictSegments.length - 6} ocorrência(s). Abra a auditoria técnica para ver todas.
-                                            </small>
-                                        ) : null}
-                                    </div>
-                                ) : null}
-                                <p className="chief-payable-attest-hint">
-                                    Revise no detalhe para não perder pagamento por sobreposição: <a href="/admin/payment-attestation/audit">abrir auditoria técnica</a>.
-                                </p>
-                            </section>
-                        ) : null}
-
-                        <div className="chief-payable-modal-grid">
-                            <article className="chief-payable-modal-card">
-                                <span>Plantões dia útil</span>
-                                <strong>{formatUnits(selectedDoctor.weekdayShiftCount)}</strong>
-                                <small>
-                                    Tarifa: {formatCurrency(PROFILE_RATES[(selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile].weekday)} · Total: {formatCurrency(selectedDoctor.weekdayDue)}
-                                </small>
-                            </article>
-                            <article className="chief-payable-modal-card">
-                                <span>Plantões fim de semana / feriado</span>
-                                <strong>{formatUnits(selectedDoctor.weekendShiftCount)}</strong>
-                                <small>
-                                    Tarifa: {formatCurrency(PROFILE_RATES[(selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile].weekend)} · Total: {formatCurrency(selectedDoctor.weekendDue)}
-                                </small>
-                            </article>
-                            <article className="chief-payable-modal-card emphasis">
-                                <span>Total a pagar no mês</span>
-                                <strong>{formatCurrency(selectedDoctor.totalDue)}</strong>
-                                <small>{formatCurrency(selectedDoctor.weekdayDue)} (semana) + {formatCurrency(selectedDoctor.weekendDue)} (fim de semana / feriado)</small>
-                            </article>
-                        </div>
-
-                        <section className="chief-payable-financials">
-                            <header>
-                                <h4>Acompanhamento financeiro</h4>
-                                <small>Nota fiscal e processo são preenchidos por você; saldo contratual e banco de horas são calculados.</small>
-                            </header>
-                            <div className="chief-payable-financials-grid">
-                                <div className="chief-payable-financials-meta">
-                                    <label>
-                                        <span>Nota fiscal</span>
-                                        <input
-                                            type="text"
-                                            value={invoiceDraft}
-                                            onChange={(event) => setInvoiceDraft(event.target.value)}
-                                            onBlur={() => autoSavePaymentMeta(selectedDoctor)}
-                                            placeholder="—"
-                                            maxLength={60}
-                                            disabled={metaBusy}
-                                        />
-                                    </label>
-                                    <label>
-                                        <span>Processo de pagamento</span>
-                                        <input
-                                            type="text"
-                                            value={processDraft}
-                                            onChange={(event) => setProcessDraft(event.target.value)}
-                                            onBlur={() => autoSavePaymentMeta(selectedDoctor)}
-                                            placeholder="—"
-                                            maxLength={60}
-                                            disabled={metaBusy}
-                                        />
-                                    </label>
-                                    <button
-                                        type="button"
-                                        className="payment-button"
-                                        onClick={() => void submitPaymentMeta(selectedDoctor.doctorId)}
-                                        disabled={metaBusy}
-                                    >
-                                        {metaBusy ? "Salvando..." : "Salvar NF / processo"}
-                                    </button>
-                                    {metaError ? <p className="chief-payable-extra-feedback danger">{metaError}</p> : null}
-                                    {metaFeedback ? <p className="chief-payable-extra-feedback ok">{metaFeedback}</p> : null}
-                                </div>
-
-                                <article className="chief-payable-modal-card">
-                                    <span>Saldo contratual</span>
-                                    {selectedDoctor.contractCeilingBrl == null ? (
-                                        <>
-                                            <small>
-                                                {canManageClosing
-                                                    ? "Informe o teto do contrato (R$). A partir daí vira cálculo automático."
-                                                    : "Teto de contrato ainda não definido para este médico."}
-                                            </small>
-                                            {canManageClosing ? (
-                                                <>
-                                                    <div className="chief-payable-contract-seed">
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.01"
-                                                            value={contractDraft}
-                                                            onChange={(event) => setContractDraft(event.target.value)}
-                                                            placeholder="ex.: 120000.00"
-                                                            disabled={contractBusy}
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            className="payment-button"
-                                                            onClick={() => void submitContractSeed(selectedDoctor.doctorId)}
-                                                            disabled={contractBusy}
-                                                        >
-                                                            {contractBusy ? "Salvando..." : "Definir teto"}
-                                                        </button>
-                                                    </div>
-                                                    {contractError ? <p className="chief-payable-extra-feedback danger">{contractError}</p> : null}
-                                                </>
-                                            ) : null}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <strong className={(selectedDoctor.contractBalanceBrl ?? 0) < 0 ? "negative" : ""}>
-                                                {formatCurrency(selectedDoctor.contractBalanceBrl)}
-                                            </strong>
-                                            <small>
-                                                Teto {formatCurrency(selectedDoctor.contractCeilingBrl)}
-                                                {selectedDoctor.contractSeedMonth ? ` desde ${selectedDoctor.contractSeedMonth}` : ""} · calculado
-                                            </small>
-                                        </>
-                                    )}
-                                </article>
-
-                                <article className="chief-payable-modal-card">
-                                    <span>Saldo banco de horas</span>
-                                    <strong className={(selectedDoctor.bankHoursMinutes ?? 0) < 0 ? "negative" : ""}>
-                                        {formatMinutesAsHours(selectedDoctor.bankHoursMinutes)}
-                                    </strong>
-                                    {selectedDoctor.bankHoursSettlement ? (
-                                        <small className="chief-payable-bank-note">
-                                            {selectedDoctor.bankHoursSettlement.kind === "bonus" ? "Bônus" : "Punição"} de 12h lançado neste mês
-                                            {selectedDoctor.bankHoursSettlement.operationalDate ? ` (dia ${selectedDoctor.bankHoursSettlement.operationalDate.slice(8, 10)})` : ""}.{" "}
-                                            <a href="/admin/bank-hours" target="_blank" rel="noopener">ver no banco de horas</a>
-                                        </small>
-                                    ) : (selectedDoctor.bankHoursMinutes ?? 0) >= BANK_HOURS_THRESHOLD_MINUTES ? (
-                                        <>
-                                            <small>+12h ou mais — bonifique com 1 plantão verde (dia útil) e debite 12h.</small>
-                                            {canManageClosing ? (
-                                                <button
-                                                    type="button"
-                                                    className="payment-button bank-bonus"
-                                                    onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
-                                                    disabled={bankBusy}
-                                                >
-                                                    {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde)"}
-                                                </button>
-                                            ) : null}
-                                        </>
-                                    ) : (selectedDoctor.bankHoursMinutes ?? 0) <= -BANK_HOURS_THRESHOLD_MINUTES ? (
-                                        <>
-                                            <small>-12h ou menos — debite 1 plantão vermelho e zere 12h.</small>
-                                            {canManageClosing ? (
-                                                <button
-                                                    type="button"
-                                                    className="payment-button bank-penalty"
-                                                    onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
-                                                    disabled={bankBusy}
-                                                >
-                                                    {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho)"}
-                                                </button>
-                                            ) : null}
-                                        </>
-                                    ) : (
-                                        <small>Dentro de ±12h — sem acerto sugerido.</small>
-                                    )}
-                                    {bankError ? <p className="chief-payable-extra-feedback danger">{bankError}</p> : null}
-                                </article>
-                            </div>
-                        </section>
-
-                        {canManageClosing ? (
-                            <section className="chief-payable-extra-form">
-                                <header>
-                                    <h4>Adicionar plantão extra</h4>
-                                    <small>Entra em verde no quadro e conta no valor a pagar. Use para plantões que o bot não registrou.</small>
-                                </header>
-                                <div className="chief-payable-extra-fields">
-                                    <label>
-                                        <span>Dia</span>
-                                        <select
-                                            value={extraDay}
-                                            onChange={(event) => setExtraDay(event.target.value)}
-                                            disabled={extraBusy}
-                                        >
-                                            <option value="">—</option>
-                                            {board.days.map((day) => (
-                                                <option key={day} value={day}>{day}</option>
-                                            ))}
-                                        </select>
-                                    </label>
-                                    <label>
-                                        <span>Turno</span>
-                                        <select
-                                            value={extraShift}
-                                            onChange={(event) => setExtraShift(event.target.value === "SN" ? "SN" : "SD")}
-                                            disabled={extraBusy}
-                                        >
-                                            <option value="SD">SD (diurno)</option>
-                                            <option value="SN">SN (noturno)</option>
-                                        </select>
-                                    </label>
-                                    <label>
-                                        <span>Cobertura</span>
-                                        <select
-                                            value={extraCoverage}
-                                            onChange={(event) => setExtraCoverage(event.target.value === "half" ? "half" : "full")}
-                                            disabled={extraBusy}
-                                        >
-                                            <option value="full">Plantão inteiro (1.0)</option>
-                                            <option value="half">Meio plantão (0.5)</option>
-                                        </select>
-                                    </label>
-                                    <label>
-                                        <span>Motivo (obrigatório, ≥2 caracteres)</span>
-                                        <input
-                                            type="text"
-                                            value={extraLabel}
-                                            onChange={(event) => setExtraLabel(event.target.value)}
-                                            placeholder="ex.: plantão trocado"
-                                            minLength={2}
-                                            maxLength={40}
-                                            required
-                                            disabled={extraBusy}
-                                        />
-                                    </label>
-                                    <button
-                                        type="button"
-                                        className="payment-button"
-                                        onClick={() => void submitAddExtraShift(selectedDoctor.doctorId, selectedDoctor.doctorName)}
-                                        disabled={extraBusy}
-                                    >
-                                        {extraBusy ? "Adicionando..." : "Adicionar plantão"}
-                                    </button>
-                                </div>
-                                {extraError ? <p className="chief-payable-extra-feedback danger">{extraError}</p> : null}
-                                {extraFeedback ? <p className="chief-payable-extra-feedback ok">{extraFeedback}</p> : null}
-                            </section>
-                        ) : null}
-
-                        <section className={`chief-payable-attest-card ${isDoctorAttested(selectedDoctor) ? "on" : ""}`.trim()}>
-                            <label className="chief-payable-attest-main">
-                                <input
-                                    type="checkbox"
-                                    checked={isDoctorAttested(selectedDoctor)}
-                                    onChange={(event) => {
-                                        if (!canManageClosing) {
-                                            return;
-                                        }
-                                        void toggleDoctorAttestation(selectedDoctor.doctorId, event.target.checked);
-                                    }}
-                                    disabled={!canManageClosing || attestBusyDoctorId === selectedDoctor.doctorId}
-                                />
-                                <span>
-                                    <strong>Conferido e assinado</strong>
-                                    <small>Já atestei a produtividade de {selectedDoctor.doctorName} em {board.monthLabel}.</small>
-                                </span>
-                            </label>
-                            <p className="chief-payable-attest-hint">
-                                {isDoctorAttested(selectedDoctor)
-                                    ? "Assinado — não precisa olhar de novo. Desmarque se algo mudar."
-                                    : "Antes de assinar, confira se falta lançar algum plantão extra (formulário acima)."}
-                            </p>
-                            {attestError && attestBusyDoctorId === null ? (
-                                <p className="chief-payable-extra-feedback danger">{attestError}</p>
-                            ) : null}
-                        </section>
-
-                        {(() => {
-                            const profile = (selectedDoctor.paymentProfile ?? "generalist") as DoctorProfile;
-                            const flatShifts = selectedDoctor.cells
-                                .flatMap((cell) => cell.shifts)
-                                .filter((shift) => !pendingRemovals.has(shift.payableShiftId))
-                                .slice()
-                                .sort((left, right) => {
-                                    const byDate = left.operationalDate.localeCompare(right.operationalDate);
-                                    if (byDate !== 0) return byDate;
-                                    if (left.shiftLabel !== right.shiftLabel) return left.shiftLabel === "SD" ? -1 : 1;
-                                    return left.targetCode.localeCompare(right.targetCode, "pt-BR");
-                                });
-
-                            return (
-                                <section className="chief-payable-modal-shifts">
-                                    <header>
-                                        <h4>Plantão a plantão</h4>
-                                        <small>Confira contra a nota fiscal do plantonista — {flatShifts.length} {flatShifts.length === 1 ? "plantão" : "plantões"}</small>
-                                    </header>
-
-                                    {flatShifts.length === 0 ? (
-                                        <p className="chief-payable-modal-shifts-empty">Nenhum plantão pagável neste mês com os filtros atuais.</p>
-                                    ) : (
-                                        <ol className="chief-payable-modal-shifts-list">
-                                            {flatShifts.map((shift) => {
-                                                const { dayMonth, weekday } = formatOperationalDate(shift.operationalDate);
-                                                const kindLabel = dayKindLabel(shift.operationalDate);
-                                                const kindClass = dayKindClassName(shift.operationalDate);
-                                                const value = resolveShiftAmount(shift, profile);
-                                                const rate = isPremiumRateDate(shift.operationalDate)
-                                                    ? PROFILE_RATES[profile].weekend
-                                                    : PROFILE_RATES[profile].weekday;
-
-                                                return (
-                                                    <li key={shift.payableShiftId} className="chief-payable-modal-shift-row">
-                                                        <span className="chief-payable-modal-shift-date">
-                                                            <strong>{dayMonth}</strong>
-                                                            <small>{weekday}</small>
-                                                        </span>
-                                                        <span className={`chief-payable-modal-shift-turn ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""}`.trim()}>
-                                                            {shift.shiftLabel}
-                                                        </span>
-                                                        <span className="chief-payable-modal-shift-target">
-                                                            {shift.source === "admin_extra" ? (shift.tagCode || "EXTRA") : shift.targetCode}
-                                                            {shift.source === "admin_extra" ? <em className="chief-payable-modal-shift-half">{shift.paymentUnit < 0 ? "punição" : "extra"}</em> : null}
-                                                            {shift.paymentTag ? <em className="chief-payable-modal-shift-half">{shift.paymentTag}</em> : null}
-                                                        </span>
-                                                        <span className={`chief-payable-modal-shift-kind ${kindClass}`}>{kindLabel}</span>
-                                                        <span className="chief-payable-modal-shift-rate">
-                                                            {formatCurrency(rate)}
-                                                            {shift.paymentUnit !== 1 ? <em> × {formatUnits(shift.paymentUnit)}</em> : null}
-                                                        </span>
-                                                        <span className="chief-payable-modal-shift-value">{formatCurrency(value)}</span>
-                                                    </li>
-                                                );
-                                            })}
-                                        </ol>
-                                    )}
-                                </section>
-                            );
-                        })()}
-                    </section>
-                </div>
+            {drawerDoctor ? (
+                <DoctorDrawer
+                    doctor={drawerDoctor}
+                    monthKey={board.monthKey}
+                    monthLabel={monthTitle}
+                    days={board.days}
+                    canManageClosing={canManageClosing}
+                    conflictSegments={drawerConflictSegments}
+                    attestBusy={attestBusyDoctorId === drawerDoctor.doctorId}
+                    attestError={attestError}
+                    onToggleAttestation={(attested) => {
+                        if (!canManageClosing) return;
+                        void toggleDoctorAttestation(drawerDoctor.doctorId, attested);
+                    }}
+                    profileBusy={profileBusyDoctorId === drawerDoctor.doctorId}
+                    employmentBusy={employmentTypeBusyDoctorId === drawerDoctor.doctorId}
+                    onToggleSpecialist={(isSpecialist) => void toggleDoctorSpecialistProfile(drawerDoctor.doctorId, isSpecialist)}
+                    onToggleEmploymentType={(employmentType) => void toggleDoctorEmploymentType(drawerDoctor.doctorId, employmentType)}
+                    invoiceDraft={invoiceDraft}
+                    processDraft={processDraft}
+                    metaBusy={metaBusy}
+                    metaError={metaError}
+                    metaFeedback={metaFeedback}
+                    onInvoiceChange={setInvoiceDraft}
+                    onProcessChange={setProcessDraft}
+                    onMetaBlur={() => autoSavePaymentMeta(drawerDoctor)}
+                    contractDraft={contractDraft}
+                    contractBusy={contractBusy}
+                    contractError={contractError}
+                    onContractChange={setContractDraft}
+                    onSubmitContract={() => void submitContractSeed(drawerDoctor.doctorId)}
+                    bankBusy={bankBusy}
+                    bankError={bankError}
+                    onSettleBank={(kind) => void submitBankHoursSettlement(drawerDoctor.doctorId, kind)}
+                    extraDay={extraDay}
+                    extraShift={extraShift}
+                    extraCoverage={extraCoverage}
+                    extraLabel={extraLabel}
+                    extraBusy={extraBusy}
+                    extraError={extraError}
+                    extraFeedback={extraFeedback}
+                    onExtraDayChange={setExtraDay}
+                    onExtraShiftChange={setExtraShift}
+                    onExtraCoverageChange={setExtraCoverage}
+                    onExtraLabelChange={setExtraLabel}
+                    onSubmitExtra={() => void submitAddExtraShift(drawerDoctor.doctorId, drawerDoctor.doctorName)}
+                    onClose={() => setDrawerDoctorId(null)}
+                />
             ) : null}
         </main>
     );
