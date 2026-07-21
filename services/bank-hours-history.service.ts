@@ -210,7 +210,14 @@ async function loadAuditTrailByOccupancy(shifts: RawBankHoursHistoryShift[]) {
     return grouped;
 }
 
-export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
+/**
+ * balancesOnly: pula o audit trail, as justificativas de saída do bot e as
+ * provas textuais por plantão — tudo exclusivamente de exibição, sem efeito no
+ * cálculo de balanceMinutes. É o modo usado pelo payment-closing, que só
+ * precisa do saldo efetivo por médico.
+ */
+export async function getBankHoursHistory(options?: { balancesOnly?: boolean }): Promise<BankHoursHistoryModel> {
+    const balancesOnly = options?.balancesOnly === true;
     const db = getDb();
     const result = await db.execute(sql`
         with regulation_history as (
@@ -304,10 +311,10 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
     const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor, lateDeparturesByOccupancy] = await Promise.all([
-        loadAuditTrailByOccupancy(rows),
+        balancesOnly ? new Map<string, MonthlyReportAuditEntry[]>() : loadAuditTrailByOccupancy(rows),
         loadAllBankHoursSettlements(),
         loadLegacyBalancesByDoctor(),
-        loadLateDeparturesByOccupancy(),
+        balancesOnly ? new Map<string, BankHoursLateDeparture>() : loadLateDeparturesByOccupancy(),
     ]);
     const manualOverridesByGroup = await loadManualBalanceOverrides(rows.map((row) => row.continuityGroupId));
     const enrichedRows = rows.map((row) => ({
@@ -320,7 +327,9 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
         lateDeparture: lateDeparturesByOccupancy.get(row.occupancyId) ?? null,
     }));
 
-    return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor);
+    return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor, {
+        includeProofs: !balancesOnly,
+    });
 }
 
 /**
@@ -336,7 +345,7 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
  */
 export async function getDoctorBankHoursEffectiveBalances(): Promise<Map<string, BankHoursSettlementBalance>> {
     const [history, settlementDelta] = await Promise.all([
-        getBankHoursHistory(),
+        getBankHoursHistory({ balancesOnly: true }),
         loadBankHoursSettlementDeltaByDoctor(),
     ]);
 

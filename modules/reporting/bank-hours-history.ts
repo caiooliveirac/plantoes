@@ -738,13 +738,26 @@ function compareDoctors(left: BankHoursDoctorHistory, right: BankHoursDoctorHist
     return left.doctorName.localeCompare(right.doctorName, "pt-BR");
 }
 
+// Proof neutro para o modo balances-only: as provas textuais são caras de
+// montar (Intl + métricas recalculadas por plantão) e servem só à exibição do
+// histórico — nunca entram no cálculo de balanceMinutes.
+const EMPTY_BANK_HOURS_PROOF: BankHoursProof = {
+    summary: "",
+    items: [],
+    mode: "pending",
+};
+
 export function buildBankHoursHistoryModel(
     shifts: RawBankHoursHistoryShift[],
     settlementsByDoctor: Map<string, BankHoursSettlementSummary[]> = new Map(),
     legacyByDoctor: Map<string, BankHoursLegacyDoctorRecord> = new Map(),
+    options?: { includeProofs?: boolean },
 ): BankHoursHistoryModel {
-    const findSuccessor = buildSuccessorLookup(shifts);
-    const chiefOnDutyAt = buildChiefOnDutyLookup(shifts);
+    const includeProofs = options?.includeProofs !== false;
+    // Sucessor da rendição e chefia na 2031 alimentam só texto de exibição —
+    // no modo balances-only nem os índices precisam ser montados.
+    const findSuccessor = includeProofs ? buildSuccessorLookup(shifts) : null;
+    const chiefOnDutyAt = includeProofs ? buildChiefOnDutyLookup(shifts) : null;
     const normalizedShifts: BankHoursHistoryShift[] = collapseContinuityHistoryShifts(shifts)
         .map((shift) => {
             const countedStartAt = resolveCountedStartAt(shift);
@@ -753,7 +766,7 @@ export function buildBankHoursHistoryModel(
             const metrics = resolveBankHoursMetrics(shift, countedStartAt, countedEndAt, scheduledStartAt, scheduledEndAt);
             const hasCorrectionHistory = shift.auditTrail.some((entry) => entry.action.endsWith(".corrected")) || shift.manualBalanceMinutes !== null;
             const handoffPrevailed = Boolean(shift.actualEndedAt && countedEndAt && !sameInstant(shift.actualEndedAt, countedEndAt));
-            const successor = handoffPrevailed ? findSuccessor(shift, countedEndAt) : null;
+            const successor = handoffPrevailed && findSuccessor ? findSuccessor(shift, countedEndAt) : null;
             const resolvedShift = {
                 ...shift,
                 bankScheduledStartAt: scheduledStartAt,
@@ -772,10 +785,12 @@ export function buildBankHoursHistoryModel(
                 workedMinutes: computeWorkedMinutes(shift.startedAt, shift.effectiveEndedAt),
                 countedStartAt,
                 countedEndAt,
-                proof: buildBankHoursProof(resolvedShift, { successorDoctorName: successor ? (successor.displayName ?? successor.doctorName) : null }),
+                proof: includeProofs
+                    ? buildBankHoursProof(resolvedShift, { successorDoctorName: successor ? (successor.displayName ?? successor.doctorName) : null })
+                    : EMPTY_BANK_HOURS_PROOF,
                 successorDoctorName: successor ? (successor.displayName ?? successor.doctorName) : null,
                 successorTookOverAt: successor?.startedAt ?? null,
-                corrections: extractCorrections(shift.auditTrail, chiefOnDutyAt),
+                corrections: chiefOnDutyAt ? extractCorrections(shift.auditTrail, chiefOnDutyAt) : [],
                 flags: {
                     hasCorrectionHistory,
                     hasHandoffOverride: handoffPrevailed,

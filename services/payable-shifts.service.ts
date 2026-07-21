@@ -27,11 +27,24 @@ import { loadBankHoursSettlementsForMonth } from "@/services/bank-hours-settleme
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
 import {
     buildPaymentAllocationBoardModel,
+    preparePaymentAllocationCandidateContext,
     type PaymentAllocationBoard,
     type PaymentAllocationRawRow,
     type PaymentAllocationTargetDefinition,
 } from "@/services/board.service";
 import { buildChiefMonthlyPayableWorkbook } from "@/modules/reporting/payable-shifts-xlsx";
+
+// Instrumentação temporária de performance (Fase 0). Ativa só com
+// PAYMENT_CLOSING_PERF=1 — em produção é um no-op sem custo.
+const PERF_ENABLED = process.env.PAYMENT_CLOSING_PERF === "1";
+export const perfEvents: Array<{ label: string; ms: number; extra?: string }> = [];
+function perfStart(): number {
+    return PERF_ENABLED ? performance.now() : 0;
+}
+function perfEnd(label: string, startedAt: number, extra?: string) {
+    if (!PERF_ENABLED) return;
+    perfEvents.push({ label, ms: performance.now() - startedAt, extra });
+}
 
 function normalizePaymentShiftLabel(value: unknown): PaymentAllocationRawRow["shiftLabel"] {
     const normalized = String(value ?? "").trim().toUpperCase();
@@ -362,6 +375,9 @@ function buildBoardsForRange(params: {
 }) {
     const boards: PaymentAllocationBoard[] = [];
     const slotDurationMs = 12 * 60 * 60 * 1000;
+    // Todo o pré-processamento independente do slot sai do loop: as mesmas
+    // linhas cruas alimentam todos os ~60 slots do intervalo.
+    const candidateContext = preparePaymentAllocationCandidateContext(params.rawRows);
 
     for (let cursor = params.rangeStart.getTime(), index = 0; cursor < params.rangeEnd.getTime(); cursor += slotDurationMs, index += 1) {
         const slotStart = new Date(cursor);
@@ -382,6 +398,7 @@ function buildBoardsForRange(params: {
             startedAt: slotStart.toISOString(),
             endedAt: slotEnd.toISOString(),
             generatedAt: params.rangeEnd.toISOString(),
+            candidateContext,
         }));
     }
 
@@ -434,18 +451,17 @@ export async function getPayableAllocationBoardsForRange(
     return { boards, continuityGroupByOccupancyId };
 }
 
-async function loadDoctorPaymentProfiles(): Promise<Map<string, DoctorPaymentProfile>> {
+async function loadDoctorPaymentSettings(): Promise<{
+    profiles: Map<string, DoctorPaymentProfile>;
+    employmentTypes: Map<string, DoctorEmploymentType>;
+}> {
     const rows = await getDb()
         .select({ id: doctors.id, metadata: doctors.metadata })
         .from(doctors);
-    return new Map(rows.map((row) => [row.id, resolveDoctorPaymentProfile(row.metadata)]));
-}
-
-async function loadDoctorEmploymentTypes(): Promise<Map<string, DoctorEmploymentType>> {
-    const rows = await getDb()
-        .select({ id: doctors.id, metadata: doctors.metadata })
-        .from(doctors);
-    return new Map(rows.map((row) => [row.id, resolveDoctorEmploymentType(row.metadata)]));
+    return {
+        profiles: new Map(rows.map((row) => [row.id, resolveDoctorPaymentProfile(row.metadata)])),
+        employmentTypes: new Map(rows.map((row) => [row.id, resolveDoctorEmploymentType(row.metadata)])),
+    };
 }
 
 /**
@@ -458,10 +474,9 @@ export async function getDoctorMonthlyPayableTotals(
     rangeStart: Date,
     rangeEnd: Date,
 ): Promise<Map<string, Map<string, number>>> {
-    const [{ boards }, profiles, employmentTypes] = await Promise.all([
+    const [{ boards }, { profiles, employmentTypes }] = await Promise.all([
         getPayableAllocationBoardsForRange(rangeStart, rangeEnd),
-        loadDoctorPaymentProfiles(),
-        loadDoctorEmploymentTypes(),
+        loadDoctorPaymentSettings(),
     ]);
     const payableShifts = buildPayableShiftsFromBoards(boards);
     const extraStartDate = new Date(rangeStart.getTime() - (180 * 60000)).toISOString().slice(0, 10);
@@ -495,11 +510,18 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     // para buscar os plantões extra do admin, cuja coluna operational_date é um date.
     const extraStartDate = new Date(range.start.getTime() - (180 * 60000)).toISOString().slice(0, 10);
     const extraEndDate = new Date(range.end.getTime() - (180 * 60000) - 1).toISOString().slice(0, 10);
+    const tQueries = perfStart();
+    const timed = async <T>(label: string, promise: Promise<T>): Promise<T> => {
+        const t = perfStart();
+        const value = await promise;
+        perfEnd(label, t, Array.isArray(value) ? `${value.length} rows` : undefined);
+        return value;
+    };
     const [targets, targetDeactivationIntervals, rawResultRows, adminExtraRows, doctorAttestations, allDoctorRows] = await Promise.all([
-        loadTargets(rawStartIso, rawEndIso),
-        loadTargetDeactivationIntervals(rawStartIso, rawEndIso),
-        loadRawRows(rawStartIso, rawEndIso),
-        loadAdminExtraShiftsForRange(extraStartDate, extraEndDate),
+        timed("q:loadTargets", loadTargets(rawStartIso, rawEndIso)),
+        timed("q:loadTargetDeactivationIntervals", loadTargetDeactivationIntervals(rawStartIso, rawEndIso)),
+        timed("q:loadRawRows", loadRawRows(rawStartIso, rawEndIso)),
+        timed("q:loadAdminExtraShifts", loadAdminExtraShiftsForRange(extraStartDate, extraEndDate)),
         loadDoctorAttestationsForMonth(range.monthKey),
         getDb()
             .select({
@@ -511,8 +533,12 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             .where(eq(doctors.isActive, true))
             .orderBy(asc(doctors.fullName)),
     ]);
+    perfEnd("phase:queries-block-1", tQueries);
 
+    const tMap = perfStart();
     const rawRows = rawResultRows.map(mapPaymentAllocationAuditRow);
+    perfEnd("cpu:mapRawRows", tMap, `${rawRows.length} rows`);
+    const tBoards = perfStart();
     const boards = buildBoardsForRange({
         rangeStart: range.start,
         rangeEnd: range.end,
@@ -520,13 +546,17 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         targetDeactivationIntervals,
         rawRows,
     });
+    perfEnd("cpu:buildBoardsForRange", tBoards, `${boards.length} boards x ${rawRows.length} rows`);
+    const tPayable = perfStart();
     const payableShifts = buildPayableShiftsFromBoards(boards);
+    perfEnd("cpu:buildPayableShiftsFromBoards", tPayable, `${payableShifts.length} shifts`);
     // Plantões extra do admin entram como PayableShift verdes — contam no total a
     // pagar, mas não viram opção de ramal/base nem segmento de presença.
     const adminExtraShifts = adminExtraRows.map(buildAdminExtraPayableShift);
     const payableShiftsWithExtras = adminExtraShifts.length > 0
         ? [...payableShifts, ...adminExtraShifts]
         : payableShifts;
+    const tDerived = perfStart();
     const disabledTargets = buildDisabledTargetsFromBoards({
         boards,
         maxSlotStartedAtIso: new Date().toISOString(),
@@ -547,6 +577,8 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         selectedOccupancyIds,
     });
 
+    perfEnd("cpu:derived-targets+segments", tDerived, `${attestationSegments.length} segments`);
+
     const doctorPaymentProfiles = Object.fromEntries(
         allDoctorRows.map((row) => [row.id, resolveDoctorPaymentProfile(row.metadata)])
     );
@@ -557,12 +589,14 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     // Camada financeira do modal: nota fiscal/processo, semente do contrato,
     // saldo do banco de horas e acerto do mês. Carregada à parte do cálculo de
     // plantões para não interferir no board.
+    const tFin = perfStart();
     const [paymentMeta, contracts, settlementsByDoctor, bankBalances] = await Promise.all([
         loadPaymentClosingMetaForMonth(range.monthKey),
         loadDoctorContracts(),
         loadBankHoursSettlementsForMonth(range.monthKey),
-        getDoctorBankHoursEffectiveBalances(),
+        timed("q:getDoctorBankHoursEffectiveBalances", getDoctorBankHoursEffectiveBalances()),
     ]);
+    perfEnd("phase:queries-block-2-financials", tFin);
 
     // Saldo contratual = teto - pagamentos acumulados desde a semente até o mês.
     const contractBalanceByDoctor = new Map<string, number>();
@@ -620,7 +654,8 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         };
     }
 
-    return buildChiefPayableBoard({
+    const tBoard = perfStart();
+    const board = buildChiefPayableBoard({
         monthKey: range.monthKey,
         monthLabel: range.monthLabel,
         presetMonths: range.presetMonths,
@@ -637,6 +672,8 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         doctorAttestations,
         doctorFinancials,
     });
+    perfEnd("cpu:buildChiefPayableBoard", tBoard, `${board.doctors.length} doctors`);
+    return board;
 }
 
 export async function exportChiefPayableShiftsXlsx(monthKey?: string | null) {

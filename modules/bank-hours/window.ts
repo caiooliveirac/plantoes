@@ -14,13 +14,17 @@ function asDate(value: string | Date | null | undefined) {
     return value instanceof Date ? value : new Date(value);
 }
 
+// Formatter cacheado: construir Intl.DateTimeFormat por chamada dominava o CPU
+// do fechamento mensal (perfil de 2026-07). Reuso é seguro — o objeto é imutável.
+const SAO_PAULO_HOUR_MINUTE_FORMAT = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+});
+
 function getSaoPauloHourMinute(date: Date) {
-    const parts = new Intl.DateTimeFormat("en-US", {
-        timeZone: "America/Sao_Paulo",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-    }).formatToParts(date);
+    const parts = SAO_PAULO_HOUR_MINUTE_FORMAT.formatToParts(date);
 
     const hour = Number(parts.find((part) => part.type === "hour")?.value ?? "0");
     const minute = Number(parts.find((part) => part.type === "minute")?.value ?? "0");
