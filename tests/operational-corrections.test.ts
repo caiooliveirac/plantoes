@@ -7,8 +7,8 @@ import {
     validateChronology,
     validateCorrectionChronology,
 } from "@/modules/operational/corrections";
-import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
-import { isRegulationPostDeactivationActive } from "@/modules/regulation/service";
+import { isInterventionBaseDeactivationActive, resolveInterventionBaseDeactivationExpiresAt } from "@/modules/intervention/service";
+import { isRegulationPostDeactivationActive, resolveRegulationPostDeactivationExpiresAt } from "@/modules/regulation/service";
 
 // ─── validateChronology ──────────────────────────────────────────────
 
@@ -205,32 +205,60 @@ test("filterTransferConflictsToShiftWindow ignores past-shift open occupancy", (
     assert.equal(conflicts[0]?.scheduledStartAt?.toISOString(), "2026-04-12T10:00:00.000Z");
 });
 
-// ─── Remanejamento: origem nunca é barrada por desativação ────────────
-// Regressão do incidente Camila Coutinho (BR05 → CN10, 2026-07-23). A base de ORIGEM
-// tinha uma janela de desativação órfã (aberta desde 14/07, reactivated_at NULL) que
-// coexistia com is_active=true e a médica em plantão. transferOperationalOccupancy
-// validava a origem com o mesmo gate estrito do destino, então essa janela órfã fazia
-// o remanejamento falhar nos dois canais (painel 8x + robô) com a mensagem sem sentido
-// "A base BR05 está desativada e não pode receber remanejamento". Estes testes fixam
-// o gatilho: qualquer janela aberta com deactivatedAt no passado é classificada como
-// "desativação ativa" — por isso a ORIGEM jamais pode passar por esse gate.
+// ─── Desativação expira na virada do turno ────────────────────────────
+// Uma desativação de base/posto vale só até a próxima virada 07:00/19:00 SP. Depois
+// dela a base/posto volta a 'waiting' (→ AGUARDANDO o próximo escalado) sem reativação
+// manual. Antes, a desativação nunca expirava (stub ano 9999) e a base ficava escura
+// indefinidamente, suprimindo o "AGUARDANDO FULANO". Como efeito colateral, isto também
+// neutraliza janelas órfãs antigas (fronteira já passada) — como a do incidente Camila
+// Coutinho BR05 (aberta desde 14/07): hoje ela é classificada como INATIVA.
 
-test("desativação órfã (aberta, no passado) conta como ativa — base de intervenção", () => {
+test("resolveInterventionBaseDeactivationExpiresAt retorna a virada do turno (SD → 19:00 SP)", () => {
+    // 09:38 SP (= 12:38Z) está no SD; expira às 19:00 SP (= 22:00Z) do mesmo dia.
+    const expiresAt = resolveInterventionBaseDeactivationExpiresAt(new Date("2026-07-23T12:38:00.000Z"));
+    assert.equal(expiresAt.toISOString(), "2026-07-23T22:00:00.000Z");
+});
+
+test("resolveRegulationPostDeactivationExpiresAt retorna a virada do turno (SN → 07:00 SP do dia seguinte)", () => {
+    // 20:00 SP (= 23:00Z) está no SN; expira às 07:00 SP (= 10:00Z) do dia seguinte.
+    const expiresAt = resolveRegulationPostDeactivationExpiresAt(new Date("2026-07-23T23:00:00.000Z"));
+    assert.equal(expiresAt.toISOString(), "2026-07-24T10:00:00.000Z");
+});
+
+test("desativação vale DENTRO do turno em que foi feita — base de intervenção", () => {
+    const active = isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-07-23T12:38:00.000Z"), // 09:38 SP (SD)
+        reactivatedAt: null,
+        referenceAt: new Date("2026-07-23T13:00:00.000Z"), // 10:00 SP, mesmo turno
+    });
+    assert.equal(active, true);
+});
+
+test("desativação EXPIRA passada a virada do turno — base de intervenção", () => {
+    const active = isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-07-23T12:38:00.000Z"), // 09:38 SP (SD)
+        reactivatedAt: null,
+        referenceAt: new Date("2026-07-23T22:30:00.000Z"), // 19:30 SP, já no SN
+    });
+    assert.equal(active, false);
+});
+
+test("desativação EXPIRA passada a virada do turno — posto de regulação", () => {
+    const active = isRegulationPostDeactivationActive({
+        deactivatedAt: new Date("2026-07-23T12:38:00.000Z"),
+        reactivatedAt: null,
+        referenceAt: new Date("2026-07-23T22:30:00.000Z"),
+    });
+    assert.equal(active, false);
+});
+
+test("janela órfã antiga (dias atrás) já não conta como ativa — incidente BR05", () => {
     const active = isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-07-14T12:41:00.000Z"),
         reactivatedAt: null,
         referenceAt: new Date("2026-07-23T11:51:00.000Z"),
     });
-    assert.equal(active, true);
-});
-
-test("desativação órfã (aberta, no passado) conta como ativa — posto de regulação", () => {
-    const active = isRegulationPostDeactivationActive({
-        deactivatedAt: new Date("2026-07-14T12:41:00.000Z"),
-        reactivatedAt: null,
-        referenceAt: new Date("2026-07-23T11:51:00.000Z"),
-    });
-    assert.equal(active, true);
+    assert.equal(active, false);
 });
 
 test("desativação futura não conta como ativa (referência antes de deactivatedAt)", () => {
