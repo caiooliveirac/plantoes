@@ -44,7 +44,7 @@ import {
 } from "@/modules/bank-hours/service";
 import { extractTelegramOccurrenceNumber } from "@/modules/telegram/departure-flow";
 import { expireInterventionBaseDeactivations, expireStaleShadowInterventionOccupancies } from "@/modules/intervention/service";
-import { expireStaleRegulationOccupancies } from "@/modules/regulation/service";
+import { expireRegulationPostDeactivations, expireStaleRegulationOccupancies } from "@/modules/regulation/service";
 
 // A "sombra" (shadow) doctor coexisting on the same ramal/base as the titular.
 // Shown on the live board as a distinct sub-line under the active occupant, never
@@ -1851,6 +1851,7 @@ export interface OperationalBoardSnapshot {
 
 export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
   await expireInterventionBaseDeactivations(new Date());
+  await expireRegulationPostDeactivations(new Date());
   await expireStaleShadowInterventionOccupancies(new Date());
   await expireStaleRegulationOccupancies(new Date());
 

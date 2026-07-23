@@ -161,8 +161,15 @@ export function resolveSafeInterventionHandoffAt(params: {
         : null;
 }
 
+// Uma desativação vale até a VIRADA do turno em que foi feita (07:00/19:00 SP).
+// Passada essa fronteira, a base volta ao normal (waiting → AGUARDANDO o próximo
+// escalado) sem depender de reativação manual nem da chegada de um médico. Se a base
+// seguir fora de serviço por mais de um turno, a chefia redesativa (o turno seguinte
+// vira vaga descoberta, não mais "coberta" — consequência aceita ao adotar a expiração
+// por turno; ver ADR-001). Antes isto era um stub (ano 9999) e a desativação nunca
+// expirava, deixando a base escura indefinidamente e suprimindo o "AGUARDANDO FULANO".
 export function resolveInterventionBaseDeactivationExpiresAt(deactivatedAt: Date) {
-    return new Date("9999-12-31T23:59:59.999Z");
+    return resolveOperationalShiftWindow(deactivatedAt).nextBoundaryAt;
 }
 
 export function isInterventionBaseDeactivationActive(params: {
@@ -171,6 +178,12 @@ export function isInterventionBaseDeactivationActive(params: {
     referenceAt: Date;
 }) {
     if (params.referenceAt.getTime() < params.deactivatedAt.getTime()) {
+        return false;
+    }
+
+    // Expira na virada do turno: além da fronteira, a desativação não vale mais.
+    const expiresAt = resolveInterventionBaseDeactivationExpiresAt(params.deactivatedAt);
+    if (params.referenceAt.getTime() >= expiresAt.getTime()) {
         return false;
     }
 
@@ -351,8 +364,32 @@ async function findActiveInterventionBaseDeactivation(tx: Executor, params: {
     return openDeactivation;
 }
 
+// Reaper: fecha janelas de desativação que já passaram da virada do turno em que
+// foram feitas (ver resolveInterventionBaseDeactivationExpiresAt), gravando
+// reactivatedAt = fronteira do turno (fim histórico correto — a base voltou na virada).
+// Chamado a cada montagem do quadro, devolve a base ao estado 'waiting' na virada sem
+// depender de reativação manual ou da chegada de um médico. Idempotente; também sana
+// janelas antigas que ficaram abertas antes desta regra (a fronteira já passou).
 export async function expireInterventionBaseDeactivations(referenceAt: Date, updatedByUserId?: string | null) {
-    return 0;
+    const db = getDb();
+    const open = await db.query.interventionBaseDeactivations.findMany({
+        where: and(
+            isNull(interventionBaseDeactivations.reactivatedAt),
+            lte(interventionBaseDeactivations.deactivatedAt, referenceAt),
+        ),
+    });
+    let closed = 0;
+    for (const window of open) {
+        const expiresAt = resolveInterventionBaseDeactivationExpiresAt(window.deactivatedAt);
+        if (referenceAt.getTime() < expiresAt.getTime()) {
+            continue;
+        }
+        await db.update(interventionBaseDeactivations)
+            .set({ reactivatedAt: expiresAt, updatedByUserId: updatedByUserId ?? null, updatedAt: new Date() })
+            .where(eq(interventionBaseDeactivations.id, window.id));
+        closed++;
+    }
+    return closed;
 }
 
 async function assertInterventionBaseExists(baseId: number) {

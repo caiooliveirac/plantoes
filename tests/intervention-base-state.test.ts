@@ -17,44 +17,50 @@ import {
 } from "@/modules/intervention/service";
 import { isRegulationPostDeactivationActive, shouldReuseImplicitRegulationContinuitySource } from "@/modules/regulation/service";
 
-test("resolveInterventionBaseDeactivationExpiresAt passa a representar persistencia indefinida", () => {
+test("resolveInterventionBaseDeactivationExpiresAt expira na virada do turno em que foi feita", () => {
+    // 10:12 SP está no SD (07–19); a desativação expira às 19:00 SP do mesmo dia.
     assert.equal(
         resolveInterventionBaseDeactivationExpiresAt(new Date("2026-03-29T10:12:00-03:00")).toISOString(),
-        new Date("9999-12-31T23:59:59.999Z").toISOString(),
+        new Date("2026-03-29T19:00:00-03:00").toISOString(),
     );
 });
 
-test("isInterventionBaseDeactivationActive exige /ativar manual para liberar turnos futuros", () => {
+test("isInterventionBaseDeactivationActive expira na virada e não persiste para turnos futuros", () => {
+    // Dentro do próprio turno (antes das 19:00): ativa.
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
         reactivatedAt: null,
         referenceAt: new Date("2026-03-29T18:59:00-03:00"),
     }), true);
 
+    // Na virada (19:00): já expirou.
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
         reactivatedAt: null,
         referenceAt: new Date("2026-03-29T19:00:00-03:00"),
-    }), true);
+    }), false);
 
+    // Turno seguinte: não persiste.
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
         reactivatedAt: null,
         referenceAt: new Date("2026-03-29T21:00:00-03:00"),
-    }), true);
+    }), false);
 });
 
-test("isInterventionBaseDeactivationActive respeita a ultima reativacao valida", () => {
+test("isInterventionBaseDeactivationActive respeita reativação manual dentro do turno", () => {
+    // Antes da reativação manual (mesmo turno): ativa.
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
-        reactivatedAt: new Date("2026-03-30T08:00:00-03:00"),
-        referenceAt: new Date("2026-03-30T07:59:00-03:00"),
+        reactivatedAt: new Date("2026-03-29T15:00:00-03:00"),
+        referenceAt: new Date("2026-03-29T14:59:00-03:00"),
     }), true);
 
+    // A partir da reativação manual: inativa.
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
-        reactivatedAt: new Date("2026-03-30T08:00:00-03:00"),
-        referenceAt: new Date("2026-03-30T08:00:00-03:00"),
+        reactivatedAt: new Date("2026-03-29T15:00:00-03:00"),
+        referenceAt: new Date("2026-03-29T15:00:00-03:00"),
     }), false);
 });
 
@@ -84,31 +90,35 @@ test("resolveInterventionOccupancyActivationReferenceAt respeita SD/SN digitados
     );
 });
 
-test("chegada antecipada para SN continua bloqueada sem reativacao manual", () => {
+test("desativação de SD não persiste para a chegada antecipada de SN (expira na virada)", () => {
+    // Chegada antecipada de SN resolve a referência para 19:00 (a virada).
     const referenceAt = resolveInterventionOccupancyActivationReferenceAt({
         startedAt: new Date("2026-03-30T18:10:00-03:00"),
         scheduledStartAt: new Date("2026-03-30T19:00:00-03:00"),
     });
 
+    // A desativação feita no SD (10:12) expira às 19:00; a chegada de SN vê a base livre.
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-03-30T10:12:00-03:00"),
         reactivatedAt: null,
         referenceAt,
-    }), true);
+    }), false);
 });
 
-test("isRegulationPostDeactivationActive segue a mesma persistencia ate reativacao", () => {
+test("isRegulationPostDeactivationActive também expira na virada, não persiste por dias", () => {
+    // Dois dias depois: expirou (não persiste).
     assert.equal(isRegulationPostDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
         reactivatedAt: null,
         referenceAt: new Date("2026-03-31T10:12:00-03:00"),
-    }), true);
+    }), false);
 
+    // Dentro do próprio turno: ativa.
     assert.equal(isRegulationPostDeactivationActive({
         deactivatedAt: new Date("2026-03-29T10:12:00-03:00"),
-        reactivatedAt: new Date("2026-03-31T09:00:00-03:00"),
-        referenceAt: new Date("2026-03-31T10:12:00-03:00"),
-    }), false);
+        reactivatedAt: null,
+        referenceAt: new Date("2026-03-29T12:00:00-03:00"),
+    }), true);
 });
 
 test("auto-reactivation on arrival: deactivation becomes inactive when reactivatedAt is set to arrival time", () => {
@@ -140,32 +150,31 @@ test("auto-reactivation on arrival: deactivation becomes inactive when reactivat
     }), false);
 });
 
-test("auto-reactivation on SN arrival: pre-shift arrival at 18:15 reactivates for the upcoming SN", () => {
-    // Base deactivated during SD
+test("desativação do SD expira na virada — chegada de SN não precisa de reativação manual", () => {
+    // Dentro do SD (antes das 19:00), a desativação vale.
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-04-01T10:00:00-03:00"),
         reactivatedAt: null,
-        referenceAt: new Date("2026-04-01T19:00:00-03:00"),
+        referenceAt: new Date("2026-04-01T18:00:00-03:00"),
     }), true);
 
-    // Doctor arrives at 18:15 (pre-SN window), auto-reactivates with arrival time
-    // The activation reference resolves to scheduledStartAt 19:00 for pre-shift
+    // A chegada antecipada de SN resolve a referência para 19:00 (a virada): já expirou,
+    // então a base está livre sem precisar de reativação manual.
     const activationRef = resolveInterventionOccupancyActivationReferenceAt({
         startedAt: new Date("2026-04-01T18:15:00-03:00"),
         scheduledStartAt: new Date("2026-04-01T19:00:00-03:00"),
     });
-    // Deactivation was active at the scheduledStartAt reference
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-04-01T10:00:00-03:00"),
         reactivatedAt: null,
         referenceAt: activationRef,
-    }), true);
+    }), false);
 
-    // After auto-reactivation sets reactivatedAt = startedAt (18:15)
+    // Chegada real às 18:15 (ainda no SD) auto-reativa com o horário da chegada.
     assert.equal(isInterventionBaseDeactivationActive({
         deactivatedAt: new Date("2026-04-01T10:00:00-03:00"),
         reactivatedAt: new Date("2026-04-01T18:15:00-03:00"),
-        referenceAt: activationRef,
+        referenceAt: new Date("2026-04-01T18:15:00-03:00"),
     }), false);
 });
 

@@ -71,6 +71,14 @@ export function resolveHistoricalAdminCorrectionEndAt(params: {
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
 
+// Simétrico à intervenção: uma desativação de posto vale até a VIRADA do turno em que
+// foi feita (07:00/19:00 SP). Passada a fronteira, o posto volta a 'waiting' (→
+// AGUARDANDO o próximo escalado) sem reativação manual nem chegada de médico. Ver
+// ADR-001 e o comentário em resolveInterventionBaseDeactivationExpiresAt.
+export function resolveRegulationPostDeactivationExpiresAt(deactivatedAt: Date) {
+    return resolveOperationalShiftWindow(deactivatedAt).nextBoundaryAt;
+}
+
 export function isRegulationPostDeactivationActive(params: {
     deactivatedAt: Date;
     reactivatedAt?: Date | null;
@@ -80,7 +88,38 @@ export function isRegulationPostDeactivationActive(params: {
         return false;
     }
 
+    // Expira na virada do turno: além da fronteira, a desativação não vale mais.
+    const expiresAt = resolveRegulationPostDeactivationExpiresAt(params.deactivatedAt);
+    if (params.referenceAt.getTime() >= expiresAt.getTime()) {
+        return false;
+    }
+
     return !params.reactivatedAt || params.referenceAt.getTime() < params.reactivatedAt.getTime();
+}
+
+// Reaper simétrico ao de intervenção: fecha janelas de desativação de posto que já
+// passaram da virada do turno, gravando reactivatedAt = fronteira. Chamado a cada
+// montagem do quadro. Idempotente; também sana janelas antigas abertas antes desta regra.
+export async function expireRegulationPostDeactivations(referenceAt: Date, updatedByUserId?: string | null) {
+    const db = getDb();
+    const open = await db.query.regulationPostDeactivations.findMany({
+        where: and(
+            isNull(regulationPostDeactivations.reactivatedAt),
+            lte(regulationPostDeactivations.deactivatedAt, referenceAt),
+        ),
+    });
+    let closed = 0;
+    for (const window of open) {
+        const expiresAt = resolveRegulationPostDeactivationExpiresAt(window.deactivatedAt);
+        if (referenceAt.getTime() < expiresAt.getTime()) {
+            continue;
+        }
+        await db.update(regulationPostDeactivations)
+            .set({ reactivatedAt: expiresAt, updatedByUserId: updatedByUserId ?? null, updatedAt: new Date() })
+            .where(eq(regulationPostDeactivations.id, window.id));
+        closed++;
+    }
+    return closed;
 }
 
 async function assertRegulationPostExists(postId: number) {
