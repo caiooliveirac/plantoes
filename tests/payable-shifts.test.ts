@@ -303,6 +303,63 @@ test("buildChiefPayableBoard keeps two payable shifts in the same day cell", () 
     assert.equal(day10?.shifts[1]?.shiftLabel, "SN");
 });
 
+test("buildChiefPayableBoard conta plantões USA (intervenção) e CRU (regulação) por médico", () => {
+    const basePayable = buildPayableShiftsFromBoards([makeBoard()]);
+    const usaShift = { ...basePayable[0], domain: "intervention" as const, tagCode: "BR05" };
+
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-04",
+        monthLabel: "abril de 2026",
+        presetMonths: [{ key: "2026-04", label: "abril de 2026" }],
+        rangeStartIso: "2026-04-01T10:00:00.000Z",
+        rangeEndIso: "2026-05-01T10:00:00.000Z",
+        payableShifts: [
+            { ...usaShift, payableShiftId: "usa-1", operationalDate: "2026-04-10", shiftLabel: "SD" },
+            { ...usaShift, payableShiftId: "usa-2", operationalDate: "2026-04-11", shiftLabel: "SN" },
+            { ...usaShift, payableShiftId: "cru-1", operationalDate: "2026-04-12", shiftLabel: "SD", domain: "regulation", tagCode: "CRU" },
+            // Punição de banco de horas (unidade negativa) não conta como plantão cumprido.
+            { ...usaShift, payableShiftId: "pen-1", operationalDate: "2026-04-13", shiftLabel: "SD", domain: "regulation", tagCode: "CRU", paymentUnit: -1 },
+        ],
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: [],
+        attestationSegments: [],
+    });
+
+    const doctor = board.doctors[0];
+    assert.ok(doctor);
+    assert.equal(doctor?.usaShiftCount, 2, "duas USAs cumpridas");
+    assert.equal(doctor?.cruShiftCount, 1, "uma CRU cumprida (punição não conta)");
+});
+
+test("buildChiefPayableBoard marca médico que só cumpriu uma função", () => {
+    const basePayable = buildPayableShiftsFromBoards([makeBoard()]);
+    const usaShift = { ...basePayable[0], domain: "intervention" as const, tagCode: "BR05" };
+
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-04",
+        monthLabel: "abril de 2026",
+        presetMonths: [{ key: "2026-04", label: "abril de 2026" }],
+        rangeStartIso: "2026-04-01T10:00:00.000Z",
+        rangeEndIso: "2026-05-01T10:00:00.000Z",
+        payableShifts: [
+            { ...usaShift, payableShiftId: "usa-1", operationalDate: "2026-04-10", shiftLabel: "SD" },
+            { ...usaShift, payableShiftId: "usa-2", operationalDate: "2026-04-11", shiftLabel: "SN" },
+        ],
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: [],
+        attestationSegments: [],
+    });
+
+    const doctor = board.doctors[0];
+    assert.ok(doctor);
+    assert.equal(doctor?.usaShiftCount, 2);
+    assert.equal(doctor?.cruShiftCount, 0);
+    // XOR: só uma das funções foi cumprida → linha destacada no painel.
+    assert.equal((doctor!.usaShiftCount > 0) !== (doctor!.cruShiftCount > 0), true);
+});
+
 test("buildChiefPayableBoard keeps audit/payment divergence explicit in summary", () => {
     const payableShifts = buildPayableShiftsFromBoards([makeBoard()]);
     const disabledTargets = [];

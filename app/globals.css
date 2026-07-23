@@ -4652,6 +4652,27 @@ button.ops-doctor-line.shadow.clickable:hover {
     box-shadow: inset 3px 0 0 0 rgba(52, 211, 153, 0.7);
 }
 
+/* Médico que só cumpriu uma das duas funções (USA ou CRU) no mês: fundo âmbar de alerta.
+   Usa background (não box-shadow) para coexistir com a marca verde de atestado. */
+.chief-payable-row-single-function td.sticky-col.doctor {
+    background: rgba(74, 51, 20, 0.98);
+}
+
+.chief-payable-single-function-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: #fde68a;
+    background: rgba(217, 119, 6, 0.22);
+    border: 1px solid rgba(251, 191, 36, 0.5);
+    white-space: nowrap;
+}
+
 /* Card de atestação dentro do modal do médico. */
 .chief-payable-attest-card {
     margin-top: 16px;
@@ -5031,6 +5052,61 @@ button.chief-payable-tag:focus-visible {
 .chief-payable-modal-card.emphasis {
     background: rgba(20, 54, 37, 0.58);
     border-color: rgba(139, 255, 198, 0.28);
+}
+
+/* Contagem de funções (USA x CRU) no modal do médico. */
+.chief-payable-functions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.chief-payable-functions.alert {
+    padding: 10px;
+    border: 1px solid rgba(251, 191, 36, 0.45);
+    border-radius: 12px;
+    background: rgba(217, 119, 6, 0.1);
+}
+
+.chief-payable-function-card {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    background: rgba(12, 24, 40, 0.66);
+    padding: 12px;
+    display: grid;
+    gap: 4px;
+}
+
+.chief-payable-function-card span {
+    font-size: 0.75rem;
+    color: var(--muted-strong);
+}
+
+.chief-payable-function-card strong {
+    font-size: 1.3rem;
+}
+
+.chief-payable-function-card small {
+    color: var(--muted);
+    font-size: 0.74rem;
+}
+
+.chief-payable-function-card.zero {
+    border-color: rgba(251, 146, 60, 0.4);
+    background: rgba(120, 53, 15, 0.28);
+}
+
+.chief-payable-function-card.zero strong {
+    color: #fdba74;
+}
+
+.chief-payable-functions-warning {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #fbbf24;
 }
 
 .chief-payable-extra-form {
@@ -5473,6 +5549,7 @@ button.chief-payable-tag:focus-visible {
     }
 
     .chief-payable-modal-grid,
+    .chief-payable-functions,
     .chief-payable-financials-grid {
         grid-template-columns: 1fr;
     }
@@ -5576,7 +5653,8 @@ button.chief-payable-tag:focus-visible {
         max-width: 220px;
     }
 
-    .chief-payable-modal-grid {
+    .chief-payable-modal-grid,
+    .chief-payable-functions {
         grid-template-columns: 1fr;
     }
 

@@ -1910,6 +1910,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                     const doctorProfile = (doctor.paymentProfile ?? "generalist") as DoctorProfile;
                                     const profileBadge = paymentProfileBadge(doctorProfile);
                                     const doctorEmploymentType = (doctor.employmentType ?? "pj") as DoctorEmploymentType;
+                                    // Só desempenhou uma das duas funções (USA xor CRU) no mês.
+                                    const singleFunction = (doctor.usaShiftCount > 0) !== (doctor.cruShiftCount > 0);
 
                                     return (
                                     <motion.tr
@@ -1919,7 +1921,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                         animate={{ opacity: 1, y: 0 }}
                                         exit={{ opacity: 0, y: -6 }}
                                         transition={{ duration: 0.2, delay: Math.min(index * 0.018, 0.18) }}
-                                        className={isDoctorAttested(doctor) ? "chief-payable-row-attested" : undefined}
+                                        className={[
+                                            isDoctorAttested(doctor) ? "chief-payable-row-attested" : "",
+                                            singleFunction ? "chief-payable-row-single-function" : "",
+                                        ].filter(Boolean).join(" ") || undefined}
                                     >
                                         <td className="sticky-col doctor">
                                             <div className="chief-payable-doctor-cell">
@@ -1937,6 +1942,14 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                                     <span className={`chief-payable-profile-badge ${doctorEmploymentType}`.trim()} title="Vínculo com a prefeitura">
                                                         {employmentTypeLabel(doctorEmploymentType)}
                                                     </span>
+                                                    {singleFunction ? (
+                                                        <span
+                                                            className="chief-payable-single-function-badge"
+                                                            title={`Não desempenhou as duas funções neste mês · USA: ${doctor.usaShiftCount} · CRU: ${doctor.cruShiftCount}`}
+                                                        >
+                                                            só {doctor.usaShiftCount > 0 ? "USA" : "CRU"}
+                                                        </span>
+                                                    ) : null}
                                                 </div>
 
                                                 <label className="chief-payable-specialist-toggle" title="Estatutário/REDA não gera valor a pagar por plantão">
@@ -2189,6 +2202,31 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                 <small>{formatCurrency(selectedDoctor.weekdayDue)} (semana) + {formatCurrency(selectedDoctor.weekendDue)} (fim de semana / feriado)</small>
                             </article>
                         </div>
+
+                        {(() => {
+                            const usa = selectedDoctor.usaShiftCount;
+                            const cru = selectedDoctor.cruShiftCount;
+                            const singleFunction = (usa > 0) !== (cru > 0);
+                            return (
+                                <div className={`chief-payable-functions${singleFunction ? " alert" : ""}`}>
+                                    <article className={`chief-payable-function-card${usa === 0 ? " zero" : ""}`}>
+                                        <span>Plantões em USA</span>
+                                        <strong>{usa}</strong>
+                                        <small>Bases de intervenção (ambulância)</small>
+                                    </article>
+                                    <article className={`chief-payable-function-card${cru === 0 ? " zero" : ""}`}>
+                                        <span>Plantões em CRU</span>
+                                        <strong>{cru}</strong>
+                                        <small>Ramais de regulação</small>
+                                    </article>
+                                    {singleFunction ? (
+                                        <p className="chief-payable-functions-warning">
+                                            ⚠ Só desempenhou {usa > 0 ? "USA" : "CRU"} neste mês — não cumpriu as duas funções.
+                                        </p>
+                                    ) : null}
+                                </div>
+                            );
+                        })()}
 
                         <section className="chief-payable-financials">
                             <header>

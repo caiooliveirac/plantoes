@@ -64,6 +64,9 @@ function makeDoctor(doctorName: string, shifts: PayableShift[]): ChiefPayableDoc
         total: shifts.length,
         pendingCount: 0,
         attestedAt: null,
+        employmentType: "pj",
+        usaShiftCount: shifts.filter((shift) => shift.domain === "intervention" && shift.paymentUnit > 0).length,
+        cruShiftCount: shifts.filter((shift) => shift.domain === "regulation" && shift.paymentUnit > 0).length,
         cells: [...byDay.entries()]
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([day, dayShifts]) => ({ day, shifts: dayShifts })),

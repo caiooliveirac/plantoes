@@ -41,6 +41,9 @@ function makeBoard(): ChiefPayableBoardModel {
                 total: 2,
                 pendingCount: 0,
                 employmentType: "pj",
+                attestedAt: null,
+                usaShiftCount: 1,
+                cruShiftCount: 1,
                 cells: [
                     {
                         day: "01",
