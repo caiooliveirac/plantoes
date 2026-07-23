@@ -21,7 +21,7 @@ function PaymentClosingUnavailable({ title, copy }: { title: string; copy: strin
 export default async function AdminPaymentClosingPage({
     searchParams,
 }: {
-    searchParams: Promise<{ month?: string }>;
+    searchParams: Promise<{ month?: string; doctor?: string }>;
 }) {
     if (!hasDatabaseUrl()) {
         return <PaymentClosingUnavailable title="Banco indisponível" copy="Sem DATABASE_URL não existe base para fechar e atestar o pagamento do turno." />;
@@ -43,9 +43,20 @@ export default async function AdminPaymentClosingPage({
         throw error;
     }
 
-    const { month } = await searchParams;
+    const { month, doctor } = await searchParams;
     const board = await getChiefPayableShiftsBoard(month ?? null);
     const canManageClosing = Boolean(session.user.roles.includes("admin"));
+    // Encaminhamento vindo da aba banco de horas: abre direto o modal do médico
+    // para lançar o acerto (plantão verde/vermelho) aqui, onde ele de fato aparece.
+    const initialDoctorId = doctor && board.doctors.some((entry) => entry.doctorId === doctor)
+        ? doctor
+        : null;
 
-    return <ChiefPaymentViewClient board={board} canManageClosing={canManageClosing} />;
+    return (
+        <ChiefPaymentViewClient
+            board={board}
+            canManageClosing={canManageClosing}
+            initialDoctorId={initialDoctorId}
+        />
+    );
 }
