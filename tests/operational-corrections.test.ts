@@ -7,6 +7,8 @@ import {
     validateChronology,
     validateCorrectionChronology,
 } from "@/modules/operational/corrections";
+import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
+import { isRegulationPostDeactivationActive } from "@/modules/regulation/service";
 
 // ─── validateChronology ──────────────────────────────────────────────
 
@@ -201,4 +203,41 @@ test("filterTransferConflictsToShiftWindow ignores past-shift open occupancy", (
 
     assert.equal(conflicts.length, 1);
     assert.equal(conflicts[0]?.scheduledStartAt?.toISOString(), "2026-04-12T10:00:00.000Z");
+});
+
+// ─── Remanejamento: origem nunca é barrada por desativação ────────────
+// Regressão do incidente Camila Coutinho (BR05 → CN10, 2026-07-23). A base de ORIGEM
+// tinha uma janela de desativação órfã (aberta desde 14/07, reactivated_at NULL) que
+// coexistia com is_active=true e a médica em plantão. transferOperationalOccupancy
+// validava a origem com o mesmo gate estrito do destino, então essa janela órfã fazia
+// o remanejamento falhar nos dois canais (painel 8x + robô) com a mensagem sem sentido
+// "A base BR05 está desativada e não pode receber remanejamento". Estes testes fixam
+// o gatilho: qualquer janela aberta com deactivatedAt no passado é classificada como
+// "desativação ativa" — por isso a ORIGEM jamais pode passar por esse gate.
+
+test("desativação órfã (aberta, no passado) conta como ativa — base de intervenção", () => {
+    const active = isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-07-14T12:41:00.000Z"),
+        reactivatedAt: null,
+        referenceAt: new Date("2026-07-23T11:51:00.000Z"),
+    });
+    assert.equal(active, true);
+});
+
+test("desativação órfã (aberta, no passado) conta como ativa — posto de regulação", () => {
+    const active = isRegulationPostDeactivationActive({
+        deactivatedAt: new Date("2026-07-14T12:41:00.000Z"),
+        reactivatedAt: null,
+        referenceAt: new Date("2026-07-23T11:51:00.000Z"),
+    });
+    assert.equal(active, true);
+});
+
+test("desativação futura não conta como ativa (referência antes de deactivatedAt)", () => {
+    const active = isInterventionBaseDeactivationActive({
+        deactivatedAt: new Date("2026-07-25T12:00:00.000Z"),
+        reactivatedAt: null,
+        referenceAt: new Date("2026-07-23T11:51:00.000Z"),
+    });
+    assert.equal(active, false);
 });

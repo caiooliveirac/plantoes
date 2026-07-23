@@ -477,14 +477,23 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
         });
 
         if (activeDeactivation) {
-            // Auto-reactivate: doctor arrival implicitly reactivates the base
+            // Auto-reactivate: doctor arrival implicitly reactivates the base.
+            // Fecha TODAS as janelas de desativação já vigentes e ainda abertas (não só a
+            // mais recente): janelas sobrepostas antigas ficavam órfãs (reactivated_at NULL)
+            // e faziam a base parecer "desativada" para o remanejamento mesmo com is_active
+            // true e médico em plantão. Janelas futuras (deactivatedAt > referência) são
+            // preservadas.
             await tx.update(interventionBaseDeactivations)
                 .set({
                     reactivatedAt: input.startedAt,
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
                 })
-                .where(eq(interventionBaseDeactivations.id, activeDeactivation.id));
+                .where(and(
+                    eq(interventionBaseDeactivations.baseId, input.baseId),
+                    isNull(interventionBaseDeactivations.reactivatedAt),
+                    lte(interventionBaseDeactivations.deactivatedAt, activationReferenceAt),
+                ));
             autoReactivated = true;
         }
         const existingSameDoctor = await tx.query.interventionOccupancies.findFirst({

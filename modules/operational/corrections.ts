@@ -446,6 +446,47 @@ async function resolveTargetMetadata(tx: Executor, target: OperationalTransferTa
     } satisfies TargetMetadata;
 }
 
+// Resolve os metadados da ORIGEM de um remanejamento. Diferente do destino, a origem
+// NUNCA é bloqueada por posto/base inativo ou desativado: remanejar alguém para FORA de
+// um posto/base que caiu é justamente o que a chefia precisa fazer quando ele é
+// desativado. Só precisamos de código/rótulo para a nota e a comparação com o destino.
+// (Bug histórico: reaproveitar resolveTargetMetadata aqui travava a saída de uma base
+// com janela de desativação aberta — inclusive órfã — com a mensagem sem sentido "a
+// base X está desativada e não pode receber remanejamento", sendo X a origem.)
+async function resolveSourceTargetMetadata(tx: Executor, target: OperationalTransferTargetInput) {
+    if (target.domain === "regulation") {
+        const post = await tx.query.regulationPosts.findFirst({
+            where: eq(regulationPosts.id, target.targetId),
+        });
+
+        if (!post) {
+            throw new Error("Posto de origem nao encontrado para o remanejamento.");
+        }
+
+        return {
+            domain: "regulation",
+            targetId: post.id,
+            code: post.code,
+            label: post.label,
+        } satisfies TargetMetadata;
+    }
+
+    const base = await tx.query.interventionBases.findFirst({
+        where: eq(interventionBases.id, target.targetId),
+    });
+
+    if (!base) {
+        throw new Error("Base de origem nao encontrada para o remanejamento.");
+    }
+
+    return {
+        domain: "intervention",
+        targetId: base.id,
+        code: base.code,
+        label: base.label,
+    } satisfies TargetMetadata;
+}
+
 async function findOpenTargetOccupancies(tx: Executor, params: {
     target: OperationalTransferTargetInput;
     excludeOccupancyIds?: string[];
@@ -915,7 +956,7 @@ export async function transferOperationalOccupancy(
             throw new Error("So ocupacoes ativas podem ser remanejadas.");
         }
 
-        const sourceTarget = await resolveTargetMetadata(tx, {
+        const sourceTarget = await resolveSourceTargetMetadata(tx, {
             domain: source.domain,
             targetId: source.targetId,
         });

@@ -453,14 +453,23 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
         });
 
         if (activeDeactivation) {
-            // Auto-reactivate: doctor arrival implicitly reactivates the post
+            // Auto-reactivate: doctor arrival implicitly reactivates the post.
+            // Fecha TODAS as janelas de desativação já vigentes e ainda abertas (não só a
+            // mais recente): janelas sobrepostas antigas ficavam órfãs (reactivated_at NULL)
+            // e faziam o posto parecer "desativado" para o remanejamento mesmo com is_active
+            // true e médico em plantão. Janelas futuras (deactivatedAt > referência) são
+            // preservadas.
             await tx.update(regulationPostDeactivations)
                 .set({
                     reactivatedAt: input.startedAt,
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
                 })
-                .where(eq(regulationPostDeactivations.id, activeDeactivation.id));
+                .where(and(
+                    eq(regulationPostDeactivations.postId, input.postId),
+                    isNull(regulationPostDeactivations.reactivatedAt),
+                    lte(regulationPostDeactivations.deactivatedAt, activationReferenceAt),
+                ));
             autoReactivated = true;
         }
 
