@@ -10,6 +10,8 @@ import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendD
 interface Props {
     board: ChiefPayableBoardModel;
     canManageClosing?: boolean;
+    /** Encaminhamento da aba banco de horas: abre o modal deste médico no load. */
+    initialDoctorId?: string | null;
 }
 
 interface FlashRecord {
@@ -236,7 +238,7 @@ function dayKindClassName(operationalDate: string) {
     return "weekday";
 }
 
-export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props) {
+export function ChiefPaymentViewClient({ board, canManageClosing = true, initialDoctorId = null }: Props) {
     const router = useRouter();
     const [, startRefreshTransition] = useTransition();
     const requestRouterRefresh = useCallback(() => {
@@ -276,7 +278,15 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
     // Última NF/processo confirmados pelo servidor por médico — evita depender só do
     // router.refresh() (assíncrono) para o modal mostrar o valor recém-salvo ao reabrir.
     const [doctorMetaOverrides, setDoctorMetaOverrides] = useState<Record<string, { invoiceNumber: string | null; paymentProcessNumber: string | null }>>({});
-    const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
+    const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(initialDoctorId);
+    // Encaminhamento vindo do banco de horas: garante que o filtro não esconda o
+    // médico alvo quando o modal abre por deep-link (?doctor=...).
+    useEffect(() => {
+        if (initialDoctorId) {
+            setStatus("all");
+            setSelectedDoctorId(initialDoctorId);
+        }
+    }, [initialDoctorId]);
     // Espelha selectedDoctorId para leitura em callbacks assíncronos (ex.: resposta de
     // save chegando depois que o admin já trocou/fechou o modal do médico).
     const selectedDoctorIdRef = useRef<string | null>(null);
