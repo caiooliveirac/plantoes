@@ -61,6 +61,9 @@ function formatSignedMinutes(value: number) {
     return `${value > 0 ? "+" : ""}${formatMinutesForHumans(value)}`;
 }
 
+/** Gatilho do acerto de banco de horas: ±12h em minutos. */
+const BANK_HOURS_SETTLEMENT_MINUTES = 12 * 60;
+
 function shiftBalanceClass(value: number | null) {
     if (value === null || value === 0) {
         return "neutral";
@@ -133,16 +136,22 @@ function renderProofLead(shift: BankHoursHistoryShift) {
     return "A leitura principal aqui é que o registro permaneceu alinhado com a janela efetivamente contabilizada.";
 }
 
+interface SettlementMonthOption {
+    key: string;
+    label: string;
+}
+
 interface Props {
     history: BankHoursHistoryModel;
     canManageOverrides: boolean;
+    settlementMonths: SettlementMonthOption[];
 }
 
 function shiftKey(shift: BankHoursHistoryShift) {
     return `${shift.domain}:${shift.occupancyId}`;
 }
 
-export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
+export function BankHoursHistoryClient({ history, canManageOverrides, settlementMonths }: Props) {
     const router = useRouter();
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
@@ -152,6 +161,9 @@ export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
     const [overrideErrorsByShift, setOverrideErrorsByShift] = useState<Record<string, string>>({});
     const [savingShiftKey, setSavingShiftKey] = useState<string | null>(null);
     const [isSaving, startSavingTransition] = useTransition();
+    const [settlementMonth, setSettlementMonth] = useState(settlementMonths[0]?.key ?? "");
+    const [settlementBusy, setSettlementBusy] = useState(false);
+    const [settlementError, setSettlementError] = useState<string | null>(null);
 
     useEffect(() => {
         const nextMinutes: Record<string, string> = {};
@@ -228,6 +240,31 @@ export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
         }
 
         router.refresh();
+    }
+
+    async function submitBankHoursSettlement(doctorId: string, kind: "bonus" | "penalty") {
+        if (!settlementMonth) {
+            setSettlementError("Escolha o mês de fechamento onde o plantão será lançado.");
+            return;
+        }
+        setSettlementBusy(true);
+        setSettlementError(null);
+        try {
+            const response = await fetch("/api/admin/payment-closing/bank-hours-settlement", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ doctorId, monthKey: settlementMonth, kind }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                throw new Error(body?.error ?? "Não foi possível lançar o acerto do banco de horas.");
+            }
+            router.refresh();
+        } catch (error) {
+            setSettlementError(error instanceof Error ? error.message : "Falha ao lançar o acerto.");
+        } finally {
+            setSettlementBusy(false);
+        }
     }
 
     return (
@@ -438,6 +475,52 @@ export function BankHoursHistoryClient({ history, canManageOverrides }: Props) {
                                         Cada acerto move o saldo 12h em direção a zero e gera um plantão {""}
                                         <strong>verde</strong> (bônus) ou <strong>vermelho</strong> (punição) no fechamento daquele mês.
                                     </p>
+                                </section>
+                            ) : null}
+
+                            {canManageOverrides ? (
+                                <section className="hours-settlements hours-settlement-action">
+                                    <p className="reports-summary-label">Abater banco de horas (±12h)</p>
+                                    <p className="hours-settlement-hint">
+                                        Ao chegar a ±12h, lance o acerto: gera um plantão <strong>verde</strong> (bônus, remunera o crédito e abate 12h do saldo) ou <strong>vermelho</strong> (punição, desconta no pagamento e devolve 12h ao saldo). Fica registrado para sempre e justifica a mudança na composição acima. Repita a cada 12h enquanto o saldo passar de ±12h.
+                                    </p>
+
+                                    <label className="hours-settlement-month-field">
+                                        <span>Mês do fechamento (onde o plantão aparece)</span>
+                                        <select
+                                            value={settlementMonth}
+                                            onChange={(event) => setSettlementMonth(event.target.value)}
+                                            disabled={settlementBusy || settlementMonths.length === 0}
+                                        >
+                                            {settlementMonths.map((month) => (
+                                                <option key={month.key} value={month.key}>{month.label}</option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    {selectedDoctor.balanceMinutes >= BANK_HOURS_SETTLEMENT_MINUTES ? (
+                                        <button
+                                            type="button"
+                                            className="payment-button bank-bonus"
+                                            onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
+                                            disabled={settlementBusy}
+                                        >
+                                            {settlementBusy ? "Lançando..." : "Bonificar +1 plantão (verde) e abater 12h"}
+                                        </button>
+                                    ) : selectedDoctor.balanceMinutes <= -BANK_HOURS_SETTLEMENT_MINUTES ? (
+                                        <button
+                                            type="button"
+                                            className="payment-button bank-penalty"
+                                            onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
+                                            disabled={settlementBusy}
+                                        >
+                                            {settlementBusy ? "Lançando..." : "Debitar 1 plantão (vermelho) e devolver 12h"}
+                                        </button>
+                                    ) : (
+                                        <p className="hours-settlement-hint">Saldo dentro de ±12h — sem acerto disponível.</p>
+                                    )}
+
+                                    {settlementError ? <div className="hours-override-error">{settlementError}</div> : null}
                                 </section>
                             ) : null}
 

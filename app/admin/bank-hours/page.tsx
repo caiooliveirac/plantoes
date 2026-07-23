@@ -3,6 +3,7 @@ import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { BankHoursHistoryClient } from "@/app/admin/bank-hours/bank-hours-history-client";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { getBankHoursHistory } from "@/services/bank-hours-history.service";
+import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
 
 export const dynamic = "force-dynamic";
 
@@ -40,5 +41,14 @@ export default async function AdminBankHoursPage() {
     }
 
     const history = await getBankHoursHistory();
-    return <BankHoursHistoryClient history={history} canManageOverrides={Boolean(session?.user.roles.includes("admin"))} />;
+    // Meses de fechamento onde o acerto (plantão verde/vermelho) pode ser lançado:
+    // mês corrente + 2 anteriores, igual ao seletor do payment-closing.
+    const settlementMonths = resolveMonthlyReportRange(null).presetMonths;
+    return (
+        <BankHoursHistoryClient
+            history={history}
+            canManageOverrides={Boolean(session?.user.roles.includes("admin"))}
+            settlementMonths={settlementMonths}
+        />
+    );
 }
