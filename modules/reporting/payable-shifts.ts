@@ -246,6 +246,10 @@ export interface ChiefPayableDoctorRow {
     bankHoursMinutes?: number | null;
     /** Acerto de banco de horas lançado neste mês (bônus/punição), se houver. */
     bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
+    /** Plantões cumpridos em USA (intervenção/ambulância) no mês — só linhas com unidade positiva. */
+    usaShiftCount: number;
+    /** Plantões cumpridos em CRU (regulação/ramais) no mês — só linhas com unidade positiva. */
+    cruShiftCount: number;
     cells: ChiefPayableCell[];
 }
 
@@ -902,6 +906,10 @@ export function buildChiefPayableBoard(params: {
             .toFixed(2));
         const pendingCount = orderedShifts.filter((shift) => shift.paymentStatus === "needs_review").length;
         const paymentStatus = pendingCount > 0 ? "needs_review" : "ready_for_payment";
+        // USA = intervenção (bases/ambulância); CRU = regulação (ramais). Conta plantões
+        // efetivamente cumpridos (unidade > 0), ignorando punições de banco de horas.
+        const usaShiftCount = orderedShifts.filter((shift) => shift.domain === "intervention" && shift.paymentUnit > 0).length;
+        const cruShiftCount = orderedShifts.filter((shift) => shift.domain === "regulation" && shift.paymentUnit > 0).length;
 
         return {
             doctorId,
@@ -927,6 +935,8 @@ export function buildChiefPayableBoard(params: {
             contractBalanceBrl: params.doctorFinancials?.[doctorId]?.contractBalanceBrl ?? null,
             bankHoursMinutes: params.doctorFinancials?.[doctorId]?.bankHoursMinutes ?? null,
             bankHoursSettlement: params.doctorFinancials?.[doctorId]?.bankHoursSettlement ?? null,
+            usaShiftCount,
+            cruShiftCount,
             cells: days.map((day) => ({
                 day,
                 shifts: [...(dayMap.get(day) ?? [])].sort((left, right) => {

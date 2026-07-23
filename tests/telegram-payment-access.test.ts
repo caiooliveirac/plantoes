@@ -197,6 +197,8 @@ function makeRow(shifts: PayableShift[]): ChiefPayableDoctorRow {
         paymentStatus: "ready_for_payment", totalSD: 0, totalSN: 0, total: shifts.length,
         totalDue: 2489.74, paymentProfile: "generalist", pendingCount: 0, attestedAt: null,
         employmentType: "pj",
+        usaShiftCount: shifts.filter((shift) => shift.domain === "intervention" && shift.paymentUnit > 0).length,
+        cruShiftCount: shifts.filter((shift) => shift.domain === "regulation" && shift.paymentUnit > 0).length,
         cells: [{ day: "01", shifts }],
     };
 }
