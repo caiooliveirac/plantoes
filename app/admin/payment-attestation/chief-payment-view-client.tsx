@@ -2291,9 +2291,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                             {selectedDoctor.bankHoursSettlement.operationalDate ? ` (dia ${selectedDoctor.bankHoursSettlement.operationalDate.slice(8, 10)})` : ""}.{" "}
                                             <a href="/admin/bank-hours" target="_blank" rel="noopener">ver no banco de horas</a>
                                         </small>
-                                    ) : (selectedDoctor.bankHoursMinutes ?? 0) >= BANK_HOURS_THRESHOLD_MINUTES ? (
+                                    ) : null}
+                                    {(selectedDoctor.bankHoursMinutes ?? 0) >= BANK_HOURS_THRESHOLD_MINUTES ? (
                                         <>
-                                            <small>+12h ou mais — bonifique com 1 plantão verde (dia útil) e debite 12h.</small>
+                                            <small>+12h ou mais — bonifique com 1 plantão verde (dia útil) e abata 12h do saldo.</small>
                                             {canManageClosing ? (
                                                 <button
                                                     type="button"
@@ -2301,13 +2302,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                                     onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
                                                     disabled={bankBusy}
                                                 >
-                                                    {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde)"}
+                                                    {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde) e abater 12h"}
                                                 </button>
                                             ) : null}
                                         </>
                                     ) : (selectedDoctor.bankHoursMinutes ?? 0) <= -BANK_HOURS_THRESHOLD_MINUTES ? (
                                         <>
-                                            <small>-12h ou menos — debite 1 plantão vermelho e zere 12h.</small>
+                                            <small>-12h ou menos — debite 1 plantão vermelho e devolva 12h ao saldo.</small>
                                             {canManageClosing ? (
                                                 <button
                                                     type="button"
@@ -2315,13 +2316,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true }: Props
                                                     onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
                                                     disabled={bankBusy}
                                                 >
-                                                    {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho)"}
+                                                    {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho) e devolver 12h"}
                                                 </button>
                                             ) : null}
                                         </>
-                                    ) : (
-                                        <small>Dentro de ±12h — sem acerto sugerido.</small>
-                                    )}
+                                    ) : !selectedDoctor.bankHoursSettlement ? (
+                                        <small>Dentro de ±12h — sem acerto disponível.</small>
+                                    ) : null}
                                     {bankError ? <p className="chief-payable-extra-feedback danger">{bankError}</p> : null}
                                 </article>
                             </div>
