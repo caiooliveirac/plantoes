@@ -11,6 +11,7 @@ const INTERVENTION_PRESENTATION_ORDER = [
     "CZ50",
     "BR60",
     "CC70",
+    "GOA",
 ] as const;
 
 const interventionOrderIndex = new Map<string, number>(

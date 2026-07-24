@@ -5850,7 +5850,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "",
             "▸ Bases de intervenção:",
             "  SM01 · CB02 · PR03 · PM04 · BR05 · CN10",
-            "  PP20 · IT30 · PM40 · CZ50 · BR60 · CC70",
+            "  PP20 · IT30 · PM40 · CZ50 · BR60 · CC70 · GOA",
             "",
             "▸ Ramais de regulação:",
             "  1321–1329 · 1361–1368 · 1476",
