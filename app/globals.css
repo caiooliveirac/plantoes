@@ -716,6 +716,30 @@ body > * { position: relative; z-index: 1; }
     white-space: nowrap;
 }
 
+/* Posto vago com esperado da escala: "Aguardando NOME COMPLETO". Não é
+   titularidade — itálico, menor e mais apagado que o nome do ocupante — mas
+   tem de ser lido por inteiro, então quebra linha em vez de cortar. */
+.ops-doctor-line.primary .ops-awaiting-name {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    font-family: var(--font-sans), "Segoe UI", sans-serif;
+    font-size: 0.72rem;
+    font-weight: 400;
+    font-style: italic;
+    line-height: 1.2;
+    letter-spacing: 0;
+    color: rgba(151, 168, 194, 0.92);
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.ops-doctor-line.primary .ops-awaiting-name em {
+    font-style: italic;
+    font-weight: 500;
+    color: #cfdcef;
+}
+
 .ops-name-tag-row {
     display: inline-flex;
     align-items: center;
@@ -1125,6 +1149,10 @@ button.ops-doctor-line.shadow.clickable:hover {
     .ops-grid-cell.column-code .ops-code-stack strong,
     .ops-doctor-line.primary strong {
         font-size: 0.7rem;
+    }
+
+    .ops-doctor-line.primary .ops-awaiting-name {
+        font-size: 0.64rem;
     }
 }
 
@@ -6472,11 +6500,15 @@ button.chief-payable-tag:focus-visible {
 }
 
 /* "Aguardando fulano…" — previsão da escala externa, discreta por desenho:
-   não compete com o nome do ocupante nem com os alertas âmbar. */
+   não compete com o nome do ocupante nem com os alertas âmbar. O nome vai
+   INTEIRO, então tem de quebrar linha em vez de estourar a coluna. */
 .ops-doctor-note.expected-arrival {
     color: rgba(151, 168, 194, 0.92);
     font-style: italic;
     font-weight: 300;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 .ops-expected-toggle-row {
