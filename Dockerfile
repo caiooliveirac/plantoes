@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.7
 
-FROM --platform=$BUILDPLATFORM node:20-bookworm-slim AS deps
+FROM --platform=$BUILDPLATFORM node:26-bookworm-slim AS deps
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM --platform=$BUILDPLATFORM node:20-bookworm-slim AS build
+FROM --platform=$BUILDPLATFORM node:26-bookworm-slim AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
@@ -19,14 +19,14 @@ RUN mkdir -p public
 # Sem --platform aqui (propositalmente): este é o único estágio cujo
 # node_modules vai para a imagem final (runtime, $TARGETPLATFORM=arm64). Rodar
 # em $BUILDPLATFORM instalaria binários nativos da arquitetura errada.
-FROM node:20-bookworm-slim AS prod-deps
+FROM node:26-bookworm-slim AS prod-deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Sem --omit=dev: o worker de lembretes roda via 'npm run telegram:worker' →
 # tsx, que é devDependency. Precisa estar presente em produção.
 RUN npm ci
 
-FROM --platform=$TARGETPLATFORM node:20-bookworm-slim AS runtime
+FROM --platform=$TARGETPLATFORM node:26-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
