@@ -566,8 +566,11 @@ function seededShuffle<T>(items: T[], seedText: string): T[] {
     return result;
 }
 
+/** Nome INTEIRO de quem a escala espera: a chefia precisa saber exatamente
+    quem está vindo, então aqui não se abrevia (o `nomeCurto` só entra se a
+    escala não mandou o nome completo). Quem renderiza cuida de quebrar linha. */
 function expectedAwaitingLabel(doctors: ExpectedDoctor[]) {
-    return doctors.slice(0, 2).map((doctor) => doctor.nomeCurto || doctor.nome).join(" · ");
+    return doctors.slice(0, 2).map((doctor) => doctor.nome || doctor.nomeCurto).join(" · ");
 }
 
 function canEditActiveCard(card: BoardCard) {
@@ -1541,8 +1544,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         return expectedByCardKey.get(`${card.domain}-${cardCode(card)}`) ?? null;
     }
 
-    // Nome principal do card: posto VAGO com esperado vira "Aguardando Fulano"
-    // — mesmo elemento, mesma fonte do nome de sempre.
+    // Nome principal do card: posto VAGO com esperado vira "Aguardando Fulano".
     function primaryDoctorLabel(card: BoardCard) {
         if (card.status === "waiting") {
             const expected = expectedDoctorsFor(card);
@@ -1551,6 +1553,22 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             }
         }
         return displayDoctorName(card);
+    }
+
+    /** O nome do esperado não é titularidade: sai em itálico menor, e por ser
+        nome INTEIRO precisa quebrar linha em vez de ser cortado com reticências
+        (o `<strong>` do ocupante é nowrap+ellipsis). */
+    function renderPrimaryDoctorLabel(card: BoardCard) {
+        const label = primaryDoctorLabel(card);
+        const expected = card.status === "waiting" ? expectedDoctorsFor(card) : null;
+        if (expected && expected.length > 0) {
+            return (
+                <span className="ops-awaiting-name" title={label}>
+                    Aguardando <em>{expectedAwaitingLabel(expected)}</em>
+                </span>
+            );
+        }
+        return <strong title={label}>{label}</strong>;
     }
 
     // Sub-linha discreta sob o ocupante ATIVO: só na janela pré-turno ou
@@ -2783,7 +2801,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <div role="cell" className="ops-grid-cell column-name">
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
-                            <strong title={primaryDoctorLabel(card)}>{primaryDoctorLabel(card)}</strong>
+                            {renderPrimaryDoctorLabel(card)}
                             {renderCardIdentityTags(card)}
                             {isDisabledRegulation && <span className="ops-inline-flag disabled">Desativado</span>}
                         </div>
@@ -2955,7 +2973,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <div role="cell" className="ops-grid-cell column-name">
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
-                            <strong title={primaryDoctorLabel(card)}>{primaryDoctorLabel(card)}</strong>
+                            {renderPrimaryDoctorLabel(card)}
                             {renderCardIdentityTags(card)}
                             {isDisabledIntervention && <span className="ops-inline-flag disabled">Desativada</span>}
                         </div>
