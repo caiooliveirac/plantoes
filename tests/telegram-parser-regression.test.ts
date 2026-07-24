@@ -1075,3 +1075,41 @@ test("'/recip' written as short code also maps to RECIP", () => {
     assert.equal(parsed.roleFunction, "RECIP");
 });
 
+
+// ── Base nomeada GOA (código sem dígitos, migration 0035) ─────────────────────────
+// Incidente 2026-07: toda chegada na GOA caía como "ignored" porque o parser só
+// enxergava bases no shape XX99 (Victor Botelho, Felipe Carneiro, Willy Rivera…).
+
+test("parses 'Victor Botelho no GOA SD' as intervention arrival on GOA", () => {
+    const parsed = parseMessage("Victor Botelho no GOA SD");
+    assert.equal(parsed.sector, "INTERVENTION");
+    assert.equal(parsed.baseCode, "GOA");
+    assert.equal(parsed.shiftType, "SD");
+    assert.deepEqual(parsed.extractedNames, ["Victor Botelho"]);
+    assert.equal(parsed.unknownTargetToken ?? null, null);
+});
+
+test("GOA is detected regardless of position and casing, and never leaks into the name", () => {
+    const before = parseMessage("Felipe Carneiro SD GOA");
+    assert.equal(before.baseCode, "GOA");
+    assert.deepEqual(before.extractedNames, ["Felipe Carneiro"]);
+
+    const lower = parseMessage("Willy Rivera goa turno SD");
+    assert.equal(lower.baseCode, "GOA");
+    assert.equal(lower.sector, "INTERVENTION");
+    assert.ok(!lower.extractedNames[0]?.toUpperCase().includes("GOA"));
+});
+
+test("GOA works on departure, continuation and reassignment messages", () => {
+    const departure = parseMessage("Victor Botelho saindo GOA 19:00");
+    assert.equal(departure.baseCode, "GOA");
+    assert.equal(departure.isDeparture, true);
+
+    const continuation = parseMessage("Victor Botelho no GOA SD continuando");
+    assert.equal(continuation.baseCode, "GOA");
+    assert.equal(continuation.isContinuation, true);
+
+    const reassignment = parseMessage("João da SM01 trocando para GOA SD");
+    assert.equal(reassignment.baseCode, "GOA");
+    assert.equal(reassignment.isReassignment, true);
+});

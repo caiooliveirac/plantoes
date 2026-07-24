@@ -16,6 +16,12 @@ const BASES_INTERVENCAO = new Set([
     "PP20", "IT30", "PM40", "CZ50", "BR60", "CC70",
 ]);
 
+// Bases de intervenção cujo código NÃO segue o shape XX99 (só letras). Precisam
+// de uma passada própria no parser — o loop de XX99 nunca as enxerga. Ver GOA
+// (base diurna, migration 0035): o mesmo papel que NUCLEO/PIAM têm na regulação.
+const BASES_INTERVENCAO_NOMEADAS = ["GOA"] as const;
+const NAMED_BASE_PATTERN = new RegExp(`\\b(${BASES_INTERVENCAO_NOMEADAS.join("|")})\\b`);
+
 const ABBREVIATION_MAP: Record<string, string> = {
     "01": "SM01", "1": "SM01",
     "02": "CB02", "2": "CB02",
@@ -357,6 +363,15 @@ export function parseMessage(text: string): ParsedMessage {
         }
     }
 
+    // Bases nomeadas (GOA): código sem dígitos, invisível ao loop XX99 acima.
+    if (!baseCode) {
+        const namedBaseMatch = baseExtractionSource.match(NAMED_BASE_PATTERN);
+        if (namedBaseMatch) {
+            sector = "INTERVENTION";
+            baseCode = namedBaseMatch[1];
+        }
+    }
+
     if (!baseCode) {
         const ramalMatch = baseExtractionSource.match(/(?:RAMAL|PA|POSICAO|REG)?\s*[:\-]?\s*(\d{4})\b/);
         if (ramalMatch && RAMAIS_REGULACAO.has(ramalMatch[1])) {
@@ -593,6 +608,7 @@ function extractNames(text: string, options?: { departureSplit?: boolean; reassi
         .replace(/\b\d+H?\b/gi, " ")
         .replace(/\bP\/\b/gi, " ")
         .replace(/\b(?:NUCLEO|PIAM)\b/gi, " ")  // Named regulation positions
+        .replace(new RegExp(`\\b(?:${BASES_INTERVENCAO_NOMEADAS.join("|")})\\b`, "gi"), " ")  // Named intervention bases (GOA)
         .replace(/[+\-:;!?.,()\[\]{}]/g, " ")
         .replace(/\bDr[a]?\.?\b/gi, " ")
         .trim();
