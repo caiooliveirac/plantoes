@@ -308,6 +308,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     }, [navMenuOpen]);
     // Alvo do botão "sem médico" da faixa: rola até a linha correspondente da tabela.
     const uncoveredRowRef = useRef<HTMLTableRowElement | null>(null);
+    // Painel por dia das linhas Desativadas / Sem médico: os chips individuais
+    // saíram das células (alargavam todas as colunas) e viraram esta lista.
+    const [dayTargetsPanel, setDayTargetsPanel] = useState<{ day: string; kind: "disabled" | "uncovered" } | null>(null);
     const [manualDraft, setManualDraft] = useState<{
         domain: "regulation" | "intervention";
         targetCode: string;
@@ -831,11 +834,16 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setTargetFilter("all");
         setSearch("");
         setTargetSearch("");
+        // Chips de desativação agora vivem no painel do dia — abre ele para o
+        // flash ter onde pousar (o chip com data-flash-key renderiza lá dentro).
+        if (flash.kind === "disable") {
+            setDayTargetsPanel({ day: flash.day, kind: "disabled" });
+        }
 
         const selector = `[data-flash-key="${flash.kind}|${flash.domain}|${flash.targetCode}|${flash.day}|${flash.shiftLabel}"]`;
         let attempts = 0;
         const tryLocate = () => {
-            const root = tableShellRef.current ?? document;
+            const root = flash.kind === "disable" ? document : (tableShellRef.current ?? document);
             const el = root.querySelector<HTMLElement>(selector);
             if (el) {
                 el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
@@ -1919,41 +1927,25 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                         <span>Fontes sem médico por desativação do turno</span>
                                     </td>
 
-                                    {board.days.map((day) => (
-                                        <td key={`disabled-${day}`}>
-                                            <div className="chief-payable-cell-tags">
-                                                {(disabledByDay.get(day) ?? []).map((item) => (
+                                    {board.days.map((day) => {
+                                        // Contador compacto no lugar dos chips: não alarga a coluna;
+                                        // o detalhe (e a correção manual) vive no painel do dia.
+                                        const dayItems = disabledByDay.get(day) ?? [];
+                                        return (
+                                            <td key={`disabled-${day}`}>
+                                                {dayItems.length > 0 ? (
                                                     <button
                                                         type="button"
-                                                        key={item.snapshotId}
-                                                        data-flash-key={`disable|${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}`}
-                                                        className={`chief-payable-tag disabled ${item.shiftLabel === "SD" ? "sd" : "sn"} ${highlightKey === `${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}|disable` ? "flash" : ""}`.trim()}
-                                                        title={`${item.targetCode} ${item.shiftLabel}${item.disabledReason ? ` · ${item.disabledReason}` : ""}`}
-                                                        onClick={() => {
-                                                            if (!canManageClosing) {
-                                                                return;
-                                                            }
-                                                            setManualDraft({
-                                                                domain: item.domain,
-                                                                targetCode: item.targetCode,
-                                                                targetLabel: item.targetLabel,
-                                                                day: item.day,
-                                                                shiftLabel: item.shiftLabel,
-                                                                sourceType: "disabled",
-                                                                reason: item.disabledReason ?? null,
-                                                            });
-                                                            setManualDoctorName("");
-                                                            setManualDisableReason("");
-                                                            setManualMode("assign");
-                                                            setManualError(null);
-                                                        }}
+                                                        className="chief-payable-day-count disabled"
+                                                        onClick={() => setDayTargetsPanel({ day, kind: "disabled" })}
+                                                        title={`${dayItems.length} desativação(ões) no dia ${day} — clique para listar`}
                                                     >
-                                                        {item.targetCode}{item.shiftLabel}
+                                                        {dayItems.length}
                                                     </button>
-                                                ))}
-                                            </div>
-                                        </td>
-                                    ))}
+                                                ) : null}
+                                            </td>
+                                        );
+                                    })}
 
                                     <td>-</td>
                                     <td>-</td>
@@ -1979,40 +1971,23 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                         <span>Sem cobertura e sem desativação no turno</span>
                                     </td>
 
-                                    {board.days.map((day) => (
-                                        <td key={`uncovered-${day}`}>
-                                            <div className="chief-payable-cell-tags">
-                                                {(uncoveredByDay.get(day) ?? []).map((item) => (
+                                    {board.days.map((day) => {
+                                        const dayItems = uncoveredByDay.get(day) ?? [];
+                                        return (
+                                            <td key={`uncovered-${day}`}>
+                                                {dayItems.length > 0 ? (
                                                     <button
                                                         type="button"
-                                                        key={item.snapshotId}
-                                                        className={`chief-payable-tag uncovered ${item.shiftLabel === "SD" ? "sd" : "sn"}`.trim()}
-                                                        title={`${item.targetCode} ${item.shiftLabel}${item.reason ? ` · ${item.reason}` : ""}`}
-                                                        onClick={() => {
-                                                            if (!canManageClosing) {
-                                                                return;
-                                                            }
-                                                            setManualDraft({
-                                                                domain: item.domain,
-                                                                targetCode: item.targetCode,
-                                                                targetLabel: item.targetLabel,
-                                                                day: item.day,
-                                                                shiftLabel: item.shiftLabel,
-                                                                sourceType: "uncovered",
-                                                                reason: item.reason ?? null,
-                                                            });
-                                                            setManualDoctorName("");
-                                                            setManualDisableReason("");
-                                                            setManualMode("assign");
-                                                            setManualError(null);
-                                                        }}
+                                                        className="chief-payable-day-count uncovered"
+                                                        onClick={() => setDayTargetsPanel({ day, kind: "uncovered" })}
+                                                        title={`${dayItems.length} turno(s) sem médico no dia ${day} — clique para listar`}
                                                     >
-                                                        {item.targetCode}{item.shiftLabel}
+                                                        {dayItems.length}
                                                     </button>
-                                                ))}
-                                            </div>
-                                        </td>
-                                    ))}
+                                                ) : null}
+                                            </td>
+                                        );
+                                    })}
 
                                     <td>-</td>
                                     <td>-</td>
@@ -2207,6 +2182,84 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                 </div>
             </section>
             </section>
+
+            {dayTargetsPanel ? (
+                <div className="chief-payable-modal-backdrop" role="presentation" onClick={() => setDayTargetsPanel(null)}>
+                    <section className="chief-payable-action-popover chief-payable-day-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+                        <header className="chief-payable-action-header">
+                            <span className="payment-eyebrow">{dayTargetsPanel.kind === "disabled" ? "Desativadas" : "Sem médico"}</span>
+                            <strong>
+                                Dia {dayTargetsPanel.day}/{board.monthKey.slice(5, 7)}/{board.monthKey.slice(0, 4)}
+                            </strong>
+                            <small>
+                                {dayTargetsPanel.kind === "disabled"
+                                    ? "Turnos sem médico por desativação. Clique numa unidade para atribuir médico."
+                                    : "Turnos sem cobertura e sem desativação. Clique numa unidade para atribuir médico ou desativar."}
+                            </small>
+                        </header>
+
+                        {(["SD", "SN"] as const).map((shiftLabel) => {
+                            const items = (dayTargetsPanel.kind === "disabled"
+                                ? (disabledByDay.get(dayTargetsPanel.day) ?? [])
+                                : (uncoveredByDay.get(dayTargetsPanel.day) ?? [])
+                            ).filter((item) => item.shiftLabel === shiftLabel);
+                            if (items.length === 0) {
+                                return null;
+                            }
+                            return (
+                                <div key={shiftLabel} className="chief-payable-day-panel-group">
+                                    <span>{shiftLabel === "SD" ? "Diurno (SD)" : "Noturno (SN)"} · {items.length}</span>
+                                    <div className="chief-payable-cell-tags">
+                                        {items.map((item) => {
+                                            const reason = "disabledReason" in item ? item.disabledReason : item.reason;
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={item.snapshotId}
+                                                    data-flash-key={dayTargetsPanel.kind === "disabled"
+                                                        ? `disable|${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}`
+                                                        : undefined}
+                                                    className={`chief-payable-tag ${dayTargetsPanel.kind} ${item.shiftLabel === "SD" ? "sd" : "sn"} ${highlightKey === `${item.domain}|${item.targetCode}|${item.day}|${item.shiftLabel}|disable` ? "flash" : ""}`.trim()}
+                                                    title={`${item.targetCode} ${item.shiftLabel}${reason ? ` · ${reason}` : ""}`}
+                                                    onClick={() => {
+                                                        if (!canManageClosing) {
+                                                            return;
+                                                        }
+                                                        setManualDraft({
+                                                            domain: item.domain,
+                                                            targetCode: item.targetCode,
+                                                            targetLabel: item.targetLabel,
+                                                            day: item.day,
+                                                            shiftLabel: item.shiftLabel,
+                                                            sourceType: dayTargetsPanel.kind,
+                                                            reason: reason ?? null,
+                                                        });
+                                                        setManualDoctorName("");
+                                                        setManualDisableReason("");
+                                                        setManualMode("assign");
+                                                        setManualError(null);
+                                                        setDayTargetsPanel(null);
+                                                        // O card de correção manual renderiza no topo do frame.
+                                                        window.scrollTo({ top: 0, behavior: "smooth" });
+                                                    }}
+                                                >
+                                                    {item.targetCode}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })}
+
+                        <div className="chief-payable-action-buttons">
+                            <button type="button" className="payment-button" onClick={() => setDayTargetsPanel(null)}>
+                                Fechar
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            ) : null}
 
             {shiftActionDraft ? (
                 <div className="chief-payable-modal-backdrop" role="presentation" onClick={() => !shiftActionBusy && setShiftActionDraft(null)}>

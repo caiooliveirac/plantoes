@@ -5105,6 +5105,70 @@ button.chief-payable-tag:focus-visible {
     gap: 14px;
 }
 
+/* Contador compacto por dia nas linhas Desativadas / Sem médico — os chips
+   individuais migraram para o painel do dia (não alargam mais as colunas). */
+.chief-payable-day-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    min-height: 26px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 800;
+    cursor: pointer;
+    transition: border-color 0.16s ease, transform 0.16s ease;
+}
+
+.chief-payable-day-count:hover,
+.chief-payable-day-count:focus-visible {
+    transform: translateY(-1px);
+}
+
+.chief-payable-day-count.disabled {
+    border: 1px solid rgba(216, 225, 236, 0.18);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--muted-strong);
+}
+
+.chief-payable-day-count.disabled:hover,
+.chief-payable-day-count.disabled:focus-visible {
+    border-color: rgba(216, 225, 236, 0.4);
+}
+
+.chief-payable-day-count.uncovered {
+    border: 1px solid rgba(255, 96, 96, 0.45);
+    background: rgba(58, 12, 12, 0.72);
+    color: #ffe9e9;
+}
+
+.chief-payable-day-count.uncovered:hover,
+.chief-payable-day-count.uncovered:focus-visible {
+    border-color: rgba(255, 96, 96, 0.8);
+}
+
+/* Painel do dia: lista de unidades desativadas / sem médico com SD/SN agrupados. */
+.chief-payable-day-panel {
+    max-width: 680px;
+    max-height: min(78vh, 720px);
+    overflow-y: auto;
+}
+
+.chief-payable-day-panel-group {
+    display: grid;
+    gap: 6px;
+}
+
+.chief-payable-day-panel-group > span {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
 .chief-payable-action-header {
     display: grid;
     gap: 4px;
