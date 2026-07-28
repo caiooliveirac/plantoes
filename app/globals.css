@@ -4083,207 +4083,351 @@ button.ops-doctor-line.shadow.clickable:hover {
     padding: 34px 28px 44px;
 }
 
-.chief-payable-hero,
-.chief-payable-summary-card,
-.chief-payable-filter-bar,
-.chief-payable-table-shell {
+.chief-payable-filter-bar {
     backdrop-filter: blur(18px);
     background: rgba(8, 14, 22, 0.92);
     border: 1px solid rgba(216, 225, 236, 0.12);
     box-shadow: 0 28px 72px -44px rgba(0, 0, 0, 0.82);
 }
 
-.chief-payable-hero {
+/* ---- Faixa de comando do fechamento mensal (design 2A) ---- */
+/* Um único container: faixa + gaveta de filtros + tabela. Sem overflow:hidden
+   para a faixa poder grudar no topo durante o scroll (position: sticky). */
+.chief-payable-bar-frame {
+    backdrop-filter: blur(18px);
+    background: rgba(8, 14, 22, 0.92);
+    border: 1px solid rgba(216, 225, 236, 0.12);
+    border-radius: 26px;
+    box-shadow: 0 28px 72px -44px rgba(0, 0, 0, 0.82);
+}
+
+.chief-payable-bar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
     display: flex;
-    justify-content: space-between;
-    gap: 22px;
-    padding: 28px;
-    border-radius: 30px;
-    background:
-        radial-gradient(circle at top left, rgba(255, 162, 79, 0.16), transparent 30%),
-        radial-gradient(circle at bottom right, rgba(84, 108, 255, 0.14), transparent 26%),
-        linear-gradient(180deg, rgba(11, 18, 28, 0.98), rgba(7, 12, 20, 0.98));
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    padding: 11px 16px;
+    border-radius: 26px 26px 0 0;
+    background: linear-gradient(180deg, rgba(11, 18, 28, 0.98), rgba(7, 12, 20, 0.98));
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 }
 
-.chief-payable-hero h1 {
-    margin: 0;
-    max-width: 16ch;
-    font-size: clamp(2rem, 3vw, 3.15rem);
-    line-height: 0.98;
-    letter-spacing: -0.05em;
+.chief-payable-bar-month {
+    min-height: 40px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(197, 161, 106, 0.42);
+    background: rgba(197, 161, 106, 0.14);
+    color: #f4dfb4;
+    font: inherit;
+    font-weight: 800;
+    font-size: 0.92rem;
+    cursor: pointer;
 }
 
-.chief-payable-subtitle {
-    margin: 14px 0 0;
-    max-width: 860px;
+.chief-payable-bar-month option {
+    background: #0b121c;
+    color: var(--text);
+}
+
+.chief-payable-bar-search {
+    min-height: 40px;
+    width: min(300px, 100%);
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid rgba(145, 170, 205, 0.34);
+    background: rgba(4, 10, 18, 0.94);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.9rem;
+}
+
+.chief-payable-bar-divider {
+    flex: none;
+    width: 1px;
+    height: 28px;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.chief-payable-bar-kpis {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    flex: 1;
+    min-width: 0;
+}
+
+.chief-payable-bar-kpi {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    white-space: nowrap;
+}
+
+.chief-payable-bar-kpi strong {
+    font-size: 1.02rem;
+    letter-spacing: -0.03em;
+}
+
+.chief-payable-bar-kpi span,
+.chief-payable-bar-kpi-button span {
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.chief-payable-bar-kpi-button {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 10px;
+    font: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.16s ease, transform 0.16s ease;
+}
+
+.chief-payable-bar-kpi-button strong {
+    font-size: 1.02rem;
+    letter-spacing: -0.03em;
+}
+
+.chief-payable-bar-kpi-button:hover,
+.chief-payable-bar-kpi-button:focus-visible {
+    transform: translateY(-1px);
+}
+
+.chief-payable-bar-kpi-button.pending {
+    border: 1px solid rgba(255, 184, 77, 0.42);
+    background: rgba(99, 63, 16, 0.42);
+    color: #ffedcf;
+}
+
+.chief-payable-bar-kpi-button.pending span {
+    color: inherit;
+}
+
+.chief-payable-bar-kpi-button.pending.active,
+.chief-payable-bar-kpi-button.pending:hover {
+    border-color: rgba(255, 198, 122, 0.7);
+}
+
+.chief-payable-bar-kpi-button.pending i {
+    font-style: normal;
+    font-weight: 800;
+}
+
+.chief-payable-bar-kpi-button.uncovered {
+    border: 1px solid rgba(255, 96, 96, 0.42);
+    background: rgba(58, 12, 12, 0.72);
+    color: #ffe9e9;
+}
+
+.chief-payable-bar-kpi-button.uncovered span {
+    color: inherit;
+}
+
+.chief-payable-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.chief-payable-bar-restricted {
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 184, 92, 0.55);
+    color: #ffe2b8;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.chief-payable-bar-filters-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(116, 165, 235, 0.4);
+    background: rgba(43, 78, 134, 0.36);
+    color: #e5f0ff;
+    font: inherit;
+    font-weight: 800;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background 0.16s ease;
+}
+
+.chief-payable-bar-filters-toggle.open,
+.chief-payable-bar-filters-toggle:hover,
+.chief-payable-bar-filters-toggle:focus-visible {
+    border-color: rgba(84, 145, 255, 0.58);
+    background: rgba(43, 78, 134, 0.5);
+}
+
+.chief-payable-bar-filter-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: rgba(84, 145, 255, 0.5);
+    font-size: 0.66rem;
+    font-style: normal;
+}
+
+.chief-payable-bar .reports-primary-link {
+    min-height: 38px;
+    padding: 0 14px;
+    font-size: 0.76rem;
+    white-space: nowrap;
+}
+
+.chief-payable-bar-menu {
+    position: relative;
+}
+
+.chief-payable-bar-menu-toggle {
+    min-height: 38px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
     color: var(--muted-strong);
-    line-height: 1.58;
+    font: inherit;
+    font-weight: 800;
+    cursor: pointer;
 }
 
-.chief-payable-hero-actions {
+.chief-payable-bar-menu-toggle:hover,
+.chief-payable-bar-menu-toggle:focus-visible {
+    border-color: rgba(145, 170, 205, 0.36);
+    color: var(--text);
+}
+
+.chief-payable-bar-menu-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 40;
+    min-width: 250px;
+    padding: 8px;
+    border-radius: 16px;
+    border: 1px solid rgba(116, 165, 235, 0.26);
+    background: rgba(8, 14, 24, 0.98);
+    box-shadow: 0 28px 72px -30px rgba(0, 0, 0, 0.9);
+}
+
+.chief-payable-bar-menu-list {
     display: grid;
-    align-content: start;
+    gap: 2px;
+}
+
+.admin-nav-menu-link {
+    display: block;
+    padding: 8px 12px;
+    border-radius: 10px;
+    color: var(--muted-strong);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.admin-nav-menu-link:hover,
+.admin-nav-menu-link:focus-visible {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+}
+
+.admin-nav-menu-link.active {
+    color: #f4dfb4;
+    background: rgba(197, 161, 106, 0.12);
+}
+
+.chief-payable-bar-drawer {
+    overflow: hidden;
+    background: rgba(7, 12, 20, 0.92);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.chief-payable-bar-drawer-inner {
+    display: grid;
+    gap: 12px;
+    padding: 14px 16px;
+}
+
+.chief-payable-bar-drawer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 12px;
 }
 
-.chief-payable-peak-day {
-    min-width: min(260px, 100%);
-    display: grid;
-    align-content: start;
-    gap: 4px;
-    padding: 14px 16px;
-    border-radius: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background:
-        linear-gradient(180deg, rgba(11, 17, 27, 0.94), rgba(8, 12, 20, 0.94));
-}
-
-.chief-payable-peak-day span {
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 0.67rem;
-    font-weight: 700;
-}
-
-.chief-payable-peak-day strong {
-    font-size: 1.1rem;
-    letter-spacing: -0.02em;
-}
-
-.chief-payable-peak-day small {
-    color: var(--muted-strong);
-    line-height: 1.45;
-}
-
-.chief-payable-summary {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 16px;
-    margin-top: 20px;
-}
-
-.chief-payable-summary-card {
+.chief-payable-bar-drawer-group {
     display: grid;
     gap: 6px;
-    padding: 18px;
-    border-radius: 24px;
+    align-content: start;
 }
 
-.chief-payable-summary-card strong {
-    font-size: clamp(1.7rem, 2.5vw, 2.5rem);
-    letter-spacing: -0.06em;
-}
-
-.chief-payable-summary-card span {
-    color: var(--muted-strong);
-}
-
-.chief-payable-summary-card.ready {
-    border-color: rgba(35, 201, 134, 0.24);
-}
-
-.chief-payable-summary-card.review {
-    border-color: rgba(255, 184, 77, 0.24);
-}
-
-.chief-payable-summary-card.warning-strong {
-    border-color: rgba(255, 96, 96, 0.42);
-    background: rgba(58, 12, 12, 0.72);
-}
-
-.chief-payable-summary-card.actionable {
-    cursor: pointer;
-    transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
-}
-
-.chief-payable-summary-card.actionable:hover,
-.chief-payable-summary-card.actionable:focus-visible {
-    transform: translateY(-2px);
-    border-color: rgba(255, 198, 122, 0.45);
-    box-shadow: 0 16px 34px -24px rgba(255, 184, 77, 0.58);
-}
-
-.chief-payable-load-strip {
-    margin-top: 14px;
-    backdrop-filter: blur(14px);
-    background: rgba(7, 12, 20, 0.9);
-    border: 1px solid rgba(216, 225, 236, 0.11);
-    border-radius: 20px;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
-    gap: 8px;
-    padding: 10px;
-}
-
-.chief-payable-load-item {
-    display: grid;
-    justify-items: center;
-    align-content: end;
-    gap: 4px;
-    min-height: 72px;
-    padding: 4px 2px;
-    border-radius: 12px;
-    background: rgba(8, 14, 24, 0.78);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.chief-payable-load-item span {
-    color: var(--muted);
+.chief-payable-bar-drawer-group > span {
     font-size: 0.62rem;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
 }
 
-.chief-payable-load-item i {
-    width: 10px;
-    height: 34px;
+.chief-payable-bar-drawer-group input,
+.chief-payable-bar-drawer-group select {
+    min-height: 32px;
+    padding: 0 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(4, 10, 18, 0.92);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.78rem;
+}
+
+.chief-payable-bar-rhythm {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 40px;
+}
+
+.chief-payable-bar-rhythm i {
+    width: 8px;
+    height: 40px;
+    border-radius: 4px;
     transform-origin: bottom;
-    border-radius: 6px;
     background: linear-gradient(180deg, rgba(255, 164, 85, 0.95), rgba(84, 110, 255, 0.92));
 }
 
-.chief-payable-load-item strong {
-    font-size: 0.64rem;
-    color: var(--muted-strong);
-}
-
-.chief-payable-control-grid {
+.chief-payable-bar-inserts {
     display: grid;
-    grid-template-columns: 1fr;
     gap: 10px;
-    margin-top: 10px;
+    padding: 12px 16px;
 }
 
-.chief-payable-control-card {
-    backdrop-filter: blur(14px);
-    background: rgba(8, 13, 22, 0.9);
-    border: 1px solid rgba(216, 225, 236, 0.11);
-    border-radius: 18px;
-    padding: 10px;
-    display: grid;
-    gap: 8px;
-}
-
-.chief-payable-control-card h3 {
-    margin: 0;
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.13em;
-    color: var(--muted-strong);
-}
-
-.chief-payable-control-card-priority {
-    padding: 10px;
-    border-color: rgba(116, 165, 235, 0.26);
-    background:
-        radial-gradient(circle at top left, rgba(57, 109, 199, 0.18), transparent 42%),
-        linear-gradient(180deg, rgba(8, 14, 24, 0.95), rgba(7, 12, 20, 0.95));
-}
-
-.chief-payable-control-card-secondary {
-    border-color: rgba(216, 225, 236, 0.08);
-    background: rgba(7, 12, 20, 0.76);
+.chief-payable-bar-inserts:empty {
+    display: none;
 }
 
 .chief-payable-chip-row {
@@ -4393,13 +4537,6 @@ button.ops-doctor-line.shadow.clickable:hover {
     letter-spacing: 0.05em;
 }
 
-.chief-payable-chip-row-priority .chief-payable-chip {
-    min-height: 38px;
-    font-size: 0.76rem;
-    padding: 0 12px;
-    letter-spacing: 0.06em;
-}
-
 .chief-payable-chip:hover,
 .chief-payable-chip:focus-visible {
     transform: translateY(-1px);
@@ -4440,26 +4577,6 @@ button.ops-doctor-line.shadow.clickable:hover {
     border-radius: 16px;
 }
 
-.chief-payable-inline-status {
-    grid-column: 1 / -1;
-    display: grid;
-    gap: 5px;
-}
-
-.chief-payable-inline-status > span {
-    color: var(--muted);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    font-size: 0.62rem;
-    font-weight: 700;
-}
-
-.chief-payable-chip-row-inline .chief-payable-chip {
-    min-height: 30px;
-    font-size: 0.64rem;
-    padding: 0 9px;
-}
-
 .chief-payable-filter-field {
     display: grid;
     gap: 5px;
@@ -4477,14 +4594,6 @@ button.ops-doctor-line.shadow.clickable:hover {
     min-width: 0;
 }
 
-.chief-payable-target-search {
-    min-width: 0;
-}
-
-.chief-payable-filter-field.compact {
-    min-width: 0;
-}
-
 .chief-payable-filter-field input,
 .chief-payable-filter-field select {
     min-height: 36px;
@@ -4495,9 +4604,9 @@ button.ops-doctor-line.shadow.clickable:hover {
     color: var(--text);
 }
 
+/* Dentro do frame da faixa de comando: só arredonda a base do container. */
 .chief-payable-table-shell {
-    margin-top: 10px;
-    border-radius: 26px;
+    border-radius: 0 0 26px 26px;
     overflow: hidden;
 }
 
@@ -4699,6 +4808,76 @@ button.ops-doctor-line.shadow.clickable:hover {
     background: rgba(217, 119, 6, 0.22);
     border: 1px solid rgba(251, 191, 36, 0.5);
     white-space: nowrap;
+}
+
+/* Saldo do banco de horas na linha do médico: discreto fora do gatilho, em
+   destaque colorido ao formar ±12h — hora de compensar com ±1 plantão. */
+.chief-payable-bank-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    width: fit-content;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.66rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.16s ease, color 0.16s ease;
+}
+
+.chief-payable-bank-chip:hover,
+.chief-payable-bank-chip:focus-visible {
+    border-color: rgba(145, 170, 205, 0.36);
+    color: var(--muted-strong);
+}
+
+.chief-payable-bank-chip span {
+    font-size: 0.56rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.chief-payable-bank-chip em {
+    font-style: normal;
+    font-size: 0.56rem;
+    letter-spacing: 0.04em;
+    color: rgba(52, 211, 153, 0.85);
+}
+
+.chief-payable-bank-chip.threshold-positive,
+.chief-payable-bank-chip.threshold-negative {
+    font-size: 0.92rem;
+    font-weight: 800;
+    padding: 3px 10px;
+}
+
+.chief-payable-bank-chip.threshold-positive {
+    color: #a8f7d2;
+    border-color: rgba(35, 201, 134, 0.5);
+    background: rgba(13, 48, 34, 0.55);
+}
+
+.chief-payable-bank-chip.threshold-positive:hover,
+.chief-payable-bank-chip.threshold-positive:focus-visible {
+    border-color: rgba(35, 201, 134, 0.8);
+    color: #c7ffe6;
+}
+
+.chief-payable-bank-chip.threshold-negative {
+    color: #ffd2d2;
+    border-color: rgba(255, 96, 96, 0.5);
+    background: rgba(58, 12, 12, 0.6);
+}
+
+.chief-payable-bank-chip.threshold-negative:hover,
+.chief-payable-bank-chip.threshold-negative:focus-visible {
+    border-color: rgba(255, 96, 96, 0.8);
+    color: #ffe6e6;
 }
 
 /* Card de atestação dentro do modal do médico. */
@@ -5638,14 +5817,6 @@ button.chief-payable-tag:focus-visible {
         grid-template-columns: 1fr;
     }
 
-    .chief-payable-summary {
-        grid-template-columns: 1fr 1fr;
-    }
-
-    .chief-payable-control-grid {
-        grid-template-columns: 1fr;
-    }
-
     .chief-payable-target-sectors {
         grid-template-columns: 1fr;
     }
@@ -5680,24 +5851,36 @@ button.chief-payable-tag:focus-visible {
         padding: 16px 12px 28px;
     }
 
-    .chief-payable-hero,
-    .chief-payable-filter-bar,
-    .chief-payable-summary-card,
-    .chief-payable-table-shell {
+    .chief-payable-filter-bar {
         padding: 16px;
+        border-radius: 24px;
+        grid-template-columns: 1fr;
+    }
+
+    .chief-payable-bar {
+        padding: 10px 12px;
+        border-radius: 24px 24px 0 0;
+    }
+
+    .chief-payable-bar-frame {
         border-radius: 24px;
     }
 
-    .chief-payable-hero {
-        display: grid;
+    .chief-payable-table-shell {
+        border-radius: 0 0 24px 24px;
     }
 
-    .chief-payable-summary {
-        grid-template-columns: 1fr;
+    .chief-payable-bar-search {
+        width: 100%;
     }
 
-    .chief-payable-filter-bar {
-        grid-template-columns: 1fr;
+    .chief-payable-bar-divider {
+        display: none;
+    }
+
+    .chief-payable-bar-actions {
+        margin-left: 0;
+        flex-wrap: wrap;
     }
 
     .chief-payable-table td.doctor,

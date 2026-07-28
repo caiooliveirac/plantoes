@@ -27,22 +27,29 @@ interface AdminGlobalNavigationLinksProps {
     current?: AdminNavKey;
     containerClassName?: string;
     children?: ReactNode;
+    /** "links" = pills soltas (padrão); "menu" = itens compactos para dropdown (ex.: botão •••). */
+    variant?: "links" | "menu";
 }
 
 export function AdminGlobalNavigationLinks({
     current,
     containerClassName = "reports-hero-actions",
     children,
+    variant = "links",
 }: AdminGlobalNavigationLinksProps) {
     return (
-        <div className={containerClassName}>
+        <div className={containerClassName} role={variant === "menu" ? "menu" : undefined}>
             {ADMIN_NAV_ITEMS.map((item) => {
                 const active = item.key === current;
+                const className = variant === "menu"
+                    ? `admin-nav-menu-link ${active ? "active" : ""}`.trim()
+                    : (active ? "reports-primary-link" : "reports-secondary-link");
                 return (
                     <a
                         key={item.key}
-                        className={active ? "reports-primary-link" : "reports-secondary-link"}
+                        className={className}
                         href={item.href}
+                        role={variant === "menu" ? "menuitem" : undefined}
                         aria-current={active ? "page" : undefined}
                     >
                         {item.label}

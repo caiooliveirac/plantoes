@@ -29,6 +29,7 @@ interface FlashRecord {
 
 const FLASH_STORAGE_KEY = "payment-closing.lastApplied.v1";
 const FLASH_TTL_MS = 10 * 60 * 1000;
+const FILTERS_OPEN_STORAGE_KEY = "payment-closing.filtersOpen.v1";
 
 type PaymentStatusFilter = "all" | "ready_for_payment" | "needs_review";
 type ShiftFilter = "all" | "SD" | "SN";
@@ -71,6 +72,12 @@ function formatMinutesAsHours(minutes: number | null | undefined) {
 
 /** Gatilho do acerto de banco de horas: ±12h em minutos. */
 const BANK_HOURS_THRESHOLD_MINUTES = 12 * 60;
+
+/** Como formatMinutesAsHours, mas com "+" explícito no saldo positivo. */
+function formatSignedMinutesAsHours(minutes: number) {
+    const formatted = formatMinutesAsHours(minutes);
+    return minutes > 0 ? `+${formatted}` : formatted;
+}
 
 function paymentProfileLabel(profile: string | null | undefined) {
     if (profile === "psychiatry") {
@@ -256,6 +263,51 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     const [flash, setFlash] = useState<FlashRecord | null>(null);
     const [highlightKey, setHighlightKey] = useState<string | null>(null);
     const tableShellRef = useRef<HTMLDivElement | null>(null);
+    // Gaveta de filtros da faixa de comando (design 2A): fechada por padrão,
+    // lembra a última escolha do admin neste navegador.
+    const [filtersOpen, setFiltersOpen] = useState(false);
+    useEffect(() => {
+        try {
+            if (window.localStorage.getItem(FILTERS_OPEN_STORAGE_KEY) === "1") {
+                setFiltersOpen(true);
+            }
+        } catch {}
+    }, []);
+    const toggleFiltersOpen = useCallback(() => {
+        setFiltersOpen((prev) => {
+            const next = !prev;
+            try {
+                window.localStorage.setItem(FILTERS_OPEN_STORAGE_KEY, next ? "1" : "0");
+            } catch {}
+            return next;
+        });
+    }, []);
+    // Menu ••• (navegação admin) da faixa: fecha com clique fora ou Escape.
+    const [navMenuOpen, setNavMenuOpen] = useState(false);
+    const navMenuRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        if (!navMenuOpen) {
+            return;
+        }
+        const onPointerDown = (event: PointerEvent) => {
+            if (navMenuRef.current && !navMenuRef.current.contains(event.target as Node)) {
+                setNavMenuOpen(false);
+            }
+        };
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setNavMenuOpen(false);
+            }
+        };
+        window.addEventListener("pointerdown", onPointerDown);
+        window.addEventListener("keydown", onKeyDown);
+        return () => {
+            window.removeEventListener("pointerdown", onPointerDown);
+            window.removeEventListener("keydown", onKeyDown);
+        };
+    }, [navMenuOpen]);
+    // Alvo do botão "sem médico" da faixa: rola até a linha correspondente da tabela.
+    const uncoveredRowRef = useRef<HTMLTableRowElement | null>(null);
     const [manualDraft, setManualDraft] = useState<{
         domain: "regulation" | "intervention";
         targetCode: string;
@@ -361,6 +413,16 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     }, [board]);
     const normalized = normalize(search);
     const normalizedTarget = normalize(targetSearch);
+    // Quantos filtros diferem do padrão — badge do botão "Filtros" da faixa.
+    const activeFilterCount = [
+        status !== "all",
+        employmentTypeFilter !== "all",
+        shiftFilter !== "all",
+        domainFilter !== "all",
+        coverageFilter !== "all",
+        targetFilter !== "all",
+        normalizedTarget.length > 0,
+    ].filter(Boolean).length;
 
     const targetPills = useMemo(() => {
         const filtered = board.targetOptions.filter((target) => {
@@ -1398,259 +1460,302 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
 
     return (
         <main className="chief-payable-shell">
-            <section className="chief-payable-hero">
-                <div>
-                    <p className="reports-kicker">Fechamento mensal do chefe</p>
-                    <h1>Unidades pagáveis por médico e por dia</h1>
-                    <p className="chief-payable-subtitle">
-                        Esta visão mostra apenas o que vira pagamento. Resíduos técnicos, fragmentos e duplicações ficam na auditoria detalhada.
-                    </p>
-                    {!canManageClosing ? (
-                        <p className="chief-payable-subtitle">
-                            Perfil restrito: você pode visualizar todo o fechamento e salvar somente NF/processo.
-                        </p>
-                    ) : null}
-                </div>
+            {/* Design 2A: faixa de comando única + gaveta de filtros + tabela num só container. */}
+            <section className="chief-payable-bar-frame">
+            <header className="chief-payable-bar">
+                <select
+                    className="chief-payable-bar-month"
+                    value={board.monthKey}
+                    onChange={(event) => router.push(`/admin/payment-closing?month=${event.target.value}`)}
+                    aria-label="Mês do fechamento"
+                >
+                    {board.presetMonths.map((preset) => (
+                        <option key={preset.key} value={preset.key}>{preset.label}</option>
+                    ))}
+                </select>
 
-                <div className="chief-payable-peak-day" aria-live="polite">
-                    <span>Pico operacional do mês</span>
-                    <strong>{peakDay ? `${peakDay.day} · ${peakDay.count} unidades` : "sem dados"}</strong>
-                    <small>Use os filtros para refinar o fechamento por turno e domínio.</small>
-                </div>
+                <input
+                    type="search"
+                    className="chief-payable-bar-search"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Filtrar médico"
+                    aria-label="Filtrar médico"
+                />
 
-                <AdminGlobalNavigationLinks current="payment-closing" containerClassName="chief-payable-hero-actions">
-                    {canManageClosing ? (
-                        <>
-                            <a className="reports-primary-link" href={`/api/admin/reports/export?month=${board.monthKey}`}>
-                                Exportar XLSX (payable shifts)
-                            </a>
-                            <a className="reports-secondary-link" href="/admin/payment-attestation/audit">
-                                Abrir auditoria técnica
-                            </a>
-                        </>
-                    ) : null}
-                </AdminGlobalNavigationLinks>
-            </section>
+                <span className="chief-payable-bar-divider" aria-hidden="true" />
 
-            <section className="reports-presets">
-                {board.presetMonths.map((preset) => (
-                    <a
-                        key={preset.key}
-                        href={`/admin/payment-closing?month=${preset.key}`}
-                        className={`reports-month-chip ${preset.key === board.monthKey ? "active" : ""}`.trim()}
-                    >
-                        {preset.label}
-                    </a>
-                ))}
-            </section>
-
-            <section className="chief-payable-summary">
-                <article className="chief-payable-summary-card">
-                    <span>Unidades pagáveis</span>
-                    <strong>{formatUnits(board.summary.payableUnitCount)}</strong>
-                </article>
-                <article className="chief-payable-summary-card ready">
-                    <span>Prontas</span>
-                    <strong>{board.summary.readyCount}</strong>
-                </article>
-                <button className="chief-payable-summary-card review actionable" type="button" onClick={() => setStatus("needs_review")}>
-                    <span>Pendências</span>
-                    <strong>{board.summary.needsReviewCount}</strong>
-                </button>
-                <article className="chief-payable-summary-card">
-                    <span>Médicos</span>
-                    <strong>{board.summary.doctorCount}</strong>
-                </article>
-                <article className="chief-payable-summary-card">
-                    <span>Valor devido (PJ · {dueAmountByEmploymentType.pj.doctorCount} médicos)</span>
-                    <strong>{formatCurrency(dueAmountByEmploymentType.pj.totalDue)}</strong>
-                </article>
-                <article className="chief-payable-summary-card">
-                    <span>Estatutário ({dueAmountByEmploymentType.estatutario.doctorCount} médicos · sem pagamento aqui)</span>
-                    <strong>{formatCurrency(dueAmountByEmploymentType.estatutario.totalDue)}</strong>
-                </article>
-                <article className="chief-payable-summary-card">
-                    <span>Desativadas</span>
-                    <strong>{visibleDisabledTargets.length}</strong>
-                </article>
-                <article className="chief-payable-summary-card warning-strong">
-                    <span>Sem médico</span>
-                    <strong>{visibleUncoveredTargets.length}</strong>
-                </article>
-            </section>
-
-            <section className="chief-payable-load-strip" aria-label="Ritmo mensal de unidades pagáveis">
-                {dayLoad.map((entry) => {
-                    const ratio = Math.max(entry.count / maxDayLoad, 0.12);
-                    return (
-                        <div key={entry.day} className="chief-payable-load-item" title={`Dia ${entry.day}: ${entry.count} unidades`}>
-                            <span>{entry.day}</span>
-                            <i style={{ transform: `scaleY(${ratio.toFixed(4)})` }} />
-                            <strong>{entry.count}</strong>
-                        </div>
-                    );
-                })}
-            </section>
-
-            <section className="chief-payable-control-grid">
-                <article className="chief-payable-control-card chief-payable-control-card-priority">
-                    <h3>Turno e domínio</h3>
-                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
-                        <button type="button" className={`chief-payable-chip ${shiftFilter === "all" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("all")}>
-                            SD + SN ({board.summary.payableShiftCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip day ${shiftFilter === "SD" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SD")}>
-                            SD ({formatUnits(filterSummary.sdCount)})
-                        </button>
-                        <button type="button" className={`chief-payable-chip night ${shiftFilter === "SN" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SN")}>
-                            SN ({formatUnits(filterSummary.snCount)})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${domainFilter === "all" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("all")}>
-                            Regulação + Intervenção
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${domainFilter === "regulation" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("regulation")}>
-                            Regulação ({filterSummary.regulationCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${domainFilter === "intervention" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("intervention")}>
-                            Intervenção ({filterSummary.interventionCount})
-                        </button>
+                <div className="chief-payable-bar-kpis">
+                    <div className="chief-payable-bar-kpi">
+                        <strong>{formatUnits(board.summary.payableUnitCount)}</strong>
+                        <span>unidades</span>
                     </div>
+                    <div className="chief-payable-bar-kpi">
+                        <strong>{board.summary.readyCount}</strong>
+                        <span>prontas</span>
+                    </div>
+                    <div className="chief-payable-bar-kpi">
+                        <strong>{board.summary.doctorCount}</strong>
+                        <span>médicos</span>
+                    </div>
+                    <div
+                        className="chief-payable-bar-kpi"
+                        title={`PJ · ${dueAmountByEmploymentType.pj.doctorCount} médicos. Estatutário (${dueAmountByEmploymentType.estatutario.doctorCount} médicos) não gera pagamento aqui.`}
+                    >
+                        <strong>{formatCurrency(dueAmountByEmploymentType.pj.totalDue)}</strong>
+                        <span>devido pj</span>
+                    </div>
+                    <div className="chief-payable-bar-kpi">
+                        <strong>{visibleDisabledTargets.length}</strong>
+                        <span>desativadas</span>
+                    </div>
+                    <button
+                        type="button"
+                        className={`chief-payable-bar-kpi-button pending ${status === "needs_review" ? "active" : ""}`.trim()}
+                        onClick={() => setStatus(status === "needs_review" ? "all" : "needs_review")}
+                        title={status === "needs_review" ? "Filtro de pendências ativo — clique para limpar" : "Mostrar só médicos com pendências"}
+                    >
+                        <strong>{board.summary.needsReviewCount}</strong>
+                        <span>pendências</span>
+                        {status === "needs_review" ? <i aria-hidden="true">×</i> : null}
+                    </button>
+                    <button
+                        type="button"
+                        className="chief-payable-bar-kpi-button uncovered"
+                        onClick={() => uncoveredRowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                        title="Rolar até a linha Sem médico"
+                    >
+                        <strong>{visibleUncoveredTargets.length}</strong>
+                        <span>sem médico</span>
+                    </button>
+                </div>
 
-                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
+                <div className="chief-payable-bar-actions">
+                    {!canManageClosing ? (
+                        <span
+                            className="chief-payable-bar-restricted"
+                            title="Perfil restrito: você pode visualizar todo o fechamento e salvar somente NF/processo."
+                        >
+                            Perfil restrito
+                        </span>
+                    ) : null}
+                    <button
+                        type="button"
+                        className={`chief-payable-bar-filters-toggle ${filtersOpen ? "open" : ""}`.trim()}
+                        onClick={toggleFiltersOpen}
+                        aria-expanded={filtersOpen}
+                    >
+                        Filtros
+                        {activeFilterCount > 0 ? <i className="chief-payable-bar-filter-count">{activeFilterCount}</i> : null}
+                        <span aria-hidden="true">{filtersOpen ? "▴" : "▾"}</span>
+                    </button>
+                    {canManageClosing ? (
+                        <a className="reports-primary-link" href={`/api/admin/reports/export?month=${board.monthKey}`}>
+                            Exportar XLSX
+                        </a>
+                    ) : null}
+                    <div className="chief-payable-bar-menu" ref={navMenuRef}>
                         <button
                             type="button"
-                            className={`chief-payable-chip ${normalizedTarget === "usa" ? "active" : ""}`.trim()}
-                            onClick={() => setTargetSearch(normalizedTarget === "usa" ? "" : "USA")}
+                            className="chief-payable-bar-menu-toggle"
+                            onClick={() => setNavMenuOpen((prev) => !prev)}
+                            aria-haspopup="menu"
+                            aria-expanded={navMenuOpen}
+                            title="Navegação admin"
                         >
-                            USA ({board.targetOptions.filter((target) => normalize([target.targetCode, target.targetLabel].join(" ")).includes("usa")).length})
+                            •••
                         </button>
-                        <button type="button" className={`chief-payable-chip ${targetFilter === "all" ? "active" : ""}`.trim()} onClick={() => setTargetFilter("all")}>
-                            Todas as bases/ramais ({targetPills.length})
-                        </button>
+                        {navMenuOpen ? (
+                            <div className="chief-payable-bar-menu-panel">
+                                <AdminGlobalNavigationLinks current="payment-closing" variant="menu" containerClassName="chief-payable-bar-menu-list">
+                                    {canManageClosing ? (
+                                        <a className="admin-nav-menu-link" href="/admin/payment-attestation/audit" role="menuitem">
+                                            Abrir auditoria técnica
+                                        </a>
+                                    ) : null}
+                                </AdminGlobalNavigationLinks>
+                            </div>
+                        ) : null}
                     </div>
+                </div>
+            </header>
 
-                    <div className="chief-payable-chip-row chief-payable-chip-row-priority">
-                        <button type="button" className={`chief-payable-chip ${coverageFilter === "all" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("all")}>
-                            Cobertura completa + meio
-                        </button>
-                        <button type="button" className={`chief-payable-chip warning ${coverageFilter === "half" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("half")}>
-                            Somente MEIO ({filterSummary.halfCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${coverageFilter === "full" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("full")}>
-                            Sem MEIO ({filterSummary.fullCount})
-                        </button>
-                    </div>
-
-                    <div className="chief-payable-order-legend" aria-label="Ordem operacional prioritária">
-                        <span>Ordem rápida</span>
-                        <strong>01 · 02 · 03 · 04 · 05 · 10 · 20</strong>
-                    </div>
-
-                    <div className="chief-payable-target-sectors">
-                        {targetSectors.map((sector) => (
-                            <section key={sector.key} className={`chief-payable-target-sector ${sector.tone}`.trim()}>
-                                <header>
-                                    <h4>{sector.title}</h4>
-                                    <small>{sector.targets.length} unidades</small>
-                                </header>
-
-                                <div className="chief-payable-chip-row chief-payable-target-pills">
-                                    {sector.targets.map((target) => {
-                                        const value = `${target.domain}|${target.targetCode}`;
-                                        return (
-                                            <button
-                                                type="button"
-                                                key={value}
-                                                className={`chief-payable-chip ${targetFilter === value ? "active" : ""}`.trim()}
-                                                onClick={() => setTargetFilter(value)}
-                                                title={`${target.targetCode} · ${target.targetLabel}`}
-                                            >
-                                                {target.targetCode}
-                                            </button>
-                                        );
-                                    })}
+            <AnimatePresence initial={false}>
+                {filtersOpen ? (
+                    <motion.div
+                        key="filters-drawer"
+                        className="chief-payable-bar-drawer"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2, ease: "easeOut" }}
+                    >
+                        <div className="chief-payable-bar-drawer-inner">
+                            <div className="chief-payable-bar-drawer-grid">
+                                <div className="chief-payable-bar-drawer-group">
+                                    <span>Turno e domínio</span>
+                                    <div className="chief-payable-chip-row">
+                                        <button type="button" className={`chief-payable-chip ${shiftFilter === "all" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("all")}>
+                                            SD + SN ({board.summary.payableShiftCount})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip day ${shiftFilter === "SD" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SD")}>
+                                            SD ({formatUnits(filterSummary.sdCount)})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip night ${shiftFilter === "SN" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("SN")}>
+                                            SN ({formatUnits(filterSummary.snCount)})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip ${domainFilter === "all" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("all")}>
+                                            Regulação + Intervenção
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip ${domainFilter === "regulation" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("regulation")}>
+                                            Regulação ({filterSummary.regulationCount})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip ${domainFilter === "intervention" ? "active" : ""}`.trim()} onClick={() => setDomainFilter("intervention")}>
+                                            Intervenção ({filterSummary.interventionCount})
+                                        </button>
+                                    </div>
                                 </div>
-                            </section>
-                        ))}
-                    </div>
-                </article>
-            </section>
 
-            <section className="chief-payable-filter-bar">
-                <div className="chief-payable-inline-status" aria-label="Status de médicos">
-                    <span>Status</span>
-                    <div className="chief-payable-chip-row chief-payable-chip-row-inline">
-                        <button type="button" className={`chief-payable-chip ${status === "all" ? "active" : ""}`.trim()} onClick={() => setStatus("all")}>
-                            Todos ({board.summary.doctorCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${status === "ready_for_payment" ? "active" : ""}`.trim()} onClick={() => setStatus("ready_for_payment")}>
-                            Prontos ({filterSummary.readyDoctors})
-                        </button>
-                        <button type="button" className={`chief-payable-chip warning ${status === "needs_review" ? "active" : ""}`.trim()} onClick={() => setStatus("needs_review")}>
-                            Pendências ({filterSummary.reviewDoctors})
-                        </button>
-                    </div>
-                </div>
+                                <div className="chief-payable-bar-drawer-group">
+                                    <span>Cobertura</span>
+                                    <div className="chief-payable-chip-row">
+                                        <button type="button" className={`chief-payable-chip ${coverageFilter === "all" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("all")}>
+                                            Completa + meio
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip warning ${coverageFilter === "half" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("half")}>
+                                            Somente MEIO ({filterSummary.halfCount})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip ${coverageFilter === "full" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("full")}>
+                                            Sem MEIO ({filterSummary.fullCount})
+                                        </button>
+                                    </div>
+                                </div>
 
-                <div className="chief-payable-inline-status" aria-label="Vínculo empregatício">
-                    <span>Vínculo</span>
-                    <div className="chief-payable-chip-row chief-payable-chip-row-inline">
-                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "all" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("all")}>
-                            Todos ({dueAmountByEmploymentType.pj.doctorCount + dueAmountByEmploymentType.estatutario.doctorCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "pj" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("pj")}>
-                            PJ ({dueAmountByEmploymentType.pj.doctorCount})
-                        </button>
-                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "estatutario" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("estatutario")}>
-                            Estatutário ({dueAmountByEmploymentType.estatutario.doctorCount})
-                        </button>
-                    </div>
-                </div>
+                                <div className="chief-payable-bar-drawer-group">
+                                    <span>Status e vínculo</span>
+                                    <div className="chief-payable-chip-row">
+                                        <button type="button" className={`chief-payable-chip ${status === "all" ? "active" : ""}`.trim()} onClick={() => setStatus("all")}>
+                                            Todos ({board.summary.doctorCount})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip ${status === "ready_for_payment" ? "active" : ""}`.trim()} onClick={() => setStatus("ready_for_payment")}>
+                                            Prontos ({filterSummary.readyDoctors})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip warning ${status === "needs_review" ? "active" : ""}`.trim()} onClick={() => setStatus("needs_review")}>
+                                            Pendências ({filterSummary.reviewDoctors})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "all" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("all")}>
+                                            PJ + Estatutário
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "pj" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("pj")}>
+                                            PJ ({dueAmountByEmploymentType.pj.doctorCount})
+                                        </button>
+                                        <button type="button" className={`chief-payable-chip ${employmentTypeFilter === "estatutario" ? "active" : ""}`.trim()} onClick={() => setEmploymentTypeFilter("estatutario")}>
+                                            Estatutário ({dueAmountByEmploymentType.estatutario.doctorCount})
+                                        </button>
+                                    </div>
+                                </div>
 
-                <label className="chief-payable-filter-field chief-payable-search">
-                    <span>Filtrar médico</span>
-                    <input
-                        type="search"
-                        value={search}
-                        onChange={(event) => setSearch(event.target.value)}
-                        placeholder="Digite nome ou apelido"
-                    />
-                </label>
+                                <div className="chief-payable-bar-drawer-group">
+                                    <span>Ordenar e alvo</span>
+                                    <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} aria-label="Ordenar por">
+                                        <option value="pending">Ordenar: pendências</option>
+                                        <option value="total">Ordenar: total</option>
+                                        <option value="weekday">Ordenar: dia útil</option>
+                                        <option value="weekend">Ordenar: fim de semana / feriado</option>
+                                        <option value="name">Ordenar: nome</option>
+                                    </select>
+                                    <input
+                                        type="search"
+                                        value={targetSearch}
+                                        onChange={(event) => setTargetSearch(event.target.value)}
+                                        placeholder="Filtrar alvo — ex.: BR60, PM04, CRU"
+                                        aria-label="Filtrar alvo"
+                                    />
+                                    <select value={targetFilter} onChange={(event) => setTargetFilter(event.target.value)} aria-label="Base/Ramal">
+                                        <option value="all">Base/Ramal: todos</option>
+                                        {board.targetOptions.map((target) => (
+                                            <option key={`${target.domain}|${target.targetCode}`} value={`${target.domain}|${target.targetCode}`}>
+                                                {target.targetCode} · {target.domain === "regulation" ? "Regulação" : "Intervenção"}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
 
-                <label className="chief-payable-filter-field chief-payable-target-search">
-                    <span>Filtrar alvo</span>
-                    <input
-                        type="search"
-                        value={targetSearch}
-                        onChange={(event) => setTargetSearch(event.target.value)}
-                        placeholder="Ex.: BR60, PM04, CRU"
-                    />
-                </label>
+                                <div className="chief-payable-bar-drawer-group">
+                                    <span>Ritmo do mês{peakDay ? ` · pico dia ${peakDay.day}` : ""}</span>
+                                    <div
+                                        className="chief-payable-bar-rhythm"
+                                        aria-label="Ritmo mensal de unidades pagáveis"
+                                        title={peakDay ? `Unidades pagáveis por dia · pico dia ${peakDay.day} (${peakDay.count})` : "Unidades pagáveis por dia"}
+                                    >
+                                        {dayLoad.map((entry) => {
+                                            const ratio = Math.max(entry.count / maxDayLoad, 0.12);
+                                            return (
+                                                <i
+                                                    key={entry.day}
+                                                    title={`Dia ${entry.day}: ${entry.count} unidades`}
+                                                    style={{ transform: `scaleY(${ratio.toFixed(4)})` }}
+                                                />
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
 
-                <label className="chief-payable-filter-field compact">
-                    <span>Ordenar por</span>
-                    <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
-                        <option value="pending">Pendências</option>
-                        <option value="total">Total</option>
-                        <option value="weekday">Dia útil</option>
-                        <option value="weekend">Fim de semana / feriado</option>
-                        <option value="name">Nome</option>
-                    </select>
-                </label>
+                            <div className="chief-payable-bar-drawer-group">
+                                <span>Base / ramal</span>
+                                <div className="chief-payable-chip-row">
+                                    <button type="button" className={`chief-payable-chip ${targetFilter === "all" ? "active" : ""}`.trim()} onClick={() => setTargetFilter("all")}>
+                                        Todas as bases/ramais ({targetPills.length})
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`chief-payable-chip ${normalizedTarget === "usa" ? "active" : ""}`.trim()}
+                                        onClick={() => setTargetSearch(normalizedTarget === "usa" ? "" : "USA")}
+                                    >
+                                        USA ({board.targetOptions.filter((target) => normalize([target.targetCode, target.targetLabel].join(" ")).includes("usa")).length})
+                                    </button>
+                                </div>
 
-                <label className="chief-payable-filter-field compact">
-                    <span>Base/Ramal</span>
-                    <select value={targetFilter} onChange={(event) => setTargetFilter(event.target.value)}>
-                        <option value="all">Todos</option>
-                        {board.targetOptions.map((target) => (
-                            <option key={`${target.domain}|${target.targetCode}`} value={`${target.domain}|${target.targetCode}`}>
-                                {target.targetCode} · {target.domain === "regulation" ? "Regulação" : "Intervenção"}
-                            </option>
-                        ))}
-                    </select>
-                </label>
-            </section>
+                                <div className="chief-payable-order-legend" aria-label="Ordem operacional prioritária">
+                                    <span>Ordem rápida</span>
+                                    <strong>01 · 02 · 03 · 04 · 05 · 10 · 20</strong>
+                                </div>
 
+                                <div className="chief-payable-target-sectors">
+                                    {targetSectors.map((sector) => (
+                                        <section key={sector.key} className={`chief-payable-target-sector ${sector.tone}`.trim()}>
+                                            <header>
+                                                <h4>{sector.title}</h4>
+                                                <small>{sector.targets.length} unidades</small>
+                                            </header>
+
+                                            <div className="chief-payable-chip-row chief-payable-target-pills">
+                                                {sector.targets.map((target) => {
+                                                    const value = `${target.domain}|${target.targetCode}`;
+                                                    return (
+                                                        <button
+                                                            type="button"
+                                                            key={value}
+                                                            className={`chief-payable-chip ${targetFilter === value ? "active" : ""}`.trim()}
+                                                            onClick={() => setTargetFilter(value)}
+                                                            title={`${target.targetCode} · ${target.targetLabel}`}
+                                                        >
+                                                            {target.targetCode}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </section>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </motion.div>
+                ) : null}
+            </AnimatePresence>
+
+            <div className="chief-payable-bar-inserts">
             {(manualError || manualFeedback) ? (
                 <section className={`payment-inline-banner ${manualError ? "danger" : "ok"}`.trim()}>
                     <strong>{manualError ? "Falha na correção" : "Correção manual"}</strong>
@@ -1780,6 +1885,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                     )}
                 </section>
             ) : null}
+            </div>
 
             <section className="chief-payable-table-shell" ref={tableShellRef}>
                 <div className="chief-payable-table-scroll">
@@ -1860,6 +1966,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
 
                                 <motion.tr
                                     key="uncovered-row"
+                                    ref={uncoveredRowRef}
                                     layout
                                     initial={{ opacity: 0, y: 6 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -1999,6 +2106,35 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                     />
                                                     <span>{isDoctorAttested(doctor) ? "✓ assinado" : "assinar"}</span>
                                                 </label>
+
+                                                {doctor.bankHoursMinutes != null || doctor.bankHoursSettlement ? (() => {
+                                                    // Saldo do banco de horas na linha: discreto abaixo de ±12h; em
+                                                    // destaque colorido ao atingir o gatilho do acerto (±1 plantão),
+                                                    // para o admin avisar o médico antes de ele assinar a nota.
+                                                    const bankMinutes = doctor.bankHoursMinutes ?? 0;
+                                                    const atPositive = bankMinutes >= BANK_HOURS_THRESHOLD_MINUTES;
+                                                    const atNegative = bankMinutes <= -BANK_HOURS_THRESHOLD_MINUTES;
+                                                    const tone = atPositive ? "threshold-positive" : atNegative ? "threshold-negative" : "";
+                                                    const title = atPositive
+                                                        ? "Banco de horas atingiu +12h: bonifique com 1 plantão verde no resumo do médico antes de ele assinar."
+                                                        : atNegative
+                                                            ? "Banco de horas atingiu -12h: debite 1 plantão vermelho no resumo do médico antes de ele assinar."
+                                                            : "Saldo do banco de horas — o acerto (±1 plantão) fica disponível a partir de ±12h.";
+                                                    return (
+                                                        <button
+                                                            type="button"
+                                                            className={`chief-payable-bank-chip ${tone}`.trim()}
+                                                            onClick={() => setSelectedDoctorId(doctor.doctorId)}
+                                                            title={title}
+                                                        >
+                                                            <strong>{formatSignedMinutesAsHours(bankMinutes)}</strong>
+                                                            <span>{atPositive ? "acerto +1 plantão" : atNegative ? "acerto −1 plantão" : "banco"}</span>
+                                                            {doctor.bankHoursSettlement ? (
+                                                                <em title="Acerto de 12h já lançado neste mês">✓ acerto no mês</em>
+                                                            ) : null}
+                                                        </button>
+                                                    );
+                                                })() : null}
                                             </div>
                                         </td>
 
@@ -2069,6 +2205,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                         </tbody>
                     </table>
                 </div>
+            </section>
             </section>
 
             {shiftActionDraft ? (
