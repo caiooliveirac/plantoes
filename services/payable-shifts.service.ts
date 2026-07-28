@@ -605,7 +605,9 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             contractCeilingBrl: contract?.ceilingBrl ?? null,
             contractSeedMonth: contract?.seedMonth ?? null,
             contractBalanceBrl: contractBalanceByDoctor.get(doctorId) ?? null,
-            bankHoursMinutes: bankBalances.get(doctorId) ?? null,
+            bankHoursMinutes: bankBalances.get(doctorId)?.totalMinutes ?? null,
+            bankHoursOldMinutes: bankBalances.get(doctorId)?.oldMinutes ?? null,
+            bankHoursRecentMinutes: bankBalances.get(doctorId)?.recentMinutes ?? null,
             bankHoursSettlement: lastSettlement
                 ? {
                     kind: lastSettlement.kind,

@@ -4,6 +4,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition }
 import { useRouter } from "next/navigation";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type { BankHoursDoctorHistory, BankHoursHistoryModel, BankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
+import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 
 function formatDateTime(value: string | null) {
@@ -496,18 +497,48 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                         </select>
                                     </label>
 
-                                    {Math.abs(selectedDoctor.balanceMinutes) >= BANK_HOURS_SETTLEMENT_MINUTES ? (
-                                        <a
-                                            className={`payment-button ${selectedDoctor.balanceMinutes >= 0 ? "bank-bonus" : "bank-penalty"}`}
-                                            href={`/admin/payment-closing?month=${encodeURIComponent(settlementMonth)}&doctor=${encodeURIComponent(selectedDoctor.doctorId)}`}
-                                        >
-                                            {selectedDoctor.balanceMinutes >= 0
-                                                ? "Lançar bônus (+1 plantão verde) no fechamento →"
-                                                : "Lançar punição (1 plantão vermelho) no fechamento →"}
-                                        </a>
-                                    ) : (
-                                        <p className="hours-settlement-hint">Saldo dentro de ±12h — sem acerto disponível.</p>
-                                    )}
+                                    {(() => {
+                                        // Régua do acerto: só horas desde mai/2025 pagam/punem; dívida
+                                        // anterior a mai/2025 é amortizada antes de qualquer bônus.
+                                        const settleBalance = resolveBankHoursSettlementBalance({
+                                            oldMinutes: selectedDoctor.legacy?.preMay2025Minutes ?? 0,
+                                            recentMinutes: (selectedDoctor.legacy?.spreadsheetPeriodMinutes ?? 0) + selectedDoctor.applicationBalanceMinutes,
+                                        });
+                                        if (settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_MINUTES) {
+                                            return (
+                                                <a
+                                                    className="payment-button bank-bonus"
+                                                    href={`/admin/payment-closing?month=${encodeURIComponent(settlementMonth)}&doctor=${encodeURIComponent(selectedDoctor.doctorId)}`}
+                                                >
+                                                    Lançar bônus (+1 plantão verde) no fechamento →
+                                                </a>
+                                            );
+                                        }
+                                        if (settleBalance.penaltyEligibleMinutes <= -BANK_HOURS_SETTLEMENT_MINUTES) {
+                                            return (
+                                                <a
+                                                    className="payment-button bank-penalty"
+                                                    href={`/admin/payment-closing?month=${encodeURIComponent(settlementMonth)}&doctor=${encodeURIComponent(selectedDoctor.doctorId)}`}
+                                                >
+                                                    Lançar punição (1 plantão vermelho) no fechamento →
+                                                </a>
+                                            );
+                                        }
+                                        if (settleBalance.oldMinutes < 0 && settleBalance.recentMinutes > 0) {
+                                            return (
+                                                <p className="hours-settlement-hint">
+                                                    As horas formadas desde mai/2025 ({formatSignedMinutes(settleBalance.recentMinutes)}) ainda amortizam a dívida
+                                                    anterior a mai/2025 ({formatSignedMinutes(settleBalance.oldMinutes)}) — sem bônus até quitar. Saldo elegível:{" "}
+                                                    {formatSignedMinutes(settleBalance.bonusEligibleMinutes)}.
+                                                </p>
+                                            );
+                                        }
+                                        return (
+                                            <p className="hours-settlement-hint">
+                                                Saldo elegível (desde mai/2025) dentro de ±12h — sem acerto disponível. A parcela anterior a mai/2025 não entra na régua.
+                                            </p>
+                                        );
+                                    })()}
                                 </section>
                             ) : null}
 

@@ -4757,10 +4757,13 @@ button.ops-doctor-line.shadow.clickable:hover {
     min-width: 56px;
 }
 
+/* Coluna do médico estreita de propósito: os badges (PJ, SÓ CRU etc.) quebram
+   de linha e sobram mais colunas de dia visíveis — principalmente no mobile.
+   Os toggles Estatutário/ESP vivem no modal do médico. */
 .chief-payable-table td.doctor,
 .chief-payable-table th.doctor {
-    min-width: 320px;
-    max-width: 320px;
+    min-width: 200px;
+    max-width: 200px;
     text-align: left;
 }
 
@@ -4986,6 +4989,19 @@ button.ops-doctor-line.shadow.clickable:hover {
 .chief-payable-bank-chip.threshold-negative:focus-visible {
     border-color: rgba(255, 96, 96, 0.8);
     color: #ffe6e6;
+}
+
+/* Formou horas desde mai/2025, mas ainda amortiza dívida anterior — sem bônus. */
+.chief-payable-bank-chip.debt {
+    color: #ffdfae;
+    border-color: rgba(255, 184, 77, 0.45);
+    background: rgba(99, 63, 16, 0.35);
+}
+
+.chief-payable-bank-chip.debt:hover,
+.chief-payable-bank-chip.debt:focus-visible {
+    border-color: rgba(255, 198, 122, 0.7);
+    color: #ffedcf;
 }
 
 /* Card de atestação dentro do modal do médico. */
@@ -5722,6 +5738,21 @@ button.chief-payable-tag:focus-visible {
     color: #ff9b9b;
 }
 
+/* <strong> dentro da nota herda o tamanho da nota, não o número grande do card. */
+.chief-payable-bank-note strong {
+    font-size: inherit;
+    letter-spacing: normal;
+}
+
+/* Toggles Estatutário/ESP no cabeçalho do modal (migraram da linha da tabela). */
+.chief-payable-modal-toggles {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 8px;
+}
+
 .chief-payable-bank-note {
     color: rgba(255, 255, 255, 0.6);
 }
@@ -6057,8 +6088,8 @@ button.chief-payable-tag:focus-visible {
 
     .chief-payable-table td.doctor,
     .chief-payable-table th.doctor {
-        min-width: 220px;
-        max-width: 220px;
+        min-width: 168px;
+        max-width: 168px;
     }
 
     .chief-payable-modal-grid,

@@ -36,18 +36,26 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-        // Confirma o gatilho no servidor: bônus exige saldo >= +12h; punição <= -12h.
+        // Confirma o gatilho no servidor com a régua de elegibilidade: só horas
+        // desde mai/2025 pagam/punem, e dívida anterior a mai/2025 precisa ser
+        // amortizada antes de qualquer bônus.
         const balances = await getDoctorBankHoursEffectiveBalances();
-        const balanceMinutes = balances.get(parsed.data.doctorId) ?? 0;
-        if (parsed.data.kind === "bonus" && balanceMinutes < BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES) {
+        const balance = balances.get(parsed.data.doctorId)
+            ?? { totalMinutes: 0, oldMinutes: 0, recentMinutes: 0, bonusEligibleMinutes: 0, penaltyEligibleMinutes: 0 };
+        if (parsed.data.kind === "bonus" && balance.bonusEligibleMinutes < BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES) {
+            const amortizing = balance.oldMinutes < 0 && balance.recentMinutes >= BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES;
             return NextResponse.json(
-                { error: "Saldo do banco de horas não chegou a +12h para bonificar." },
+                {
+                    error: amortizing
+                        ? "As horas formadas desde mai/2025 ainda amortizam a dívida anterior a mai/2025 — sem bônus até quitá-la."
+                        : "Saldo elegível (desde mai/2025, descontada dívida antiga) não chegou a +12h para bonificar.",
+                },
                 { status: 409 },
             );
         }
-        if (parsed.data.kind === "penalty" && balanceMinutes > -BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES) {
+        if (parsed.data.kind === "penalty" && balance.penaltyEligibleMinutes > -BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES) {
             return NextResponse.json(
-                { error: "Saldo do banco de horas não chegou a -12h para debitar." },
+                { error: "Saldo desde mai/2025 não chegou a -12h para debitar (dívida anterior a mai/2025 não gera punição)." },
                 { status: 409 },
             );
         }
@@ -72,7 +80,13 @@ export async function POST(request: NextRequest) {
                 deltaMinutes: result.deltaMinutes,
                 operationalDate: result.operationalDate,
                 adminExtraShiftId: result.adminExtraShiftId,
-                balanceBeforeMinutes: balanceMinutes,
+                balanceBeforeMinutes: balance.totalMinutes,
+                balanceCompositionBefore: {
+                    oldMinutes: balance.oldMinutes,
+                    recentMinutes: balance.recentMinutes,
+                    bonusEligibleMinutes: balance.bonusEligibleMinutes,
+                    penaltyEligibleMinutes: balance.penaltyEligibleMinutes,
+                },
             },
         });
 

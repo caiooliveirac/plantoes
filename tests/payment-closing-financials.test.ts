@@ -7,9 +7,49 @@ import {
 } from "@/modules/reporting/payable-shifts";
 import {
     buildBankHoursHistoryModel,
+    resolveBankHoursSettlementBalance,
     type BankHoursSettlementSummary,
     type RawBankHoursHistoryShift,
 } from "@/modules/reporting/bank-hours-history";
+
+test("régua do acerto: sem legado, o saldo recente é elegível para bônus e punição", () => {
+    const balance = resolveBankHoursSettlementBalance({ oldMinutes: 0, recentMinutes: 780 });
+    assert.equal(balance.bonusEligibleMinutes, 780);
+    assert.equal(balance.penaltyEligibleMinutes, 780);
+    assert.equal(balance.totalMinutes, 780);
+});
+
+test("régua do acerto: dívida anterior a mai/2025 é amortizada antes de qualquer bônus", () => {
+    // +13h recentes com -10h de dívida antiga: elegível só +3h — sem bônus.
+    const amortizing = resolveBankHoursSettlementBalance({ oldMinutes: -600, recentMinutes: 780 });
+    assert.equal(amortizing.bonusEligibleMinutes, 180);
+    assert.equal(amortizing.bonusEligibleMinutes < 720, true, "não pode bonificar enquanto amortiza");
+
+    // +25h recentes quitam as -10h antigas e sobram +15h: bônus liberado.
+    const cleared = resolveBankHoursSettlementBalance({ oldMinutes: -600, recentMinutes: 1500 });
+    assert.equal(cleared.bonusEligibleMinutes, 900);
+    assert.equal(cleared.bonusEligibleMinutes >= 720, true);
+});
+
+test("régua do acerto: crédito anterior a mai/2025 não remunera nem blinda punição", () => {
+    // +15h antigas + 5h recentes: só as 5h contam para bônus (sem gatilho).
+    const oldCredit = resolveBankHoursSettlementBalance({ oldMinutes: 900, recentMinutes: 300 });
+    assert.equal(oldCredit.bonusEligibleMinutes, 300);
+
+    // Crédito antigo não impede punição do saldo recente negativo.
+    const punished = resolveBankHoursSettlementBalance({ oldMinutes: 900, recentMinutes: -800 });
+    assert.equal(punished.penaltyEligibleMinutes, -800);
+    assert.equal(punished.penaltyEligibleMinutes <= -720, true);
+});
+
+test("régua do acerto: dívida antiga não gera punição — só o saldo recente pune", () => {
+    // -15h antigas com recente -5h: punição NÃO dispara (recente > -12h).
+    const balance = resolveBankHoursSettlementBalance({ oldMinutes: -900, recentMinutes: -300 });
+    assert.equal(balance.penaltyEligibleMinutes, -300);
+    assert.equal(balance.penaltyEligibleMinutes <= -720, false, "dívida antiga fica fora da punição");
+    // Mas ela continua bloqueando bônus futuros (elegível -20h).
+    assert.equal(balance.bonusEligibleMinutes, -1200);
+});
 
 function makeExtraInput(overrides: Partial<AdminExtraShiftInput> = {}): AdminExtraShiftInput {
     return {

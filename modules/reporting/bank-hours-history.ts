@@ -115,6 +115,10 @@ export interface BankHoursDoctorHistory {
     settlements: BankHoursSettlementSummary[];
 }
 
+// Régua do acerto de ±12h: vive em módulo próprio (sem imports) para poder ir
+// ao bundle do client sem arrastar as dependências de Node deste arquivo.
+export { resolveBankHoursSettlementBalance, type BankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
+
 export interface BankHoursSettlementSummary {
     id: string;
     monthKey: string;

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
+import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
 
 interface Props {
@@ -2004,32 +2005,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                     ) : null}
                                                 </div>
 
-                                                <label className="chief-payable-specialist-toggle" title="Estatutário/REDA não gera valor a pagar por plantão">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={doctorEmploymentType === "estatutario"}
-                                                        onChange={(event) => {
-                                                            void toggleDoctorEmploymentType(doctor.doctorId, event.target.checked ? "estatutario" : "pj");
-                                                        }}
-                                                        disabled={!canManageClosing || employmentTypeBusyDoctorId === doctor.doctorId}
-                                                    />
-                                                    <span>Estatutário</span>
-                                                </label>
-
-                                                {doctorProfile !== "psychiatry" ? (
-                                                    <label className="chief-payable-specialist-toggle">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={doctorProfile === "specialist"}
-                                                            onChange={(event) => {
-                                                                void toggleDoctorSpecialistProfile(doctor.doctorId, event.target.checked);
-                                                            }}
-                                                            disabled={!canManageClosing || profileBusyDoctorId === doctor.doctorId}
-                                                        />
-                                                        <span>ESP</span>
-                                                    </label>
-                                                ) : null}
-
+                                                {/* Toggles Estatutário/ESP moveram para o modal do médico —
+                                                    a linha fica só com assinar + banco de horas (coluna estreita). */}
                                                 <label className={`chief-payable-attest-toggle ${isDoctorAttested(doctor) ? "on" : ""}`.trim()} title="Conferido e assinado">
                                                     <input
                                                         type="checkbox"
@@ -2043,18 +2020,31 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                 </label>
 
                                                 {doctor.bankHoursMinutes != null || doctor.bankHoursSettlement ? (() => {
-                                                    // Saldo do banco de horas na linha: discreto abaixo de ±12h; em
-                                                    // destaque colorido ao atingir o gatilho do acerto (±1 plantão),
-                                                    // para o admin avisar o médico antes de ele assinar a nota.
-                                                    const bankMinutes = doctor.bankHoursMinutes ?? 0;
-                                                    const atPositive = bankMinutes >= BANK_HOURS_THRESHOLD_MINUTES;
-                                                    const atNegative = bankMinutes <= -BANK_HOURS_THRESHOLD_MINUTES;
-                                                    const tone = atPositive ? "threshold-positive" : atNegative ? "threshold-negative" : "";
+                                                    // Saldo do banco de horas na linha, pela régua de elegibilidade:
+                                                    // só horas desde mai/2025 pagam/punem, e dívida anterior a
+                                                    // mai/2025 é amortizada antes de qualquer bônus. Mostrar o bruto
+                                                    // aqui faria o chefe remunerar horas antigas ou devedores.
+                                                    const bank = resolveBankHoursSettlementBalance({
+                                                        oldMinutes: doctor.bankHoursOldMinutes ?? 0,
+                                                        recentMinutes: doctor.bankHoursRecentMinutes ?? (doctor.bankHoursMinutes ?? 0),
+                                                    });
+                                                    const atPositive = bank.bonusEligibleMinutes >= BANK_HOURS_THRESHOLD_MINUTES;
+                                                    const atNegative = bank.penaltyEligibleMinutes <= -BANK_HOURS_THRESHOLD_MINUTES;
+                                                    const amortizing = !atPositive && bank.oldMinutes < 0 && bank.recentMinutes > 0;
+                                                    const tone = atPositive ? "threshold-positive" : atNegative ? "threshold-negative" : amortizing ? "debt" : "";
+                                                    const composition = `Desde mai/2025: ${formatSignedMinutesAsHours(bank.recentMinutes)} · antes de mai/2025: ${formatSignedMinutesAsHours(bank.oldMinutes)} · bruto: ${formatSignedMinutesAsHours(bank.totalMinutes)}`;
                                                     const title = atPositive
-                                                        ? "Banco de horas atingiu +12h: bonifique com 1 plantão verde no resumo do médico antes de ele assinar."
+                                                        ? `Elegível para bônus: ${formatSignedMinutesAsHours(bank.bonusEligibleMinutes)} (horas desde mai/2025, dívida antiga já descontada). Bonifique com 1 plantão verde antes de ele assinar. ${composition}`
                                                         : atNegative
-                                                            ? "Banco de horas atingiu -12h: debite 1 plantão vermelho no resumo do médico antes de ele assinar."
-                                                            : "Saldo do banco de horas — o acerto (±1 plantão) fica disponível a partir de ±12h.";
+                                                            ? `Saldo desde mai/2025 atingiu -12h: debite 1 plantão vermelho antes de ele assinar. ${composition}`
+                                                            : amortizing
+                                                                ? `As horas formadas desde mai/2025 estão amortizando a dívida anterior a mai/2025 — sem bônus até quitar. ${composition}`
+                                                                : `Saldo elegível para acerto (±1 plantão a partir de ±12h). ${composition}`;
+                                                    const shown = atPositive
+                                                        ? bank.bonusEligibleMinutes
+                                                        : atNegative
+                                                            ? bank.penaltyEligibleMinutes
+                                                            : bank.recentMinutes;
                                                     return (
                                                         <button
                                                             type="button"
@@ -2062,8 +2052,16 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             onClick={() => setSelectedDoctorId(doctor.doctorId)}
                                                             title={title}
                                                         >
-                                                            <strong>{formatSignedMinutesAsHours(bankMinutes)}</strong>
-                                                            <span>{atPositive ? "acerto +1 plantão" : atNegative ? "acerto −1 plantão" : "banco"}</span>
+                                                            <strong>{formatSignedMinutesAsHours(shown)}</strong>
+                                                            <span>
+                                                                {atPositive
+                                                                    ? "acerto +1 plantão"
+                                                                    : atNegative
+                                                                        ? "acerto −1 plantão"
+                                                                        : amortizing
+                                                                            ? "amortiza dívida antiga"
+                                                                            : "banco"}
+                                                            </span>
                                                             {doctor.bankHoursSettlement ? (
                                                                 <em title="Acerto de 12h já lançado neste mês">✓ acerto no mês</em>
                                                             ) : null}
@@ -2289,6 +2287,34 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                 <span className="payment-eyebrow">Resumo do médico</span>
                                 <h3>{selectedDoctor.doctorName}</h3>
                                 <p>{paymentProfileLabel(selectedDoctor.paymentProfile)} · {employmentTypeLabel(selectedDoctor.employmentType)} · {board.monthLabel}</p>
+                                {/* Toggles de vínculo/tarifa moraram na linha da tabela; migraram
+                                    para cá para a coluna do médico ficar estreita. */}
+                                <div className="chief-payable-modal-toggles">
+                                    <label className="chief-payable-specialist-toggle" title="Estatutário/REDA não gera valor a pagar por plantão">
+                                        <input
+                                            type="checkbox"
+                                            checked={(doctorEmploymentTypeOverrides[selectedDoctor.doctorId] ?? selectedDoctor.employmentType ?? "pj") === "estatutario"}
+                                            onChange={(event) => {
+                                                void toggleDoctorEmploymentType(selectedDoctor.doctorId, event.target.checked ? "estatutario" : "pj");
+                                            }}
+                                            disabled={!canManageClosing || employmentTypeBusyDoctorId === selectedDoctor.doctorId}
+                                        />
+                                        <span>Estatutário</span>
+                                    </label>
+                                    {(doctorProfileOverrides[selectedDoctor.doctorId] ?? selectedDoctor.paymentProfile ?? "generalist") !== "psychiatry" ? (
+                                        <label className="chief-payable-specialist-toggle" title="Tarifa de especialista">
+                                            <input
+                                                type="checkbox"
+                                                checked={(doctorProfileOverrides[selectedDoctor.doctorId] ?? selectedDoctor.paymentProfile ?? "generalist") === "specialist"}
+                                                onChange={(event) => {
+                                                    void toggleDoctorSpecialistProfile(selectedDoctor.doctorId, event.target.checked);
+                                                }}
+                                                disabled={!canManageClosing || profileBusyDoctorId === selectedDoctor.doctorId}
+                                            />
+                                            <span>ESP</span>
+                                        </label>
+                                    ) : null}
+                                </div>
                             </div>
                             <div className="chief-payable-modal-header-actions">
                                 <a
@@ -2478,51 +2504,80 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     )}
                                 </article>
 
-                                <article className="chief-payable-modal-card">
-                                    <span>Saldo banco de horas</span>
-                                    <strong className={(selectedDoctor.bankHoursMinutes ?? 0) < 0 ? "negative" : ""}>
-                                        {formatMinutesAsHours(selectedDoctor.bankHoursMinutes)}
-                                    </strong>
-                                    {selectedDoctor.bankHoursSettlement ? (
-                                        <small className="chief-payable-bank-note">
-                                            {selectedDoctor.bankHoursSettlement.kind === "bonus" ? "Bônus" : "Punição"} de 12h lançado neste mês
-                                            {selectedDoctor.bankHoursSettlement.operationalDate ? ` (dia ${selectedDoctor.bankHoursSettlement.operationalDate.slice(8, 10)})` : ""}.{" "}
-                                            <a href="/admin/bank-hours" target="_blank" rel="noopener">ver no banco de horas</a>
-                                        </small>
-                                    ) : null}
-                                    {(selectedDoctor.bankHoursMinutes ?? 0) >= BANK_HOURS_THRESHOLD_MINUTES ? (
-                                        <>
-                                            <small>+12h ou mais — bonifique com 1 plantão verde (dia útil) e abata 12h do saldo.</small>
-                                            {canManageClosing ? (
-                                                <button
-                                                    type="button"
-                                                    className="payment-button bank-bonus"
-                                                    onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
-                                                    disabled={bankBusy}
-                                                >
-                                                    {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde) e abater 12h"}
-                                                </button>
+                                {(() => {
+                                    // Régua do acerto: só horas desde mai/2025 pagam/punem; dívida
+                                    // anterior a mai/2025 é amortizada antes de qualquer bônus.
+                                    const bank = resolveBankHoursSettlementBalance({
+                                        oldMinutes: selectedDoctor.bankHoursOldMinutes ?? 0,
+                                        recentMinutes: selectedDoctor.bankHoursRecentMinutes ?? (selectedDoctor.bankHoursMinutes ?? 0),
+                                    });
+                                    const bonusReady = bank.bonusEligibleMinutes >= BANK_HOURS_THRESHOLD_MINUTES;
+                                    const penaltyReady = bank.penaltyEligibleMinutes <= -BANK_HOURS_THRESHOLD_MINUTES;
+                                    const amortizing = !bonusReady && bank.oldMinutes < 0 && bank.recentMinutes > 0;
+                                    return (
+                                        <article className="chief-payable-modal-card">
+                                            <span>Banco de horas · desde mai/2025</span>
+                                            <strong className={bank.recentMinutes < 0 ? "negative" : ""}>
+                                                {formatMinutesAsHours(bank.recentMinutes)}
+                                            </strong>
+                                            {bank.oldMinutes !== 0 ? (
+                                                <small className="chief-payable-bank-note">
+                                                    Antes de mai/2025: <strong className={bank.oldMinutes < 0 ? "negative" : ""}>{formatSignedMinutesAsHours(bank.oldMinutes)}</strong>{" "}
+                                                    — fora da régua do acerto{bank.oldMinutes < 0 ? " (dívida: as horas novas amortizam primeiro)" : " (crédito antigo não remunera)"}.
+                                                    {" "}Bruto total: {formatSignedMinutesAsHours(bank.totalMinutes)}.
+                                                </small>
                                             ) : null}
-                                        </>
-                                    ) : (selectedDoctor.bankHoursMinutes ?? 0) <= -BANK_HOURS_THRESHOLD_MINUTES ? (
-                                        <>
-                                            <small>-12h ou menos — debite 1 plantão vermelho e devolva 12h ao saldo.</small>
-                                            {canManageClosing ? (
-                                                <button
-                                                    type="button"
-                                                    className="payment-button bank-penalty"
-                                                    onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
-                                                    disabled={bankBusy}
-                                                >
-                                                    {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho) e devolver 12h"}
-                                                </button>
+                                            {selectedDoctor.bankHoursSettlement ? (
+                                                <small className="chief-payable-bank-note">
+                                                    {selectedDoctor.bankHoursSettlement.kind === "bonus" ? "Bônus" : "Punição"} de 12h lançado neste mês
+                                                    {selectedDoctor.bankHoursSettlement.operationalDate ? ` (dia ${selectedDoctor.bankHoursSettlement.operationalDate.slice(8, 10)})` : ""}.{" "}
+                                                    <a href="/admin/bank-hours" target="_blank" rel="noopener">ver no banco de horas</a>
+                                                </small>
                                             ) : null}
-                                        </>
-                                    ) : !selectedDoctor.bankHoursSettlement ? (
-                                        <small>Dentro de ±12h — sem acerto disponível.</small>
-                                    ) : null}
-                                    {bankError ? <p className="chief-payable-extra-feedback danger">{bankError}</p> : null}
-                                </article>
+                                            {bonusReady ? (
+                                                <>
+                                                    <small>
+                                                        Elegível para bônus: {formatSignedMinutesAsHours(bank.bonusEligibleMinutes)}
+                                                        {bank.oldMinutes < 0 ? " (dívida antiga já descontada)" : ""} — bonifique com 1 plantão verde (dia útil) e abata 12h.
+                                                    </small>
+                                                    {canManageClosing ? (
+                                                        <button
+                                                            type="button"
+                                                            className="payment-button bank-bonus"
+                                                            onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
+                                                            disabled={bankBusy}
+                                                        >
+                                                            {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde) e abater 12h"}
+                                                        </button>
+                                                    ) : null}
+                                                </>
+                                            ) : penaltyReady ? (
+                                                <>
+                                                    <small>-12h ou menos desde mai/2025 — debite 1 plantão vermelho e devolva 12h ao saldo.</small>
+                                                    {canManageClosing ? (
+                                                        <button
+                                                            type="button"
+                                                            className="payment-button bank-penalty"
+                                                            onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
+                                                            disabled={bankBusy}
+                                                        >
+                                                            {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho) e devolver 12h"}
+                                                        </button>
+                                                    ) : null}
+                                                </>
+                                            ) : amortizing ? (
+                                                <small>
+                                                    Formou {formatSignedMinutesAsHours(bank.recentMinutes)} desde mai/2025, mas ainda amortiza a dívida antiga
+                                                    ({formatSignedMinutesAsHours(bank.oldMinutes)}). Sem bônus até quitar — saldo elegível atual:{" "}
+                                                    {formatSignedMinutesAsHours(bank.bonusEligibleMinutes)}.
+                                                </small>
+                                            ) : !selectedDoctor.bankHoursSettlement ? (
+                                                <small>Dentro de ±12h — sem acerto disponível.</small>
+                                            ) : null}
+                                            {bankError ? <p className="chief-payable-extra-feedback danger">{bankError}</p> : null}
+                                        </article>
+                                    );
+                                })()}
                             </div>
                         </section>
 

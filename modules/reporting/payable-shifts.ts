@@ -244,6 +244,10 @@ export interface ChiefPayableDoctorRow {
     contractBalanceBrl?: number | null;
     /** Saldo efetivo do banco de horas (bruto + acertos), em minutos. */
     bankHoursMinutes?: number | null;
+    /** Parcela do saldo anterior a mai/2025 (planilha) — fora da régua de acerto. */
+    bankHoursOldMinutes?: number | null;
+    /** Parcela do saldo desde mai/2025 (planilha 25→26 + aplicação + acertos). */
+    bankHoursRecentMinutes?: number | null;
     /** Acerto de banco de horas lançado neste mês (bônus/punição), se houver. */
     bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
     /** Plantões cumpridos em USA (intervenção/ambulância) no mês — só linhas com unidade positiva. */
@@ -269,6 +273,8 @@ export interface DoctorFinancialExtras {
     contractSeedMonth?: string | null;
     contractBalanceBrl?: number | null;
     bankHoursMinutes?: number | null;
+    bankHoursOldMinutes?: number | null;
+    bankHoursRecentMinutes?: number | null;
     bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
 }
 
@@ -934,6 +940,8 @@ export function buildChiefPayableBoard(params: {
             contractSeedMonth: params.doctorFinancials?.[doctorId]?.contractSeedMonth ?? null,
             contractBalanceBrl: params.doctorFinancials?.[doctorId]?.contractBalanceBrl ?? null,
             bankHoursMinutes: params.doctorFinancials?.[doctorId]?.bankHoursMinutes ?? null,
+            bankHoursOldMinutes: params.doctorFinancials?.[doctorId]?.bankHoursOldMinutes ?? null,
+            bankHoursRecentMinutes: params.doctorFinancials?.[doctorId]?.bankHoursRecentMinutes ?? null,
             bankHoursSettlement: params.doctorFinancials?.[doctorId]?.bankHoursSettlement ?? null,
             usaShiftCount,
             cruShiftCount,

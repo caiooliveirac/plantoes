@@ -3,8 +3,10 @@ import { getDb } from "@/db";
 import { auditLogs, bankHoursBalanceOverrides, bankHoursLegacyBalances, doctors, users } from "@/db/schema";
 import {
     buildBankHoursHistoryModel,
+    resolveBankHoursSettlementBalance,
     type BankHoursHistoryModel,
     type BankHoursLegacyDoctorRecord,
+    type BankHoursSettlementBalance,
     type RawBankHoursHistoryShift,
 } from "@/modules/reporting/bank-hours-history";
 import type { MonthlyReportAuditEntry, MonthlyReportSource } from "@/modules/reporting/monthly-report";
@@ -285,25 +287,34 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
 }
 
 /**
- * Saldo EFETIVO do banco de horas por médico, em minutos. É a fonte única usada
- * pelo modal do payment-closing para decidir o gatilho de ±12h. O saldo do
+ * Saldo EFETIVO do banco de horas por médico, decomposto para a régua do acerto
+ * de ±12h do fechamento. É a fonte única usada pelo payment-closing. O saldo do
  * histórico JÁ inclui os acertos (buildBankHoursHistoryModel os soma), então aqui
- * apenas reusamos esse número — sem dobrar a contagem.
+ * apenas reusamos esses números — sem dobrar a contagem.
+ *
+ * Decomposição: `oldMinutes` = planilha até abr/2025 (fora da régua);
+ * `recentMinutes` = planilha mai/2025→mai/2026 + apurado pela aplicação
+ * (com acertos). Só o recente pode virar bônus/punição — ver
+ * resolveBankHoursSettlementBalance.
  */
-export async function getDoctorBankHoursEffectiveBalances(): Promise<Map<string, number>> {
+export async function getDoctorBankHoursEffectiveBalances(): Promise<Map<string, BankHoursSettlementBalance>> {
     const [history, settlementDelta] = await Promise.all([
         getBankHoursHistory(),
         loadBankHoursSettlementDeltaByDoctor(),
     ]);
 
-    const balances = new Map<string, number>();
+    const balances = new Map<string, BankHoursSettlementBalance>();
     for (const doctor of history.doctors) {
-        balances.set(doctor.doctorId, doctor.balanceMinutes);
+        const oldMinutes = doctor.legacy?.preMay2025Minutes ?? 0;
+        balances.set(doctor.doctorId, resolveBankHoursSettlementBalance({
+            oldMinutes,
+            recentMinutes: (doctor.legacy?.spreadsheetPeriodMinutes ?? 0) + doctor.applicationBalanceMinutes,
+        }));
     }
     // Médicos que só têm acerto (sem histórico de plantão) ainda precisam aparecer.
     for (const [doctorId, delta] of settlementDelta) {
         if (!balances.has(doctorId)) {
-            balances.set(doctorId, delta);
+            balances.set(doctorId, resolveBankHoursSettlementBalance({ oldMinutes: 0, recentMinutes: delta }));
         }
     }
     return balances;
