@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { auditLogs, bankHoursBalanceOverrides, bankHoursLegacyBalances, doctors, users } from "@/db/schema";
+import { bankHoursBalanceOverrides, bankHoursLegacyBalances, doctors, users } from "@/db/schema";
 import {
     buildBankHoursHistoryModel,
     resolveBankHoursSettlementBalance,
@@ -59,17 +59,10 @@ function mapRow(row: Record<string, unknown>): RawBankHoursHistoryShift {
     };
 }
 
-async function loadManualBalanceOverrides(continuityGroupIds: string[]) {
-    const normalizedIds = [...new Set(continuityGroupIds.filter(Boolean))];
-    if (normalizedIds.length === 0) {
-        return new Map<string, {
-            balanceMinutes: number;
-            notes: string;
-            updatedAt: string;
-            actorEmail: string | null;
-        }>();
-    }
-
+// Carrega TODOS os overrides (tabela pequena, 1 linha por correção manual):
+// mandar milhares de continuity_group_ids num IN custava mais em parse/bind do
+// que trazer a tabela inteira e resolver o vínculo no map por grupo.
+async function loadManualBalanceOverrides() {
     const db = getDb();
     const rows = await db
         .select({
@@ -80,8 +73,7 @@ async function loadManualBalanceOverrides(continuityGroupIds: string[]) {
             actorEmail: users.email,
         })
         .from(bankHoursBalanceOverrides)
-        .leftJoin(users, eq(users.id, bankHoursBalanceOverrides.updatedByUserId))
-        .where(inArray(bankHoursBalanceOverrides.continuityGroupId, normalizedIds));
+        .leftJoin(users, eq(users.id, bankHoursBalanceOverrides.updatedByUserId));
 
     return new Map(rows.map((row) => [
         row.continuityGroupId,
@@ -153,55 +145,40 @@ async function loadLateDeparturesByOccupancy(): Promise<Map<string, BankHoursLat
     return map;
 }
 
-async function loadAuditTrailByOccupancy(shifts: RawBankHoursHistoryShift[]) {
-    const regulationIds = shifts.filter((shift) => shift.domain === "regulation").map((shift) => shift.occupancyId);
-    const interventionIds = shifts.filter((shift) => shift.domain === "intervention").map((shift) => shift.occupancyId);
-    const filters = [];
-
-    if (regulationIds.length > 0) {
-        filters.push(and(
-            eq(auditLogs.entityType, "regulation_occupancy"),
-            inArray(auditLogs.entityId, regulationIds),
-        ));
-    }
-
-    if (interventionIds.length > 0) {
-        filters.push(and(
-            eq(auditLogs.entityType, "intervention_occupancy"),
-            inArray(auditLogs.entityId, interventionIds),
-        ));
-    }
-
-    if (filters.length === 0) {
-        return new Map<string, MonthlyReportAuditEntry[]>();
-    }
-
+// O histórico cobre TODAS as ocupações, então o vínculo com a auditoria é
+// resolvido no banco via EXISTS (índice audit_logs_entity_idx, migration 0036)
+// em vez de mandar milhares de ids num IN — que custava parse/bind por request.
+async function loadAuditTrailByOccupancy() {
     const db = getDb();
-    const whereClause = filters.length === 1 ? filters[0] : or(...filters);
-    const rows = await db
-        .select({
-            id: auditLogs.id,
-            action: auditLogs.action,
-            entityType: auditLogs.entityType,
-            entityId: auditLogs.entityId,
-            createdAt: auditLogs.createdAt,
-            details: auditLogs.details,
-            actorEmail: users.email,
-        })
-        .from(auditLogs)
-        .leftJoin(users, eq(users.id, auditLogs.actorUserId))
-        .where(whereClause)
-        .orderBy(desc(auditLogs.createdAt));
+    const result = await db.execute(sql`
+        select
+            al.id,
+            al.action,
+            al.entity_type as "entityType",
+            al.entity_id as "entityId",
+            al.created_at as "createdAt",
+            al.details,
+            u.email as "actorEmail"
+        from operations_v2.audit_logs al
+        left join operations_v2.users u on u.id = al.actor_user_id
+        where (al.entity_type = 'regulation_occupancy' and exists (
+                select 1 from operations_v2.regulation_occupancies ro where ro.id::text = al.entity_id
+            ))
+           or (al.entity_type = 'intervention_occupancy' and exists (
+                select 1 from operations_v2.intervention_occupancies io where io.id::text = al.entity_id
+            ))
+        order by al.created_at desc
+    `);
 
     const grouped = new Map<string, MonthlyReportAuditEntry[]>();
-    for (const row of rows) {
-        const key = `${row.entityType}:${row.entityId}`;
+    for (const row of result as unknown as Record<string, unknown>[]) {
+        const key = `${String(row.entityType)}:${String(row.entityId)}`;
         const current = grouped.get(key) ?? [];
         current.push({
-            id: row.id,
-            action: row.action,
-            actorEmail: row.actorEmail,
-            createdAt: row.createdAt.toISOString(),
+            id: String(row.id),
+            action: String(row.action),
+            actorEmail: (row.actorEmail ?? null) as string | null,
+            createdAt: new Date(String(row.createdAt)).toISOString(),
             details: typeof row.details === "object" && row.details !== null ? row.details as Record<string, unknown> : {},
         });
         grouped.set(key, current);
@@ -219,104 +196,20 @@ async function loadAuditTrailByOccupancy(shifts: RawBankHoursHistoryShift[]) {
 export async function getBankHoursHistory(options?: { balancesOnly?: boolean }): Promise<BankHoursHistoryModel> {
     const balancesOnly = options?.balancesOnly === true;
     const db = getDb();
+    // Forma canônica em operations_v2.bank_hours_history_shifts (migration 0036):
+    // a mesma consulta fica disponível para EXPLAIN/auditoria direto no psql.
     const result = await db.execute(sql`
-        with regulation_history as (
-            select
-                ro.id as "occupancyId",
-                'regulation' as domain,
-                d.id as "doctorId",
-                d.full_name as "doctorName",
-                d.display_name as "displayName",
-                rp.code as "targetCode",
-                rp.label as "targetLabel",
-                ro.continuity_group_id as "continuityGroupId",
-                ro.started_at as "startedAt",
-                ro.board_started_at as "boardStartedAt",
-                ro.ended_at as "handoffEndedAt",
-                ro.actual_ended_at as "actualEndedAt",
-                coalesce(ro.actual_ended_at, ro.ended_at) as "effectiveEndedAt",
-                ro.shift_label as "shiftLabel",
-                ro.source as source,
-                ro.notes as notes,
-                ro.created_at as "createdAt",
-                ro.updated_at as "updatedAt",
-                creator.email as "createdByEmail",
-                updater.email as "updatedByEmail",
-                (bhe.id is not null) as "hasPersistedBankEntry",
-                ro.scheduled_start_at as "occupancyScheduledStartAt",
-                ro.scheduled_end_at as "occupancyScheduledEndAt",
-                bhe.scheduled_start_at as "bankScheduledStartAt",
-                bhe.scheduled_end_at as "bankScheduledEndAt",
-                bhe.actual_start_at as "bankActualStartAt",
-                bhe.actual_end_at as "bankActualEndAt",
-                bhe.arrival_delay_minutes as "arrivalDelayMinutes",
-                bhe.overtime_minutes as "overtimeMinutes",
-                bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
-                bhe.balance_minutes as "balanceMinutes",
-                bhe.rule_code as "ruleCode",
-                bhe.explanation as "bankHoursExplanation"
-            from operations_v2.regulation_occupancies ro
-            inner join operations_v2.doctors d on d.id = ro.doctor_id
-            inner join operations_v2.regulation_posts rp on rp.id = ro.post_id
-            left join operations_v2.users creator on creator.id = ro.created_by_user_id
-            left join operations_v2.users updater on updater.id = ro.updated_by_user_id
-            left join operations_v2.bank_hours_entries bhe on bhe.regulation_occupancy_id = ro.id
-        ),
-        intervention_history as (
-            select
-                io.id as "occupancyId",
-                'intervention' as domain,
-                d.id as "doctorId",
-                d.full_name as "doctorName",
-                d.display_name as "displayName",
-                ib.code as "targetCode",
-                ib.label as "targetLabel",
-                io.continuity_group_id as "continuityGroupId",
-                io.started_at as "startedAt",
-                io.board_started_at as "boardStartedAt",
-                io.ended_at as "handoffEndedAt",
-                io.actual_ended_at as "actualEndedAt",
-                coalesce(io.actual_ended_at, io.ended_at) as "effectiveEndedAt",
-                io.shift_label as "shiftLabel",
-                io.source as source,
-                io.notes as notes,
-                io.created_at as "createdAt",
-                io.updated_at as "updatedAt",
-                creator.email as "createdByEmail",
-                updater.email as "updatedByEmail",
-                (bhe.id is not null) as "hasPersistedBankEntry",
-                io.scheduled_start_at as "occupancyScheduledStartAt",
-                io.scheduled_end_at as "occupancyScheduledEndAt",
-                bhe.scheduled_start_at as "bankScheduledStartAt",
-                bhe.scheduled_end_at as "bankScheduledEndAt",
-                bhe.actual_start_at as "bankActualStartAt",
-                bhe.actual_end_at as "bankActualEndAt",
-                bhe.arrival_delay_minutes as "arrivalDelayMinutes",
-                bhe.overtime_minutes as "overtimeMinutes",
-                bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
-                bhe.balance_minutes as "balanceMinutes",
-                bhe.rule_code as "ruleCode",
-                bhe.explanation as "bankHoursExplanation"
-            from operations_v2.intervention_occupancies io
-            inner join operations_v2.doctors d on d.id = io.doctor_id
-            inner join operations_v2.intervention_bases ib on ib.id = io.base_id
-            left join operations_v2.users creator on creator.id = io.created_by_user_id
-            left join operations_v2.users updater on updater.id = io.updated_by_user_id
-            left join operations_v2.bank_hours_entries bhe on bhe.intervention_occupancy_id = io.id
-        )
-        select * from regulation_history
-        union all
-        select * from intervention_history
+        select * from operations_v2.bank_hours_history_shifts
     `);
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
-    const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor, lateDeparturesByOccupancy] = await Promise.all([
-        balancesOnly ? new Map<string, MonthlyReportAuditEntry[]>() : loadAuditTrailByOccupancy(rows),
+    const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor, lateDeparturesByOccupancy, manualOverridesByGroup] = await Promise.all([
+        balancesOnly ? new Map<string, MonthlyReportAuditEntry[]>() : loadAuditTrailByOccupancy(),
         loadAllBankHoursSettlements(),
         loadLegacyBalancesByDoctor(),
         balancesOnly ? new Map<string, BankHoursLateDeparture>() : loadLateDeparturesByOccupancy(),
+        loadManualBalanceOverrides(),
     ]);
-    const manualOverridesByGroup = await loadManualBalanceOverrides(rows.map((row) => row.continuityGroupId));
     const enrichedRows = rows.map((row) => ({
         ...row,
         manualBalanceMinutes: manualOverridesByGroup.get(row.continuityGroupId)?.balanceMinutes ?? null,

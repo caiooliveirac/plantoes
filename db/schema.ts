@@ -265,6 +265,7 @@ export const regulationOccupancies = operationsV2.table(
         index("regulation_occupancies_post_idx").on(table.postId),
         index("regulation_occupancies_board_idx").on(table.postId, table.boardStartedAt),
         index("regulation_occupancies_active_idx").on(table.endedAt),
+        index("regulation_occupancies_started_idx").on(table.startedAt),
     ],
 );
 
@@ -302,6 +303,7 @@ export const interventionOccupancies = operationsV2.table(
         index("intervention_occupancies_base_idx").on(table.baseId),
         index("intervention_occupancies_board_idx").on(table.baseId, table.boardStartedAt),
         index("intervention_occupancies_active_idx").on(table.endedAt),
+        index("intervention_occupancies_started_idx").on(table.startedAt),
     ],
 );
 
@@ -652,7 +654,10 @@ export const auditLogs = operationsV2.table(
         details: jsonb("details").notNull().default({}),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },
-    (table) => [index("audit_logs_action_idx").on(table.action, table.createdAt)],
+    (table) => [
+        index("audit_logs_action_idx").on(table.action, table.createdAt),
+        index("audit_logs_entity_idx").on(table.entityType, table.entityId),
+    ],
 );
 
 // Preferências de base ordenadas do médico (só intervenção tem bases).
