@@ -1,7 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react";
-import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
+import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import { resolvePendingRegulationOccupantLabel } from "@/modules/operational/board-display";
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
 
@@ -413,82 +413,73 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
 
     return (
         <main className="payment-shell">
-            <section className="payment-hero">
-                <div>
-                    <p className="reports-kicker">Pagamento operacional</p>
-                    <h1>Quem fecha o turno no banco por base ou ramal, com revisão pronta para o admin.</h1>
-                    <p className="payment-subtitle">
-                        Esta leitura pega o turno operacional, escolhe o ocupante que efetivamente vai para pagamento em cada entidade e separa o que já está limpo do que ainda precisa conferência humana.
-                    </p>
-                </div>
-
-                <AdminGlobalNavigationLinks current="payment-allocation" containerClassName="payment-hero-actions" />
-            </section>
-
-            <section className="payment-summary-grid">
-                <article className="payment-summary-card">
-                    <span className="reports-summary-label">Alvos no turno</span>
-                    <strong>{board.summary.totalTargets}</strong>
-                    <span>{formatDateLabel(board.operationalDate)} · {board.shiftLabel}</span>
-                </article>
-                <article className="payment-summary-card ready">
-                    <span className="reports-summary-label">Prontos</span>
-                    <strong>{board.summary.readyForPaymentCount}</strong>
-                    <span>sem pendência operacional de pagamento</span>
-                </article>
-                <article className="payment-summary-card review">
-                    <span className="reports-summary-label">Em revisão</span>
-                    <strong>{board.summary.needsReviewCount}</strong>
-                    <span>com atraso, conflito, vazio ou correção manual</span>
-                </article>
-                <article className="payment-summary-card empty">
-                    <span className="reports-summary-label">Sem ocupação</span>
-                    <strong>{board.summary.unassignedCount}</strong>
-                    <span>alvos que não fecharam com titular identificado</span>
-                </article>
-                <article className="payment-summary-card">
-                    <span className="reports-summary-label">Desativadas</span>
-                    <strong>{board.summary.disabledCount ?? 0}</strong>
-                    <span>bases retiradas da operação no turno</span>
-                </article>
-            </section>
-
-            <section className="payment-filter-bar">
-                <label className="payment-filter-field">
-                    <span>Data operacional</span>
+            {/* Faixa de comando compacta: turno + busca + KPIs + navegação •••. */}
+            <section className="admin-bar-frame standalone">
+                <header className="admin-bar">
+                    <span
+                        className="admin-bar-kicker"
+                        title="Escolhe o ocupante que efetivamente vai para pagamento em cada base/ramal do turno e separa o que está limpo do que precisa conferência humana."
+                    >
+                        Alocação de pagamento
+                    </span>
                     <input
                         type="date"
+                        className="admin-bar-field"
                         value={dateInput}
                         onChange={(event) => setDateInput(event.target.value)}
+                        aria-label="Data operacional"
                     />
-                </label>
-
-                <label className="payment-filter-field compact">
-                    <span>Turno</span>
-                    <select value={shiftInput} onChange={(event) => setShiftInput(event.target.value as "SD" | "SN")}>
+                    <select
+                        className="admin-bar-field"
+                        value={shiftInput}
+                        onChange={(event) => setShiftInput(event.target.value as "SD" | "SN")}
+                        aria-label="Turno"
+                    >
                         <option value="SD">SD</option>
                         <option value="SN">SN</option>
                     </select>
-                </label>
-
-                <label className="payment-filter-field payment-filter-search">
-                    <span>Buscar alvo</span>
-                    <input
-                        type="search"
-                        value={search}
-                        onChange={(event) => setSearch(event.target.value)}
-                        placeholder="Base, ramal ou médico"
-                    />
-                </label>
-
-                <div className="payment-filter-actions">
                     <button type="button" className="payment-button primary" onClick={() => void applyFilters()} disabled={isRefreshing || isSaving}>
                         {isRefreshing ? "Atualizando..." : "Conferir"}
                     </button>
                     <button type="button" className="payment-button" onClick={() => void resetToCurrentShift()} disabled={isRefreshing || isSaving}>
                         Turno atual
                     </button>
-                </div>
+                    <input
+                        type="search"
+                        className="admin-bar-search"
+                        style={{ width: "min(220px, 100%)" }}
+                        value={search}
+                        onChange={(event) => setSearch(event.target.value)}
+                        placeholder="Buscar base, ramal ou médico"
+                        aria-label="Buscar alvo"
+                    />
+                    <span className="admin-bar-divider" aria-hidden="true" />
+                    <div className="admin-bar-kpis">
+                        <div className="admin-bar-kpi" title={`${formatDateLabel(board.operationalDate)} · ${board.shiftLabel}`}>
+                            <strong>{board.summary.totalTargets}</strong>
+                            <span>alvos no turno</span>
+                        </div>
+                        <div className="admin-bar-kpi ok" title="Sem pendência operacional de pagamento">
+                            <strong>{board.summary.readyForPaymentCount}</strong>
+                            <span>prontos</span>
+                        </div>
+                        <div className="admin-bar-kpi warn" title="Com atraso, conflito, vazio ou correção manual">
+                            <strong>{board.summary.needsReviewCount}</strong>
+                            <span>em revisão</span>
+                        </div>
+                        <div className="admin-bar-kpi danger" title="Alvos que não fecharam com titular identificado">
+                            <strong>{board.summary.unassignedCount}</strong>
+                            <span>sem ocupação</span>
+                        </div>
+                        <div className="admin-bar-kpi" title="Bases retiradas da operação no turno">
+                            <strong>{board.summary.disabledCount ?? 0}</strong>
+                            <span>desativadas</span>
+                        </div>
+                    </div>
+                    <div className="admin-bar-actions">
+                        <AdminBarNavMenu current="payment-allocation" />
+                    </div>
+                </header>
             </section>
 
             {(loadError || feedbackMessage) && (

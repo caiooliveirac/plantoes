@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useState, useTransition } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type { BankHoursDoctorHistory, BankHoursHistoryModel, BankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
@@ -164,6 +164,20 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const [settlementMonth, setSettlementMonth] = useState(settlementMonths[0]?.key ?? "");
     // Gaveta "Como ler" da faixa de comando (absorveu o herói e os princípios).
     const [guideOpen, setGuideOpen] = useState(false);
+    const detailPanelRef = useRef<HTMLElement | null>(null);
+
+    // Em layout empilhado (≤1180px) o detalhe fica ABAIXO da lista inteira de
+    // médicos — sem isso o admin precisa arrastar a página toda após o clique.
+    function selectDoctor(doctorId: string) {
+        setSelectedDoctorId(doctorId);
+        if (window.matchMedia("(max-width: 1180px)").matches) {
+            // Timeout curto: espera o React commitar o novo detalhe antes de rolar.
+            // behavior "auto" (salto): o smooth era abortado pelo re-render do painel.
+            window.setTimeout(() => {
+                detailPanelRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+            }, 80);
+        }
+    }
 
     useEffect(() => {
         const nextMinutes: Record<string, string> = {};
@@ -342,7 +356,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                             key={doctor.doctorId}
                             type="button"
                             className={`hours-doctor-card ${selectedDoctor?.doctorId === doctor.doctorId ? "selected" : ""}`.trim()}
-                            onClick={() => setSelectedDoctorId(doctor.doctorId)}
+                            onClick={() => selectDoctor(doctor.doctorId)}
                         >
                             <div>
                                 <strong>{doctor.doctorName}</strong>
@@ -370,7 +384,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                     ))}
                 </div>
 
-                <aside className="hours-detail-panel">
+                <aside className="hours-detail-panel" ref={detailPanelRef}>
                     {selectedDoctor ? (
                         <>
                             <header className="hours-detail-header">

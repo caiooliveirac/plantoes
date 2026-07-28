@@ -2940,6 +2940,25 @@ button.ops-doctor-line.shadow.clickable:hover {
     gap: 12px;
 }
 
+/* Desktop: a lista de médicos rola dentro da própria coluna, grudada abaixo da
+   faixa de comando — o detalhe do médico fica sempre visível ao lado, sem
+   precisar arrastar a página toda. */
+@media (min-width: 1181px) {
+    .hours-directory-column {
+        position: sticky;
+        top: 84px;
+        max-height: calc(100vh - 100px);
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+}
+
+/* Faixa do histórico operacional: dentro da mesa ao vivo não gruda no topo
+   (evita sobrepor o cromo do quadro ao rolar). */
+.ops-retro-bar {
+    position: static;
+}
+
 .hours-directory-header {
     display: flex;
     justify-content: space-between;
@@ -4158,7 +4177,10 @@ button.ops-doctor-line.shadow.clickable:hover {
     flex-wrap: wrap;
     gap: 8px 14px;
     flex: 1;
-    min-width: 0;
+    /* Sem min-width: 0 — os KPIs têm nowrap; encolher abaixo do conteúdo faz
+       o texto vazar por cima dos vizinhos em telas estreitas. Preferimos que
+       o bloco quebre de linha inteiro dentro da faixa (flex-wrap). */
+    min-width: fit-content;
 }
 
 .admin-bar-kpi {

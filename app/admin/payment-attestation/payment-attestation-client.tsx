@@ -385,13 +385,19 @@ export function PaymentAttestationClient({ initialView }: Props) {
                             <strong>{view.slot.summary.readyCount}</strong>
                             <span>prontos</span>
                         </div>
-                        <div className="admin-bar-kpi warn" title={`${view.slot.summary.unassignedCount} sem ocupação consolidada`}>
+                        <div
+                            className="admin-bar-kpi warn"
+                            title={`Alvos que ainda impedem aprovar o slot (sem titular consolidado ou com pendência) · ${view.slot.summary.unassignedCount} sem ocupação`}
+                        >
                             <strong>{view.slot.summary.needsReviewCount}</strong>
-                            <span>em revisão</span>
+                            <span>travam aprovação</span>
                         </div>
-                        <div className="admin-bar-kpi" title={`${view.slot.summary.disabledCount} desativadas fora da conta`}>
+                        <div
+                            className="admin-bar-kpi"
+                            title={`Total de ramais/bases que contam neste turno · ${view.slot.summary.disabledCount} desativadas fora da conta`}
+                        >
                             <strong>{view.slot.summary.totalTargets}</strong>
-                            <span>alvos</span>
+                            <span>alvos no turno</span>
                         </div>
                         <span
                             className={`payment-status-pill ${slotStatusBadgeTone(view.slot.status)}`.trim()}

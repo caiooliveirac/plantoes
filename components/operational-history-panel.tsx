@@ -630,31 +630,11 @@ export function OperationalHistoryPanel({ session, doctors, onReturnLive }: Prop
                             </button>
                         </form>
 
-                        <span className="admin-bar-divider" aria-hidden="true" />
-
-                        <div className="admin-bar-kpis">
-                            <div className="admin-bar-kpi warn">
-                                <strong>{board.summary.relevantPending.totalItems}</strong>
-                                <span>pendências relevantes</span>
-                            </div>
-                            <div className="admin-bar-kpi">
-                                <strong>{board.summary.relevantPending.regulationOccupiedCount}/{board.summary.relevantPending.regulationExpectedCount}</strong>
-                                <span>regulação</span>
-                            </div>
-                            <div className="admin-bar-kpi">
-                                <strong>{board.summary.relevantPending.interventionOccupiedCount}/{board.summary.relevantPending.interventionExpectedCount}</strong>
-                                <span>intervenção</span>
-                            </div>
-                            <div className="admin-bar-kpi" title="Janela auditada do turno exibido">
-                                <strong>{formatBoardTime(board.startedAt)}–{formatBoardTime(board.endedAt)}</strong>
-                                <span>janela</span>
-                            </div>
-                            {isLoading && loadingSlotKey && slotSelection.date ? (
-                                <div className="admin-bar-kpi">
-                                    <span>Carregando {formatShiftDateLabel(slotSelection.date)} • {slotSelection.shift}…</span>
-                                </div>
-                            ) : null}
-                        </div>
+                        {isLoading && loadingSlotKey && slotSelection.date ? (
+                            <span className="admin-bar-kpi">
+                                <span>Carregando {formatShiftDateLabel(slotSelection.date)} • {slotSelection.shift}…</span>
+                            </span>
+                        ) : null}
 
                         <div className="admin-bar-actions">
                             <button type="button" className="chief-secondary-button" onClick={onReturnLive}>Agora operacional</button>
