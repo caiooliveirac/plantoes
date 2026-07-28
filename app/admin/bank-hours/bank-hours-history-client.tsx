@@ -340,7 +340,9 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const router = useRouter();
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
-    const [selectedDoctorId, setSelectedDoctorId] = useState(history.doctors[0]?.doctorId ?? null);
+    // Nenhum médico aberto por padrão: o histórico dilata muito a página, então
+    // ele só abre por clique e pode ser fechado em vários pontos (X, fim, Esc).
+    const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
     const [overrideMinutesByShift, setOverrideMinutesByShift] = useState<Record<string, string>>({});
     const [overrideNotesByShift, setOverrideNotesByShift] = useState<Record<string, string>>({});
     const [overrideErrorsByShift, setOverrideErrorsByShift] = useState<Record<string, string>>({});
@@ -350,10 +352,17 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     // Gaveta "Como ler" da faixa de comando (absorveu o herói e os princípios).
     const [guideOpen, setGuideOpen] = useState(false);
     const detailPanelRef = useRef<HTMLElement | null>(null);
+    const directoryRef = useRef<HTMLDivElement | null>(null);
 
     // Em layout empilhado (≤1180px) o detalhe fica ABAIXO da lista inteira de
     // médicos — sem isso o admin precisa arrastar a página toda após o clique.
     function selectDoctor(doctorId: string) {
+        // Clicar de novo no médico já aberto fecha o histórico.
+        if (doctorId === selectedDoctorId) {
+            closeDoctor();
+            return;
+        }
+
         setSelectedDoctorId(doctorId);
         if (window.matchMedia("(max-width: 1180px)").matches) {
             // Timeout curto: espera o React commitar o novo detalhe antes de rolar.
@@ -362,6 +371,15 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 detailPanelRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
             }, 80);
         }
+    }
+
+    function closeDoctor() {
+        setSelectedDoctorId(null);
+        // O painel some e a página encolhe; sem isso o scroll fica perdido no
+        // fim do documento. Volta para a lista de médicos.
+        window.setTimeout(() => {
+            directoryRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+        }, 40);
     }
 
     useEffect(() => {
@@ -406,22 +424,29 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         return { delayCount, bonusCount };
     }, [history.doctors]);
 
-    const selectedDoctor = filteredDoctors.find((doctor) => doctor.doctorId === selectedDoctorId)
-        ?? history.doctors.find((doctor) => doctor.doctorId === selectedDoctorId)
-        ?? filteredDoctors[0]
-        ?? history.doctors[0]
-        ?? null;
+    // Sem fallback automático: null = fechado de propósito, e fica fechado.
+    const selectedDoctor = selectedDoctorId
+        ? history.doctors.find((doctor) => doctor.doctorId === selectedDoctorId) ?? null
+        : null;
 
+    // Esc fecha o histórico aberto de qualquer ponto da página.
     useEffect(() => {
-        if (!selectedDoctor && filteredDoctors[0]) {
-            setSelectedDoctorId(filteredDoctors[0].doctorId);
+        if (!selectedDoctorId) {
             return;
         }
 
-        if (selectedDoctor && selectedDoctor.doctorId !== selectedDoctorId) {
-            setSelectedDoctorId(selectedDoctor.doctorId);
+        function onKeyDown(event: KeyboardEvent) {
+            if (event.key === "Escape") {
+                setSelectedDoctorId(null);
+                window.setTimeout(() => {
+                    directoryRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+                }, 40);
+            }
         }
-    }, [filteredDoctors, selectedDoctor, selectedDoctorId]);
+
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [selectedDoctorId]);
 
     const selectedDoctorEvents = useMemo(
         () => (selectedDoctor ? buildDoctorEvents(selectedDoctor) : []),
@@ -550,8 +575,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 ) : null}
             </section>
 
-            <section className="hours-grid">
-                <div className="hours-directory-column">
+            <section className={`hours-grid ${selectedDoctor ? "" : "list-only"}`.trim()}>
+                <div className="hours-directory-column" ref={directoryRef}>
                     <header className="hours-directory-header">
                         <div>
                             <p className="reports-kicker">Médicos</p>
@@ -601,7 +626,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 <aside className="hours-detail-panel" ref={detailPanelRef}>
                     {selectedDoctor ? (
                         <>
-                            <header className="hours-detail-header">
+                            <header className="hours-detail-header sticky">
                                 <div>
                                     <p className="reports-kicker">Histórico do médico</p>
                                     <h2>{selectedDoctor.doctorName}</h2>
@@ -609,7 +634,18 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                         <p>{selectedDoctor.displayName}</p>
                                     ) : null}
                                 </div>
-                                <span className={`hours-balance-pill large ${shiftBalanceClass(selectedDoctor.balanceMinutes)}`}>{formatMinutesForHumans(selectedDoctor.balanceMinutes)}</span>
+                                <div className="hours-detail-header-actions">
+                                    <span className={`hours-balance-pill large ${shiftBalanceClass(selectedDoctor.balanceMinutes)}`}>{formatMinutesForHumans(selectedDoctor.balanceMinutes)}</span>
+                                    <button
+                                        type="button"
+                                        className="hours-close-button"
+                                        onClick={closeDoctor}
+                                        aria-label={`Fechar histórico de ${selectedDoctor.doctorName}`}
+                                        title="Fechar histórico (Esc)"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
                             </header>
 
                             <section className="hours-events-panel">
@@ -977,11 +1013,15 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     );
                                 })}
                             </div>
+
+                            <button type="button" className="hours-close-footer" onClick={closeDoctor}>
+                                Fechar histórico de {selectedDoctor.doctorName} ✕
+                            </button>
                         </>
                     ) : (
                         <article className="hours-empty-state">
-                            <strong>Selecione um médico para abrir o histórico.</strong>
-                            <span>O painel da direita mostra o que mexeu no saldo e a prova plantão a plantão.</span>
+                            <strong>Clique em um médico para abrir o histórico.</strong>
+                            <span>Abre só o que mexeu no saldo e a prova plantão a plantão. Feche pelo ✕, pelo botão no fim ou com Esc.</span>
                         </article>
                     )}
                 </aside>
