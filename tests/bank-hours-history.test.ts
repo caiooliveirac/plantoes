@@ -128,7 +128,7 @@ test("buildBankHoursHistoryModel reconstructs closed shifts without persisted ba
     assert.equal(shift.ruleCode, "ON_TIME_NO_OVERTIME");
     assert.equal(shift.bankScheduledStartAt, "2026-03-25T10:00:00.000Z");
     assert.equal(shift.bankScheduledEndAt, "2026-03-25T22:15:00.000Z");
-    assert.match(shift.proof.items.join(" "), /reconstruida a partir da janela operacional/i);
+    assert.match(shift.proof.items.join(" "), /reconstruída a partir da janela operacional/i);
 });
 
 test("buildBankHoursProof keeps open shifts as pending with precise explanation", () => {
@@ -230,4 +230,96 @@ test("buildBankHoursProof highlights a manual balance override over the automati
     assert.match(proof.summary, /ajustado manualmente/i);
     assert.match(proof.items.join(" "), /admin@mnrs.com.br/);
     assert.match(proof.items.join(" "), /sem direito a banco/i);
+});
+test("modelo nomeia quem rendeu quando a rendição prevalece sobre a saída física", () => {
+    const model = buildBankHoursHistoryModel([
+        makeShift(),
+        makeShift({
+            occupancyId: "occ-2",
+            continuityGroupId: "cg-2",
+            doctorId: "doc-2",
+            doctorName: "Helena Prado",
+            displayName: "Helena",
+            startedAt: "2026-03-25T22:20:00.000Z",
+            boardStartedAt: "2026-03-25T22:20:00.000Z",
+            handoffEndedAt: null,
+            actualEndedAt: null,
+            effectiveEndedAt: null,
+            bankScheduledStartAt: "2026-03-25T22:15:00.000Z",
+            bankScheduledEndAt: "2026-03-26T10:15:00.000Z",
+            bankActualStartAt: "2026-03-25T22:20:00.000Z",
+            bankActualEndAt: null,
+            hasPersistedBankEntry: false,
+            arrivalDelayMinutes: null,
+            overtimeMinutes: null,
+            creditedOvertimeMinutes: null,
+            balanceMinutes: null,
+            ruleCode: null,
+            bankHoursExplanation: null,
+        }),
+    ]);
+
+    const vagner = model.doctors.find((doctor) => doctor.doctorId === "doc-1");
+    const shift = vagner?.shifts[0];
+    assert.ok(shift);
+    assert.equal(shift.flags.hasHandoffOverride, true);
+    assert.equal(shift.successorDoctorName, "Helena");
+    assert.match(shift.proof.items.join(" "), /Helena assumiu a cobertura/);
+});
+
+test("correções da chefia viram entradas legíveis com o chefe da 2031 no momento", () => {
+    const model = buildBankHoursHistoryModel([
+        makeShift({
+            auditTrail: [{
+                id: "audit-1",
+                action: "intervention_occupancy.corrected",
+                actorEmail: "chefe@mnrs.com.br",
+                createdAt: "2026-03-25T14:00:00.000Z",
+                details: {
+                    notes: "Chegada corrigida a pedido da coordenacao.",
+                    previousStartedAt: "2026-03-25T10:00:00.000Z",
+                    nextStartedAt: "2026-03-25T10:40:00.000Z",
+                    beforeSnapshot: {
+                        startedAt: "2026-03-25T10:00:00.000Z",
+                        endedAt: "2026-03-25T22:20:00.000Z",
+                        actualEndedAt: "2026-03-25T22:50:00.000Z",
+                    },
+                },
+            }],
+        }),
+        // Chefia titular da 2031 cobrindo o horário da correção.
+        makeShift({
+            occupancyId: "occ-chief",
+            continuityGroupId: "cg-chief",
+            domain: "regulation",
+            targetCode: "2031",
+            targetLabel: "Ramal 2031",
+            doctorId: "doc-chief",
+            doctorName: "Paulo Cesar",
+            displayName: "Paulo",
+            startedAt: "2026-03-25T10:05:00.000Z",
+            boardStartedAt: "2026-03-25T10:05:00.000Z",
+            handoffEndedAt: "2026-03-25T22:00:00.000Z",
+            actualEndedAt: "2026-03-25T22:00:00.000Z",
+            effectiveEndedAt: "2026-03-25T22:00:00.000Z",
+            hasPersistedBankEntry: false,
+            arrivalDelayMinutes: null,
+            overtimeMinutes: null,
+            creditedOvertimeMinutes: null,
+            balanceMinutes: null,
+            ruleCode: null,
+            bankHoursExplanation: null,
+        }),
+    ]);
+
+    const vagner = model.doctors.find((doctor) => doctor.doctorId === "doc-1");
+    const shift = vagner?.shifts[0];
+    assert.ok(shift);
+    assert.equal(shift.corrections.length, 1);
+    const correction = shift.corrections[0]!;
+    assert.equal(correction.actorEmail, "chefe@mnrs.com.br");
+    assert.equal(correction.chiefOnDutyName, "Paulo");
+    assert.equal(correction.undone, false);
+    assert.match(correction.changes.join(" "), /Chegada: .*07:00.* → .*07:40/);
+    assert.match(correction.notes ?? "", /pedido da coordenacao/);
 });

@@ -3,7 +3,14 @@ import { calculateBankHours } from "@/modules/bank-hours/calculator";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { buildBankHoursBalanceOverrideExplanation, MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE } from "@/modules/bank-hours/service";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import {
+    describeLateDepartureReason,
+    translateBankHoursRuleCode,
+    type BankHoursLateDeparture,
+} from "@/modules/reporting/bank-hours-labels";
 import type { MonthlyReportAuditEntry, MonthlyReportSource } from "@/modules/reporting/monthly-report";
+
+export type { BankHoursLateDeparture } from "@/modules/reporting/bank-hours-labels";
 
 export interface RawBankHoursHistoryShift {
     occupancyId: string;
@@ -44,6 +51,7 @@ export interface RawBankHoursHistoryShift {
     manualBalanceUpdatedAt: string | null;
     manualBalanceActorEmail: string | null;
     auditTrail: MonthlyReportAuditEntry[];
+    lateDeparture?: BankHoursLateDeparture | null;
 }
 
 interface ResolvedBankHoursMetrics {
@@ -62,11 +70,27 @@ export interface BankHoursProof {
     mode: "handoff" | "double_overtime" | "simple_overtime" | "debit" | "neutral" | "pending";
 }
 
+/** Uma correção administrativa reconstruída da trilha de auditoria, já legível. */
+export interface BankHoursShiftCorrection {
+    id: string;
+    createdAt: string;
+    actorEmail: string | null;
+    /** Quem estava no ramal 2031 (chefia de plantão) no momento da correção. */
+    chiefOnDutyName: string | null;
+    changes: string[];
+    notes: string | null;
+    undone: boolean;
+}
+
 export interface BankHoursHistoryShift extends RawBankHoursHistoryShift {
     workedMinutes: number | null;
     countedStartAt: string | null;
     countedEndAt: string | null;
     proof: BankHoursProof;
+    /** Quem assumiu o posto/base na rendição, quando identificável. */
+    successorDoctorName: string | null;
+    successorTookOverAt: string | null;
+    corrections: BankHoursShiftCorrection[];
     flags: {
         hasCorrectionHistory: boolean;
         hasHandoffOverride: boolean;
@@ -145,6 +169,12 @@ export interface BankHoursHistoryModel {
 
 const SAO_PAULO_TIME_ZONE = "America/Sao_Paulo";
 
+/** Ramal cuja titularidade identifica a chefia de plantão (CP) num dado instante. */
+const CHIEF_POST_CODE = "2031";
+
+/** Tolerância para casar a chegada de quem rendeu com o fim contado do plantão anterior. */
+const SUCCESSOR_MATCH_TOLERANCE_MS = 45 * 60000;
+
 function joinDistinct(values: Array<string | null>) {
     const filtered = Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim()))));
     if (filtered.length === 0) {
@@ -181,6 +211,9 @@ function collapseContinuityHistoryShifts(shifts: RawBankHoursHistoryShift[]) {
             updatedByEmail: group.tail.updatedByEmail ?? group.carrier.updatedByEmail,
             hasPersistedBankEntry: group.members.some((member) => member.hasPersistedBankEntry),
             auditTrail: mergeAuditTrail(group.members.map((member) => member.auditTrail)),
+            lateDeparture: group.tail.lateDeparture
+                ?? group.members.map((member) => member.lateDeparture).find(Boolean)
+                ?? null,
         } satisfies RawBankHoursHistoryShift;
     });
 }
@@ -342,7 +375,220 @@ function computeWorkedMinutes(startedAt: string, endedAt: string | null) {
     return diff;
 }
 
-export function buildBankHoursProof(shift: RawBankHoursHistoryShift): BankHoursProof {
+interface SuccessorCandidate {
+    doctorId: string;
+    doctorName: string;
+    displayName: string | null;
+    continuityGroupId: string;
+    startedAtMs: number;
+    startedAt: string;
+}
+
+/**
+ * Índice "quem assumiu este posto/base logo depois": usa a lista COMPLETA de
+ * ocupações (antes do colapso de continuidade) para nomear quem rendeu.
+ */
+function buildSuccessorLookup(shifts: RawBankHoursHistoryShift[]) {
+    const byTarget = new Map<string, SuccessorCandidate[]>();
+    for (const shift of shifts) {
+        const startedAtMs = new Date(shift.startedAt).getTime();
+        if (Number.isNaN(startedAtMs)) {
+            continue;
+        }
+
+        const key = `${shift.domain}:${shift.targetCode}`;
+        const list = byTarget.get(key) ?? [];
+        list.push({
+            doctorId: shift.doctorId,
+            doctorName: shift.doctorName,
+            displayName: shift.displayName,
+            continuityGroupId: shift.continuityGroupId,
+            startedAtMs,
+            startedAt: shift.startedAt,
+        });
+        byTarget.set(key, list);
+    }
+
+    return (shift: RawBankHoursHistoryShift, handoffAt: string | null) => {
+        if (!handoffAt) {
+            return null;
+        }
+
+        const handoffMs = new Date(handoffAt).getTime();
+        if (Number.isNaN(handoffMs)) {
+            return null;
+        }
+
+        // O colapso concatena códigos com " -> "; procure em todos os alvos do grupo.
+        const targetCodes = shift.targetCode.split(" -> ").map((code) => code.trim()).filter(Boolean);
+        let best: { candidate: SuccessorCandidate; distance: number } | null = null;
+        for (const targetCode of targetCodes) {
+            for (const candidate of byTarget.get(`${shift.domain}:${targetCode}`) ?? []) {
+                if (candidate.doctorId === shift.doctorId || candidate.continuityGroupId === shift.continuityGroupId) {
+                    continue;
+                }
+
+                const distance = Math.abs(candidate.startedAtMs - handoffMs);
+                if (distance <= SUCCESSOR_MATCH_TOLERANCE_MS && (!best || distance < best.distance)) {
+                    best = { candidate, distance };
+                }
+            }
+        }
+
+        return best?.candidate ?? null;
+    };
+}
+
+/**
+ * Índice "quem era a chefia de plantão (titular da 2031) num dado instante".
+ * Preferimos titulares do quadro (boardStartedAt preenchido); sombra não chefia.
+ */
+function buildChiefOnDutyLookup(shifts: RawBankHoursHistoryShift[]) {
+    const intervals = shifts
+        .filter((shift) => shift.domain === "regulation" && shift.targetCode === CHIEF_POST_CODE && shift.boardStartedAt)
+        .map((shift) => {
+            const startMs = new Date(shift.startedAt).getTime();
+            const endSource = shift.effectiveEndedAt ?? shift.handoffEndedAt;
+            const endMs = endSource ? new Date(endSource).getTime() : startMs + 14 * 3600000;
+            return {
+                startMs,
+                endMs,
+                name: shift.displayName ?? shift.doctorName,
+            };
+        })
+        .filter((interval) => !Number.isNaN(interval.startMs) && !Number.isNaN(interval.endMs));
+
+    return (at: string | null) => {
+        if (!at) {
+            return null;
+        }
+
+        const atMs = new Date(at).getTime();
+        if (Number.isNaN(atMs)) {
+            return null;
+        }
+
+        let best: { startMs: number; name: string } | null = null;
+        for (const interval of intervals) {
+            if (interval.startMs <= atMs && atMs <= interval.endMs && (!best || interval.startMs > best.startMs)) {
+                best = interval;
+            }
+        }
+
+        return best?.name ?? null;
+    };
+}
+
+function readIsoField(details: Record<string, unknown>, key: string) {
+    const value = details[key];
+    return typeof value === "string" && value.trim() ? value : null;
+}
+
+function readSnapshotField(details: Record<string, unknown>, key: string) {
+    const snapshot = details.beforeSnapshot;
+    if (typeof snapshot !== "object" || snapshot === null) {
+        return null;
+    }
+
+    const value = (snapshot as Record<string, unknown>)[key];
+    return typeof value === "string" && value.trim() ? value : null;
+}
+
+function describeTimeChange(label: string, before: string | null, after: string | null) {
+    if (!after || sameInstant(before, after)) {
+        return null;
+    }
+
+    return `${label}: ${formatLocalDateTime(before)} → ${formatLocalDateTime(after)}`;
+}
+
+/**
+ * Reconstrói as correções administrativas do plantão a partir da trilha de
+ * auditoria, com o que mudou (chegada/saída) e quem era a chefia na hora.
+ */
+function extractCorrections(
+    auditTrail: MonthlyReportAuditEntry[],
+    chiefOnDutyAt: (at: string | null) => string | null,
+): BankHoursShiftCorrection[] {
+    const corrections: BankHoursShiftCorrection[] = [];
+    for (const entry of auditTrail) {
+        const isCorrection = entry.action.endsWith(".corrected");
+        const isUndo = entry.action.endsWith(".corrected.undone");
+        if (!isCorrection && !isUndo) {
+            continue;
+        }
+
+        if (isUndo) {
+            corrections.push({
+                id: entry.id,
+                createdAt: entry.createdAt,
+                actorEmail: entry.actorEmail,
+                chiefOnDutyName: chiefOnDutyAt(entry.createdAt),
+                changes: ["Correção desfeita — o registro voltou ao estado anterior."],
+                notes: null,
+                undone: true,
+            });
+            continue;
+        }
+
+        const details = entry.details ?? {};
+        const changes: string[] = [];
+
+        const arrivalChange = describeTimeChange(
+            "Chegada",
+            readIsoField(details, "previousStartedAt") ?? readSnapshotField(details, "startedAt"),
+            readIsoField(details, "nextStartedAt") ?? readIsoField(details, "startedAt"),
+        );
+        if (arrivalChange) {
+            changes.push(arrivalChange);
+        }
+
+        const handoffChange = describeTimeChange(
+            "Saída do quadro (rendição)",
+            readSnapshotField(details, "endedAt"),
+            readIsoField(details, "endedAt"),
+        );
+        if (handoffChange) {
+            changes.push(handoffChange);
+        }
+
+        const physicalChange = describeTimeChange(
+            "Saída física",
+            readSnapshotField(details, "actualEndedAt"),
+            readIsoField(details, "actualEndedAt"),
+        );
+        if (physicalChange) {
+            changes.push(physicalChange);
+        }
+
+        const previousDoctorId = typeof details.previousDoctorId === "string" ? details.previousDoctorId : null;
+        const nextDoctorId = typeof details.nextDoctorId === "string" ? details.nextDoctorId : null;
+        if (previousDoctorId && nextDoctorId && previousDoctorId !== nextDoctorId) {
+            changes.push("Plantonista do registro trocado.");
+        }
+
+        if (changes.length === 0) {
+            changes.push("Registro corrigido pela administração (detalhes na trilha de auditoria).");
+        }
+
+        corrections.push({
+            id: entry.id,
+            createdAt: entry.createdAt,
+            actorEmail: entry.actorEmail,
+            chiefOnDutyName: chiefOnDutyAt(entry.createdAt),
+            changes,
+            notes: typeof details.notes === "string" && details.notes.trim() ? details.notes.trim() : null,
+            undone: false,
+        });
+    }
+
+    return corrections.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
+export function buildBankHoursProof(
+    shift: RawBankHoursHistoryShift,
+    context?: { successorDoctorName?: string | null },
+): BankHoursProof {
     const countedStartAt = resolveCountedStartAt(shift);
     const countedEndAt = resolveCountedEndAt(shift);
     const { scheduledStartAt, scheduledEndAt } = resolveScheduledWindow(shift);
@@ -379,7 +625,7 @@ export function buildBankHoursProof(shift: RawBankHoursHistoryShift): BankHoursP
     }
 
     if (metrics.source === "reconstructed") {
-        items.push("Nao havia linha persistida de banco de horas para este plantão. A leitura abaixo foi reconstruida a partir da janela operacional do plantão e do encerramento registrado no quadro.");
+        items.push("Não havia linha persistida de banco de horas para este plantão. A leitura abaixo foi reconstruída a partir da janela operacional do plantão e do encerramento registrado no quadro.");
     }
 
     if (metrics.source === "manual_override") {
@@ -394,7 +640,10 @@ export function buildBankHoursProof(shift: RawBankHoursHistoryShift): BankHoursP
 
     if (shift.actualEndedAt && !sameInstant(countedEndAt, shift.actualEndedAt)) {
         if (shift.handoffEndedAt && sameInstant(countedEndAt, shift.handoffEndedAt)) {
-            items.push(`A responsabilidade operacional foi entregue às ${formatLocalTime(shift.handoffEndedAt)}. Existe uma saída física registrada às ${formatLocalTime(shift.actualEndedAt)}, mas o cálculo travou na rendição porque outra pessoa já tinha assumido a cobertura.`);
+            const successorName = context?.successorDoctorName ?? null;
+            items.push(successorName
+                ? `${successorName} assumiu a cobertura às ${formatLocalTime(shift.handoffEndedAt)}. Existe uma saída física registrada às ${formatLocalTime(shift.actualEndedAt)}, mas o cálculo travou na rendição porque a responsabilidade já tinha sido transferida.`
+                : `A responsabilidade operacional foi entregue às ${formatLocalTime(shift.handoffEndedAt)}. Existe uma saída física registrada às ${formatLocalTime(shift.actualEndedAt)}, mas o cálculo travou na rendição porque outra pessoa já tinha assumido a cobertura.`);
         } else {
             items.push(`O cálculo usou ${formatLocalTime(countedEndAt)} como horário final válido. A saída física em ${formatLocalTime(shift.actualEndedAt)} ficou guardada como prova, mas não substituiu o encerramento operacional contado.`);
         }
@@ -406,10 +655,15 @@ export function buildBankHoursProof(shift: RawBankHoursHistoryShift): BankHoursP
         items.push(`A saída considerada foi ${formatLocalTime(countedEndAt)} e gerou ${metrics.creditedOvertimeMinutes} min de crédito. Como houve atraso na entrada, o bônus em dobro não se aplica neste plantão.`);
     }
 
+    const lateDepartureReason = describeLateDepartureReason(shift.lateDeparture);
+    if (lateDepartureReason && metrics.creditedOvertimeMinutes > 0) {
+        items.push(`A permanência além do previsto tem justificativa registrada no bot: ${lateDepartureReason}.`);
+    }
+
     if (metrics.ruleCode && metrics.explanation) {
-        items.push(`Regra aplicada: ${metrics.ruleCode}. ${metrics.explanation}`);
+        items.push(`Regra aplicada: ${translateBankHoursRuleCode(metrics.ruleCode)}. ${metrics.explanation}`);
     } else if (metrics.ruleCode) {
-        items.push(`Regra aplicada: ${metrics.ruleCode}.`);
+        items.push(`Regra aplicada: ${translateBankHoursRuleCode(metrics.ruleCode)}.`);
     } else if (metrics.explanation) {
         items.push(metrics.explanation);
     }
@@ -482,6 +736,8 @@ export function buildBankHoursHistoryModel(
     settlementsByDoctor: Map<string, BankHoursSettlementSummary[]> = new Map(),
     legacyByDoctor: Map<string, BankHoursLegacyDoctorRecord> = new Map(),
 ): BankHoursHistoryModel {
+    const findSuccessor = buildSuccessorLookup(shifts);
+    const chiefOnDutyAt = buildChiefOnDutyLookup(shifts);
     const normalizedShifts: BankHoursHistoryShift[] = collapseContinuityHistoryShifts(shifts)
         .map((shift) => {
             const countedStartAt = resolveCountedStartAt(shift);
@@ -489,6 +745,8 @@ export function buildBankHoursHistoryModel(
             const { scheduledStartAt, scheduledEndAt } = resolveScheduledWindow(shift);
             const metrics = resolveBankHoursMetrics(shift, countedStartAt, countedEndAt, scheduledStartAt, scheduledEndAt);
             const hasCorrectionHistory = shift.auditTrail.some((entry) => entry.action.endsWith(".corrected")) || shift.manualBalanceMinutes !== null;
+            const handoffPrevailed = Boolean(shift.actualEndedAt && countedEndAt && !sameInstant(shift.actualEndedAt, countedEndAt));
+            const successor = handoffPrevailed ? findSuccessor(shift, countedEndAt) : null;
             const resolvedShift = {
                 ...shift,
                 bankScheduledStartAt: scheduledStartAt,
@@ -507,10 +765,13 @@ export function buildBankHoursHistoryModel(
                 workedMinutes: computeWorkedMinutes(shift.startedAt, shift.effectiveEndedAt),
                 countedStartAt,
                 countedEndAt,
-                proof: buildBankHoursProof(resolvedShift),
+                proof: buildBankHoursProof(resolvedShift, { successorDoctorName: successor ? (successor.displayName ?? successor.doctorName) : null }),
+                successorDoctorName: successor ? (successor.displayName ?? successor.doctorName) : null,
+                successorTookOverAt: successor?.startedAt ?? null,
+                corrections: extractCorrections(shift.auditTrail, chiefOnDutyAt),
                 flags: {
                     hasCorrectionHistory,
-                    hasHandoffOverride: Boolean(shift.actualEndedAt && countedEndAt && !sameInstant(shift.actualEndedAt, countedEndAt)),
+                    hasHandoffOverride: handoffPrevailed,
                     hasLateArrival: (resolvedShift.arrivalDelayMinutes ?? 0) > 0,
                     hasOpenShift: !shift.effectiveEndedAt,
                 },

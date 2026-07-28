@@ -5,6 +5,7 @@ import {
     buildBankHoursHistoryModel,
     resolveBankHoursSettlementBalance,
     type BankHoursHistoryModel,
+    type BankHoursLateDeparture,
     type BankHoursLegacyDoctorRecord,
     type BankHoursSettlementBalance,
     type RawBankHoursHistoryShift,
@@ -116,6 +117,40 @@ async function loadLegacyBalancesByDoctor(): Promise<Map<string, BankHoursLegacy
     return new Map(rows
         .filter((row): row is typeof row & { doctorId: string } => Boolean(row.doctorId))
         .map((row) => [row.doctorId, row]));
+}
+
+// Justificativas de saída tardia registradas no bot (ocorrência com número,
+// higienização, liberação da chefia, rendição). Vivem no resolution_data das
+// mensagens ingeridas; são poucas linhas no total, então carregamos todas.
+async function loadLateDeparturesByOccupancy(): Promise<Map<string, BankHoursLateDeparture>> {
+    const db = getDb();
+    const result = await db.execute(sql`
+        select
+            related_occupancy_id as "occupancyId",
+            resolution_data->>'matchedReasonCode' as "reasonCode",
+            resolution_data->>'occurrenceNumber' as "occurrenceNumber"
+        from operations_v2.telegram_ingested_messages
+        where related_occupancy_id is not null
+          and resolution_data ? 'matchedReasonCode'
+        order by created_at asc
+    `);
+
+    const map = new Map<string, BankHoursLateDeparture>();
+    for (const row of result as unknown as Record<string, unknown>[]) {
+        const occupancyId = row.occupancyId ? String(row.occupancyId) : null;
+        const reasonCode = row.reasonCode ? String(row.reasonCode) : null;
+        if (!occupancyId || !reasonCode) {
+            continue;
+        }
+
+        // Ordenado por received_at asc: a última justificativa aceita prevalece.
+        map.set(occupancyId, {
+            reasonCode,
+            occurrenceNumber: row.occurrenceNumber ? String(row.occurrenceNumber) : null,
+        });
+    }
+
+    return map;
 }
 
 async function loadAuditTrailByOccupancy(shifts: RawBankHoursHistoryShift[]) {
@@ -268,10 +303,11 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
     `);
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
-    const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor] = await Promise.all([
+    const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor, lateDeparturesByOccupancy] = await Promise.all([
         loadAuditTrailByOccupancy(rows),
         loadAllBankHoursSettlements(),
         loadLegacyBalancesByDoctor(),
+        loadLateDeparturesByOccupancy(),
     ]);
     const manualOverridesByGroup = await loadManualBalanceOverrides(rows.map((row) => row.continuityGroupId));
     const enrichedRows = rows.map((row) => ({
@@ -281,6 +317,7 @@ export async function getBankHoursHistory(): Promise<BankHoursHistoryModel> {
         manualBalanceUpdatedAt: manualOverridesByGroup.get(row.continuityGroupId)?.updatedAt ?? null,
         manualBalanceActorEmail: manualOverridesByGroup.get(row.continuityGroupId)?.actorEmail ?? null,
         auditTrail: auditTrailByOccupancy.get(`${row.domain === "regulation" ? "regulation_occupancy" : "intervention_occupancy"}:${row.occupancyId}`) ?? [],
+        lateDeparture: lateDeparturesByOccupancy.get(row.occupancyId) ?? null,
     }));
 
     return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor);
