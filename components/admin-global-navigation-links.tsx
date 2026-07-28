@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-type AdminNavKey =
+export type AdminNavKey =
     | "payment-attestation"
     | "payment-closing"
     | "payment-allocation"

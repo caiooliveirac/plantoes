@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
+import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
 
@@ -282,30 +282,6 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
             return next;
         });
     }, []);
-    // Menu ••• (navegação admin) da faixa: fecha com clique fora ou Escape.
-    const [navMenuOpen, setNavMenuOpen] = useState(false);
-    const navMenuRef = useRef<HTMLDivElement | null>(null);
-    useEffect(() => {
-        if (!navMenuOpen) {
-            return;
-        }
-        const onPointerDown = (event: PointerEvent) => {
-            if (navMenuRef.current && !navMenuRef.current.contains(event.target as Node)) {
-                setNavMenuOpen(false);
-            }
-        };
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-                setNavMenuOpen(false);
-            }
-        };
-        window.addEventListener("pointerdown", onPointerDown);
-        window.addEventListener("keydown", onKeyDown);
-        return () => {
-            window.removeEventListener("pointerdown", onPointerDown);
-            window.removeEventListener("keydown", onKeyDown);
-        };
-    }, [navMenuOpen]);
     // Alvo do botão "sem médico" da faixa: rola até a linha correspondente da tabela.
     const uncoveredRowRef = useRef<HTMLTableRowElement | null>(null);
     // Painel por dia das linhas Desativadas / Sem médico: os chips individuais
@@ -1469,10 +1445,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     return (
         <main className="chief-payable-shell">
             {/* Design 2A: faixa de comando única + gaveta de filtros + tabela num só container. */}
-            <section className="chief-payable-bar-frame">
-            <header className="chief-payable-bar">
+            <section className="admin-bar-frame">
+            <header className="admin-bar">
                 <select
-                    className="chief-payable-bar-month"
+                    className="admin-bar-month"
                     value={board.monthKey}
                     onChange={(event) => router.push(`/admin/payment-closing?month=${event.target.value}`)}
                     aria-label="Mês do fechamento"
@@ -1484,42 +1460,42 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
 
                 <input
                     type="search"
-                    className="chief-payable-bar-search"
+                    className="admin-bar-search"
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Filtrar médico"
                     aria-label="Filtrar médico"
                 />
 
-                <span className="chief-payable-bar-divider" aria-hidden="true" />
+                <span className="admin-bar-divider" aria-hidden="true" />
 
-                <div className="chief-payable-bar-kpis">
-                    <div className="chief-payable-bar-kpi">
+                <div className="admin-bar-kpis">
+                    <div className="admin-bar-kpi">
                         <strong>{formatUnits(board.summary.payableUnitCount)}</strong>
                         <span>unidades</span>
                     </div>
-                    <div className="chief-payable-bar-kpi">
+                    <div className="admin-bar-kpi">
                         <strong>{board.summary.readyCount}</strong>
                         <span>prontas</span>
                     </div>
-                    <div className="chief-payable-bar-kpi">
+                    <div className="admin-bar-kpi">
                         <strong>{board.summary.doctorCount}</strong>
                         <span>médicos</span>
                     </div>
                     <div
-                        className="chief-payable-bar-kpi"
+                        className="admin-bar-kpi"
                         title={`PJ · ${dueAmountByEmploymentType.pj.doctorCount} médicos. Estatutário (${dueAmountByEmploymentType.estatutario.doctorCount} médicos) não gera pagamento aqui.`}
                     >
                         <strong>{formatCurrency(dueAmountByEmploymentType.pj.totalDue)}</strong>
                         <span>devido pj</span>
                     </div>
-                    <div className="chief-payable-bar-kpi">
+                    <div className="admin-bar-kpi">
                         <strong>{visibleDisabledTargets.length}</strong>
                         <span>desativadas</span>
                     </div>
                     <button
                         type="button"
-                        className={`chief-payable-bar-kpi-button pending ${status === "needs_review" ? "active" : ""}`.trim()}
+                        className={`admin-bar-kpi-button pending ${status === "needs_review" ? "active" : ""}`.trim()}
                         onClick={() => setStatus(status === "needs_review" ? "all" : "needs_review")}
                         title={status === "needs_review" ? "Filtro de pendências ativo — clique para limpar" : "Mostrar só médicos com pendências"}
                     >
@@ -1529,7 +1505,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                     </button>
                     <button
                         type="button"
-                        className="chief-payable-bar-kpi-button uncovered"
+                        className="admin-bar-kpi-button uncovered"
                         onClick={() => uncoveredRowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
                         title="Rolar até a linha Sem médico"
                     >
@@ -1538,10 +1514,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                     </button>
                 </div>
 
-                <div className="chief-payable-bar-actions">
+                <div className="admin-bar-actions">
                     {!canManageClosing ? (
                         <span
-                            className="chief-payable-bar-restricted"
+                            className="admin-bar-restricted"
                             title="Perfil restrito: você pode visualizar todo o fechamento e salvar somente NF/processo."
                         >
                             Perfil restrito
@@ -1549,12 +1525,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                     ) : null}
                     <button
                         type="button"
-                        className={`chief-payable-bar-filters-toggle ${filtersOpen ? "open" : ""}`.trim()}
+                        className={`admin-bar-filters-toggle ${filtersOpen ? "open" : ""}`.trim()}
                         onClick={toggleFiltersOpen}
                         aria-expanded={filtersOpen}
                     >
                         Filtros
-                        {activeFilterCount > 0 ? <i className="chief-payable-bar-filter-count">{activeFilterCount}</i> : null}
+                        {activeFilterCount > 0 ? <i className="admin-bar-filter-count">{activeFilterCount}</i> : null}
                         <span aria-hidden="true">{filtersOpen ? "▴" : "▾"}</span>
                     </button>
                     {canManageClosing ? (
@@ -1562,29 +1538,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                             Exportar XLSX
                         </a>
                     ) : null}
-                    <div className="chief-payable-bar-menu" ref={navMenuRef}>
-                        <button
-                            type="button"
-                            className="chief-payable-bar-menu-toggle"
-                            onClick={() => setNavMenuOpen((prev) => !prev)}
-                            aria-haspopup="menu"
-                            aria-expanded={navMenuOpen}
-                            title="Navegação admin"
-                        >
-                            •••
-                        </button>
-                        {navMenuOpen ? (
-                            <div className="chief-payable-bar-menu-panel">
-                                <AdminGlobalNavigationLinks current="payment-closing" variant="menu" containerClassName="chief-payable-bar-menu-list">
-                                    {canManageClosing ? (
-                                        <a className="admin-nav-menu-link" href="/admin/payment-attestation/audit" role="menuitem">
-                                            Abrir auditoria técnica
-                                        </a>
-                                    ) : null}
-                                </AdminGlobalNavigationLinks>
-                            </div>
+                    <AdminBarNavMenu current="payment-closing">
+                        {canManageClosing ? (
+                            <a className="admin-nav-menu-link" href="/admin/payment-attestation/audit" role="menuitem">
+                                Abrir auditoria técnica
+                            </a>
                         ) : null}
-                    </div>
+                    </AdminBarNavMenu>
                 </div>
             </header>
 
@@ -1592,15 +1552,15 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                 {filtersOpen ? (
                     <motion.div
                         key="filters-drawer"
-                        className="chief-payable-bar-drawer"
+                        className="admin-bar-drawer"
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: "auto", opacity: 1 }}
                         exit={{ height: 0, opacity: 0 }}
                         transition={{ duration: 0.2, ease: "easeOut" }}
                     >
-                        <div className="chief-payable-bar-drawer-inner">
-                            <div className="chief-payable-bar-drawer-grid">
-                                <div className="chief-payable-bar-drawer-group">
+                        <div className="admin-bar-drawer-inner">
+                            <div className="admin-bar-drawer-grid">
+                                <div className="admin-bar-drawer-group">
                                     <span>Turno e domínio</span>
                                     <div className="chief-payable-chip-row">
                                         <button type="button" className={`chief-payable-chip ${shiftFilter === "all" ? "active" : ""}`.trim()} onClick={() => setShiftFilter("all")}>
@@ -1624,7 +1584,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     </div>
                                 </div>
 
-                                <div className="chief-payable-bar-drawer-group">
+                                <div className="admin-bar-drawer-group">
                                     <span>Cobertura</span>
                                     <div className="chief-payable-chip-row">
                                         <button type="button" className={`chief-payable-chip ${coverageFilter === "all" ? "active" : ""}`.trim()} onClick={() => setCoverageFilter("all")}>
@@ -1639,7 +1599,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     </div>
                                 </div>
 
-                                <div className="chief-payable-bar-drawer-group">
+                                <div className="admin-bar-drawer-group">
                                     <span>Status e vínculo</span>
                                     <div className="chief-payable-chip-row">
                                         <button type="button" className={`chief-payable-chip ${status === "all" ? "active" : ""}`.trim()} onClick={() => setStatus("all")}>
@@ -1663,7 +1623,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     </div>
                                 </div>
 
-                                <div className="chief-payable-bar-drawer-group">
+                                <div className="admin-bar-drawer-group">
                                     <span>Ordenar e alvo</span>
                                     <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} aria-label="Ordenar por">
                                         <option value="pending">Ordenar: pendências</option>
@@ -1689,10 +1649,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     </select>
                                 </div>
 
-                                <div className="chief-payable-bar-drawer-group">
+                                <div className="admin-bar-drawer-group">
                                     <span>Ritmo do mês{peakDay ? ` · pico dia ${peakDay.day}` : ""}</span>
                                     <div
-                                        className="chief-payable-bar-rhythm"
+                                        className="admin-bar-rhythm"
                                         aria-label="Ritmo mensal de unidades pagáveis"
                                         title={peakDay ? `Unidades pagáveis por dia · pico dia ${peakDay.day} (${peakDay.count})` : "Unidades pagáveis por dia"}
                                     >
@@ -1710,7 +1670,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                 </div>
                             </div>
 
-                            <div className="chief-payable-bar-drawer-group">
+                            <div className="admin-bar-drawer-group">
                                 <span>Base / ramal</span>
                                 <div className="chief-payable-chip-row">
                                     <button type="button" className={`chief-payable-chip ${targetFilter === "all" ? "active" : ""}`.trim()} onClick={() => setTargetFilter("all")}>
@@ -1763,7 +1723,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                 ) : null}
             </AnimatePresence>
 
-            <div className="chief-payable-bar-inserts">
+            <div className="admin-bar-inserts">
             {(manualError || manualFeedback) ? (
                 <section className={`payment-inline-banner ${manualError ? "danger" : "ok"}`.trim()}>
                     <strong>{manualError ? "Falha na correção" : "Correção manual"}</strong>

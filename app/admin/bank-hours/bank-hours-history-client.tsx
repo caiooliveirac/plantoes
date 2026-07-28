@@ -2,7 +2,7 @@
 
 import { useDeferredValue, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
+import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type { BankHoursDoctorHistory, BankHoursHistoryModel, BankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 
@@ -162,6 +162,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const [savingShiftKey, setSavingShiftKey] = useState<string | null>(null);
     const [isSaving, startSavingTransition] = useTransition();
     const [settlementMonth, setSettlementMonth] = useState(settlementMonths[0]?.key ?? "");
+    // Gaveta "Como ler" da faixa de comando (absorveu o herói e os princípios).
+    const [guideOpen, setGuideOpen] = useState(false);
 
     useEffect(() => {
         const nextMinutes: Record<string, string> = {};
@@ -242,73 +244,82 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
 
     return (
         <main className="hours-shell">
-            <section className="hours-hero">
-                <div>
-                    <p className="reports-kicker">Banco de horas</p>
-                    <h1>Prova operacional por médico, com saldo acumulado e justificativa por plantão.</h1>
-                    <p className="hours-subtitle">
-                        Esta visão foi desenhada para responder contestação com prova. A coordenadora vê o histórico completo, o saldo acumulado e, em cada plantão, qual horário entrou no cálculo e por que ele pode ser diferente do horário físico registrado depois.
-                    </p>
-                </div>
-
-                <AdminGlobalNavigationLinks current="bank-hours" containerClassName="hours-hero-actions" />
-            </section>
-
-            <section className="hours-summary-grid">
-                <article className="hours-summary-card">
-                    <span className="reports-summary-label">Médicos com histórico</span>
-                    <strong>{history.summary.doctorCount}</strong>
-                    <span>{history.summary.shiftCount} plantões consolidados</span>
-                </article>
-                <article className="hours-summary-card">
-                    <span className="reports-summary-label">Saldo acumulado</span>
-                    <strong>{formatMinutesForHumans(history.summary.balanceMinutes)}</strong>
-                    <span>{formatMinutesForHumans(history.summary.workedMinutes)} trabalhados</span>
-                </article>
-                <article className="hours-summary-card warn">
-                    <span className="reports-summary-label">Rendição prevaleceu</span>
-                    <strong>{history.summary.handoffOverrideCount}</strong>
-                    <span>plantões em que a prova precisou separar rendição de saída física</span>
-                </article>
-                <article className="hours-summary-card danger">
-                    <span className="reports-summary-label">Correções e atrasos</span>
-                    <strong>{history.summary.correctionCount + history.summary.lateArrivalCount}</strong>
-                    <span>{history.summary.lateArrivalCount} atrasos e {history.summary.correctionCount} correções auditadas</span>
-                </article>
-            </section>
-
-            <section className="hours-filter-bar">
-                <label className="hours-filter-field hours-filter-search">
-                    <span>Buscar médico</span>
+            {/* Faixa de comando compacta: busca + KPIs + gaveta "Como ler" + navegação ••• */}
+            <section className="admin-bar-frame standalone">
+                <header className="admin-bar">
+                    <span className="admin-bar-kicker">Banco de horas</span>
                     <input
                         type="search"
+                        className="admin-bar-search"
                         value={search}
                         onChange={(event) => setSearch(event.target.value)}
-                        placeholder="Nome, base ou posto"
+                        placeholder="Buscar médico, base ou posto"
+                        aria-label="Buscar médico"
                     />
-                </label>
-                <div className="hours-filter-copy">
-                    <span className="reports-summary-label">Leitura principal</span>
-                    <p>Primeiro o saldo acumulado do médico. Depois, a prova fina plantão por plantão: janela prevista, entrada contada, rendição, saída física e regra aplicada.</p>
-                </div>
-            </section>
+                    <span className="admin-bar-divider" aria-hidden="true" />
+                    <div className="admin-bar-kpis">
+                        <div className="admin-bar-kpi">
+                            <strong>{history.summary.doctorCount}</strong>
+                            <span>médicos</span>
+                        </div>
+                        <div className="admin-bar-kpi">
+                            <strong>{history.summary.shiftCount}</strong>
+                            <span>plantões</span>
+                        </div>
+                        <div className="admin-bar-kpi" title={`${formatMinutesForHumans(history.summary.workedMinutes)} trabalhados`}>
+                            <strong>{formatMinutesForHumans(history.summary.balanceMinutes)}</strong>
+                            <span>saldo acumulado</span>
+                        </div>
+                        <div className="admin-bar-kpi warn" title="Plantões em que a prova precisou separar rendição de saída física">
+                            <strong>{history.summary.handoffOverrideCount}</strong>
+                            <span>rendição-prova</span>
+                        </div>
+                        <div
+                            className="admin-bar-kpi danger"
+                            title={`${history.summary.lateArrivalCount} atrasos e ${history.summary.correctionCount} correções auditadas`}
+                        >
+                            <strong>{history.summary.correctionCount + history.summary.lateArrivalCount}</strong>
+                            <span>atrasos + correções</span>
+                        </div>
+                    </div>
+                    <div className="admin-bar-actions">
+                        <button
+                            type="button"
+                            className={`admin-bar-filters-toggle ${guideOpen ? "open" : ""}`.trim()}
+                            onClick={() => setGuideOpen((prev) => !prev)}
+                            aria-expanded={guideOpen}
+                        >
+                            Como ler
+                            <span aria-hidden="true">{guideOpen ? "▴" : "▾"}</span>
+                        </button>
+                        <AdminBarNavMenu current="bank-hours" />
+                    </div>
+                </header>
 
-            <section className="hours-principles-grid">
-                <article className="hours-principle-card">
-                    <span className="hours-proof-label">Princípio 1</span>
-                    <strong>Quem assume o posto encerra a permanência válida de quem saiu.</strong>
-                    <p>Quando a rendição acontece antes da saída física, a prova precisa mostrar os dois horários e deixar claro que o banco para na transferência da cobertura.</p>
-                </article>
-                <article className="hours-principle-card">
-                    <span className="hours-proof-label">Princípio 2</span>
-                    <strong>Entrada no prazo decide se a permanência final pode valer em dobro.</strong>
-                    <p>Se a chegada estourou a tolerância, a permanência pode continuar existindo, mas perde o bônus dobrado. A tela precisa deixar esse ponto impossível de confundir.</p>
-                </article>
-                <article className="hours-principle-card accent">
-                    <span className="hours-proof-label">Princípio 3</span>
-                    <strong>A contestação deve ser respondida com trilha e não com interpretação.</strong>
-                    <p>Cada linha combina origem do registro, regra aplicada e histórico de edição para que a coordenação tenha defesa operacional pronta.</p>
-                </article>
+                {guideOpen ? (
+                    <div className="admin-bar-drawer">
+                        <div className="admin-bar-drawer-inner">
+                            <div className="admin-bar-drawer-grid">
+                                <div className="admin-bar-drawer-group">
+                                    <span>Leitura principal</span>
+                                    <p>Primeiro o saldo acumulado do médico. Depois, a prova fina plantão por plantão: janela prevista, entrada contada, rendição, saída física e regra aplicada.</p>
+                                </div>
+                                <div className="admin-bar-drawer-group">
+                                    <span>Princípio 1 · rendição encerra a permanência</span>
+                                    <p>Quando a rendição acontece antes da saída física, a prova mostra os dois horários e deixa claro que o banco para na transferência da cobertura.</p>
+                                </div>
+                                <div className="admin-bar-drawer-group">
+                                    <span>Princípio 2 · entrada no prazo decide o dobro</span>
+                                    <p>Se a chegada estourou a tolerância, a permanência pode continuar existindo, mas perde o bônus dobrado.</p>
+                                </div>
+                                <div className="admin-bar-drawer-group">
+                                    <span>Princípio 3 · contestação com trilha</span>
+                                    <p>Cada linha combina origem do registro, regra aplicada e histórico de edição para que a coordenação tenha defesa operacional pronta.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
             </section>
 
             <section className="hours-grid">

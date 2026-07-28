@@ -4093,7 +4093,7 @@ button.ops-doctor-line.shadow.clickable:hover {
 /* ---- Faixa de comando do fechamento mensal (design 2A) ---- */
 /* Um único container: faixa + gaveta de filtros + tabela. Sem overflow:hidden
    para a faixa poder grudar no topo durante o scroll (position: sticky). */
-.chief-payable-bar-frame {
+.admin-bar-frame {
     backdrop-filter: blur(18px);
     background: rgba(8, 14, 22, 0.92);
     border: 1px solid rgba(216, 225, 236, 0.12);
@@ -4101,7 +4101,7 @@ button.ops-doctor-line.shadow.clickable:hover {
     box-shadow: 0 28px 72px -44px rgba(0, 0, 0, 0.82);
 }
 
-.chief-payable-bar {
+.admin-bar {
     position: sticky;
     top: 0;
     z-index: 30;
@@ -4115,7 +4115,7 @@ button.ops-doctor-line.shadow.clickable:hover {
     border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 }
 
-.chief-payable-bar-month {
+.admin-bar-month {
     min-height: 40px;
     padding: 0 14px;
     border-radius: 12px;
@@ -4128,12 +4128,12 @@ button.ops-doctor-line.shadow.clickable:hover {
     cursor: pointer;
 }
 
-.chief-payable-bar-month option {
+.admin-bar-month option {
     background: #0b121c;
     color: var(--text);
 }
 
-.chief-payable-bar-search {
+.admin-bar-search {
     min-height: 40px;
     width: min(300px, 100%);
     padding: 0 14px;
@@ -4145,14 +4145,14 @@ button.ops-doctor-line.shadow.clickable:hover {
     font-size: 0.9rem;
 }
 
-.chief-payable-bar-divider {
+.admin-bar-divider {
     flex: none;
     width: 1px;
     height: 28px;
     background: rgba(255, 255, 255, 0.1);
 }
 
-.chief-payable-bar-kpis {
+.admin-bar-kpis {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -4161,20 +4161,20 @@ button.ops-doctor-line.shadow.clickable:hover {
     min-width: 0;
 }
 
-.chief-payable-bar-kpi {
+.admin-bar-kpi {
     display: flex;
     align-items: baseline;
     gap: 5px;
     white-space: nowrap;
 }
 
-.chief-payable-bar-kpi strong {
+.admin-bar-kpi strong {
     font-size: 1.02rem;
     letter-spacing: -0.03em;
 }
 
-.chief-payable-bar-kpi span,
-.chief-payable-bar-kpi-button span {
+.admin-bar-kpi span,
+.admin-bar-kpi-button span {
     font-size: 0.6rem;
     font-weight: 700;
     letter-spacing: 0.1em;
@@ -4182,7 +4182,7 @@ button.ops-doctor-line.shadow.clickable:hover {
     color: var(--muted);
 }
 
-.chief-payable-bar-kpi-button {
+.admin-bar-kpi-button {
     display: flex;
     align-items: baseline;
     gap: 5px;
@@ -4194,54 +4194,54 @@ button.ops-doctor-line.shadow.clickable:hover {
     transition: border-color 0.16s ease, transform 0.16s ease;
 }
 
-.chief-payable-bar-kpi-button strong {
+.admin-bar-kpi-button strong {
     font-size: 1.02rem;
     letter-spacing: -0.03em;
 }
 
-.chief-payable-bar-kpi-button:hover,
-.chief-payable-bar-kpi-button:focus-visible {
+.admin-bar-kpi-button:hover,
+.admin-bar-kpi-button:focus-visible {
     transform: translateY(-1px);
 }
 
-.chief-payable-bar-kpi-button.pending {
+.admin-bar-kpi-button.pending {
     border: 1px solid rgba(255, 184, 77, 0.42);
     background: rgba(99, 63, 16, 0.42);
     color: #ffedcf;
 }
 
-.chief-payable-bar-kpi-button.pending span {
+.admin-bar-kpi-button.pending span {
     color: inherit;
 }
 
-.chief-payable-bar-kpi-button.pending.active,
-.chief-payable-bar-kpi-button.pending:hover {
+.admin-bar-kpi-button.pending.active,
+.admin-bar-kpi-button.pending:hover {
     border-color: rgba(255, 198, 122, 0.7);
 }
 
-.chief-payable-bar-kpi-button.pending i {
+.admin-bar-kpi-button.pending i {
     font-style: normal;
     font-weight: 800;
 }
 
-.chief-payable-bar-kpi-button.uncovered {
+.admin-bar-kpi-button.uncovered {
     border: 1px solid rgba(255, 96, 96, 0.42);
     background: rgba(58, 12, 12, 0.72);
     color: #ffe9e9;
 }
 
-.chief-payable-bar-kpi-button.uncovered span {
+.admin-bar-kpi-button.uncovered span {
     color: inherit;
 }
 
-.chief-payable-bar-actions {
+.admin-bar-actions {
     display: flex;
     align-items: center;
     gap: 8px;
     margin-left: auto;
 }
 
-.chief-payable-bar-restricted {
+.admin-bar-restricted {
     padding: 4px 10px;
     border-radius: 999px;
     border: 1px solid rgba(255, 184, 92, 0.55);
@@ -4253,7 +4253,7 @@ button.ops-doctor-line.shadow.clickable:hover {
     white-space: nowrap;
 }
 
-.chief-payable-bar-filters-toggle {
+.admin-bar-filters-toggle {
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -4272,14 +4272,14 @@ button.ops-doctor-line.shadow.clickable:hover {
     transition: border-color 0.16s ease, background 0.16s ease;
 }
 
-.chief-payable-bar-filters-toggle.open,
-.chief-payable-bar-filters-toggle:hover,
-.chief-payable-bar-filters-toggle:focus-visible {
+.admin-bar-filters-toggle.open,
+.admin-bar-filters-toggle:hover,
+.admin-bar-filters-toggle:focus-visible {
     border-color: rgba(84, 145, 255, 0.58);
     background: rgba(43, 78, 134, 0.5);
 }
 
-.chief-payable-bar-filter-count {
+.admin-bar-filter-count {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -4292,18 +4292,18 @@ button.ops-doctor-line.shadow.clickable:hover {
     font-style: normal;
 }
 
-.chief-payable-bar .reports-primary-link {
+.admin-bar .reports-primary-link {
     min-height: 38px;
     padding: 0 14px;
     font-size: 0.76rem;
     white-space: nowrap;
 }
 
-.chief-payable-bar-menu {
+.admin-bar-menu {
     position: relative;
 }
 
-.chief-payable-bar-menu-toggle {
+.admin-bar-menu-toggle {
     min-height: 38px;
     padding: 0 12px;
     border-radius: 999px;
@@ -4315,13 +4315,13 @@ button.ops-doctor-line.shadow.clickable:hover {
     cursor: pointer;
 }
 
-.chief-payable-bar-menu-toggle:hover,
-.chief-payable-bar-menu-toggle:focus-visible {
+.admin-bar-menu-toggle:hover,
+.admin-bar-menu-toggle:focus-visible {
     border-color: rgba(145, 170, 205, 0.36);
     color: var(--text);
 }
 
-.chief-payable-bar-menu-panel {
+.admin-bar-menu-panel {
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
@@ -4334,7 +4334,7 @@ button.ops-doctor-line.shadow.clickable:hover {
     box-shadow: 0 28px 72px -30px rgba(0, 0, 0, 0.9);
 }
 
-.chief-payable-bar-menu-list {
+.admin-bar-menu-list {
     display: grid;
     gap: 2px;
 }
@@ -4361,31 +4361,31 @@ button.ops-doctor-line.shadow.clickable:hover {
     background: rgba(197, 161, 106, 0.12);
 }
 
-.chief-payable-bar-drawer {
+.admin-bar-drawer {
     overflow: hidden;
     background: rgba(7, 12, 20, 0.92);
     border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 }
 
-.chief-payable-bar-drawer-inner {
+.admin-bar-drawer-inner {
     display: grid;
     gap: 12px;
     padding: 14px 16px;
 }
 
-.chief-payable-bar-drawer-grid {
+.admin-bar-drawer-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 12px;
 }
 
-.chief-payable-bar-drawer-group {
+.admin-bar-drawer-group {
     display: grid;
     gap: 6px;
     align-content: start;
 }
 
-.chief-payable-bar-drawer-group > span {
+.admin-bar-drawer-group > span {
     font-size: 0.62rem;
     font-weight: 700;
     letter-spacing: 0.12em;
@@ -4393,8 +4393,8 @@ button.ops-doctor-line.shadow.clickable:hover {
     color: var(--muted);
 }
 
-.chief-payable-bar-drawer-group input,
-.chief-payable-bar-drawer-group select {
+.admin-bar-drawer-group input,
+.admin-bar-drawer-group select {
     min-height: 32px;
     padding: 0 10px;
     border-radius: 10px;
@@ -4405,14 +4405,14 @@ button.ops-doctor-line.shadow.clickable:hover {
     font-size: 0.78rem;
 }
 
-.chief-payable-bar-rhythm {
+.admin-bar-rhythm {
     display: flex;
     align-items: flex-end;
     gap: 3px;
     height: 40px;
 }
 
-.chief-payable-bar-rhythm i {
+.admin-bar-rhythm i {
     width: 8px;
     height: 40px;
     border-radius: 4px;
@@ -4420,14 +4420,100 @@ button.ops-doctor-line.shadow.clickable:hover {
     background: linear-gradient(180deg, rgba(255, 164, 85, 0.95), rgba(84, 110, 255, 0.92));
 }
 
-.chief-payable-bar-inserts {
+.admin-bar-inserts {
     display: grid;
     gap: 10px;
     padding: 12px 16px;
 }
 
-.chief-payable-bar-inserts:empty {
+.admin-bar-inserts:empty {
     display: none;
+}
+
+/* Rótulo da tela dentro da faixa (substitui o herói com h1 gigante). */
+.admin-bar-kicker {
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #d1b07a;
+    white-space: nowrap;
+}
+
+/* Faixa "solta" (sem tabela dentro do frame): o card inteiro gruda no topo. */
+.admin-bar-frame.standalone {
+    position: sticky;
+    top: 8px;
+    z-index: 30;
+    margin-bottom: 14px;
+}
+
+.admin-bar-frame.standalone .admin-bar {
+    position: static;
+}
+
+.admin-bar-frame.standalone > .admin-bar:last-child {
+    border-radius: 26px;
+    border-bottom: none;
+}
+
+.admin-bar-frame.standalone .admin-bar-drawer:last-child {
+    border-radius: 0 0 26px 26px;
+    border-bottom: none;
+}
+
+/* Tons dos KPIs inline (espelham os cards antigos ready/warn/danger). */
+.admin-bar-kpi.ok strong {
+    color: #a8f7d2;
+}
+
+.admin-bar-kpi.warn strong {
+    color: #ffdfae;
+}
+
+.admin-bar-kpi.danger strong {
+    color: #ffb4b4;
+}
+
+/* Campos compactos direto na faixa (data, turno etc.). */
+.admin-bar-field {
+    min-height: 38px;
+    padding: 0 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(145, 170, 205, 0.34);
+    background: rgba(4, 10, 18, 0.94);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.admin-bar form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.admin-bar .payment-button {
+    min-height: 38px;
+}
+
+/* Prosa movida do herói para dentro da gaveta. */
+.admin-bar-drawer-group p {
+    margin: 0;
+    color: var(--muted-strong);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    max-width: 62ch;
+}
+
+/* Toggle de checkbox dentro da gaveta (ex.: só pendências). */
+.admin-bar-drawer-group .admin-bar-drawer-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted-strong);
+    font-size: 0.78rem;
+    cursor: pointer;
 }
 
 .chief-payable-chip-row {
@@ -5921,12 +6007,12 @@ button.chief-payable-tag:focus-visible {
         grid-template-columns: 1fr;
     }
 
-    .chief-payable-bar {
+    .admin-bar {
         padding: 10px 12px;
         border-radius: 24px 24px 0 0;
     }
 
-    .chief-payable-bar-frame {
+    .admin-bar-frame {
         border-radius: 24px;
     }
 
@@ -5934,15 +6020,15 @@ button.chief-payable-tag:focus-visible {
         border-radius: 0 0 24px 24px;
     }
 
-    .chief-payable-bar-search {
+    .admin-bar-search {
         width: 100%;
     }
 
-    .chief-payable-bar-divider {
+    .admin-bar-divider {
         display: none;
     }
 
-    .chief-payable-bar-actions {
+    .admin-bar-actions {
         margin-left: 0;
         flex-wrap: wrap;
     }

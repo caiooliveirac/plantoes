@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
+import { useRouter } from "next/navigation";
+import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type { MonthlyReportDoctorGroup, MonthlyReportModel, MonthlyReportPaymentStatus, MonthlyReportShift } from "@/modules/reporting/monthly-report";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 
@@ -78,10 +79,13 @@ interface Props {
 }
 
 export function MonthlyReportClient({ report }: Props) {
+    const router = useRouter();
     const [search, setSearch] = useState("");
     const [domainFilter, setDomainFilter] = useState<"all" | MonthlyReportShift["domain"]>("all");
     const [paymentStatusFilter, setPaymentStatusFilter] = useState<"all" | MonthlyReportPaymentStatus>("all");
     const [onlyInconsistent, setOnlyInconsistent] = useState(false);
+    // Gaveta de filtros da faixa de comando (escopo, status, só pendências).
+    const [filtersOpen, setFiltersOpen] = useState(false);
     const [expandedDoctorIds, setExpandedDoctorIds] = useState<string[]>(report.groups.slice(0, 1).map((group) => group.doctorId));
     const [selectedShiftId, setSelectedShiftId] = useState<string | null>(report.groups[0]?.shifts[0]?.occupancyId ?? null);
 
@@ -151,96 +155,123 @@ export function MonthlyReportClient({ report }: Props) {
 
     return (
         <main className="reports-shell">
-            <section className="reports-hero">
-                <div>
-                    <p className="reports-kicker">Auditoria mensal</p>
-                    <h1>Relatório operacional para fechar nota antes do pagamento.</h1>
-                    <p className="reports-subtitle">
-                        A leitura principal combina quantidade real de plantões, detalhamento por médico e alertas de inconsistência para travar o que ainda precisa de revisão.
-                    </p>
-                </div>
-
-                <AdminGlobalNavigationLinks current="reports" containerClassName="reports-hero-actions">
-                    <a className="reports-primary-link" href={`/api/admin/reports/export?month=${report.monthKey}`}>
-                        Exportar XLSX
-                    </a>
-                    <a className="reports-secondary-link" href={`/api/admin/reports/export?month=${report.monthKey}&format=csv`}>
-                        Baixar CSV
-                    </a>
-                </AdminGlobalNavigationLinks>
-            </section>
-
-            <section className="reports-presets">
-                {report.presetMonths.map((preset) => (
-                    <a
-                        key={preset.key}
-                        href={`/admin/reports?month=${preset.key}`}
-                        className={`reports-month-chip ${preset.key === report.monthKey ? "active" : ""}`.trim()}
+            {/* Faixa de comando compacta: mês + busca + KPIs + filtros na gaveta. */}
+            <section className="admin-bar-frame standalone">
+                <header className="admin-bar">
+                    <span className="admin-bar-kicker">Auditoria mensal</span>
+                    <select
+                        className="admin-bar-month"
+                        value={report.monthKey}
+                        onChange={(event) => router.push(`/admin/reports?month=${event.target.value}`)}
+                        aria-label="Mês do relatório"
                     >
-                        {preset.label}
-                    </a>
-                ))}
-            </section>
-
-            <section className="reports-summary-grid">
-                <article className="reports-summary-card">
-                    <span className="reports-summary-label">Prontos para pagar</span>
-                    <strong>{report.summary.readyForPaymentCount}</strong>
-                    <span>{report.summary.doctorsReadyForPaymentCount} médicos liberados</span>
-                </article>
-                <article className="reports-summary-card">
-                    <span className="reports-summary-label">Plantões em revisão</span>
-                    <strong>{report.summary.needsReviewCount}</strong>
-                    <span>{report.summary.doctorsNeedsReviewCount} médicos travados</span>
-                </article>
-                <article className={`reports-summary-card ${summaryTone(report.summary.inconsistentShiftCount)}`.trim()}>
-                    <span className="reports-summary-label">Pendências de auditoria</span>
-                    <strong>{report.summary.inconsistentShiftCount}</strong>
-                    <span>{report.summary.openShiftCount} ainda sem saída</span>
-                </article>
-                <article className="reports-summary-card">
-                    <span className="reports-summary-label">Volume do mês</span>
-                    <strong>{report.summary.shiftCount}</strong>
-                    <span>{formatMinutesForHumans(report.summary.workedMinutes)} trabalhados · saldo {formatMinutesForHumans(report.summary.balanceMinutes)}</span>
-                </article>
-            </section>
-
-            <section className="reports-filter-bar">
-                <label className="reports-filter-field reports-filter-search">
-                    <span>Buscar</span>
+                        {report.presetMonths.map((preset) => (
+                            <option key={preset.key} value={preset.key}>{preset.label}</option>
+                        ))}
+                    </select>
                     <input
+                        type="search"
+                        className="admin-bar-search"
                         value={search}
                         onChange={(event) => setSearch(event.target.value)}
                         placeholder="Médico, base, posto ou observação"
+                        aria-label="Buscar"
                     />
-                </label>
+                    <span className="admin-bar-divider" aria-hidden="true" />
+                    <div className="admin-bar-kpis">
+                        <div className="admin-bar-kpi ok" title={`${report.summary.doctorsReadyForPaymentCount} médicos liberados`}>
+                            <strong>{report.summary.readyForPaymentCount}</strong>
+                            <span>prontos p/ pagar</span>
+                        </div>
+                        <div className="admin-bar-kpi warn" title={`${report.summary.doctorsNeedsReviewCount} médicos travados`}>
+                            <strong>{report.summary.needsReviewCount}</strong>
+                            <span>em revisão</span>
+                        </div>
+                        <button
+                            type="button"
+                            className={`admin-bar-kpi-button pending ${onlyInconsistent ? "active" : ""}`.trim()}
+                            onClick={() => setOnlyInconsistent((prev) => !prev)}
+                            title={onlyInconsistent
+                                ? "Mostrando só pendências — clique para ver tudo"
+                                : `Mostrar só pendências de auditoria (${report.summary.openShiftCount} ainda sem saída)`}
+                        >
+                            <strong>{report.summary.inconsistentShiftCount}</strong>
+                            <span>pendências</span>
+                            {onlyInconsistent ? <i aria-hidden="true">×</i> : null}
+                        </button>
+                        <div
+                            className="admin-bar-kpi"
+                            title={`${formatMinutesForHumans(report.summary.workedMinutes)} trabalhados · saldo ${formatMinutesForHumans(report.summary.balanceMinutes)}`}
+                        >
+                            <strong>{report.summary.shiftCount}</strong>
+                            <span>plantões no mês</span>
+                        </div>
+                    </div>
+                    <div className="admin-bar-actions">
+                        <button
+                            type="button"
+                            className={`admin-bar-filters-toggle ${filtersOpen ? "open" : ""}`.trim()}
+                            onClick={() => setFiltersOpen((prev) => !prev)}
+                            aria-expanded={filtersOpen}
+                        >
+                            Filtros
+                            {(domainFilter !== "all" ? 1 : 0) + (paymentStatusFilter !== "all" ? 1 : 0) > 0 ? (
+                                <i className="admin-bar-filter-count">
+                                    {(domainFilter !== "all" ? 1 : 0) + (paymentStatusFilter !== "all" ? 1 : 0)}
+                                </i>
+                            ) : null}
+                            <span aria-hidden="true">{filtersOpen ? "▴" : "▾"}</span>
+                        </button>
+                        <a className="reports-primary-link" href={`/api/admin/reports/export?month=${report.monthKey}`}>
+                            Exportar XLSX
+                        </a>
+                        <AdminBarNavMenu current="reports">
+                            <a className="admin-nav-menu-link" href={`/api/admin/reports/export?month=${report.monthKey}&format=csv`} role="menuitem">
+                                Baixar CSV
+                            </a>
+                        </AdminBarNavMenu>
+                    </div>
+                </header>
 
-                <label className="reports-filter-field">
-                    <span>Escopo</span>
-                    <select value={domainFilter} onChange={(event) => setDomainFilter(event.target.value as "all" | MonthlyReportShift["domain"])}>
-                        <option value="all">Tudo</option>
-                        <option value="regulation">Regulação</option>
-                        <option value="intervention">Intervenção</option>
-                    </select>
-                </label>
-
-                <label className="reports-filter-field">
-                    <span>Status</span>
-                    <select value={paymentStatusFilter} onChange={(event) => setPaymentStatusFilter(event.target.value as "all" | MonthlyReportPaymentStatus)}>
-                        <option value="all">Tudo</option>
-                        <option value="ready_for_payment">Pronto para pagar</option>
-                        <option value="needs_review">Revisar</option>
-                    </select>
-                </label>
-
-                <label className="reports-toggle">
-                    <input
-                        type="checkbox"
-                        checked={onlyInconsistent}
-                        onChange={(event) => setOnlyInconsistent(event.target.checked)}
-                    />
-                    <span>Mostrar só pendências</span>
-                </label>
+                {filtersOpen ? (
+                    <div className="admin-bar-drawer">
+                        <div className="admin-bar-drawer-inner">
+                            <div className="admin-bar-drawer-grid">
+                                <div className="admin-bar-drawer-group">
+                                    <span>Escopo</span>
+                                    <select value={domainFilter} onChange={(event) => setDomainFilter(event.target.value as "all" | MonthlyReportShift["domain"])}>
+                                        <option value="all">Tudo</option>
+                                        <option value="regulation">Regulação</option>
+                                        <option value="intervention">Intervenção</option>
+                                    </select>
+                                </div>
+                                <div className="admin-bar-drawer-group">
+                                    <span>Status</span>
+                                    <select value={paymentStatusFilter} onChange={(event) => setPaymentStatusFilter(event.target.value as "all" | MonthlyReportPaymentStatus)}>
+                                        <option value="all">Tudo</option>
+                                        <option value="ready_for_payment">Pronto para pagar</option>
+                                        <option value="needs_review">Revisar</option>
+                                    </select>
+                                </div>
+                                <div className="admin-bar-drawer-group">
+                                    <span>Pendências</span>
+                                    <label className="admin-bar-drawer-toggle">
+                                        <input
+                                            type="checkbox"
+                                            checked={onlyInconsistent}
+                                            onChange={(event) => setOnlyInconsistent(event.target.checked)}
+                                        />
+                                        <span>Mostrar só pendências</span>
+                                    </label>
+                                </div>
+                                <div className="admin-bar-drawer-group">
+                                    <span>Leitura principal</span>
+                                    <p>Quantidade real de plantões, detalhamento por médico e alertas de inconsistência para travar o que ainda precisa de revisão antes do pagamento.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
             </section>
 
             <section className="reports-grid">

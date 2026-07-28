@@ -1,6 +1,7 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
+import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import { getSlotAuditReport, type SlotAuditPanel, type SlotAuditPosition } from "@/services/slot-audit.service";
 
 export const dynamic = "force-dynamic";
@@ -167,65 +168,54 @@ export default async function AdminSlotAuditPage({
 
     return (
         <main className="payment-shell slot-audit-shell">
-            <section className="payment-hero slot-audit-hero">
-                <div>
-                    <p className="payment-eyebrow">Auditoria de fechamento por posição</p>
-                    <h1>Quem ficou em cada ramal e base — e quem vai receber por isso.</h1>
-                    <p className="payment-subtitle">
-                        Cada linha é uma POSIÇÃO. O nome exibido é exatamente quem o fechamento de pagamento (payment-closing)
-                        aponta como pagável naquele ramal/base no turno. A TAG mostra o saldo de banco de horas do plantão,
-                        igual à tela de banco de horas. Use para conferir, numa olhada, se o plantão fechou certo.
-                    </p>
-
-                    <div className="payment-summary-grid">
-                        <article className="payment-summary-card ready">
-                            <span>Posições pagáveis</span>
-                            <strong>{report.summary.payableCount}</strong>
-                        </article>
-                        <article className="payment-summary-card review">
-                            <span>Pendentes</span>
-                            <strong>{report.summary.pendingCount}</strong>
-                        </article>
-                        <article className="payment-summary-card empty">
-                            <span>Vagas</span>
-                            <strong>{report.summary.emptyCount}</strong>
-                        </article>
-                        <article className="payment-summary-card review">
-                            <span>Desativadas</span>
-                            <strong>{report.summary.disabledCount}</strong>
-                        </article>
-                    </div>
-                </div>
-
-                <div className="slot-audit-hero-meta">
-                    <span className={`payment-status-pill large ${report.isClosed ? "ready" : "review"}`}>
-                        {report.shiftLabel} · {report.isClosed ? "encerrado" : "em andamento"}
+            {/* Faixa de comando compacta: slot + KPIs + navegação; a tabela de posições vem logo abaixo. */}
+            <section className="admin-bar-frame standalone">
+                <header className="admin-bar">
+                    <span
+                        className="admin-bar-kicker"
+                        title="Cada linha é uma POSIÇÃO: o nome exibido é quem o payment-closing aponta como pagável naquele ramal/base no turno. A tag mostra o saldo de banco de horas do plantão, igual à tela de banco de horas."
+                    >
+                        Auditoria de slots
                     </span>
-                    <span className="slot-audit-range-label">{formatDateLabel(report.operationalDate)}</span>
-                    <span className="slot-audit-range-label">{formatClock(report.slotStartedAt)} às {formatClock(report.slotEndedAt)}</span>
-                    <AdminGlobalNavigationLinks current="slot-audit" containerClassName="payment-hero-actions" />
-                </div>
+                    <form method="get">
+                        <input type="date" name="date" defaultValue={report.operationalDate} className="admin-bar-field" aria-label="Data do plantão" />
+                        <select name="shift" defaultValue={report.shiftLabel} className="admin-bar-field" aria-label="Turno">
+                            <option value="SD">SD (07h–19h)</option>
+                            <option value="SN">SN (19h–07h)</option>
+                        </select>
+                        <button type="submit" className="payment-button primary">Auditar</button>
+                        <a className="payment-button" href="/admin/slot-audit">Mais recente</a>
+                    </form>
+                    <span className="admin-bar-divider" aria-hidden="true" />
+                    <div className="admin-bar-kpis">
+                        <div className="admin-bar-kpi ok">
+                            <strong>{report.summary.payableCount}</strong>
+                            <span>pagáveis</span>
+                        </div>
+                        <div className="admin-bar-kpi warn">
+                            <strong>{report.summary.pendingCount}</strong>
+                            <span>pendentes</span>
+                        </div>
+                        <div className="admin-bar-kpi">
+                            <strong>{report.summary.emptyCount}</strong>
+                            <span>vagas</span>
+                        </div>
+                        <div className="admin-bar-kpi danger">
+                            <strong>{report.summary.disabledCount}</strong>
+                            <span>desativadas</span>
+                        </div>
+                        <span
+                            className={`payment-status-pill ${report.isClosed ? "ready" : "review"}`}
+                            title={`${formatDateLabel(report.operationalDate)} · ${formatClock(report.slotStartedAt)} às ${formatClock(report.slotEndedAt)}`}
+                        >
+                            {report.shiftLabel} · {report.isClosed ? "encerrado" : "em andamento"}
+                        </span>
+                    </div>
+                    <div className="admin-bar-actions">
+                        <AdminBarNavMenu current="slot-audit" />
+                    </div>
+                </header>
             </section>
-
-            <form className="payment-filter-bar" method="get">
-                <label className="payment-filter-field compact">
-                    <span>Data do plantão</span>
-                    <input type="date" name="date" defaultValue={report.operationalDate} />
-                </label>
-
-                <label className="payment-filter-field compact">
-                    <span>Turno</span>
-                    <select name="shift" defaultValue={report.shiftLabel}>
-                        <option value="SD">SD (07h–19h)</option>
-                        <option value="SN">SN (19h–07h)</option>
-                    </select>
-                </label>
-
-                <div className="payment-filter-actions">
-                    <button type="submit" className="payment-button primary">Auditar plantão</button>
-                    <a className="payment-button" href="/admin/slot-audit">Plantão mais recente</a>
-                </div>
-            </form>
 
             {loadError && (
                 <div className="payment-inline-banner danger">

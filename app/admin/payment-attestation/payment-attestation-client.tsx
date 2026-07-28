@@ -1,7 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react";
-import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
+import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type {
     PaymentAttestationEntrySnapshot,
     PaymentAttestationRecentSlot,
@@ -228,6 +228,8 @@ export function PaymentAttestationClient({ initialView }: Props) {
     const [loadError, setLoadError] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+    // Gaveta "Recentes" da faixa de comando (absorveu os chips de fechamentos salvos).
+    const [recentOpen, setRecentOpen] = useState(false);
     const [isRefreshing, startRefreshTransition] = useTransition();
     const [isSaving, startSaveTransition] = useTransition();
 
@@ -345,102 +347,114 @@ export function PaymentAttestationClient({ initialView }: Props) {
 
     return (
         <main className="payment-shell">
-            <section className="payment-hero">
-                <div>
-                    <p className="reports-kicker">Atesto de pagamento</p>
-                    <h1>Congelamento diário do SD/SN para transformar o site na fonte oficial do que vale pagar.</h1>
-                    <p className="payment-subtitle">
-                        Primeiro você enxerga quem estava onde e por que cada alvo fechou daquele jeito. Depois congela o slot para impedir drift operacional e sustentar o fechamento mensal por médico.
-                    </p>
-                </div>
-
-                <AdminGlobalNavigationLinks current="payment-attestation" containerClassName="payment-hero-actions" />
-            </section>
-
-            <section className="reports-presets">
-                {view.recentSlots.length === 0 ? (
-                    <span className="reports-badge neutral">Nenhum fechamento salvo ainda</span>
-                ) : view.recentSlots.map((slot) => {
-                    const active = boardDateInputValue(slot.operationalDate) === dateInput && slot.shiftLabel === shiftInput;
-                    return (
-                        <button
-                            key={slot.id}
-                            type="button"
-                            className={`reports-month-chip ${active ? "active" : ""}`.trim()}
-                            onClick={() => void openRecentSlot(slot)}
-                        >
-                            {recentSlotLabel(slot)} · {slot.status === "approved" ? "aprovado" : "rascunho"}
-                        </button>
-                    );
-                })}
-            </section>
-
-            <section className="payment-summary-grid">
-                <article className="payment-summary-card">
-                    <span className="reports-summary-label">Slot</span>
-                    <strong>{view.slot.shiftLabel}</strong>
-                    <span>{formatDateLabel(view.slot.operationalDate)}</span>
-                </article>
-                <article className="payment-summary-card ready">
-                    <span className="reports-summary-label">Prontos</span>
-                    <strong>{view.slot.summary.readyCount}</strong>
-                    <span>{view.slot.summary.doctorCount} médicos elegíveis neste snapshot</span>
-                </article>
-                <article className="payment-summary-card review">
-                    <span className="reports-summary-label">Em revisão</span>
-                    <strong>{view.slot.summary.needsReviewCount}</strong>
-                    <span>{view.slot.summary.unassignedCount} sem ocupação consolidada</span>
-                </article>
-                <article className="payment-summary-card empty">
-                    <span className="reports-summary-label">Alvos contábeis</span>
-                    <strong>{view.slot.summary.totalTargets}</strong>
-                    <span>{view.slot.summary.disabledCount} desativadas fora da conta</span>
-                </article>
-                <article className="payment-summary-card">
-                    <span className="reports-summary-label">Estado do fechamento</span>
-                    <strong>{slotStatusLabel(view.slot.status)}</strong>
-                    <span>{view.slot.approvedAt ? `aprovado em ${formatDateTime(view.slot.approvedAt)}` : `lido em ${formatDateTime(view.slot.snapshotGeneratedAt)}`}</span>
-                </article>
-            </section>
-
-            <section className="payment-filter-bar">
-                <label className="payment-filter-field">
-                    <span>Data operacional</span>
-                    <input type="date" value={dateInput} onChange={(event) => setDateInput(event.target.value)} />
-                </label>
-
-                <label className="payment-filter-field compact">
-                    <span>Turno</span>
-                    <select value={shiftInput} onChange={(event) => setShiftInput(event.target.value as "SD" | "SN")}>
+            {/* Faixa de comando compacta: slot + busca + KPIs + ações + gaveta de recentes. */}
+            <section className="admin-bar-frame standalone">
+                <header className="admin-bar">
+                    <span className="admin-bar-kicker">Atesto diário</span>
+                    <input
+                        type="date"
+                        className="admin-bar-field"
+                        value={dateInput}
+                        onChange={(event) => setDateInput(event.target.value)}
+                        aria-label="Data operacional"
+                    />
+                    <select
+                        className="admin-bar-field"
+                        value={shiftInput}
+                        onChange={(event) => setShiftInput(event.target.value as "SD" | "SN")}
+                        aria-label="Turno"
+                    >
                         <option value="SD">SD</option>
                         <option value="SN">SN</option>
                     </select>
-                </label>
-
-                <label className="payment-filter-field payment-filter-search">
-                    <span>Buscar alvo</span>
-                    <input
-                        type="search"
-                        value={search}
-                        onChange={(event) => setSearch(event.target.value)}
-                        placeholder="Base, ramal ou médico"
-                    />
-                </label>
-
-                <div className="payment-filter-actions">
                     <button type="button" className="payment-button" onClick={() => void applyFilters()} disabled={isRefreshing || isSaving}>
                         {isRefreshing ? "Lendo..." : "Abrir slot"}
                     </button>
-                    <button type="button" className="payment-button" onClick={() => void handleAction("refresh")} disabled={isRefreshing || isSaving || isApproved}>
-                        {isSaving ? "Aplicando..." : view.slot.isPersisted ? "Atualizar snapshot" : "Salvar snapshot"}
-                    </button>
-                    <button type="button" className="payment-button primary" onClick={() => void handleAction("approve")} disabled={isRefreshing || isSaving || !canApprove}>
-                        Aprovar slot
-                    </button>
-                    <button type="button" className="payment-button" onClick={() => void handleAction("reopen")} disabled={isRefreshing || isSaving || !isApproved}>
-                        Reabrir
-                    </button>
-                </div>
+                    <input
+                        type="search"
+                        className="admin-bar-search"
+                        style={{ width: "min(220px, 100%)" }}
+                        value={search}
+                        onChange={(event) => setSearch(event.target.value)}
+                        placeholder="Buscar base, ramal ou médico"
+                        aria-label="Buscar alvo"
+                    />
+                    <span className="admin-bar-divider" aria-hidden="true" />
+                    <div className="admin-bar-kpis">
+                        <div className="admin-bar-kpi ok" title={`${view.slot.summary.doctorCount} médicos elegíveis neste snapshot`}>
+                            <strong>{view.slot.summary.readyCount}</strong>
+                            <span>prontos</span>
+                        </div>
+                        <div className="admin-bar-kpi warn" title={`${view.slot.summary.unassignedCount} sem ocupação consolidada`}>
+                            <strong>{view.slot.summary.needsReviewCount}</strong>
+                            <span>em revisão</span>
+                        </div>
+                        <div className="admin-bar-kpi" title={`${view.slot.summary.disabledCount} desativadas fora da conta`}>
+                            <strong>{view.slot.summary.totalTargets}</strong>
+                            <span>alvos</span>
+                        </div>
+                        <span
+                            className={`payment-status-pill ${slotStatusBadgeTone(view.slot.status)}`.trim()}
+                            title={view.slot.approvedAt ? `Aprovado em ${formatDateTime(view.slot.approvedAt)}` : `Lido em ${formatDateTime(view.slot.snapshotGeneratedAt)}`}
+                        >
+                            {slotStatusLabel(view.slot.status)}
+                        </span>
+                    </div>
+                    <div className="admin-bar-actions">
+                        <button
+                            type="button"
+                            className={`admin-bar-filters-toggle ${recentOpen ? "open" : ""}`.trim()}
+                            onClick={() => setRecentOpen((prev) => !prev)}
+                            aria-expanded={recentOpen}
+                        >
+                            Recentes
+                            <span aria-hidden="true">{recentOpen ? "▴" : "▾"}</span>
+                        </button>
+                        <button type="button" className="payment-button" onClick={() => void handleAction("refresh")} disabled={isRefreshing || isSaving || isApproved}>
+                            {isSaving ? "Aplicando..." : view.slot.isPersisted ? "Atualizar snapshot" : "Salvar snapshot"}
+                        </button>
+                        <button type="button" className="payment-button primary" onClick={() => void handleAction("approve")} disabled={isRefreshing || isSaving || !canApprove}>
+                            Aprovar slot
+                        </button>
+                        {isApproved ? (
+                            <button type="button" className="payment-button" onClick={() => void handleAction("reopen")} disabled={isRefreshing || isSaving}>
+                                Reabrir
+                            </button>
+                        ) : null}
+                        <AdminBarNavMenu current="payment-attestation" />
+                    </div>
+                </header>
+
+                {recentOpen ? (
+                    <div className="admin-bar-drawer">
+                        <div className="admin-bar-drawer-inner">
+                            <div className="admin-bar-drawer-group">
+                                <span>Fechamentos recentes · {formatDateLabel(view.slot.operationalDate)}</span>
+                                <div className="chief-payable-chip-row">
+                                    {view.recentSlots.length === 0 ? (
+                                        <span className="reports-badge neutral">Nenhum fechamento salvo ainda</span>
+                                    ) : view.recentSlots.map((slot) => {
+                                        const active = boardDateInputValue(slot.operationalDate) === dateInput && slot.shiftLabel === shiftInput;
+                                        return (
+                                            <button
+                                                key={slot.id}
+                                                type="button"
+                                                className={`reports-month-chip ${active ? "active" : ""}`.trim()}
+                                                onClick={() => void openRecentSlot(slot)}
+                                            >
+                                                {recentSlotLabel(slot)} · {slot.status === "approved" ? "aprovado" : "rascunho"}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            <div className="admin-bar-drawer-group">
+                                <span>O que esta tela congela</span>
+                                <p>Primeiro você enxerga quem estava onde e por que cada alvo fechou daquele jeito. Depois congela o slot para impedir drift operacional e sustentar o fechamento mensal por médico.</p>
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
             </section>
 
             {(loadError || actionError || feedbackMessage) && (
