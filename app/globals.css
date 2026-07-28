@@ -9553,9 +9553,11 @@ button.chief-payable-tag:focus-visible {
 .board-audit-rail {
     position: fixed;
     top: 96px;
-    right: 24px;
+    /* À ESQUERDA do ops-auth-dock (right 22px + 210px de largura): o rail nunca
+       mais cobre os botões de banco de horas/fechamento, com 1 ou 15 avisos. */
+    right: 250px;
     z-index: 40;
-    width: min(380px, calc(100vw - 48px));
+    width: min(380px, calc(100vw - 290px));
     max-height: calc(100vh - 128px);
     display: flex;
     flex-direction: column;
@@ -9575,8 +9577,36 @@ button.chief-payable-tag:focus-visible {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding-bottom: 12px;
+    padding: 0 0 12px;
+    border: none;
     border-bottom: 1px solid var(--surface-elevated-border);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    width: 100%;
+    cursor: pointer;
+}
+
+.board-audit-rail.collapsed {
+    gap: 0;
+    padding: 12px 18px;
+}
+
+.board-audit-rail.collapsed .board-audit-rail__header {
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.board-audit-rail__header-end {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.board-audit-rail__chevron {
+    color: var(--muted);
+    font-size: 0.7rem;
 }
 
 .board-audit-rail__title {

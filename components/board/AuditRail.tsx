@@ -21,12 +21,46 @@ export interface AuditRailProps {
  *
  * Visibility: caller must already have gated on session.canManage.
  */
+const AUDIT_RAIL_COLLAPSED_STORAGE_KEY = "board-audit-rail-collapsed";
+
 export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps) {
     const quickConfirm = useQuickConfirmDeparture();
     const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
     const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
     const seenIdsRef = useRef<Set<string>>(new Set());
     const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
+    // Colapsado, o rail vira só a faixa "Saídas a confirmar · N" e deixa de
+    // disputar espaço com o restante da tela. Preferência do chefe persiste;
+    // sem preferência salva, telas estreitas começam colapsadas.
+    const [collapsed, setCollapsed] = useState(false);
+
+    useEffect(() => {
+        try {
+            const stored = window.localStorage.getItem(AUDIT_RAIL_COLLAPSED_STORAGE_KEY);
+            if (stored !== null) {
+                setCollapsed(stored === "1");
+                return;
+            }
+        } catch {
+            // localStorage indisponível (modo privado etc.) — segue o padrão.
+        }
+
+        if (window.matchMedia("(max-width: 720px)").matches) {
+            setCollapsed(true);
+        }
+    }, []);
+
+    function toggleCollapsed() {
+        setCollapsed((previous) => {
+            const next = !previous;
+            try {
+                window.localStorage.setItem(AUDIT_RAIL_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+            } catch {
+                // Sem persistência não tem problema — só não lembra a escolha.
+            }
+            return next;
+        });
+    }
 
     // Mark items that appeared after the first render as "fresh" so they pulse.
     // First render: everything is just baseline state, no pulse.
@@ -86,23 +120,32 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
 
     return (
         <motion.aside
-            className="board-audit-rail"
+            className={`board-audit-rail ${collapsed ? "collapsed" : ""}`.trim()}
             variants={fadeRise}
             initial="initial"
             animate="animate"
             aria-label="Saídas verbalizadas pendentes de confirmação"
         >
-            <header className="board-audit-rail__header">
+            <button
+                type="button"
+                className="board-audit-rail__header"
+                onClick={toggleCollapsed}
+                aria-expanded={!collapsed}
+                title={collapsed ? "Expandir saídas a confirmar" : "Recolher saídas a confirmar"}
+            >
                 <span className="board-audit-rail__title">
                     <Shield size={14} strokeWidth={2.2} />
                     Saídas a confirmar
                 </span>
-                <span className={`board-audit-rail__count ${visible.length === 0 ? "zero" : ""}`.trim()}>
-                    {visible.length}
+                <span className="board-audit-rail__header-end">
+                    <span className={`board-audit-rail__count ${visible.length === 0 ? "zero" : ""}`.trim()}>
+                        {visible.length}
+                    </span>
+                    <span className="board-audit-rail__chevron" aria-hidden="true">{collapsed ? "▾" : "▴"}</span>
                 </span>
-            </header>
+            </button>
 
-            {visible.length === 0 ? (
+            {collapsed ? null : visible.length === 0 ? (
                 <div className="board-audit-rail__empty">
                     Nenhuma saída verbalizada aguardando revisão. Crédito flui automaticamente quando o sistema fecha por boundary ou você encerra direto.
                 </div>
