@@ -218,17 +218,28 @@ function collapseContinuityHistoryShifts(shifts: RawBankHoursHistoryShift[]) {
     });
 }
 
+// Formatters cacheados no módulo: são chamados várias vezes POR PLANTÃO na
+// montagem da prova; instanciar Intl.DateTimeFormat a cada chamada dominava o
+// tempo de resposta da página do banco de horas.
+const LOCAL_TIME_FORMAT = new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: SAO_PAULO_TIME_ZONE,
+});
+
+const LOCAL_DATE_TIME_FORMAT = new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: SAO_PAULO_TIME_ZONE,
+});
+
 function formatLocalTime(value: string | null) {
     if (!value) {
         return "--";
     }
 
-    return new Intl.DateTimeFormat("pt-BR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-        timeZone: SAO_PAULO_TIME_ZONE,
-    }).format(new Date(value));
+    return LOCAL_TIME_FORMAT.format(new Date(value));
 }
 
 function formatLocalDateTime(value: string | null) {
@@ -236,11 +247,7 @@ function formatLocalDateTime(value: string | null) {
         return "--";
     }
 
-    return new Intl.DateTimeFormat("pt-BR", {
-        dateStyle: "short",
-        timeStyle: "short",
-        timeZone: SAO_PAULO_TIME_ZONE,
-    }).format(new Date(value));
+    return LOCAL_DATE_TIME_FORMAT.format(new Date(value));
 }
 
 function sameInstant(left: string | null, right: string | null) {
