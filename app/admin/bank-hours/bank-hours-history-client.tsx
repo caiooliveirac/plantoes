@@ -382,6 +382,20 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         }, 40);
     }
 
+    // O header sticky do detalhe precisa grudar ABAIXO do admin-bar (que também
+    // é sticky e tem altura variável — no mobile a busca/KPIs quebram linha).
+    useEffect(() => {
+        function updateStickyOffset() {
+            const frame = document.querySelector(".admin-bar-frame.standalone");
+            const height = frame instanceof HTMLElement ? frame.offsetHeight + 8 : 0;
+            document.documentElement.style.setProperty("--admin-bar-offset", `${height}px`);
+        }
+
+        updateStickyOffset();
+        window.addEventListener("resize", updateStickyOffset);
+        return () => window.removeEventListener("resize", updateStickyOffset);
+    }, []);
+
     useEffect(() => {
         const nextMinutes: Record<string, string> = {};
         const nextNotes: Record<string, string> = {};
@@ -428,6 +442,36 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const selectedDoctor = selectedDoctorId
         ? history.doctors.find((doctor) => doctor.doctorId === selectedDoctorId) ?? null
         : null;
+
+    // Busca vai direto ao médico: sobrou UM resultado -> abre na hora; com
+    // vários resultados num layout empilhado, fecha o detalhe aberto para a
+    // lista filtrada aparecer sem rolagem.
+    useEffect(() => {
+        if (!normalizeSearch(deferredSearch)) {
+            return;
+        }
+
+        if (filteredDoctors.length === 1) {
+            const only = filteredDoctors[0]!;
+            if (only.doctorId !== selectedDoctorId) {
+                setSelectedDoctorId(only.doctorId);
+                if (window.matchMedia("(max-width: 1180px)").matches) {
+                    window.setTimeout(() => {
+                        detailPanelRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+                    }, 80);
+                }
+            }
+            return;
+        }
+
+        if (
+            selectedDoctorId
+            && window.matchMedia("(max-width: 1180px)").matches
+            && !filteredDoctors.some((doctor) => doctor.doctorId === selectedDoctorId)
+        ) {
+            setSelectedDoctorId(null);
+        }
+    }, [deferredSearch, filteredDoctors, selectedDoctorId]);
 
     // Esc fecha o histórico aberto de qualquer ponto da página.
     useEffect(() => {
@@ -575,7 +619,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 ) : null}
             </section>
 
-            <section className={`hours-grid ${selectedDoctor ? "" : "list-only"}`.trim()}>
+            <section className={`hours-grid ${selectedDoctor ? "detail-open" : "list-only"}`.trim()}>
                 <div className="hours-directory-column" ref={directoryRef}>
                     <header className="hours-directory-header">
                         <div>

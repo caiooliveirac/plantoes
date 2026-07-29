@@ -3387,7 +3387,9 @@ button.ops-doctor-line.shadow.clickable:hover {
 
 .hours-detail-header.sticky {
     position: sticky;
-    top: 10px;
+    /* Abaixo do admin-bar sticky; a altura real (que varia no mobile) é medida
+       em runtime e publicada na var pelo client do banco de horas. */
+    top: calc(var(--admin-bar-offset, 0px) + 8px);
     z-index: 6;
     margin: -8px -8px 0;
     padding: 12px 14px;
@@ -3579,6 +3581,32 @@ button.ops-doctor-line.shadow.clickable:hover {
     margin: 0;
     color: var(--muted-strong);
     line-height: 1.5;
+}
+
+/* Telas estreitas: a grade de 3 colunas espremia data/dia da semana em 92px e
+   quebrava tudo com buracos. Empilha: data + local + valor numa linha, frase
+   inteira embaixo ocupando a largura toda. */
+@media (max-width: 720px) {
+    .hours-event-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        row-gap: 6px;
+    }
+
+    .hours-event-when {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        column-gap: 8px;
+    }
+
+    .hours-event-text {
+        grid-column: 1 / -1;
+    }
+
+    .hours-events-list {
+        max-height: none;
+        overflow-y: visible;
+    }
 }
 
 /* ---- Correções da chefia ---- */
@@ -6310,6 +6338,12 @@ button.chief-payable-tag:focus-visible {
     .hours-directory-header {
         position: static;
     }
+
+    /* Empilhado com um médico aberto: só o detalhe na tela. A lista volta ao
+       fechar (✕ sticky, botão no fim, Esc) — sem quilômetros de rolagem. */
+    .hours-grid.detail-open .hours-directory-column {
+        display: none;
+    }
 }
 
 @media (max-width: 720px) {
@@ -6326,6 +6360,25 @@ button.chief-payable-tag:focus-visible {
     .admin-bar {
         padding: 10px 12px;
         border-radius: 24px 24px 0 0;
+    }
+
+    /* No mobile os KPIs quebravam em 3-4 linhas e a faixa sticky engolia ~200px
+       da tela. Uma linha só, com rolagem horizontal discreta. */
+    .admin-bar-kpis {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        min-width: 0;
+        max-width: 100%;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .admin-bar-kpis::-webkit-scrollbar {
+        display: none;
+    }
+
+    .admin-bar-kpi {
+        flex-shrink: 0;
     }
 
     .admin-bar-frame {
