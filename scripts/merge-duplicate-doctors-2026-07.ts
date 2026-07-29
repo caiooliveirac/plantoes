@@ -66,14 +66,9 @@ const FREE_MOVE_TABLES: Array<{ table: string; col: string }> = [
     { table: "bank_hours_entries", col: "doctor_id" },
     { table: "bank_hours_balance_overrides", col: "doctor_id" },
     { table: "payment_attestation_slot_entries", col: "doctor_id" },
-    { table: "shift_offer_bids", col: "doctor_id" },
 ];
-const FREE_MOVE_DUAL_COLUMN_TABLES: Array<{ table: string; cols: string[] }> = [
-    { table: "shift_swaps", cols: ["from_doctor_id", "to_doctor_id"] },
-];
-const FREE_MOVE_SINGLE_OTHER_COL_TABLES: Array<{ table: string; col: string }> = [
-    { table: "shift_offers", col: "offered_by_doctor_id" },
-];
+const FREE_MOVE_DUAL_COLUMN_TABLES: Array<{ table: string; cols: string[] }> = [];
+const FREE_MOVE_SINGLE_OTHER_COL_TABLES: Array<{ table: string; col: string }> = [];
 
 // Uma linha só por médico no total (não por mês/base/etc): conflito se os dois lados tiverem uma.
 const ONE_PER_DOCTOR_TABLES: Array<{ table: string; col: string; label: string }> = [
@@ -89,7 +84,6 @@ const KEYED_TABLES: Array<{ table: string; col: string; keyCols: string[]; label
     { table: "doctor_base_preferences", col: "doctor_id", keyCols: ["base_id"], label: "preferência de base" },
     { table: "doctor_weekday_preferences", col: "doctor_id", keyCols: ["weekday"], label: "preferência de dia da semana" },
     { table: "doctor_fixed_shifts", col: "doctor_id", keyCols: ["weekday", "shift_label"], label: "plantão fixo" },
-    { table: "scheduled_shifts", col: "doctor_id", keyCols: ["operational_date", "shift_label"], label: "plantão agendado" },
 ];
 
 interface Conflict {
