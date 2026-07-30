@@ -6,6 +6,7 @@ import {
     buildMealBreakChoiceRejection,
     buildMealBreakConsistencyAdminReply,
     buildMealBreakErrorReply,
+    buildMealBreakTurnNudgeMessage,
     buildMealBreakPriorityReply,
     buildMealBreakPriorityReplyMessages,
     buildMealBreakRoster,
@@ -28,11 +29,13 @@ import {
     resolveMealBreakTechnicalErrorDetail,
     reconcileMealBreakSessionRamalsWithBoard,
     resolveMealBreakEligibilityExclusions,
+    selectRecentMealBreakRegulatorTelegramIds,
     reconcileNightMealBreakSessionWithBoard,
     resolveMealBreakTurnNudgeAction,
     shouldPreferMealBreakReplyForSession,
     syncDaySessionState,
 } from "@/modules/telegram/meal-breaks";
+import { getTelegramReminderPollMs } from "@/modules/telegram/config";
 
 function makeBoard(): Parameters<typeof buildMealBreakRoster>[0] {
     return {
@@ -3335,40 +3338,56 @@ test("COI noturno: nao-COI redirecionado no trabalho quando escolha bloquearia s
         assert.equal(result.session.nightWorkAssignments[lastNonCoi!], "03:00", "Nao-COI deve ser desviado para 03:00");
     }
 });
-const TWO_MIN = 2 * 60 * 1000;
+const NINETY_SECONDS = 90 * 1000;
 const BASE_ISO = "2026-03-29T12:00:00.000Z";
 const baseMs = new Date(BASE_ISO).getTime();
 
 test("resolveMealBreakTurnNudgeAction nao cutuca em estagio sem fila ou sem alguem na vez", () => {
     assert.deepEqual(
-        resolveMealBreakTurnNudgeAction({ stage: "awaiting_confirmation", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + TWO_MIN * 5 }),
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_confirmation", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + NINETY_SECONDS * 5 }),
         { send: false },
     );
     assert.deepEqual(
-        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: null, sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + TWO_MIN * 5 }),
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: null, sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + NINETY_SECONDS * 5 }),
         { send: false },
     );
 });
 
-test("resolveMealBreakTurnNudgeAction cutuca quem virou a vez so depois de 2 min", () => {
+test("worker usa poll padrao de 30 segundos para sustentar a cadencia de 90 segundos", () => {
+    const previous = process.env.TELEGRAM_REMINDER_POLL_MS;
+    try {
+        delete process.env.TELEGRAM_REMINDER_POLL_MS;
+        assert.equal(getTelegramReminderPollMs(), 30_000);
+        process.env.TELEGRAM_REMINDER_POLL_MS = "15000";
+        assert.equal(getTelegramReminderPollMs(), 15_000);
+    } finally {
+        if (previous === undefined) {
+            delete process.env.TELEGRAM_REMINDER_POLL_MS;
+        } else {
+            process.env.TELEGRAM_REMINDER_POLL_MS = previous;
+        }
+    }
+});
+
+test("resolveMealBreakTurnNudgeAction cutuca quem virou a vez so depois de 90 segundos", () => {
     assert.deepEqual(
-        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + 60_000 }),
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + NINETY_SECONDS - 1 }),
         { send: false },
     );
     assert.deepEqual(
-        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + TWO_MIN }),
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous: null, nowMs: baseMs + NINETY_SECONDS }),
         { send: true, count: 1 },
     );
 });
 
-test("resolveMealBreakTurnNudgeAction espaca cutucoes do mesmo da vez em 2 min e incrementa contagem", () => {
+test("resolveMealBreakTurnNudgeAction espaca cutucoes do mesmo da vez em 90 segundos e incrementa contagem", () => {
     const previous = { ramal: "2036", at: BASE_ISO, count: 1 };
     assert.deepEqual(
-        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: "2026-03-29T11:50:00.000Z", previous, nowMs: baseMs + 90_000 }),
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: "2026-03-29T11:50:00.000Z", previous, nowMs: baseMs + NINETY_SECONDS - 1 }),
         { send: false },
     );
     assert.deepEqual(
-        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: "2026-03-29T11:50:00.000Z", previous, nowMs: baseMs + TWO_MIN }),
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: "2026-03-29T11:50:00.000Z", previous, nowMs: baseMs + NINETY_SECONDS }),
         { send: true, count: 2 },
     );
 });
@@ -3377,9 +3396,73 @@ test("resolveMealBreakTurnNudgeAction reinicia a contagem quando a vez passa par
     const previous = { ramal: "2035", at: "2026-03-29T11:59:30.000Z", count: 3 };
     // novo da vez (2036) virou a vez em sessionUpdatedAt; conta a partir dali, nao do cutucao antigo
     assert.deepEqual(
-        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous, nowMs: baseMs + TWO_MIN }),
+        resolveMealBreakTurnNudgeAction({ stage: "awaiting_lunch_choice", queueHead: "2036", sessionUpdatedAt: BASE_ISO, previous, nowMs: baseMs + NINETY_SECONDS }),
         { send: true, count: 1 },
     );
+});
+
+test("cobrancas escalam em uma linha, com nome em negrito e aparencias distintas", () => {
+    const { mrv } = buildDaySessionAtLunchQueue();
+    const mentions = ["@ana_reg", "@bruno_reg", "@carla_reg"];
+    const first = buildMealBreakTurnNudgeMessage(mrv.session, 1, mentions);
+    const second = buildMealBreakTurnNudgeMessage(mrv.session, 2, mentions);
+    const third = buildMealBreakTurnNudgeMessage(mrv.session, 3, mentions);
+    const fourth = buildMealBreakTurnNudgeMessage(mrv.session, 4, mentions);
+
+    for (const message of [first, second, third, fourth]) {
+        assert.doesNotMatch(message, /\n/);
+        assert.match(message, /\*Bia\*/);
+    }
+    assert.match(first, /^⏳/);
+    assert.doesNotMatch(first, /@chefe2031/);
+    assert.match(second, /^📞 @chefe2031/);
+    assert.match(second, /ligar para \*Bia\*/);
+    assert.match(third, /^🚨/);
+    assert.match(third, /@ana_reg @bruno_reg @carla_reg/);
+    assert.match(fourth, /^🩺/);
+    assert.equal(new Set([first, second, third, fourth]).size, 4);
+});
+
+test("cobranca coletiva degrada para o grupo quando nenhum arroba pode ser resolvido", () => {
+    const { mrv } = buildDaySessionAtLunchQueue();
+    const message = buildMealBreakTurnNudgeMessage(mrv.session, 3, []);
+    assert.match(message, /Pessoal da regulação/);
+    assert.match(message, /\*Bia\*/);
+    assert.doesNotMatch(message, /\n/);
+});
+
+test("seleciona os seis reguladores que interagiram mais recentemente e exclui intervenção, chefia e o médico da vez", () => {
+    const declarations = [
+        { senderTelegramId: "1", doctorId: "doc-1" },
+        { senderTelegramId: "2", doctorId: "doc-2" },
+        { senderTelegramId: "3", doctorId: "doc-3" },
+        { senderTelegramId: "4", doctorId: "doc-4" },
+        { senderTelegramId: "5", doctorId: "doc-5" },
+        { senderTelegramId: "6", doctorId: "doc-6" },
+        { senderTelegramId: "7", doctorId: "doc-7" },
+        // Usuário 8 só declarou chegada em intervenção e, portanto, não aparece.
+        // Usuário 9 é o próprio médico aguardado.
+        { senderTelegramId: "9", doctorId: "doc-current" },
+    ];
+    const interactions = [
+        { senderTelegramId: "8", createdAt: new Date("2026-03-29T12:09:00Z") },
+        { senderTelegramId: "9", createdAt: new Date("2026-03-29T12:08:00Z") },
+        { senderTelegramId: "1", createdAt: new Date("2026-03-29T12:07:00Z") },
+        { senderTelegramId: "2", createdAt: new Date("2026-03-29T12:06:00Z") },
+        { senderTelegramId: "3", createdAt: new Date("2026-03-29T12:05:00Z") },
+        { senderTelegramId: "4", createdAt: new Date("2026-03-29T12:04:00Z") },
+        { senderTelegramId: "5", createdAt: new Date("2026-03-29T12:03:00Z") },
+        { senderTelegramId: "6", createdAt: new Date("2026-03-29T12:02:00Z") },
+        { senderTelegramId: "7", createdAt: new Date("2026-03-29T12:01:00Z") },
+    ];
+
+    assert.deepEqual(selectRecentMealBreakRegulatorTelegramIds({
+        declarations,
+        interactions,
+        excludedTelegramIds: new Set(["2"]),
+        targetDoctorId: "doc-current",
+        limit: 6,
+    }), ["1", "3", "4", "5", "6", "7"]);
 });
 
 // ─── Onda 2 (refeição sem migração de teclado): helpers puros novos ─────────

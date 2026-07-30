@@ -12,6 +12,12 @@ export interface TelegramUser {
     first_name: string;
     last_name?: string;
     username?: string;
+    is_bot?: boolean;
+}
+
+export interface TelegramChatMember {
+    status: "creator" | "administrator" | "member" | "restricted" | "left" | "kicked";
+    user: TelegramUser;
 }
 
 export interface TelegramMessage {
@@ -178,6 +184,18 @@ export async function sendMessage(
         }
         throw error;
     }
+}
+
+/**
+ * Resolve o perfil atual de um participante do grupo. O Telegram só garante
+ * consulta de terceiros quando o bot é administrador; por isso os callsites
+ * devem tratar falha/username ausente como fallback normal.
+ */
+export function getChatMember(chatId: string | number, userId: string | number) {
+    return callApi<TelegramChatMember>("getChatMember", {
+        chat_id: Number(chatId),
+        user_id: Number(userId),
+    });
 }
 
 export function buildChoiceKeyboard(rows: string[][]): TelegramReplyKeyboardMarkup {
