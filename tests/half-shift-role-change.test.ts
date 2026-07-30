@@ -21,7 +21,7 @@ import { resolveCorrectedScheduledWindow } from "@/modules/operational/correctio
 import { inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { calculateBankHours, applyAnomalyGuard } from "@/modules/bank-hours/calculator";
-import { HALF_SHIFT_ROLE_LABEL, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
+import { HALF_SHIFT_ROLE_LABEL, isHalfShiftScheduledWindow, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
 import { OPERATIONAL_ROLE_REMOVED_SENTINEL } from "@/modules/operational/roles";
 
 const iso = (value: string) => new Date(value);
@@ -156,6 +156,76 @@ test("troca de função que não cruza a fronteira preserva a janela existente",
 
     assert.equal(window.scheduledStartAt?.toISOString(), existingWindow.scheduledStartAt.toISOString());
     assert.equal(window.scheduledEndAt?.toISOString(), existingWindow.scheduledEndAt.toISOString());
+});
+
+// --- Auto-cura do passivo -------------------------------------------------
+// As ocupações que já sofreram a troca de função ANTES do fix ficaram com a
+// função inteira sobre a janela de meia jornada. Trocar a função de novo não
+// cruza fronteira nenhuma (COI -> COI), então sem a auto-cura a janela errada
+// sobreviveria para sempre. Casos reais: Vanessa Brito 30/07 e Ana Luiza 06/07.
+
+test("auto-cura: função inteira sobre janela de meia jornada é refeita mesmo sem cruzar fronteira", () => {
+    const window = regulationWindow({
+        existingRoleLabel: "COI",
+        nextRoleLabel: "COI",
+        roleLabelProvided: true,
+        temporalFieldsChanged: false,
+        // Estado exato da Vanessa em produção: role COI, janela 11:30–17:00.
+        existingWindow: { scheduledStartAt: at("11:30"), scheduledEndAt: at("17:00") },
+    });
+
+    assert.equal(window.scheduledStartAt?.toISOString(), at("07:00").toISOString());
+    assert.equal(window.scheduledEndAt?.toISOString(), at("19:15").toISOString());
+});
+
+test("auto-cura: vale também quando nem a função foi enviada na correção", () => {
+    const window = regulationWindow({
+        existingRoleLabel: "MRV",
+        nextRoleLabel: "MRV",
+        roleLabelProvided: false,
+        temporalFieldsChanged: false,
+        existingWindow: { scheduledStartAt: at("11:30"), scheduledEndAt: at("17:00") },
+    });
+
+    assert.equal(window.scheduledStartAt?.toISOString(), at("07:00").toISOString());
+});
+
+test("auto-cura NÃO reescreve quem é meio plantão de verdade", () => {
+    const window = regulationWindow({
+        existingRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        roleLabelProvided: true,
+        temporalFieldsChanged: false,
+        existingWindow: { scheduledStartAt: at("11:30"), scheduledEndAt: at("17:00") },
+    });
+
+    assert.equal(window.scheduledStartAt?.toISOString(), at("11:30").toISOString());
+    assert.equal(window.scheduledEndAt?.toISOString(), at("17:00").toISOString());
+});
+
+test("auto-cura não confunde janela custom com janela de meia jornada", () => {
+    const existingWindow = { scheduledStartAt: at("11:30"), scheduledEndAt: at("19:00") };
+    const window = regulationWindow({
+        existingRoleLabel: "COI",
+        nextRoleLabel: "COI",
+        roleLabelProvided: true,
+        temporalFieldsChanged: false,
+        existingWindow,
+    });
+
+    assert.equal(window.scheduledEndAt?.toISOString(), existingWindow.scheduledEndAt.toISOString());
+});
+
+test("isHalfShiftScheduledWindow reconhece a janela pelo relógio local, em qualquer dia", () => {
+    assert.equal(isHalfShiftScheduledWindow({
+        scheduledStartAt: new Date("2026-02-14T11:30:00-03:00"),
+        scheduledEndAt: new Date("2026-02-14T17:00:00-03:00"),
+    }), true);
+    assert.equal(isHalfShiftScheduledWindow({
+        scheduledStartAt: at("07:00"),
+        scheduledEndAt: at("19:15"),
+    }), false);
+    assert.equal(isHalfShiftScheduledWindow({ scheduledStartAt: null, scheduledEndAt: null }), false);
 });
 
 test("pagamento acompanha a troca: 0,5 como meio plantao, 1 como qualquer outra função", () => {

@@ -34,6 +34,31 @@ export function resolveHalfShiftScheduledWindow(referenceAt: Date) {
     };
 }
 
+function toSaoPauloHHMM(date: Date) {
+    return new Intl.DateTimeFormat("en-GB", {
+        timeZone: "America/Sao_Paulo",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+    }).format(date);
+}
+
+/** A janela agendada é a de meia jornada (11:30–17:00 no relógio local)?
+ *  Usado para detectar ocupação incoerente: função de plantão inteiro sobre
+ *  janela de meio plantão. Compara pelo relógio local, não pelo instante, para
+ *  valer em qualquer dia. */
+export function isHalfShiftScheduledWindow(window: {
+    scheduledStartAt: Date | null;
+    scheduledEndAt: Date | null;
+}) {
+    if (!window.scheduledStartAt || !window.scheduledEndAt) {
+        return false;
+    }
+
+    return toSaoPauloHHMM(window.scheduledStartAt) === HALF_SHIFT_EXPECTED_START_HHMM
+        && toSaoPauloHHMM(window.scheduledEndAt) === HALF_SHIFT_AUTO_END_HHMM;
+}
+
 export function isHalfShiftRoleLabel(value: string | null | undefined) {
     if (!value) {
         return false;

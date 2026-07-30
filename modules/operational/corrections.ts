@@ -32,7 +32,7 @@ import {
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
-import { isHalfShiftRoleLabel, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
+import { isHalfShiftRoleLabel, isHalfShiftScheduledWindow, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
@@ -673,6 +673,14 @@ interface CorrectedScheduledWindow {
  *    (antes, corrigir a chegada de um meio plantão reescrevia a janela como turno
  *    inteiro e inventava um atraso gigante).
  *
+ * AUTO-CURA: uma janela de meia jornada gravada sob função de plantão inteiro é
+ * incoerente — sobra de uma troca de função feita antes deste fix, quando o rótulo
+ * mudava e a janela ficava para trás. Nesse estado QUALQUER correção na ocupação
+ * refaz a janela, mesmo sem cruzar a fronteira: sem isso o passivo fica travado,
+ * porque trocar COI→COI não cruza nada e a janela errada sobrevive para sempre.
+ * Só curamos essa direção (janela de meia jornada sob função inteira); o inverso
+ * não ocorreu em produção e forçá-lo sobrescreveria ajuste manual de janela.
+ *
  * O pagamento não precisa de nada aqui: payment-closing deriva a unidade (0,5 ou
  * 1) do próprio role_label em tempo de leitura.
  */
@@ -688,8 +696,10 @@ export function resolveCorrectedScheduledWindow(params: {
     const nextIsHalfShift = isHalfShiftRoleLabel(params.nextRoleLabel);
     const halfShiftBoundaryCrossed = params.roleLabelProvided
         && isHalfShiftRoleLabel(params.existingRoleLabel) !== nextIsHalfShift;
+    const staleHalfShiftWindow = !nextIsHalfShift
+        && isHalfShiftScheduledWindow(params.existingWindow);
 
-    if (!params.temporalFieldsChanged && !halfShiftBoundaryCrossed) {
+    if (!params.temporalFieldsChanged && !halfShiftBoundaryCrossed && !staleHalfShiftWindow) {
         return params.existingWindow;
     }
 
