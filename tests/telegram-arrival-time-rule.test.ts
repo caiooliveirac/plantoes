@@ -84,7 +84,7 @@ test("buildArrivalRuleReply: FASE 1 com horário declarado avisa que a regra mud
         });
         assert.match(reply, /A partir de amanhã/);
         assert.match(reply, /desde 21:00/);
-        assert.match(reply, /sua msg foi 22:00/);
+        assert.match(reply, /\(msg 22:00\)/);
     });
 });
 
@@ -113,8 +113,10 @@ test("buildArrivalRuleReply: FASE 2 registra a hora do aviso e mostra a declarad
             isPcoverage: false,
         });
         assert.match(reply, /✅ Ana na SM01 desde 07:30/);
-        assert.match(reply, /Vale a hora do aviso/);
+        assert.match(reply, /vale a hora do aviso/);
         assert.match(reply, /você citou 06:00/);
+        // Confirmação de chegada cabe em 1 linha (era 2 com a nota separada).
+        assert.equal(reply.split("\n").length, 1);
     });
 });
 
@@ -141,6 +143,6 @@ test("buildArrivalRuleReply: cobertura P acrescenta a nota de duplo plantão", (
             declaredArrivalTime: null,
             isPcoverage: true,
         });
-        assert.match(reply, /Cobertura P/);
+        assert.match(reply, /Cobertura \*P\*/);
     });
 });

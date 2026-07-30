@@ -17,19 +17,25 @@ export interface ChecklistKeyResponse {
     key?: string;
 }
 
-/** Monta o bloco de texto anexado à confirmação de chegada. Pura — testável. */
+/**
+ * Monta o bloco de texto anexado à confirmação de chegada. Pura — testável.
+ *
+ * Duas linhas: chave e link. O convite para o @samu_checklists_bot virou sufixo
+ * do link em vez de uma terceira linha de instrução — a chegada da USA já vinha
+ * com bloco maior que a própria confirmação.
+ */
 export function buildChecklistKeyHint(baseCode: string, key: string): string {
     if (!baseCode || !key) return "";
     return [
         "",
         "",
-        `📋 Checklist da *${baseCode}* — chave de hoje: *${key}*`,
-        `checklist.mnrs.com.br/b/${baseCode}`,
-        "🤖 Depois toque em @samu_checklists_bot e mande /start — em breve os avisos do checklist virão por ele.",
+        `📋 Checklist *${baseCode}* · chave de hoje *${key}*`,
+        `checklist.mnrs.com.br/b/${baseCode} · avisos: @samu_checklists_bot`,
     ].join("\n");
 }
 
-const ARRIVAL_REPLY_KINDS = new Set([
+/** Confirmações que registram ocupação — as que ganham anexos de chegada. */
+export const ARRIVAL_REPLY_KINDS = new Set([
     "arrival_recorded",
     "arrival_p_recorded",
     "continuation_recorded",
