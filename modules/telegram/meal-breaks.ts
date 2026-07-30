@@ -1495,7 +1495,8 @@ function buildDayStartPrompt() {
 export function buildMealBreakTurnNudgeMessage(
     session: MealBreakSession,
     count: number,
-    recentRegulatorMentions: string[] = [],
+    recentRegulatorMentions: Array<string | MealBreakTelegramMention> = [],
+    targetMention: string | MealBreakTelegramMention | null = null,
 ) {
     const currentRamal = resolveStageChoiceQueue(session)[0];
     if (!currentRamal) {
@@ -1503,28 +1504,32 @@ export function buildMealBreakTurnNudgeMessage(
     }
     const name = escapeTelegramMarkdown(resolveDoctorCompactName(findDoctor(session, currentRamal) ?? { name: currentRamal }));
     const boldName = `*${name}*`;
+    const safeTargetMention = formatMealBreakTelegramMention(targetMention);
+    const targetLabel = safeTargetMention ? `${safeTargetMention} (${boldName})` : boldName;
 
     if (count <= 1) {
-        return `⏳ ${boldName}, sua vez chegou — escolha um horário nos botões para a fila andar.`;
+        return safeTargetMention
+            ? `⏳ ${safeTargetMention} — ${boldName}, sua vez chegou; escolha um horário nos botões para a fila andar.`
+            : `⏳ ${boldName}, sua vez chegou — escolha um horário nos botões para a fila andar.`;
     }
 
     if (count === 2) {
-        return `📞 ${MEAL_BREAK_CHIEF_USERNAME}, consegue ligar para ${boldName}? A divisão está parada esperando a resposta.`;
+        return `📞 ${MEAL_BREAK_CHIEF_USERNAME}, consegue ligar para ${targetLabel}? A divisão está parada esperando a resposta.`;
     }
 
     const safeMentions = recentRegulatorMentions
-        .map((mention) => mention.trim())
-        .filter((mention) => /^@[A-Za-z0-9_]{5,32}$/.test(mention))
-        .filter((mention) => mention.toLowerCase() !== MEAL_BREAK_CHIEF_USERNAME.toLowerCase())
+        .map(formatMealBreakTelegramMention)
+        .filter((mention): mention is string => Boolean(mention))
+        .filter((mention) => !mention.toLowerCase().includes("@chefe2031"))
         .slice(0, MEAL_BREAK_RECENT_REGULATOR_LIMIT);
     const audience = safeMentions.length > 0 ? safeMentions.join(" ") : "Pessoal da regulação";
     const collectiveTemplates = [
-        `🚨 ${audience}: missão relâmpago #${count} — alguém liga para ${boldName} e pede a resposta no bot?`,
-        `🩺 Busca ativa #${count}: ${audience}, quem localizar ${boldName} primeiro liga e destrava a fila.`,
-        `☎️ Corrente do ramal #${count} — ${audience}, passem o chamado até ${boldName} escolher o horário.`,
-        `🛰️ Sinal procurando ${boldName} na rodada #${count}: ${audience}, deem um toque por telefone.`,
-        `🎯 Desafio #${count} para ${audience}: encontrar ${boldName}, ligar e trazer a resposta para o bot.`,
-        `📣 Central da regulação, chamada #${count}: ${audience}, precisamos de contato telefônico com ${boldName}.`,
+        `🚨 ${audience}: missão relâmpago #${count} — alguém liga para ${targetLabel} e pede a resposta no bot?`,
+        `🩺 Busca ativa #${count}: ${audience}, quem localizar ${targetLabel} primeiro liga e destrava a fila.`,
+        `☎️ Corrente do ramal #${count} — ${audience}, passem o chamado até ${targetLabel} escolher o horário.`,
+        `🛰️ Sinal procurando ${targetLabel} na rodada #${count}: ${audience}, deem um toque por telefone.`,
+        `🎯 Desafio #${count} para ${audience}: encontrar ${targetLabel}, ligar e trazer a resposta para o bot.`,
+        `📣 Central da regulação, chamada #${count}: ${audience}, precisamos de contato telefônico com ${targetLabel}.`,
     ];
     return collectiveTemplates[(count - 3) % collectiveTemplates.length]!;
 }
@@ -5419,12 +5424,19 @@ export interface MealBreakTurnNudgeRecord {
     ramal: string;
     at: string;
     count: number;
-    recentRegulatorMentions?: string[];
+    targetMention?: string | MealBreakTelegramMention | null;
+    recentRegulatorMentions?: Array<string | MealBreakTelegramMention>;
+}
+
+export interface MealBreakTelegramMention {
+    telegramId: string;
+    username: string;
 }
 
 export interface MealBreakRegulatorDeclaration {
     senderTelegramId: string | null;
     doctorId: string;
+    createdAt?: Date;
 }
 
 export interface MealBreakTelegramInteraction {
@@ -5476,6 +5488,126 @@ export function selectRecentMealBreakRegulatorTelegramIds(params: {
     }
 
     return selected;
+}
+
+/**
+ * Candidatos de Telegram vinculados ao próprio médico aguardado, mais recente
+ * primeiro. O vínculo é operacional (mensagem aceita → ocupação → doctorId);
+ * nunca é inferido por semelhança de nome.
+ */
+export function selectMealBreakTargetTelegramIds(params: {
+    declarations: MealBreakRegulatorDeclaration[];
+    targetDoctorId: string;
+    excludedTelegramIds: ReadonlySet<string>;
+    limit?: number;
+}) {
+    const selected: string[] = [];
+    const seen = new Set<string>();
+    const sorted = [...params.declarations]
+        .filter((row) => row.doctorId === params.targetDoctorId)
+        .sort((left, right) => (right.createdAt?.getTime() ?? 0) - (left.createdAt?.getTime() ?? 0));
+
+    for (const row of sorted) {
+        const id = row.senderTelegramId;
+        if (!id || seen.has(id) || params.excludedTelegramIds.has(id)) {
+            continue;
+        }
+        seen.add(id);
+        selected.push(id);
+        if (selected.length >= (params.limit ?? 6)) {
+            break;
+        }
+    }
+
+    return selected;
+}
+
+function formatMealBreakTelegramMention(
+    mention: string | MealBreakTelegramMention | null | undefined,
+) {
+    if (!mention) {
+        return null;
+    }
+    if (typeof mention === "string") {
+        const username = mention.trim().replace(/^@/, "");
+        return /^[A-Za-z0-9_]{5,32}$/.test(username)
+            ? `@${escapeTelegramMarkdown(username)}`
+            : null;
+    }
+    const telegramId = mention.telegramId.trim();
+    const username = mention.username.trim().replace(/^@/, "");
+    if (!/^\d+$/.test(telegramId) || !/^[A-Za-z0-9_]{5,32}$/.test(username)) {
+        return null;
+    }
+    return `[@${escapeTelegramMarkdown(username)}](tg://user?id=${telegramId})`;
+}
+
+function resolveMealBreakTelegramMention(
+    member: Awaited<ReturnType<typeof getChatMember>> | null,
+    telegramId: string,
+) {
+    if (!member || member.status === "left" || member.status === "kicked" || member.user.is_bot) {
+        return null;
+    }
+    const username = member.user.username?.trim() ?? "";
+    return /^[A-Za-z0-9_]{5,32}$/.test(username)
+        ? { telegramId, username } satisfies MealBreakTelegramMention
+        : null;
+}
+
+async function resolveMealBreakTargetMention(params: {
+    chatId: string;
+    referenceAt: Date;
+    targetDoctorId: string;
+}) {
+    const db = getDb();
+    const shift = resolveOperationalShiftWindow(params.referenceAt);
+    const declarations = await db.select({
+        senderTelegramId: telegramIngestedMessages.senderTelegramId,
+        doctorId: regulationOccupancies.doctorId,
+        createdAt: telegramIngestedMessages.createdAt,
+    })
+        .from(telegramIngestedMessages)
+        .innerJoin(
+            regulationOccupancies,
+            eq(telegramIngestedMessages.relatedOccupancyId, regulationOccupancies.id),
+        )
+        .where(and(
+            eq(telegramIngestedMessages.chatId, params.chatId),
+            eq(telegramIngestedMessages.status, "accepted"),
+            eq(telegramIngestedMessages.parsedDomain, "REGULATION"),
+            inArray(telegramIngestedMessages.parsedAction, ["arrival", "continuation"]),
+            eq(regulationOccupancies.doctorId, params.targetDoctorId),
+            isNotNull(telegramIngestedMessages.senderTelegramId),
+            gte(telegramIngestedMessages.createdAt, shift.startedAt),
+            lte(telegramIngestedMessages.createdAt, params.referenceAt),
+        ))
+        .orderBy(desc(telegramIngestedMessages.createdAt));
+    const excludedTelegramIds = new Set([
+        ...getTelegramAdminUserIds(),
+        ...getTelegramChiefUserIds(),
+    ]);
+    const candidateIds = selectMealBreakTargetTelegramIds({
+        declarations,
+        targetDoctorId: params.targetDoctorId,
+        excludedTelegramIds,
+    });
+    const members = await Promise.all(candidateIds.map(async (telegramId) => {
+        try {
+            return await getChatMember(params.chatId, telegramId);
+        } catch (error) {
+            console.warn(`telegram meal break could not resolve target @username for ${telegramId}`, error);
+            return null;
+        }
+    }));
+
+    for (const [index, member] of members.entries()) {
+        const mention = resolveMealBreakTelegramMention(member, candidateIds[index]!);
+        if (mention && `@${mention.username}`.toLowerCase() !== MEAL_BREAK_CHIEF_USERNAME.toLowerCase()) {
+            return mention;
+        }
+    }
+    return null;
 }
 
 async function resolveRecentMealBreakRegulatorMentions(params: {
@@ -5547,11 +5679,9 @@ async function resolveRecentMealBreakRegulatorMentions(params: {
     }));
 
     return members
-        .filter((member) => member && member.status !== "left" && member.status !== "kicked" && !member.user.is_bot)
-        .map((member) => member!.user.username?.trim() ?? "")
-        .filter((username) => /^[A-Za-z0-9_]{5,32}$/.test(username))
-        .map((username) => `@${username}`)
-        .filter((mention) => mention.toLowerCase() !== MEAL_BREAK_CHIEF_USERNAME.toLowerCase())
+        .map((member, index) => resolveMealBreakTelegramMention(member, selectedIds[index]!))
+        .filter((mention): mention is MealBreakTelegramMention => Boolean(mention))
+        .filter((mention) => `@${mention.username}`.toLowerCase() !== MEAL_BREAK_CHIEF_USERNAME.toLowerCase())
         .slice(0, MEAL_BREAK_RECENT_REGULATOR_LIMIT);
 }
 
@@ -5583,12 +5713,20 @@ function isMealBreakTurnNudgeRecord(value: unknown): value is MealBreakTurnNudge
         return false;
     }
     const candidate = value as Record<string, unknown>;
+    const isMention = (mention: unknown) => typeof mention === "string"
+        || (Boolean(mention)
+            && typeof mention === "object"
+            && typeof (mention as Record<string, unknown>).telegramId === "string"
+            && typeof (mention as Record<string, unknown>).username === "string");
     return typeof candidate.ramal === "string"
         && typeof candidate.at === "string"
         && typeof candidate.count === "number"
+        && (candidate.targetMention === undefined
+            || candidate.targetMention === null
+            || isMention(candidate.targetMention))
         && (candidate.recentRegulatorMentions === undefined
             || (Array.isArray(candidate.recentRegulatorMentions)
-                && candidate.recentRegulatorMentions.every((value) => typeof value === "string")));
+                && candidate.recentRegulatorMentions.every(isMention)));
 }
 
 async function loadMealBreakTurnNudgeRecord(chatId: string, operationalDate: string, mode: MealBreakMode) {
@@ -5656,20 +5794,37 @@ export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()
 
         try {
             const sameHead = previous?.ramal === head;
+            const targetDoctorId = findDoctor(session, head)?.doctorId ?? null;
+            let targetMention = sameHead && previous && "targetMention" in previous
+                ? previous.targetMention
+                : undefined;
+            if (targetMention === undefined && targetDoctorId) {
+                targetMention = await resolveMealBreakTargetMention({
+                    chatId,
+                    referenceAt: referenceDate,
+                    targetDoctorId,
+                });
+            }
             let recentRegulatorMentions = sameHead
                 ? previous?.recentRegulatorMentions
                 : undefined;
-            if (action.count >= 3 && recentRegulatorMentions === undefined) {
+            const hasLegacyTextMentions = recentRegulatorMentions?.some((mention) => typeof mention === "string") ?? false;
+            if (action.count >= 3 && (recentRegulatorMentions === undefined || hasLegacyTextMentions)) {
                 recentRegulatorMentions = await resolveRecentMealBreakRegulatorMentions({
                     chatId,
                     referenceAt: referenceDate,
-                    targetDoctorId: findDoctor(session, head)?.doctorId ?? null,
+                    targetDoctorId,
                 });
             }
 
             await sendMessage(
                 chatId,
-                buildMealBreakTurnNudgeMessage(session, action.count, recentRegulatorMentions ?? []),
+                buildMealBreakTurnNudgeMessage(
+                    session,
+                    action.count,
+                    recentRegulatorMentions ?? [],
+                    targetMention ?? null,
+                ),
                 undefined,
                 buildMealBreakStageKeyboard(session) ?? undefined,
                 MEAL_BREAK_FORMAT_OPTIONS,
@@ -5678,6 +5833,7 @@ export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()
                 ramal: head,
                 at: referenceDate.toISOString(),
                 count: action.count,
+                targetMention: targetMention ?? null,
                 ...(recentRegulatorMentions !== undefined ? { recentRegulatorMentions } : {}),
             });
             sent += 1;
