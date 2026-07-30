@@ -90,12 +90,14 @@ export function getTelegramRegulationAlertUserIds() {
 export function getTelegramReminderPollMs() {
     const raw = process.env.TELEGRAM_REMINDER_POLL_MS?.trim();
     if (!raw) {
-        return 60_000;
+        // Meal-breaks cobra a cada 90s; poll de 30s mantém essa cadência sem
+        // acelerar as regras de dedupe dos demais lembretes.
+        return 30_000;
     }
 
     const parsed = Number(raw);
     if (!Number.isFinite(parsed) || parsed < 15_000) {
-        return 60_000;
+        return 30_000;
     }
 
     return parsed;

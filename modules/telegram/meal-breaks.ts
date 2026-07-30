@@ -19,17 +19,17 @@
  *   - Break slots respect minimum coverage constraints
  *   - Stage sequence: lunch → rest (SD) or dinner → night-work (SN)
  */
-import { and, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { interventionOccupancies, regulationOccupancies, telegramBotNotices } from "@/db/schema";
+import { interventionOccupancies, regulationOccupancies, telegramBotNotices, telegramIngestedMessages } from "@/db/schema";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
 import { isRemoteOperationalRole, isRemotePriorityRegulationCode, normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { getSaoPauloParts, resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import type { TelegramFormatOptions, TelegramUpdate } from "@/modules/telegram/api";
-import { buildChoiceKeyboard, escapeTelegramMarkdown, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
+import { buildChoiceKeyboard, escapeTelegramMarkdown, getChatMember, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
 import { publishBoardUpdate } from "@/lib/board-live";
-import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds } from "@/modules/telegram/config";
+import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds } from "@/modules/telegram/config";
 import { getOperationalBoard } from "@/services/board.service";
 
 type OperationalBoard = Awaited<ReturnType<typeof getOperationalBoard>>;
@@ -303,9 +303,11 @@ const ELIGIBILITY_KIND = "telegram_meal_break_eligibility_overrides";
 const ELIGIBILITY_NOTICE_STAGE = "meal_break_eligibility";
 const TURN_NUDGE_NOTICE_STAGE = "meal_break_turn_nudge";
 const PRIORITY_NOTICE_CHAT_ID = "operational";
-// Intervalo entre os "cutucoes" da vez: o bot chama de novo quem esta segurando
-// a fila a cada 2 minutos, ate a pessoa responder.
-const MEAL_BREAK_TURN_NUDGE_INTERVAL_MS = 2 * 60 * 1000;
+// Intervalo entre as cobranças da vez: o bot escala o chamado a cada 90 segundos
+// até a pessoa responder.
+const MEAL_BREAK_TURN_NUDGE_INTERVAL_MS = 90 * 1000;
+const MEAL_BREAK_CHIEF_USERNAME = "@chefe2031";
+const MEAL_BREAK_RECENT_REGULATOR_LIMIT = 6;
 const MEAL_BREAK_NUDGEABLE_STAGES: ReadonlySet<MealBreakStage> = new Set<MealBreakStage>([
     "awaiting_lunch_choice",
     "awaiting_rest_choice",
@@ -1487,16 +1489,44 @@ function buildDayStartPrompt() {
     return `Primeiro, informem o RAMAL ou nome do médico ${RECIP_GLOSS}.`;
 }
 
-// Cobrança quando a pessoa da vez não respondeu: 1 linha, sem piada e sem
-// reenviar o balão inteiro — o teclado da vez vai junto (via dispatcher) para
-// a escolha continuar a um toque de distância.
-function buildMealBreakTurnNudgeMessage(session: MealBreakSession) {
+// Escalada de cobrança quando a pessoa da vez não respondeu. Cada mensagem tem
+// uma única linha, nome em negrito e linguagem visual diferente da anterior.
+// A partir da terceira, convoca reguladores recentes para telefonar ao colega.
+export function buildMealBreakTurnNudgeMessage(
+    session: MealBreakSession,
+    count: number,
+    recentRegulatorMentions: string[] = [],
+) {
     const currentRamal = resolveStageChoiceQueue(session)[0];
     if (!currentRamal) {
         return buildCurrentPrompt(session);
     }
-    const name = resolveDoctorCompactName(findDoctor(session, currentRamal) ?? { name: currentRamal });
-    return `⏰ ${name} (${currentRamal}), a fila da refeição está esperando você — escolhe um horário aí.`;
+    const name = escapeTelegramMarkdown(resolveDoctorCompactName(findDoctor(session, currentRamal) ?? { name: currentRamal }));
+    const boldName = `*${name}*`;
+
+    if (count <= 1) {
+        return `⏳ ${boldName}, sua vez chegou — escolha um horário nos botões para a fila andar.`;
+    }
+
+    if (count === 2) {
+        return `📞 ${MEAL_BREAK_CHIEF_USERNAME}, consegue ligar para ${boldName}? A divisão está parada esperando a resposta.`;
+    }
+
+    const safeMentions = recentRegulatorMentions
+        .map((mention) => mention.trim())
+        .filter((mention) => /^@[A-Za-z0-9_]{5,32}$/.test(mention))
+        .filter((mention) => mention.toLowerCase() !== MEAL_BREAK_CHIEF_USERNAME.toLowerCase())
+        .slice(0, MEAL_BREAK_RECENT_REGULATOR_LIMIT);
+    const audience = safeMentions.length > 0 ? safeMentions.join(" ") : "Pessoal da regulação";
+    const collectiveTemplates = [
+        `🚨 ${audience}: missão relâmpago #${count} — alguém liga para ${boldName} e pede a resposta no bot?`,
+        `🩺 Busca ativa #${count}: ${audience}, quem localizar ${boldName} primeiro liga e destrava a fila.`,
+        `☎️ Corrente do ramal #${count} — ${audience}, passem o chamado até ${boldName} escolher o horário.`,
+        `🛰️ Sinal procurando ${boldName} na rodada #${count}: ${audience}, deem um toque por telefone.`,
+        `🎯 Desafio #${count} para ${audience}: encontrar ${boldName}, ligar e trazer a resposta para o bot.`,
+        `📣 Central da regulação, chamada #${count}: ${audience}, precisamos de contato telefônico com ${boldName}.`,
+    ];
+    return collectiveTemplates[(count - 3) % collectiveTemplates.length]!;
 }
 
 /**
@@ -5389,6 +5419,140 @@ export interface MealBreakTurnNudgeRecord {
     ramal: string;
     at: string;
     count: number;
+    recentRegulatorMentions?: string[];
+}
+
+export interface MealBreakRegulatorDeclaration {
+    senderTelegramId: string | null;
+    doctorId: string;
+}
+
+export interface MealBreakTelegramInteraction {
+    senderTelegramId: string | null;
+    createdAt: Date;
+}
+
+/**
+ * Entre quem declarou presença em REGULATION no turno, escolhe os usuários que
+ * interagiram mais recentemente no mesmo chat. As consultas que alimentam este
+ * helper já excluem chegadas de intervenção por domínio + join de ocupação.
+ */
+export function selectRecentMealBreakRegulatorTelegramIds(params: {
+    declarations: MealBreakRegulatorDeclaration[];
+    interactions: MealBreakTelegramInteraction[];
+    excludedTelegramIds: ReadonlySet<string>;
+    targetDoctorId: string | null;
+    limit?: number;
+}) {
+    const idsForTargetDoctor = new Set(
+        params.declarations
+            .filter((row) => params.targetDoctorId && row.doctorId === params.targetDoctorId)
+            .map((row) => row.senderTelegramId)
+            .filter((id): id is string => Boolean(id)),
+    );
+    const eligibleIds = new Set(
+        params.declarations
+            .map((row) => row.senderTelegramId)
+            .filter((id): id is string => Boolean(id))
+            .filter((id) => !params.excludedTelegramIds.has(id))
+            .filter((id) => !idsForTargetDoctor.has(id)),
+    );
+    const sortedInteractions = [...params.interactions]
+        .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+    const selected: string[] = [];
+    const seen = new Set<string>();
+    const limit = params.limit ?? MEAL_BREAK_RECENT_REGULATOR_LIMIT;
+
+    for (const row of sortedInteractions) {
+        const id = row.senderTelegramId;
+        if (!id || seen.has(id) || !eligibleIds.has(id)) {
+            continue;
+        }
+        seen.add(id);
+        selected.push(id);
+        if (selected.length >= limit) {
+            break;
+        }
+    }
+
+    return selected;
+}
+
+async function resolveRecentMealBreakRegulatorMentions(params: {
+    chatId: string;
+    referenceAt: Date;
+    targetDoctorId: string | null;
+}) {
+    const db = getDb();
+    const shift = resolveOperationalShiftWindow(params.referenceAt);
+    const declarations = await db.select({
+        senderTelegramId: telegramIngestedMessages.senderTelegramId,
+        doctorId: regulationOccupancies.doctorId,
+    })
+        .from(telegramIngestedMessages)
+        .innerJoin(
+            regulationOccupancies,
+            eq(telegramIngestedMessages.relatedOccupancyId, regulationOccupancies.id),
+        )
+        .where(and(
+            eq(telegramIngestedMessages.chatId, params.chatId),
+            eq(telegramIngestedMessages.status, "accepted"),
+            eq(telegramIngestedMessages.parsedDomain, "REGULATION"),
+            inArray(telegramIngestedMessages.parsedAction, ["arrival", "continuation"]),
+            isNotNull(telegramIngestedMessages.senderTelegramId),
+            gte(telegramIngestedMessages.createdAt, shift.startedAt),
+            lte(telegramIngestedMessages.createdAt, params.referenceAt),
+        ));
+
+    if (declarations.length === 0) {
+        return [] as string[];
+    }
+
+    const eligibleIds = [...new Set(
+        declarations
+            .map((row) => row.senderTelegramId)
+            .filter((id): id is string => Boolean(id)),
+    )];
+    const interactions = await db.select({
+        senderTelegramId: telegramIngestedMessages.senderTelegramId,
+        createdAt: telegramIngestedMessages.createdAt,
+    })
+        .from(telegramIngestedMessages)
+        .where(and(
+            eq(telegramIngestedMessages.chatId, params.chatId),
+            inArray(telegramIngestedMessages.senderTelegramId, eligibleIds),
+            gte(telegramIngestedMessages.createdAt, shift.startedAt),
+            lte(telegramIngestedMessages.createdAt, params.referenceAt),
+        ))
+        .orderBy(desc(telegramIngestedMessages.createdAt));
+
+    const excludedTelegramIds = new Set([
+        ...getTelegramAdminUserIds(),
+        ...getTelegramChiefUserIds(),
+    ]);
+    const selectedIds = selectRecentMealBreakRegulatorTelegramIds({
+        declarations,
+        interactions,
+        excludedTelegramIds,
+        targetDoctorId: params.targetDoctorId,
+        limit: MEAL_BREAK_RECENT_REGULATOR_LIMIT,
+    });
+    const members = await Promise.all(selectedIds.map(async (telegramId) => {
+        try {
+            return await getChatMember(params.chatId, telegramId);
+        } catch (error) {
+            console.warn(`telegram meal break could not resolve @username for ${telegramId}`, error);
+            return null;
+        }
+    }));
+
+    return members
+        .filter((member) => member && member.status !== "left" && member.status !== "kicked" && !member.user.is_bot)
+        .map((member) => member!.user.username?.trim() ?? "")
+        .filter((username) => /^[A-Za-z0-9_]{5,32}$/.test(username))
+        .map((username) => `@${username}`)
+        .filter((mention) => mention.toLowerCase() !== MEAL_BREAK_CHIEF_USERNAME.toLowerCase())
+        .slice(0, MEAL_BREAK_RECENT_REGULATOR_LIMIT);
 }
 
 // Decisao pura: dado o estagio, quem esta na vez, quando ele virou a vez e o
@@ -5421,7 +5585,10 @@ function isMealBreakTurnNudgeRecord(value: unknown): value is MealBreakTurnNudge
     const candidate = value as Record<string, unknown>;
     return typeof candidate.ramal === "string"
         && typeof candidate.at === "string"
-        && typeof candidate.count === "number";
+        && typeof candidate.count === "number"
+        && (candidate.recentRegulatorMentions === undefined
+            || (Array.isArray(candidate.recentRegulatorMentions)
+                && candidate.recentRegulatorMentions.every((value) => typeof value === "string")));
 }
 
 async function loadMealBreakTurnNudgeRecord(chatId: string, operationalDate: string, mode: MealBreakMode) {
@@ -5447,9 +5614,10 @@ async function saveMealBreakTurnNudgeRecord(chatId: string, operationalDate: str
         });
 }
 
-// Reenvia o anuncio "e a vez de fulano" a cada MEAL_BREAK_TURN_NUDGE_INTERVAL_MS
-// enquanto a fila estiver parada esperando a escolha de quem esta na vez.
-// Chamado pelo worker de lembretes a cada poll.
+// Escala a cobrança a cada MEAL_BREAK_TURN_NUDGE_INTERVAL_MS enquanto a fila
+// estiver parada. Na terceira, resolve e guarda até 6 @usernames de reguladores
+// recentes; as cobranças seguintes reutilizam o snapshot para não consultar a
+// API do Telegram a cada poll.
 export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()) {
     if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) {
         return { sent: 0, evaluated: 0 };
@@ -5487,9 +5655,21 @@ export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()
         }
 
         try {
+            const sameHead = previous?.ramal === head;
+            let recentRegulatorMentions = sameHead
+                ? previous?.recentRegulatorMentions
+                : undefined;
+            if (action.count >= 3 && recentRegulatorMentions === undefined) {
+                recentRegulatorMentions = await resolveRecentMealBreakRegulatorMentions({
+                    chatId,
+                    referenceAt: referenceDate,
+                    targetDoctorId: findDoctor(session, head)?.doctorId ?? null,
+                });
+            }
+
             await sendMessage(
                 chatId,
-                buildMealBreakTurnNudgeMessage(session),
+                buildMealBreakTurnNudgeMessage(session, action.count, recentRegulatorMentions ?? []),
                 undefined,
                 buildMealBreakStageKeyboard(session) ?? undefined,
                 MEAL_BREAK_FORMAT_OPTIONS,
@@ -5498,6 +5678,7 @@ export async function sendTelegramMealBreakTurnNudges(referenceDate = new Date()
                 ramal: head,
                 at: referenceDate.toISOString(),
                 count: action.count,
+                ...(recentRegulatorMentions !== undefined ? { recentRegulatorMentions } : {}),
             });
             sent += 1;
         } catch (error) {

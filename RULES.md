@@ -489,6 +489,21 @@ Permite que a chefia desfaça sua última ação dentro de uma janela de seguran
 
 Um estado por data operacional + modo, persistido em `telegram_bot_notices`.
 
+### Cobrança da pessoa da vez
+
+- A pessoa da vez recebe uma cobrança curta após 90 segundos sem resposta.
+- Na segunda cobrança, o bot marca `@chefe2031` e pede contato telefônico.
+- Da terceira em diante, o bot pode marcar até 6 usuários recentes do mesmo grupo.
+- Um usuário só é elegível para a cobrança coletiva quando registrou uma chegada
+  ou continuidade aceita em `REGULATION`, vinculada a uma ocupação de ramal, no
+  turno operacional atual. Chegadas em bases de intervenção não são elegíveis.
+- ADMINs/chefes e o médico que está sendo aguardado são excluídos.
+- O `@username` é resolvido via `getChatMember`; ausência de username ou falha da
+  API degrada para uma chamada genérica ao pessoal da regulação.
+- As cobranças permanecem em uma linha, preservam o teclado e sempre exibem o
+  nome da pessoa aguardada em negrito.
+- O worker consulta pendências a cada 30 segundos para sustentar a cadência de 90 segundos.
+
 **Arquivo de testes**: [tests/telegram-meal-breaks.test.ts](tests/telegram-meal-breaks.test.ts)
 
 ---
