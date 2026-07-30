@@ -4,48 +4,6 @@ export type TelegramCommandName = "corrigir" | "retirar" | "remover" | "ramal" |
 
 const DEPARTURE_COMMAND_ALIASES = new Set(["saiu", "saindo", "saida", "saída"]);
 const TELEGRAM_DEPARTURE_CORRECTION_COMMAND_PREFIX = /^\/corrigirsaida(?:@\w+)?\b\s*([\s\S]*)$/i;
-const TELEGRAM_LATE_ARRIVAL_COMMAND_PREFIX = /^\/(?:meioplantao|meio_plantao)(?:@\w+)?\b\s*([\s\S]*)$/i;
-
-export interface ParsedTelegramLateArrivalCommand {
-    name: "meioplantao";
-    baseCode: string | null;
-    time: string | null;
-    note: string | null;
-    rawBody: string;
-}
-
-export function isTelegramLateArrivalCommandText(text: string) {
-    return TELEGRAM_LATE_ARRIVAL_COMMAND_PREFIX.test(text.trim());
-}
-
-export function parseTelegramLateArrivalCommand(text: string): ParsedTelegramLateArrivalCommand | null {
-    const match = text.trim().match(TELEGRAM_LATE_ARRIVAL_COMMAND_PREFIX);
-    if (!match) {
-        return null;
-    }
-    const rawBody = (match[1] ?? "").trim();
-    const tokens = rawBody.split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) {
-        return { name: "meioplantao", baseCode: null, time: null, note: null, rawBody };
-    }
-    const baseCode = tokens[0].toUpperCase();
-    let time: string | null = null;
-    const remaining: string[] = [];
-    for (const token of tokens.slice(1)) {
-        if (!time && /^\d{1,2}[:h]\d{2}$/i.test(token)) {
-            time = token.replace(/h/i, ":");
-            continue;
-        }
-        remaining.push(token);
-    }
-    return {
-        name: "meioplantao",
-        baseCode,
-        time,
-        note: remaining.length > 0 ? remaining.join(" ") : null,
-        rawBody,
-    };
-}
 
 export interface ParsedTelegramCommand {
     name: TelegramCommandName;

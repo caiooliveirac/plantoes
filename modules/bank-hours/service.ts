@@ -122,7 +122,6 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
             scheduledStartAt: occupancy.scheduledStartAt,
             scheduledEndAt: occupancy.scheduledEndAt,
             shiftLabel: occupancy.shiftLabel,
-            lateArrivalAcknowledgedAt: occupancy.lateArrivalAcknowledgedAt,
         })),
     ];
 }
@@ -194,18 +193,11 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
         return null;
     }
 
-    // Late half-shift acknowledgement: when the continuity carrier is an
-    // intervention occupancy whose chefe/admin marked it as a late arrival
-    // converted to half-shift, the calculator applies the carryover branch.
-    const carrierLateHalfShift = span.carrierDomain === "intervention"
-        && Boolean(meaningful.find((o) => o.domain === "intervention" && o.occupancyId === span.carrierOccupancyId)?.lateArrivalAcknowledgedAt);
-
     const rawCalculation = calculateBankHours({
         scheduledStartAt: span.scheduledStartAt,
         scheduledEndAt: span.scheduledEndAt,
         actualStartAt: span.actualStartAt,
         actualEndAt: span.actualEndAt,
-        lateHalfShiftAcknowledged: carrierLateHalfShift,
     });
     const calculation = applyAnomalyGuard(rawCalculation);
     const override = (await listBankHoursBalanceOverridesByContinuityGroupIds(db, [continuityGroupId])).get(continuityGroupId) ?? null;

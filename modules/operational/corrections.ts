@@ -32,6 +32,7 @@ import {
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
+import { isHalfShiftRoleLabel, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
@@ -652,6 +653,51 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
     };
 }
 
+interface CorrectedScheduledWindow {
+    scheduledStartAt: Date | null;
+    scheduledEndAt: Date | null;
+}
+
+/**
+ * Decide a janela agendada (scheduled_start_at/scheduled_end_at) depois de uma
+ * correção. É essa janela que o banco de horas usa como baseline de atraso e de
+ * hora extra, então trocar a FUNÇÃO entre meio plantão e qualquer outra muda o
+ * plantão inteiro, não só o rótulo:
+ *
+ *  - MEIO_PLANTAO → outra função: o plantão sempre foi inteiro. A janela volta a
+ *    ser a do turno (SD 07:00–19:15 na regulação, 07:00–19:00 na intervenção) e o
+ *    atraso passa a ser medido a partir das 07:00 — quem chegou 10:38 leva o
+ *    débito cheio de ~3h38 (caso Vanessa Brito, jul/2026).
+ *  - outra função → MEIO_PLANTAO: aplica a janela canônica 11:30–17:00.
+ *  - continua meio plantão e só o horário mudou: mantém a janela de meia jornada
+ *    (antes, corrigir a chegada de um meio plantão reescrevia a janela como turno
+ *    inteiro e inventava um atraso gigante).
+ *
+ * O pagamento não precisa de nada aqui: payment-closing deriva a unidade (0,5 ou
+ * 1) do próprio role_label em tempo de leitura.
+ */
+export function resolveCorrectedScheduledWindow(params: {
+    existingRoleLabel: string | null;
+    nextRoleLabel: string | null;
+    roleLabelProvided: boolean;
+    temporalFieldsChanged: boolean;
+    windowReferenceAt: Date;
+    existingWindow: CorrectedScheduledWindow;
+    inferFullShiftWindow: () => CorrectedScheduledWindow;
+}): CorrectedScheduledWindow {
+    const nextIsHalfShift = isHalfShiftRoleLabel(params.nextRoleLabel);
+    const halfShiftBoundaryCrossed = params.roleLabelProvided
+        && isHalfShiftRoleLabel(params.existingRoleLabel) !== nextIsHalfShift;
+
+    if (!params.temporalFieldsChanged && !halfShiftBoundaryCrossed) {
+        return params.existingWindow;
+    }
+
+    return nextIsHalfShift
+        ? resolveHalfShiftScheduledWindow(params.windowReferenceAt)
+        : params.inferFullShiftWindow();
+}
+
 export async function correctRegulationOccupancy(
     id: string,
     input: RegulationOccupancyCorrectionInput,
@@ -704,25 +750,39 @@ export async function correctRegulationOccupancy(
             });
         }
 
-        // Recalculate scheduled window whenever startedAt or shiftLabel is corrected.
-        // Without this, /corrigir would leave stale scheduled_start_at/scheduled_end_at
-        // pointing at the wrong shift after an arrival-time or shift-label edit.
+        const nextShiftLabel = hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel;
+        const requestedRoleLabel = hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel;
+        const sanitizedRoleLabel = applyOperationalRoleShiftPolicy({
+            shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
+                ? nextShiftLabel
+                : null,
+            roleLabel: requestedRoleLabel,
+        });
+
+        // Recalculate scheduled window whenever startedAt, shiftLabel or the
+        // half-shift role boundary is corrected. Without this, /corrigir would
+        // leave stale scheduled_start_at/scheduled_end_at pointing at the wrong
+        // shift after an arrival-time, shift-label or função edit.
         // For continuity entries (boardStartedAt > startedAt), use boardStartedAt as
         // the window reference so the scheduled window matches the current shift.
-        const nextShiftLabel = hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel;
-        const scheduledWindowChanged = hasOwn(input, "startedAt") || hasOwn(input, "shiftLabel") || hasOwn(input, "boardStartedAt");
         const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
             ? boardStartedAt
             : startedAt;
-        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = scheduledWindowChanged
-            ? inferRegulationCoverageWindow({
+        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = resolveCorrectedScheduledWindow({
+            existingRoleLabel: existing.roleLabel,
+            nextRoleLabel: sanitizedRoleLabel,
+            roleLabelProvided: hasOwn(input, "roleLabel"),
+            temporalFieldsChanged: hasOwn(input, "startedAt") || hasOwn(input, "shiftLabel") || hasOwn(input, "boardStartedAt"),
+            windowReferenceAt,
+            existingWindow: { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt },
+            inferFullShiftWindow: () => inferRegulationCoverageWindow({
                 startedAt: windowReferenceAt,
                 shiftLabel: nextShiftLabel,
                 postCode: targetPost.code,
                 explicitScheduledStartAt: null,
                 explicitScheduledEndAt: null,
-            })
-            : { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt };
+            }),
+        });
 
         if (postId !== existing.postId) {
             if (!endedAt) {
@@ -739,14 +799,6 @@ export async function correctRegulationOccupancy(
                 }
             }
         }
-
-        const requestedRoleLabel = hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel;
-        const sanitizedRoleLabel = applyOperationalRoleShiftPolicy({
-            shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
-                ? nextShiftLabel
-                : null,
-            roleLabel: requestedRoleLabel,
-        });
 
         const actualEndedAtTimeChanged = actualEndedAtChanged
             && (actualEndedAt?.getTime() ?? null) !== (existing.actualEndedAt?.getTime() ?? null);
@@ -830,25 +882,30 @@ export async function correctInterventionOccupancy(
         }
 
         const nextShiftLabel = hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel;
-        const scheduledWindowChanged = startedAtChanged || boardStartedAtChanged || hasOwn(input, "shiftLabel");
-        const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
-            ? boardStartedAt
-            : startedAt;
-        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = scheduledWindowChanged
-            ? inferInterventionCoverageWindow({
-                startedAt: windowReferenceAt,
-                shiftLabel: nextShiftLabel,
-                explicitScheduledStartAt: null,
-                explicitScheduledEndAt: null,
-            })
-            : { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt };
-
         const requestedRoleLabel = hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel;
         const sanitizedRoleLabel = applyOperationalRoleShiftPolicy({
             shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
                 ? nextShiftLabel
                 : null,
             roleLabel: requestedRoleLabel,
+        });
+
+        const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
+            ? boardStartedAt
+            : startedAt;
+        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = resolveCorrectedScheduledWindow({
+            existingRoleLabel: existing.roleLabel,
+            nextRoleLabel: sanitizedRoleLabel,
+            roleLabelProvided: hasOwn(input, "roleLabel"),
+            temporalFieldsChanged: startedAtChanged || boardStartedAtChanged || hasOwn(input, "shiftLabel"),
+            windowReferenceAt,
+            existingWindow: { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt },
+            inferFullShiftWindow: () => inferInterventionCoverageWindow({
+                startedAt: windowReferenceAt,
+                shiftLabel: nextShiftLabel,
+                explicitScheduledStartAt: null,
+                explicitScheduledEndAt: null,
+            }),
         });
 
         const actualEndedAtTimeChanged = actualEndedAtChanged

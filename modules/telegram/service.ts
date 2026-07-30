@@ -55,7 +55,12 @@ import {
 import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, isSameOperationalShiftArrival, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
-import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
+import {
+    HALF_SHIFT_ROLE_LABEL,
+    isHalfShiftRoleLabel,
+    isWithinHalfShiftWindow,
+    resolveHalfShiftScheduledWindow,
+} from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveContinuationReferenceBoundary, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
@@ -190,8 +195,6 @@ import {
     isTelegramAdminOnlyCommand,
     isTelegramDepartureCorrectionCommandText,
     parseTelegramCommand,
-    parseTelegramLateArrivalCommand,
-    isTelegramLateArrivalCommandText,
     parseTelegramDepartureCorrectionCommand,
 } from "@/modules/telegram/commands";
 import { buildTelegramCommandSuggestionReply, suggestTelegramCommandHelp, type TelegramRecentSenderMessage } from "@/modules/telegram/command-suggestions";
@@ -254,8 +257,6 @@ import {
 /** Botão "Foi só esta noite" para reverter um P forward noturno. Null = sem botão. */
 type ForwardContinuityPrompt = { occupancyId: string; domain: ContinuityRevertDomain } | null;
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
-import { buildLateArrivalAcknowledgementAnnouncement, maybeSendInterventionLateArrivalOrientation } from "@/modules/telegram/late-arrival-prompt";
-import { acknowledgeInterventionLateArrival, LATE_HALF_SHIFT_CUTOFF_HOUR, resolveBahiaHour } from "@/modules/bank-hours/late-arrival";
 import { buildCandidatePromptReply, buildGroupCorrectionAnnouncement, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 import { getOperationalBoard, getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
 import { getOperationalSlotAuditReport } from "@/services/slot-audit.service";
@@ -456,22 +457,7 @@ const TELEGRAM_RECENT_CLOSED_CONTINUITY_LINK_WINDOW_MS = 2 * 60 * 60 * 1000;
 // até depois dela — o médico ainda "estava lá na virada" para fins de vínculo.
 const TELEGRAM_CONTINUATION_SOURCE_CLOSURE_TOLERANCE_MS = 2 * 60 * 60 * 1000;
 const TELEGRAM_FORCED_TAKEOVER_MIN_DURATION_MS = 60 * 1000;
-const TELEGRAM_HALF_SHIFT_AUTO_END_HHMM = "17:00";
-// Hora esperada de chegada do meio plantão da tarde. É o piso a partir do qual o
-// banco de horas mede atraso — chegar/avisar antes disso não gera crédito nem
-// débito; avisar depois (além da tolerância de 15 min) debita o atraso.
-const TELEGRAM_HALF_SHIFT_EXPECTED_START_HHMM = "11:30";
-// Janela em que um aviso de meio plantão da tarde ("meio plantão", "meio turno",
-// "tarde", "MP/MT") é honrado como meia jornada — pela hora declarada, ou, na
-// ausência dela, pela hora da própria mensagem. 10:30 (inclusive) até 17:00.
-const TELEGRAM_HALF_SHIFT_WINDOW_START_MINUTE = 10 * 60 + 30;
-const TELEGRAM_HALF_SHIFT_WINDOW_END_MINUTE = 17 * 60;
 const TELEGRAM_HALF_SHIFT_ALREADY_CLOSED_ERROR = "half_shift_already_closed";
-
-function isWithinTelegramHalfShiftWindow(minuteOfDay: number) {
-    return minuteOfDay >= TELEGRAM_HALF_SHIFT_WINDOW_START_MINUTE
-        && minuteOfDay < TELEGRAM_HALF_SHIFT_WINDOW_END_MINUTE;
-}
 
 interface TelegramCommandActor {
     userId: string | null;
@@ -919,21 +905,21 @@ export function resolveTelegramShadowFlag(parsed: Pick<OperationalParsedEntry, "
 }
 
 function resolveHalfShiftScheduledEndAt(referenceAt: Date) {
-    return resolveForcedDayEventTime(referenceAt, TELEGRAM_HALF_SHIFT_AUTO_END_HHMM, 0);
+    return resolveHalfShiftScheduledWindow(referenceAt).scheduledEndAt;
 }
 
 // Início agendado (esperado) do meio plantão da tarde. Fixo às 11:30 no relógio
 // local, independente de quando o médico avisou. É o que o banco de horas usa
-// como baseline de atraso. Ver TELEGRAM_HALF_SHIFT_EXPECTED_START_HHMM.
+// como baseline de atraso. Ver HALF_SHIFT_EXPECTED_START_HHMM.
 function resolveHalfShiftScheduledStartAt(referenceAt: Date) {
-    return resolveForcedDayEventTime(referenceAt, TELEGRAM_HALF_SHIFT_EXPECTED_START_HHMM, 0);
+    return resolveHalfShiftScheduledWindow(referenceAt).scheduledStartAt;
 }
 
 // Gate de chegada (F6): um meio plantão explícito ("meio plantão", "tarde",
 // "meio turno", "MP/MT") conta como *turno* informado, evitando o aviso de
 // "faltou turno". Só liberamos quando o aviso será de fato honrado como meia
 // jornada da tarde a jusante (regulação, sem turno explícito, dentro da janela
-// 10:30–17:00). O médico NÃO precisa informar horário: se não declarar uma hora,
+// 11:10–17:00). O médico NÃO precisa informar horário: se não declarar uma hora,
 // usamos o relógio da própria mensagem (referenceAt) para a janela — o mesmo
 // instante que shouldAssumeTelegramHalfShift consome como eventAt a jusante.
 export function arrivalHalfShiftSatisfiesShiftGate(
@@ -950,13 +936,13 @@ export function arrivalHalfShiftSatisfiesShiftGate(
         if (!match) return false;
         // A hora declarada já está no relógio local de Salvador.
         const minuteOfDay = (Number(match[1]) * 60) + Number(match[2]);
-        return isWithinTelegramHalfShiftWindow(minuteOfDay);
+        return isWithinHalfShiftWindow(minuteOfDay);
     }
 
     // Sem hora declarada: cai para o relógio da mensagem (igual ao eventAt usado
     // por shouldAssumeTelegramHalfShift), para que aviso sem horário seja aceito.
     const parts = getSaoPauloParts(referenceAt);
-    return isWithinTelegramHalfShiftWindow((parts.hour * 60) + parts.minute);
+    return isWithinHalfShiftWindow((parts.hour * 60) + parts.minute);
 }
 
 export function shouldAssumeTelegramHalfShift(params: {
@@ -969,7 +955,7 @@ export function shouldAssumeTelegramHalfShift(params: {
     }
 
     const parts = getSaoPauloParts(params.eventAt);
-    return isWithinTelegramHalfShiftWindow((parts.hour * 60) + parts.minute);
+    return isWithinHalfShiftWindow((parts.hour * 60) + parts.minute);
 }
 
 function appendTelegramOperationalNote(existingNotes: string | null | undefined, marker: string, messageText: string) {
@@ -3864,7 +3850,7 @@ const KNOWN_TELEGRAM_COMMANDS = [
     "plantao", "resumo", "saidas", "prioridadesaida", "prioridade", "ajuda", "help",
     "comandos", "cobrar", "lembretes", "status", "meuturno", "almoco", "jantar",
     "excluir", "incluir", "corrigir", "corrigirsaida", "retirar", "remover", "ramal",
-    "ativar", "desativar", "ontem", "hoje", "meioplantao", "pagamento", "resetcodinome",
+    "ativar", "desativar", "ontem", "hoje", "pagamento", "resetcodinome",
     "desfazer", "slots", "medico", "piam", "banco", "alerta", "saiu", "saindo", "saida",
 ];
 
@@ -4383,13 +4369,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             await sendMessage(message.chat.id, buildMealBreakErrorReply(error), message.message_id);
             await alertAdminsOnMealBreakTechnicalError("/prioridade", error);
             return { ok: true, ignored: true };
-        }
-    }
-
-    if (isTelegramLateArrivalCommandText(message.text)) {
-        const lateArrivalResult = await runTelegramLateArrivalAcknowledgeCommand(update, logId);
-        if (lateArrivalResult) {
-            return lateArrivalResult;
         }
     }
 
@@ -5977,9 +5956,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 "▸ /desativar — desativa base/ramal:",
                 "  _/desativar PM40_",
                 "  _/desativar 2031 19:00_",
-                "",
-                "▸ /meioplantao — registra chegada de meio plantão (chefe/admin):",
-                "  _/meioplantao SM01_ (ocupação ativa) ou _/meioplantao SM01 13:11_",
             );
 
             sections.push(
@@ -6918,176 +6894,6 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     return { ok: true, removed: true };
 }
 
-async function runTelegramLateArrivalAcknowledgeCommand(update: TelegramUpdate, logId: string) {
-    const message = update.message;
-    if (!message?.text) {
-        return null;
-    }
-
-    const senderTelegramId = message.from?.id ? String(message.from.id) : null;
-    const isAdmin = senderTelegramId !== null && getTelegramAdminUserIds().includes(senderTelegramId);
-    const isChief = senderTelegramId !== null && getTelegramChiefUserIds().includes(senderTelegramId);
-    if (!isAdmin && !isChief) {
-        await markTelegramProcessed(logId, {
-            status: "ignored",
-            parsedAction: "late_arrival_command",
-            errorMessage: "late_arrival_command_forbidden",
-            resolutionData: { rawCommand: message.text },
-        });
-        await sendMessage(
-            message.chat.id,
-            "🛑 /meioplantao e exclusivo para chefes e admin do bot.",
-            message.message_id,
-        );
-        return { ok: true, ignored: true };
-    }
-
-    const command = parseTelegramLateArrivalCommand(message.text);
-    if (!command || !command.baseCode) {
-        await markTelegramProcessed(logId, {
-            status: "ignored",
-            parsedAction: "late_arrival_command",
-            errorMessage: "late_arrival_command_usage_invalid",
-            resolutionData: { rawCommand: message.text },
-        });
-        await sendMessage(
-            message.chat.id,
-            "Uso: `/meioplantao <base> [HH:MM]` — exemplo `/meioplantao SM01` (reconhece a ocupacao ativa atual) ou `/meioplantao SM01 13:11` (reconhece a ocupacao iniciada nesse horario).",
-            message.message_id,
-        );
-        return { ok: true, ignored: true };
-    }
-
-    const db = getDb();
-    const baseRow = await db.query.interventionBases.findFirst({
-        where: eq(interventionBases.code, command.baseCode),
-    });
-    if (!baseRow) {
-        await markTelegramProcessed(logId, {
-            status: "ignored",
-            parsedAction: "late_arrival_command",
-            errorMessage: "late_arrival_command_base_not_found",
-            resolutionData: { rawCommand: message.text, baseCode: command.baseCode },
-        });
-        await sendMessage(
-            message.chat.id,
-            `Nao encontrei a base intervencao *${command.baseCode}*. Confere o codigo (ex.: SM01, PM04, BR60).`,
-            message.message_id,
-        );
-        return { ok: true, ignored: true };
-    }
-
-    let occupancyRow: typeof interventionOccupancies.$inferSelect | undefined;
-    if (command.time) {
-        const referenceAt = new Date(message.date * 1000);
-        const lookbackStart = new Date(referenceAt.getTime() - 24 * 60 * 60 * 1000);
-        const candidates = await db.query.interventionOccupancies.findMany({
-            where: and(
-                eq(interventionOccupancies.baseId, baseRow.id),
-                gte(interventionOccupancies.startedAt, lookbackStart),
-            ),
-            orderBy: [desc(interventionOccupancies.startedAt)],
-        });
-        const [hh, mm] = command.time.split(":").map((value) => Number.parseInt(value, 10));
-        const formatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Bahia", hour: "2-digit", minute: "2-digit", hour12: false });
-        occupancyRow = candidates.find((candidate) => {
-            const parts = formatter.format(new Date(candidate.startedAt));
-            const [candHH, candMM] = parts.split(":").map((value) => Number.parseInt(value, 10));
-            const minutesDiff = Math.abs((candHH * 60 + candMM) - (hh * 60 + mm));
-            return minutesDiff <= 5;
-        });
-    } else {
-        occupancyRow = await db.query.interventionOccupancies.findFirst({
-            where: and(
-                eq(interventionOccupancies.baseId, baseRow.id),
-                isNull(interventionOccupancies.endedAt),
-            ),
-            orderBy: [desc(interventionOccupancies.startedAt)],
-        });
-    }
-
-    if (!occupancyRow) {
-        await markTelegramProcessed(logId, {
-            status: "ignored",
-            parsedAction: "late_arrival_command",
-            errorMessage: "late_arrival_command_occupancy_not_found",
-            resolutionData: { rawCommand: message.text, baseCode: command.baseCode, time: command.time },
-        });
-        await sendMessage(
-            message.chat.id,
-            command.time
-                ? `Nao encontrei ocupacao em *${command.baseCode}* iniciando proximo de *${command.time}*.`
-                : `Nao tem ocupacao ativa agora em *${command.baseCode}*.`,
-            message.message_id,
-        );
-        return { ok: true, ignored: true };
-    }
-
-    const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || "Usuario do Telegram";
-    const noteParts: string[] = [];
-    noteParts.push(`Reconhecido via /meioplantao por ${senderName}${isAdmin ? " (admin)" : " (chefe)"}.`);
-    if (command.note) {
-        noteParts.push(`Motivo: ${command.note}.`);
-    }
-
-    let result;
-    try {
-        result = await acknowledgeInterventionLateArrival({
-            occupancyId: occupancyRow.id,
-            note: noteParts.join(" "),
-            actor: { userId: null, telegramId: senderTelegramId, label: senderName },
-        });
-    } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "late_arrival_ack_failed";
-        await markTelegramProcessed(logId, {
-            status: "ignored",
-            parsedAction: "late_arrival_command",
-            errorMessage: errorMsg,
-            relatedOccupancyId: occupancyRow.id,
-        });
-        await sendMessage(message.chat.id, `❌ ${errorMsg}`, message.message_id);
-        return { ok: true, ignored: true };
-    }
-
-    const doctorRow = await db.query.doctors.findFirst({
-        where: eq(doctors.id, occupancyRow.doctorId),
-    });
-    const doctorSurfaceName = doctorRow?.displayName ?? doctorRow?.fullName ?? "medico desconhecido";
-    const actualStartLabel = new Date(result.actualStartAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Bahia" });
-
-    await markTelegramProcessed(logId, {
-        status: "accepted",
-        parsedDomain: "INTERVENTION",
-        parsedTargetCode: command.baseCode,
-        parsedAction: "late_arrival_command",
-        parsedDoctorName: doctorRow?.fullName ?? null,
-        relatedOccupancyId: occupancyRow.id,
-        resolutionData: {
-            rawCommand: message.text,
-            baseCode: command.baseCode,
-            time: command.time,
-            carryoverMinutes: result.carryoverMinutes,
-            actorTelegramId: senderTelegramId,
-            actorRole: isAdmin ? "admin" : "chief",
-        },
-    });
-
-    await sendMessage(
-        message.chat.id,
-        buildLateArrivalAcknowledgementAnnouncement({
-            doctorName: doctorSurfaceName,
-            baseCode: command.baseCode,
-            actualStartLabel,
-            carryoverMinutes: result.carryoverMinutes,
-            markedByLabel: senderName,
-            markedByChefe: !isAdmin,
-            source: "telegram_command",
-        }),
-        message.message_id,
-    );
-
-    return { ok: true, lateArrivalAcknowledged: true };
-}
 
 async function tryHandleMealBreakReply(update: TelegramUpdate, logId: string) {
     const message = update.message;
@@ -13278,30 +13084,12 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     );
                 }
 
-                // Late half-shift orientation: when an intervention SD arrival lands
-                // at or after the 9h coordination cutoff (Bahia local), publish a
-                // one-shot informative message explaining the rule and that the
-                // chefe/admin must acknowledge the conversion. Purely orientative.
-                if (
-                    occupancyId
-                    && firstParsed.sector === "INTERVENTION"
-                    && !firstParsed.isDeparture
-                    && !treatedAsContinuation
-                    && !isTelegramContinuationEntry(firstParsed)
-                    && resolveBahiaHour(eventAt) >= LATE_HALF_SHIFT_CUTOFF_HOUR
-                    && resolveBahiaHour(eventAt) < 18
-                ) {
-                    try {
-                        await maybeSendInterventionLateArrivalOrientation({
-                            chatId: message.chat.id,
-                            occupancyId,
-                            replyToMessageId: message.message_id,
-                        });
-                    } catch (lateArrivalError) {
-                        console.error("late_arrival_orientation_failed", lateArrivalError);
-                    }
-                }
-
+                // A regra "chegada em intervenção depois das 9h vira meio plantão
+                // 13–19 com carryover no banco" foi APOSENTADA (jul/2026). Chegar
+                // atrasado num SD é atraso: a janela continua sendo a do turno
+                // inteiro e o débito é do plantonista. Meia jornada agora só existe
+                // quando declarada (janela 11:10–17:00) ou quando a chefia troca a
+                // função no quadro — ver modules/operational/half-shift.ts.
                 return { ok: true, occupancyId };
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
