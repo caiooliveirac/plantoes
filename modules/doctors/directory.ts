@@ -2,6 +2,7 @@ import { normalizeDoctorName } from "@/modules/doctors/importer";
 import { normalizeOperationalRoleLabel } from "@/modules/operational/roles";
 
 const DOCTOR_METADATA_PREFERRED_ROLE_KEY = "preferredOperationalRole";
+const DOCTOR_METADATA_IS_RESIDENTE_KEY = "isResidente";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -51,11 +52,26 @@ export function extractDoctorPreferredOperationalRole(metadata: unknown) {
     return normalizeOperationalRoleLabel(metadata[DOCTOR_METADATA_PREFERRED_ROLE_KEY] as string | null | undefined);
 }
 
+/**
+ * Residente: médico coringa que pode ocupar qualquer posto/base (inclusive
+ * mais de um ao mesmo tempo), não gera banco de horas e não aparece em
+ * payment-closing/payment-attestation/slot-audit. Marcado só por essa flag em
+ * metadata — não é um role operacional nem um tipo de vínculo.
+ */
+export function extractDoctorIsResidente(metadata: unknown) {
+    if (!isPlainObject(metadata)) {
+        return false;
+    }
+
+    return metadata[DOCTOR_METADATA_IS_RESIDENTE_KEY] === true;
+}
+
 export function mergeDoctorDirectoryMetadata(
     metadata: unknown,
     params: {
         aliases?: string[];
         preferredOperationalRole?: string | null;
+        isResidente?: boolean;
     },
 ) {
     const nextMetadata = isPlainObject(metadata) ? { ...metadata } : {};
@@ -71,6 +87,12 @@ export function mergeDoctorDirectoryMetadata(
         nextMetadata[DOCTOR_METADATA_PREFERRED_ROLE_KEY] = preferredOperationalRole;
     } else if (params.preferredOperationalRole !== undefined) {
         delete nextMetadata[DOCTOR_METADATA_PREFERRED_ROLE_KEY];
+    }
+
+    if (params.isResidente) {
+        nextMetadata[DOCTOR_METADATA_IS_RESIDENTE_KEY] = true;
+    } else if (params.isResidente !== undefined) {
+        delete nextMetadata[DOCTOR_METADATA_IS_RESIDENTE_KEY];
     }
 
     return nextMetadata;

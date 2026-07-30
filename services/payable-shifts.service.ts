@@ -1,6 +1,7 @@
 import { asc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { doctors } from "@/db/schema";
+import { extractDoctorIsResidente } from "@/modules/doctors/directory";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
 import {
     buildAdminExtraPayableShift,
@@ -272,6 +273,18 @@ function applyTargetDeactivationState(params: {
     });
 }
 
+// Residente é um cadastro coringa (ocupa qualquer posto/base, inclusive mais
+// de um ao mesmo tempo) que não deve entrar em nenhum relatório de pagamento
+// nem de auditoria de presença por posição — payment-closing, slot-audit e
+// payment-attestation reusam os mesmos rawRows/allDoctorRows deste arquivo,
+// então filtrar aqui basta para excluí-lo de todos.
+async function loadResidenteDoctorIds(): Promise<Set<string>> {
+    const rows = await getDb()
+        .select({ id: doctors.id, metadata: doctors.metadata })
+        .from(doctors);
+    return new Set(rows.filter((row) => extractDoctorIsResidente(row.metadata)).map((row) => row.id));
+}
+
 async function loadRawRows(startIso: string, endIso: string) {
     const db = getDb();
     const result = await db.execute(sql`
@@ -409,13 +422,16 @@ export async function getPayableAllocationBoardsForRange(
 ): Promise<PayableAllocationRangeResult> {
     const rawStartIso = new Date(rangeStart.getTime() - 86400000).toISOString();
     const rawEndIso = new Date(rangeEnd.getTime() + 86400000).toISOString();
-    const [targets, targetDeactivationIntervals, rawResultRows] = await Promise.all([
+    const [targets, targetDeactivationIntervals, rawResultRows, residenteDoctorIds] = await Promise.all([
         loadTargets(rawStartIso, rawEndIso),
         loadTargetDeactivationIntervals(rawStartIso, rawEndIso),
         loadRawRows(rawStartIso, rawEndIso),
+        loadResidenteDoctorIds(),
     ]);
 
-    const rawRows = rawResultRows.map(mapPaymentAllocationAuditRow);
+    const rawRows = rawResultRows
+        .map(mapPaymentAllocationAuditRow)
+        .filter((row) => !residenteDoctorIds.has(row.doctorId));
     const boards = buildBoardsForRange({
         rangeStart,
         rangeEnd,
@@ -512,7 +528,13 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             .orderBy(asc(doctors.fullName)),
     ]);
 
-    const rawRows = rawResultRows.map(mapPaymentAllocationAuditRow);
+    const residenteDoctorIds = new Set(
+        allDoctorRows.filter((row) => extractDoctorIsResidente(row.metadata)).map((row) => row.id),
+    );
+    const visibleDoctorRows = allDoctorRows.filter((row) => !residenteDoctorIds.has(row.id));
+    const rawRows = rawResultRows
+        .map(mapPaymentAllocationAuditRow)
+        .filter((row) => !residenteDoctorIds.has(row.doctorId));
     const boards = buildBoardsForRange({
         rangeStart: range.start,
         rangeEnd: range.end,
@@ -541,17 +563,18 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         rawEvents: rawResultRows
             .filter((row) => {
                 const startedAt = new Date(String(row.startedAt)).getTime();
-                return startedAt >= range.start.getTime() && startedAt < range.end.getTime();
+                return startedAt >= range.start.getTime() && startedAt < range.end.getTime()
+                    && !residenteDoctorIds.has(String(row.doctorId));
             })
             .map(mapRawPresenceEvent),
         selectedOccupancyIds,
     });
 
     const doctorPaymentProfiles = Object.fromEntries(
-        allDoctorRows.map((row) => [row.id, resolveDoctorPaymentProfile(row.metadata)])
+        visibleDoctorRows.map((row) => [row.id, resolveDoctorPaymentProfile(row.metadata)])
     );
     const doctorEmploymentTypes = Object.fromEntries(
-        allDoctorRows.map((row) => [row.id, resolveDoctorEmploymentType(row.metadata)])
+        visibleDoctorRows.map((row) => [row.id, resolveDoctorEmploymentType(row.metadata)])
     );
 
     // Camada financeira do modal: nota fiscal/processo, semente do contrato,
@@ -629,7 +652,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         uncoveredTargets,
         targetOptions,
         attestationSegments,
-        allDoctorNames: allDoctorRows.map((row) => row.fullName),
+        allDoctorNames: visibleDoctorRows.map((row) => row.fullName),
         doctorPaymentProfiles,
         doctorEmploymentTypes,
         doctorAttestations,
