@@ -29,6 +29,7 @@ import {
     resolveMealBreakTechnicalErrorDetail,
     reconcileMealBreakSessionRamalsWithBoard,
     resolveMealBreakEligibilityExclusions,
+    selectMealBreakTargetTelegramIds,
     selectRecentMealBreakRegulatorTelegramIds,
     reconcileNightMealBreakSessionWithBoard,
     resolveMealBreakTurnNudgeAction,
@@ -3404,23 +3405,32 @@ test("resolveMealBreakTurnNudgeAction reinicia a contagem quando a vez passa par
 test("cobrancas escalam em uma linha, com nome em negrito e aparencias distintas", () => {
     const { mrv } = buildDaySessionAtLunchQueue();
     const mentions = ["@ana_reg", "@bruno_reg", "@carla_reg"];
-    const first = buildMealBreakTurnNudgeMessage(mrv.session, 1, mentions);
-    const second = buildMealBreakTurnNudgeMessage(mrv.session, 2, mentions);
-    const third = buildMealBreakTurnNudgeMessage(mrv.session, 3, mentions);
-    const fourth = buildMealBreakTurnNudgeMessage(mrv.session, 4, mentions);
+    const targetMention = { telegramId: "102", username: "bia_2036" };
+    const first = buildMealBreakTurnNudgeMessage(mrv.session, 1, mentions, targetMention);
+    const second = buildMealBreakTurnNudgeMessage(mrv.session, 2, mentions, targetMention);
+    const third = buildMealBreakTurnNudgeMessage(mrv.session, 3, mentions, targetMention);
+    const fourth = buildMealBreakTurnNudgeMessage(mrv.session, 4, mentions, targetMention);
 
     for (const message of [first, second, third, fourth]) {
         assert.doesNotMatch(message, /\n/);
         assert.match(message, /\*Bia\*/);
+        assert.match(message, /\[@bia\\_2036\]\(tg:\/\/user\?id=102\)/);
     }
     assert.match(first, /^⏳/);
     assert.doesNotMatch(first, /@chefe2031/);
     assert.match(second, /^📞 @chefe2031/);
-    assert.match(second, /ligar para \*Bia\*/);
+    assert.match(second, /ligar para \[@bia\\_2036\]\(tg:\/\/user\?id=102\) \(\*Bia\*\)/);
     assert.match(third, /^🚨/);
-    assert.match(third, /@ana_reg @bruno_reg @carla_reg/);
+    assert.match(third, /@ana\\_reg @bruno\\_reg @carla\\_reg/);
     assert.match(fourth, /^🩺/);
     assert.equal(new Set([first, second, third, fourth]).size, 4);
+});
+
+test("cobranca direta preserva o fallback em negrito quando o profissional nao tem arroba resolvido", () => {
+    const { mrv } = buildDaySessionAtLunchQueue();
+    const message = buildMealBreakTurnNudgeMessage(mrv.session, 1, [], null);
+    assert.match(message, /^⏳ \*Bia\*,/);
+    assert.doesNotMatch(message, /@\w+/);
 });
 
 test("cobranca coletiva degrada para o grupo quando nenhum arroba pode ser resolvido", () => {
@@ -3463,6 +3473,22 @@ test("seleciona os seis reguladores que interagiram mais recentemente e exclui i
         targetDoctorId: "doc-current",
         limit: 6,
     }), ["1", "3", "4", "5", "6", "7"]);
+});
+
+test("identifica os remetentes mais recentes vinculados ao doctorId do profissional aguardado", () => {
+    const declarations = [
+        { senderTelegramId: "admin", doctorId: "doc-current", createdAt: new Date("2026-03-29T12:10:00Z") },
+        { senderTelegramId: "ramal-account", doctorId: "doc-current", createdAt: new Date("2026-03-29T12:09:00Z") },
+        { senderTelegramId: "personal-account", doctorId: "doc-current", createdAt: new Date("2026-03-29T12:08:00Z") },
+        { senderTelegramId: "personal-account", doctorId: "doc-current", createdAt: new Date("2026-03-29T12:07:00Z") },
+        { senderTelegramId: "other-doctor", doctorId: "doc-other", createdAt: new Date("2026-03-29T12:06:00Z") },
+    ];
+
+    assert.deepEqual(selectMealBreakTargetTelegramIds({
+        declarations,
+        targetDoctorId: "doc-current",
+        excludedTelegramIds: new Set(["admin"]),
+    }), ["ramal-account", "personal-account"]);
 });
 
 // ─── Onda 2 (refeição sem migração de teclado): helpers puros novos ─────────
