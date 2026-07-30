@@ -4,11 +4,13 @@ import { buildChecklistKeyHint, fetchChecklistKeyHint } from "@/modules/telegram
 
 test("buildChecklistKeyHint: monta bloco com base, chave e link", () => {
     const hint = buildChecklistKeyHint("SM01", "1234");
-    assert.match(hint, /Checklist da \*SM01\*/);
-    assert.match(hint, /chave de hoje: \*1234\*/);
+    assert.match(hint, /Checklist \*SM01\*/);
+    assert.match(hint, /chave de hoje \*1234\*/);
     assert.match(hint, /checklist\.mnrs\.com\.br\/b\/SM01/);
-    assert.match(hint, /@samu_checklists_bot/, "orienta o /start no privado do bot do checklist");
+    assert.match(hint, /@samu_checklists_bot/, "mantém o ponteiro para o bot do checklist");
     assert.ok(hint.startsWith("\n\n"), "separa da confirmação com linha em branco");
+    // Chegada da USA vinha com bloco maior que a própria confirmação: 2 linhas.
+    assert.equal(hint.trim().split("\n").length, 2, "bloco do checklist cabe em 2 linhas");
 });
 
 test("buildChecklistKeyHint: vazio sem base ou sem chave", () => {

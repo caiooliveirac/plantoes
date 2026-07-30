@@ -91,6 +91,13 @@ telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
   (`parser.ts`, `meal-breaks.ts`, `departure-flow.ts`, `reminders.ts`, etc.) mas
   `service.ts` continua sendo o hub.
 
+> **Dois bots, não um.** O bot deste repo ("Plantões SAMU", webhook) vive no
+> grupo da escala e cuida de chegada/saída. O "bot regulador" é outro token,
+> outro grupo e **outro repo** (`tabela`): vagas de leito e restrição de UPA. Os
+> avisos periódicos de UPA restrita saem de lá, não daqui — este app só lê
+> `GET {TABELA_API_URL}/upas/restrictions` para a chegada do regulador e o
+> `/upas`. Ver [docs/upas-restritas.md](docs/upas-restritas.md).
+
 **`services/`** é a camada que monta read models para as páginas/API a partir dos
 `modules/` + queries diretas ao banco — ex.: `board.service.ts` monta o estado do
 quadro ao vivo; `payment-attestation.service.ts` e `payment-closing-*.service.ts`

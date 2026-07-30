@@ -21,20 +21,23 @@ interface TelegramBatchReviewIssue {
 }
 
 const REPLIES: Record<ReplyKind, string[]> = {
+    // Confirmações de chegada: UMA linha. O emoji do prefixo já diz o que
+    // aconteceu ("Chegada registrada." depois do ✅ era eco), e o que precisa de
+    // explicação vem nos hints de sendSuccessReply, sem repetir o corpo.
     arrival_recorded: [
-        "Chegada registrada.\n{name} assumiu {target} às {time}.\nQuadro atualizado.",
+        "{name} assumiu {target} às {time}.",
     ],
     arrival_p_recorded: [
-        "Chegada em P registrada.\n{name} assumiu {target} às {time}.\nEssa cobertura vale para este plantão e o próximo.",
+        "{name} assumiu {target} às {time} — cobertura *P*: vale este plantão e o próximo.",
     ],
     half_shift_assumed: [
-        "Supus que você está no meio plantão da tarde em {target}.\n{name} está no quadro desde {time} e vou encerrar automaticamente às 17:00.\nNo pagamento, isso entra como MEIO.",
+        "Meio plantão da tarde em {target}: {name} no quadro desde {time}, encerro automático às 17:00 (pagamento = MEIO).",
     ],
     continuation_recorded: [
-        "Continuidade registrada.\n{name} segue em {target} desde {time}.\nMantive a chegada original e só estendi a cobertura.",
+        "{name} continua em {target} desde {time} — chegada original mantida, sem atraso.",
     ],
     reassignment_recorded: [
-        "Remanejamento registrado.\n{name} agora está em {target} desde {time}.\nOcupação anterior encerrada automaticamente.",
+        "{name} agora em {target}, desde {time} — ocupação anterior encerrada.",
     ],
     departure_recorded: [
         "Saída registrada: {name} deixou {target} às {time}.",

@@ -2172,8 +2172,10 @@ test("pickTelegramReply uses dedicated wording for explicit P arrival", () => {
     });
 
     assert.match(reply, /^🔁/u);
-    assert.match(reply, /chegada em P|entrada em P|tudo certo com o P|P registrado/i);
+    assert.match(reply, /cobertura \*P\*|chegada em P|entrada em P|P registrado/i);
     assert.match(reply, /próximo|seguinte/i);
+    // Confirmações de chegada cabem em 1 linha (eram 3).
+    assert.equal(reply.split("\n").length, 1);
 });
 
 test("pickTelegramReply describes continuation without resetting arrival", () => {
@@ -2196,9 +2198,11 @@ test("pickTelegramReply renders half-shift assumption with dedicated emoji and w
     });
 
     assert.match(reply, /^☀️/u);
-    assert.match(reply, /supus que você está no meio plantão da tarde/i);
+    assert.match(reply, /meio plantão da tarde/i);
     assert.match(reply, /MEIO/i);
     assert.match(reply, /17:00/);
+    // Confirmações de chegada cabem em 1 linha (eram 3).
+    assert.equal(reply.split("\n").length, 1);
 });
 
 test("resolveTelegramSuccessReplyKind separates arrival, P arrival and continuation", () => {
@@ -3149,7 +3153,7 @@ test("buildTelegramContinuationSourceHint explicita troca de destino durante con
             targetCode: "2153",
             isContinuationReply: true,
         }),
-        "\n\n🔁 Mudanca confirmada: *PM40* → *2153* mantendo a mesma continuidade.",
+        "\n🔁 Mudanca confirmada: *PM40* → *2153* mantendo a mesma continuidade.",
     );
 
     assert.equal(

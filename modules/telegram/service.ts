@@ -45,6 +45,7 @@ import { applyBankHoursBalanceOverride, syncBankHoursByContinuityGroup } from "@
 import { extractDoctorAliases, extractDoctorPreferredOperationalRole, formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
 import { checklistHintForConfirmation, fetchChecklistKeyHint } from "@/modules/telegram/checklist-key";
+import { buildUpaRestrictionsCommandReply, fetchUpaRestrictions, upaRestrictionsHintForConfirmation } from "@/modules/telegram/upa-restrictions";
 import {
     createDoctorDirectoryEntry,
     listDoctorsByPreferredOperationalRole,
@@ -898,7 +899,7 @@ export function buildTelegramContinuationSourceHint(params: {
         return "";
     }
 
-    return `\n\n🔁 Mudanca confirmada: *${sourceCode}* → *${targetCode}* mantendo a mesma continuidade.`;
+    return `\n🔁 Mudanca confirmada: *${sourceCode}* → *${targetCode}* mantendo a mesma continuidade.`;
 }
 
 export function resolveTelegramShadowFlag(parsed: Pick<OperationalParsedEntry, "isDeparture" | "isShadow">, messageText: string) {
@@ -1844,7 +1845,7 @@ export function buildForcedTakeoverHint(params: {
     if (!params.displacedDoctorName) return "";
     // 🔁 (remanejo/troca) no lugar do 🚨 *ATENÇÃO* e frase sem particípio flexionado
     // ("foi retirado" não funciona para todo nome) — auditoria §2 e §3.1#18.
-    return `\n\n🔁 Retirei *${params.displacedDoctorName}* de *${params.baseCode}* automaticamente para você assumir este posto.`;
+    return `\n🔁 Retirei *${escapeTelegramMarkdown(params.displacedDoctorName)}* de *${escapeTelegramMarkdown(params.baseCode)}* automaticamente para você assumir este posto.`;
 }
 
 export function shouldForceTelegramTakeoverOnContinuationConflict(params: {
@@ -2349,7 +2350,9 @@ function buildApproximateMatchHint(params: {
         return "";
     }
 
-    return `\nSe eu associei \"${params.doctorQuery}\" a ${params.doctorName} e não era essa pessoa, me corrija com o nome completo.`;
+    // doctorQuery é texto cru do plantonista — escapa, senão um `*` solto quebra
+    // o Markdown do balão inteiro de chegada.
+    return `\nSe eu associei "${escapeTelegramMarkdown(params.doctorQuery)}" a ${escapeTelegramMarkdown(params.doctorName)} e não era essa pessoa, me corrija com o nome completo.`;
 }
 
 async function prepareTelegramBatchEntries(message: TelegramUpdate["message"]) {
@@ -5782,7 +5785,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "▸ Emenda (segue no posto): `Vagner Costa continuo PM04`",
             "",
             "Sempre nome *e* sobrenome + local + turno (SD, SN ou P) na mesma mensagem.",
-            "Refeição: /almoco ou /jantar · Todos os comandos: /comandos",
+            "Refeição: /almoco ou /jantar · UPAs restritas: /upas · Todos: /comandos",
         ];
 
         if (helpIsChief) {
@@ -5806,6 +5809,24 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         });
         await sendTelegramHelpMessage(message.chat.id, helpText, message.message_id);
         return { ok: true, help: true };
+    }
+
+    // /upas — UPAs restritas pela chefia (fonte: painel /tabela). Aberto a
+    // qualquer um: é informação de conduta, não de gestão.
+    if (normalizedText === "/upas") {
+        const entries = await fetchUpaRestrictions();
+        await markTelegramProcessed(logId, {
+            status: "accepted",
+            parsedAction: "upa_restrictions_command",
+        });
+        await sendMessage(
+            message.chat.id,
+            buildUpaRestrictionsCommandReply(entries),
+            message.message_id,
+            undefined,
+            { parseMode: "Markdown" },
+        );
+        return { ok: true, ignored: true };
     }
 
     if (normalizedText === "/comandos") {
@@ -9507,10 +9528,14 @@ async function sendSuccessReply(
     const useArrivalRuleCopy = Boolean(messageReferenceAt)
         && !piamAutoAllocated
         && (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded");
+    // Markdown ligado (com escape dos textos livres): sem parse_mode os `*` dos
+    // hints apareciam crus no balão de chegada — era metade da ilegibilidade.
+    const safeName = escapeTelegramMarkdown(doctorName);
+    const safeTarget = escapeTelegramMarkdown(parsed.baseCode ?? "plantao");
     const text = useArrivalRuleCopy
         ? buildArrivalRuleReply({
-            name: doctorName,
-            base: parsed.baseCode ?? "plantao",
+            name: safeName,
+            base: safeTarget,
             messageReferenceAt: messageReferenceAt as Date,
             declaredArrivalTime,
             isPcoverage: replyKind === "arrival_p_recorded",
@@ -9519,18 +9544,20 @@ async function sendSuccessReply(
             replyKind,
             seed,
             {
-                name: doctorName,
-                target: parsed.baseCode ?? "plantao",
+                name: safeName,
+                target: safeTarget,
                 time,
             },
         );
 
+    // Remanejamento e continuidade já dizem "chegada original mantida, sem
+    // atraso" no corpo — o hint de horário aqui só duplicava (auditoria de UX).
     let timeContextHint = "";
-    if (reassignedFrom) {
-        timeContextHint = `\n\n⏱ Mantido o horário original de chegada em *${time}* para banco de horas e prioridades.`;
-    } else if (replyKind === "continuation_recorded" || forceContinuation) {
-        timeContextHint = `\n\n🔗 Continuação detectada — computado desde *${time}* (turno anterior), sem atraso.`;
-    } else if ((replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded") && !useArrivalRuleCopy) {
+    if (!reassignedFrom
+        && replyKind !== "continuation_recorded"
+        && !forceContinuation
+        && (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded")
+        && !useArrivalRuleCopy) {
         // Resolve the TARGET shift, not the clock-based current shift.
         // Pre-shift windows: 05:00–06:59 → target SD; 17:00–18:59 → target SN.
         // Explicit shiftType from the parser always overrides clock inference.
@@ -9552,34 +9579,38 @@ async function sendSuccessReply(
         const delayMin = Math.round(delayMs / 60000);
         if (delayMin > 0) {
             const target = parsed.baseCode ?? "RAMAL/BASE";
-            timeContextHint = `\n\n⏱ ${delayMin}min após o início do turno (${shiftStartTime}) — se é continuação do plantão anterior, responda "continuando ${target}".`;
+            timeContextHint = `\n⏱ ${delayMin}min após as ${shiftStartTime} — se é continuação, responda "continuando ${target}".`;
         }
     }
 
     const resolvedShift = effectiveShiftType ?? parsed.shiftType;
     // arrival_p_recorded (e o pNote da regra de chegada) já explicam o P no corpo do
     // balão — repetir "P (plantão 24h)" aqui era a frase duplicada no ✅ (auditoria §3.1#19).
-    const shiftLabelFull = resolvedShift === "SD" ? "SD (diurno)" : resolvedShift === "SN" ? "SN (noturno)" : "P (plantão 24h)";
+    // ☀️/🌙 substituem o "(diurno)"/"(noturno)" escrito: mesmo significado, e é o
+    // vocabulário visual já definido em replies.ts.
+    const shiftIcon = resolvedShift === "SD" ? "☀️" : resolvedShift === "SN" ? "🌙" : "🔁";
     // Turno explícito na mensagem: só confirma. Turno inferido: confirma e abre
     // espaço para o médico corrigir respondendo SD/SN/P.
     const shiftHint = resolvedShift && replyKind !== "arrival_p_recorded"
         ? parsed.shiftType
-            ? `\nTurno: *${shiftLabelFull}*`
-            : `\nTurno: *${shiftLabelFull}* — se for outro, responda SD, SN ou P.`
+            ? `\n${shiftIcon} Turno *${resolvedShift}*`
+            : `\n${shiftIcon} Turno *${resolvedShift}* — outro? responda SD, SN ou P.`
         : "";
 
     // A variante half_shift_assumed já explica o meio plantão no corpo do balão —
     // sem esta guarda o hint duplicava a mesma informação (auditoria §3.1#14).
     const halfShiftHint = assumedHalfShift && replyKind !== "half_shift_assumed"
-        ? "\n\n🟠 Tipo de cobertura: *Meio Plantão da Tarde* (até 17:00)."
+        ? "\n🟠 *Meio Plantão da Tarde* (até 17:00)."
         : "";
 
     const reactivationHint = autoReactivated
-        ? `\n\n🔄 ${parsed.sector === "REGULATION" ? "Ramal" : "Base"} *${parsed.baseCode}* estava desativad${parsed.sector === "REGULATION" ? "o" : "a"} — reativad${parsed.sector === "REGULATION" ? "o" : "a"} automaticamente com a chegada.`
+        ? `\n🔄 *${safeTarget}* estava desativad${parsed.sector === "REGULATION" ? "o" : "a"} — reativei com a sua chegada.`
         : "";
 
+    // Uma linha só: o horário original preservado é a informação que importa do
+    // remanejamento (antes vinha repetida num segundo hint de horário).
     const reassignmentHint = reassignedFrom
-        ? `\n\n🔀 Remanejamento: *${reassignedFrom}* → *${parsed.baseCode}* (chegada original mantida, sem atraso).`
+        ? `\n🔀 Remanejado *${escapeTelegramMarkdown(reassignedFrom)}* → *${safeTarget}* — chegada original *${time}* mantida, sem atraso.`
         : "";
     const forcedTakeoverHint = buildForcedTakeoverHint({
         displacedDoctorName,
@@ -9596,29 +9627,32 @@ async function sendSuccessReply(
     // confirmação + turno + chave do checklist (auditoria de UX 2026-07-17).
     const arrivalHint = "";
     const shadowHint = parsed.isShadow && !parsed.isDeparture
-        ? "\n\n🫥 Cobertura marcada como *sombra*. Titular atual mantido no quadro."
+        ? "\n🫥 Cobertura *sombra* — titular atual mantido no quadro."
         : "";
     const piamHint = piamAutoAllocated
         ? (() => {
-            const turnoLabel = (effectiveShiftType ?? parsed.shiftType) === "SN"
-                ? "noturno"
-                : (effectiveShiftType ?? parsed.shiftType) === "SD"
-                    ? "diurno"
-                    : null;
-            const turnoSuffix = turnoLabel ? ` do turno *${turnoLabel}*` : " do turno";
             const overrideSuffix = piamOriginalCode && piamOriginalCode !== "PIAM"
-                ? ` (em vez de ${piamOriginalCode})`
+                ? ` (em vez de ${escapeTelegramMarkdown(piamOriginalCode)})`
                 : "";
-            return `\n\n🩺 Alocado como *PIAM*${turnoSuffix}${overrideSuffix}.`;
+            return `\n🩺 Alocado como *PIAM*${overrideSuffix}.`;
         })()
         : "";
     const longShiftHint = extendedLongShift
-        ? "\n\n⏰ Entendi que você está *emendando mais um turno* — plantão prolongado (*~36h*), já que estava de plantão nos dois turnos anteriores. A cobertura segue estendida. Se não for o caso, avise para corrigir."
+        ? "\n⏰ Plantão prolongado (*~36h*): entendi que você emendou mais um turno. Se não for, avise."
         : "";
     // Chegada em base de intervenção (USA): anexa a chave do dia do checklist
     // (checklist.mnrs.com.br). Fail-soft — sem config/serviço, segue sem a chave.
     const checklistKeyHint = await checklistHintForConfirmation(parsed, replyKind);
-    await sendMessage(chatId, `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}${checklistKeyHint}`, replyToMessageId);
+    // UPAs restritas pela chefia (fonte: /tabela). Só na chegada de quem assume
+    // ramal de regulação — é quem decide para onde o paciente vai. Fail-soft.
+    const upaRestrictionsHint = await upaRestrictionsHintForConfirmation(parsed, replyKind);
+    await sendMessage(
+        chatId,
+        `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}${checklistKeyHint}${upaRestrictionsHint}`,
+        replyToMessageId,
+        undefined,
+        { parseMode: "Markdown" },
+    );
 }
 
 function formatTelegramReplyTime(value: Date) {
@@ -9660,24 +9694,21 @@ export function buildArrivalRuleReply(params: {
     const declared = params.declaredArrivalTime?.trim() || null;
     const hasDeclared = Boolean(declared) && declared !== msgTime;
     const pNote = params.isPcoverage
-        ? "\n🔁 Cobertura P: vale para este plantão e o próximo."
+        ? "\n🔁 Cobertura *P*: vale este plantão e o próximo."
         : "";
 
     if (phase === "phase1") {
-        if (hasDeclared) {
-            return `Oi, ${params.name} 👋\n`
-                + `Anotei sua chegada na ${params.base}.\n`
-                + `⚠️ A partir de amanhã vamos considerar a HORA DO AVISO, não a hora que você diz.\n`
-                + `Ficou: ${params.name} na ${params.base} desde ${declared} (sua msg foi ${msgTime})${pNote}`;
-        }
-        return `Oi, ${params.name} 👋\n`
-            + `Anotei sua chegada na ${params.base} desde ${msgTime}.\n`
-            + `⚠️ A partir de amanhã vamos considerar a HORA DO AVISO, não a hora que você diz.${pNote}`;
+        // Legado: só alcançável antes do ARRIVAL_TIME_CUTOFF. Mantido curto —
+        // o aviso da mudança de regra cabe em uma linha.
+        const registrada = hasDeclared ? declared : msgTime;
+        const msgNote = hasDeclared ? ` (msg ${msgTime})` : "";
+        return `✅ ${params.name} na ${params.base} desde ${registrada}${msgNote}\n`
+            + `⚠️ A partir de amanhã vale a HORA DO AVISO, não a hora informada.${pNote}`;
     }
 
     // FASE 2 — confirmação direta, sem sermão: vale a hora do aviso e ponto.
     const ignoredNote = hasDeclared
-        ? `\n⏱ Vale a hora do aviso (você citou ${declared}).`
+        ? ` — vale a hora do aviso (você citou ${declared})`
         : "";
     return `✅ ${params.name} na ${params.base} desde ${msgTime}${ignoredNote}${pNote}`;
 }
