@@ -5,6 +5,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { createAdminExtraShift, removeAdminExtraShift } from "@/services/admin-extra-shifts.service";
+import { syncContractLedgerForMonth } from "@/services/contract-ledger.service";
 
 const payloadSchema = z.discriminatedUnion("action", [
     z.object({
@@ -65,6 +66,14 @@ export async function POST(request: NextRequest) {
                 },
             });
 
+            // O extra muda o total do mês DEPOIS da atestação: o razão precisa
+            // acompanhar, senão o saldo desencontra do fechamento.
+            await syncContractLedgerForMonth({
+                doctorId: extra.doctorId,
+                monthKey: extra.operationalDate.slice(0, 7),
+                actorUserId: session.user.id,
+            });
+
             revalidatePath("/admin/payment-closing");
             return NextResponse.json({ extra });
         }
@@ -72,6 +81,14 @@ export async function POST(request: NextRequest) {
         const result = await removeAdminExtraShift({ id: parsed.data.id });
         if (!result.removed) {
             return NextResponse.json({ error: "Plantao extra nao encontrado." }, { status: 404 });
+        }
+
+        if (result.doctorId && result.operationalDate) {
+            await syncContractLedgerForMonth({
+                doctorId: result.doctorId,
+                monthKey: result.operationalDate.slice(0, 7),
+                actorUserId: session.user.id,
+            });
         }
 
         await getDb().insert(auditLogs).values({

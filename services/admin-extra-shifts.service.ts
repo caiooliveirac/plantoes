@@ -102,14 +102,27 @@ export async function createAdminExtraShift(params: {
 }
 
 /** Remove um plantão extra criado pelo admin. */
-export async function removeAdminExtraShift(params: { id: string }): Promise<{ removed: boolean }> {
+export async function removeAdminExtraShift(params: { id: string }): Promise<{
+    removed: boolean;
+    /** Quem e quando — o razão do saldo contratual precisa saber qual mês reconciliar. */
+    doctorId: string | null;
+    operationalDate: string | null;
+}> {
     const db = getDb();
     const deleted = await db
         .delete(adminExtraShifts)
         .where(eq(adminExtraShifts.id, params.id))
-        .returning({ id: adminExtraShifts.id });
+        .returning({
+            id: adminExtraShifts.id,
+            doctorId: adminExtraShifts.doctorId,
+            operationalDate: adminExtraShifts.operationalDate,
+        });
 
-    return { removed: deleted.length > 0 };
+    return {
+        removed: deleted.length > 0,
+        doctorId: deleted[0]?.doctorId ?? null,
+        operationalDate: deleted[0]?.operationalDate ?? null,
+    };
 }
 
 /**

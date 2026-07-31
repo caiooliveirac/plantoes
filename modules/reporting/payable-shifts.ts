@@ -250,6 +250,8 @@ export interface ChiefPayableDoctorRow {
     bankHoursRecentMinutes?: number | null;
     /** Acerto de banco de horas lançado neste mês (bônus/punição), se houver. */
     bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
+    /** Contratos ativos do médico com saldo e métricas. Mais de um = seletor. */
+    contractBalances?: ContractBalanceSummary[];
     /** Plantões cumpridos em USA (intervenção/ambulância) no mês — só linhas com unidade positiva. */
     usaShiftCount: number;
     /** Plantões cumpridos em CRU (regulação/ramais) no mês — só linhas com unidade positiva. */
@@ -266,6 +268,47 @@ export interface ChiefPayableBankHoursSettlement {
 }
 
 /** Dados financeiros por médico injetados no board pelo serviço (fora do cálculo de plantões). */
+/**
+ * Saldo contratual do médico para o bloco do fechamento (Fase 4).
+ *
+ * `metricsInput` viaja serializado de propósito: o cliente reconstrói as datas e
+ * chama o MESMO módulo puro do servidor (lib/contracts/balance-metrics.ts) a
+ * cada plantão marcado. Sem round-trip por tecla, e sem uma segunda
+ * implementação da conta no front — que é como os dois números divergem.
+ */
+export interface ContractBalanceSummary {
+    contractId: string;
+    contractNumber: string;
+    cycleStart: string;
+    cycleEnd: string;
+    ceilingCents: number | null;
+    balanceCents: number;
+    consumedCents: number;
+    consumedPct: number | null;
+    elapsedPct: number;
+    riskLevel: "safe" | "watch" | "warning" | "critical" | "depleted";
+    hasReliableBurnRate: boolean;
+    projectedDepletionDate: string | null;
+    healthyMonthlyBudgetCents: number;
+    monthlyWeekdayShifts: number;
+    remainingWeekdayShifts: number;
+    /** Razão vazio: o coordenador ainda precisa informar o saldo de abertura. */
+    awaitingOpeningBalance: boolean;
+    metricsInput: {
+        ceilingCents: number | null;
+        balanceCents: number;
+        observedConsumptionCents: number;
+        observedSince: string;
+        cycleStart: string;
+        cycleEnd: string;
+        asOf: string;
+        weekdayRateCents: number;
+        weekendRateCents: number;
+        weekdayShifts: number;
+        weekendShifts: number;
+    };
+}
+
 export interface DoctorFinancialExtras {
     invoiceNumber?: string | null;
     paymentProcessNumber?: string | null;
@@ -276,6 +319,8 @@ export interface DoctorFinancialExtras {
     bankHoursOldMinutes?: number | null;
     bankHoursRecentMinutes?: number | null;
     bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
+    /** Contratos ativos do médico. Mais de um = seletor no bloco de saldo. */
+    contractBalances?: ContractBalanceSummary[];
 }
 
 export interface ChiefPayableBoardModel {
@@ -939,6 +984,7 @@ export function buildChiefPayableBoard(params: {
             contractCeilingBrl: params.doctorFinancials?.[doctorId]?.contractCeilingBrl ?? null,
             contractSeedMonth: params.doctorFinancials?.[doctorId]?.contractSeedMonth ?? null,
             contractBalanceBrl: params.doctorFinancials?.[doctorId]?.contractBalanceBrl ?? null,
+            contractBalances: params.doctorFinancials?.[doctorId]?.contractBalances ?? [],
             bankHoursMinutes: params.doctorFinancials?.[doctorId]?.bankHoursMinutes ?? null,
             bankHoursOldMinutes: params.doctorFinancials?.[doctorId]?.bankHoursOldMinutes ?? null,
             bankHoursRecentMinutes: params.doctorFinancials?.[doctorId]?.bankHoursRecentMinutes ?? null,
