@@ -24,7 +24,14 @@ export async function POST(request: NextRequest) {
     }
 
     try {
+        const startedAt = Date.now();
+        // lagMs = quanto tempo o update levou do Telegram até chegar aqui; procMs = o
+        // que é nosso. Separa "o bot está lento" de "a entrega está lenta".
+        const sentAt = update?.message?.date ? update.message.date * 1000 : null;
         const result = await processTelegramUpdate(update);
+        // Só a primeira palavra: o resto do texto carrega codinome/nome e não vai para log.
+        const command = typeof update?.message?.text === "string" ? update.message.text.trim().split(/\s+/)[0].slice(0, 24) : "";
+        console.log(`[tg-hook] procMs=${Date.now() - startedAt} lagMs=${sentAt ? startedAt - sentAt : "?"} cmd=${JSON.stringify(command)}`);
         return NextResponse.json({ ok: true, result });
     } catch (error) {
         return NextResponse.json(

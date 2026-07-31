@@ -85,6 +85,7 @@ async function callApi<T>(method: string, body: Record<string, unknown>) {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const startedAt = Date.now();
         try {
             const response = await fetch(`${getBaseUrl()}/${method}`, {
                 method: "POST",
@@ -94,6 +95,9 @@ async function callApi<T>(method: string, body: Record<string, unknown>) {
             });
 
             const data = await response.json();
+            // Cada chamada à API do Telegram custa um RTT; medir é a única forma de
+            // saber se a lentidão percebida é nossa ou do caminho até o Telegram.
+            console.log(`[tg-api] ${method} ${Date.now() - startedAt}ms attempt=${attempt}`);
             if (!data.ok) {
                 // Erro de aplicacao do Telegram (chat invalido, bloqueado...) nao e
                 // transitorio: lanca e NAO retenta.
@@ -103,6 +107,7 @@ async function callApi<T>(method: string, body: Record<string, unknown>) {
             return data.result as T;
         } catch (error) {
             lastError = error;
+            console.log(`[tg-api] ${method} FALHOU ${Date.now() - startedAt}ms attempt=${attempt}`);
             // So retenta falha de transporte (fetch failed / timeout). Erro de aplicacao
             // ("Telegram API ...") cai aqui mas nao e transitorio -> relanca na hora.
             const transient = error instanceof Error

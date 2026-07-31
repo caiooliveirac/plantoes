@@ -15,6 +15,7 @@ export interface RuntimeIdentity {
 }
 
 let cachedCommitSha: string | null = null;
+let cachedCommitShaLong: string | null = null;
 const bootLogKeys = new Set<string>();
 
 function resolveCommitSha() {
@@ -41,19 +42,27 @@ function resolveCommitSha() {
     }
 }
 
+// Cache igual ao do sha curto: sem ele, todo POST do webhook (e todo /api/health)
+// fazia um execSync de git, que bloqueia o event loop do processo inteiro.
 function resolveCommitShaLong() {
+    if (cachedCommitShaLong) {
+        return cachedCommitShaLong;
+    }
+
     const fromEnv = process.env.GIT_COMMIT_SHA_LONG?.trim();
     if (fromEnv) {
-        return fromEnv;
+        cachedCommitShaLong = fromEnv;
+        return cachedCommitShaLong;
     }
     try {
-        return execSync("git rev-parse HEAD", {
+        cachedCommitShaLong = execSync("git rev-parse HEAD", {
             cwd: process.cwd(),
             stdio: ["ignore", "pipe", "ignore"],
         }).toString().trim() || "unknown";
     } catch {
-        return "unknown";
+        cachedCommitShaLong = "unknown";
     }
+    return cachedCommitShaLong;
 }
 
 function resolveWorkingTreeClean(): boolean | "unknown" {
