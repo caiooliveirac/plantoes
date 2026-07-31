@@ -1089,6 +1089,33 @@ export async function applyManualRemoveAssignment(params: {
     const slotStart = new Date(board.startedAt);
     const db = getDb();
 
+    /**
+     * Remover UM slot não pode apagar os outros que a mesma ocupação cobre.
+     *
+     * Antes, a remoção zerava a ocupação (endedAt = actualEndedAt = startedAt) para
+     * garantir que o plantão não fosse recapturado em outro turno. Numa ocupação de
+     * 24h que cobre SD e SN, remover o SN levava o SD junto — plantão real sumindo do
+     * pagamento (caso Uenderson 05/07/2026 1363: fez 07:03→19:13, e ao remover o SN
+     * fantasma perdeu o SD que trabalhou).
+     *
+     * Quando o médico trabalhou ANTES do slot removido, a ocupação é recortada até o
+     * início desse slot: os turnos anteriores continuam pagos e o slot removido deixa
+     * de ser coberto. Só quando não sobra nada antes do slot é que a ocupação é zerada,
+     * como antes.
+     */
+    function resolveRemovalEnd(existing: { startedAt: Date; endedAt: Date | null; actualEndedAt: Date | null }) {
+        const workedBeforeSlot = existing.startedAt.getTime() < slotStart.getTime();
+        if (!workedBeforeSlot) {
+            return { endedAt: existing.startedAt, actualEndedAt: existing.startedAt, clearedWholeOccupancy: true };
+        }
+
+        const effectiveEnd = existing.actualEndedAt ?? existing.endedAt;
+        const trimmedEnd = effectiveEnd && effectiveEnd.getTime() < slotStart.getTime()
+            ? effectiveEnd
+            : slotStart;
+        return { endedAt: trimmedEnd, actualEndedAt: trimmedEnd, clearedWholeOccupancy: false };
+    }
+
     await db.transaction(async (tx) => {
         if (params.domain === "regulation") {
             const [existing] = await tx.select().from(regulationOccupancies)
@@ -1103,13 +1130,12 @@ export async function applyManualRemoveAssignment(params: {
                 await tx.delete(regulationOccupancies)
                     .where(eq(regulationOccupancies.id, existing.id));
             } else {
-                // Remocao no fechamento deve excluir o plantao do pagamento por
-                // completo (todos os slots), evitando recaptura em outro turno.
-                const clampedEnd = existing.startedAt;
+                const removal = resolveRemovalEnd(existing);
                 await tx.update(regulationOccupancies)
                     .set({
-                        endedAt: clampedEnd,
-                        actualEndedAt: clampedEnd,
+                        endedAt: removal.endedAt,
+                        actualEndedAt: removal.actualEndedAt,
+                        scheduledEndAt: removal.clearedWholeOccupancy ? existing.scheduledEndAt : slotStart,
                         notes: `${existing.notes ?? ""}\n[chefia] Remocao via fechamento de pagamento (${slotStart.toISOString()})`.trim(),
                         updatedByUserId: params.actorUserId,
                         updatedAt: new Date(),
@@ -1130,13 +1156,12 @@ export async function applyManualRemoveAssignment(params: {
                 await tx.delete(interventionOccupancies)
                     .where(eq(interventionOccupancies.id, existing.id));
             } else {
-                // Remocao no fechamento deve excluir o plantao do pagamento por
-                // completo (todos os slots), evitando recaptura em outro turno.
-                const clampedEnd = existing.startedAt;
+                const removal = resolveRemovalEnd(existing);
                 await tx.update(interventionOccupancies)
                     .set({
-                        endedAt: clampedEnd,
-                        actualEndedAt: clampedEnd,
+                        endedAt: removal.endedAt,
+                        actualEndedAt: removal.actualEndedAt,
+                        scheduledEndAt: removal.clearedWholeOccupancy ? existing.scheduledEndAt : slotStart,
                         notes: `${existing.notes ?? ""}\n[chefia] Remocao via fechamento de pagamento (${slotStart.toISOString()})`.trim(),
                         updatedByUserId: params.actorUserId,
                         updatedAt: new Date(),
