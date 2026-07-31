@@ -1807,3 +1807,130 @@ test("does not leak continuation/vou tokens into doctor name extraction", () => 
     assert.equal(parsed.baseCode, "PR03");
     assert.deepEqual(parsed.extractedNames, ["Vagner"]);
 });
+// Caso Ana Beatriz 31/07/2026: SN na regulação 2031 (30/07 18:26 → 31/07 07:10) e
+// "continua" na CZ50. O registro novo nascia com rótulo "P" e ganhava cobertura de 24h
+// (07:00 → 01/08 07:00), o que a fazia ser PAGA no SN do dia 31 sem ter trabalhado, e
+// travava a tag "Continua" no lugar do botão de retirar.
+//
+// O rótulo do bloco novo é o turno da chegada; a cobertura, 12h.
+test("continuidade em outro posto abre bloco de 12h, não 24h", () => {
+    const chegada = new Date("2026-07-31T07:10:24-03:00");
+    assert.equal(resolveArrivalShiftLabel(chegada), "SD");
+
+    const janela = inferInterventionCoverageWindow({
+        startedAt: chegada,
+        shiftLabel: resolveArrivalShiftLabel(chegada),
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janela.scheduledStartAt?.toISOString(), new Date("2026-07-31T07:00:00-03:00").toISOString());
+    assert.equal(janela.scheduledEndAt?.toISOString(), new Date("2026-07-31T19:00:00-03:00").toISOString());
+
+    // O que acontecia antes: rótulo "P" no mesmo registro esticava para 01/08 07:00.
+    const janelaAntiga = inferInterventionCoverageWindow({
+        startedAt: chegada,
+        shiftLabel: "P",
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janelaAntiga.scheduledEndAt?.toISOString(), new Date("2026-08-01T07:00:00-03:00").toISOString());
+});
+
+// Avisar continuidade pouco antes da virada tem de abrir o turno SEGUINTE, não repetir
+// o que está acabando: quem está no SD e avisa 18:50 que segue à noite abre o SN.
+test("continuidade avisada pouco antes da virada abre o turno seguinte", () => {
+    const aviso = new Date("2026-07-31T18:50:00-03:00");
+    assert.equal(resolveArrivalShiftLabel(aviso), "SN");
+
+    const janela = inferInterventionCoverageWindow({
+        startedAt: aviso,
+        shiftLabel: resolveArrivalShiftLabel(aviso),
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janela.scheduledStartAt?.toISOString(), new Date("2026-07-31T19:00:00-03:00").toISOString());
+    assert.equal(janela.scheduledEndAt?.toISOString(), new Date("2026-08-01T07:00:00-03:00").toISOString());
+});
+
+// A regra que o "continua" precisa respeitar: comprometer o turno SEGUINTE só quando
+// dito perto da virada. Dito ao chegar ou no meio do plantão, ele apenas amarra o
+// plantão ao anterior — não estende cobertura por mais 12h.
+test("continua no início ou no meio do turno não referencia a virada seguinte", () => {
+    // Uenderson 05/07/2026: "continuando 1363" às 07:03, ao CHEGAR para o SD.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T07:03:38-03:00")).toISOString(),
+        new Date("2026-07-05T07:00:00-03:00").toISOString(),
+    );
+    // Meio da tarde: antes bastava estar "mais perto" das 19:00 para comprometer a noite.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T13:30:00-03:00")).toISOString(),
+        new Date("2026-07-05T07:00:00-03:00").toISOString(),
+    );
+    // Meio da madrugada, no SN: referencia o início do próprio turno.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T01:00:00-03:00")).toISOString(),
+        new Date("2026-07-04T19:00:00-03:00").toISOString(),
+    );
+});
+
+test("continua perto da virada segue referenciando o turno seguinte", () => {
+    // Relevo real: avisa quando o rendedor está a caminho.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T18:40:00-03:00")).toISOString(),
+        new Date("2026-07-05T19:00:00-03:00").toISOString(),
+    );
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T17:05:00-03:00")).toISOString(),
+        new Date("2026-07-05T19:00:00-03:00").toISOString(),
+    );
+    // Uenderson 06:41 (jul/2026), avisando pouco antes da virada das 07:00.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-18T06:41:00-03:00")).toISOString(),
+        new Date("2026-07-18T07:00:00-03:00").toISOString(),
+    );
+});
+
+// Cenário Ana Beatriz: passa a noite na regulação (2031, SN), sai de manhã e avisa que
+// continua na CZ50. O aviso é dito às 07:10 — início do SD, longe da virada das 19:00.
+// Composição exata das duas decisões que o fluxo do bot faz nesse caso:
+//   1) rótulo do registro novo  -> resolveArrivalShiftLabel(chegada)
+//   2) fim da cobertura         -> inferInterventionCoverageWindow(rótulo)
+// e, para a continuidade no MESMO posto, resolveInterventionContinuationScheduledEndAt.
+test("Ana Beatriz: continuidade avisada às 07:10 cobre 12h, não invade a noite", () => {
+    const aviso = new Date("2026-07-31T07:10:24-03:00");
+
+    // 1) O registro novo na CZ50 nasce como SD — nunca P.
+    const rotulo = resolveArrivalShiftLabel(aviso);
+    assert.equal(rotulo, "SD");
+
+    // 2) A cobertura termina às 19:00 do mesmo dia.
+    const janela = inferInterventionCoverageWindow({
+        startedAt: aviso,
+        shiftLabel: rotulo,
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janela.scheduledStartAt?.toISOString(), new Date("2026-07-31T07:00:00-03:00").toISOString());
+    assert.equal(janela.scheduledEndAt?.toISOString(), new Date("2026-07-31T19:00:00-03:00").toISOString());
+    const horas = (janela.scheduledEndAt!.getTime() - janela.scheduledStartAt!.getTime()) / 3600_000;
+    assert.equal(horas, 12);
+
+    // 3) O outro caminho (continuidade no MESMO posto) também para às 19:00.
+    assert.equal(
+        resolveInterventionContinuationScheduledEndAt({
+            existingScheduledEndAt: null,
+            continuationAt: aviso,
+        }).toISOString(),
+        new Date("2026-07-31T19:00:00-03:00").toISOString(),
+    );
+
+    // 4) E o mesmo vale na regulação, caso ela continue num ramal em vez de base.
+    const janelaReg = inferRegulationCoverageWindow({
+        startedAt: aviso,
+        shiftLabel: rotulo,
+        postCode: null,
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janelaReg.scheduledEndAt?.toISOString(), new Date("2026-07-31T19:15:00-03:00").toISOString());
+});
