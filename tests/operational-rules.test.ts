@@ -1851,3 +1851,41 @@ test("continuidade avisada pouco antes da virada abre o turno seguinte", () => {
     assert.equal(janela.scheduledStartAt?.toISOString(), new Date("2026-07-31T19:00:00-03:00").toISOString());
     assert.equal(janela.scheduledEndAt?.toISOString(), new Date("2026-08-01T07:00:00-03:00").toISOString());
 });
+
+// A regra que o "continua" precisa respeitar: comprometer o turno SEGUINTE só quando
+// dito perto da virada. Dito ao chegar ou no meio do plantão, ele apenas amarra o
+// plantão ao anterior — não estende cobertura por mais 12h.
+test("continua no início ou no meio do turno não referencia a virada seguinte", () => {
+    // Uenderson 05/07/2026: "continuando 1363" às 07:03, ao CHEGAR para o SD.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T07:03:38-03:00")).toISOString(),
+        new Date("2026-07-05T07:00:00-03:00").toISOString(),
+    );
+    // Meio da tarde: antes bastava estar "mais perto" das 19:00 para comprometer a noite.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T13:30:00-03:00")).toISOString(),
+        new Date("2026-07-05T07:00:00-03:00").toISOString(),
+    );
+    // Meio da madrugada, no SN: referencia o início do próprio turno.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T01:00:00-03:00")).toISOString(),
+        new Date("2026-07-04T19:00:00-03:00").toISOString(),
+    );
+});
+
+test("continua perto da virada segue referenciando o turno seguinte", () => {
+    // Relevo real: avisa quando o rendedor está a caminho.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T18:40:00-03:00")).toISOString(),
+        new Date("2026-07-05T19:00:00-03:00").toISOString(),
+    );
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-05T17:05:00-03:00")).toISOString(),
+        new Date("2026-07-05T19:00:00-03:00").toISOString(),
+    );
+    // Uenderson 06:41 (jul/2026), avisando pouco antes da virada das 07:00.
+    assert.equal(
+        resolveContinuationReferenceBoundary(new Date("2026-07-18T06:41:00-03:00")).toISOString(),
+        new Date("2026-07-18T07:00:00-03:00").toISOString(),
+    );
+});

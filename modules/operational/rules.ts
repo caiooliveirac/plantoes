@@ -243,17 +243,32 @@ export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: stri
 //     em modules/telegram/service.ts) para um humano confirmar/corrigir.
 
 /**
- * A virada de turno que um aviso de continuidade referencia: a mais próxima da
- * mensagem (empate → a anterior). Toda a semântica de continuidade (extensão de
- * cobertura, vínculo com plantão anterior, âncora) deriva desta fronteira, para
- * que o resultado NÃO dependa de o médico avisar antes ou depois da virada
- * (casos Uenderson 06:41/08:12 e Luiz Alvarez 10:15, jul/2026).
+ * Quão perto da virada o aviso precisa ser dito para valer como promessa do turno
+ * SEGUINTE. Fora dessa janela, "continua" só amarra o plantão ao anterior.
+ * 2h cobre o relevo real (o médico avisa quando o rendedor está a caminho) sem
+ * deixar um aviso de meio de plantão comprometer as 12h seguintes.
+ */
+const CONTINUATION_NEXT_BOUNDARY_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * A virada de turno que um aviso de continuidade referencia: a seguinte quando o
+ * aviso é dito perto dela, senão a do turno corrente. Toda a semântica de
+ * continuidade (extensão de cobertura, vínculo com plantão anterior, âncora)
+ * deriva desta fronteira, para que o resultado NÃO dependa de o médico avisar
+ * antes ou depois da virada (casos Uenderson 06:41/08:12 e Luiz Alvarez 10:15,
+ * jul/2026).
  */
 export function resolveContinuationReferenceBoundary(eventAt: Date): Date {
     const window = resolveOperationalShiftWindow(eventAt);
-    const toPreviousMs = eventAt.getTime() - window.startedAt.getTime();
     const toNextMs = window.nextBoundaryAt.getTime() - eventAt.getTime();
-    return toNextMs < toPreviousMs ? window.nextBoundaryAt : window.startedAt;
+    // Só é promessa do PRÓXIMO turno quando dita perto da virada. Um "continuando"
+    // falado ao chegar, ou no meio do plantão, diz de onde o médico VEM — comprometer
+    // o turno seguinte com ele estende a cobertura por 12h que ninguém prometeu
+    // (caso Uenderson 05/07/2026: "continuando 1363" às 07:03, ao chegar).
+    if (toNextMs <= CONTINUATION_NEXT_BOUNDARY_WINDOW_MS) {
+        return window.nextBoundaryAt;
+    }
+    return window.startedAt;
 }
 
 /**
