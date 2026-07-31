@@ -125,3 +125,63 @@ test("buildContinuityCarrierLookup points every member to the first operational 
         memberCount: 2,
     });
 });
+// Caso real (Ana Beatriz, 16→17/07/2026): entrou de noite na regulação 2031, avisou
+// continuidade e emendou o dia na base CZ50. O registro da ponta nasceu com "P"
+// herdado, e a extensão do P jogava o previsto para 18/07 07:00 — 12h depois da saída.
+// Resultado: a permanência além das 19:00 sumia e o crédito em dobro não saía.
+test("P herdado na ponta da continuidade não estica o previsto além da saída", () => {
+    const span = buildContinuityBankHoursSpan([
+        {
+            occupancyId: "reg-2031",
+            domain: "regulation",
+            doctorId: "ana",
+            continuityGroupId: "cg-p",
+            startedAt: new Date("2026-07-16T19:06:48-03:00"),
+            endedAt: new Date("2026-07-17T07:26:36-03:00"),
+            actualEndedAt: new Date("2026-07-17T19:15:00-03:00"),
+            departureConfirmedAt: new Date("2026-07-17T19:38:41-03:00"),
+            scheduledStartAt: new Date("2026-07-16T19:00:00-03:00"),
+            scheduledEndAt: new Date("2026-07-17T19:15:00-03:00"),
+            shiftLabel: "P",
+        },
+        {
+            occupancyId: "int-cz50",
+            domain: "intervention",
+            doctorId: "ana",
+            continuityGroupId: "cg-p",
+            startedAt: new Date("2026-07-17T07:47:38-03:00"),
+            endedAt: new Date("2026-07-17T19:12:30-03:00"),
+            actualEndedAt: new Date("2026-07-17T19:19:50-03:00"),
+            departureConfirmedAt: new Date("2026-07-17T19:38:41-03:00"),
+            scheduledStartAt: new Date("2026-07-17T07:00:00-03:00"),
+            scheduledEndAt: new Date("2026-07-18T07:00:00-03:00"),
+            shiftLabel: "P",
+        },
+    ]);
+
+    assert.equal(span.scheduledStartAt?.toISOString(), new Date("2026-07-16T19:00:00-03:00").toISOString());
+    assert.equal(span.scheduledEndAt?.toISOString(), new Date("2026-07-17T19:00:00-03:00").toISOString());
+    assert.equal(span.actualEndAt?.toISOString(), new Date("2026-07-17T19:19:50-03:00").toISOString());
+});
+
+// O contrário também precisa valer: quem de fato cumpriu o turno extra prometido pelo
+// "P" mantém a janela estendida (a saída na virada não pode virar hora extra).
+test("P cumprido até a virada seguinte mantém o previsto estendido", () => {
+    const span = buildContinuityBankHoursSpan([
+        {
+            occupancyId: "int-p-cumprido",
+            domain: "intervention",
+            doctorId: "doc-1",
+            continuityGroupId: "cg-ok",
+            startedAt: new Date("2026-07-16T19:00:00-03:00"),
+            endedAt: null,
+            actualEndedAt: new Date("2026-07-17T19:05:00-03:00"),
+            departureConfirmedAt: new Date("2026-07-17T19:30:00-03:00"),
+            scheduledStartAt: new Date("2026-07-16T19:00:00-03:00"),
+            scheduledEndAt: null,
+            shiftLabel: "P",
+        },
+    ]);
+
+    assert.equal(span.scheduledEndAt?.toISOString(), new Date("2026-07-17T19:00:00-03:00").toISOString());
+});

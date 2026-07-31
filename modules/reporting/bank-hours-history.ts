@@ -299,6 +299,7 @@ function resolveScheduledWindow(shift: RawBankHoursHistoryShift) {
         scheduledStartAt: shift.bankScheduledStartAt ?? shift.occupancyScheduledStartAt,
         scheduledEndAt: shift.bankScheduledEndAt ?? shift.occupancyScheduledEndAt,
         postCode: shift.domain === "regulation" ? shift.targetCode : null,
+        actualEndAt: shift.effectiveEndedAt,
     });
 
     return {
