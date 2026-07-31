@@ -1,23 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-    isTelegramPiamCommandText,
-    parseTelegramPiamCommand,
-} from "@/modules/telegram/piam-commands";
+    isTelegramRoleCommandText,
+    parseTelegramRoleCommand,
+} from "@/modules/telegram/role-commands";
 import { buildPiamAlreadyPresentReply, resolvePiamShiftBounds } from "@/modules/telegram/service";
 import { isRegulationShadowOccupancyNotes } from "@/modules/regulation/service";
 import { resolveDoctorPaymentProfile } from "@/modules/reporting/payable-shifts";
 
-test("parseTelegramPiamCommand recognizes assign by bare name", () => {
-    const parsed = parseTelegramPiamCommand("/piam Aline Cardoso");
-    assert.deepEqual(parsed, {
-        name: "piam_assign",
-        lookup: "Aline Cardoso",
-        rawBody: "Aline Cardoso",
-    });
+test("parseTelegramRoleCommand recognizes assign by bare name", () => {
+    const parsed = parseTelegramRoleCommand("/piam Aline Cardoso");
+    assert.equal(parsed?.action, "assign");
+    assert.equal(parsed?.config.role, "PIAM");
+    assert.equal(parsed?.rawBody, "Aline Cardoso");
+    if (parsed?.action === "assign") {
+        assert.equal(parsed.lookup, "Aline Cardoso");
+    }
 });
 
-test("parseTelegramPiamCommand recognizes remove variants", () => {
+test("parseTelegramRoleCommand recognizes remove variants", () => {
     for (const command of [
         "/piam remover Aline Cardoso",
         "/piam remove Aline Cardoso",
@@ -25,31 +26,49 @@ test("parseTelegramPiamCommand recognizes remove variants", () => {
         "/piam tirar Aline Cardoso",
         "/piam desmarcar Aline Cardoso",
     ]) {
-        const parsed = parseTelegramPiamCommand(command);
-        assert.equal(parsed?.name, "piam_unassign", `${command} should parse as unassign`);
-        if (parsed?.name === "piam_unassign") {
+        const parsed = parseTelegramRoleCommand(command);
+        assert.equal(parsed?.action, "unassign", `${command} should parse as unassign`);
+        if (parsed?.action === "unassign") {
             assert.equal(parsed.lookup, "Aline Cardoso");
         }
     }
 });
 
-test("parseTelegramPiamCommand handles listar variants", () => {
+test("parseTelegramRoleCommand handles listar variants", () => {
     for (const command of ["/piam listar", "/piam list", "/piam ls"]) {
-        const parsed = parseTelegramPiamCommand(command);
-        assert.equal(parsed?.name, "piam_list", `${command} should be a list command`);
+        const parsed = parseTelegramRoleCommand(command);
+        assert.equal(parsed?.action, "list", `${command} should be a list command`);
     }
 });
 
-test("parseTelegramPiamCommand returns null on empty body", () => {
-    assert.equal(parseTelegramPiamCommand("/piam"), null);
-    assert.equal(parseTelegramPiamCommand("/piam   "), null);
+test("parseTelegramRoleCommand returns null on empty body", () => {
+    assert.equal(parseTelegramRoleCommand("/piam"), null);
+    assert.equal(parseTelegramRoleCommand("/piam   "), null);
+    assert.equal(parseTelegramRoleCommand("/psiq"), null);
 });
 
-test("isTelegramPiamCommandText only matches the /piam command", () => {
-    assert.equal(isTelegramPiamCommandText("/piam Aline"), true);
-    assert.equal(isTelegramPiamCommandText("/piam@bot Aline"), true);
-    assert.equal(isTelegramPiamCommandText("Aline /piam"), false);
-    assert.equal(isTelegramPiamCommandText("/medico cadastrar Aline"), false);
+test("isTelegramRoleCommandText only matches /piam and /psiq", () => {
+    assert.equal(isTelegramRoleCommandText("/piam Aline"), true);
+    assert.equal(isTelegramRoleCommandText("/piam@bot Aline"), true);
+    assert.equal(isTelegramRoleCommandText("/psiq Larissa Osthues"), true);
+    assert.equal(isTelegramRoleCommandText("Aline /piam"), false);
+    assert.equal(isTelegramRoleCommandText("/medico cadastrar Aline"), false);
+});
+
+test("/psiq assigns the PSIQ role and keeps the same assign/unassign/list grammar", () => {
+    const assign = parseTelegramRoleCommand("/psiq Larissa Osthues");
+    assert.equal(assign?.config.role, "PSIQ");
+    assert.equal(assign?.config.command, "psiq");
+    assert.equal(assign?.action, "assign");
+    if (assign?.action === "assign") {
+        assert.equal(assign.lookup, "Larissa Osthues");
+    }
+
+    const unassign = parseTelegramRoleCommand("/psiq remover Larissa Osthues");
+    assert.equal(unassign?.action, "unassign");
+    assert.equal(unassign?.config.role, "PSIQ");
+
+    assert.equal(parseTelegramRoleCommand("/psiq listar")?.action, "list");
 });
 
 test("resolvePiamShiftBounds anchors SD to 07:00-19:00 of the local day", () => {
