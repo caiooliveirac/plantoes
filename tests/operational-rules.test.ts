@@ -1889,3 +1889,48 @@ test("continua perto da virada segue referenciando o turno seguinte", () => {
         new Date("2026-07-18T07:00:00-03:00").toISOString(),
     );
 });
+
+// Cenário Ana Beatriz: passa a noite na regulação (2031, SN), sai de manhã e avisa que
+// continua na CZ50. O aviso é dito às 07:10 — início do SD, longe da virada das 19:00.
+// Composição exata das duas decisões que o fluxo do bot faz nesse caso:
+//   1) rótulo do registro novo  -> resolveArrivalShiftLabel(chegada)
+//   2) fim da cobertura         -> inferInterventionCoverageWindow(rótulo)
+// e, para a continuidade no MESMO posto, resolveInterventionContinuationScheduledEndAt.
+test("Ana Beatriz: continuidade avisada às 07:10 cobre 12h, não invade a noite", () => {
+    const aviso = new Date("2026-07-31T07:10:24-03:00");
+
+    // 1) O registro novo na CZ50 nasce como SD — nunca P.
+    const rotulo = resolveArrivalShiftLabel(aviso);
+    assert.equal(rotulo, "SD");
+
+    // 2) A cobertura termina às 19:00 do mesmo dia.
+    const janela = inferInterventionCoverageWindow({
+        startedAt: aviso,
+        shiftLabel: rotulo,
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janela.scheduledStartAt?.toISOString(), new Date("2026-07-31T07:00:00-03:00").toISOString());
+    assert.equal(janela.scheduledEndAt?.toISOString(), new Date("2026-07-31T19:00:00-03:00").toISOString());
+    const horas = (janela.scheduledEndAt!.getTime() - janela.scheduledStartAt!.getTime()) / 3600_000;
+    assert.equal(horas, 12);
+
+    // 3) O outro caminho (continuidade no MESMO posto) também para às 19:00.
+    assert.equal(
+        resolveInterventionContinuationScheduledEndAt({
+            existingScheduledEndAt: null,
+            continuationAt: aviso,
+        }).toISOString(),
+        new Date("2026-07-31T19:00:00-03:00").toISOString(),
+    );
+
+    // 4) E o mesmo vale na regulação, caso ela continue num ramal em vez de base.
+    const janelaReg = inferRegulationCoverageWindow({
+        startedAt: aviso,
+        shiftLabel: rotulo,
+        postCode: null,
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janelaReg.scheduledEndAt?.toISOString(), new Date("2026-07-31T19:15:00-03:00").toISOString());
+});
