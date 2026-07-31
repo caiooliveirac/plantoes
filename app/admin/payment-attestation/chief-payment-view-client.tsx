@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
+import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
@@ -385,6 +386,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     }, [selectedDoctorId]);
     // Atestação: "já conferi e assinei a produtividade deste médico no mês".
     const [attestationOverrides, setAttestationOverrides] = useState<Record<string, boolean>>({});
+    // Estouro pede ciência explícita antes de assinar. É aviso, não bloqueio do
+    // pagamento: o que trava é só o botão de atestar, até o admin marcar.
+    const [overrunBlocked, setOverrunBlocked] = useState(false);
     const [attestBusyDoctorId, setAttestBusyDoctorId] = useState<string | null>(null);
     const [attestError, setAttestError] = useState<string | null>(null);
     // Quando o board chega atualizado, descarta os estados otimistas de atestação.
@@ -2457,6 +2461,21 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     {metaFeedback ? <p className="chief-payable-extra-feedback ok">{metaFeedback}</p> : null}
                                 </div>
 
+                                {(selectedDoctor.contractBalances?.length ?? 0) > 0 ? (
+                                    <ContractBalanceCard
+                                        contracts={selectedDoctor.contractBalances ?? []}
+                                        draft={{
+                                            amountCents: Math.round((selectedDoctor.totalDue ?? 0) * 100),
+                                            weekdayShifts: selectedDoctor.weekdayShiftCount ?? 0,
+                                            weekendShifts: selectedDoctor.weekendShiftCount ?? 0,
+                                        }}
+                                        canManage={canManageClosing}
+                                        monthLabel={board.monthLabel}
+                                        alreadyAttested={isDoctorAttested(selectedDoctor)}
+                                        onOverrunBlockChange={setOverrunBlocked}
+                                        onOpeningBalanceSaved={requestRouterRefresh}
+                                    />
+                                ) : (
                                 <article className="chief-payable-modal-card">
                                     <span>Saldo contratual</span>
                                     {selectedDoctor.contractCeilingBrl == null ? (
@@ -2503,6 +2522,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                         </>
                                     )}
                                 </article>
+                                )}
 
                                 {(() => {
                                     // Régua do acerto: só horas desde mai/2025 pagam/punem; dívida
@@ -2661,7 +2681,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                         }
                                         void toggleDoctorAttestation(selectedDoctor.doctorId, event.target.checked);
                                     }}
-                                    disabled={!canManageClosing || attestBusyDoctorId === selectedDoctor.doctorId}
+                                    // Estouro exige ciência marcada no bloco de saldo. Desassinar
+                                    // nunca trava: sair de um estado errado tem que ser sempre possível.
+                                    disabled={
+                                        !canManageClosing
+                                        || attestBusyDoctorId === selectedDoctor.doctorId
+                                        || (overrunBlocked && !isDoctorAttested(selectedDoctor))
+                                    }
                                 />
                                 <span>
                                     <strong>Conferido e assinado</strong>
@@ -2669,9 +2695,11 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                 </span>
                             </label>
                             <p className="chief-payable-attest-hint">
-                                {isDoctorAttested(selectedDoctor)
-                                    ? "Assinado — não precisa olhar de novo. Desmarque se algo mudar."
-                                    : "Antes de assinar, confira se falta lançar algum plantão extra (formulário acima)."}
+                                {overrunBlocked && !isDoctorAttested(selectedDoctor)
+                                    ? "Este fechamento estoura o teto do contrato. Marque a ciência no bloco de saldo para poder assinar."
+                                    : isDoctorAttested(selectedDoctor)
+                                        ? "Assinado — não precisa olhar de novo. Desmarque se algo mudar."
+                                        : "Antes de assinar, confira se falta lançar algum plantão extra (formulário acima)."}
                             </p>
                             {attestError && attestBusyDoctorId === null ? (
                                 <p className="chief-payable-extra-feedback danger">{attestError}</p>
