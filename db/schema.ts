@@ -821,3 +821,102 @@ export const shiftOfferBids = operationsV2.table(
         index("shift_offer_bids_offer_idx").on(table.offerId, table.status),
     ],
 );
+
+// ---------------------------------------------------------------------------
+// Saldo contratual (docs/saldo-contrato/SPEC.md §4, migration 0038)
+//
+// Duas tabelas. A renovação do contrato é ato MANUAL do chefe: ele cria o
+// contrato novo já com o saldo de abertura que decidiu. Não há rollover
+// automático, ciclo não é entidade própria, e o estouro do contrato anterior
+// não vira registro — na renovação o chefe já resolve ao digitar o saldo.
+//
+// O saldo nunca é campo mutável: é a soma do razão append-only contractLedger.
+// Leitura pela view contract_balance. Convive com doctorContracts (semente da
+// 0026) até esta feature virar a chave.
+// ---------------------------------------------------------------------------
+
+export const contractCategoryEnum = operationsV2.enum("contract_category", ["generalista", "especialista", "psiquiatria"]);
+export const contractStatusEnum = operationsV2.enum("contract_status", ["active", "suspended", "terminated"]);
+export const contractLedgerEntryTypeEnum = operationsV2.enum("contract_ledger_entry_type", [
+    "opening",
+    "invoice",
+    "invoice_reversal",
+    "manual_adjustment",
+]);
+
+// Um médico pode ter mais de um contrato ativo: a atribuição fechamento ->
+// contrato é por data, pela janela [startedAt, endedAt). Renovar = criar outro
+// registro, apontando supersededByContractId do antigo para o novo.
+export const contracts = operationsV2.table(
+    "contracts",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        contractNumber: varchar("contract_number", { length: 40 }).notNull(),
+        companyName: varchar("company_name", { length: 255 }),
+        companyTaxId: varchar("company_tax_id", { length: 20 }),
+        category: contractCategoryEnum("category").notNull(),
+        // Dado cadastral: nenhum cálculo do saldo depende da CH (SPEC §3.3).
+        weeklyHours: numeric("weekly_hours", { precision: 5, scale: 1 }),
+        // Nullable: no backfill de maio nem todo médico tem teto conhecido, e o
+        // coordenador preenche depois. Sem teto o saldo funciona; o que não dá
+        // para calcular é o percentual consumido.
+        ceilingAmount: numeric("ceiling_amount", { precision: 14, scale: 2 }),
+        // Janela do ciclo vigente, definida pelo chefe — é o que permite projetar
+        // "acaba em dd/mm e o ciclo só termina em dd/mm".
+        cycleStart: date("cycle_start").notNull(),
+        cycleEnd: date("cycle_end").notNull(),
+        startedAt: date("started_at").notNull(),
+        endedAt: date("ended_at"),
+        status: contractStatusEnum("status").notNull().default("active"),
+        supersededByContractId: uuid("superseded_by_contract_id"),
+        notes: text("notes"),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index("contracts_doctor_idx").on(table.doctorId),
+        index("contracts_status_doctor_idx").on(table.status, table.doctorId),
+        index("contracts_doctor_window_idx").on(table.doctorId, table.startedAt, table.endedAt),
+        uniqueIndex("contracts_doctor_number_active_idx")
+            .on(table.doctorId, table.contractNumber)
+            .where(sql`status = 'active'`),
+    ],
+);
+
+// Append-only: nada aqui é UPDATE nem DELETE. Errou, lança o estorno.
+// Sinal do amount: positivo credita saldo, negativo consome.
+export const contractLedger = operationsV2.table(
+    "contract_ledger",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        contractId: uuid("contract_id").notNull().references(() => contracts.id),
+        entryDate: date("entry_date").notNull(),
+        type: contractLedgerEntryTypeEnum("type").notNull(),
+        amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+        // Um invoice_reversal precisa trazer estes valores NEGATIVOS: a view soma
+        // as colunas cruas, e estorno sem isso conta os plantões duas vezes.
+        weekdayShifts: numeric("weekday_shifts", { precision: 6, scale: 1 }).notNull().default("0"),
+        weekendShifts: numeric("weekend_shifts", { precision: 6, scale: 1 }).notNull().default("0"),
+        // Não existe tabela payment_closings: o fechamento é (médico, mês) em
+        // paymentClosingAttestations, cuja linha é DELETADA ao desassinar. Por
+        // isso a origem é chave lógica estável, não FK.
+        sourceType: varchar("source_type", { length: 40 }),
+        sourceKey: varchar("source_key", { length: 80 }),
+        // atestar=0, desatestar=1, reatestar=2... o unique impede dois 'invoice'
+        // vivos para o mesmo fechamento sem quebrar o append-only.
+        sourceRevision: integer("source_revision").notNull().default(0),
+        invoiceNumber: varchar("invoice_number", { length: 60 }),
+        processNumber: varchar("process_number", { length: 60 }),
+        description: text("description"),
+        createdByUserId: uuid("created_by_user_id").references(() => users.id),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index("contract_ledger_contract_idx").on(table.contractId, table.entryDate),
+        uniqueIndex("contract_ledger_source_revision_idx")
+            .on(table.sourceType, table.sourceKey, table.sourceRevision)
+            .where(sql`source_key is not null`),
+    ],
+);
