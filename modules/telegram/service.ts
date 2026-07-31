@@ -53,7 +53,7 @@ import {
     updateDoctorDirectoryEntry,
 } from "@/modules/doctors/service";
 import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
-import { getSaoPauloParts, isSameOperationalShiftArrival, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
+import { getSaoPauloParts, isSameOperationalShiftArrival, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import { HALF_SHIFT_ROLE_LABEL, isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
@@ -8642,9 +8642,17 @@ async function applyParsedEntry(params: {
     let replyTimeAt = eventAt;
     let effectiveShiftType: string | null = parsed.shiftType ?? null;
     if (!parsed.isDeparture && parsed.isContinuation) {
-        // Continuation wording must always stay in P mode; keeping SD/SN/null can make
-        // the occupancy disappear from shift-scoped board/payment/meal-break panels.
-        effectiveShiftType = "P";
+        // "continua" diz de onde o médico VEM, não que ele promete mais 24h. O rótulo
+        // aqui é o turno em que ele está chegando — nunca "P", que daria a este registro
+        // cobertura de 24h e, com ela, pagamento do turno seguinte sem tê-lo trabalhado
+        // (doesCandidateCoverPaymentSlot) e a tag "Continua" travada no lugar do botão de
+        // retirar (continuesBeyondShift).
+        //
+        // O rótulo continua preenchido — a preocupação original de não deixar SD/SN/null
+        // sumir de painéis com escopo de turno segue atendida, agora com o turno certo.
+        // Continuidade no MESMO posto é outro caminho (continueRegulation/Intervention
+        // Occupancy), que estende a ocupação existente em um bloco de 12h e mantém "P".
+        effectiveShiftType = resolveArrivalShiftLabel(eventAt);
     }
     let continuationFrom: string | null = null;
     let displacedDoctorName: string | null = null;
@@ -8863,12 +8871,17 @@ async function applyParsedEntry(params: {
                     ? new Date(continuityContext.continuityStartedAt ?? continuityContext.source.startedAt)
                     : undefined;
 
-                // Any continuity link means the doctor is crossing from a previous shift
-                // occupation into this one — the effective shift is always P (24h coverage).
-                // This covers: SD→SN, P→SN, null→SN, SN→SD, and any other cross-shift combination.
-                if (shouldUseContinuityContext && continuityContext?.source) {
-                    effectiveShiftType = "P";
-                }
+                // Continuidade NÃO é promessa de mais 24h. Quem vinha do turno anterior e
+                // avisa que segue em OUTRO posto abre um bloco novo de 12h: o turno em que
+                // está chegando. O vínculo com o plantão anterior vive no continuityGroupId
+                // e no boardStartedAt — não no rótulo.
+                //
+                // Marcar esse registro como "P" dava a ele cobertura de 24h, e a cobertura
+                // é o que decide pagamento (doesCandidateCoverPaymentSlot) e a tag "Continua"
+                // no quadro (continuesBeyondShift): o médico era pago pelo turno seguinte sem
+                // tê-lo trabalhado e ficava presa a tag em vez do botão de retirar.
+                // Caso Ana Beatriz 31/07: SN na 2031 → continua na CZ50 e aparece pago no SN
+                // do dia seguinte.
 
                 // CROSS-TARGET CONTINUATION FIX (continuation-bug audit, May/2026):
                 // When the doctor is moving from one post/base to another between shifts
@@ -8893,6 +8906,11 @@ async function applyParsedEntry(params: {
                     : (crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
                         ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
                         : continuationStartedAt);
+                if (shouldUseContinuityContext && continuityContext?.source) {
+                    // O bloco novo é o turno da chegada (resolveArrivalShiftLabel já vira para o
+                    // turno seguinte quando o médico avisa pouco antes da virada).
+                    effectiveShiftType = resolveArrivalShiftLabel(effectiveContinuationStartedAt);
+                }
 
                 const createRegulationArrival = (startedAtOverride?: Date) => startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
@@ -9139,11 +9157,8 @@ async function applyParsedEntry(params: {
                     ? new Date(continuityContext.continuityStartedAt ?? continuityContext.source.startedAt)
                     : undefined;
 
-                // Any continuity link means the doctor is crossing from a previous shift
-                // occupation into this one — the effective shift is always P (24h coverage).
-                if (shouldUseContinuityContext && continuityContext?.source) {
-                    effectiveShiftType = "P";
-                }
+                // Mesma regra da regulação: continuidade abre um bloco de 12h (o turno da
+                // chegada), não mais 24h. Ver o comentário longo no branch de regulação.
 
                 // Cross-target continuation: same rationale as the regulation branch above.
                 // startedAt = eventAt (real arrival at this base); boardStartedAt holds the
@@ -9158,6 +9173,9 @@ async function applyParsedEntry(params: {
                     : (crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
                         ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
                         : continuationStartedAt);
+                if (shouldUseContinuityContext && continuityContext?.source) {
+                    effectiveShiftType = resolveArrivalShiftLabel(effectiveContinuationStartedAtIntv);
+                }
 
                 const createInterventionArrival = (startedAtOverride?: Date) => startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,

@@ -1807,3 +1807,47 @@ test("does not leak continuation/vou tokens into doctor name extraction", () => 
     assert.equal(parsed.baseCode, "PR03");
     assert.deepEqual(parsed.extractedNames, ["Vagner"]);
 });
+// Caso Ana Beatriz 31/07/2026: SN na regulação 2031 (30/07 18:26 → 31/07 07:10) e
+// "continua" na CZ50. O registro novo nascia com rótulo "P" e ganhava cobertura de 24h
+// (07:00 → 01/08 07:00), o que a fazia ser PAGA no SN do dia 31 sem ter trabalhado, e
+// travava a tag "Continua" no lugar do botão de retirar.
+//
+// O rótulo do bloco novo é o turno da chegada; a cobertura, 12h.
+test("continuidade em outro posto abre bloco de 12h, não 24h", () => {
+    const chegada = new Date("2026-07-31T07:10:24-03:00");
+    assert.equal(resolveArrivalShiftLabel(chegada), "SD");
+
+    const janela = inferInterventionCoverageWindow({
+        startedAt: chegada,
+        shiftLabel: resolveArrivalShiftLabel(chegada),
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janela.scheduledStartAt?.toISOString(), new Date("2026-07-31T07:00:00-03:00").toISOString());
+    assert.equal(janela.scheduledEndAt?.toISOString(), new Date("2026-07-31T19:00:00-03:00").toISOString());
+
+    // O que acontecia antes: rótulo "P" no mesmo registro esticava para 01/08 07:00.
+    const janelaAntiga = inferInterventionCoverageWindow({
+        startedAt: chegada,
+        shiftLabel: "P",
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janelaAntiga.scheduledEndAt?.toISOString(), new Date("2026-08-01T07:00:00-03:00").toISOString());
+});
+
+// Avisar continuidade pouco antes da virada tem de abrir o turno SEGUINTE, não repetir
+// o que está acabando: quem está no SD e avisa 18:50 que segue à noite abre o SN.
+test("continuidade avisada pouco antes da virada abre o turno seguinte", () => {
+    const aviso = new Date("2026-07-31T18:50:00-03:00");
+    assert.equal(resolveArrivalShiftLabel(aviso), "SN");
+
+    const janela = inferInterventionCoverageWindow({
+        startedAt: aviso,
+        shiftLabel: resolveArrivalShiftLabel(aviso),
+        explicitScheduledStartAt: null,
+        explicitScheduledEndAt: null,
+    });
+    assert.equal(janela.scheduledStartAt?.toISOString(), new Date("2026-07-31T19:00:00-03:00").toISOString());
+    assert.equal(janela.scheduledEndAt?.toISOString(), new Date("2026-08-01T07:00:00-03:00").toISOString());
+});
