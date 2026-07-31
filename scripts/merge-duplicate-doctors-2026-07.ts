@@ -98,6 +98,24 @@ interface Conflict {
     detail: string;
 }
 
+/**
+ * A lista de tabelas deste script é estática, mas o schema anda. A produção já
+ * tinha a migration 0037 aplicada — que derruba scheduled_shifts, shift_swaps e
+ * companhia — enquanto o código que remove essas tabelas ainda não estava na
+ * main, e o merge quebrava inteiro em "relation does not exist". Tabela que não
+ * existe mais não tem linha para mover: pula, avisando.
+ */
+const tabelasConhecidas = new Map<string, boolean>();
+async function tableExists(db: ReturnType<typeof getDb>, table: string) {
+    const cache = tabelasConhecidas.get(table);
+    if (cache !== undefined) return cache;
+    const result = await db.execute(sql.raw(`select to_regclass('operations_v2.${table}') is not null as existe`));
+    const existe = Boolean((result as unknown as { existe: boolean }[])[0]?.existe);
+    tabelasConhecidas.set(table, existe);
+    if (!existe) console.log(`  (tabela ${table} não existe mais neste banco — ignorada)`);
+    return existe;
+}
+
 async function countRows(db: ReturnType<typeof getDb>, table: string, col: string, id: string) {
     const result = await db.execute(sql.raw(`select count(*)::int as n from operations_v2.${table} where ${col} = '${id}'`));
     return (result as unknown as { n: number }[])[0]?.n ?? 0;
@@ -125,6 +143,7 @@ export async function mergeDoctorRecords(params: {
     const resolved: string[] = [];
 
     for (const { table, col, label } of ONE_PER_DOCTOR_TABLES) {
+        if (!await tableExists(tx, table)) continue;
         const keepCount = await countRows(tx, table, col, keepId);
         const dropCount = await countRows(tx, table, col, dropId);
         if (keepCount > 0 && dropCount > 0) {
@@ -141,6 +160,7 @@ export async function mergeDoctorRecords(params: {
     }
 
     for (const { table, col, keyCols, label } of KEYED_TABLES) {
+        if (!await tableExists(tx, table)) continue;
         const keyExpr = keyCols.join(", ");
         const result = await tx.execute(sql.raw(`
             select k.${keyCols[0]} ${keyCols.slice(1).map((c) => `, k.${c}`).join("")}
@@ -167,14 +187,17 @@ export async function mergeDoctorRecords(params: {
     }
 
     for (const { table, col } of FREE_MOVE_TABLES) {
+        if (!await tableExists(tx, table)) continue;
         await tx.execute(sql.raw(`update operations_v2.${table} set ${col} = '${keepId}' where ${col} = '${dropId}'`));
     }
     for (const { table, cols } of FREE_MOVE_DUAL_COLUMN_TABLES) {
+        if (!await tableExists(tx, table)) continue;
         for (const col of cols) {
             await tx.execute(sql.raw(`update operations_v2.${table} set ${col} = '${keepId}' where ${col} = '${dropId}'`));
         }
     }
     for (const { table, col } of FREE_MOVE_SINGLE_OTHER_COL_TABLES) {
+        if (!await tableExists(tx, table)) continue;
         await tx.execute(sql.raw(`update operations_v2.${table} set ${col} = '${keepId}' where ${col} = '${dropId}'`));
     }
     for (const { table, col } of ONE_PER_DOCTOR_TABLES) {
