@@ -201,10 +201,12 @@ export async function mergeDoctorRecords(params: {
         await tx.execute(sql.raw(`update operations_v2.${table} set ${col} = '${keepId}' where ${col} = '${dropId}'`));
     }
     for (const { table, col } of ONE_PER_DOCTOR_TABLES) {
+        if (!await tableExists(tx, table)) continue;
         // Só um dos dois lados tem linha (senão teria conflitado acima) — move se for o drop.
         await tx.execute(sql.raw(`update operations_v2.${table} set ${col} = '${keepId}' where ${col} = '${dropId}'`));
     }
     for (const { table, col, keyCols } of KEYED_TABLES) {
+        if (!await tableExists(tx, table)) continue;
         await tx.execute(sql.raw(`update operations_v2.${table} set ${col} = '${keepId}' where ${col} = '${dropId}'`));
     }
 
