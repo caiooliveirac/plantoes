@@ -156,7 +156,7 @@ export function buildDoctorPayrollEmptyMessage(monthLabel: string) {
 // ficava no fim, espremido acima de uma URL de ~150 chars), linhas com R$, legenda de
 // MEIO quando aparece, e link assinado da folha no rodapé. Quebra por linhas se passar
 // do limite, mantendo o rodapé (link) na última mensagem.
-export function buildDoctorPayrollMessages(row: ChiefPayableDoctorRow, board: ChiefPayableBoardModel, folhaUrl: string): string[] {
+export function buildDoctorPayrollMessages(row: ChiefPayableDoctorRow, board: ChiefPayableBoardModel, folhaUrl: string, bankHoursUrl?: string): string[] {
     const shifts = row.cells.flatMap((cell) => cell.shifts);
 
     if (shifts.length === 0) {
@@ -170,7 +170,12 @@ export function buildDoctorPayrollMessages(row: ChiefPayableDoctorRow, board: Ch
         + (hasMeio ? "\nMEIO = meio plantão" : "");
 
     const lines = shifts.map((shift) => `${formatShiftLine(shift)} · ${formatBRL(doctorShiftDue(row, shift))}`);
-    const footer = `📄 Folha de ponto: ${folhaUrl}`;
+    // Banco de horas no mesmo rodapé: o médico precisa saber se tem crédito ou débito
+    // ANTES de assinar a folha.
+    const footer = [
+        `📄 Folha de ponto: ${folhaUrl}`,
+        ...(bankHoursUrl ? [`🏦 Seu banco de horas: ${bankHoursUrl}`] : []),
+    ].join("\n");
 
     // Caminho comum: cabe tudo numa mensagem.
     const full = [header, "", ...lines, "", footer].join("\n");
