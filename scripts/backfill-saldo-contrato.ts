@@ -348,7 +348,12 @@ function buildContractPlan(
 
     // O aniversário caiu dentro dos meses lidos e a planilha não resetou o saldo:
     // ela segue no ciclo velho. Quem define o saldo do ciclo novo é o chefe.
-    const renewedInWindow = plan.cycle.start >= MONTHS[0].lastDay;
+    //
+    // PRIMEIRO ciclo não é renovação: contrato que nasceu em 2026 começa dentro
+    // da janela por definição, e não há nada para resetar. Sem esta distinção o
+    // detector marca todo contrato novo como pendente.
+    const isFirstCycle = plan.cycle.start.slice(0, 7) === anniversary.slice(0, 7);
+    const renewedInWindow = !isFirstCycle && plan.cycle.start >= MONTHS[0].lastDay;
     const sawReset = ordered.some(({ row }, index) => index > 0
         && row!.openingBalance != null
         && ordered[index - 1].row!.closingBalance != null

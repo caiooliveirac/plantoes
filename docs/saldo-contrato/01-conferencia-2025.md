@@ -37,11 +37,11 @@ de 248.598,00 já estava disponível em 1º de dezembro. Então dezembro conta n
 **Saldo real em 31/05/2026: +R$ 153.128,27.** Não é caso de risco — é erro de controle
 da planilha.
 
-> **Divergência em aberto.** Caio calculou R$ 181.450,22 para a mesma data. A diferença
-> de R$ 28.321,95 corresponderia a um consumo de R$ 67.147,78 no ciclo, e nenhum recorte
-> de meses da planilha chega a esse número (dez–mai = 95.469,73; jan–mai = 80.550,09;
-> fev–mai = 71.018,62). Pendente de esclarecer de onde vem o número dele antes de
-> qualquer um dos dois virar saldo de abertura.
+> **Resolvido em 2026-07-31.** A planilha foi corrigida na origem
+> (`2025 CHAMAMENTO NOVO-2.xlsx` / `2026 CHAMAMENTO 004-2.xlsx`): dezembro/2025 passou a
+> abrir em 248.598,00 e maio fecha em **153.128,27**, batendo com o cálculo acima.
+> Francisco foi a **única** linha alterada entre as duas versões dos arquivos — os
+> outros casos desta conferência seguem como estão.
 
 ## 2. Karen Seifarth Miranda estourou, mas em R$ 6,9 mil, não R$ 89,8 mil
 
@@ -65,7 +65,9 @@ Consumo do ciclo vigente (16/08/2025 até 31/05/2026): R$ 255.494,24.
 
 Ela estourou de verdade, mas o tamanho do estouro está inflado em doze vezes.
 
-## 3. Os outros oito com a mesma falha de renovação
+## 3. Os outros sete com a mesma falha de renovação
+
+> Francisco saiu desta tabela: a planilha de origem foi corrigida (§1).
 
 Aniversário passou dentro da série e a planilha não resetou. "Saldo real" = teto de
 referência menos o consumo **desde o dia 1 do mês de virada** (§3.1).
@@ -74,7 +76,6 @@ referência menos o consumo **desde o dia 1 do mês de virada** (§3.1).
 |---|---:|---|---:|---:|---:|---:|
 | Acacio Junio de Almeida | 24 | 03/2026 | 165.732,00 | 0,00 | **165.732,00** | 11.931,84 |
 | Enrico Biscarde | 24 | 12/2025 | 165.732,00 | 8.568,46 | **157.163,54** | 8.202,00 |
-| Francisco Isensee de Macedo | 36 | 12/2025 | 248.598,00 | 95.469,73 | **153.128,27** | −46.778,94 |
 | Gabriel Ribeiro Sampaio Cruz | 24 | 08/2025 | 165.732,00 | 35.636,14 | **130.095,86** | 123.326,59 |
 | João Gustavo dos Anjos Morais Oliveira | 24 | 03/2026 | 165.732,00 | 0,00 | **165.732,00** | 21.780,46 |
 | Renê Requião Paim | 24 | 12/2025 | 165.732,00 | 24.606,14 | **141.125,86** | 101.853,74 |
@@ -131,8 +132,13 @@ autor, data e justificativa, em vez de um número que muda e não deixa rastro.
 ## 6. O que isso muda no backfill
 
 O backfill classificou 13 contratos como "renovação pendente" olhando só fev–mai/2026.
-Com 17 meses o diagnóstico fica mais firme e o conjunto muda: **8 casos confirmados**,
-com o saldo correto calculável, mais a Karla por outro motivo (§4).
+Com 17 meses o diagnóstico fica mais firme: **7 casos confirmados** com o saldo correto
+calculável, mais a Karla (§4) e o teto da Karen (§7).
+
+**Limite do backfill:** ele só lê fev–mai/2026, então enxerga apenas as renovações
+ignoradas dentro dessa janela. As de 2025 (agosto, setembro, outubro, dezembro) passam
+despercebidas e esses médicos entram com o número errado da planilha. A lista da §3 é a
+que vale para a correção manual depois da carga.
 
 Nenhum deles deve entrar com o número da planilha. Duas opções, e é decisão do
 coordenador:
@@ -143,7 +149,7 @@ coordenador:
    e depende de o teto de referência estar certo para cada um, o que a Karen mostra que
    nem sempre está.
 
-**Recomendo a opção 1.** São 9 médicos contando a Karla, uma sentada, e cada número passa pelo olho de
+**Recomendo a opção 1.** São 9 médicos contando a Karla e a Karen, uma sentada, e cada número passa pelo olho de
 quem conhece o contrato. Automatizar aqui é assumir que a tabela de tetos está certa —
 e a Karen é a prova de que não está.
 
