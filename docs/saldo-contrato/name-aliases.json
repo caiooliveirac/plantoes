@@ -1,0 +1,19 @@
+{
+  "_comentario": "Vínculos nome-da-planilha -> nome-em-doctors aprovados à mão. O fuzzy match do backfill só SUGERE; é este arquivo que faz o vínculo valer. Os dois lados passam pela mesma normalização, então a grafia aqui pode ser livre. Aprovados por Caio em 2026-07-31.",
+
+  "FREDERICO AFONSO FOEPPEL DIAS": "Frederico Afonso Foepel Dias",
+  "GERARDSON MACEDO E SILVA E SOUZA": "Gerardson Macedo e Silva Souza",
+  "VENANDRA RIBEIRO E ANDRADE": "Venandra Ribeiro Andrade",
+  "LEONARDO PRADO FABEM": "Leonardo Prado Faben",
+  "MAIANA SANTOS DE OLIVEIRA CARDOSO": "Maiana Santos Oliveira Cardoso",
+  "MARCELA ARIMATEA CABRAL": "Marcela Arimateia Cabral",
+  "GULHERME RABELO MOTA": "Guilherme Rabelo Mota",
+  "VANESSA BRITO RAMOS SAMU + HELIO MACHADO": "Vanessa Brito Ramos",
+  "LUANA FRANCO SOUZA BORDONI )": "Luana Franco Bordoni",
+  "SARA DE JESUS CARNEIRO SANTOS": "Sara de Jesus Carneiro",
+
+  "BRUNO MOTA (PSIQUIATRIA)": "Bruno Mota de Almeida",
+  "LILLIAN BARROS ARAUJO DOS SANTOS (-12H)": "Lilian Barros Araujo dos Anjos",
+
+  "_fundidas": "Ana Beatriz Nunes Bomfim e Ketherynne Cabral Ferreira de Oliveira estavam duplicadas em doctors e foram fundidas por scripts/merge-duplicate-doctors-2026-07.ts em 2026-07-31. Depois da fusão o nome do cadastro passou a bater com o da planilha, então elas não precisam de alias."
+}

@@ -4,6 +4,13 @@
 //      pelo usuário), com employmentType=estatutario.
 //   2) Funde "Ana Beatriz Bonfim Nunes" + "Ana Beatriz Nunes Bonfim" num só
 //      registro, nome final "Ana Beatriz Nunes Bomfim" (grafia da planilha PJ).
+//   2b) Funde "Kethertnne Cabral Ferreira de Oliveira" + "Ketherynne Cabral
+//      Ferrreira de Oliveira" num só, nome final "Ketherynne Cabral Ferreira de
+//      Oliveira" (grafia da planilha PJ — as duas do banco têm erro de digitação).
+//      Acrescentado em 2026-07-31, durante o backfill do saldo contratual: os
+//      dados desta dupla estão PARTIDOS — um registro tem os plantões e o
+//      atestado, o outro tem a conta de login. Fundir é o que evita o saldo
+//      entrar num registro e o consumo no outro.
 //   3) Apaga os médicos de demonstração ("Dr./Dra. <papel>", @plantoes.local,
 //      sem role) — EXCETO "Admin Sistema", que é a conta real de admin.
 //
@@ -26,6 +33,12 @@
 // Uso (contra o DATABASE_URL do ambiente onde rodar):
 //   tsx scripts/merge-duplicate-doctors-2026-07.ts            # preview / detecta conflitos
 //   tsx scripts/merge-duplicate-doctors-2026-07.ts --apply    # executa (só se não houver conflito)
+//   tsx scripts/merge-duplicate-doctors-2026-07.ts --apply --only=Ana Beatriz,Ketherynne
+//
+// --only roda apenas as duplas listadas (pelo label) e PULA a limpeza dos
+// médicos de demonstração. Serve para não deixar uma dupla com conflito
+// pendente travar as outras: como tudo roda numa transação só, sem o filtro um
+// conflito no Oswaldo impede o merge da Ana Beatriz e da Ketherynne.
 
 import { eq, sql } from "drizzle-orm";
 import { closeDb, getDb } from "@/db";
@@ -34,6 +47,13 @@ import { normalizeDoctorName } from "@/modules/doctors/importer";
 
 function hasFlag(flag: string) {
     return process.argv.includes(flag);
+}
+
+/** --only=Label,Outro -> ["Label", "Outro"]; vazio = roda tudo. */
+function onlyLabels(): string[] {
+    const raw = process.argv.find((arg) => arg.startsWith("--only="));
+    if (!raw) return [];
+    return raw.slice("--only=".length).split(",").map((label) => label.trim()).filter(Boolean);
 }
 
 // Tabelas sem risco de conflito de unicidade por médico: sempre seguro mover.
@@ -92,16 +112,32 @@ export async function mergeDoctorRecords(params: {
     keepId: string;
     dropId: string;
     finalFullName: string;
+    /**
+     * Tabelas de ONE_PER_DOCTOR onde a decisão manual JÁ foi tomada: em vez de
+     * abortar, apaga a linha do registro perdedor e fica com a do sobrevivente.
+     * Só entra aqui o que o usuário decidiu nominalmente — o default continua
+     * sendo abortar. Ver o comentário de cada chamada.
+     */
+    resolveByKeeping?: string[];
 }): Promise<{ conflicts: Conflict[] }> {
-    const { tx, keepId, dropId, finalFullName } = params;
+    const { tx, keepId, dropId, finalFullName, resolveByKeeping = [] } = params;
     const conflicts: Conflict[] = [];
+    const resolved: string[] = [];
 
     for (const { table, col, label } of ONE_PER_DOCTOR_TABLES) {
         const keepCount = await countRows(tx, table, col, keepId);
         const dropCount = await countRows(tx, table, col, dropId);
         if (keepCount > 0 && dropCount > 0) {
+            if (resolveByKeeping.includes(table)) {
+                await tx.execute(sql.raw(`delete from operations_v2.${table} where ${col} = '${dropId}'`));
+                resolved.push(`${label}: mantida a linha do registro sobrevivente, apagada a do perdedor`);
+                continue;
+            }
             conflicts.push({ table, label, detail: `os dois registros têm ${label} — precisa decisão manual sobre qual manter` });
         }
+    }
+    for (const entry of resolved) {
+        console.log(`  resolvido por decisão prévia -> ${entry}`);
     }
 
     for (const { table, col, keyCols, label } of KEYED_TABLES) {
@@ -172,11 +208,35 @@ async function main() {
 
     const { a: oswaldoNeves, b: oswaldoNeto } = await resolvePair(db, "Oswaldo Alves Bastos Neves", "Oswaldo Alves Bastos Neto");
     const { a: anaBonfimNunes, b: anaNunesBonfim } = await resolvePair(db, "Ana Beatriz Bonfim Nunes", "Ana Beatriz Nunes Bonfim");
+    // Mantém o registro que tem os plantões; a conta de login do outro lado é
+    // movida por mergeDoctorRecords (o sobrevivente não tem login próprio).
+    const { a: ketherynneComPlantoes, b: ketherynneComLogin } = await resolvePair(
+        db,
+        "Ketherynne Cabral Ferrreira de Oliveira",
+        "Kethertnne Cabral Ferreira de Oliveira",
+    );
 
+    const selected = onlyLabels();
     const pairs = [
-        oswaldoNeves && oswaldoNeto ? { keep: oswaldoNeves, drop: oswaldoNeto, finalName: "Oswaldo Alves Bastos Neto", label: "Oswaldo" } : null,
-        anaBonfimNunes && anaNunesBonfim ? { keep: anaNunesBonfim, drop: anaBonfimNunes, finalName: "Ana Beatriz Nunes Bomfim", label: "Ana Beatriz" } : null,
-    ].filter((p): p is NonNullable<typeof p> => Boolean(p));
+        oswaldoNeves && oswaldoNeto ? { keep: oswaldoNeves, drop: oswaldoNeto, finalName: "Oswaldo Alves Bastos Neto", label: "Oswaldo", resolveByKeeping: [] as string[] } : null,
+        anaBonfimNunes && anaNunesBonfim ? { keep: anaNunesBonfim, drop: anaBonfimNunes, finalName: "Ana Beatriz Nunes Bomfim", label: "Ana Beatriz", resolveByKeeping: [] as string[] } : null,
+        ketherynneComPlantoes && ketherynneComLogin
+            ? {
+                keep: ketherynneComPlantoes,
+                drop: ketherynneComLogin,
+                finalName: "Ketherynne Cabral Ferreira de Oliveira",
+                label: "Ketherynne",
+                // Os dois registros têm codinome de pagamento do Telegram, criados
+                // no mesmo dia, nenhum com o codinome em claro — não há dado que
+                // diga qual ela usa. Decisão do usuário em 2026-07-31: fica o do
+                // registro que tem os plantões. Se ela usava o outro, o extrato
+                // no bot para de responder até recadastrar o codinome.
+                resolveByKeeping: ["doctor_payment_access"] as string[],
+            }
+            : null,
+    ]
+        .filter((p): p is NonNullable<typeof p> => Boolean(p))
+        .filter((p) => selected.length === 0 || selected.includes(p.label));
 
     if (pairs.length === 0) {
         console.log("Nenhuma das duplas encontrada com esses nomes exatos neste banco — confira manualmente antes de seguir.");
@@ -185,7 +245,10 @@ async function main() {
     }
 
     const allDoctors = await db.select().from(doctors);
-    const demoDoctors = allDoctors.filter((d) => DEMO_NAME_PATTERN.test(d.fullName) && d.fullName !== ADMIN_ACCOUNT_NAME);
+    // Com --only o alvo é uma dupla específica: não é hora de mexer no resto.
+    const demoDoctors = selected.length > 0
+        ? []
+        : allDoctors.filter((d) => DEMO_NAME_PATTERN.test(d.fullName) && d.fullName !== ADMIN_ACCOUNT_NAME);
 
     console.log(`Duplas a fundir: ${pairs.length}`);
     for (const pair of pairs) {
@@ -207,6 +270,7 @@ async function main() {
                 keepId: pair.keep.id,
                 dropId: pair.drop.id,
                 finalFullName: pair.finalName,
+                resolveByKeeping: pair.resolveByKeeping,
             });
             if (conflicts.length > 0) {
                 aborted = true;
