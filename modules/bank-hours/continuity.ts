@@ -139,13 +139,14 @@ export function buildContinuityCarrierLookup<T extends ContinuityRecord>(records
     return lookup;
 }
 
-function resolveMemberScheduledWindow(member: ContinuityOccupancy) {
+function resolveMemberScheduledWindow(member: ContinuityOccupancy, actualEndAt?: Date | null) {
     return resolveBankHoursScheduledWindow({
         domain: member.domain,
         startedAt: member.startedAt,
         shiftLabel: member.shiftLabel,
         scheduledStartAt: member.scheduledStartAt,
         scheduledEndAt: member.scheduledEndAt,
+        actualEndAt,
     });
 }
 
@@ -155,8 +156,11 @@ export function buildContinuityBankHoursSpan(records: ContinuityOccupancy[]) {
     }
 
     const group = buildContinuityGroups(records)[0]!;
+    const tailEndedAt = resolveContinuityEffectiveEndedAt(group.tail);
     const firstWindow = resolveMemberScheduledWindow(group.carrier);
-    const tailWindow = resolveMemberScheduledWindow(group.tail);
+    // O fim previsto do grupo é o do último membro, recortado pela saída que ele teve:
+    // um "P" herdado na ponta esticava a janela mais um turno e engolia a hora extra.
+    const tailWindow = resolveMemberScheduledWindow(group.tail, tailEndedAt);
 
     return {
         doctorId: group.carrier.doctorId,
@@ -167,7 +171,7 @@ export function buildContinuityBankHoursSpan(records: ContinuityOccupancy[]) {
         scheduledStartAt: firstWindow.scheduledStartAt,
         scheduledEndAt: tailWindow.scheduledEndAt,
         actualStartAt: asDate(group.carrier.startedAt)!,
-        actualEndAt: resolveContinuityEffectiveEndedAt(group.tail),
+        actualEndAt: tailEndedAt,
         isClosed: group.members.every((member) => isDepartureClosureAuthoritative(member)),
     } satisfies ContinuityBankHoursSpan;
 }
