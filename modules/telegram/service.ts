@@ -4985,6 +4985,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 const appUrl = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
                 const folhaToken = createFolhaToken({ medicoId: selfDoctorId, ano: year, mes: month });
                 const folhaUrl = `${appUrl}/folha-ponto/${selfDoctorId}/${year}/${String(month).padStart(2, "0")}?t=${folhaToken}`;
+                // Mesmo token assina a visão do banco de horas do próprio médico.
+                const bankHoursUrl = `${appUrl}/banco-de-horas/${selfDoctorId}/${year}/${String(month).padStart(2, "0")}?t=${folhaToken}`;
 
                 await markTelegramProcessed(logId, {
                     status: "accepted",
@@ -4999,7 +5001,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     return { ok: true, reported: true };
                 }
 
-                const messages = buildDoctorPayrollMessages(row, board, folhaUrl);
+                const messages = buildDoctorPayrollMessages(row, board, folhaUrl, bankHoursUrl);
                 for (const [index, text] of messages.entries()) {
                     await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
                 }
@@ -5245,6 +5247,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                         const appUrl = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
                         const folhaToken = createFolhaToken({ medicoId: adminDoctorId, ano: year, mes: month });
                         const folhaUrl = `${appUrl}/folha-ponto/${adminDoctorId}/${year}/${String(month).padStart(2, "0")}?t=${folhaToken}`;
+                        const bankHoursUrl = `${appUrl}/banco-de-horas/${adminDoctorId}/${year}/${String(month).padStart(2, "0")}?t=${folhaToken}`;
                         await markTelegramProcessed(logId, {
                             status: "accepted",
                             parsedAction: "payment_self_admin",
@@ -5256,7 +5259,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                             await sendMessage(message.chat.id, buildDoctorPayrollEmptyMessage(board.monthLabel), message.message_id);
                             return { ok: true, reported: true };
                         }
-                        const messages = buildDoctorPayrollMessages(row, board, folhaUrl);
+                        const messages = buildDoctorPayrollMessages(row, board, folhaUrl, bankHoursUrl);
                         for (const [index, text] of messages.entries()) {
                             await sendMessage(message.chat.id, text, index === 0 ? message.message_id : undefined);
                         }

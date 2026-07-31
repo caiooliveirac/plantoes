@@ -192,14 +192,18 @@ async function loadAuditTrailByOccupancy() {
  * provas textuais por plantão — tudo exclusivamente de exibição, sem efeito no
  * cálculo de balanceMinutes. É o modo usado pelo payment-closing, que só
  * precisa do saldo efetivo por médico.
+ *
+ * doctorId: restringe a UM médico — a visão do próprio médico (link do bot) não
+ * precisa varrer o histórico de todo mundo.
  */
-export async function getBankHoursHistory(options?: { balancesOnly?: boolean }): Promise<BankHoursHistoryModel> {
+export async function getBankHoursHistory(options?: { balancesOnly?: boolean; doctorId?: string }): Promise<BankHoursHistoryModel> {
     const balancesOnly = options?.balancesOnly === true;
     const db = getDb();
     // Forma canônica em operations_v2.bank_hours_history_shifts (migration 0036):
     // a mesma consulta fica disponível para EXPLAIN/auditoria direto no psql.
     const result = await db.execute(sql`
         select * from operations_v2.bank_hours_history_shifts
+        ${options?.doctorId ? sql`where "doctorId" = ${options.doctorId}` : sql``}
     `);
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);

@@ -234,6 +234,15 @@ test("buildDoctorPayrollMessages inclui R$ por linha, total no CABEÇALHO e link
     assert.match(message, /📄 Folha de ponto: https:\/\/plantoes/);
 });
 
+test("buildDoctorPayrollMessages leva o link do banco de horas quando informado", () => {
+    const row = makeRow([makeShift({})]);
+    const [message] = buildDoctorPayrollMessages(row, makeBoard(), "https://x/folha", "https://x/banco-de-horas/doc-123/2026/06?t=abc.def");
+    assert.match(message, /🏦 Seu banco de horas: https:\/\/x\/banco-de-horas/);
+
+    const [semBanco] = buildDoctorPayrollMessages(row, makeBoard(), "https://x/folha");
+    assert.ok(!semBanco.includes("banco de horas"), "sem URL, sem linha de banco de horas");
+});
+
 test("buildDoctorPayrollMessages acrescenta legenda de MEIO quando há meio plantão", () => {
     const row = makeRow([makeShift({ paymentTag: "MEIO", paymentUnit: 0.5 })]);
     const [message] = buildDoctorPayrollMessages(row, makeBoard(), "https://x/y");
