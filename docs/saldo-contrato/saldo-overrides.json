@@ -1,0 +1,51 @@
+{
+  "_comentario": "Correções manuais do saldo de abertura, aprovadas por Caio em 2026-07-31. Derivação completa em docs/saldo-contrato/01-conferencia-2025.md. Duas formas: 'saldoBrl' substitui o número da planilha; 'revisar' força o campo em branco na tela, com a nota aparecendo no relatório. Chave = nome como está na planilha.",
+
+  "_criterio": "Só entra com saldoBrl quem tem TODOS os meses do ciclo legíveis na planilha. Mês com #VALUE! não vira zero (SPEC §9.4) — tratar assim produziria um saldo sempre otimista, a favor de deixar o médico gastar mais do que pode.",
+
+  "KAREN SEIFARTH MIRANDA": {
+    "saldoBrl": -6896.24,
+    "tetoBrl": 248598.00,
+    "motivo": "A planilha resetou no mês certo (ago/2025) com o teto errado: 165.732 (24h) em vez de 248.598 (36h). Karen é 36h nos 17 meses da série. Consumo do ciclo 08/2025-05/2026 = 255.494,24, todos os 10 meses legíveis. Ela estourou, mas em 6.896,24 e não em 89.762,24."
+  },
+
+  "KARLA SANTOS PINTO": {
+    "saldoBrl": 284605.23,
+    "tetoBrl": 331464.00,
+    "motivo": "Ciclo começa 01/02/2026. A planilha abriu fevereiro em 322.341,22 = 331.464,00 menos 9.122,78, que era o consumo de janeiro — gasto do ciclo anterior descontado do ciclo novo. Consumo fev-mai = 46.858,77, todos os 4 meses legíveis. A coluna CH diz 24h mas o contrato 99/2025 reseta em 331.464 (48h), como nos sócios Gabriel Sapucaia, Sadja e Rafaela."
+  },
+
+  "ENRICO BISCARDE": {
+    "revisar": "Ciclo começa 01/12/2025 e a planilha não resetou. Fevereiro/2026 está ilegível, então o consumo do ciclo não é apurável. Somando só os meses legíveis o saldo seria 137.400,65 — é um TETO, não o saldo.",
+    "estimativaBrl": 137400.65
+  },
+
+  "RENÊ REQUIÃO PAIM": {
+    "revisar": "Ciclo começa 01/12/2025 e a planilha não resetou. Fevereiro/2026 ilegível. Com os meses legíveis o saldo seria 137.391,25 — teto, não saldo.",
+    "estimativaBrl": 137391.25
+  },
+
+  "VENANDRA RIBEIRO E ANDRADE": {
+    "revisar": "Ciclo começa 01/10/2025 e a planilha não resetou. Outubro e novembro/2025 ilegíveis. Com os meses legíveis o saldo seria 168.691,46 — teto, não saldo.",
+    "estimativaBrl": 168691.46
+  },
+
+  "ACACIO JUNIO DE ALMEIDA": {
+    "revisar": "Ciclo começa 01/03/2026 e a planilha não resetou. Abril e maio/2026 ilegíveis. Com os meses legíveis o saldo seria 158.262,78 — teto, não saldo.",
+    "estimativaBrl": 158262.78
+  },
+
+  "JOÃO GUSTAVO DOS ANJOS MORAIS OLIVEIRA": {
+    "revisar": "Ciclo começa 01/03/2026 e a planilha não resetou. Março/2026 é o único mês do ciclo e está ilegível: não há nenhum dado apurável. O teto cheio (165.732,00) é o limite superior.",
+    "estimativaBrl": 165732.00
+  },
+
+  "GABRIEL RIBEIRO SAMPAIO CRUZ": {
+    "revisar": "Ciclo começa 01/08/2025 e a planilha não resetou. Ele não aparece em maio/2026 — a série dele para em março. Com os meses legíveis até lá o saldo seria 123.326,59, mas faltam abril e maio.",
+    "estimativaBrl": 123326.59
+  },
+
+  "_sem_correcao": {
+    "VINICIUS SANTOS MOURA DE JESUS": "Estava na lista de renovação não aplicada, mas o recálculo bate exatamente com a planilha (33.385,89). Nada a corrigir."
+  }
+}

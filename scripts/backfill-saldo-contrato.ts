@@ -290,6 +290,7 @@ function buildContractPlan(
     normalized: string,
     contractNumber: string,
     monthRows: Map<string, SheetRow>,
+    override?: SaldoOverride,
 ): ContractPlan {
     const ordered = MONTHS.map((month) => ({ month, row: monthRows.get(month.key) })).filter((item) => item.row);
     const reference = ordered.at(-1)!.row!;
@@ -336,6 +337,19 @@ function buildContractPlan(
     }
     plan.seedBalance = round2(seedRow.closingBalance);
 
+    // Correção manual aprovada: manda sobre tudo que vem da planilha.
+    if (override?.saldoBrl !== undefined) {
+        plan.seedBalance = round2(override.saldoBrl);
+        if (override.tetoBrl !== undefined) plan.ceiling = round2(override.tetoBrl);
+        notes.push(`saldo corrigido à mão para ${formatBrl(plan.seedBalance)}: ${override.motivo ?? "sem motivo registrado"}`);
+        return plan;
+    }
+    if (override?.revisar) {
+        plan.status = "renovacao_pendente";
+        notes.push(`campo em branco por decisão manual: ${override.revisar}`);
+        return plan;
+    }
+
     // A planilha abriu este contrato em R$ 0,00 e foi acumulando negativo: o
     // número dela é consumo, não saldo. É o caso de Gabriel Vitor e João Pedro
     // Miguez, que o SPEC §1 lista como estourados — não estão.
@@ -380,7 +394,34 @@ interface UnmatchedName {
 }
 
 const ALIASES_PATH = "docs/saldo-contrato/name-aliases.json";
+const OVERRIDES_PATH = "docs/saldo-contrato/saldo-overrides.json";
 const aliasesUsed: string[] = [];
+
+/**
+ * Correções manuais do saldo de abertura, aprovadas nominalmente e versionadas.
+ * `saldoBrl` substitui o número da planilha; `revisar` força o campo em branco.
+ * Existe porque a planilha erra de dois jeitos que o backfill não tem como
+ * adivinhar: teto trocado no reset e gasto do ciclo velho descontado do novo.
+ */
+export interface SaldoOverride {
+    saldoBrl?: number;
+    tetoBrl?: number;
+    motivo?: string;
+    revisar?: string;
+    estimativaBrl?: number;
+}
+
+async function loadSaldoOverrides(): Promise<Map<string, SaldoOverride>> {
+    try {
+        const raw = await readFile(path.resolve(process.cwd(), OVERRIDES_PATH), "utf8");
+        const parsed = JSON.parse(raw) as Record<string, SaldoOverride | string>;
+        return new Map(Object.entries(parsed)
+            .filter(([chave, valor]) => !chave.startsWith("_") && typeof valor === "object")
+            .map(([chave, valor]) => [normalizeDoctorName(chave), valor as SaldoOverride]));
+    } catch {
+        return new Map();
+    }
+}
 
 /**
  * { "<nome como está na planilha>": "<nome como está em doctors>" }
@@ -606,6 +647,9 @@ async function main() {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(sourceFile);
 
+    // Correções manuais aprovadas — lidas antes de montar os planos.
+    const overrides = await loadSaldoOverrides();
+
     // "<nome normalizado>||<nº do contrato>" -> monthKey -> linha. A chave inclui
     // o contrato porque um médico pode aparecer duas vezes no mesmo mês, em abas
     // diferentes, com contratos diferentes (Leonardo Copque em maio: 247/2025
@@ -626,7 +670,7 @@ async function main() {
         .filter(([, monthRows]) => monthRows.has(SEED_MONTH.key))
         .map(([key, monthRows]) => {
             const [normalized, contractNumber] = key.split("||");
-            return buildContractPlan(normalized, contractNumber, monthRows);
+            return buildContractPlan(normalized, contractNumber, monthRows, overrides.get(normalized));
         })
         .sort((left, right) => left.rawName.localeCompare(right.rawName, "pt-BR"));
 
