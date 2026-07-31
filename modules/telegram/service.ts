@@ -80,10 +80,10 @@ import {
     parseTelegramUndoCommand,
 } from "@/modules/telegram/admin-commands";
 import {
-    isTelegramPiamCommandText,
-    parseTelegramPiamCommand,
-    TELEGRAM_PIAM_COMMAND_USAGE,
-} from "@/modules/telegram/piam-commands";
+    isTelegramRoleCommandText,
+    parseTelegramRoleCommand,
+    resolveTelegramRoleCommandConfig,
+} from "@/modules/telegram/role-commands";
 import { getUndoableActions, undoAction, type UndoableEntry } from "@/modules/operational/undo";
 import {
     buildDeparturePriorityCommandUsageReply,
@@ -4654,57 +4654,61 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
     }
 
-    if (isTelegramPiamCommandText(message.text)) {
+    if (isTelegramRoleCommandText(message.text)) {
+        const commandConfig = resolveTelegramRoleCommandConfig(message.text)!;
+        const commandName = commandConfig.command;
         const actor = await resolveTelegramCommandActor(message);
         if (!actor || !actor.roles.includes("admin")) {
             await markTelegramProcessed(logId, {
                 status: "ignored",
-                errorMessage: "piam_command_forbidden",
-                parsedAction: "piam_command",
+                errorMessage: `${commandName}_command_forbidden`,
+                parsedAction: `${commandName}_command`,
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, "⛔ /piam fica restrito a admin.", message.message_id);
+            await sendMessage(message.chat.id, `⛔ /${commandName} fica restrito a admin.`, message.message_id);
             return { ok: true, ignored: true };
         }
 
-        const piamCommand = parseTelegramPiamCommand(message.text);
-        if (!piamCommand) {
+        const roleCommand = parseTelegramRoleCommand(message.text);
+        if (!roleCommand) {
             await markTelegramProcessed(logId, {
                 status: "ignored",
-                errorMessage: "piam_command_usage_invalid",
-                parsedAction: "piam_command",
+                errorMessage: `${commandName}_command_usage_invalid`,
+                parsedAction: `${commandName}_command`,
                 resolutionData: { rawCommand: message.text },
             });
-            await sendMessage(message.chat.id, `⛔ Uso: ${TELEGRAM_PIAM_COMMAND_USAGE}`, message.message_id);
+            await sendMessage(message.chat.id, `⛔ Uso: ${commandConfig.usage}`, message.message_id);
             return { ok: true, ignored: true };
         }
 
+        const parsedAction = `${commandName}_${roleCommand.action}`;
+
         try {
-            if (piamCommand.name === "piam_list") {
-                const piamDoctors = await listDoctorsByPreferredOperationalRole("PIAM");
+            if (roleCommand.action === "list") {
+                const roleDoctors = await listDoctorsByPreferredOperationalRole(commandConfig.role);
                 await markTelegramProcessed(logId, {
                     status: "accepted",
-                    parsedAction: piamCommand.name,
-                    resolutionData: { actorRoles: actor.roles, count: piamDoctors.length },
+                    parsedAction,
+                    resolutionData: { actorRoles: actor.roles, count: roleDoctors.length },
                 });
-                if (piamDoctors.length === 0) {
-                    await sendMessage(message.chat.id, "Nenhum cardiologista PIAM cadastrado. Use `/piam Nome` para marcar.", message.message_id);
+                if (roleDoctors.length === 0) {
+                    await sendMessage(message.chat.id, commandConfig.listEmptyText, message.message_id);
                 } else {
-                    const lines = piamDoctors.map((doctor, index) =>
+                    const lines = roleDoctors.map((doctor, index) =>
                         `${index + 1}. ${doctor.displayName?.trim() || doctor.fullName}`,
                     );
                     await sendMessage(
                         message.chat.id,
-                        [`🩺 Cardiologistas PIAM (${piamDoctors.length}):`, ...lines].join("\n"),
+                        [commandConfig.listHeading(roleDoctors.length), ...lines].join("\n"),
                         message.message_id,
                     );
                 }
                 return { ok: true };
             }
 
-            const nextRole = piamCommand.name === "piam_assign" ? "PIAM" : null;
+            const nextRole = roleCommand.action === "assign" ? commandConfig.role : null;
             const result = await setDoctorPreferredOperationalRole({
-                lookup: piamCommand.lookup,
+                lookup: roleCommand.lookup,
                 role: nextRole,
             }, {
                 actorUserId: actor.userId,
@@ -4719,25 +4723,25 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             if (result.status === "not_found") {
                 await markTelegramProcessed(logId, {
                     status: "ignored",
-                    errorMessage: "piam_doctor_not_found",
-                    parsedAction: piamCommand.name,
-                    resolutionData: { actorRoles: actor.roles, lookup: piamCommand.lookup },
+                    errorMessage: `${commandName}_doctor_not_found`,
+                    parsedAction,
+                    resolutionData: { actorRoles: actor.roles, lookup: roleCommand.lookup },
                 });
-                await sendMessage(message.chat.id, `⛔ Não achei médico com "${piamCommand.lookup}".`, message.message_id);
+                await sendMessage(message.chat.id, `⛔ Não achei médico com "${roleCommand.lookup}".`, message.message_id);
                 return { ok: true, ignored: true };
             }
 
             if (result.status === "ambiguous") {
                 await markTelegramProcessed(logId, {
                     status: "ignored",
-                    errorMessage: "piam_doctor_ambiguous",
-                    parsedAction: piamCommand.name,
-                    resolutionData: { actorRoles: actor.roles, lookup: piamCommand.lookup, matches: result.matches },
+                    errorMessage: `${commandName}_doctor_ambiguous`,
+                    parsedAction,
+                    resolutionData: { actorRoles: actor.roles, lookup: roleCommand.lookup, matches: result.matches },
                 });
                 await sendMessage(
                     message.chat.id,
                     [
-                        `⛔ Achei mais de um médico para "${piamCommand.lookup}".`,
+                        `⛔ Achei mais de um médico para "${roleCommand.lookup}".`,
                         ...result.matches.map((doctor, index) => `${index + 1}. ${doctor.fullName}`),
                         "",
                         "Use o nome completo.",
@@ -4749,7 +4753,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
 
             await markTelegramProcessed(logId, {
                 status: "accepted",
-                parsedAction: piamCommand.name,
+                parsedAction,
                 parsedDoctorName: result.doctor.fullName,
                 resolutionData: {
                     actorRoles: actor.roles,
@@ -4759,28 +4763,28 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
 
             if (result.status === "unchanged") {
-                const stateText = piamCommand.name === "piam_assign"
-                    ? `${result.doctor.fullName} ja estava marcado como PIAM.`
-                    : `${result.doctor.fullName} ja nao tinha role PIAM.`;
+                const stateText = roleCommand.action === "assign"
+                    ? commandConfig.alreadyAssignedText(result.doctor.fullName)
+                    : commandConfig.alreadyUnassignedText(result.doctor.fullName);
                 await sendMessage(message.chat.id, `:| ${stateText}`, message.message_id);
                 return { ok: true, doctorId: result.doctor.id };
             }
 
-            const reply = piamCommand.name === "piam_assign"
-                ? `✅ ${result.doctor.fullName} marcado como cardiologista PIAM. A partir de agora, ao avisar SD/SN/dia/noite, o bot aloca automaticamente no ramal PIAM (07:00 às 19:00 ou 19:00 às 07:00).`
-                : `✅ ${result.doctor.fullName} desmarcado de PIAM. Volta a ser lançado normalmente.`;
+            const reply = roleCommand.action === "assign"
+                ? commandConfig.assignReply(result.doctor.fullName)
+                : commandConfig.unassignReply(result.doctor.fullName);
             await sendMessage(message.chat.id, reply, message.message_id);
             return { ok: true, doctorId: result.doctor.id };
         } catch (error) {
             await markTelegramProcessed(logId, {
                 status: "error",
-                errorMessage: error instanceof Error ? error.message : "piam_command_failed",
-                parsedAction: piamCommand.name,
+                errorMessage: error instanceof Error ? error.message : `${commandName}_command_failed`,
+                parsedAction,
                 resolutionData: { rawCommand: message.text },
             });
             await sendMessage(
                 message.chat.id,
-                `⛔ Não consegui aplicar /piam. ${resolveTelegramErrorText(error)}`,
+                `⛔ Não consegui aplicar /${commandName}. ${resolveTelegramErrorText(error)}`,
                 message.message_id,
             );
             return { ok: true, ignored: true };
@@ -5794,7 +5798,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         }
         if (helpIsAdmin) {
             helpLines.push(
-                "👑 *Admin (privado):* /desfazer · /slots · /medico · /piam · /banco · /pagamento listar",
+                "👑 *Admin (privado):* /desfazer · /slots · /medico · /piam · /psiq · /banco · /pagamento listar",
             );
         }
 
@@ -6000,6 +6004,9 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 "",
                 "▸ /piam — atribui/remove médico do PIAM:",
                 "  _/piam Nome_ · _/piam remover Nome_ · _/piam listar_",
+                "",
+                "▸ /psiq — marca/remove médico como psiquiatra (PSIQ):",
+                "  _/psiq Nome_ · _/psiq remover Nome_ · _/psiq listar_",
                 "",
                 "▸ /banco — ajusta banco de horas:",
                 "  _/banco Nome Completo SD 0_",
