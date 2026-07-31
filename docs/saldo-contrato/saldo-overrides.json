@@ -22,7 +22,9 @@
   },
 
   "VENANDRA RIBEIRO E ANDRADE": {
-    "revisar": "Ciclo começa 01/10/2025 e a planilha não resetou. Outubro e novembro/2025 têm 5 dias marcados cada, mas a fórmula do valor ficou sem resultado e o sistema NÃO cobre 2025 (a base só tem plantões a partir de abril/2026). Não há segunda fonte para precificar esses dez dias. Com os meses legíveis o saldo seria 168.691,46 — é um TETO. Basta o coordenador olhar outubro e novembro dela na planilha e informar o valor."
+    "saldoBrl": 168691.46,
+    "tetoBrl": 248598.00,
+    "motivo": "Ciclo começa 01/10/2025 e a planilha não resetou. Outubro e novembro ficaram sem valor calculado — novembro tem contagem de plantões digitada como 0, outubro tem a célula vazia. Caio confirmou em 2026-07-31 que ela entrou em dezembro ainda com o teto cheio, ou seja, não consumiu nada em outubro nem em novembro. Consumo de dezembro em diante = 12.584,93 + 15.697,11 + 28.535,70 + 13.129,85 + 4.979,48 + 4.979,48 = 79.906,54."
   },
 
   "ACACIO JUNIO DE ALMEIDA": {
