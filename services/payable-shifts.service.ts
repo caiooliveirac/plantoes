@@ -14,18 +14,22 @@ import {
     type ChiefPayableBoardModel,
     type DoctorEmploymentType,
     type DoctorFinancialExtras,
+    type ContractBalanceSummary,
     type DoctorPaymentProfile,
     resolveDoctorEmploymentType,
     resolveDoctorPaymentProfile,
     resolveShiftDueAmount,
+    resolveShiftDueAmountCents,
     type RawPresenceEvent,
 } from "@/modules/reporting/payable-shifts";
+import { isPremiumRateDate } from "@/modules/operational/holidays";
 import { loadAdminExtraShiftsForRange } from "@/services/admin-extra-shifts.service";
 import { loadDoctorAttestationsForMonth } from "@/services/payment-closing-attestation.service";
 import { loadPaymentClosingMetaForMonth } from "@/services/payment-closing-meta.service";
 import { loadDoctorContracts } from "@/services/doctor-contracts.service";
 import { loadBankHoursSettlementsForMonth } from "@/services/bank-hours-settlements.service";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
+import { loadContractBalances } from "@/services/contract-balance.service";
 import {
     buildPaymentAllocationBoardModel,
     preparePaymentAllocationCandidateContext,
@@ -490,6 +494,36 @@ export async function getDoctorMonthlyPayableTotals(
     rangeStart: Date,
     rangeEnd: Date,
 ): Promise<Map<string, Map<string, number>>> {
+    const breakdown = await getDoctorMonthlyPayableBreakdown(rangeStart, rangeEnd);
+    const totals = new Map<string, Map<string, number>>();
+    for (const [doctorId, byMonth] of breakdown) {
+        totals.set(doctorId, new Map([...byMonth].map(([month, entry]) => [month, entry.amountCents / 100])));
+    }
+    return totals;
+}
+
+/** Consumo de um mês, do jeito que o razão do saldo contratual precisa. */
+export interface MonthlyPayableBreakdown {
+    /** Centavos inteiros — nada de float em dinheiro. */
+    amountCents: number;
+    /** Plantões de dia útil, em passos de 0,5. */
+    weekdayShifts: number;
+    /** Plantões de fim de semana OU feriado (mesma tarifa, isPremiumRateDate). */
+    weekendShifts: number;
+}
+
+/**
+ * Mesma apuração do fechamento, decomposta em centavos e em plantões por tipo de
+ * dia. É a fonte do lançamento 'invoice' no razão do saldo contratual: como o
+ * total de um mês pode mudar DEPOIS da atestação (plantão extra do admin, acerto
+ * de banco de horas, correção administrativa, undo, chegada registrada pelo bot),
+ * o razão se reconcilia contra esta função em vez de confiar no valor congelado
+ * no momento em que o admin assinou. Ver services/contract-ledger.service.ts.
+ */
+export async function getDoctorMonthlyPayableBreakdown(
+    rangeStart: Date,
+    rangeEnd: Date,
+): Promise<Map<string, Map<string, MonthlyPayableBreakdown>>> {
     const [{ boards }, { profiles, employmentTypes }] = await Promise.all([
         getPayableAllocationBoardsForRange(rangeStart, rangeEnd),
         loadDoctorPaymentSettings(),
@@ -500,22 +534,30 @@ export async function getDoctorMonthlyPayableTotals(
     const adminExtraRows = await loadAdminExtraShiftsForRange(extraStartDate, extraEndDate);
     const allShifts = [...payableShifts, ...adminExtraRows.map(buildAdminExtraPayableShift)];
 
-    const totals = new Map<string, Map<string, number>>();
+    const breakdown = new Map<string, Map<string, MonthlyPayableBreakdown>>();
     for (const shift of allShifts) {
         const monthKey = shift.operationalDate.slice(0, 7);
         const profile = profiles.get(shift.doctorId) ?? "generalist";
         const employmentType = employmentTypes.get(shift.doctorId) ?? "pj";
-        const due = resolveShiftDueAmount({
+        const amountCents = resolveShiftDueAmountCents({
             profile,
             operationalDate: shift.operationalDate,
             paymentUnit: shift.paymentUnit,
             employmentType,
         });
-        const byMonth = totals.get(shift.doctorId) ?? new Map<string, number>();
-        byMonth.set(monthKey, (byMonth.get(monthKey) ?? 0) + due);
-        totals.set(shift.doctorId, byMonth);
+        const byMonth = breakdown.get(shift.doctorId) ?? new Map<string, MonthlyPayableBreakdown>();
+        const current = byMonth.get(monthKey) ?? { amountCents: 0, weekdayShifts: 0, weekendShifts: 0 };
+        const premium = isPremiumRateDate(shift.operationalDate);
+        byMonth.set(monthKey, {
+            amountCents: current.amountCents + amountCents,
+            // O plantão vermelho do admin tem paymentUnit negativo: subtrai da
+            // contagem tanto quanto subtrai do valor.
+            weekdayShifts: current.weekdayShifts + (premium ? 0 : shift.paymentUnit),
+            weekendShifts: current.weekendShifts + (premium ? shift.paymentUnit : 0),
+        });
+        breakdown.set(shift.doctorId, byMonth);
     }
-    return totals;
+    return breakdown;
 }
 
 export async function getChiefPayableShiftsBoard(monthKey?: string | null): Promise<ChiefPayableBoardModel> {
@@ -613,13 +655,48 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     // saldo do banco de horas e acerto do mês. Carregada à parte do cálculo de
     // plantões para não interferir no board.
     const tFin = perfStart();
-    const [paymentMeta, contracts, settlementsByDoctor, bankBalances] = await Promise.all([
+    const [paymentMeta, contracts, settlementsByDoctor, bankBalances, contractBalances] = await Promise.all([
         loadPaymentClosingMetaForMonth(range.monthKey),
         loadDoctorContracts(),
         loadBankHoursSettlementsForMonth(range.monthKey),
         timed("q:getDoctorBankHoursEffectiveBalances", getDoctorBankHoursEffectiveBalances()),
+        // Saldo contratual do razão (Fase 3). Convive com a semente antiga da
+        // 0026 até a virada; quem tem contrato novo mostra o bloco novo.
+        timed("q:loadContractBalances", loadContractBalances()),
     ]);
     perfEnd("phase:queries-block-2-financials", tFin);
+
+    const contractBalancesByDoctor = new Map<string, ContractBalanceSummary[]>();
+    for (const row of contractBalances.rows) {
+        const summary: ContractBalanceSummary = {
+            contractId: row.contractId,
+            contractNumber: row.contractNumber,
+            cycleStart: row.cycleStart,
+            cycleEnd: row.cycleEnd,
+            ceilingCents: row.ceilingCents,
+            balanceCents: row.metrics.balanceCents,
+            consumedCents: row.metrics.consumedCents,
+            consumedPct: row.metrics.consumedPct,
+            elapsedPct: row.metrics.elapsedPct,
+            riskLevel: row.metrics.riskLevel,
+            hasReliableBurnRate: row.metrics.hasReliableBurnRate,
+            projectedDepletionDate: row.metrics.projectedDepletionDate?.toISOString() ?? null,
+            healthyMonthlyBudgetCents: row.metrics.healthyMonthlyBudgetCents,
+            monthlyWeekdayShifts: row.metrics.monthlyWeekdayShifts,
+            remainingWeekdayShifts: row.metrics.remainingWeekdayShifts,
+            awaitingOpeningBalance: row.awaitingOpeningBalance,
+            metricsInput: {
+                ...row.metricsInput,
+                observedSince: row.metricsInput.observedSince.toISOString(),
+                cycleStart: row.metricsInput.cycleStart.toISOString(),
+                cycleEnd: row.metricsInput.cycleEnd.toISOString(),
+                asOf: row.metricsInput.asOf.toISOString(),
+            },
+        };
+        const list = contractBalancesByDoctor.get(row.doctorId) ?? [];
+        list.push(summary);
+        contractBalancesByDoctor.set(row.doctorId, list);
+    }
 
     // Saldo contratual = teto - pagamentos acumulados desde a semente até o mês.
     const contractBalanceByDoctor = new Map<string, number>();
@@ -647,6 +724,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     const financialDoctorIds = new Set<string>([
         ...paymentMeta.keys(),
         ...contracts.keys(),
+        ...contractBalancesByDoctor.keys(),
         ...settlementsByDoctor.keys(),
         ...bankBalances.keys(),
     ]);
@@ -665,6 +743,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             bankHoursMinutes: bankBalances.get(doctorId)?.totalMinutes ?? null,
             bankHoursOldMinutes: bankBalances.get(doctorId)?.oldMinutes ?? null,
             bankHoursRecentMinutes: bankBalances.get(doctorId)?.recentMinutes ?? null,
+            contractBalances: contractBalancesByDoctor.get(doctorId) ?? [],
             bankHoursSettlement: lastSettlement
                 ? {
                     kind: lastSettlement.kind,

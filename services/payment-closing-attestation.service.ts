@@ -18,9 +18,11 @@ export async function setDoctorMonthAttestation(params: {
     monthKey: string;
     attested: boolean;
     actorUserId: string;
+    /** Permite assinar e lançar no razão do saldo contratual na mesma transação. */
+    tx?: Pick<ReturnType<typeof getDb>, "insert" | "delete">;
 }): Promise<{ attestedAt: string | null }> {
     const monthKey = normalizeMonthKey(params.monthKey);
-    const db = getDb();
+    const db = params.tx ?? getDb();
 
     if (!params.attested) {
         await db

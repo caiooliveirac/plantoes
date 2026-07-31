@@ -11668,3 +11668,185 @@ button.chief-payable-tag:focus-visible {
 }
 .board-modal-deactivate:hover { background: var(--accent-warn); color: #1a130a; }
 .board-modal-deactivate:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Bloco de saldo de contrato no fechamento (docs/saldo-contrato/SPEC.md §7.1).
+   Risco nunca é comunicado só por cor: a cor acompanha ícone e texto. */
+.contract-balance-card {
+    grid-column: 1 / -1;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 12px;
+    padding: 16px 18px;
+    background: rgba(15, 23, 42, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.contract-balance-card header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.contract-balance-card header span {
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #cbd5f5;
+}
+
+.contract-balance-card header small {
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+
+.contract-balance-card.risk-warning { border-color: rgba(251, 146, 60, 0.55); }
+.contract-balance-card.risk-critical { border-color: rgba(248, 113, 113, 0.6); }
+.contract-balance-card.risk-depleted { border-color: rgba(148, 163, 184, 0.7); }
+
+.contract-balance-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    color: #cbd5f5;
+}
+
+/* Duas camadas: preenchimento é o consumido, o traço vertical é o ritmo
+   esperado hoje. É a leitura de um segundo. */
+.contract-balance-bar {
+    position: relative;
+    height: 14px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.2);
+    overflow: hidden;
+}
+
+.contract-balance-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #38bdf8, #6366f1);
+}
+
+.risk-warning .contract-balance-bar-fill { background: linear-gradient(90deg, #fbbf24, #fb923c); }
+.risk-critical .contract-balance-bar-fill,
+.risk-depleted .contract-balance-bar-fill { background: linear-gradient(90deg, #fb7185, #ef4444); }
+
+.contract-balance-bar-pace {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    width: 2px;
+    background: #f8fafc;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.8);
+}
+
+.contract-balance-bar-legend,
+.contract-balance-projection,
+.contract-balance-budget,
+.contract-balance-no-ceiling,
+.contract-balance-awaiting-note {
+    margin: 0;
+    font-size: 0.82rem;
+    color: #cbd5f5;
+    line-height: 1.5;
+}
+
+.contract-balance-no-ceiling,
+.contract-balance-awaiting-note {
+    color: #fcd34d;
+}
+
+.contract-balance-values {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin: 4px 0 0;
+}
+
+.contract-balance-values div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.contract-balance-values dt {
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.contract-balance-values dd {
+    margin: 0;
+    font-size: 1.02rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    font-variant-numeric: tabular-nums;
+}
+
+.contract-balance-values .highlight dd {
+    font-size: 1.18rem;
+    color: #f8fafc;
+}
+
+.contract-balance-values dd.negative { color: #fda4af; }
+
+.contract-balance-risk {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: rgba(56, 189, 248, 0.16);
+    color: #7dd3fc;
+}
+
+.contract-balance-risk.risk-watch { background: rgba(250, 204, 21, 0.16); color: #fde047; }
+.contract-balance-risk.risk-warning { background: rgba(251, 146, 60, 0.18); color: #fdba74; }
+.contract-balance-risk.risk-critical { background: rgba(248, 113, 113, 0.2); color: #fca5a5; }
+.contract-balance-risk.risk-depleted { background: rgba(148, 163, 184, 0.22); color: #e2e8f0; }
+
+.contract-balance-overrun {
+    border: 1px solid rgba(248, 113, 113, 0.55);
+    background: rgba(127, 29, 29, 0.28);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.contract-balance-overrun p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #fecaca;
+    line-height: 1.5;
+}
+
+.contract-balance-overrun label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: #fee2e2;
+    cursor: pointer;
+}
+
+.contract-balance-opening {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.contract-balance-opening input {
+    flex: 1;
+    min-width: 0;
+}
+
+@media (max-width: 640px) {
+    .contract-balance-values {
+        grid-template-columns: 1fr;
+    }
+}

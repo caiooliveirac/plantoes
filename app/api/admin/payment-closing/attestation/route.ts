@@ -5,6 +5,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { setDoctorMonthAttestation } from "@/services/payment-closing-attestation.service";
+import { syncContractLedgerForMonth } from "@/services/contract-ledger.service";
 
 const payloadSchema = z.object({
     doctorId: z.string().uuid(),
@@ -31,12 +32,25 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-        const result = await setDoctorMonthAttestation({
-            doctorId: parsed.data.doctorId,
-            monthKey: parsed.data.monthKey,
-            attested: parsed.data.attested,
-            actorUserId: session.user.id,
-        });
+        // Assinatura e lançamento no razão são o mesmo ato: ou os dois acontecem
+        // ou nenhum. Desassinar entra aqui como estorno, não como delete do razão
+        // — o razão é append-only.
+        const { result, ledger } = await getDb().transaction(async (tx) => ({
+            result: await setDoctorMonthAttestation({
+                doctorId: parsed.data.doctorId,
+                monthKey: parsed.data.monthKey,
+                attested: parsed.data.attested,
+                actorUserId: session.user.id,
+                tx,
+            }),
+            ledger: await syncContractLedgerForMonth({
+                doctorId: parsed.data.doctorId,
+                monthKey: parsed.data.monthKey,
+                attested: parsed.data.attested,
+                actorUserId: session.user.id,
+                tx,
+            }),
+        }));
 
         await getDb().insert(auditLogs).values({
             actorUserId: session.user.id,
@@ -47,11 +61,13 @@ export async function POST(request: NextRequest) {
                 doctorId: parsed.data.doctorId,
                 monthKey: parsed.data.monthKey,
                 attested: parsed.data.attested,
+                ledgerOutcome: ledger.outcome,
+                ledgerDeltaCents: ledger.deltaCents,
             },
         });
 
         revalidatePath("/admin/payment-closing");
-        return NextResponse.json({ attestedAt: result.attestedAt });
+        return NextResponse.json({ attestedAt: result.attestedAt, ledger });
     } catch (error) {
         return NextResponse.json(
             { error: error instanceof Error ? error.message : "Nao foi possivel salvar a atestacao." },

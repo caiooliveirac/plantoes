@@ -1,6 +1,7 @@
 import { getTelegramReminderPollMs } from "@/modules/telegram/config";
 import { assertSingleRuntimeConfig, logRuntimeIdentity } from "@/lib/runtime-identity";
 import { sendTelegramMealBreakCycle, sendTelegramMealBreakTurnNudges } from "@/modules/telegram/meal-breaks";
+import { sendContractBalanceCycle } from "@/modules/telegram/contract-balance-alerts";
 import { sendTelegramPaymentDigestCycle } from "@/modules/telegram/payment-digest";
 import { sendTelegramReminderCycle } from "@/modules/telegram/reminders";
 import { expireResidenteOccupancies } from "@/modules/operational/residente-auto-close";
@@ -15,15 +16,19 @@ async function runCycle() {
     running = true;
     try {
         const referenceDate = new Date();
-        const [reminders, mealBreak, mealBreakNudges, paymentDigest, residenteAutoClose] = await Promise.all([
+        const [reminders, mealBreak, mealBreakNudges, paymentDigest, residenteAutoClose, contractBalance] = await Promise.all([
             sendTelegramReminderCycle(referenceDate),
             sendTelegramMealBreakCycle(referenceDate),
             sendTelegramMealBreakTurnNudges(referenceDate),
             sendTelegramPaymentDigestCycle(referenceDate),
             expireResidenteOccupancies(referenceDate),
+            // Varredura do razão do saldo contratual + alertas (SPEC §8).
+            sendContractBalanceCycle(referenceDate),
         ]);
-        const evaluated = reminders.evaluated + mealBreak.evaluated + mealBreakNudges.evaluated + paymentDigest.evaluated;
-        const sent = reminders.sent + mealBreak.sent + mealBreakNudges.sent + paymentDigest.sent;
+        const evaluated = reminders.evaluated + mealBreak.evaluated + mealBreakNudges.evaluated
+            + paymentDigest.evaluated + contractBalance.evaluated;
+        const sent = reminders.sent + mealBreak.sent + mealBreakNudges.sent
+            + paymentDigest.sent + contractBalance.sent;
         if (evaluated > 0 || sent > 0) {
             console.log(`[telegram-reminder-worker] evaluated=${evaluated} sent=${sent}`);
         }

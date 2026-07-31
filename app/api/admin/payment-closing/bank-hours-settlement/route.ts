@@ -9,6 +9,7 @@ import {
     BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES,
     settleBankHours,
 } from "@/services/bank-hours-settlements.service";
+import { syncContractLedgerForMonth } from "@/services/contract-ledger.service";
 
 const payloadSchema = z.object({
     doctorId: z.string().uuid(),
@@ -92,6 +93,13 @@ export async function POST(request: NextRequest) {
 
         revalidatePath("/admin/payment-closing");
         revalidatePath("/admin/bank-hours");
+        // O acerto gera um plantão verde/vermelho, então mexe no total do mês.
+        await syncContractLedgerForMonth({
+            doctorId: result.doctorId,
+            monthKey: result.monthKey,
+            actorUserId: session.user.id,
+        });
+
         return NextResponse.json({ settlement: result });
     } catch (error) {
         return NextResponse.json(

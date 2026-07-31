@@ -1,0 +1,40 @@
+{
+  "_comentario": "Correções manuais do saldo de abertura, aprovadas por Caio em 2026-07-31. Derivação completa em docs/saldo-contrato/01-conferencia-2025.md. Duas formas: 'saldoBrl' substitui o número da planilha; 'revisar' força o campo em branco na tela, com a nota aparecendo no relatório. Chave = nome como está na planilha.",
+
+  "_criterio": "Só entra com saldoBrl quem tem TODOS os meses do ciclo legíveis na planilha. Mês com #VALUE! não vira zero (SPEC §9.4) — tratar assim produziria um saldo sempre otimista, a favor de deixar o médico gastar mais do que pode.",
+
+  "KAREN SEIFARTH MIRANDA": {
+    "saldoBrl": -6896.24,
+    "tetoBrl": 248598.00,
+    "motivo": "A planilha resetou no mês certo (ago/2025) com o teto errado: 165.732 (24h) em vez de 248.598 (36h). Karen é 36h nos 17 meses da série. Consumo do ciclo 08/2025-05/2026 = 255.494,24, todos os 10 meses legíveis. Ela estourou, mas em 6.896,24 e não em 89.762,24."
+  },
+
+  "KARLA SANTOS PINTO": {
+    "saldoBrl": 284605.23,
+    "tetoBrl": 331464.00,
+    "motivo": "Ciclo começa 01/02/2026. A planilha abriu fevereiro em 322.341,22 = 331.464,00 menos 9.122,78, que era o consumo de janeiro — gasto do ciclo anterior descontado do ciclo novo. Consumo fev-mai = 46.858,77, todos os 4 meses legíveis. A coluna CH diz 24h mas o contrato 99/2025 reseta em 331.464 (48h), como nos sócios Gabriel Sapucaia, Sadja e Rafaela."
+  },
+
+  "RENÊ REQUIÃO PAIM": {
+    "saldoBrl": 137391.25,
+    "tetoBrl": 165732.00,
+    "motivo": "Ciclo começa 01/12/2025 e a planilha não resetou. Fevereiro/2026 parecia ilegível, mas a célula não é #VALUE! e sim fórmula sem resultado em cache: na linha dele de fevereiro NENHUM dia está marcado e o saldo de fechamento é igual ao de abertura. Dois sinais independentes de que o mês é zero — ele não trabalhou. Consumo do ciclo = 3.734,61 + 6.224,35 + 0 + 6.633,04 + 4.007,07 + 7.741,68 = 28.340,75."
+  },
+
+  "VENANDRA RIBEIRO E ANDRADE": {
+    "saldoBrl": 168691.46,
+    "tetoBrl": 248598.00,
+    "motivo": "Ciclo começa 01/10/2025 e a planilha não resetou. Outubro e novembro ficaram sem valor calculado — novembro tem contagem de plantões digitada como 0, outubro tem a célula vazia. Caio confirmou em 2026-07-31 que ela entrou em dezembro ainda com o teto cheio, ou seja, não consumiu nada em outubro nem em novembro. Consumo de dezembro em diante = 12.584,93 + 15.697,11 + 28.535,70 + 13.129,85 + 4.979,48 + 4.979,48 = 79.906,54."
+  },
+
+  "ACACIO JUNIO DE ALMEIDA": {
+    "saldoBrl": 140834.60,
+    "tetoBrl": 165732.00,
+    "motivo": "Ciclo começa 01/03/2026 e a planilha não resetou. Março (7.469,22) vem da planilha. Abril e maio tinham a fórmula sem resultado, mas o SISTEMA tem cobertura completa desses dois meses (1.255 e 1.303 ocupações) e os dias dele batem exatamente com os marcados na planilha: 06, 13, 20 e 27 de abril; 04, 11 e 25 de maio. Pelo app, abril = 9.958,96 e maio = 7.469,22. Consumo do ciclo = 24.897,40."
+  },
+
+  "_sem_correcao": {
+    "VINICIUS SANTOS MOURA DE JESUS": "Estava na lista de renovação não aplicada, mas o recálculo bate exatamente com a planilha (33.385,89). Nada a corrigir.",
+    "ENRICO BISCARDE / JOÃO GUSTAVO DOS ANJOS / GABRIEL RIBEIRO SAMPAIO CRUZ": "Saíram do serviço (confirmado por Caio em 2026-07-31). Não têm linha em maio/2026, então nem entram no backfill."
+  }
+}
