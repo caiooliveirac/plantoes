@@ -15,37 +15,24 @@
     "motivo": "Ciclo começa 01/02/2026. A planilha abriu fevereiro em 322.341,22 = 331.464,00 menos 9.122,78, que era o consumo de janeiro — gasto do ciclo anterior descontado do ciclo novo. Consumo fev-mai = 46.858,77, todos os 4 meses legíveis. A coluna CH diz 24h mas o contrato 99/2025 reseta em 331.464 (48h), como nos sócios Gabriel Sapucaia, Sadja e Rafaela."
   },
 
-  "ENRICO BISCARDE": {
-    "revisar": "Ciclo começa 01/12/2025 e a planilha não resetou. Fevereiro/2026 está ilegível, então o consumo do ciclo não é apurável. Somando só os meses legíveis o saldo seria 137.400,65 — é um TETO, não o saldo.",
-    "estimativaBrl": 137400.65
-  },
-
   "RENÊ REQUIÃO PAIM": {
-    "revisar": "Ciclo começa 01/12/2025 e a planilha não resetou. Fevereiro/2026 ilegível. Com os meses legíveis o saldo seria 137.391,25 — teto, não saldo.",
-    "estimativaBrl": 137391.25
+    "saldoBrl": 137391.25,
+    "tetoBrl": 165732.00,
+    "motivo": "Ciclo começa 01/12/2025 e a planilha não resetou. Fevereiro/2026 parecia ilegível, mas a célula não é #VALUE! e sim fórmula sem resultado em cache: na linha dele de fevereiro NENHUM dia está marcado e o saldo de fechamento é igual ao de abertura. Dois sinais independentes de que o mês é zero — ele não trabalhou. Consumo do ciclo = 3.734,61 + 6.224,35 + 0 + 6.633,04 + 4.007,07 + 7.741,68 = 28.340,75."
   },
 
   "VENANDRA RIBEIRO E ANDRADE": {
-    "revisar": "Ciclo começa 01/10/2025 e a planilha não resetou. Outubro e novembro/2025 ilegíveis. Com os meses legíveis o saldo seria 168.691,46 — teto, não saldo.",
-    "estimativaBrl": 168691.46
+    "revisar": "Ciclo começa 01/10/2025 e a planilha não resetou. Outubro e novembro/2025 têm 5 dias marcados cada, mas a fórmula do valor ficou sem resultado e o sistema NÃO cobre 2025 (a base só tem plantões a partir de abril/2026). Não há segunda fonte para precificar esses dez dias. Com os meses legíveis o saldo seria 168.691,46 — é um TETO. Basta o coordenador olhar outubro e novembro dela na planilha e informar o valor."
   },
 
   "ACACIO JUNIO DE ALMEIDA": {
-    "revisar": "Ciclo começa 01/03/2026 e a planilha não resetou. Abril e maio/2026 ilegíveis. Com os meses legíveis o saldo seria 158.262,78 — teto, não saldo.",
-    "estimativaBrl": 158262.78
-  },
-
-  "JOÃO GUSTAVO DOS ANJOS MORAIS OLIVEIRA": {
-    "revisar": "Ciclo começa 01/03/2026 e a planilha não resetou. Março/2026 é o único mês do ciclo e está ilegível: não há nenhum dado apurável. O teto cheio (165.732,00) é o limite superior.",
-    "estimativaBrl": 165732.00
-  },
-
-  "GABRIEL RIBEIRO SAMPAIO CRUZ": {
-    "revisar": "Ciclo começa 01/08/2025 e a planilha não resetou. Ele não aparece em maio/2026 — a série dele para em março. Com os meses legíveis até lá o saldo seria 123.326,59, mas faltam abril e maio.",
-    "estimativaBrl": 123326.59
+    "saldoBrl": 140834.60,
+    "tetoBrl": 165732.00,
+    "motivo": "Ciclo começa 01/03/2026 e a planilha não resetou. Março (7.469,22) vem da planilha. Abril e maio tinham a fórmula sem resultado, mas o SISTEMA tem cobertura completa desses dois meses (1.255 e 1.303 ocupações) e os dias dele batem exatamente com os marcados na planilha: 06, 13, 20 e 27 de abril; 04, 11 e 25 de maio. Pelo app, abril = 9.958,96 e maio = 7.469,22. Consumo do ciclo = 24.897,40."
   },
 
   "_sem_correcao": {
-    "VINICIUS SANTOS MOURA DE JESUS": "Estava na lista de renovação não aplicada, mas o recálculo bate exatamente com a planilha (33.385,89). Nada a corrigir."
+    "VINICIUS SANTOS MOURA DE JESUS": "Estava na lista de renovação não aplicada, mas o recálculo bate exatamente com a planilha (33.385,89). Nada a corrigir.",
+    "ENRICO BISCARDE / JOÃO GUSTAVO DOS ANJOS / GABRIEL RIBEIRO SAMPAIO CRUZ": "Saíram do serviço (confirmado por Caio em 2026-07-31). Não têm linha em maio/2026, então nem entram no backfill."
   }
 }
