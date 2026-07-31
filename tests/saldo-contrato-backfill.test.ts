@@ -1,42 +1,52 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { anniversaryOn, nameSimilarity, normalizeDoctorName, resolveCycleWindow, suggestMatches } from "../scripts/backfill-saldo-contrato";
+import { cycleWindowFor, nameSimilarity, normalizeDoctorName, suggestMatches } from "../scripts/backfill-saldo-contrato";
 
-describe("anniversaryOn", () => {
-    it("mantém o dia quando ele existe no ano", () => {
-        assert.equal(anniversaryOn(2026, "2024-01-03"), "2026-01-03");
-    });
-
-    it("normaliza 29/02 para 28/02 em ano não bissexto", () => {
-        assert.equal(anniversaryOn(2026, "2024-02-29"), "2026-02-28");
-        assert.equal(anniversaryOn(2028, "2024-02-29"), "2028-02-29");
-    });
-
-    it("trata a regra dos séculos", () => {
-        assert.equal(anniversaryOn(2100, "2024-02-29"), "2100-02-28");
-        assert.equal(anniversaryOn(2000, "2024-02-29"), "2000-02-29");
-    });
-});
-
-describe("resolveCycleWindow", () => {
-    it("usa o aniversário deste ano quando ele já passou", () => {
+describe("cycleWindowFor", () => {
+    it("o dia da admissão não importa: o ciclo começa no dia 1 do mês", () => {
+        // Admitido em 26/12 ou em 01/12, o ciclo é o mesmo.
         assert.deepEqual(
-            resolveCycleWindow("2024-01-03", "2026-05-31"),
-            { start: "2026-01-03", end: "2027-01-03" },
+            cycleWindowFor("2024-12-26", "2026-05-31"),
+            { start: "2025-12-01", end: "2026-12-01" },
+        );
+        assert.deepEqual(
+            cycleWindowFor("2024-12-01", "2026-05-31"),
+            { start: "2025-12-01", end: "2026-12-01" },
         );
     });
 
-    it("volta para o aniversário do ano anterior quando ele ainda não chegou", () => {
+    it("volta um ano quando o mês de aniversário ainda não chegou", () => {
         assert.deepEqual(
-            resolveCycleWindow("2024-08-16", "2026-05-31"),
-            { start: "2025-08-16", end: "2026-08-16" },
+            cycleWindowFor("2024-08-16", "2026-05-31"),
+            { start: "2025-08-01", end: "2026-08-01" },
         );
     });
 
-    it("aceita o aniversário exatamente na data de referência", () => {
+    it("usa o ano corrente quando o mês de aniversário já passou", () => {
         assert.deepEqual(
-            resolveCycleWindow("2024-05-31", "2026-05-31"),
-            { start: "2026-05-31", end: "2027-05-31" },
+            cycleWindowFor("2024-01-03", "2026-05-31"),
+            { start: "2026-01-01", end: "2027-01-01" },
+        );
+    });
+
+    it("o mês de aniversário conta desde o dia 1, mesmo com admissão no fim dele", () => {
+        assert.deepEqual(
+            cycleWindowFor("2025-05-28", "2026-05-15"),
+            { start: "2026-05-01", end: "2027-05-01" },
+        );
+    });
+
+    it("nunca começa antes da própria admissão", () => {
+        assert.deepEqual(
+            cycleWindowFor("2026-04-09", "2026-05-31"),
+            { start: "2026-04-01", end: "2027-04-01" },
+        );
+    });
+
+    it("fevereiro não precisa de tratamento especial — o dia é sempre 1", () => {
+        assert.deepEqual(
+            cycleWindowFor("2024-02-29", "2026-05-31"),
+            { start: "2026-02-01", end: "2027-02-01" },
         );
     });
 });

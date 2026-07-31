@@ -231,20 +231,30 @@ function readSheet(sheet: ExcelJS.Worksheet): SheetRow[] {
 // Ciclo
 // --------------------------------------------------------------------------
 
-/** 29/02 em ano não bissexto normaliza para 28/02 (SPEC §3.1). */
-export function anniversaryOn(year: number, anniversary: string): string {
-    const [, month, day] = anniversary.split("-").map(Number);
-    const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-    const safeDay = month === 2 && day === 29 && !isLeap ? 28 : day;
-    return `${year}-${String(month).padStart(2, "0")}-${String(safeDay).padStart(2, "0")}`;
-}
+/**
+ * Início do ciclo: dia 1 do mês da admissão.
+ *
+ * O dia da admissão NÃO importa. Confirmado por Caio em 2026-07-31 e verificado
+ * contra a planilha: em 56 dos 63 resets limpos da série 2025–2026 a virada cai
+ * no mesmo mês da admissão, com o teto integral já no dia 1. Quem é admitido em
+ * 26 de dezembro queima o saldo velho até 30 de novembro e recebe o teto novo em
+ * 1º de dezembro.
+ *
+ * Efeito colateral bom: como o ciclo sempre começa no dia 1, o caso do
+ * aniversário em 29/02 simplesmente não existe.
+ */
+export function cycleWindowFor(admission: string, asOf: string): { start: string; end: string } {
+    const [admYear, admMonth] = admission.split("-").map(Number);
+    const [asOfYear, asOfMonth] = asOf.split("-").map(Number);
 
-/** Janela vigente em `asOf`: [último aniversário <= asOf, +1 ano). */
-export function resolveCycleWindow(anniversary: string, asOf: string): { start: string; end: string } {
-    const asOfYear = Number(asOf.slice(0, 4));
-    let start = anniversaryOn(asOfYear, anniversary);
-    if (start > asOf) start = anniversaryOn(asOfYear - 1, anniversary);
-    return { start, end: anniversaryOn(Number(start.slice(0, 4)) + 1, anniversary) };
+    // Último aniversário do mês de admissão que já começou.
+    let year = asOfYear;
+    if (admMonth > asOfMonth) year -= 1;
+    if (year < admYear) year = admYear;
+
+    const start = `${year}-${String(admMonth).padStart(2, "0")}-01`;
+    const end = `${year + 1}-${String(admMonth).padStart(2, "0")}-01`;
+    return { start, end };
 }
 
 function round2(value: number): number {
@@ -316,7 +326,7 @@ function buildContractPlan(
     if (anniversary > SEED_MONTH.lastDay) {
         notes.push(`DATA ADMISSÃO no futuro (${anniversary}) — provável erro de digitação na planilha`);
     }
-    plan.cycle = resolveCycleWindow(anniversary, SEED_MONTH.lastDay);
+    plan.cycle = cycleWindowFor(anniversary, SEED_MONTH.lastDay);
 
     const seedRow = monthRows.get(SEED_MONTH.key);
     if (!seedRow || seedRow.closingBalance == null) {
