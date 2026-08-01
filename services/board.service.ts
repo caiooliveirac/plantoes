@@ -101,8 +101,6 @@ export interface InterventionBoardRow {
   liveSource: "operations_v2" | "legacy_live" | "none";
   liveUpdatedAt: string | null;
   scheduledStartAt?: string | null;
-  lateArrivalAcknowledgedAt?: string | null;
-  lateArrivalAcknowledgedNote?: string | null;
   shadowOccupants?: BoardShadowOccupant[];
   displacedOccupants?: BoardShadowOccupant[];
 }
@@ -775,8 +773,6 @@ function mapInterventionRow(row: Record<string, unknown>): InterventionBoardRow 
     disabledReason: (row.disabledReason ?? row.disabled_reason ?? null) as string | null,
     liveSource: (row.liveSource ?? row.live_source ?? "none") as InterventionBoardRow["liveSource"],
     liveUpdatedAt: (row.liveUpdatedAt ?? row.live_updated_at ?? null) as string | null,
-    lateArrivalAcknowledgedAt: (row.lateArrivalAcknowledgedAt ?? row.late_arrival_acknowledged_at ?? null) as string | null,
-    lateArrivalAcknowledgedNote: (row.lateArrivalAcknowledgedNote ?? row.late_arrival_acknowledged_note ?? null) as string | null,
   };
 }
 
@@ -1780,8 +1776,6 @@ export async function listInterventionBoard() {
       end as "roleLabel",
       ad.deactivated_at as "disabledAt",
       ad.notes as "disabledReason",
-      io.late_arrival_acknowledged_at as "lateArrivalAcknowledgedAt",
-      io.late_arrival_acknowledged_note as "lateArrivalAcknowledgedNote",
       case
         when io.id is not null or li.base_code is not null then 'active'
         when ad.base_id is not null then 'disabled'

@@ -55,13 +55,32 @@ test("gate: meio plantão SEM horário é aceito pela hora da mensagem dentro da
     assert.ok(parsed.extractedNames.length > 0, "esperava nome extraído");
 });
 
-test("gate: limites da janela 10:30 (inclusive) – 17:00 (exclusive) pela hora da mensagem", () => {
+test("gate: limites da janela 11:10 (inclusive) – 17:00 (exclusive) pela hora da mensagem", () => {
     const parsed = parseMessage("Uenderson 1361 tarde");
-    assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("10:30")), true, "10:30 inclusive");
+    assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("11:10")), true, "11:10 inclusive");
     assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("16:59")), true, "16:59 dentro");
-    assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("10:29")), false, "10:29 antes");
+    assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("11:09")), false, "11:09 antes");
     assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("17:00")), false, "17:00 exclusive");
     assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("18:30")), false, "18:30 depois");
+});
+
+// Caso Vanessa Brito (jul/2026): chegada 10:38 virava meio plantão automático.
+// 10:30–11:09 agora é SD INTEIRO com atraso, não meia jornada.
+test("gate: 10:30–11:09 deixou de ser meio plantão (é SD atrasado)", () => {
+    const parsed = parseMessage("Uenderson 1361 tarde");
+    assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("10:30")), false, "10:30 fora");
+    assert.equal(arrivalHalfShiftSatisfiesShiftGate(parsed, at("10:38")), false, "10:38 fora");
+
+    assert.equal(shouldAssumeTelegramHalfShift({
+        parsed: { sector: "REGULATION", isDeparture: false, isContinuation: false },
+        eventAt: at("10:38"),
+        effectiveShiftType: null,
+    }), false, "chegada 10:38 não é suposta como meio plantão");
+    assert.equal(shouldAssumeTelegramHalfShift({
+        parsed: { sector: "REGULATION", isDeparture: false, isContinuation: false },
+        eventAt: at("11:10"),
+        effectiveShiftType: null,
+    }), true, "11:10 continua sendo meio plantão");
 });
 
 test("gate: horário declarado, quando presente, manda na janela (independe da hora da mensagem)", () => {

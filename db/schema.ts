@@ -287,6 +287,11 @@ export const interventionOccupancies = operationsV2.table(
         updatedByUserId: uuid("updated_by_user_id").references(() => users.id),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
         updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+        // APOSENTADAS (jul/2026). Marcavam a regra "chegou depois das 9h em
+        // intervenção SD -> vira meio plantão 13-19, o antes vira crédito no
+        // banco". A regra saiu: atraso em plantão inteiro é atraso e debita
+        // sobre a janela do turno. Colunas mantidas só como histórico das
+        // ocupações já marcadas — nada lê mais para cálculo. Não usar em código novo.
         lateArrivalAcknowledgedAt: timestamp("late_arrival_acknowledged_at", { withTimezone: true }),
         lateArrivalAcknowledgedByUserId: uuid("late_arrival_acknowledged_by_user_id").references(() => users.id),
         lateArrivalAcknowledgedNote: text("late_arrival_acknowledged_note"),

@@ -32,6 +32,7 @@ import {
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
+import { isBeforeHalfShiftWindow, isHalfShiftRoleLabel, isHalfShiftScheduledWindow, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
@@ -652,6 +653,92 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
     };
 }
 
+interface CorrectedScheduledWindow {
+    scheduledStartAt: Date | null;
+    scheduledEndAt: Date | null;
+}
+
+interface CorrectedHalfShiftState extends CorrectedScheduledWindow {
+    roleLabel: string | null;
+}
+
+/**
+ * Decide FUNÇÃO e janela agendada (scheduled_start_at/scheduled_end_at) depois de
+ * uma correção. É essa janela que o banco de horas usa como baseline de atraso e
+ * de hora extra, então meio plantão não é só um rótulo: muda o plantão inteiro.
+ *
+ * Só existem DUAS formas de tirar o meio plantão de alguém:
+ *
+ *  1. Trocar a função — pelo quadro ou pelo `/ramal`. MEIO_PLANTAO → outra função
+ *     devolve a janela do turno (SD 07:00–19:15 na regulação, 07:00–19:00 na
+ *     intervenção) e o atraso passa a ser medido a partir das 07:00: quem chegou
+ *     10:38 leva o débito cheio de ~3h38 (caso Vanessa Brito, jul/2026).
+ *  2. Corrigir a chegada para antes das 11:10 — fora da janela de reconhecimento,
+ *     a meia jornada não se sustenta. A função é REBAIXADA junto com a janela;
+ *     manter o rótulo faria o payment-closing pagar 0,5 de um plantão inteiro.
+ *
+ * Corrigir só o horário DENTRO da janela (11:10–17:00) mantém a meia jornada:
+ * antes deste fix, ajustar a chegada de 11:59 para 11:50 reescrevia a janela como
+ * turno inteiro e inventava ~4h50 de atraso (caso Cecilia Veiga, 26/07/2026).
+ *
+ * AUTO-CURA nas duas direções: função e janela em desacordo é estado incoerente,
+ * sobra das versões anteriores deste código. Nesse estado QUALQUER correção na
+ * ocupação refaz a janela, mesmo sem cruzar fronteira nenhuma — sem isso o passivo
+ * fica travado, porque trocar COI→COI (ou MEIO→MEIO) não cruza nada e a janela
+ * errada sobreviveria para sempre. As duas incoerências curadas:
+ *   - função inteira sobre a janela canônica de meia jornada (caso Vanessa);
+ *   - meio plantão sobre janela que COMEÇA antes das 11:10, ou seja a janela do
+ *     turno inteiro (caso Cecilia).
+ * Meia jornada declarada tarde, com janela própria (ex.: 13:13–17:00), NÃO é
+ * incoerente e fica como está: encaixá-la à força em 11:30 inventaria atraso.
+ *
+ * O pagamento não precisa de nada além da função: payment-closing deriva a unidade
+ * (0,5 ou 1) do próprio role_label em tempo de leitura.
+ */
+export function resolveCorrectedHalfShiftState(params: {
+    existingRoleLabel: string | null;
+    nextRoleLabel: string | null;
+    roleLabelProvided: boolean;
+    temporalFieldsChanged: boolean;
+    windowReferenceAt: Date;
+    existingWindow: CorrectedScheduledWindow;
+    inferFullShiftWindow: () => CorrectedScheduledWindow;
+}): CorrectedHalfShiftState {
+    const demoted = isHalfShiftRoleLabel(params.nextRoleLabel)
+        && isBeforeHalfShiftWindow(params.windowReferenceAt);
+    const roleLabel = demoted ? null : params.nextRoleLabel;
+
+    const nextIsHalfShift = isHalfShiftRoleLabel(roleLabel);
+    const halfShiftBoundaryCrossed = (params.roleLabelProvided || demoted)
+        && isHalfShiftRoleLabel(params.existingRoleLabel) !== nextIsHalfShift;
+
+    if (nextIsHalfShift) {
+        // A janela de meia jornada só é (re)escrita quando a gravada não serve:
+        // ou a função acabou de virar meio plantão, ou o que está lá é janela de
+        // turno inteiro (começa antes das 11:10). Meia jornada declarada tarde,
+        // com janela própria (13:13–17:00, do bot antigo), fica como está —
+        // encaixá-la em 11:30 inventaria atraso numa correção de horário.
+        const storedStartAt = params.existingWindow.scheduledStartAt;
+        const storedWindowServes = !halfShiftBoundaryCrossed
+            && storedStartAt !== null
+            && !isBeforeHalfShiftWindow(storedStartAt);
+
+        return {
+            roleLabel,
+            ...(storedWindowServes
+                ? params.existingWindow
+                : resolveHalfShiftScheduledWindow(params.windowReferenceAt)),
+        };
+    }
+
+    const staleHalfShiftWindow = isHalfShiftScheduledWindow(params.existingWindow);
+    if (!params.temporalFieldsChanged && !halfShiftBoundaryCrossed && !staleHalfShiftWindow) {
+        return { roleLabel, ...params.existingWindow };
+    }
+
+    return { roleLabel, ...params.inferFullShiftWindow() };
+}
+
 export async function correctRegulationOccupancy(
     id: string,
     input: RegulationOccupancyCorrectionInput,
@@ -704,25 +791,43 @@ export async function correctRegulationOccupancy(
             });
         }
 
-        // Recalculate scheduled window whenever startedAt or shiftLabel is corrected.
-        // Without this, /corrigir would leave stale scheduled_start_at/scheduled_end_at
-        // pointing at the wrong shift after an arrival-time or shift-label edit.
+        const nextShiftLabel = hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel;
+        const requestedRoleLabel = hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel;
+        const sanitizedRoleLabel = applyOperationalRoleShiftPolicy({
+            shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
+                ? nextShiftLabel
+                : null,
+            roleLabel: requestedRoleLabel,
+        });
+
+        // Recalculate scheduled window whenever startedAt, shiftLabel or the
+        // half-shift role boundary is corrected. Without this, /corrigir would
+        // leave stale scheduled_start_at/scheduled_end_at pointing at the wrong
+        // shift after an arrival-time, shift-label or função edit.
         // For continuity entries (boardStartedAt > startedAt), use boardStartedAt as
         // the window reference so the scheduled window matches the current shift.
-        const nextShiftLabel = hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel;
-        const scheduledWindowChanged = hasOwn(input, "startedAt") || hasOwn(input, "shiftLabel") || hasOwn(input, "boardStartedAt");
         const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
             ? boardStartedAt
             : startedAt;
-        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = scheduledWindowChanged
-            ? inferRegulationCoverageWindow({
+        const {
+            roleLabel: nextRoleLabel,
+            scheduledStartAt: newScheduledStart,
+            scheduledEndAt: newScheduledEnd,
+        } = resolveCorrectedHalfShiftState({
+            existingRoleLabel: existing.roleLabel,
+            nextRoleLabel: sanitizedRoleLabel,
+            roleLabelProvided: hasOwn(input, "roleLabel"),
+            temporalFieldsChanged: hasOwn(input, "startedAt") || hasOwn(input, "shiftLabel") || hasOwn(input, "boardStartedAt"),
+            windowReferenceAt,
+            existingWindow: { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt },
+            inferFullShiftWindow: () => inferRegulationCoverageWindow({
                 startedAt: windowReferenceAt,
                 shiftLabel: nextShiftLabel,
                 postCode: targetPost.code,
                 explicitScheduledStartAt: null,
                 explicitScheduledEndAt: null,
-            })
-            : { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt };
+            }),
+        });
 
         if (postId !== existing.postId) {
             if (!endedAt) {
@@ -739,14 +844,6 @@ export async function correctRegulationOccupancy(
                 }
             }
         }
-
-        const requestedRoleLabel = hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel;
-        const sanitizedRoleLabel = applyOperationalRoleShiftPolicy({
-            shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
-                ? nextShiftLabel
-                : null,
-            roleLabel: requestedRoleLabel,
-        });
 
         const actualEndedAtTimeChanged = actualEndedAtChanged
             && (actualEndedAt?.getTime() ?? null) !== (existing.actualEndedAt?.getTime() ?? null);
@@ -773,7 +870,7 @@ export async function correctRegulationOccupancy(
                 endedAt,
                 actualEndedAt,
                 shiftLabel: nextShiftLabel,
-                roleLabel: sanitizedRoleLabel,
+                roleLabel: nextRoleLabel,
                 ramalLabel: normalizeRegulationRamalLabel({
                     actualPostCode: targetPost.code,
                     requestedRamalLabel: hasOwn(input, "ramalLabel") ? input.ramalLabel ?? null : existing.ramalLabel,
@@ -830,25 +927,34 @@ export async function correctInterventionOccupancy(
         }
 
         const nextShiftLabel = hasOwn(input, "shiftLabel") ? input.shiftLabel ?? null : existing.shiftLabel;
-        const scheduledWindowChanged = startedAtChanged || boardStartedAtChanged || hasOwn(input, "shiftLabel");
-        const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
-            ? boardStartedAt
-            : startedAt;
-        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = scheduledWindowChanged
-            ? inferInterventionCoverageWindow({
-                startedAt: windowReferenceAt,
-                shiftLabel: nextShiftLabel,
-                explicitScheduledStartAt: null,
-                explicitScheduledEndAt: null,
-            })
-            : { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt };
-
         const requestedRoleLabel = hasOwn(input, "roleLabel") ? input.roleLabel ?? null : existing.roleLabel;
         const sanitizedRoleLabel = applyOperationalRoleShiftPolicy({
             shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
                 ? nextShiftLabel
                 : null,
             roleLabel: requestedRoleLabel,
+        });
+
+        const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
+            ? boardStartedAt
+            : startedAt;
+        const {
+            roleLabel: nextRoleLabel,
+            scheduledStartAt: newScheduledStart,
+            scheduledEndAt: newScheduledEnd,
+        } = resolveCorrectedHalfShiftState({
+            existingRoleLabel: existing.roleLabel,
+            nextRoleLabel: sanitizedRoleLabel,
+            roleLabelProvided: hasOwn(input, "roleLabel"),
+            temporalFieldsChanged: startedAtChanged || boardStartedAtChanged || hasOwn(input, "shiftLabel"),
+            windowReferenceAt,
+            existingWindow: { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt },
+            inferFullShiftWindow: () => inferInterventionCoverageWindow({
+                startedAt: windowReferenceAt,
+                shiftLabel: nextShiftLabel,
+                explicitScheduledStartAt: null,
+                explicitScheduledEndAt: null,
+            }),
         });
 
         const actualEndedAtTimeChanged = actualEndedAtChanged
@@ -875,7 +981,7 @@ export async function correctInterventionOccupancy(
                 endedAt,
                 actualEndedAt,
                 shiftLabel: nextShiftLabel,
-                roleLabel: sanitizedRoleLabel,
+                roleLabel: nextRoleLabel,
                 notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),
