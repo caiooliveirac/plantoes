@@ -64,6 +64,12 @@ export interface ContractBalanceCardProps {
     /** Avisa o pai quando falta marcar a ciência do estouro. */
     onOverrunBlockChange?: (blocked: boolean) => void;
     onOpeningBalanceSaved?: () => void;
+    /**
+     * Painel do médico: mesma informação, nada clicável. Some o campo de saldo
+     * de abertura, o checkbox de ciência e o aviso de estouro — que são atos do
+     * admin. O médico vê o número e a projeção, e é só o que ele precisa ver.
+     */
+    readOnly?: boolean;
 }
 
 export function ContractBalanceCard({
@@ -74,6 +80,7 @@ export function ContractBalanceCard({
     alreadyAttested,
     onOverrunBlockChange,
     onOpeningBalanceSaved,
+    readOnly = false,
 }: ContractBalanceCardProps) {
     const [selectedId, setSelectedId] = useState(contracts[0]?.contractId ?? "");
     const [overrunAcknowledged, setOverrunAcknowledged] = useState(false);
@@ -110,6 +117,7 @@ export function ContractBalanceCard({
     const overruns = after !== null
         && after.balanceCents < 0
         && !alreadyAttested
+        && !readOnly
         && !(selected?.awaitingOpeningBalance ?? false);
     const blocked = overruns && !overrunAcknowledged;
     // Avisar o pai é efeito, não render: chamar setState de outro componente
@@ -147,10 +155,11 @@ export function ContractBalanceCard({
                     <small>contrato {selected.contractNumber}</small>
                 </header>
                 <p className="contract-balance-awaiting-note">
-                    Este contrato ainda não tem saldo informado. A planilha de origem não trouxe um número
-                    confiável para ele — informe o saldo atual para o acompanhamento começar.
+                    {readOnly
+                        ? "O saldo deste contrato ainda não foi informado pela coordenação. Assim que for, o acompanhamento aparece aqui."
+                        : "Este contrato ainda não tem saldo informado. A planilha de origem não trouxe um número confiável para ele — informe o saldo atual para o acompanhamento começar."}
                 </p>
-                {canManage ? (
+                {canManage && !readOnly ? (
                     <div className="contract-balance-opening">
                         <input
                             type="number"

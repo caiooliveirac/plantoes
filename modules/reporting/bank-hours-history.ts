@@ -9,6 +9,9 @@ import {
     type BankHoursLateDeparture,
 } from "@/modules/reporting/bank-hours-labels";
 import type { MonthlyReportAuditEntry, MonthlyReportSource } from "@/modules/reporting/monthly-report";
+import { resolveBankHoursApproval, type BankHoursApproval } from "@/modules/reporting/bank-hours-approval";
+
+export type { BankHoursApproval } from "@/modules/reporting/bank-hours-approval";
 
 export type { BankHoursLateDeparture } from "@/modules/reporting/bank-hours-labels";
 
@@ -46,6 +49,13 @@ export interface RawBankHoursHistoryShift {
     balanceMinutes: number | null;
     ruleCode: string | null;
     bankHoursExplanation: string | null;
+    /** Validação da chefia sobre a saída (view bank_hours_history_shifts, 0039). */
+    departureConfirmedAt: string | null;
+    departureConfirmedByName: string | null;
+    departureConfirmedNote: string | null;
+    lateArrivalAcknowledgedAt: string | null;
+    lateArrivalAcknowledgedByName: string | null;
+    lateArrivalAcknowledgedNote: string | null;
     manualBalanceMinutes: number | null;
     manualBalanceNotes: string | null;
     manualBalanceUpdatedAt: string | null;
@@ -91,6 +101,8 @@ export interface BankHoursHistoryShift extends RawBankHoursHistoryShift {
     successorDoctorName: string | null;
     successorTookOverAt: string | null;
     corrections: BankHoursShiftCorrection[];
+    /** A chefia validou a saída tardia? Quem, quando — ou quem deixou pendente. */
+    approval: BankHoursApproval;
     flags: {
         hasCorrectionHistory: boolean;
         hasHandoffOverride: boolean;
@@ -511,6 +523,24 @@ function describeTimeChange(label: string, before: string | null, after: string 
 }
 
 /**
+ * "Saída física: 10/07/2026 22:30 → 10/07/2026 21:15" reduziu o horário?
+ * As mudanças são texto formatado por describeTimeChange; comparar as duas
+ * datas dentro da frase é o jeito de saber sem mudar o formato.
+ */
+function ehReducao(mudanca: string): boolean {
+    const datas = mudanca.match(/\d{2}\/\d{2}\/\d{4},? \d{2}:\d{2}/g);
+    if (!datas || datas.length < 2) return false;
+    const paraMs = (valor: string) => {
+        const [dia, hora] = valor.replace(",", "").split(" ");
+        const [d, m, a] = dia.split("/");
+        return new Date(`${a}-${m}-${d}T${hora}:00`).getTime();
+    };
+    const antes = paraMs(datas[0]);
+    const depois = paraMs(datas[1]);
+    return Number.isFinite(antes) && Number.isFinite(depois) && depois < antes;
+}
+
+/**
  * Reconstrói as correções administrativas do plantão a partir da trilha de
  * auditoria, com o que mudou (chegada/saída) e quem era a chefia na hora.
  */
@@ -781,6 +811,11 @@ export function buildBankHoursHistoryModel(
                 ruleCode: metrics?.ruleCode ?? shift.ruleCode,
                 bankHoursExplanation: metrics?.explanation ?? shift.bankHoursExplanation,
             } satisfies RawBankHoursHistoryShift;
+            const correcoes = chiefOnDutyAt ? extractCorrections(shift.auditTrail, chiefOnDutyAt) : [];
+            // Correção que puxou a saída para trás corta o crédito: é recusa na
+            // prática, ainda que ninguém tenha clicado em "recusar".
+            const reduziuSaida = correcoes.some((correcao) => !correcao.undone
+                && correcao.changes.some((mudanca) => /sa.da/i.test(mudanca) && ehReducao(mudanca)));
             return {
                 ...resolvedShift,
                 workedMinutes: computeWorkedMinutes(shift.startedAt, shift.effectiveEndedAt),
@@ -791,7 +826,23 @@ export function buildBankHoursHistoryModel(
                     : EMPTY_BANK_HOURS_PROOF,
                 successorDoctorName: successor ? (successor.displayName ?? successor.doctorName) : null,
                 successorTookOverAt: successor?.startedAt ?? null,
-                corrections: chiefOnDutyAt ? extractCorrections(shift.auditTrail, chiefOnDutyAt) : [],
+                corrections: correcoes,
+                approval: resolveBankHoursApproval({
+                    creditedOvertimeMinutes: resolvedShift.creditedOvertimeMinutes,
+                    actualEndedAt: shift.actualEndedAt,
+                    handoffEndedAt: shift.handoffEndedAt,
+                    departureConfirmedAt: shift.departureConfirmedAt,
+                    departureConfirmedByName: shift.departureConfirmedByName,
+                    departureConfirmedNote: shift.departureConfirmedNote,
+                    lateDeparture: shift.lateDeparture ?? null,
+                    // A saída é o momento que interessa: é quem estava na chefia
+                    // naquela hora que deixaria (ou não) o crédito passar.
+                    chiefOnDutyAtDeparture: chiefOnDutyAt ? chiefOnDutyAt(shift.actualEndedAt ?? shift.effectiveEndedAt) : null,
+                    corrections: correcoes,
+                    departureReducedByCorrection: reduziuSaida,
+                    overtimeMinutes: resolvedShift.overtimeMinutes,
+                    ruleCode: resolvedShift.ruleCode,
+                }),
                 flags: {
                     hasCorrectionHistory,
                     hasHandoffOverride: handoffPrevailed,

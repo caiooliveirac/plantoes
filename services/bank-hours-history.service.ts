@@ -28,6 +28,12 @@ function mapRow(row: Record<string, unknown>): RawBankHoursHistoryShift {
         continuityGroupId: String(row.continuityGroupId),
         startedAt: String(row.startedAt),
         boardStartedAt: (row.boardStartedAt ?? null) as string | null,
+        departureConfirmedAt: (row.departureConfirmedAt ?? null) as string | null,
+        departureConfirmedByName: (row.departureConfirmedByName ?? null) as string | null,
+        departureConfirmedNote: (row.departureConfirmedNote ?? null) as string | null,
+        lateArrivalAcknowledgedAt: (row.lateArrivalAcknowledgedAt ?? null) as string | null,
+        lateArrivalAcknowledgedByName: (row.lateArrivalAcknowledgedByName ?? null) as string | null,
+        lateArrivalAcknowledgedNote: (row.lateArrivalAcknowledgedNote ?? null) as string | null,
         handoffEndedAt: (row.handoffEndedAt ?? null) as string | null,
         actualEndedAt: (row.actualEndedAt ?? null) as string | null,
         effectiveEndedAt: (row.effectiveEndedAt ?? null) as string | null,
@@ -201,9 +207,15 @@ export async function getBankHoursHistory(options?: { balancesOnly?: boolean; do
     const db = getDb();
     // Forma canônica em operations_v2.bank_hours_history_shifts (migration 0036):
     // a mesma consulta fica disponível para EXPLAIN/auditoria direto no psql.
+    // Filtrando por médico, os plantões do ramal 2031 de OUTROS médicos precisam
+    // vir junto: é deles que sai a identificação de quem estava na chefia em cada
+    // momento. Sem isso o lookup nasce vazio e nenhuma validação tem dono — que é
+    // exatamente o que acontecia na página do médico.
     const result = await db.execute(sql`
         select * from operations_v2.bank_hours_history_shifts
-        ${options?.doctorId ? sql`where "doctorId" = ${options.doctorId}` : sql``}
+        ${options?.doctorId
+            ? sql`where "doctorId" = ${options.doctorId} or ("domain" = 'regulation' and "targetCode" = '2031')`
+            : sql``}
     `);
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
@@ -224,9 +236,12 @@ export async function getBankHoursHistory(options?: { balancesOnly?: boolean; do
         lateDeparture: lateDeparturesByOccupancy.get(row.occupancyId) ?? null,
     }));
 
-    return buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor, {
+    const model = buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor, {
         includeProofs: !balancesOnly,
     });
+    if (!options?.doctorId) return model;
+    // Os plantões da chefia entraram só para alimentar o lookup: não são deste médico.
+    return { ...model, doctors: model.doctors.filter((row) => row.doctorId === options.doctorId) };
 }
 
 /**
