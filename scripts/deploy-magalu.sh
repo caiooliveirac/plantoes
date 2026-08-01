@@ -108,6 +108,14 @@ rm -rf .next.prev
 [ -d .next ] && mv .next .next.prev
 mv .next.build .next
 
+# O next build reescreve next-env.d.ts e tsconfig.json apontando para o distDir
+# usado — com NEXT_DIST_DIR eles passam a referenciar .next.build, que deixa de
+# existir logo após a troca. Deixar assim suja o working tree de produção (que a
+# regra do repo manda manter limpo) e faz o health reportar
+# workingTreeClean: true mentindo. Restaura os dois.
+echo "=== restaurando arquivos que o build reescreveu ==="
+git checkout -- next-env.d.ts tsconfig.json 2>/dev/null || true
+
 echo "=== pm2 restart ==="
 export GIT_COMMIT_SHA="${SHA:0:7}"
 export GIT_COMMIT_SHA_LONG="$SHA"
