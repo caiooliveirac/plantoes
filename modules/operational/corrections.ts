@@ -32,7 +32,7 @@ import {
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
-import { isHalfShiftRoleLabel, isHalfShiftScheduledWindow, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
+import { isBeforeHalfShiftWindow, isHalfShiftRoleLabel, isHalfShiftScheduledWindow, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
@@ -658,33 +658,44 @@ interface CorrectedScheduledWindow {
     scheduledEndAt: Date | null;
 }
 
+interface CorrectedHalfShiftState extends CorrectedScheduledWindow {
+    roleLabel: string | null;
+}
+
 /**
- * Decide a janela agendada (scheduled_start_at/scheduled_end_at) depois de uma
- * correção. É essa janela que o banco de horas usa como baseline de atraso e de
- * hora extra, então trocar a FUNÇÃO entre meio plantão e qualquer outra muda o
- * plantão inteiro, não só o rótulo:
+ * Decide FUNÇÃO e janela agendada (scheduled_start_at/scheduled_end_at) depois de
+ * uma correção. É essa janela que o banco de horas usa como baseline de atraso e
+ * de hora extra, então meio plantão não é só um rótulo: muda o plantão inteiro.
  *
- *  - MEIO_PLANTAO → outra função: o plantão sempre foi inteiro. A janela volta a
- *    ser a do turno (SD 07:00–19:15 na regulação, 07:00–19:00 na intervenção) e o
- *    atraso passa a ser medido a partir das 07:00 — quem chegou 10:38 leva o
- *    débito cheio de ~3h38 (caso Vanessa Brito, jul/2026).
- *  - outra função → MEIO_PLANTAO: aplica a janela canônica 11:30–17:00.
- *  - continua meio plantão e só o horário mudou: mantém a janela de meia jornada
- *    (antes, corrigir a chegada de um meio plantão reescrevia a janela como turno
- *    inteiro e inventava um atraso gigante).
+ * Só existem DUAS formas de tirar o meio plantão de alguém:
  *
- * AUTO-CURA: uma janela de meia jornada gravada sob função de plantão inteiro é
- * incoerente — sobra de uma troca de função feita antes deste fix, quando o rótulo
- * mudava e a janela ficava para trás. Nesse estado QUALQUER correção na ocupação
- * refaz a janela, mesmo sem cruzar a fronteira: sem isso o passivo fica travado,
- * porque trocar COI→COI não cruza nada e a janela errada sobrevive para sempre.
- * Só curamos essa direção (janela de meia jornada sob função inteira); o inverso
- * não ocorreu em produção e forçá-lo sobrescreveria ajuste manual de janela.
+ *  1. Trocar a função — pelo quadro ou pelo `/ramal`. MEIO_PLANTAO → outra função
+ *     devolve a janela do turno (SD 07:00–19:15 na regulação, 07:00–19:00 na
+ *     intervenção) e o atraso passa a ser medido a partir das 07:00: quem chegou
+ *     10:38 leva o débito cheio de ~3h38 (caso Vanessa Brito, jul/2026).
+ *  2. Corrigir a chegada para antes das 11:10 — fora da janela de reconhecimento,
+ *     a meia jornada não se sustenta. A função é REBAIXADA junto com a janela;
+ *     manter o rótulo faria o payment-closing pagar 0,5 de um plantão inteiro.
  *
- * O pagamento não precisa de nada aqui: payment-closing deriva a unidade (0,5 ou
- * 1) do próprio role_label em tempo de leitura.
+ * Corrigir só o horário DENTRO da janela (11:10–17:00) mantém a meia jornada:
+ * antes deste fix, ajustar a chegada de 11:59 para 11:50 reescrevia a janela como
+ * turno inteiro e inventava ~4h50 de atraso (caso Cecilia Veiga, 26/07/2026).
+ *
+ * AUTO-CURA nas duas direções: função e janela em desacordo é estado incoerente,
+ * sobra das versões anteriores deste código. Nesse estado QUALQUER correção na
+ * ocupação refaz a janela, mesmo sem cruzar fronteira nenhuma — sem isso o passivo
+ * fica travado, porque trocar COI→COI (ou MEIO→MEIO) não cruza nada e a janela
+ * errada sobreviveria para sempre. As duas incoerências curadas:
+ *   - função inteira sobre a janela canônica de meia jornada (caso Vanessa);
+ *   - meio plantão sobre janela que COMEÇA antes das 11:10, ou seja a janela do
+ *     turno inteiro (caso Cecilia).
+ * Meia jornada declarada tarde, com janela própria (ex.: 13:13–17:00), NÃO é
+ * incoerente e fica como está: encaixá-la à força em 11:30 inventaria atraso.
+ *
+ * O pagamento não precisa de nada além da função: payment-closing deriva a unidade
+ * (0,5 ou 1) do próprio role_label em tempo de leitura.
  */
-export function resolveCorrectedScheduledWindow(params: {
+export function resolveCorrectedHalfShiftState(params: {
     existingRoleLabel: string | null;
     nextRoleLabel: string | null;
     roleLabelProvided: boolean;
@@ -692,20 +703,40 @@ export function resolveCorrectedScheduledWindow(params: {
     windowReferenceAt: Date;
     existingWindow: CorrectedScheduledWindow;
     inferFullShiftWindow: () => CorrectedScheduledWindow;
-}): CorrectedScheduledWindow {
-    const nextIsHalfShift = isHalfShiftRoleLabel(params.nextRoleLabel);
-    const halfShiftBoundaryCrossed = params.roleLabelProvided
-        && isHalfShiftRoleLabel(params.existingRoleLabel) !== nextIsHalfShift;
-    const staleHalfShiftWindow = !nextIsHalfShift
-        && isHalfShiftScheduledWindow(params.existingWindow);
+}): CorrectedHalfShiftState {
+    const demoted = isHalfShiftRoleLabel(params.nextRoleLabel)
+        && isBeforeHalfShiftWindow(params.windowReferenceAt);
+    const roleLabel = demoted ? null : params.nextRoleLabel;
 
-    if (!params.temporalFieldsChanged && !halfShiftBoundaryCrossed && !staleHalfShiftWindow) {
-        return params.existingWindow;
+    const nextIsHalfShift = isHalfShiftRoleLabel(roleLabel);
+    const halfShiftBoundaryCrossed = (params.roleLabelProvided || demoted)
+        && isHalfShiftRoleLabel(params.existingRoleLabel) !== nextIsHalfShift;
+
+    if (nextIsHalfShift) {
+        // A janela de meia jornada só é (re)escrita quando a gravada não serve:
+        // ou a função acabou de virar meio plantão, ou o que está lá é janela de
+        // turno inteiro (começa antes das 11:10). Meia jornada declarada tarde,
+        // com janela própria (13:13–17:00, do bot antigo), fica como está —
+        // encaixá-la em 11:30 inventaria atraso numa correção de horário.
+        const storedStartAt = params.existingWindow.scheduledStartAt;
+        const storedWindowServes = !halfShiftBoundaryCrossed
+            && storedStartAt !== null
+            && !isBeforeHalfShiftWindow(storedStartAt);
+
+        return {
+            roleLabel,
+            ...(storedWindowServes
+                ? params.existingWindow
+                : resolveHalfShiftScheduledWindow(params.windowReferenceAt)),
+        };
     }
 
-    return nextIsHalfShift
-        ? resolveHalfShiftScheduledWindow(params.windowReferenceAt)
-        : params.inferFullShiftWindow();
+    const staleHalfShiftWindow = isHalfShiftScheduledWindow(params.existingWindow);
+    if (!params.temporalFieldsChanged && !halfShiftBoundaryCrossed && !staleHalfShiftWindow) {
+        return { roleLabel, ...params.existingWindow };
+    }
+
+    return { roleLabel, ...params.inferFullShiftWindow() };
 }
 
 export async function correctRegulationOccupancy(
@@ -778,7 +809,11 @@ export async function correctRegulationOccupancy(
         const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
             ? boardStartedAt
             : startedAt;
-        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = resolveCorrectedScheduledWindow({
+        const {
+            roleLabel: nextRoleLabel,
+            scheduledStartAt: newScheduledStart,
+            scheduledEndAt: newScheduledEnd,
+        } = resolveCorrectedHalfShiftState({
             existingRoleLabel: existing.roleLabel,
             nextRoleLabel: sanitizedRoleLabel,
             roleLabelProvided: hasOwn(input, "roleLabel"),
@@ -835,7 +870,7 @@ export async function correctRegulationOccupancy(
                 endedAt,
                 actualEndedAt,
                 shiftLabel: nextShiftLabel,
-                roleLabel: sanitizedRoleLabel,
+                roleLabel: nextRoleLabel,
                 ramalLabel: normalizeRegulationRamalLabel({
                     actualPostCode: targetPost.code,
                     requestedRamalLabel: hasOwn(input, "ramalLabel") ? input.ramalLabel ?? null : existing.ramalLabel,
@@ -903,7 +938,11 @@ export async function correctInterventionOccupancy(
         const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
             ? boardStartedAt
             : startedAt;
-        const { scheduledStartAt: newScheduledStart, scheduledEndAt: newScheduledEnd } = resolveCorrectedScheduledWindow({
+        const {
+            roleLabel: nextRoleLabel,
+            scheduledStartAt: newScheduledStart,
+            scheduledEndAt: newScheduledEnd,
+        } = resolveCorrectedHalfShiftState({
             existingRoleLabel: existing.roleLabel,
             nextRoleLabel: sanitizedRoleLabel,
             roleLabelProvided: hasOwn(input, "roleLabel"),
@@ -942,7 +981,7 @@ export async function correctInterventionOccupancy(
                 endedAt,
                 actualEndedAt,
                 shiftLabel: nextShiftLabel,
-                roleLabel: sanitizedRoleLabel,
+                roleLabel: nextRoleLabel,
                 notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),

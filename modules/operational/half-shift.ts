@@ -43,6 +43,16 @@ function toSaoPauloHHMM(date: Date) {
     }).format(date);
 }
 
+/** Chegada anterior ao início da janela de reconhecimento (11:10 local).
+ *  Quem chegou antes disso devia estar no posto às 07:00: é plantão INTEIRO
+ *  atrasado, não meia jornada. É essa a segunda forma de tirar o meio plantão
+ *  de alguém — corrigir a chegada para antes das 11:10 (a primeira é trocar a
+ *  função, pelo quadro ou pelo /ramal). */
+export function isBeforeHalfShiftWindow(date: Date) {
+    const [hour, minute] = toSaoPauloHHMM(date).split(":").map(Number);
+    return ((hour * 60) + minute) < HALF_SHIFT_WINDOW_START_MINUTE;
+}
+
 /** A janela agendada é a de meia jornada (11:30–17:00 no relógio local)?
  *  Usado para detectar ocupação incoerente: função de plantão inteiro sobre
  *  janela de meio plantão. Compara pelo relógio local, não pelo instante, para

@@ -6795,17 +6795,31 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     commandName: command.name,
                     previousRoleLabel: active.occupancy.roleLabel,
                     nextRoleLabel,
+                    appliedRoleLabel: updated.roleLabel,
                     usedActiveDoctorFallback,
                 },
             });
 
-            await sendMessage(
-                message.chat.id,
-                nextRoleLabel
-                    ? `Função atualizada em ${command.targetCode}: ${resolveTelegramDoctorSurfaceName(doctor)} segue no mesmo plantão, agora como ${nextRoleLabel}. Chegada e meal break foram preservados.`
-                    : `Função removida em ${command.targetCode}: ${resolveTelegramDoctorSurfaceName(doctor)} segue no mesmo plantão sem função operacional extra. Chegada e meal break foram preservados.`,
-                message.message_id,
-            );
+            // A função manda na janela agendada, e é ela que o banco de horas usa
+            // como baseline. Duas situações precisam ser ditas em voz alta:
+            // meio plantão pedido para quem chegou antes das 11:10 NÃO cola, e
+            // cruzar a fronteira meio<->inteiro muda a jornada, não só o rótulo.
+            const halfShiftRefused = isHalfShiftRoleLabel(nextRoleLabel) && !isHalfShiftRoleLabel(updated.roleLabel);
+            const halfShiftBoundaryCrossed = isHalfShiftRoleLabel(active.occupancy.roleLabel)
+                !== isHalfShiftRoleLabel(updated.roleLabel);
+            const doctorSurfaceName = resolveTelegramDoctorSurfaceName(doctor);
+            const roleReply = halfShiftRefused
+                ? `⛔ ${doctorSurfaceName} chegou em ${command.targetCode} às ${formatSaoPauloClock(active.occupancy.startedAt)}, antes das 11:10 — não dá pra marcar meio plantão. Segue como plantão INTEIRO (07:00–19:15) e o atraso conta a partir das 07:00. Para virar meia jornada, corrija a chegada primeiro.`
+                : updated.roleLabel
+                    ? `Função atualizada em ${command.targetCode}: ${doctorSurfaceName} segue no mesmo plantão, agora como ${updated.roleLabel}. Chegada e meal break foram preservados.`
+                    : `Função removida em ${command.targetCode}: ${doctorSurfaceName} segue no mesmo plantão sem função operacional extra. Chegada e meal break foram preservados.`;
+            const windowNote = !halfShiftRefused && halfShiftBoundaryCrossed
+                ? isHalfShiftRoleLabel(updated.roleLabel)
+                    ? "\n\n⏱️ Vira meia jornada: jornada prevista 11:30–17:00 e pagamento 0,5."
+                    : "\n\n⏱️ Volta a ser plantão inteiro: jornada prevista 07:00–19:15, o atraso passa a contar das 07:00 e o pagamento volta a 1."
+                : "";
+
+            await sendMessage(message.chat.id, `${roleReply}${windowNote}`, message.message_id);
             return { ok: true, occupancyId: updated.id };
         } catch (error) {
             await markTelegramProcessed(logId, {

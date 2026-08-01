@@ -7,17 +7,20 @@
  * na de meia jornada, então o banco de horas continuou medindo atraso a partir
  * das 11:30 (ou seja: chegada adiantada, saldo zero) em vez do SD inteiro.
  *
- * Regra atual: a função manda na JANELA.
+ * Regra atual: só DUAS coisas tiram o meio plantão de alguém — trocar a função
+ * (quadro ou /ramal) e corrigir a chegada para antes das 11:10.
  *   - sai de MEIO_PLANTAO  -> janela do turno inteiro (SD 07:00–19:15) e o
  *     atraso vira o débito cheio a partir das 07:00;
  *   - entra em MEIO_PLANTAO -> janela canônica 11:30–17:00;
- *   - continua meio plantão -> a janela de meia jornada NÃO é reescrita por uma
- *     correção de horário.
+ *   - chegada corrigida para antes das 11:10 -> a função é rebaixada junto: sem
+ *     isso o payment-closing pagaria 0,5 de um plantão inteiro;
+ *   - continua meio plantão dentro da janela -> a janela de meia jornada NÃO é
+ *     reescrita por uma correção de horário (caso Cecilia Veiga, 26/07/2026).
  * O pagamento acompanha sozinho: a unidade (0,5 vs 1) vem do role_label.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveCorrectedScheduledWindow } from "@/modules/operational/corrections";
+import { resolveCorrectedHalfShiftState } from "@/modules/operational/corrections";
 import { inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { calculateBankHours, applyAnomalyGuard } from "@/modules/bank-hours/calculator";
@@ -29,6 +32,8 @@ const at = (hhmm: string) => iso(`2026-07-30T${hhmm}:00-03:00`);
 
 // Chegada real da Vanessa: 10:38, ramal comum de regulação, turno SD.
 const ARRIVAL_AT = at("10:38");
+// Chegada dentro da janela de reconhecimento (>= 11:10): meia jornada legítima.
+const HALF_SHIFT_ARRIVAL_AT = at("11:50");
 const POST_CODE = "2153";
 
 function regulationWindow(params: {
@@ -36,21 +41,23 @@ function regulationWindow(params: {
     nextRoleLabel: string | null;
     roleLabelProvided?: boolean;
     temporalFieldsChanged?: boolean;
+    windowReferenceAt?: Date;
     existingWindow?: { scheduledStartAt: Date | null; scheduledEndAt: Date | null };
 }) {
-    return resolveCorrectedScheduledWindow({
+    const windowReferenceAt = params.windowReferenceAt ?? ARRIVAL_AT;
+    return resolveCorrectedHalfShiftState({
         existingRoleLabel: params.existingRoleLabel,
         nextRoleLabel: params.nextRoleLabel,
         roleLabelProvided: params.roleLabelProvided ?? true,
         temporalFieldsChanged: params.temporalFieldsChanged ?? false,
-        windowReferenceAt: ARRIVAL_AT,
+        windowReferenceAt,
         existingWindow: params.existingWindow ?? {
             // Janela que o bot gravou ao supor meia jornada.
             scheduledStartAt: at("11:30"),
             scheduledEndAt: at("17:00"),
         },
         inferFullShiftWindow: () => inferRegulationCoverageWindow({
-            startedAt: ARRIVAL_AT,
+            startedAt: windowReferenceAt,
             shiftLabel: "SD",
             postCode: POST_CODE,
             explicitScheduledStartAt: null,
@@ -127,9 +134,11 @@ test("COI -> meio plantao: janela vira a canônica 11:30–17:00", () => {
     const window = regulationWindow({
         existingRoleLabel: "COI",
         nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        windowReferenceAt: HALF_SHIFT_ARRIVAL_AT,
         existingWindow: { scheduledStartAt: at("07:00"), scheduledEndAt: at("19:15") },
     });
 
+    assert.equal(window.roleLabel, HALF_SHIFT_ROLE_LABEL);
     assert.equal(window.scheduledStartAt?.toISOString(), at("11:30").toISOString());
     assert.equal(window.scheduledEndAt?.toISOString(), at("17:00").toISOString());
 });
@@ -140,10 +149,69 @@ test("corrigir o horário de quem CONTINUA meio plantao não reescreve a janela 
         nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
         roleLabelProvided: false,
         temporalFieldsChanged: true,
+        windowReferenceAt: HALF_SHIFT_ARRIVAL_AT,
     });
 
+    assert.equal(window.roleLabel, HALF_SHIFT_ROLE_LABEL);
     assert.equal(window.scheduledStartAt?.toISOString(), at("11:30").toISOString());
     assert.equal(window.scheduledEndAt?.toISOString(), at("17:00").toISOString());
+});
+
+// --- Chegada antes das 11:10 tira o meio plantão --------------------------
+// Caso Cecilia Veiga (26/07/2026): o bot gravou 11:30–17:00 certinho e a chefia
+// só ajustou a chegada de 11:59 para 11:50. Antes deste fix a correção reescrevia
+// a janela como SD inteiro e inventava 290 min de atraso. Agora a janela só cai
+// quando a chegada corrigida sai da janela de reconhecimento.
+
+test("chegada corrigida para antes das 11:10 rebaixa a função e devolve o turno inteiro", () => {
+    const corrected = regulationWindow({
+        existingRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        roleLabelProvided: false,
+        temporalFieldsChanged: true,
+        // 10:38: fora da janela 11:10–17:00.
+        windowReferenceAt: ARRIVAL_AT,
+    });
+
+    assert.equal(corrected.roleLabel, null, "sem rebaixar a função o pagamento sairia 0,5");
+    assert.equal(corrected.scheduledStartAt?.toISOString(), at("07:00").toISOString());
+    assert.equal(corrected.scheduledEndAt?.toISOString(), at("19:15").toISOString());
+    assert.equal(resolvePaymentUnitFromRole(corrected.roleLabel), 1);
+});
+
+test("11:10 em ponto ainda é meio plantão; 11:09 não é", () => {
+    const inWindow = regulationWindow({
+        existingRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        roleLabelProvided: false,
+        temporalFieldsChanged: true,
+        windowReferenceAt: at("11:10"),
+    });
+    assert.equal(inWindow.roleLabel, HALF_SHIFT_ROLE_LABEL);
+    assert.equal(inWindow.scheduledStartAt?.toISOString(), at("11:30").toISOString());
+
+    const outOfWindow = regulationWindow({
+        existingRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        roleLabelProvided: false,
+        temporalFieldsChanged: true,
+        windowReferenceAt: at("11:09"),
+    });
+    assert.equal(outOfWindow.roleLabel, null);
+    assert.equal(outOfWindow.scheduledStartAt?.toISOString(), at("07:00").toISOString());
+});
+
+test("/ramal marcando MEIO_PLANTAO em quem chegou cedo não cola", () => {
+    const corrected = regulationWindow({
+        existingRoleLabel: "COI",
+        nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        roleLabelProvided: true,
+        windowReferenceAt: at("07:05"),
+        existingWindow: { scheduledStartAt: at("07:00"), scheduledEndAt: at("19:15") },
+    });
+
+    assert.equal(corrected.roleLabel, null);
+    assert.equal(corrected.scheduledStartAt?.toISOString(), at("07:00").toISOString());
 });
 
 test("troca de função que não cruza a fronteira preserva a janela existente", () => {
@@ -196,11 +264,67 @@ test("auto-cura NÃO reescreve quem é meio plantão de verdade", () => {
         nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
         roleLabelProvided: true,
         temporalFieldsChanged: false,
+        windowReferenceAt: HALF_SHIFT_ARRIVAL_AT,
         existingWindow: { scheduledStartAt: at("11:30"), scheduledEndAt: at("17:00") },
     });
 
+    assert.equal(window.roleLabel, HALF_SHIFT_ROLE_LABEL);
     assert.equal(window.scheduledStartAt?.toISOString(), at("11:30").toISOString());
     assert.equal(window.scheduledEndAt?.toISOString(), at("17:00").toISOString());
+});
+
+// Direção inversa da auto-cura: função de meia jornada sobre janela de turno
+// inteiro. É o passivo dos 11 casos de abr–jul/2026 (Cecilia, Maiana, Uenderson,
+// João Marcos, Maria Clara, Sadja…): role MEIO_PLANTAO com janela 07:00–19:15,
+// pagando 0,5 e debitando ~4h30 de atraso inventado.
+
+test("auto-cura inversa: meio plantão sobre janela de turno inteiro volta para 11:30–17:00", () => {
+    const window = regulationWindow({
+        existingRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        roleLabelProvided: true,
+        temporalFieldsChanged: false,
+        windowReferenceAt: HALF_SHIFT_ARRIVAL_AT,
+        // Estado exato da Cecilia em produção.
+        existingWindow: { scheduledStartAt: at("07:00"), scheduledEndAt: at("19:15") },
+    });
+
+    assert.equal(window.roleLabel, HALF_SHIFT_ROLE_LABEL);
+    assert.equal(window.scheduledStartAt?.toISOString(), at("11:30").toISOString());
+    assert.equal(window.scheduledEndAt?.toISOString(), at("17:00").toISOString());
+});
+
+test("auto-cura inversa NÃO encaixa em 11:30 meia jornada declarada tarde", () => {
+    // Registros do bot antigo gravavam a janela na hora da chegada. Puxar um
+    // 13:13–17:00 para 11:30 inventaria 103 min de atraso em quem foi pontual —
+    // foi o que o dry-run do saneamento pegou (Uenderson 31/05, Viviane 09/06).
+    const existingWindow = { scheduledStartAt: at("13:13"), scheduledEndAt: at("17:00") };
+    const window = regulationWindow({
+        existingRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        roleLabelProvided: true,
+        temporalFieldsChanged: true,
+        windowReferenceAt: at("13:13"),
+        existingWindow,
+    });
+
+    assert.equal(window.roleLabel, HALF_SHIFT_ROLE_LABEL);
+    assert.equal(window.scheduledStartAt?.toISOString(), existingWindow.scheduledStartAt.toISOString());
+    assert.equal(window.scheduledEndAt?.toISOString(), existingWindow.scheduledEndAt.toISOString());
+});
+
+test("auto-cura inversa: com chegada fora da janela o passivo vira plantão inteiro, não meia jornada", () => {
+    const window = regulationWindow({
+        existingRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        nextRoleLabel: HALF_SHIFT_ROLE_LABEL,
+        roleLabelProvided: true,
+        temporalFieldsChanged: false,
+        windowReferenceAt: ARRIVAL_AT,
+        existingWindow: { scheduledStartAt: at("07:00"), scheduledEndAt: at("19:15") },
+    });
+
+    assert.equal(window.roleLabel, null);
+    assert.equal(window.scheduledStartAt?.toISOString(), at("07:00").toISOString());
 });
 
 test("auto-cura não confunde janela custom com janela de meia jornada", () => {
