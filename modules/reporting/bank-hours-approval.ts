@@ -52,6 +52,10 @@ export interface BankHoursApprovalInput {
     /** Fim programado do plantão. */
     handoffEndedAt: string | null;
     departureConfirmedAt: string | null;
+    /**
+     * Conta que registrou a confirmação. NÃO é usada para dizer quem validou —
+     * ver identificaQuemValidou. Fica no modelo para auditoria interna.
+     */
     departureConfirmedByName: string | null;
     departureConfirmedNote: string | null;
     /** Justificativa que o médico mandou pelo bot, quando houve. */
@@ -85,20 +89,19 @@ const RAZAO_LEGIVEL: Record<string, string> = {
 };
 
 /**
- * Nome de quem validou. A conta usada no clique é compartilhada
- * (chefe@samu.local), então o e-mail não diz nada: vale mais quem estava na 2031
- * naquele instante. Só cai para o e-mail quando o ramal não identifica ninguém.
+ * Quem validou é SEMPRE quem estava na 2031, nunca a conta que clicou.
+ *
+ * A conta logada não responde pela validação: pode ser a compartilhada
+ * (chefe@samu.local) ou a de um admin que apertou o botão de outro lugar — e
+ * atribuir a validação a um admin que não estava na chefia naquele plantão é
+ * pior do que não atribuir a ninguém. O ramal 2031 é a fonte: os chefes avisam
+ * lá assim que chegam, justamente porque vale banco de horas.
+ *
+ * Sem ninguém identificável no ramal, devolve null e a tela omite o "validado
+ * por" — melhor um nome a menos que o nome errado.
  */
 function identificaQuemValidou(input: BankHoursApprovalInput): string | null {
-    return input.chiefOnDutyAtConfirmation
-        ?? (ehContaCompartilhada(input.departureConfirmedByName) ? null : input.departureConfirmedByName)
-        ?? input.chiefOnDutyAtDeparture
-        ?? input.departureConfirmedByName;
-}
-
-/** Conta genérica de chefia: e-mail em vez de nome de pessoa. */
-function ehContaCompartilhada(valor: string | null): boolean {
-    return Boolean(valor && valor.includes("@"));
+    return input.chiefOnDutyAtConfirmation ?? input.chiefOnDutyAtDeparture;
 }
 
 function descreveRazao(lateDeparture: BankHoursApprovalInput["lateDeparture"]): string {
