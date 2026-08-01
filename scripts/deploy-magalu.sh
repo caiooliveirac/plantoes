@@ -80,27 +80,33 @@ if [ "$RUN_MIGRATIONS" = "--run-migrations" ]; then
   npm run db:migrate
 fi
 
-# Build LIMPO. O incremental por cima do .next antigo deixa manifesto órfão
-# quando o deploy REMOVE rotas ou componentes de cliente: aconteceu no deploy do
-# PR #128, que apagou /escala e /trocas — o Next passou a responder
-# "client reference manifest for route /admin/payment-closing does not exist" e a
-# tela do fechamento caiu com 500, enquanto as rotas removidas seguiam
-# respondendo 200 a partir de chunks velhos.
+# Build LIMPO, sem tirar a produção do ar.
 #
-# O .next anterior vira .next.prev ANTES do build, então a garantia de rollback
-# continua de pé: se o build falhar, o processo antigo segue no ar e o
-# .next.prev tem o build que estava funcionando.
-echo "=== preservando build anterior em .next.prev ==="
-rm -rf .next.prev
-[ -d .next ] && mv .next .next.prev
-
-echo "=== next build limpo (nice, antes do restart — falha não derruba produção) ==="
-if ! nice -n 10 npm run build; then
-  echo "ERRO: build falhou. Restaurando o .next anterior para o processo atual."
-  rm -rf .next
-  [ -d .next.prev ] && cp -r .next.prev .next
+# Duas armadilhas já pegaram este deploy, uma de cada lado:
+#
+#   build incremental por cima do .next antigo deixa manifesto órfão quando o
+#   deploy REMOVE rotas ou componentes de cliente — foi o que derrubou o
+#   /admin/payment-closing com "client reference manifest does not exist"
+#   enquanto rotas recém-apagadas seguiam respondendo 200 de chunks velhos;
+#
+#   apagar o .next antes de buildar tira o build de baixo do processo que está
+#   no ar, e a produção responde 500 durante toda a compilação.
+#
+# A saída é buildar em .next.build (via NEXT_DIST_DIR, ver next.config.ts) e só
+# trocar no fim. O processo em execução segue servindo o .next antigo até o
+# restart, e o build novo nasce limpo.
+echo "=== next build limpo em .next.build (produção segue no ar) ==="
+rm -rf .next.build
+if ! NEXT_DIST_DIR=.next.build nice -n 10 npm run build; then
+  echo "ERRO: build falhou. Nada foi trocado — a produção segue com o build anterior."
+  rm -rf .next.build
   exit 1
 fi
+
+echo "=== troca do build (atômica) ==="
+rm -rf .next.prev
+[ -d .next ] && mv .next .next.prev
+mv .next.build .next
 
 echo "=== pm2 restart ==="
 export GIT_COMMIT_SHA="${SHA:0:7}"
