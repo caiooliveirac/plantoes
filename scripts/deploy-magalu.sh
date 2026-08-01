@@ -80,8 +80,27 @@ if [ "$RUN_MIGRATIONS" = "--run-migrations" ]; then
   npm run db:migrate
 fi
 
-echo "=== next build (nice, antes do restart — falha não derruba produção) ==="
-nice -n 10 npm run build
+# Build LIMPO. O incremental por cima do .next antigo deixa manifesto órfão
+# quando o deploy REMOVE rotas ou componentes de cliente: aconteceu no deploy do
+# PR #128, que apagou /escala e /trocas — o Next passou a responder
+# "client reference manifest for route /admin/payment-closing does not exist" e a
+# tela do fechamento caiu com 500, enquanto as rotas removidas seguiam
+# respondendo 200 a partir de chunks velhos.
+#
+# O .next anterior vira .next.prev ANTES do build, então a garantia de rollback
+# continua de pé: se o build falhar, o processo antigo segue no ar e o
+# .next.prev tem o build que estava funcionando.
+echo "=== preservando build anterior em .next.prev ==="
+rm -rf .next.prev
+[ -d .next ] && mv .next .next.prev
+
+echo "=== next build limpo (nice, antes do restart — falha não derruba produção) ==="
+if ! nice -n 10 npm run build; then
+  echo "ERRO: build falhou. Restaurando o .next anterior para o processo atual."
+  rm -rf .next
+  [ -d .next.prev ] && cp -r .next.prev .next
+  exit 1
+fi
 
 echo "=== pm2 restart ==="
 export GIT_COMMIT_SHA="${SHA:0:7}"

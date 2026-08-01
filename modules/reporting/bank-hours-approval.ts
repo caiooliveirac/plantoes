@@ -58,6 +58,15 @@ export interface BankHoursApprovalInput {
     lateDeparture: { reasonCode: string; occurrenceNumber: string | null } | null;
     /** Quem estava na chefia (ramal 2031) no momento da saída. */
     chiefOnDutyAtDeparture: string | null;
+    /**
+     * Quem estava na 2031 no momento do CLIQUE de validação.
+     *
+     * A conta que valida costuma ser compartilhada (chefe@samu.local), então o
+     * e-mail não identifica ninguém. Os chefes avisam na 2031 assim que chegam,
+     * justamente porque vale banco de horas — então o ramal sabe quem estava lá
+     * na hora. É o mesmo critério que a view interna já usa.
+     */
+    chiefOnDutyAtConfirmation: string | null;
     /** Hora extra apurada antes de qualquer corte de regra. */
     overtimeMinutes: number | null;
     /** Regra aplicada pelo cálculo do banco de horas. */
@@ -74,6 +83,23 @@ const RAZAO_LEGIVEL: Record<string, string> = {
     chief_release: "liberação da chefia",
     handoff: "rendição atrasada",
 };
+
+/**
+ * Nome de quem validou. A conta usada no clique é compartilhada
+ * (chefe@samu.local), então o e-mail não diz nada: vale mais quem estava na 2031
+ * naquele instante. Só cai para o e-mail quando o ramal não identifica ninguém.
+ */
+function identificaQuemValidou(input: BankHoursApprovalInput): string | null {
+    return input.chiefOnDutyAtConfirmation
+        ?? (ehContaCompartilhada(input.departureConfirmedByName) ? null : input.departureConfirmedByName)
+        ?? input.chiefOnDutyAtDeparture
+        ?? input.departureConfirmedByName;
+}
+
+/** Conta genérica de chefia: e-mail em vez de nome de pessoa. */
+function ehContaCompartilhada(valor: string | null): boolean {
+    return Boolean(valor && valor.includes("@"));
+}
 
 function descreveRazao(lateDeparture: BankHoursApprovalInput["lateDeparture"]): string {
     if (!lateDeparture) return "saída após o horário previsto";
@@ -116,7 +142,7 @@ export function resolveBankHoursApproval(input: BankHoursApprovalInput): BankHou
             label: "Crédito retido para revisão",
             detail: "O sistema registrou hora extra neste plantão, mas o valor ficou fora do padrão esperado"
                 + " e o crédito foi retido até alguém da coordenação revisar à mão. Ele não foi recusado — está parado.",
-            chiefName: input.departureConfirmedByName ?? input.chiefOnDutyAtDeparture,
+            chiefName: identificaQuemValidou(input),
             at: input.departureConfirmedAt ?? input.actualEndedAt,
             note: input.departureConfirmedNote,
         };
@@ -128,7 +154,7 @@ export function resolveBankHoursApproval(input: BankHoursApprovalInput): BankHou
             tone: "ok",
             label: "Validado pela chefia",
             detail: `A chefia confirmou sua saída por ${descreveRazao(input.lateDeparture)}.`,
-            chiefName: input.departureConfirmedByName ?? input.chiefOnDutyAtDeparture,
+            chiefName: identificaQuemValidou(input),
             at: input.departureConfirmedAt,
             note: input.departureConfirmedNote,
         };
