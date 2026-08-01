@@ -174,7 +174,9 @@ export function buildDoctorPayrollMessages(row: ChiefPayableDoctorRow, board: Ch
     // ANTES de assinar a folha.
     const footer = [
         `📄 Folha de ponto: ${folhaUrl}`,
-        ...(bankHoursUrl ? [`🏦 Seu banco de horas: ${bankHoursUrl}`] : []),
+        // O link agora abre o painel completo — banco de horas, saldo de contrato
+        // e o fechamento do mês, com a validação da chefia em cada plantão.
+        ...(bankHoursUrl ? [`📊 Seu painel completo (banco de horas, saldo de contrato e validações): ${bankHoursUrl}`] : []),
     ].join("\n");
 
     // Caminho comum: cabe tudo numa mensagem.
