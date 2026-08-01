@@ -15,6 +15,7 @@ function entrada(overrides: Partial<BankHoursApprovalInput> = {}): BankHoursAppr
         departureConfirmedNote: null,
         lateDeparture: { reasonCode: "occurrence", occurrenceNumber: "123456" },
         chiefOnDutyAtDeparture: "Dra. Fulana",
+        chiefOnDutyAtConfirmation: null,
         corrections: [],
         departureReducedByCorrection: false,
         overtimeMinutes: 90,
@@ -88,7 +89,8 @@ describe("resolveBankHoursApproval — validado", () => {
     it("confirmação da chefia vence tudo", () => {
         assert.equal(r.state, "validado");
         assert.equal(r.tone, "ok");
-        assert.equal(r.chiefName, "chefe@samu.local");
+        // Conta compartilhada não identifica ninguém: cai para quem estava na 2031.
+        assert.equal(r.chiefName, "Dra. Fulana");
         assert.equal(r.note, "conferido no espelho da ocorrência");
     });
 
@@ -102,6 +104,49 @@ describe("resolveBankHoursApproval — validado", () => {
             departureReducedByCorrection: true,
         }));
         assert.equal(r2.state, "validado");
+    });
+});
+
+describe("resolveBankHoursApproval — quem validou, com conta compartilhada", () => {
+    // Os chefes avisam na 2031 quando chegam, justamente porque vale banco de
+    // horas. O ramal sabe quem estava lá; a conta chefe@samu.local não.
+    it("prefere quem estava na 2031 no momento do clique", () => {
+        const r = resolveBankHoursApproval(entrada({
+            departureConfirmedAt: "2026-07-11T09:00:00Z",
+            departureConfirmedByName: "chefe@samu.local",
+            chiefOnDutyAtConfirmation: "Dr. Quem Clicou",
+            chiefOnDutyAtDeparture: "Dra. Outra",
+        }));
+        assert.equal(r.chiefName, "Dr. Quem Clicou");
+    });
+
+    it("conta nominal é respeitada quando existe", () => {
+        const r = resolveBankHoursApproval(entrada({
+            departureConfirmedAt: "2026-07-11T09:00:00Z",
+            departureConfirmedByName: "Dra. Luana Bordoni",
+            chiefOnDutyAtConfirmation: null,
+        }));
+        assert.equal(r.chiefName, "Dra. Luana Bordoni");
+    });
+
+    it("sem nada no ramal e com conta compartilhada, cai para a chefia da saída", () => {
+        const r = resolveBankHoursApproval(entrada({
+            departureConfirmedAt: "2026-07-11T09:00:00Z",
+            departureConfirmedByName: "chefe@samu.local",
+            chiefOnDutyAtConfirmation: null,
+            chiefOnDutyAtDeparture: "Dra. Fulana",
+        }));
+        assert.equal(r.chiefName, "Dra. Fulana");
+    });
+
+    it("último recurso: mostra o e-mail em vez de não mostrar nada", () => {
+        const r = resolveBankHoursApproval(entrada({
+            departureConfirmedAt: "2026-07-11T09:00:00Z",
+            departureConfirmedByName: "chefe@samu.local",
+            chiefOnDutyAtConfirmation: null,
+            chiefOnDutyAtDeparture: null,
+        }));
+        assert.equal(r.chiefName, "chefe@samu.local");
     });
 });
 

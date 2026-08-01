@@ -838,6 +838,8 @@ export function buildBankHoursHistoryModel(
                     // A saída é o momento que interessa: é quem estava na chefia
                     // naquela hora que deixaria (ou não) o crédito passar.
                     chiefOnDutyAtDeparture: chiefOnDutyAt ? chiefOnDutyAt(shift.actualEndedAt ?? shift.effectiveEndedAt) : null,
+                    // Quem estava na 2031 quando o clique de validação aconteceu.
+                    chiefOnDutyAtConfirmation: chiefOnDutyAt ? chiefOnDutyAt(shift.departureConfirmedAt) : null,
                     corrections: correcoes,
                     departureReducedByCorrection: reduziuSaida,
                     overtimeMinutes: resolvedShift.overtimeMinutes,
