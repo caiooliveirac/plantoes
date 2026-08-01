@@ -89,7 +89,7 @@ describe("resolveBankHoursApproval — validado", () => {
     it("confirmação da chefia vence tudo", () => {
         assert.equal(r.state, "validado");
         assert.equal(r.tone, "ok");
-        // Conta compartilhada não identifica ninguém: cai para quem estava na 2031.
+        // Quem validou é sempre o da 2031, nunca a conta que clicou.
         assert.equal(r.chiefName, "Dra. Fulana");
         assert.equal(r.note, "conferido no espelho da ocorrência");
     });
@@ -120,16 +120,18 @@ describe("resolveBankHoursApproval — quem validou, com conta compartilhada", (
         assert.equal(r.chiefName, "Dr. Quem Clicou");
     });
 
-    it("conta nominal é respeitada quando existe", () => {
+    it("conta nominal NÃO vale: quem validou é quem estava na 2031", () => {
+        // Um admin pode apertar o botão de qualquer lugar. Atribuir a validação
+        // a ele seria dizer que estava na chefia daquele plantão — e não estava.
         const r = resolveBankHoursApproval(entrada({
             departureConfirmedAt: "2026-07-11T09:00:00Z",
-            departureConfirmedByName: "Dra. Luana Bordoni",
-            chiefOnDutyAtConfirmation: null,
+            departureConfirmedByName: "Caio Oliveira do Carmo",
+            chiefOnDutyAtConfirmation: "Dr. Quem Estava na 2031",
         }));
-        assert.equal(r.chiefName, "Dra. Luana Bordoni");
+        assert.equal(r.chiefName, "Dr. Quem Estava na 2031");
     });
 
-    it("sem nada no ramal e com conta compartilhada, cai para a chefia da saída", () => {
+    it("sem o ramal no clique, cai para quem estava na 2031 na saída", () => {
         const r = resolveBankHoursApproval(entrada({
             departureConfirmedAt: "2026-07-11T09:00:00Z",
             departureConfirmedByName: "chefe@samu.local",
@@ -139,14 +141,14 @@ describe("resolveBankHoursApproval — quem validou, com conta compartilhada", (
         assert.equal(r.chiefName, "Dra. Fulana");
     });
 
-    it("último recurso: mostra o e-mail em vez de não mostrar nada", () => {
+    it("sem ninguém no ramal, não atribui a ninguém — nem à conta que clicou", () => {
         const r = resolveBankHoursApproval(entrada({
             departureConfirmedAt: "2026-07-11T09:00:00Z",
-            departureConfirmedByName: "chefe@samu.local",
+            departureConfirmedByName: "Caio Oliveira do Carmo",
             chiefOnDutyAtConfirmation: null,
             chiefOnDutyAtDeparture: null,
         }));
-        assert.equal(r.chiefName, "chefe@samu.local");
+        assert.equal(r.chiefName, null);
     });
 });
 
