@@ -3,7 +3,6 @@ import { Manrope, Space_Grotesk } from "next/font/google";
 import painelOgImage from "@/components/Painel.png";
 import { Toaster } from "@/components/board/Toaster";
 import "./globals.css";
-import "./escala-trocas.css";
 
 const metadataBase = new URL(process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br");
 

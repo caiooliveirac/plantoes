@@ -42,6 +42,33 @@ set -a
 . "$ENV_FILE"
 set +a
 
+# Guarda de desvio: migration no repo que ainda não foi aplicada em produção
+# derruba o deploy ANTES do build. É o erro que já aconteceu duas vezes aqui —
+# a 0037 foi aplicada à mão e o código ficou para trás; a 0038 e a 0039 exigiram
+# aplicação manual antes do merge. Sem esta checagem o deploy sobe código que
+# consulta coluna ou tabela que não existe, e a falha só aparece para o usuário.
+if [ "$RUN_MIGRATIONS" != "--run-migrations" ]; then
+  echo "=== conferindo migrações pendentes em produção ==="
+  aplicadas=$(psql "$DATABASE_URL" -qtA -c \
+    "select filename from operations_v2.schema_migrations" 2>/dev/null | sort || echo "")
+  if [ -z "$aplicadas" ]; then
+    echo "AVISO: não consegui ler schema_migrations — seguindo sem a checagem."
+  else
+    noRepo=$(ls db/migrations/*.sql 2>/dev/null | xargs -r -n1 basename | sort)
+    pendentes=$(comm -23 <(echo "$noRepo") <(echo "$aplicadas"))
+    if [ -n "$pendentes" ]; then
+      echo "ERRO: existem migrações no repo que não foram aplicadas neste banco:"
+      echo "$pendentes" | sed "s/^/  - /"
+      echo ""
+      echo "Aplique antes de seguir (o padrão do repo é manual):"
+      echo "  cd $APP_DIR && set -a && . .env.production && set +a && npm run db:migrate"
+      echo "Ou refaça o deploy com --run-migrations (faz backup antes)."
+      exit 1
+    fi
+    echo "nenhuma migração pendente."
+  fi
+fi
+
 if [ "$RUN_MIGRATIONS" = "--run-migrations" ]; then
   echo "=== backup do banco antes das migrações ==="
   mkdir -p "$BACKUP_DIR"
