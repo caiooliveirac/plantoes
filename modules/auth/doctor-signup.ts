@@ -18,6 +18,38 @@ export const SIGNUP_CODE_TTL_MS = 15 * 60 * 1000;
 export const SIGNUP_CODE_RESEND_COOLDOWN_MS = 60 * 1000;
 export const SIGNUP_CODE_ATTEMPT_LIMIT = 5;
 
+/**
+ * Domínio das contas semeadas na importação de mar/2026 (email fake, não
+ * entregável). Sem role = nunca usadas para login → o cadastro pode ASSUMIR a
+ * conta (troca email+senha no mesmo users.id, preservando FKs/auditoria).
+ * Com role (7 chefes) a conta está em uso e continua bloqueando o cadastro.
+ */
+export const PLACEHOLDER_EMAIL_SUFFIX = "@medicos.plantoes.local";
+
+type ExistingAccount = { id: string; email: string; hasRoles: boolean };
+
+function isReplaceablePlaceholder(account: ExistingAccount) {
+    return account.email.endsWith(PLACEHOLDER_EMAIL_SUFFIX) && !account.hasRoles;
+}
+
+async function loadDoctorAccount(doctorId: string): Promise<ExistingAccount | null> {
+    const db = getDb();
+    const [user] = await db
+        .select({ id: users.id, email: users.email })
+        .from(users)
+        .where(eq(users.doctorId, doctorId))
+        .limit(1);
+    if (!user) {
+        return null;
+    }
+    const roles = await db
+        .select({ role: userRoles.role })
+        .from(userRoles)
+        .where(eq(userRoles.userId, user.id))
+        .limit(1);
+    return { id: user.id, email: user.email, hasRoles: roles.length > 0 };
+}
+
 export function normalizeSignupEmail(email: string) {
     return email.trim().toLowerCase();
 }
@@ -62,12 +94,8 @@ export async function startDoctorSignup(codename: string, rawEmail: string, now 
         return { status: "invalid_codename" };
     }
 
-    const [existingByDoctor] = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.doctorId, doctorId))
-        .limit(1);
-    if (existingByDoctor) {
+    const account = await loadDoctorAccount(doctorId);
+    if (account && !isReplaceablePlaceholder(account)) {
         return { status: "doctor_already_registered" };
     }
 
@@ -169,12 +197,8 @@ export async function completeDoctorSignup(
     }
 
     // Re-checa unicidade na hora de criar (corrida entre start e complete).
-    const [existingByDoctor] = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.doctorId, doctorId))
-        .limit(1);
-    if (existingByDoctor) {
+    const account = await loadDoctorAccount(doctorId);
+    if (account && !isReplaceablePlaceholder(account)) {
         return { status: "doctor_already_registered" };
     }
     const [existingByEmail] = await db
@@ -188,27 +212,39 @@ export async function completeDoctorSignup(
 
     const passwordHash = await hash(password, 10);
     const userId = await db.transaction(async (tx) => {
-        const [user] = await tx.insert(users).values({
-            doctorId,
-            email,
-            passwordHash,
-            isActive: true,
-        }).returning({ id: users.id });
+        let userId: string;
+        if (account) {
+            // Assume a conta placeholder do seed: mesmo users.id (preserva FKs),
+            // email real + senha do médico no lugar do fake não entregável.
+            await tx
+                .update(users)
+                .set({ email, passwordHash, isActive: true, mustChangePassword: false, updatedAt: new Date() })
+                .where(eq(users.id, account.id));
+            userId = account.id;
+        } else {
+            const [user] = await tx.insert(users).values({
+                doctorId,
+                email,
+                passwordHash,
+                isActive: true,
+            }).returning({ id: users.id });
+            userId = user.id;
+        }
 
-        await tx.insert(userRoles).values({ userId: user.id, role: "doctor" });
+        await tx.insert(userRoles).values({ userId, role: "doctor" }).onConflictDoNothing();
         await tx
             .update(doctorSignupEmailVerifications)
             .set({ consumedAt: now })
             .where(eq(doctorSignupEmailVerifications.id, verification.id));
         await tx.insert(auditLogs).values({
-            actorUserId: user.id,
-            action: "doctor_signup_email_verified",
+            actorUserId: userId,
+            action: account ? "doctor_signup_replaced_placeholder" : "doctor_signup_email_verified",
             entityType: "user",
-            entityId: user.id,
-            details: { doctorId, email },
+            entityId: userId,
+            details: { doctorId, email, ...(account ? { previousEmail: account.email } : {}) },
         });
 
-        return user.id;
+        return userId;
     });
 
     return { status: "created", userId };
