@@ -689,6 +689,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             awaitingOpeningBalance: row.awaitingOpeningBalance,
             settledBalanceCents: row.settledBalanceCents,
             pendingConsumptionCents: row.pendingConsumptionCents,
+            statement: row.statement,
             metricsInput: {
                 ...row.metricsInput,
                 observedSince: row.metricsInput.observedSince.toISOString(),

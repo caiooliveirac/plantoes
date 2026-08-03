@@ -2,6 +2,7 @@ import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/bo
 import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_ROLE_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
+import type { ContractStatementMonth } from "@/lib/contracts/statement";
 
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const MIN_SEGMENT_MINUTES = 45;
@@ -298,6 +299,12 @@ export interface ContractBalanceSummary {
     settledBalanceCents: number;
     /** Plantões já dados, ainda sem fechamento assinado, fora do mês em edição. */
     pendingConsumptionCents: number;
+    /**
+     * Extrato mês a mês (datas em AAAA-MM-DD): saldo no início do mês, gasto do
+     * mês, saldo no fim (dia 1º seguinte, fim do ciclo, ou hoje). Já vem pronto
+     * do servidor — o cliente só formata.
+     */
+    statement: ContractStatementMonth[];
     metricsInput: {
         ceilingCents: number | null;
         balanceCents: number;

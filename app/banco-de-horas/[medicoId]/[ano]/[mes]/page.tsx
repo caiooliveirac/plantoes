@@ -168,6 +168,7 @@ export default async function PainelDoMedicoPage({
                         canManage={false}
                         readOnly
                         monthLabel={board.monthLabel}
+                        monthKey={board.monthKey}
                         alreadyAttested={Boolean(paymentRow?.attestedAt)}
                     />
                 </section>
