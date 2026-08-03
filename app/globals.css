@@ -12108,15 +12108,88 @@ button.chief-payable-tag:focus-visible {
     .panel-shift-metrics { grid-template-columns: repeat(4, 1fr); }
 }
 
-/* Consumo já feito e ainda não assinado: o médico precisa ver, senão o saldo
-   da tela fica melhor que a realidade. */
-.contract-balance-pending {
+/* Extrato mês a mês do saldo contratual: saldo datado no início e no fim de
+   cada mês, para a leitura "tinha X em 01/07, gastou Y, ficou Z em 01/08". */
+.contract-balance-statement {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-x: auto;
+}
+
+.contract-balance-statement-title {
+    margin: 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(226, 232, 240, 0.75);
+}
+
+.contract-balance-statement table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.contract-balance-statement th {
+    text-align: left;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(148, 163, 184, 0.9);
+    padding: 4px 8px 4px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.contract-balance-statement td {
+    padding: 6px 8px 6px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    color: #e2e8f0;
+    white-space: nowrap;
+    vertical-align: top;
+}
+
+.contract-balance-statement td small {
+    display: block;
+    font-size: 0.68rem;
+    color: rgba(148, 163, 184, 0.9);
+}
+
+.contract-balance-statement td.negative { color: #fda4af; }
+
+.contract-balance-statement tbody tr:last-child td {
+    border-bottom: none;
+    font-weight: 600;
+}
+
+/* Fronteira do ciclo: o mês em edição pertence ao ciclo renovado, não a este. */
+.contract-balance-cycle-boundary {
     margin: 0;
     font-size: 0.8rem;
     line-height: 1.5;
-    color: #fcd34d;
-    background: rgba(120, 53, 15, 0.22);
-    border-left: 3px solid rgba(251, 191, 36, 0.6);
+    color: #93c5fd;
+    background: rgba(30, 58, 138, 0.24);
+    border-left: 3px solid rgba(96, 165, 250, 0.6);
     border-radius: 8px;
     padding: 8px 10px;
+}
+
+/* Renovação pendente: o ciclo venceu e o saldo novo precisa ser confirmado. */
+.contract-balance-renewal {
+    border: 1px solid rgba(251, 191, 36, 0.45);
+    background: rgba(120, 53, 15, 0.22);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.contract-balance-renewal p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #fde68a;
+    line-height: 1.5;
 }

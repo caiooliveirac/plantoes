@@ -8,6 +8,15 @@
  * uma segunda implementação da conta no front — é assim que os dois números
  * divergem e ninguém descobre.
  *
+ * O saldo mostrado é o REAL: plantão dado já desconta, assinado ou não. A
+ * assinatura só decide se o mês em edição ainda precisa ser subtraído como
+ * projeção (para não descontar duas vezes) — ela nunca muda o valor.
+ *
+ * Fronteira do ciclo é regra dura: se o mês do fechamento está fora do ciclo do
+ * contrato (renovou em 01/08 → agosto é do ciclo novo), o fechamento NÃO é
+ * subtraído deste saldo. Era o bug da renovação: plantões de agosto entravam no
+ * contrato anterior.
+ *
  * Estouro é AVISO, nunca bloqueio: o médico pode pegar o plantão extra. O que o
  * sistema faz é mostrar o custo da decisão na hora em que ela é tomada, e exigir
  * ciência explícita antes de assinar.
@@ -18,6 +27,7 @@ import {
     type CycleMetrics,
     type CycleMetricsInput,
 } from "@/lib/contracts/balance-metrics";
+import { isMonthWithinCycle } from "@/lib/contracts/statement";
 import type { ContractBalanceSummary } from "@/modules/reporting/payable-shifts";
 
 const RISK_LABEL: Record<CycleMetrics["riskLevel"], { text: string; icon: string }> = {
@@ -28,6 +38,11 @@ const RISK_LABEL: Record<CycleMetrics["riskLevel"], { text: string; icon: string
     critical: { text: "acaba muito antes do fim", icon: "▲▲" },
     depleted: { text: "saldo esgotado", icon: "■" },
 };
+
+const MONTH_NAMES = [
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+];
 
 function formatBrl(cents: number | null): string {
     if (cents === null) return "—";
@@ -41,6 +56,16 @@ function formatBrl(cents: number | null): string {
 function formatDate(iso: string | null): string {
     if (!iso) return "—";
     return new Date(iso).toLocaleDateString("pt-BR", { timeZone: "UTC" });
+}
+
+/** "2026-07-01" -> "01/07" — as datas do extrato dispensam o ano na célula. */
+function formatDayMonth(iso: string): string {
+    return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+}
+
+function formatMonthName(monthKey: string): string {
+    const month = Number(monthKey.slice(5, 7));
+    return `${MONTH_NAMES[month - 1]}/${monthKey.slice(0, 4)}`;
 }
 
 function toInput(summary: ContractBalanceSummary, asOf: Date): CycleMetricsInput {
@@ -59,6 +84,8 @@ export interface ContractBalanceCardProps {
     draft: { amountCents: number; weekdayShifts: number; weekendShifts: number };
     canManage: boolean;
     monthLabel: string;
+    /** Mês em edição (AAAA-MM) — decide se o fechamento pertence ao ciclo do contrato. */
+    monthKey?: string;
     /** Já assinado: o consumo do mês já está no razão, não é mais projeção. */
     alreadyAttested: boolean;
     /** Avisa o pai quando falta marcar a ciência do estouro. */
@@ -77,6 +104,7 @@ export function ContractBalanceCard({
     draft,
     canManage,
     monthLabel,
+    monthKey,
     alreadyAttested,
     onOverrunBlockChange,
     onOpeningBalanceSaved,
@@ -87,8 +115,16 @@ export function ContractBalanceCard({
     const [openingDraft, setOpeningDraft] = useState("");
     const [openingBusy, setOpeningBusy] = useState(false);
     const [openingError, setOpeningError] = useState<string | null>(null);
+    const [renewalDraft, setRenewalDraft] = useState<string | null>(null);
+    const [renewalBusy, setRenewalBusy] = useState(false);
+    const [renewalError, setRenewalError] = useState<string | null>(null);
 
     const selected = contracts.find((item) => item.contractId === selectedId) ?? contracts[0];
+
+    // Fronteira do ciclo: o fechamento do mês só desconta deste contrato se o
+    // mês pertence ao ciclo dele. Sem monthKey (chamador antigo), assume dentro.
+    const monthInCycle = !selected || !monthKey
+        || isMonthWithinCycle(monthKey, selected.cycleStart.slice(0, 10), selected.cycleEnd.slice(0, 10));
 
     const { before, after } = useMemo(() => {
         if (!selected) return { before: null, after: null };
@@ -96,8 +132,9 @@ export function ContractBalanceCard({
         const input = toInput(selected, asOf);
         const beforeMetrics = computeCycleMetrics(input);
         // Já atestado, o consumo do mês está no razão: somar de novo contaria
-        // duas vezes. Aí "depois" é o próprio estado atual.
-        if (alreadyAttested) return { before: beforeMetrics, after: beforeMetrics };
+        // duas vezes. Mês fora do ciclo não pertence a este contrato. Nos dois
+        // casos "depois" é o próprio estado atual.
+        if (alreadyAttested || !monthInCycle) return { before: beforeMetrics, after: beforeMetrics };
         return {
             before: beforeMetrics,
             after: computeCycleMetrics({
@@ -108,7 +145,12 @@ export function ContractBalanceCard({
                 weekendShifts: input.weekendShifts + draft.weekendShifts,
             }),
         };
-    }, [selected, draft, alreadyAttested]);
+    }, [selected, draft, alreadyAttested, monthInCycle]);
+
+    // Ciclo vencido = renovação pendente: o contrato novo ainda não existe no
+    // sistema e a coordenação precisa confirmar o saldo do novo ciclo.
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const cycleEnded = selected ? selected.cycleEnd.slice(0, 10) <= todayIso : false;
 
     // Contrato ainda sem saldo informado não estoura coisa nenhuma: o saldo é
     // zero porque ninguém digitou, não porque acabou. Sem esta guarda o botão de
@@ -118,6 +160,7 @@ export function ContractBalanceCard({
         && after.balanceCents < 0
         && !alreadyAttested
         && !readOnly
+        && monthInCycle
         && !(selected?.awaitingOpeningBalance ?? false);
     const blocked = overruns && !overrunAcknowledged;
     // Avisar o pai é efeito, não render: chamar setState de outro componente
@@ -144,6 +187,30 @@ export function ContractBalanceCard({
             setOpeningError(error instanceof Error ? error.message : "Falha ao gravar o saldo.");
         } finally {
             setOpeningBusy(false);
+        }
+    }
+
+    async function confirmRenewal() {
+        const value = Number((renewalValue ?? "").replace(",", "."));
+        if (!Number.isFinite(value)) {
+            setRenewalError("Informe o saldo do novo ciclo em reais.");
+            return;
+        }
+        setRenewalBusy(true);
+        setRenewalError(null);
+        try {
+            const response = await fetch(`/api/admin/contracts/${selected.contractId}/renew`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ openingBalanceBrl: value }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) throw new Error(body?.error ?? "Não foi possível renovar o contrato.");
+            onOpeningBalanceSaved?.();
+        } catch (error) {
+            setRenewalError(error instanceof Error ? error.message : "Falha ao renovar o contrato.");
+        } finally {
+            setRenewalBusy(false);
         }
     }
 
@@ -188,13 +255,20 @@ export function ContractBalanceCard({
     const consumedPct = after.consumedPct === null ? null : Math.min(after.consumedPct, 1.5);
     const barWidth = consumedPct === null ? 0 : Math.min(consumedPct * 100, 100);
     const paceLeft = Math.min(after.elapsedPct * 100, 100);
+    // Sugestão do novo ciclo: a única coisa que o passado permite inferir é o
+    // teto do ciclo anterior (a renovação costuma repor o valor anual cheio).
+    const suggestedRenewalBrl = selected.ceilingCents !== null
+        ? (selected.ceilingCents / 100).toFixed(2)
+        : null;
+    const renewalValue = renewalDraft ?? suggestedRenewalBrl;
+    const cycleEndLabel = formatDate(selected.cycleEnd);
 
     return (
         <article className={`contract-balance-card risk-${after.riskLevel}`}>
             <header>
                 <span>Saldo de contrato</span>
                 <small>
-                    ciclo {formatDate(selected.cycleStart)} – {formatDate(selected.cycleEnd)}
+                    ciclo {formatDate(selected.cycleStart)} – {cycleEndLabel}
                 </small>
             </header>
 
@@ -236,28 +310,111 @@ export function ContractBalanceCard({
                 </p>
             ) : null}
 
-            {selected.pendingConsumptionCents > 0 ? (
-                <p className="contract-balance-pending">
-                    Já descontado aqui: <strong>{formatBrl(selected.pendingConsumptionCents)}</strong> de
-                    plantões dados e ainda não fechados. O valor entra no saldo assim que a chefia assinar
-                    o mês — mas o gasto já é seu, então ele já aparece.
-                </p>
-            ) : null}
-
             <dl className="contract-balance-values">
                 <div>
                     <dt>Saldo hoje</dt>
                     <dd>{formatBrl(before.balanceCents)}</dd>
                 </div>
                 <div>
-                    <dt>{alreadyAttested ? `${monthLabel} (já atestado)` : `Este fechamento (${monthLabel})`}</dt>
-                    <dd className="negative">{alreadyAttested ? "—" : `−${formatBrl(draft.amountCents)}`}</dd>
+                    <dt>
+                        {!monthInCycle
+                            ? `${monthLabel} (ciclo novo)`
+                            : alreadyAttested
+                                ? `${monthLabel} (já descontado)`
+                                : `Este fechamento (${monthLabel})`}
+                    </dt>
+                    <dd className="negative">
+                        {!monthInCycle || alreadyAttested ? "—" : `−${formatBrl(draft.amountCents)}`}
+                    </dd>
                 </div>
                 <div className="highlight">
                     <dt>Saldo depois</dt>
                     <dd className={after.balanceCents < 0 ? "negative" : ""}>{formatBrl(after.balanceCents)}</dd>
                 </div>
             </dl>
+
+            {!monthInCycle ? (
+                <p className="contract-balance-cycle-boundary">
+                    O ciclo deste contrato vai até <strong>{cycleEndLabel}</strong>: os plantões de{" "}
+                    {monthLabel} pertencem ao ciclo renovado e <strong>não descontam deste saldo</strong>.
+                </p>
+            ) : null}
+
+            {selected.statement.length > 0 ? (
+                <div className="contract-balance-statement">
+                    <p className="contract-balance-statement-title">Saldo mês a mês</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Mês</th>
+                                <th>Saldo no início</th>
+                                <th>Gasto do mês</th>
+                                <th>Saldo no fim</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {selected.statement.map((row) => (
+                                <tr key={row.monthKey}>
+                                    <td>{formatMonthName(row.monthKey)}</td>
+                                    <td>
+                                        {formatBrl(row.startBalanceCents)}
+                                        <small>em {formatDayMonth(row.startDate)}</small>
+                                    </td>
+                                    <td className={row.consumptionCents > 0 ? "negative" : ""}>
+                                        {row.consumptionCents > 0 ? `−${formatBrl(row.consumptionCents)}` : "—"}
+                                        {row.adjustmentsCents !== 0 ? (
+                                            <small>
+                                                ajuste {row.adjustmentsCents > 0 ? "+" : "−"}
+                                                {formatBrl(Math.abs(row.adjustmentsCents))}
+                                            </small>
+                                        ) : null}
+                                    </td>
+                                    <td className={row.endBalanceCents < 0 ? "negative" : ""}>
+                                        {formatBrl(row.endBalanceCents)}
+                                        <small>{row.endIsToday ? `hoje (${formatDayMonth(row.endDate)})` : `em ${formatDayMonth(row.endDate)}`}</small>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            ) : null}
+
+            {cycleEnded ? (
+                <div className="contract-balance-renewal">
+                    <p>
+                        <strong>Ciclo encerrado em {cycleEndLabel}.</strong>{" "}
+                        {readOnly || !canManage
+                            ? "A coordenação ainda precisa informar o saldo do novo ciclo — os valores acima param nessa data."
+                            : suggestedRenewalBrl !== null
+                                ? `Pelo histórico, a renovação costuma repor o teto do ciclo anterior (${formatBrl(selected.ceilingCents)}). Confirme ou corrija o saldo do novo ciclo:`
+                                : "Não dá para calcular o saldo do novo ciclo pelo histórico — informe o valor definido pela coordenação:"}
+                    </p>
+                    {canManage && !readOnly ? (
+                        <>
+                            <div className="contract-balance-opening">
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={renewalValue ?? ""}
+                                    onChange={(event) => setRenewalDraft(event.target.value)}
+                                    placeholder="saldo do novo ciclo, ex.: 165732.00"
+                                    disabled={renewalBusy}
+                                />
+                                <button
+                                    type="button"
+                                    className="payment-button"
+                                    onClick={() => void confirmRenewal()}
+                                    disabled={renewalBusy || (renewalValue ?? "").trim() === ""}
+                                >
+                                    {renewalBusy ? "Renovando..." : `Confirmar renovação em ${cycleEndLabel}`}
+                                </button>
+                            </div>
+                            {renewalError ? <p className="chief-payable-extra-feedback danger">{renewalError}</p> : null}
+                        </>
+                    ) : null}
+                </div>
+            ) : null}
 
             <p className="contract-balance-projection">
                 <span className={`contract-balance-risk risk-${after.riskLevel}`}>
@@ -267,7 +424,7 @@ export function ContractBalanceCard({
                     after.projectedDepletionDate ? (
                         <>
                             {" "}No ritmo atual o saldo acaba em <strong>{formatDate(after.projectedDepletionDate.toISOString())}</strong>
-                            {" "}(ciclo até {formatDate(selected.cycleEnd)}).
+                            {" "}(ciclo até {cycleEndLabel}).
                         </>
                     ) : (
                         <> Sem projeção de exaustão no ritmo atual.</>

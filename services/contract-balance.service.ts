@@ -14,6 +14,12 @@ import {
     type CycleMetricsInput,
 } from "@/lib/contracts/balance-metrics";
 import {
+    buildContractStatement,
+    isMonthWithinCycle,
+    type ContractStatementMonth,
+    type StatementMonthMovements,
+} from "@/lib/contracts/statement";
+import {
     resolveDoctorPaymentProfile,
     type DoctorPaymentProfile,
 } from "@/modules/reporting/payable-shifts";
@@ -27,52 +33,99 @@ const RATE_CENTS: Record<DoctorPaymentProfile, { weekday: number; weekend: numbe
     psychiatry: { weekday: 129982, weekend: 141147 },
 };
 
+interface MonthMovement { amountCents: number; weekdayShifts: number; weekendShifts: number }
+
+/** Razão de um contrato quebrado por mês, para o extrato e para o saldo ao vivo. */
+interface ContractLedgerMonthly {
+    openingCents: number;
+    openingDate: string | null;
+    /** Consumo lançado no razão por mês (positivo = gasto), net de estornos. */
+    settledByMonth: Map<string, number>;
+    /** Ajustes manuais por mês, com sinal. */
+    adjustmentsByMonth: Map<string, number>;
+}
+
 /**
- * Consumo que o médico já fez e o razão ainda não registrou.
- *
- * O razão só recebe lançamento de fechamento ATESTADO — é o registro do que foi
- * conferido e assinado. Mas o médico precisa ver o que já gastou, não o que já
- * foi carimbado: a cada plantão que ele dá, o saldo dele muda de fato. Sem isto
- * a tela mostrava saldo melhor que a realidade para 126 dos 136 contratos, um
- * total de R$ 3,3 milhões — gente com saldo positivo na tela que já estava
- * negativa de verdade.
- *
- * Conta os meses do ciclo cuja competência é posterior ao lançamento de abertura
- * e que ainda não têm invoice no razão. Assim nada é contado duas vezes.
+ * Carrega o razão inteiro dos contratos pedidos, quebrado por mês, e o conjunto
+ * global de (médico, mês) que já tem consumo VIVO lançado — vivo = a soma
+ * algébrica dos lançamentos daquela origem é diferente de zero. Um mês atestado
+ * e depois desassinado soma zero: para o saldo ele volta a ser apurado ao vivo,
+ * porque o gasto do médico existe independente de assinatura.
  */
-async function loadPendingConsumption(params: {
-    contratos: { contractId: string; doctorId: string; cycleEnd: string; openingAt: Date }[];
-    asOf: Date;
-    excludeMonthKey?: string;
-}): Promise<Map<string, { amountCents: number; weekdayShifts: number; weekendShifts: number }>> {
-    const pendente = new Map<string, { amountCents: number; weekdayShifts: number; weekendShifts: number }>();
-    if (params.contratos.length === 0) return pendente;
+async function loadLedgerBreakdown(contractIds: string[]): Promise<{
+    byContract: Map<string, ContractLedgerMonthly>;
+    settledKeys: Set<string>;
+}> {
+    const db = getDb();
 
-    const mesDe = (data: Date) => `${data.getUTCFullYear()}-${String(data.getUTCMonth() + 1).padStart(2, "0")}`;
-    const mesAtual = mesDe(params.asOf);
-    const primeiroMes = params.contratos
-        .map((c) => mesDe(c.openingAt))
-        .reduce((menor, atual) => (atual < menor ? atual : menor), mesAtual);
+    // Origem de fechamento é global (o lançamento pode estar num contrato antigo
+    // do mesmo médico): meses com consumo vivo no razão não voltam como pendência.
+    const closingRows = await db
+        .select({ sourceKey: contractLedger.sourceKey, amount: contractLedger.amount })
+        .from(contractLedger)
+        .where(eq(contractLedger.sourceType, "payment_closing_attestation"));
+    const netByKey = new Map<string, number>();
+    for (const row of closingRows) {
+        if (!row.sourceKey) continue;
+        netByKey.set(row.sourceKey, (netByKey.get(row.sourceKey) ?? 0) + Math.round(Number(row.amount) * 100));
+    }
+    const settledKeys = new Set<string>();
+    for (const [key, net] of netByKey) if (net !== 0) settledKeys.add(key);
 
-    // Meses a apurar, uma vez cada — a apuração monta o mês inteiro.
+    const byContract = new Map<string, ContractLedgerMonthly>();
+    if (contractIds.length === 0) return { byContract, settledKeys };
+
+    const rows = await db
+        .select({
+            contractId: contractLedger.contractId,
+            entryDate: contractLedger.entryDate,
+            type: contractLedger.type,
+            amount: contractLedger.amount,
+            sourceKey: contractLedger.sourceKey,
+        })
+        .from(contractLedger)
+        .where(sql`${contractLedger.contractId} = any(${sql.raw(`array[${contractIds.map((id) => `'${id}'`).join(",")}]::uuid[]`)})`);
+
+    for (const row of rows) {
+        const data = byContract.get(row.contractId)
+            ?? { openingCents: 0, openingDate: null, settledByMonth: new Map(), adjustmentsByMonth: new Map() };
+        const cents = Math.round(Number(row.amount) * 100);
+        if (row.type === "opening") {
+            data.openingCents += cents;
+            if (data.openingDate === null || row.entryDate < data.openingDate) data.openingDate = row.entryDate;
+        } else if (row.type === "manual_adjustment") {
+            const mes = row.entryDate.slice(0, 7);
+            data.adjustmentsByMonth.set(mes, (data.adjustmentsByMonth.get(mes) ?? 0) + cents);
+        } else {
+            // invoice / invoice_reversal: competência vem da chave da origem
+            // ('<doctorId>|AAAA-MM'), com fallback na data do lançamento.
+            const mes = row.sourceKey?.split("|")[1] ?? row.entryDate.slice(0, 7);
+            data.settledByMonth.set(mes, (data.settledByMonth.get(mes) ?? 0) - cents);
+        }
+        byContract.set(row.contractId, data);
+    }
+    return { byContract, settledKeys };
+}
+
+/** Meses AAAA-MM de `primeiro` até `ultimo`, inclusive. */
+function monthRange(primeiro: string, ultimo: string): string[] {
     const meses: string[] = [];
-    let [ano, mes] = primeiroMes.split("-").map(Number);
-    const [anoFim, mesFim] = mesAtual.split("-").map(Number);
+    let [ano, mes] = primeiro.split("-").map(Number);
+    const [anoFim, mesFim] = ultimo.split("-").map(Number);
     while (ano < anoFim || (ano === anoFim && mes <= mesFim)) {
         meses.push(`${ano}-${String(mes).padStart(2, "0")}`);
         mes += 1;
         if (mes > 12) { mes = 1; ano += 1; }
     }
-    if (meses.length === 0) return pendente;
+    return meses;
+}
 
-    const jaLancado = new Set<string>();
-    const linhas = await getDb()
-        .select({ sourceKey: contractLedger.sourceKey })
-        .from(contractLedger)
-        .where(eq(contractLedger.sourceType, "payment_closing_attestation"));
-    for (const linha of linhas) if (linha.sourceKey) jaLancado.add(linha.sourceKey);
-
-    const apuracao = new Map<string, Map<string, { amountCents: number; weekdayShifts: number; weekendShifts: number }>>();
+/**
+ * Apura o valor pagável de cada mês para todos os médicos, uma vez por mês —
+ * a apuração monta o mês inteiro, então o custo é por mês, não por contrato.
+ */
+async function loadMonthlyApuracao(meses: string[]): Promise<Map<string, Map<string, MonthMovement>>> {
+    const apuracao = new Map<string, Map<string, MonthMovement>>();
     for (const mesChave of meses) {
         const range = resolveMonthlyReportRange(mesChave);
         apuracao.set(mesChave, new Map());
@@ -82,12 +135,35 @@ async function loadPendingConsumption(params: {
             if (valor) apuracao.get(mesChave)!.set(doctorId, valor);
         }
     }
+    return apuracao;
+}
 
+/**
+ * Consumo que o médico já fez e o razão ainda não registrou.
+ *
+ * O razão só recebe lançamento no fechamento — mas o médico precisa ver o que
+ * já gastou, não o que já foi carimbado: a cada plantão que ele dá, o saldo
+ * dele muda de fato. Assinatura NÃO é pré-condição do valor: mês sem lançamento
+ * vivo no razão é apurado ao vivo. Sem isto a tela mostrava saldo melhor que a
+ * realidade para 126 dos 136 contratos (R$ 3,3 milhões no total).
+ *
+ * Conta os meses cuja competência é posterior ao lançamento de abertura, que
+ * estão DENTRO do ciclo do contrato (renovou em 01/08 → agosto é do ciclo novo)
+ * e que ainda não têm lançamento vivo no razão. Assim nada é contado duas vezes.
+ */
+function computePendingConsumption(params: {
+    contratos: { contractId: string; doctorId: string; cycleStart: string; cycleEnd: string; openingAt: Date }[];
+    meses: string[];
+    apuracao: Map<string, Map<string, MonthMovement>>;
+    settledKeys: Set<string>;
+    excludeMonthKey?: string;
+}): Map<string, MonthMovement> {
+    const pendente = new Map<string, MonthMovement>();
     for (const contrato of params.contratos) {
         let amountCents = 0;
         let weekdayShifts = 0;
         let weekendShifts = 0;
-        for (const mesChave of meses) {
+        for (const mesChave of params.meses) {
             // Competência posterior à abertura, dentro do ciclo, e ainda não lançada.
             const ultimoDia = new Date(Date.UTC(
                 Number(mesChave.slice(0, 4)),
@@ -95,10 +171,10 @@ async function loadPendingConsumption(params: {
                 0,
             ));
             if (ultimoDia <= contrato.openingAt) continue;
-            if (`${mesChave}-01` >= contrato.cycleEnd) continue;
+            if (!isMonthWithinCycle(mesChave, contrato.cycleStart, contrato.cycleEnd)) continue;
             if (mesChave === params.excludeMonthKey) continue;
-            if (jaLancado.has(`${contrato.doctorId}|${mesChave}`)) continue;
-            const valor = apuracao.get(mesChave)?.get(contrato.doctorId);
+            if (params.settledKeys.has(`${contrato.doctorId}|${mesChave}`)) continue;
+            const valor = params.apuracao.get(mesChave)?.get(contrato.doctorId);
             if (!valor) continue;
             amountCents += valor.amountCents;
             weekdayShifts += valor.weekdayShifts;
@@ -106,7 +182,6 @@ async function loadPendingConsumption(params: {
         }
         pendente.set(contrato.contractId, { amountCents, weekdayShifts, weekendShifts });
     }
-
     return pendente;
 }
 
@@ -130,6 +205,13 @@ export interface ContractBalanceRow {
     metrics: CycleMetrics;
     /** A entrada exata que gerou `metrics` — o /simulate reusa em vez de remontar. */
     metricsInput: CycleMetricsInput;
+    /**
+     * Extrato mês a mês: saldo datado no início do mês, gasto do mês, saldo
+     * datado no fim (dia 1º do mês seguinte, fim do ciclo, ou HOJE). Inclui o
+     * mês corrente mesmo quando `excludeMonthKey` o tira do saldo projetado —
+     * o extrato mostra a realidade de hoje, sem depender de assinatura.
+     */
+    statement: ContractStatementMonth[];
 }
 
 interface BalanceViewRow {
@@ -153,23 +235,6 @@ function toCents(value: string | null): number | null {
 
 function toDate(value: string): Date {
     return new Date(`${value}T00:00:00Z`);
-}
-
-/**
- * Data a partir da qual há consumo medido. É o lançamento de abertura: antes
- * dele o razão não sabe nada, e medir ritmo em janela sem dado dá projeção
- * otimista (ver o comentário do burn rate em lib/contracts/balance-metrics.ts).
- */
-async function loadObservedSince(contractIds: string[]): Promise<Map<string, Date>> {
-    if (contractIds.length === 0) return new Map();
-    const rows = await getDb()
-        .select({ contractId: contractLedger.contractId, entryDate: contractLedger.entryDate })
-        .from(contractLedger)
-        .where(and(
-            eq(contractLedger.type, "opening"),
-            sql`${contractLedger.contractId} = any(${sql.raw(`array[${contractIds.map((id) => `'${id}'`).join(",")}]::uuid[]`)})`,
-        ));
-    return new Map(rows.map((row) => [row.contractId, toDate(row.entryDate)]));
 }
 
 export async function loadContractBalances(params: {
@@ -207,19 +272,78 @@ export async function loadContractBalances(params: {
         metadata: unknown;
     })[];
 
-    const observedSince = await loadObservedSince(viewRows.map((row) => row.contract_id));
+    const { byContract: ledger, settledKeys } = await loadLedgerBreakdown(viewRows.map((row) => row.contract_id));
+
+    // Janela observada de cada contrato: começa no lançamento de abertura;
+    // sem abertura, no início do ciclo.
+    const observedSince = new Map<string, Date>();
+    for (const row of viewRows) {
+        const openingDate = ledger.get(row.contract_id)?.openingDate;
+        observedSince.set(row.contract_id, openingDate ? toDate(openingDate) : toDate(row.cycle_start));
+    }
+
+    const contratos = viewRows.map((row) => ({
+        contractId: row.contract_id,
+        doctorId: row.doctor_id,
+        cycleStart: row.cycle_start,
+        cycleEnd: row.cycle_end,
+        openingAt: observedSince.get(row.contract_id)!,
+    }));
+
+    // Meses a apurar ao vivo: da abertura mais antiga até o mês corrente.
+    const mesDe = (data: Date) => `${data.getUTCFullYear()}-${String(data.getUTCMonth() + 1).padStart(2, "0")}`;
+    const mesAtual = mesDe(asOf);
+    const primeiroMes = contratos
+        .map((c) => mesDe(c.openingAt))
+        .reduce((menor, atual) => (atual < menor ? atual : menor), mesAtual);
+    const meses = contratos.length > 0 ? monthRange(primeiroMes, mesAtual) : [];
+    const apuracao = await loadMonthlyApuracao(meses);
 
     // O que o médico já gastou e o fechamento ainda não carimbou.
-    const pendente = await loadPendingConsumption({
-        asOf,
+    const pendente = computePendingConsumption({
+        contratos,
+        meses,
+        apuracao,
+        settledKeys,
         excludeMonthKey: params.excludeMonthKey,
-        contratos: viewRows.map((row) => ({
-            contractId: row.contract_id,
-            doctorId: row.doctor_id,
-            cycleEnd: row.cycle_end,
-            openingAt: observedSince.get(row.contract_id) ?? toDate(row.cycle_start),
-        })),
     });
+
+    const asOfDate = asOf.toISOString().slice(0, 10);
+    // Extrato mês a mês por contrato: razão (fechado + ajustes) + apuração ao
+    // vivo dos meses sem lançamento. Diferente do saldo projetado, o extrato
+    // NÃO exclui o mês em edição — a última linha é o saldo de hoje de fato.
+    const statements = new Map<string, ContractStatementMonth[]>();
+    for (const contrato of contratos) {
+        const data = ledger.get(contrato.contractId)
+            ?? { openingCents: 0, openingDate: null, settledByMonth: new Map<string, number>(), adjustmentsByMonth: new Map<string, number>() };
+        const months = new Map<string, StatementMonthMovements>();
+        const add = (mes: string, delta: Partial<StatementMonthMovements>) => {
+            const atual = months.get(mes) ?? { consumptionCents: 0, adjustmentsCents: 0 };
+            months.set(mes, {
+                consumptionCents: atual.consumptionCents + (delta.consumptionCents ?? 0),
+                adjustmentsCents: atual.adjustmentsCents + (delta.adjustmentsCents ?? 0),
+            });
+        };
+        for (const [mes, cents] of data.settledByMonth) add(mes, { consumptionCents: cents });
+        for (const [mes, cents] of data.adjustmentsByMonth) add(mes, { adjustmentsCents: cents });
+        for (const mesChave of meses) {
+            const ultimoDia = new Date(Date.UTC(Number(mesChave.slice(0, 4)), Number(mesChave.slice(5, 7)), 0));
+            if (ultimoDia <= contrato.openingAt) continue;
+            if (!isMonthWithinCycle(mesChave, contrato.cycleStart, contrato.cycleEnd)) continue;
+            if (data.settledByMonth.has(mesChave)) continue;
+            if (settledKeys.has(`${contrato.doctorId}|${mesChave}`)) continue;
+            const valor = apuracao.get(mesChave)?.get(contrato.doctorId);
+            if (!valor) continue;
+            add(mesChave, { consumptionCents: valor.amountCents });
+        }
+        statements.set(contrato.contractId, buildContractStatement({
+            openingCents: data.openingCents,
+            openingDate: data.openingDate ?? contrato.cycleStart,
+            months,
+            cycleEnd: contrato.cycleEnd,
+            asOfDate,
+        }));
+    }
 
     const rows = viewRows.map((row) => {
         const profile = resolveDoctorPaymentProfile(row.metadata);
@@ -266,6 +390,7 @@ export async function loadContractBalances(params: {
             pendingConsumptionCents: emAberto.amountCents,
             metrics: computeCycleMetrics(input),
             metricsInput: input,
+            statement: statements.get(row.contract_id) ?? [],
         } satisfies ContractBalanceRow;
     });
 

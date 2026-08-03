@@ -2473,6 +2473,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                         }}
                                         canManage={canManageClosing}
                                         monthLabel={board.monthLabel}
+                                        monthKey={board.monthKey}
                                         alreadyAttested={isDoctorAttested(selectedDoctor)}
                                         onOverrunBlockChange={setOverrunBlocked}
                                         onOpeningBalanceSaved={requestRouterRefresh}

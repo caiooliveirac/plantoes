@@ -28,6 +28,7 @@ import { and, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { contractLedger, contracts, paymentClosingAttestations } from "@/db/schema";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
+import { isMonthWithinCycle } from "@/lib/contracts/statement";
 import { getDoctorMonthlyPayableBreakdown } from "@/services/payable-shifts.service";
 
 /** Origem dos lançamentos automáticos. Casa com contract_ledger.source_type. */
@@ -68,6 +69,14 @@ function centsToNumeric(cents: number): string {
  * Qual contrato do médico vale na competência do mês. A janela manda: um médico
  * pode ter dois contratos ativos (Ana Beatriz D'Almeida) e o fechamento precisa
  * saber contra qual a nota corre. Havendo empate, vence o que começou depois.
+ *
+ * O CICLO também manda: contrato renovado em 01/08 não recebe lançamento de
+ * agosto — agosto pertence ao ciclo novo. Enquanto a renovação não é
+ * confirmada no sistema (não existe contrato com ciclo cobrindo o mês), o mês
+ * fica sem lançamento ("sem_contrato") em vez de consumir o saldo do ciclo
+ * vencido. O razão é append-only: um lançamento no contrato errado não se
+ * corrige sozinho depois — melhor não escrever do que escrever errado. A
+ * varredura diária lança o mês assim que o contrato novo existir.
  */
 export async function resolveContractForMonth(
     tx: DbLike,
@@ -76,7 +85,7 @@ export async function resolveContractForMonth(
 ): Promise<{ id: string } | null> {
     const reference = monthLastDay(monthKey);
     const rows = await tx
-        .select({ id: contracts.id })
+        .select({ id: contracts.id, cycleStart: contracts.cycleStart, cycleEnd: contracts.cycleEnd })
         .from(contracts)
         .where(and(
             eq(contracts.doctorId, doctorId),
@@ -84,9 +93,9 @@ export async function resolveContractForMonth(
             lte(contracts.startedAt, reference),
             or(isNull(contracts.endedAt), sql`${contracts.endedAt} > ${reference}`),
         ))
-        .orderBy(desc(contracts.startedAt))
-        .limit(1);
-    return rows[0] ?? null;
+        .orderBy(desc(contracts.startedAt));
+    const match = rows.find((row) => isMonthWithinCycle(monthKey, row.cycleStart, row.cycleEnd));
+    return match ? { id: match.id } : null;
 }
 
 /**
