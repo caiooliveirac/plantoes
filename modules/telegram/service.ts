@@ -1475,6 +1475,30 @@ export function resolveContinuationShiftStart(eventAt: Date, shiftType: string |
     return window.startedAt;
 }
 
+/**
+ * Bloco de turno que uma continuação EXPLÍCITA ("continua"/"continuando") abre.
+ *
+ * Regra canônica (modules/operational/rules.ts): a mensagem referencia a virada
+ * de turno mais próxima (resolveContinuationReferenceBoundary) e o bloco novo é
+ * o turno DEPOIS dessa virada — começa na virada, com o rótulo desse turno.
+ *
+ * Derivar rótulo/janela do âncora da manhã (started_at herdado da chegada
+ * original) fazia a ocupação nova nascer no bloco ANTERIOR, já expirado: a
+ * varredura de auto-close fechava a linha segundos depois de criada e o médico
+ * sumia do painel e da divisão do jantar, com resposta de sucesso no grupo
+ * (casos Claudio Azoubel / Matheus Mendonça / Rafaela Menoita / Acacio Junio,
+ * 03/08/2026). O horário de chegada original segue preservado no
+ * boardStartedAt e no continuityGroup — nunca no started_at do bloco novo.
+ */
+export function resolveTelegramExplicitContinuationBlock(eventAt: Date) {
+    const blockStartAt = resolveContinuationReferenceBoundary(eventAt);
+    const blockProbe = new Date(blockStartAt.getTime() + 60000);
+    return {
+        blockStartAt,
+        shiftLabel: resolveOperationalShiftWindow(blockProbe).shiftLabel,
+    };
+}
+
 export function resolveTelegramContinuationStartedAt(params: {
     eventAt: Date;
     shiftType: string | null | undefined;
@@ -8729,15 +8753,25 @@ async function applyParsedEntry(params: {
                 const crossShiftExpiry = shouldUseContinuityContext
                     ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
                     : null;
+                // Continuação explícita: o bloco novo começa na virada referenciada
+                // (nunca no âncora da manhã — ver resolveTelegramExplicitContinuationBlock).
+                // Se o âncora já cai dentro do bloco novo (chegada real depois da
+                // virada), ele prevalece para não creditar tempo não trabalhado.
+                const explicitContinuationBlock = shouldUseContinuityContext && parsed.isContinuation
+                    ? resolveTelegramExplicitContinuationBlock(eventAt)
+                    : null;
                 const effectiveContinuationStartedAt = isCrossTargetContinuation
                     ? eventAt
-                    : (crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
-                        ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
-                        : continuationStartedAt);
+                    : explicitContinuationBlock
+                        ? new Date(Math.max(explicitContinuationBlock.blockStartAt.getTime(), continuationStartedAt.getTime()))
+                        : (crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
+                            ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
+                            : continuationStartedAt);
                 if (shouldUseContinuityContext && continuityContext?.source) {
                     // O bloco novo é o turno da chegada (resolveArrivalShiftLabel já vira para o
                     // turno seguinte quando o médico avisa pouco antes da virada).
-                    effectiveShiftType = resolveArrivalShiftLabel(effectiveContinuationStartedAt);
+                    effectiveShiftType = explicitContinuationBlock?.shiftLabel
+                        ?? resolveArrivalShiftLabel(effectiveContinuationStartedAt);
                 }
 
                 const createRegulationArrival = (startedAtOverride?: Date) => startRegulationOccupancy({
@@ -8802,6 +8836,18 @@ async function applyParsedEntry(params: {
                 }
                 occupancyId = regResult.id;
                 if (regResult.autoReactivated) autoReactivated = true;
+
+                // Uma continuação nunca pode materializar uma janela já vencida:
+                // a varredura de auto-close fecharia a linha em segundos e o bot
+                // teria respondido sucesso (bug de 03/08/2026). Melhor errar alto.
+                if (
+                    shouldUseContinuityContext
+                    && parsed.isContinuation
+                    && regResult.scheduledEndAt
+                    && regResult.scheduledEndAt.getTime() <= eventAt.getTime()
+                ) {
+                    throw new Error("Continuacao caiu numa janela de turno ja encerrada — registro nao efetivado, avise a regulacao.");
+                }
 
                 if (shouldUseContinuityContext && continuityContext?.source) {
                     treatedAsContinuation = true;
@@ -8996,13 +9042,21 @@ async function applyParsedEntry(params: {
                 const crossShiftExpiryIntv = shouldUseContinuityContext
                     ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
                     : null;
+                // Mesma regra da regulação: continuação explícita abre o bloco
+                // depois da virada referenciada (resolveTelegramExplicitContinuationBlock).
+                const explicitContinuationBlockIntv = shouldUseContinuityContext && parsed.isContinuation
+                    ? resolveTelegramExplicitContinuationBlock(eventAt)
+                    : null;
                 const effectiveContinuationStartedAtIntv = isCrossTargetContinuation
                     ? eventAt
-                    : (crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
-                        ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
-                        : continuationStartedAt);
+                    : explicitContinuationBlockIntv
+                        ? new Date(Math.max(explicitContinuationBlockIntv.blockStartAt.getTime(), continuationStartedAt.getTime()))
+                        : (crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
+                            ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
+                            : continuationStartedAt);
                 if (shouldUseContinuityContext && continuityContext?.source) {
-                    effectiveShiftType = resolveArrivalShiftLabel(effectiveContinuationStartedAtIntv);
+                    effectiveShiftType = explicitContinuationBlockIntv?.shiftLabel
+                        ?? resolveArrivalShiftLabel(effectiveContinuationStartedAtIntv);
                 }
 
                 const createInterventionArrival = (startedAtOverride?: Date) => startInterventionOccupancy({
@@ -9064,6 +9118,17 @@ async function applyParsedEntry(params: {
                 }
                 occupancyId = intResult.id;
                 if (intResult.autoReactivated) autoReactivated = true;
+
+                // Paridade com a regulação: janela já vencida = erro alto, nunca
+                // sucesso silencioso seguido de auto-close.
+                if (
+                    shouldUseContinuityContext
+                    && parsed.isContinuation
+                    && intResult.scheduledEndAt
+                    && intResult.scheduledEndAt.getTime() <= eventAt.getTime()
+                ) {
+                    throw new Error("Continuacao caiu numa janela de turno ja encerrada — registro nao efetivado, avise a regulacao.");
+                }
 
                 if (shouldUseContinuityContext && continuityContext?.source) {
                     treatedAsContinuation = true;
