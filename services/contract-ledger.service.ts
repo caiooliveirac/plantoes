@@ -413,7 +413,8 @@ export async function recordOpeningBalance(params: {
     contractId: string;
     balanceCents: number;
     entryDate: string;
-    actorUserId: string;
+    /** `null` quando a abertura vem de script de carga, não de um clique. */
+    actorUserId: string | null;
     tx?: DbLike;
 }): Promise<void> {
     const tx = params.tx ?? getDb();
