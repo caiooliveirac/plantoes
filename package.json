@@ -26,7 +26,8 @@
     "runtime:guard-check": "bash scripts/runtime-guard-check.sh",
     "provision:initial-access": "tsx scripts/provision-initial-access.ts",
     "deploy:production": "bash scripts/deploy-production.sh",
-    "saldo:backfill": "tsx scripts/backfill-saldo-contrato.ts"
+    "saldo:backfill": "tsx scripts/backfill-saldo-contrato.ts",
+    "saldo:repair-maio": "tsx scripts/repair-maio-extrato.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
