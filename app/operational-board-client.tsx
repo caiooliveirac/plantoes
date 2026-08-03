@@ -70,6 +70,8 @@ interface SessionSummary {
     roles: UserRole[];
     mustChangePassword: boolean;
     canManage: boolean;
+    /** Vínculo com o cadastro de médicos — habilita o link do painel individual. */
+    doctorId: string | null;
 }
 
 interface RegulationCard extends RegulationBoardRow {
@@ -3446,6 +3448,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 {session.roles.includes("payment_closing_limited") && !session.mustChangePassword && !session.roles.includes("admin") && (
                                     <a className="ops-auth-inline-link" href="/admin/payment-closing">
                                         Abrir fechamento de pagamento
+                                    </a>
+                                )}
+
+                                {session.doctorId && !session.mustChangePassword && (
+                                    <a className="ops-auth-inline-link" href="/medico">
+                                        Meu painel (pagamento e banco de horas)
                                     </a>
                                 )}
                             </div>

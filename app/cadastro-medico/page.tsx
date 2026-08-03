@@ -79,7 +79,7 @@ export default function CadastroMedicoPage() {
                             Use este email e a senha escolhida nos próximos acessos —
                             e para recuperar a senha, se precisar.
                         </p>
-                        <a className="et-btn primary" href="/">Entrar no painel</a>
+                        <a className="et-btn primary" href="/medico">Abrir meu painel</a>
                     </div>
                 ) : step === "verify" ? (
                     <form className="et-form" style={{ padding: 20 }} onSubmit={submitVerify}>

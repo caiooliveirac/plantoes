@@ -12,7 +12,7 @@
  * Acesso: token assinado do bot (validade de 7 dias) OU sessão admin.
  */
 import { notFound } from "next/navigation";
-import { requireAuthenticatedSession } from "@/lib/auth/server";
+import { readAuthenticatedSession, requireAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
 import { hasDatabaseUrl } from "@/db";
 import { getBankHoursHistory } from "@/services/bank-hours-history.service";
@@ -70,7 +70,12 @@ export default async function PainelDoMedicoPage({
     if (!Number.isInteger(mes) || mes < 1 || mes > 12) notFound();
 
     if (!isValidFolhaToken(t, { medicoId, ano, mes })) {
-        await requireAuthenticatedSession(["admin"]);
+        // Sessão do PRÓPRIO médico (cadastro por codinome+email) também entra;
+        // qualquer outra sessão continua exigindo admin.
+        const session = await readAuthenticatedSession();
+        if (!session || session.user.doctorId !== medicoId) {
+            await requireAuthenticatedSession(["admin"]);
+        }
     }
     if (!hasDatabaseUrl()) notFound();
 

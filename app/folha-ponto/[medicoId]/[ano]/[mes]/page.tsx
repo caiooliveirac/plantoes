@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
-import { requireAuthenticatedSession } from "@/lib/auth/server";
+import { readAuthenticatedSession, requireAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
 import type { DadosFolhaPonto, Plantao, Turno } from "@/lib/folha-ponto/types";
 import { FolhaPontoClient } from "./FolhaPontoClient";
@@ -40,9 +40,13 @@ export default async function FolhaPontoPage({
     if (!Number.isInteger(ano) || ano < 2020 || ano > 2100) notFound();
     if (!Number.isInteger(mes) || mes < 1 || mes > 12) notFound();
 
-    // Acesso: link assinado (médico, via bot) OU sessão admin (botão do site).
+    // Acesso: link assinado (médico, via bot), sessão do PRÓPRIO médico
+    // (cadastro por codinome+email) OU sessão admin (botão do site).
     if (!isValidFolhaToken(t, { medicoId, ano, mes })) {
-        await requireAuthenticatedSession(["admin"]);
+        const session = await readAuthenticatedSession();
+        if (!session || session.user.doctorId !== medicoId) {
+            await requireAuthenticatedSession(["admin"]);
+        }
     }
 
     if (!hasDatabaseUrl()) notFound();
