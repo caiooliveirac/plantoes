@@ -156,10 +156,13 @@ function computePendingConsumption(params: {
     meses: string[];
     apuracao: Map<string, Map<string, MonthMovement>>;
     settledKeys: Set<string>;
+    /** Meses já lançados no razão do próprio contrato (qualquer origem — inclui import de planilha). */
+    ledger: Map<string, ContractLedgerMonthly>;
     excludeMonthKey?: string;
 }): Map<string, MonthMovement> {
     const pendente = new Map<string, MonthMovement>();
     for (const contrato of params.contratos) {
+        const settledByMonth = params.ledger.get(contrato.contractId)?.settledByMonth;
         let amountCents = 0;
         let weekdayShifts = 0;
         let weekendShifts = 0;
@@ -174,6 +177,7 @@ function computePendingConsumption(params: {
             if (!isMonthWithinCycle(mesChave, contrato.cycleStart, contrato.cycleEnd)) continue;
             if (mesChave === params.excludeMonthKey) continue;
             if (params.settledKeys.has(`${contrato.doctorId}|${mesChave}`)) continue;
+            if (settledByMonth?.has(mesChave)) continue;
             const valor = params.apuracao.get(mesChave)?.get(contrato.doctorId);
             if (!valor) continue;
             amountCents += valor.amountCents;
@@ -305,6 +309,7 @@ export async function loadContractBalances(params: {
         meses,
         apuracao,
         settledKeys,
+        ledger,
         excludeMonthKey: params.excludeMonthKey,
     });
 
