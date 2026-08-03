@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import "@/app/auth-pages.css";
 
 type TokenState = "checking" | "valid" | "invalid";
 
@@ -85,8 +86,8 @@ export default function RedefinirSenhaPage({ params }: { params: Promise<{ token
                         <a className="et-btn primary" href="/">Ir para o login</a>
                     </div>
                 ) : (
-                    <form className="et-form" style={{ padding: 20 }} onSubmit={submit}>
-                        <p style={{ margin: 0, color: "var(--muted)", fontSize: 13.5 }}>
+                    <form className="et-form" onSubmit={submit}>
+                        <p>
                             {email ? <>Definindo nova senha para <strong>{email}</strong>.</> : "Escolha sua nova senha."}
                         </p>
                         <label>

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { readAuthenticatedSession } from "@/lib/auth/server";
+import "@/app/auth-pages.css";
 
 export const dynamic = "force-dynamic";
 

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
+import "@/app/auth-pages.css";
 
 export default function EsqueciSenhaPage() {
     const [email, setEmail] = useState("");
@@ -51,8 +52,8 @@ export default function EsqueciSenhaPage() {
                         </p>
                     </div>
                 ) : (
-                    <form className="et-form" style={{ padding: 20 }} onSubmit={submit}>
-                        <p style={{ margin: 0, color: "var(--muted)", fontSize: 13.5 }}>
+                    <form className="et-form" onSubmit={submit}>
+                        <p>
                             Informe o email do seu cadastro. Enviaremos um link para você
                             escolher uma nova senha.
                         </p>
