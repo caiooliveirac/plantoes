@@ -3850,7 +3850,7 @@ const KNOWN_TELEGRAM_COMMANDS = [
     "plantao", "resumo", "saidas", "prioridadesaida", "prioridade", "ajuda", "help",
     "comandos", "cobrar", "lembretes", "status", "meuturno", "almoco", "jantar",
     "excluir", "incluir", "corrigir", "corrigirsaida", "retirar", "remover", "ramal",
-    "ativar", "desativar", "ontem", "hoje", "pagamento", "resetcodinome",
+    "ativar", "desativar", "ontem", "hoje", "pagamento", "resetcodinome", "rc",
     "desfazer", "slots", "medico", "piam", "banco", "alerta", "saiu", "saindo", "saida",
 ];
 
@@ -4779,7 +4779,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             // Botão-url para o privado (auditoria §3.4#9); sem username, só o texto.
             await sendMessage(
                 message.chat.id,
-                "⛔ /resetcodinome fica no privado do bot.",
+                "⛔ /rc fica no privado do bot.",
                 message.message_id,
                 await buildOpenBotPrivateChatKeyboard(),
             );
@@ -4788,7 +4788,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         const actor = await resolveTelegramCommandActor(message);
         if (!actor || !actor.roles.some((role) => role === "admin" || role === "chief")) {
             await markTelegramProcessed(logId, { status: "ignored", errorMessage: "reset_codinome_forbidden", parsedAction: "reset_codinome" });
-            await sendMessage(message.chat.id, "⛔ /resetcodinome é exclusivo de admin/chefia.", message.message_id);
+            await sendMessage(message.chat.id, "⛔ /rc é exclusivo de admin/chefia.", message.message_id);
             return { ok: true, ignored: true };
         }
         const resetCmd = parseTelegramResetCodinomeCommand(message.text);
@@ -5059,7 +5059,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             try {
                 const all = await listDoctorCodenames();
                 await markTelegramProcessed(logId, { status: "accepted", parsedAction: "payment_list", resolutionData: { count: all.length } });
-                const header = `📋 Codinomes (${all.length} médicos)\n"(sem registro)" = codinome antigo, de antes de eu guardar o texto — para gerar um novo, use /resetcodinome Nome Completo.`;
+                const header = `📋 Codinomes (${all.length} médicos)\n"(sem registro)" = codinome antigo, de antes de eu guardar o texto — para gerar um novo, use /rc Nome Completo.`;
                 const lines = all.map((r) => `${r.fullName} — ${r.codename ?? "(sem registro)"}`);
                 const messages = chunkTelegramLines(header, lines);
                 for (const [index, text] of messages.entries()) {
@@ -5778,7 +5778,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             helpLines.push(
                 "",
                 "🔑 *Chefia (privado):* /pagamento · /pagamento conferir · /pagamento corrigir",
-                "   /resetcodinome <Nome ou codinome> — reseta o codinome de um médico",
+                "   /rc <Nome ou codinome> — reseta o codinome de um médico",
             );
         }
         if (helpIsAdmin) {
@@ -5973,8 +5973,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 "▸ /pagamento corrigir — corrige pagamento:",
                 "  _/pagamento corrigir PM04 | Karen | 2026-04-07 | SD | motivo_",
                 "",
-                "▸ /resetcodinome — gera/reseta o codinome de UM médico (por nome OU codinome):",
-                "  _/resetcodinome João Silva_  ou  _/resetcodinome tigre-azul-958_",
+                "▸ /rc — gera/reseta o codinome de UM médico (por nome OU codinome):",
+                "  _/rc João Silva_  ou  _/rc tigre-azul-958_  (alias: /resetcodinome)",
                 "  → responde com o codinome novo p/ você entregar no particular.",
                 "",
                 "▸ Você também pode puxar a folha de um médico pelo codinome:",
