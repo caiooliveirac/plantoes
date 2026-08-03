@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
+import "@/app/auth-pages.css";
 
 type Step = "start" | "verify" | "done";
 
@@ -82,8 +83,8 @@ export default function CadastroMedicoPage() {
                         <a className="et-btn primary" href="/medico">Abrir meu painel</a>
                     </div>
                 ) : step === "verify" ? (
-                    <form className="et-form" style={{ padding: 20 }} onSubmit={submitVerify}>
-                        <p style={{ margin: 0, color: "var(--muted)", fontSize: 13.5 }}>
+                    <form className="et-form" onSubmit={submitVerify}>
+                        <p>
                             Enviamos um código de 6 dígitos para <strong>{email}</strong>.
                             Digite o código e escolha sua senha para concluir.
                         </p>
@@ -128,8 +129,8 @@ export default function CadastroMedicoPage() {
                         </button>
                     </form>
                 ) : (
-                    <form className="et-form" style={{ padding: 20 }} onSubmit={submitStart}>
-                        <p style={{ margin: 0, color: "var(--muted)", fontSize: 13.5 }}>
+                    <form className="et-form" onSubmit={submitStart}>
+                        <p>
                             Use o <strong>codinome</strong> que a coordenação te entregou
                             (ex.: <code>tigre-azul-958</code>) e um email que você acessa.
                             Vamos enviar um código de 6 dígitos para confirmar o email antes
