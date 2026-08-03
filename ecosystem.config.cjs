@@ -3,7 +3,6 @@ module.exports = {
         {
             name: "plantoes",
             cwd: "/home/ubuntu/plantoes",
-            env_file: "/home/ubuntu/plantoes/.env.production",
             script: "npm",
             args: "start",
             env: {
@@ -19,7 +18,6 @@ module.exports = {
         {
             name: "plantoes-telegram-worker",
             cwd: "/home/ubuntu/plantoes",
-            env_file: "/home/ubuntu/plantoes/.env.production",
             script: "npm",
             args: "run telegram:worker",
             env: {
