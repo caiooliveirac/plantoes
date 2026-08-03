@@ -236,6 +236,14 @@ export function ContractBalanceCard({
                 </p>
             ) : null}
 
+            {selected.pendingConsumptionCents > 0 ? (
+                <p className="contract-balance-pending">
+                    Já descontado aqui: <strong>{formatBrl(selected.pendingConsumptionCents)}</strong> de
+                    plantões dados e ainda não fechados. O valor entra no saldo assim que a chefia assinar
+                    o mês — mas o gasto já é seu, então ele já aparece.
+                </p>
+            ) : null}
+
             <dl className="contract-balance-values">
                 <div>
                     <dt>Saldo hoje</dt>

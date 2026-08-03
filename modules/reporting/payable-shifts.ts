@@ -294,6 +294,10 @@ export interface ContractBalanceSummary {
     remainingWeekdayShifts: number;
     /** Razão vazio: o coordenador ainda precisa informar o saldo de abertura. */
     awaitingOpeningBalance: boolean;
+    /** Saldo já conferido e assinado — o que está no razão. */
+    settledBalanceCents: number;
+    /** Plantões já dados, ainda sem fechamento assinado, fora do mês em edição. */
+    pendingConsumptionCents: number;
     metricsInput: {
         ceilingCents: number | null;
         balanceCents: number;
