@@ -238,8 +238,29 @@ async function isMonthAttested(tx: DbLike, doctorId: string, monthKey: string): 
     return rows.length > 0;
 }
 
+/** Apura o consumo de um mês. Fora de transação, sempre — abre conexão própria. */
+export async function loadMonthConsumption(doctorId: string, monthKey: string) {
+    const range = resolveMonthlyReportRange(monthKey);
+    const breakdown = await getDoctorMonthlyPayableBreakdown(range.start, range.end);
+    return breakdown.get(doctorId)?.get(monthKey) ?? { amountCents: 0, weekdayShifts: 0, weekendShifts: 0 };
+}
+
 export async function syncContractLedgerForMonth(params: SyncParams): Promise<LedgerSyncResult> {
     const { doctorId, monthKey, actorUserId = null, tx = getDb() } = params;
+
+    // DEADLOCK: o pool tem max=1 (db/index.ts). Se este sync roda DENTRO de uma
+    // transação e precisa apurar o mês, o getDoctorMonthlyPayableBreakdown pede
+    // uma segunda conexão que nunca vem — a transação segura a única que existe.
+    // Trava o app inteiro, não só a atestação. Aconteceu em produção em
+    // 2026-08-03: 13 minutos de "idle in transaction" e nenhuma requisição
+    // respondendo. Quem chama dentro de transação apura ANTES e passa em
+    // precomputed.
+    if (params.tx && !params.precomputed) {
+        throw new Error(
+            "syncContractLedgerForMonth dentro de transação exige `precomputed`"
+            + " — apure o mês antes de abrir a transação (ver loadMonthConsumption).",
+        );
+    }
     const sourceKey = closingSourceKey(doctorId, monthKey);
     const attested = params.attested ?? await isMonthAttested(tx, doctorId, monthKey);
 

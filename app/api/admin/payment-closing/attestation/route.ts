@@ -5,7 +5,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { setDoctorMonthAttestation } from "@/services/payment-closing-attestation.service";
-import { syncContractLedgerForMonth } from "@/services/contract-ledger.service";
+import { loadMonthConsumption, syncContractLedgerForMonth } from "@/services/contract-ledger.service";
 
 const payloadSchema = z.object({
     doctorId: z.string().uuid(),
@@ -32,6 +32,10 @@ export async function POST(request: NextRequest) {
     }
 
     try {
+        // Apuração ANTES da transação: o pool tem max=1, e apurar lá dentro
+        // pediria uma segunda conexão que nunca chega (ver o guard no service).
+        const consumoDoMes = await loadMonthConsumption(parsed.data.doctorId, parsed.data.monthKey);
+
         // Assinatura e lançamento no razão são o mesmo ato: ou os dois acontecem
         // ou nenhum. Desassinar entra aqui como estorno, não como delete do razão
         // — o razão é append-only.
@@ -48,6 +52,7 @@ export async function POST(request: NextRequest) {
                 monthKey: parsed.data.monthKey,
                 attested: parsed.data.attested,
                 actorUserId: session.user.id,
+                precomputed: consumoDoMes,
                 tx,
             }),
         }));

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
     closingSourceKey,
     planLedgerSync,
+    syncContractLedgerForMonth,
     type LiveLedgerState,
 } from "@/services/contract-ledger.service";
 
@@ -159,5 +160,24 @@ describe("planLedgerSync — bordas", () => {
 describe("closingSourceKey", () => {
     it("é estável: a atestação some ao desassinar, a chave não", () => {
         assert.equal(closingSourceKey("abc", "2026-06"), "abc|2026-06");
+    });
+});
+
+describe("syncContractLedgerForMonth — guarda contra deadlock", () => {
+    // O pool do repo tem max=1. Sync dentro de transação que precise apurar o
+    // mês pediria uma segunda conexão que nunca vem, e trava o app inteiro —
+    // não só a atestação. Aconteceu em produção em 2026-08-03.
+    it("recusa rodar dentro de transação sem o mês já apurado", async () => {
+        const txFalso = { select: () => { throw new Error("não deveria consultar"); },
+                          insert: () => { throw new Error("não deveria inserir"); } };
+        await assert.rejects(
+            () => syncContractLedgerForMonth({
+                doctorId: "doc-1",
+                monthKey: "2026-08",
+                attested: true,
+                tx: txFalso as never,
+            }),
+            /exige `precomputed`/,
+        );
     });
 });
