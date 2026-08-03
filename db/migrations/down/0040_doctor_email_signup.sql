@@ -1,0 +1,1 @@
+drop table if exists operations_v2.doctor_signup_email_verifications;

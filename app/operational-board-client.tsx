@@ -3555,6 +3555,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     {isAuthSubmitting || isRefreshing ? "Entrando..." : "Entrar"}
                                 </button>
                             </div>
+
+                            <div className="ops-auth-actions">
+                                <a className="ops-auth-inline-link" href="/esqueci-senha">
+                                    Esqueci a senha
+                                </a>
+                                <a className="ops-auth-inline-link" href="/cadastro-medico">
+                                    Sou medico e quero me cadastrar
+                                </a>
+                            </div>
                         </form>
                     )}
                     </div>

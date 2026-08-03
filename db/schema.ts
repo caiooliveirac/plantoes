@@ -632,6 +632,27 @@ export const doctorPaymentAccess = operationsV2.table(
     ],
 );
 
+// Autocadastro do médico por codinome: código de 6 dígitos enviado por email para
+// provar a posse do endereço ANTES de criar a conta (evita email digitado errado,
+// que inviabilizaria a recuperação de senha). Só o HMAC do código é guardado.
+export const doctorSignupEmailVerifications = operationsV2.table(
+    "doctor_signup_email_verifications",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id, { onDelete: "cascade" }),
+        email: text("email").notNull(),
+        codeHmac: text("code_hmac").notNull(),
+        expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+        attemptCount: integer("attempt_count").notNull().default(0),
+        consumedAt: timestamp("consumed_at", { withTimezone: true }),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [
+        index("doctor_signup_email_verif_doctor_idx").on(table.doctorId, table.createdAt),
+        index("doctor_signup_email_verif_email_idx").on(table.email, table.createdAt),
+    ],
+);
+
 // Anti-força-bruta por conta de Telegram: conta tentativas de codinome erradas numa
 // janela e trava temporariamente após o limite.
 export const telegramPaymentAccessAttempts = operationsV2.table(

@@ -3779,6 +3779,7 @@ function buildCodenameDeliveryReply(params: { fullName: string; codename: string
     const lines = [
         `✅ Codinome de ${params.fullName}: ${params.codename}`,
         `Entregue no privado. Para consultar o próprio pagamento, a pessoa manda no privado do bot: /pagamento ${params.codename}`,
+        `O codinome também serve para criar a conta no site (com email próprio): https://plantoes.mnrs.com.br/cadastro-medico`,
     ];
     if (params.hadPrevious) {
         lines.push(params.previous
