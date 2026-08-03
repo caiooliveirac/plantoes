@@ -1,3 +1,4 @@
+import "./worker-env";
 import { getTelegramReminderPollMs } from "@/modules/telegram/config";
 import { assertSingleRuntimeConfig, logRuntimeIdentity } from "@/lib/runtime-identity";
 import { sendTelegramMealBreakCycle, sendTelegramMealBreakTurnNudges } from "@/modules/telegram/meal-breaks";

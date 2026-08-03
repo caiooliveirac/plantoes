@@ -120,6 +120,8 @@ echo "=== pm2 restart ==="
 export GIT_COMMIT_SHA="${SHA:0:7}"
 export GIT_COMMIT_SHA_LONG="$SHA"
 export GIT_WORKING_TREE_CLEAN="true"
+# pm2 não suporta env_file: exporta o .env.production aqui para o processo herdar
+set -a; . "$ENV_FILE"; set +a
 pm2 startOrRestart ecosystem.config.cjs --update-env
 pm2 save
 
