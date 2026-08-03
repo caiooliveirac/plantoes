@@ -662,7 +662,9 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         timed("q:getDoctorBankHoursEffectiveBalances", getDoctorBankHoursEffectiveBalances()),
         // Saldo contratual do razão (Fase 3). Convive com a semente antiga da
         // 0026 até a virada; quem tem contrato novo mostra o bloco novo.
-        timed("q:loadContractBalances", loadContractBalances()),
+        // O mês em edição fica de fora do saldo em aberto: a tela já o subtrai
+        // como "este fechamento", e contar dos dois lados dobraria o desconto.
+        timed("q:loadContractBalances", loadContractBalances({ excludeMonthKey: range.monthKey })),
     ]);
     perfEnd("phase:queries-block-2-financials", tFin);
 
@@ -685,6 +687,8 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             monthlyWeekdayShifts: row.metrics.monthlyWeekdayShifts,
             remainingWeekdayShifts: row.metrics.remainingWeekdayShifts,
             awaitingOpeningBalance: row.awaitingOpeningBalance,
+            settledBalanceCents: row.settledBalanceCents,
+            pendingConsumptionCents: row.pendingConsumptionCents,
             metricsInput: {
                 ...row.metricsInput,
                 observedSince: row.metricsInput.observedSince.toISOString(),

@@ -17,6 +17,8 @@ import {
     resolveDoctorPaymentProfile,
     type DoctorPaymentProfile,
 } from "@/modules/reporting/payable-shifts";
+import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
+import { getDoctorMonthlyPayableBreakdown } from "@/services/payable-shifts.service";
 
 /** Mesmas tarifas do fechamento, em centavos (modules/reporting/payable-shifts.ts). */
 const RATE_CENTS: Record<DoctorPaymentProfile, { weekday: number; weekend: number }> = {
@@ -24,6 +26,89 @@ const RATE_CENTS: Record<DoctorPaymentProfile, { weekday: number; weekend: numbe
     specialist: { weekday: 132966, weekend: 145715 },
     psychiatry: { weekday: 129982, weekend: 141147 },
 };
+
+/**
+ * Consumo que o médico já fez e o razão ainda não registrou.
+ *
+ * O razão só recebe lançamento de fechamento ATESTADO — é o registro do que foi
+ * conferido e assinado. Mas o médico precisa ver o que já gastou, não o que já
+ * foi carimbado: a cada plantão que ele dá, o saldo dele muda de fato. Sem isto
+ * a tela mostrava saldo melhor que a realidade para 126 dos 136 contratos, um
+ * total de R$ 3,3 milhões — gente com saldo positivo na tela que já estava
+ * negativa de verdade.
+ *
+ * Conta os meses do ciclo cuja competência é posterior ao lançamento de abertura
+ * e que ainda não têm invoice no razão. Assim nada é contado duas vezes.
+ */
+async function loadPendingConsumption(params: {
+    contratos: { contractId: string; doctorId: string; cycleEnd: string; openingAt: Date }[];
+    asOf: Date;
+    excludeMonthKey?: string;
+}): Promise<Map<string, { amountCents: number; weekdayShifts: number; weekendShifts: number }>> {
+    const pendente = new Map<string, { amountCents: number; weekdayShifts: number; weekendShifts: number }>();
+    if (params.contratos.length === 0) return pendente;
+
+    const mesDe = (data: Date) => `${data.getUTCFullYear()}-${String(data.getUTCMonth() + 1).padStart(2, "0")}`;
+    const mesAtual = mesDe(params.asOf);
+    const primeiroMes = params.contratos
+        .map((c) => mesDe(c.openingAt))
+        .reduce((menor, atual) => (atual < menor ? atual : menor), mesAtual);
+
+    // Meses a apurar, uma vez cada — a apuração monta o mês inteiro.
+    const meses: string[] = [];
+    let [ano, mes] = primeiroMes.split("-").map(Number);
+    const [anoFim, mesFim] = mesAtual.split("-").map(Number);
+    while (ano < anoFim || (ano === anoFim && mes <= mesFim)) {
+        meses.push(`${ano}-${String(mes).padStart(2, "0")}`);
+        mes += 1;
+        if (mes > 12) { mes = 1; ano += 1; }
+    }
+    if (meses.length === 0) return pendente;
+
+    const jaLancado = new Set<string>();
+    const linhas = await getDb()
+        .select({ sourceKey: contractLedger.sourceKey })
+        .from(contractLedger)
+        .where(eq(contractLedger.sourceType, "payment_closing_attestation"));
+    for (const linha of linhas) if (linha.sourceKey) jaLancado.add(linha.sourceKey);
+
+    const apuracao = new Map<string, Map<string, { amountCents: number; weekdayShifts: number; weekendShifts: number }>>();
+    for (const mesChave of meses) {
+        const range = resolveMonthlyReportRange(mesChave);
+        apuracao.set(mesChave, new Map());
+        const breakdown = await getDoctorMonthlyPayableBreakdown(range.start, range.end);
+        for (const [doctorId, porMes] of breakdown) {
+            const valor = porMes.get(mesChave);
+            if (valor) apuracao.get(mesChave)!.set(doctorId, valor);
+        }
+    }
+
+    for (const contrato of params.contratos) {
+        let amountCents = 0;
+        let weekdayShifts = 0;
+        let weekendShifts = 0;
+        for (const mesChave of meses) {
+            // Competência posterior à abertura, dentro do ciclo, e ainda não lançada.
+            const ultimoDia = new Date(Date.UTC(
+                Number(mesChave.slice(0, 4)),
+                Number(mesChave.slice(5, 7)),
+                0,
+            ));
+            if (ultimoDia <= contrato.openingAt) continue;
+            if (`${mesChave}-01` >= contrato.cycleEnd) continue;
+            if (mesChave === params.excludeMonthKey) continue;
+            if (jaLancado.has(`${contrato.doctorId}|${mesChave}`)) continue;
+            const valor = apuracao.get(mesChave)?.get(contrato.doctorId);
+            if (!valor) continue;
+            amountCents += valor.amountCents;
+            weekdayShifts += valor.weekdayShifts;
+            weekendShifts += valor.weekendShifts;
+        }
+        pendente.set(contrato.contractId, { amountCents, weekdayShifts, weekendShifts });
+    }
+
+    return pendente;
+}
 
 export interface ContractBalanceRow {
     contractId: string;
@@ -38,6 +123,10 @@ export interface ContractBalanceRow {
     ceilingCents: number | null;
     /** `true` = razão vazio: o coordenador ainda não informou o saldo. */
     awaitingOpeningBalance: boolean;
+    /** Saldo já conferido e assinado — o que está no razão. */
+    settledBalanceCents: number;
+    /** Plantões já dados que ainda não foram fechados. */
+    pendingConsumptionCents: number;
     metrics: CycleMetrics;
     /** A entrada exata que gerou `metrics` — o /simulate reusa em vez de remontar. */
     metricsInput: CycleMetricsInput;
@@ -86,6 +175,15 @@ async function loadObservedSince(contractIds: string[]): Promise<Map<string, Dat
 export async function loadContractBalances(params: {
     asOf?: Date;
     doctorId?: string;
+    /**
+     * Mês que NÃO deve entrar no saldo projetado.
+     *
+     * A tela do fechamento subtrai o mês em edição por conta própria ("saldo
+     * depois"). Se ele também entrasse no saldo em aberto, o valor sairia
+     * descontado duas vezes. Quem monta o board do mês M passa M aqui; o painel
+     * do médico não passa nada, porque quer ver tudo que já gastou.
+     */
+    excludeMonthKey?: string;
 } = {}): Promise<{ rows: ContractBalanceRow[]; asOf: Date; computedAt: Date }> {
     const asOf = params.asOf ?? new Date();
     const db = getDb();
@@ -111,12 +209,30 @@ export async function loadContractBalances(params: {
 
     const observedSince = await loadObservedSince(viewRows.map((row) => row.contract_id));
 
+    // O que o médico já gastou e o fechamento ainda não carimbou.
+    const pendente = await loadPendingConsumption({
+        asOf,
+        excludeMonthKey: params.excludeMonthKey,
+        contratos: viewRows.map((row) => ({
+            contractId: row.contract_id,
+            doctorId: row.doctor_id,
+            cycleEnd: row.cycle_end,
+            openingAt: observedSince.get(row.contract_id) ?? toDate(row.cycle_start),
+        })),
+    });
+
     const rows = viewRows.map((row) => {
         const profile = resolveDoctorPaymentProfile(row.metadata);
         const rates = RATE_CENTS[profile];
-        const balanceCents = toCents(row.balance) ?? 0;
+        const settledBalanceCents = toCents(row.balance) ?? 0;
         const openingCents = toCents(row.opening_balance) ?? 0;
-        const consumedCents = toCents(row.consumed) ?? 0;
+        const settledConsumedCents = toCents(row.consumed) ?? 0;
+        const emAberto = pendente.get(row.contract_id) ?? { amountCents: 0, weekdayShifts: 0, weekendShifts: 0 };
+
+        // O saldo que vale para quem acompanha o próprio contrato é o de agora,
+        // não o do último mês assinado. O razão continua guardando o fechado.
+        const balanceCents = settledBalanceCents - emAberto.amountCents;
+        const consumedCents = settledConsumedCents + emAberto.amountCents;
 
         const input: CycleMetricsInput = {
             ceilingCents: toCents(row.ceiling),
@@ -130,8 +246,8 @@ export async function loadContractBalances(params: {
             asOf,
             weekdayRateCents: rates.weekday,
             weekendRateCents: rates.weekend,
-            weekdayShifts: Number(row.weekday_shifts),
-            weekendShifts: Number(row.weekend_shifts),
+            weekdayShifts: Number(row.weekday_shifts) + emAberto.weekdayShifts,
+            weekendShifts: Number(row.weekend_shifts) + emAberto.weekendShifts,
         };
 
         return {
@@ -145,7 +261,9 @@ export async function loadContractBalances(params: {
             cycleStart: row.cycle_start,
             cycleEnd: row.cycle_end,
             ceilingCents: toCents(row.ceiling),
-            awaitingOpeningBalance: openingCents === 0 && consumedCents === 0,
+            awaitingOpeningBalance: openingCents === 0 && settledConsumedCents === 0 && emAberto.amountCents === 0,
+            settledBalanceCents,
+            pendingConsumptionCents: emAberto.amountCents,
             metrics: computeCycleMetrics(input),
             metricsInput: input,
         } satisfies ContractBalanceRow;

@@ -12107,3 +12107,16 @@ button.chief-payable-tag:focus-visible {
     .panel-kpi-grid { grid-template-columns: repeat(4, 1fr); }
     .panel-shift-metrics { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* Consumo já feito e ainda não assinado: o médico precisa ver, senão o saldo
+   da tela fica melhor que a realidade. */
+.contract-balance-pending {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #fcd34d;
+    background: rgba(120, 53, 15, 0.22);
+    border-left: 3px solid rgba(251, 191, 36, 0.6);
+    border-radius: 8px;
+    padding: 8px 10px;
+}
