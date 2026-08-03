@@ -42,10 +42,8 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: "Código incorreto. Confira os 6 dígitos do email." }, { status: 400 });
         case "weak_password":
             return NextResponse.json({ error: result.message }, { status: 400 });
-        case "doctor_already_registered":
-            return NextResponse.json({ error: "Você já tem conta no sistema." }, { status: 409 });
         case "email_taken":
-            return NextResponse.json({ error: "Já existe uma conta com este email." }, { status: 409 });
+            return NextResponse.json({ error: "Este email já está em uso por outra conta. Use outro email." }, { status: 409 });
         case "created": {
             await writeSessionCookie(result.userId);
             return NextResponse.json({ ok: true }, { status: 201 });

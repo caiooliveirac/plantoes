@@ -34,10 +34,8 @@ export async function POST(request: NextRequest) {
     switch (result.status) {
         case "invalid_codename":
             return NextResponse.json({ error: "Codinome não confere. Confira com a coordenação." }, { status: 404 });
-        case "doctor_already_registered":
-            return NextResponse.json({ error: "Você já tem conta no sistema. Use \"esqueci a senha\" se precisar recuperar o acesso." }, { status: 409 });
         case "email_taken":
-            return NextResponse.json({ error: "Já existe uma conta com este email." }, { status: 409 });
+            return NextResponse.json({ error: "Este email já está em uso por outra conta. Use outro email." }, { status: 409 });
         case "cooldown":
             return NextResponse.json({ error: `Código já enviado há pouco. Aguarde ${result.retryInSeconds}s para reenviar.` }, { status: 429 });
         case "sent":

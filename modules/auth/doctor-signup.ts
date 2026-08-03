@@ -18,20 +18,10 @@ export const SIGNUP_CODE_TTL_MS = 15 * 60 * 1000;
 export const SIGNUP_CODE_RESEND_COOLDOWN_MS = 60 * 1000;
 export const SIGNUP_CODE_ATTEMPT_LIMIT = 5;
 
-/**
- * Domínio das contas semeadas na importação de mar/2026 (email fake, não
- * entregável). Sem role = nunca usadas para login → o cadastro pode ASSUMIR a
- * conta (troca email+senha no mesmo users.id, preservando FKs/auditoria).
- * Com role (7 chefes) a conta está em uso e continua bloqueando o cadastro.
- */
-export const PLACEHOLDER_EMAIL_SUFFIX = "@medicos.plantoes.local";
+type ExistingAccount = { id: string; email: string };
 
-type ExistingAccount = { id: string; email: string; hasRoles: boolean };
-
-function isReplaceablePlaceholder(account: ExistingAccount) {
-    return account.email.endsWith(PLACEHOLDER_EMAIL_SUFFIX) && !account.hasRoles;
-}
-
+// Conta já vinculada ao médico (seed de mar/2026 com email fake ou cadastro
+// real anterior). O cadastro sempre re-vincula em cima dela — nunca bloqueia.
 async function loadDoctorAccount(doctorId: string): Promise<ExistingAccount | null> {
     const db = getDb();
     const [user] = await db
@@ -39,15 +29,7 @@ async function loadDoctorAccount(doctorId: string): Promise<ExistingAccount | nu
         .from(users)
         .where(eq(users.doctorId, doctorId))
         .limit(1);
-    if (!user) {
-        return null;
-    }
-    const roles = await db
-        .select({ role: userRoles.role })
-        .from(userRoles)
-        .where(eq(userRoles.userId, user.id))
-        .limit(1);
-    return { id: user.id, email: user.email, hasRoles: roles.length > 0 };
+    return user ?? null;
 }
 
 export function normalizeSignupEmail(email: string) {
@@ -76,7 +58,6 @@ export function hashSignupCode(code: string, email: string) {
 
 export type DoctorSignupStartResult =
     | { status: "invalid_codename" }
-    | { status: "doctor_already_registered" }
     | { status: "email_taken" }
     | { status: "cooldown"; retryInSeconds: number }
     | { status: "sent"; doctorId: string; email: string; code: string; fullName: string };
@@ -94,17 +75,16 @@ export async function startDoctorSignup(codename: string, rawEmail: string, now 
         return { status: "invalid_codename" };
     }
 
+    // Conta existente do PRÓPRIO médico nunca bloqueia: o cadastro re-vincula
+    // email+senha na mesma conta (decisão do coordenador — codinome + posse do
+    // email são a prova). Só barra se o email pertencer a OUTRO usuário.
     const account = await loadDoctorAccount(doctorId);
-    if (account && !isReplaceablePlaceholder(account)) {
-        return { status: "doctor_already_registered" };
-    }
-
     const [existingByEmail] = await db
         .select({ id: users.id })
         .from(users)
         .where(eq(users.email, email))
         .limit(1);
-    if (existingByEmail) {
+    if (existingByEmail && existingByEmail.id !== account?.id) {
         return { status: "email_taken" };
     }
 
@@ -145,7 +125,6 @@ export type DoctorSignupCompleteResult =
     | { status: "too_many_attempts" }
     | { status: "invalid_code" }
     | { status: "weak_password"; message: string }
-    | { status: "doctor_already_registered" }
     | { status: "email_taken" }
     | { status: "created"; userId: string };
 
@@ -196,17 +175,14 @@ export async function completeDoctorSignup(
         return { status: "weak_password", message: passwordError };
     }
 
-    // Re-checa unicidade na hora de criar (corrida entre start e complete).
+    // Conta existente do próprio médico é re-vinculada; só barra email de terceiro.
     const account = await loadDoctorAccount(doctorId);
-    if (account && !isReplaceablePlaceholder(account)) {
-        return { status: "doctor_already_registered" };
-    }
     const [existingByEmail] = await db
         .select({ id: users.id })
         .from(users)
         .where(eq(users.email, email))
         .limit(1);
-    if (existingByEmail) {
+    if (existingByEmail && existingByEmail.id !== account?.id) {
         return { status: "email_taken" };
     }
 
@@ -214,8 +190,9 @@ export async function completeDoctorSignup(
     const userId = await db.transaction(async (tx) => {
         let userId: string;
         if (account) {
-            // Assume a conta placeholder do seed: mesmo users.id (preserva FKs),
-            // email real + senha do médico no lugar do fake não entregável.
+            // Re-vincula a conta existente: mesmo users.id (preserva FKs e roles),
+            // email + senha novos por cima — placeholder do seed ou conta real,
+            // codinome + código no email valem como prova (decisão do coordenador).
             await tx
                 .update(users)
                 .set({ email, passwordHash, isActive: true, mustChangePassword: false, updatedAt: new Date() })
@@ -238,7 +215,7 @@ export async function completeDoctorSignup(
             .where(eq(doctorSignupEmailVerifications.id, verification.id));
         await tx.insert(auditLogs).values({
             actorUserId: userId,
-            action: account ? "doctor_signup_replaced_placeholder" : "doctor_signup_email_verified",
+            action: account ? "doctor_signup_rebound_account" : "doctor_signup_email_verified",
             entityType: "user",
             entityId: userId,
             details: { doctorId, email, ...(account ? { previousEmail: account.email } : {}) },
