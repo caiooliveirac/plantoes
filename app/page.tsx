@@ -72,6 +72,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
                 roles: session.user.roles,
                 mustChangePassword: session.user.mustChangePassword,
                 canManage,
+                doctorId: session.user.doctorId,
             } : null}
         />
     );

@@ -257,6 +257,21 @@ export async function editMessageText(
     }
 }
 
+export interface TelegramBotCommand {
+    /** minúsculas, 1-32 chars [a-z0-9_], sem a barra. */
+    command: string;
+    description: string;
+}
+
+/**
+ * Registra o menu de comandos do bot. Com scope `{type:"chat", chat_id}` o menu
+ * vale só para aquele chat privado — é como expomos ações de admin sem vazá-las
+ * para o grupo. Falha com "chat not found" se o usuário nunca abriu o privado.
+ */
+export function setMyCommands(commands: TelegramBotCommand[], scope?: Record<string, unknown>) {
+    return callApi<boolean>("setMyCommands", { commands, ...(scope ? { scope } : {}) });
+}
+
 let cachedBotUsername: string | null = null;
 
 /**

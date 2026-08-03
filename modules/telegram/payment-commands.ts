@@ -173,7 +173,7 @@ export function parseTelegramPaymentResetAllCommand(text: string): TelegramPayme
     return { name: "payment_reset_all", confirmed: rest === "CONFIRMO" };
 }
 
-export const TELEGRAM_RESET_CODINOME_USAGE = "/resetcodinome Nome Completo (ou o codinome atual)";
+export const TELEGRAM_RESET_CODINOME_USAGE = "/rc Nome Completo (ou o codinome atual)";
 
 export type TelegramResetCodinomeCommand = {
     name: "reset_codinome";
@@ -181,12 +181,13 @@ export type TelegramResetCodinomeCommand = {
 };
 
 // Comando dedicado de reset de UM codinome, por nome OU pelo codinome atual.
+// /rc é a forma curta oficial; /resetcodinome segue aceito como alias.
 export function isTelegramResetCodinomeCommandText(text: string) {
-    return /^\/resetcodinome(?:@\w+)?\b/i.test(text.trim());
+    return /^\/(?:rc|resetcodinome)(?:@\w+)?\b/i.test(text.trim());
 }
 
 export function parseTelegramResetCodinomeCommand(text: string): TelegramResetCodinomeCommand | null {
-    const match = text.trim().match(/^\/resetcodinome(?:@\w+)?\s+([\s\S]+)$/i);
+    const match = text.trim().match(/^\/(?:rc|resetcodinome)(?:@\w+)?\s+([\s\S]+)$/i);
     if (!match) {
         return null;
     }

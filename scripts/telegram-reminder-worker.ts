@@ -5,6 +5,7 @@ import { sendTelegramMealBreakCycle, sendTelegramMealBreakTurnNudges } from "@/m
 import { sendContractBalanceCycle } from "@/modules/telegram/contract-balance-alerts";
 import { sendTelegramPaymentDigestCycle } from "@/modules/telegram/payment-digest";
 import { sendTelegramReminderCycle } from "@/modules/telegram/reminders";
+import { syncTelegramAdminCommandMenus } from "@/modules/telegram/admin-menu";
 import { expireResidenteOccupancies } from "@/modules/operational/residente-auto-close";
 
 let running = false;
@@ -46,6 +47,14 @@ async function runCycle() {
 async function main() {
     logRuntimeIdentity("telegram.reminder.worker");
     assertSingleRuntimeConfig("telegram.reminder.worker");
+
+    // Menu "/" no privado dos admins — idempotente, refeito a cada boot.
+    try {
+        const menu = await syncTelegramAdminCommandMenus();
+        console.log(`[telegram-reminder-worker] admin menus: synced=${menu.synced} failed=${menu.failed}`);
+    } catch (error) {
+        console.error("[telegram-reminder-worker] admin menu sync failed", error);
+    }
 
     await runCycle();
     const intervalMs = getTelegramReminderPollMs();

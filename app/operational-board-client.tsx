@@ -70,6 +70,8 @@ interface SessionSummary {
     roles: UserRole[];
     mustChangePassword: boolean;
     canManage: boolean;
+    /** Vínculo com o cadastro de médicos — habilita o link do painel individual. */
+    doctorId: string | null;
 }
 
 interface RegulationCard extends RegulationBoardRow {
@@ -3469,6 +3471,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         Abrir fechamento de pagamento
                                     </a>
                                 )}
+
+                                {session.doctorId && !session.mustChangePassword && (
+                                    <a className="ops-auth-inline-link" href="/medico">
+                                        Meu painel (pagamento e banco de horas)
+                                    </a>
+                                )}
                             </div>
 
                             {session.mustChangePassword && (
@@ -3575,6 +3583,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 <button type="submit" className="ops-auth-primary" disabled={isAuthSubmitting || isRefreshing || !authEmail.trim() || !authPassword}>
                                     {isAuthSubmitting || isRefreshing ? "Entrando..." : "Entrar"}
                                 </button>
+                            </div>
+
+                            <div className="ops-auth-actions">
+                                <a className="ops-auth-inline-link" href="/esqueci-senha">
+                                    Esqueci a senha
+                                </a>
+                                <a className="ops-auth-inline-link" href="/cadastro-medico">
+                                    Sou medico e quero me cadastrar
+                                </a>
                             </div>
                         </form>
                     )}

@@ -170,6 +170,11 @@ test("parseTelegramResetCodinomeCommand aceita nome ou codinome", () => {
     assert.deepEqual(parseTelegramResetCodinomeCommand("/resetcodinome tigre-azul-958"), { name: "reset_codinome", query: "tigre-azul-958" });
     assert.equal(parseTelegramResetCodinomeCommand("/resetcodinome"), null);
     assert.equal(parseTelegramResetCodinomeCommand("/pagamento maio"), null);
+    // /rc é a forma curta oficial; ambas seguem válidas.
+    assert.deepEqual(parseTelegramResetCodinomeCommand("/rc João Silva"), { name: "reset_codinome", query: "João Silva" });
+    assert.deepEqual(parseTelegramResetCodinomeCommand("/rc@MeuBot tigre-azul-958"), { name: "reset_codinome", query: "tigre-azul-958" });
+    assert.equal(parseTelegramResetCodinomeCommand("/rc"), null);
+    assert.equal(parseTelegramResetCodinomeCommand("/rcx João"), null);
 });
 
 test("parseTelegramPaymentListCommand reconhece só /pagamento listar", () => {

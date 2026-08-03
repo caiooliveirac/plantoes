@@ -3,29 +3,57 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 
+type Step = "start" | "verify" | "done";
+
 export default function CadastroMedicoPage() {
-    const [form, setForm] = useState({ fullName: "", email: "", password: "" });
+    const [step, setStep] = useState<Step>("start");
+    const [codename, setCodename] = useState("");
+    const [email, setEmail] = useState("");
+    const [code, setCode] = useState("");
+    const [password, setPassword] = useState("");
     const [feedback, setFeedback] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
     const [busy, setBusy] = useState(false);
-    const [done, setDone] = useState(false);
 
-    async function submit(event: React.FormEvent) {
+    async function post(path: string, body: unknown) {
+        const response = await fetch(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        return { ok: response.ok, payload };
+    }
+
+    async function submitStart(event: React.FormEvent) {
         event.preventDefault();
         if (busy) return;
         setBusy(true);
         setFeedback(null);
         try {
-            const response = await fetch("/api/auth/register-doctor", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify(form),
-            });
-            const payload = await response.json();
-            if (!response.ok) {
+            const { ok, payload } = await post("/api/auth/signup/start", { codename, email });
+            if (!ok) {
+                setFeedback({ kind: "err", text: payload.error ?? "Não foi possível enviar o código." });
+                return;
+            }
+            setStep("verify");
+            setFeedback({ kind: "ok", text: payload.message ?? "Código enviado." });
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function submitVerify(event: React.FormEvent) {
+        event.preventDefault();
+        if (busy) return;
+        setBusy(true);
+        setFeedback(null);
+        try {
+            const { ok, payload } = await post("/api/auth/signup/complete", { codename, email, code, password });
+            if (!ok) {
                 setFeedback({ kind: "err", text: payload.error ?? "Não foi possível concluir o cadastro." });
                 return;
             }
-            setDone(true);
+            setStep("done");
         } finally {
             setBusy(false);
         }
@@ -42,46 +70,41 @@ export default function CadastroMedicoPage() {
                 <div className="et-panel-head">
                     <h2>Cadastro de médico</h2>
                 </div>
-                {done ? (
+
+                {step === "done" ? (
                     <div className="et-empty-state">
-                        <strong>Cadastro recebido ✓</strong>
+                        <strong>Conta criada ✓</strong>
                         <p>
-                            Sua conta foi criada e aguarda ativação pela chefia de plantão.
-                            Depois de ativada, entre em <code>/trocas</code> para operar suas trocas.
+                            Seu email foi confirmado e você já está conectado(a).
+                            Use este email e a senha escolhida nos próximos acessos —
+                            e para recuperar a senha, se precisar.
                         </p>
+                        <a className="et-btn primary" href="/medico">Abrir meu painel</a>
                     </div>
-                ) : (
-                    <form className="et-form" style={{ padding: 20 }} onSubmit={submit}>
+                ) : step === "verify" ? (
+                    <form className="et-form" style={{ padding: 20 }} onSubmit={submitVerify}>
                         <p style={{ margin: 0, color: "var(--muted)", fontSize: 13.5 }}>
-                            Use o nome exatamente como aparece na escala. A conta nasce pendente e só
-                            funciona após ativação pela chefia. Check-ins continuam pelo robô do Telegram.
+                            Enviamos um código de 6 dígitos para <strong>{email}</strong>.
+                            Digite o código e escolha sua senha para concluir.
                         </p>
                         <label>
-                            Nome completo (como na escala)
+                            Código de 6 dígitos
                             <input
-                                value={form.fullName}
-                                onChange={(event) => setForm({ ...form, fullName: event.target.value })}
+                                value={code}
+                                onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
                                 required
-                                minLength={5}
-                                autoComplete="name"
-                            />
-                        </label>
-                        <label>
-                            E-mail
-                            <input
-                                type="email"
-                                value={form.email}
-                                onChange={(event) => setForm({ ...form, email: event.target.value })}
-                                required
-                                autoComplete="email"
+                                inputMode="numeric"
+                                pattern="\d{6}"
+                                autoComplete="one-time-code"
+                                placeholder="000000"
                             />
                         </label>
                         <label>
                             Senha (mín. 10 caracteres, 3 grupos)
                             <input
                                 type="password"
-                                value={form.password}
-                                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                                value={password}
+                                onChange={(event) => setPassword(event.target.value)}
                                 required
                                 minLength={10}
                                 autoComplete="new-password"
@@ -89,7 +112,53 @@ export default function CadastroMedicoPage() {
                         </label>
                         {feedback ? <div className={`et-feedback ${feedback.kind}`}>{feedback.text}</div> : null}
                         <button type="submit" className="et-btn primary" disabled={busy}>
-                            {busy ? "Enviando…" : "Criar conta"}
+                            {busy ? "Confirmando…" : "Confirmar e criar conta"}
+                        </button>
+                        <button
+                            type="button"
+                            className="et-btn"
+                            disabled={busy}
+                            onClick={() => {
+                                setStep("start");
+                                setCode("");
+                                setFeedback(null);
+                            }}
+                        >
+                            Voltar (corrigir email ou reenviar código)
+                        </button>
+                    </form>
+                ) : (
+                    <form className="et-form" style={{ padding: 20 }} onSubmit={submitStart}>
+                        <p style={{ margin: 0, color: "var(--muted)", fontSize: 13.5 }}>
+                            Use o <strong>codinome</strong> que a coordenação te entregou
+                            (ex.: <code>tigre-azul-958</code>) e um email que você acessa.
+                            Vamos enviar um código de 6 dígitos para confirmar o email antes
+                            de criar a conta.
+                        </p>
+                        <label>
+                            Codinome
+                            <input
+                                value={codename}
+                                onChange={(event) => setCodename(event.target.value)}
+                                required
+                                minLength={3}
+                                autoComplete="off"
+                                placeholder="tigre-azul-958"
+                            />
+                        </label>
+                        <label>
+                            Email
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={(event) => setEmail(event.target.value)}
+                                required
+                                autoComplete="email"
+                            />
+                        </label>
+                        {feedback ? <div className={`et-feedback ${feedback.kind}`}>{feedback.text}</div> : null}
+                        <button type="submit" className="et-btn primary" disabled={busy}>
+                            {busy ? "Enviando…" : "Enviar código de confirmação"}
                         </button>
                     </form>
                 )}
