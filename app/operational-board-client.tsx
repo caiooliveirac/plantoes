@@ -2330,13 +2330,34 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     };
             }
 
-            const response = await fetch(endpoint, {
+            let response = await fetch(endpoint, {
                 method,
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             });
 
-            const responseBody = await response.json().catch(() => null) as { error?: string } | null;
+            let responseBody = await response.json().catch(() => null) as
+                { error?: string; needsDuplicateConfirmation?: boolean } | null;
+
+            // O servidor viu plantão do mesmo médico no mesmo dia e turno. Não
+            // bloqueia — pergunta, porque duplicata infla a nota e passa batido
+            // até o fechamento, mas um segundo plantão de verdade existe.
+            if (response.status === 409 && responseBody?.needsDuplicateConfirmation) {
+                const confirmado = window.confirm(
+                    `${responseBody.error ?? "Já existe plantão neste dia e turno."}\n\nLançar mesmo assim?`,
+                );
+                if (!confirmado) {
+                    setErrorMessage("Lançamento cancelado — o plantão que já existe foi mantido.");
+                    return;
+                }
+                response = await fetch(endpoint, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ ...payload, confirmDuplicate: true }),
+                });
+                responseBody = await response.json().catch(() => null) as { error?: string } | null;
+            }
+
             if (!response.ok) {
                 throw new Error(responseBody?.error || "Falha ao aplicar a acao operacional.");
             }
