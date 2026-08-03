@@ -16,7 +16,10 @@ export function getDb() {
 
     if (!client) {
         client = postgres(process.env.DATABASE_URL, {
-            max: 1,
+            // max: 1 fazia uma transação presa enfileirar o app inteiro
+            // (incidente de 03/08: idle-in-transaction de 12min = timeouts em tudo).
+            max: 5,
+            idle_timeout: 30,
             prepare: false,
         });
     }
