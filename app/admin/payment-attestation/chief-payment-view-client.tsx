@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
+// Nenhuma ação desta tela pode ficar pendurada esperando o servidor.
+import { fetchComLimite } from "@/lib/fetch-com-limite";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
@@ -882,7 +884,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
 
         try {
             const date = `${board.monthKey}-${manualDraft.day}`;
-            const response = await fetch("/api/admin/payment-attestation/slot", {
+            const response = await fetchComLimite("/api/admin/payment-attestation/slot", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -948,7 +950,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
 
         try {
             const date = `${board.monthKey}-${manualDraft.day}`;
-            const response = await fetch("/api/admin/payment-attestation/slot", {
+            const response = await fetchComLimite("/api/admin/payment-attestation/slot", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -1021,7 +1023,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
 
         try {
             const response = isExtra
-                ? await fetch("/api/admin/payment-closing/extra-shift", {
+                ? await fetchComLimite("/api/admin/payment-closing/extra-shift", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -1029,7 +1031,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                         id: draft.occupancyId.replace(/^extra:/, ""),
                     }),
                 })
-                : await fetch("/api/admin/payment-attestation/slot", {
+                : await fetchComLimite("/api/admin/payment-attestation/slot", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -1100,7 +1102,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setExtraFeedback(null);
 
         try {
-            const response = await fetch("/api/admin/payment-closing/extra-shift", {
+            const response = await fetchComLimite("/api/admin/payment-closing/extra-shift", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1154,7 +1156,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setMetaError(null);
         setMetaFeedback(null);
         try {
-            const response = await fetch("/api/admin/payment-closing/meta", {
+            const response = await fetchComLimite("/api/admin/payment-closing/meta", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1204,7 +1206,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setContractBusy(true);
         setContractError(null);
         try {
-            const response = await fetch("/api/admin/payment-closing/contract", {
+            const response = await fetchComLimite("/api/admin/payment-closing/contract", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ doctorId, ceilingBrl: ceiling, seedMonth: board.monthKey }),
@@ -1225,7 +1227,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setBankBusy(true);
         setBankError(null);
         try {
-            const response = await fetch("/api/admin/payment-closing/bank-hours-settlement", {
+            const response = await fetchComLimite("/api/admin/payment-closing/bank-hours-settlement", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ doctorId, monthKey: board.monthKey, kind }),
@@ -1256,7 +1258,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setAttestError(null);
         setAttestationOverrides((prev) => ({ ...prev, [doctorId]: attested }));
         try {
-            const response = await fetch("/api/admin/payment-closing/attestation", {
+            const response = await fetchComLimite("/api/admin/payment-closing/attestation", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ doctorId, monthKey: board.monthKey, attested }),
@@ -1288,7 +1290,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         }));
 
         try {
-            const response = await fetch("/api/admin/payment-attestation/slot", {
+            const response = await fetchComLimite("/api/admin/payment-attestation/slot", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -1330,7 +1332,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         }));
 
         try {
-            const response = await fetch("/api/admin/payment-attestation/slot", {
+            const response = await fetchComLimite("/api/admin/payment-attestation/slot", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

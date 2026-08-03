@@ -4,6 +4,7 @@ import { z } from "zod";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs, doctors, interventionBases, interventionOccupancies } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { describeConflicts, findSameDayOccupancies } from "@/services/duplicate-occupancy-guard";
 import { startInterventionOccupancy } from "@/modules/intervention/service";
 
 const schema = z.object({
@@ -20,6 +21,8 @@ const schema = z.object({
     roleLabel: z.string().trim().max(100).optional().nullable(),
     source: z.enum(["manual", "telegram", "import", "admin_correction"]),
     notes: z.string().trim().max(2000).optional().nullable(),
+    /** Marcado pelo admin depois de ver o aviso de plantão duplicado. */
+    confirmDuplicate: z.boolean().optional(),
 });
 
 export async function GET() {
@@ -75,6 +78,24 @@ export async function POST(request: NextRequest) {
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
         return NextResponse.json({ error: "Invalid intervention occupancy payload." }, { status: 400 });
+    }
+
+    // Plantão duplicado no mesmo dia e turno infla o valor da nota e costuma
+    // passar despercebido até o fechamento. Avisa e exige confirmação.
+    if (!parsed.data.confirmDuplicate) {
+        const conflitos = await findSameDayOccupancies({
+            doctorId: parsed.data.doctorId,
+            startedAt: new Date(parsed.data.startedAt),
+            shiftLabel: parsed.data.shiftLabel ?? null,
+            continuityGroupId: parsed.data.continuityGroupId ?? null,
+        });
+        if (conflitos.length > 0) {
+            return NextResponse.json({
+                error: describeConflicts(conflitos),
+                needsDuplicateConfirmation: true,
+                conflicts: conflitos,
+            }, { status: 409 });
+        }
     }
 
     try {
