@@ -80,6 +80,14 @@ jobs:
             exit 1
           fi
           set -a; . .env.production; set +a
+          # 1) Ciclos dos 7 contratos com DATA ADMISSÃO no ano errado (dossiê
+          #    2026-08-04). Idempotente e com guardas; precisa vir ANTES do
+          #    reparo de maio, que respeita a fronteira do ciclo.
+          if [[ -f scripts/repair-ciclos-2026.ts ]]; then
+            npx tsx scripts/repair-ciclos-2026.ts${APPLY_FLAG}
+            echo
+          fi
+          # 2) Reparo da linha de maio (pega os 7 acima automaticamente).
           npm run saldo:repair-maio -- --data docs/saldo-contrato/maio-2026-planilha.json${APPLY_FLAG}
           echo
           echo "===== docs/saldo-contrato/repair-maio-report.md ====="
