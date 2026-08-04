@@ -951,7 +951,9 @@ test("getCurrentDeparturePriorityView na janela 16-21h lista saida das 19h (SD +
     assert.equal(view.shiftLabel, "SD");
     assert.equal(view.departureBoundary, "19h");
     // SD e P invertido saem 19h → rankeados. Emily (P normal) sai 07h → continuacao. Caroline (SN) fora.
-    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035", "2036"]);
+    // Bruno (P invertido) esta desde ONTEM 19:00 (ancora da cadeia) → sai antes de
+    // Ana (chegou 07:00): tenure medida pelo boardStartedAt, nao pelo started do bloco.
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2036", "2035"]);
     assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
 
     const reply = buildDeparturePriorityReply(view);
@@ -1021,7 +1023,9 @@ test("getCurrentDeparturePriorityView na janela 02-09h lista saida das 07h (SN +
     assert.equal(view.shiftLabel, "SN");
     assert.equal(view.departureBoundary, "07h");
     // SN e P normal saem 07h → rankeados. Carla (P invertido) sai 19h → continuacao. Diego (SD) fora.
-    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2035", "2036"]);
+    // Bruno (P normal) dobra desde 07:00 (ancora da cadeia) → sai antes de Ana (19:05):
+    // tenure medida pelo boardStartedAt, nao pelo started do bloco.
+    assert.deepEqual(view.entries.map((entry) => entry.targetCode), ["2036", "2035"]);
     assert.deepEqual(view.excludedContinuations.map((entry) => entry.targetCode), ["2154"]);
 
     const reply = buildDeparturePriorityReply(view);
