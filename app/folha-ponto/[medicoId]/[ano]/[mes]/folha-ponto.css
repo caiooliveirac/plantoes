@@ -360,6 +360,16 @@
     margin-top: 12mm;
 }
 
+/* Quando o "Local e Data" antecede as assinaturas (pg. 2), aperta o espaço
+   vertical para o bloco de assinaturas + endereço continuarem na mesma folha. */
+.fp-localdata-caixa + .fp-assinaturas-pg2 {
+    margin-top: 6mm;
+}
+
+.fp-localdata-caixa + .fp-assinaturas-pg2 .fp-linha-assinatura {
+    margin-top: 10mm;
+}
+
 .fp-assinatura-bloco {
     display: flex;
     flex-direction: column;
