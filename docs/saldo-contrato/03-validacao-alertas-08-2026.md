@@ -1,0 +1,138 @@
+# Validação dos alertas de saldo de contrato — agosto/2026
+
+> Conferência dos nomes que o bot manda às 08:00 contra as planilhas de origem
+> (`2026 CHAMAMENTO 004` e `2025 CHAMAMENTO NOVO`, versões enviadas em 2026-08-04).
+> Feito em modo leitura: nenhuma linha do banco foi tocada.
+
+**Resultado curto: a maior parte da lista de "estourou o contrato" é falso positivo.**
+Só um médico da lista estourou de verdade, e o valor dele está inflado em treze vezes.
+
+---
+
+## 1. A causa raiz — o `awaitingOpeningBalance` morre no primeiro plantão
+
+O backfill deixa o saldo de abertura **em branco** de propósito quando a planilha não
+dá um número confiável (18 contratos, ver [backfill-report.md](backfill-report.md)).
+Chutar seria pior. O alerta sabe disso e tem uma guarda
+([contract-balance-alerts.ts:118](../../modules/telegram/contract-balance-alerts.ts#L118)):
+
+```ts
+if (row.awaitingOpeningBalance) continue;
+```
+
+Só que a flag é calculada assim
+([contract-balance.service.ts:393](../../services/contract-balance.service.ts#L393)):
+
+```ts
+awaitingOpeningBalance: openingCents === 0 && settledConsumedCents === 0 && emAberto.amountCents === 0
+```
+
+Ela exige **consumo zero**. No dia em que o médico bate o primeiro plantão depois da
+carga, `emAberto` deixa de ser zero, a flag vira `false`, e o saldo passa a ser
+`0 − consumo` — negativo. O alerta `depleted` dispara e anuncia como "saldo de contrato
+zerado" um contrato que na verdade **nunca teve teto lançado**.
+
+O valor que o bot mostra não é estouro: é a soma do que o médico produziu desde junho.
+
+## 2. O detector de "teto não carregado" só pega quem abre exatamente em R$ 0,00
+
+Segundo defeito, no backfill
+([backfill-saldo-contrato.ts:356](../../scripts/backfill-saldo-contrato.ts#L356)):
+
+```ts
+const firstLegible = ordered.find(({ row }) => row!.openingBalance != null)?.row ?? null;
+if (firstLegible && Math.abs(firstLegible.openingBalance!) <= TOLERANCE && (firstLegible.total ?? 0) > 0) {
+```
+
+`firstLegible` é o primeiro mês com célula **preenchida**. Nos psiquiatras a célula
+nasce **vazia** (não zero) e só aparece um mês depois, já negativa — aí
+`Math.abs(...) <= TOLERANCE` falha e o detector não reconhece o padrão. Por isso
+Ketherynne, Luan e Bruno Mota foram importados como "estouro real" quando são
+exatamente o mesmo caso de João Miguez e Gabriel Vitor.
+
+Conferido na planilha, coluna `SALDO CONTRATO`, mês a mês:
+
+| Médico | jan | fev | mar | abr | mai (abre) | mai (fecha) |
+|---|---|---|---|---|---|---|
+| João Pedro Miguez Pinto | — | — | em branco | R$ 0,00 | −11.466,89 | **−25.277,89** |
+| Gabriel Vitor do Amor Divino de Jesus | — | — | em branco | R$ 0,00 | −9.958,96 | **−27.368,34** |
+| Ketherynne Cabral F. de Oliveira | — | em branco | em branco | −7.798,92 | −10.510,21 | **−18.755,73** |
+| Luan Sampaio Evangelista Santos | — | — | em branco | −3.899,46 | −6.499,10 | **−9.098,74** |
+| Thiago Borghi Petrus Costa | — | — | — | em branco | −6.499,10 | **−11.698,38** |
+| Bruno Mota de Almeida | — | — | — | em branco | em branco | **−1.411,47** |
+
+Em todos, o fechamento de maio é exatamente a abertura menos o TOTAL do mês. É um
+contador de consumo com sinal trocado, não um saldo. Nenhum deles chegou perto do teto
+(165.732,00 para 24h; 82.866,00 para os psiquiatras de 12h).
+
+## 3. Karen Seifarth Miranda — estourou, mas em R$ 6,9 mil
+
+Único caso real da lista. O erro aqui é de tamanho, não de existência.
+
+Verificado direto na planilha de 2025:
+
+```
+2025-07  abre −R$ 44.223,54   CH 36h   contrato 518/2024   admissão 16-ago
+2025-08  abre  R$ 165.732,00  CH 36h   <- reset com o teto de 24h
+```
+
+A coluna CH diz **36h** nos 17 meses da série — o teto dela é **248.598,00**, não
+165.732,00. Faltaram R$ 82.866,00 no reset.
+
+| | valor |
+|---|---:|
+| Planilha / alerta | −R$ 89.762,24 |
+| Real | **−R$ 6.896,24** |
+
+## 4. Francisco Isensee de Macedo — não estourou, e a planilha já foi corrigida
+
+A planilha enviada agora traz a correção de dezembro/2025 aplicada:
+
+```
+2026-01 abre 233.678,36 → 02 224.146,89 → 03 205.356,41 → 04 185.321,06
+2026-05 abre 169.156,55  gasta 16.028,28  fecha  +153.128,27
+```
+
+Mas [backfill-report.md](backfill-report.md) registra a importação de **−46.778,94**,
+porque rodou sobre a versão antiga do arquivo. **Se o razão ainda tiver esse número, é
+um falso positivo de ~R$ 200 mil.** Conferir na tela antes de repassar qualquer coisa.
+
+## 5. Os 13 com renovação pendente
+
+Mesmo mecanismo da §1: ciclo virou, planilha não resetou, backfill deixou o saldo em
+branco. Todos fecham maio com saldo **alto e positivo** no ciclo velho — nenhum é
+candidato legítimo a "saldo zerado".
+
+| Médico | Contrato | Fecha maio |
+|---|---|---:|
+| Acacio Junio de Almeida | 190/2025 | 11.931,84 |
+| Alexandre Curi Quinteiro | 111/2026 | 67.511,79 |
+| André Victor Cardoso Codeceira | 061/2026 | 138.654,92 |
+| Bruno Santana Alencar | 048/2026 | 135.329,00 |
+| Gustavo Fernandes Vieira | 158/2026 | 159.507,65 |
+| Leonardo Prado Faben | 110/2026 | 57.541,11 |
+| Leonardo Santana Cabanelas Ribeiro | 80/2026 | 137.255,02 |
+| Maiana Santos Oliveira Cardoso | 085/2026 | 153.633,28 |
+| Maria Clara Coppieters Gusmão | 157/2026 | 103.798,56 |
+| Vitor Luiz Valverde Martinez | 079/2026 | 144.724,24 |
+| Yngra Maria Pimentel Novais | 188/2026 | 165.732,00 |
+| Stephane Izabor de Oliveira Costa | 156/2026 | 160.752,52 (sem data de admissão) |
+| Vinicius Pereira de Carvalho | sem número | linha sem valores |
+
+Leonardo Copque Magalhães aparece duas vezes: o 247/2025 fecha maio em −33.141,77 e é
+o contrato **antigo**; o vigente é o 184/2026, com **+340.025,91**.
+
+## 6. O que corrigir
+
+1. **`awaitingOpeningBalance` não pode depender de consumo.** A pergunta certa é "existe
+   lançamento de abertura no razão?", não "o médico ficou parado?". Enquanto não houver
+   abertura, o contrato não entra em nenhum alerta de saldo — entra numa lista de
+   pendência de cadastro, que é outra conversa.
+2. **Detector de teto não carregado**: aceitar célula vazia seguida de série
+   monotonicamente decrescente e negativa, não só o `0,00` exato.
+3. **Reimportar Francisco** a partir da planilha corrigida (+153.128,27 em 31/05).
+4. **Karen**: aplicar o override já versionado em
+   [saldo-overrides.json](saldo-overrides.json) (−6.896,24, teto 248.598,00).
+5. **Piso de sanidade no alerta**: saldo negativo cujo módulo é menor que o consumo
+   observado no ciclo é aritmeticamente impossível num contrato com teto lançado. É a
+   assinatura exata desse bug e dá para barrar o aviso na origem.
