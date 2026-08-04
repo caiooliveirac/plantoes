@@ -1,0 +1,80 @@
+name: Saldo contrato - reparo da linha de maio
+
+# Roda scripts/repair-maio-extrato.ts NO SERVIDOR (onde o banco escuta em
+# loopback), via o mesmo SSH do deploy. A entrada é o JSON versionado em
+# docs/saldo-contrato/maio-2026-planilha.json — extraído das abas de maio da
+# planilha 2026 CHAMAMENTO 004; toda a validação de idoneidade (cadeia
+# início − gasto = fim, confronto com o razão, ciclo do contrato) roda no
+# próprio script antes de qualquer escrita.
+#
+# Disparo manual, dois modos:
+#   apply=false (default)  dry-run: só imprime o relatório no log
+#   apply=true             grava no razão (idempotente: rodar de novo não duplica)
+#
+# Pré-requisito: o commit deployado no servidor precisa conter o script e o
+# JSON (qualquer main >= PR do reparo). O job confere isso antes de rodar.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Gravar no banco (false = dry-run, só relatório)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: plantoes-saldo-repair-maio
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    name: Reparo de maio no servidor (${{ inputs.apply && 'APPLY' || 'dry-run' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
+      APPLY: ${{ inputs.apply }}
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Reparo (script do repo, executado no servidor)
+        run: |
+          set -euo pipefail
+          APPLY_FLAG=""
+          if [[ "${APPLY}" == "true" ]]; then
+            APPLY_FLAG=" --apply"
+          fi
+          ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=45 -i ~/.ssh/id_ed25519 "${REMOTE}" bash -s <<EOF
+          set -euo pipefail
+          cd /home/ubuntu/plantoes
+          if [[ ! -f scripts/repair-maio-extrato.ts || ! -f docs/saldo-contrato/maio-2026-planilha.json ]]; then
+            echo "ERRO: o commit deployado ainda não tem o script/JSON do reparo — faça o deploy da main primeiro." >&2
+            exit 1
+          fi
+          set -a; . .env.production; set +a
+          npm run saldo:repair-maio -- --data docs/saldo-contrato/maio-2026-planilha.json${APPLY_FLAG}
+          echo
+          echo "===== docs/saldo-contrato/repair-maio-report.md ====="
+          cat docs/saldo-contrato/repair-maio-report.md
+          # O relatório é gerado no working tree de produção, que precisa ficar
+          # limpo (o deploy usa git reset --hard). O log do job é o registro.
+          rm -f docs/saldo-contrato/repair-maio-report.md
+          EOF
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "### Reparo da linha de maio (saldo contratual)"
+            echo "- Modo: ${APPLY} (true = gravou no razão)"
+            echo "- Relatório completo: no log do passo 'Reparo'"
+          } >> "$GITHUB_STEP_SUMMARY"
