@@ -4,6 +4,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { deactivateInterventionBase, reactivateInterventionBase } from "@/modules/intervention/service";
+import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
 
 const schema = z.object({
     action: z.enum(["deactivate", "reactivate"]),
@@ -53,7 +54,17 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
                     deactivatedAt: result.state.deactivatedAt,
                     notes: result.state.notes,
                     closedOccupancyIds: result.closedOccupancyIds,
+                    closedOccupancies: result.closedOccupancies.map((occupancy) => ({
+                        id: occupancy.id,
+                        earlyDepartureOutcome: occupancy.earlyDepartureOutcome,
+                    })),
                 },
+            });
+
+            void announceDeactivationDepartures({
+                domain: "intervention",
+                targetId: baseId,
+                closedOccupancies: result.closedOccupancies,
             });
 
             return NextResponse.json({

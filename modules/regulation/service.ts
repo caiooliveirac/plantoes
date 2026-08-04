@@ -6,9 +6,10 @@ import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directo
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
+import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 
 export interface StartRegulationOccupancyInput {
@@ -882,15 +883,28 @@ export async function deactivateRegulationPost(input: DeactivateRegulationPostIn
         }).returning();
 
         const closedOccupancyIds: string[] = [];
+        const closedOccupancies: Array<{ id: string; doctorId: string; endedAt: Date; earlyDepartureOutcome: string | null }> = [];
         for (const occupancy of openOccupancies) {
             const endedAt = input.deactivatedAt.getTime() < occupancy.startedAt.getTime()
                 ? occupancy.startedAt
                 : input.deactivatedAt;
 
+            // Desativar com ocupante é uma retirada decidida pela chefia:
+            // aplica a régua de saída antecipada e grava o desfecho.
+            const earlyDepartureOutcome = isEarlyDepartureEligible({ roleLabel: occupancy.roleLabel })
+                ? classifyEarlyDeparture({
+                    departureAt: endedAt,
+                    scheduledStartAt: occupancy.scheduledStartAt,
+                    scheduledEndAt: occupancy.scheduledEndAt,
+                    startedAt: occupancy.startedAt,
+                }).outcome
+                : occupancy.earlyDepartureOutcome;
+
             await tx.update(regulationOccupancies)
                 .set({
                     endedAt,
                     actualEndedAt: endedAt,
+                    earlyDepartureOutcome,
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
                 })
@@ -898,9 +912,10 @@ export async function deactivateRegulationPost(input: DeactivateRegulationPostIn
 
             await syncRegulationBankHours(tx, occupancy.id);
             closedOccupancyIds.push(occupancy.id);
+            closedOccupancies.push({ id: occupancy.id, doctorId: occupancy.doctorId, endedAt, earlyDepartureOutcome });
         }
 
-        return { state, closedOccupancyIds };
+        return { state, closedOccupancyIds, closedOccupancies };
     });
 
     publishBoardUpdate(`regulation:deactivate:${input.postId}`);
@@ -1047,11 +1062,17 @@ export async function continueRegulationOccupancy(
             boardStartedAt: existing.boardStartedAt,
             continuedAt: continuationAt,
         });
+        const nextShiftLabel = resolveContinuationInPlaceShiftLabel({
+            existingStartedAt: existing.startedAt,
+            existingShiftLabel: existing.shiftLabel,
+            fallbackShiftLabel: baseShiftLabel,
+            continuationAt,
+        });
 
         const [updated] = await tx.update(regulationOccupancies)
             .set({
                 boardStartedAt: nextBoardStartedAt,
-                shiftLabel: "P",
+                shiftLabel: nextShiftLabel,
                 scheduledStartAt: inferredScheduledStartAt,
                 scheduledEndAt: nextScheduledEndAt,
                 notes: nextNotes ?? null,
@@ -1071,7 +1092,18 @@ export async function continueRegulationOccupancy(
 
 export async function endRegulationOccupancy(
     id: string,
-    input: { endedAt: Date; actualEndedAt?: Date | null; chiefConfirmed?: boolean; handoffClosure?: boolean },
+    input: {
+        endedAt: Date;
+        actualEndedAt?: Date | null;
+        chiefConfirmed?: boolean;
+        handoffClosure?: boolean;
+        /**
+         * Retirada decidida pela chefia (Retirar/desativação): aplica a régua de
+         * saída antecipada e grava o desfecho (bank_only/half_shift/full_shift)
+         * na ocupação — ver modules/operational/early-departure.ts.
+         */
+        chiefWithdrawal?: boolean;
+    },
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
@@ -1099,11 +1131,22 @@ export async function endRegulationOccupancy(
             ? (updatedByUserId ?? null)
             : existing.departureConfirmedByUserId;
 
+        const earlyDepartureOutcome = input.chiefWithdrawal
+            && isEarlyDepartureEligible({ roleLabel: existing.roleLabel })
+            ? classifyEarlyDeparture({
+                departureAt: actualEndedAt ?? input.endedAt,
+                scheduledStartAt: existing.scheduledStartAt,
+                scheduledEndAt: existing.scheduledEndAt,
+                startedAt: existing.startedAt,
+            }).outcome
+            : existing.earlyDepartureOutcome;
+
         const [updated] = await tx
             .update(regulationOccupancies)
             .set({
                 endedAt: boardEndedAt,
                 actualEndedAt,
+                earlyDepartureOutcome,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: now,
                 departureConfirmedAt,

@@ -193,6 +193,7 @@ export interface PaymentAllocationRawRow {
   shiftLabel: "SD" | "SN" | "P" | null;
   roleLabel: string | null;
   ramalLabel: string | null;
+  earlyDepartureOutcome: string | null;
   arrivalDelayMinutes: number | null;
   overtimeMinutes: number | null;
   creditedOvertimeMinutes: number | null;
@@ -229,6 +230,8 @@ export interface PaymentAllocationRow {
   shiftLabel: "SD" | "SN" | "P" | null;
   roleLabel: string | null;
   ramalLabel: string | null;
+  /** Desfecho da régua de saída antecipada gravado na ocupação (early-departure.ts). */
+  earlyDepartureOutcome: string | null;
   source: string | null;
   notes?: string | null;
   candidateCount: number;
@@ -890,6 +893,7 @@ function mapPreviousOperationalRow(row: Record<string, unknown>): PreviousOperat
     shiftLabel: normalizeShiftLabel((row.shiftLabel ?? null) as string | null),
     roleLabel: (row.roleLabel ?? null) as string | null,
     ramalLabel: (row.ramalLabel ?? null) as string | null,
+    earlyDepartureOutcome: (row.earlyDepartureOutcome ?? null) as string | null,
     arrivalDelayMinutes: row.arrivalDelayMinutes === null ? null : Number(row.arrivalDelayMinutes),
     overtimeMinutes: row.overtimeMinutes === null ? null : Number(row.overtimeMinutes),
     creditedOvertimeMinutes: row.creditedOvertimeMinutes === null ? null : Number(row.creditedOvertimeMinutes),
@@ -2897,6 +2901,7 @@ function buildEmptyPaymentAllocationRow(params: {
     shiftLabel: params.shiftLabel,
     roleLabel: params.target.defaultRole,
     ramalLabel: params.target.domain === "regulation" ? params.target.targetCode : null,
+    earlyDepartureOutcome: null,
     source: null,
     notes: null,
     candidateCount: params.candidateCount ?? 0,
@@ -3115,6 +3120,7 @@ function buildChosenPaymentAllocationRow(params: {
     shiftLabel: params.shiftLabel,
     roleLabel: chosen.roleLabel ?? params.target.defaultRole,
     ramalLabel: chosen.ramalLabel ?? (params.target.domain === "regulation" ? params.target.targetCode : null),
+    earlyDepartureOutcome: chosen.earlyDepartureOutcome ?? null,
     source: chosen.source,
     notes: chosen.notes,
     candidateCount: params.candidates.length,
@@ -3940,6 +3946,7 @@ async function loadPaymentAllocationSourceData(
         ro.shift_label as "shiftLabel",
         ro.role_label as "roleLabel",
         coalesce(ro.ramal_label, rp.code) as "ramalLabel",
+        ro.early_departure_outcome as "earlyDepartureOutcome",
         bhe.arrival_delay_minutes as "arrivalDelayMinutes",
         bhe.overtime_minutes as "overtimeMinutes",
         bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
@@ -3975,6 +3982,7 @@ async function loadPaymentAllocationSourceData(
         io.shift_label as "shiftLabel",
         io.role_label as "roleLabel",
         null::text as "ramalLabel",
+        io.early_departure_outcome as "earlyDepartureOutcome",
         bhe.arrival_delay_minutes as "arrivalDelayMinutes",
         bhe.overtime_minutes as "overtimeMinutes",
         bhe.credited_overtime_minutes as "creditedOvertimeMinutes",

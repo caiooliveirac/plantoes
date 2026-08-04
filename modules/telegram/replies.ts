@@ -145,11 +145,23 @@ const CHIEF_KICK_ANNOUNCEMENTS = [
     "👋\nSaída declarada pelo chefe de plantão.\n{name} saiu de {target} às {time}.",
 ];
 
+const DEACTIVATION_DEPARTURE_ANNOUNCEMENTS = [
+    "🔌\n{target} desativado pelo chefe de plantão.\n{name} saiu às {time}.",
+];
+
 export function buildChiefKickAnnouncement(seed: string | number, params: { name: string; target: string; time: string }) {
     const numericSeed = String(seed)
         .split("")
         .reduce((acc, char) => acc + char.charCodeAt(0), 0);
     const template = CHIEF_KICK_ANNOUNCEMENTS[numericSeed % CHIEF_KICK_ANNOUNCEMENTS.length];
+    return interpolate(template, params);
+}
+
+export function buildDeactivationDepartureAnnouncement(seed: string | number, params: { name: string; target: string; time: string }) {
+    const numericSeed = String(seed)
+        .split("")
+        .reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const template = DEACTIVATION_DEPARTURE_ANNOUNCEMENTS[numericSeed % DEACTIVATION_DEPARTURE_ANNOUNCEMENTS.length];
     return interpolate(template, params);
 }
 

@@ -52,6 +52,9 @@ import {
     setDoctorPreferredOperationalRole,
     updateDoctorDirectoryEntry,
 } from "@/modules/doctors/service";
+import { isStoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
+import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
+import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
 import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, isSameOperationalShiftArrival, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
@@ -175,6 +178,7 @@ import {
     resolveMealBreakTechnicalErrorDetail,
     isTelegramMealBreakCommandText,
     isTelegramMealBreakExcludeCommandText,
+    ensureArrivalInCurrentMealBreakSession,
     isTelegramMealBreakPriorityCommandText,
     looksLikeMealBreakButtonReply,
     parseTelegramMealBreakCommand,
@@ -1475,6 +1479,30 @@ export function resolveContinuationShiftStart(eventAt: Date, shiftType: string |
     return window.startedAt;
 }
 
+/**
+ * Bloco de turno que uma continuação EXPLÍCITA ("continua"/"continuando") abre.
+ *
+ * Regra canônica (modules/operational/rules.ts): a mensagem referencia a virada
+ * de turno mais próxima (resolveContinuationReferenceBoundary) e o bloco novo é
+ * o turno DEPOIS dessa virada — começa na virada, com o rótulo desse turno.
+ *
+ * Derivar rótulo/janela do âncora da manhã (started_at herdado da chegada
+ * original) fazia a ocupação nova nascer no bloco ANTERIOR, já expirado: a
+ * varredura de auto-close fechava a linha segundos depois de criada e o médico
+ * sumia do painel e da divisão do jantar, com resposta de sucesso no grupo
+ * (casos Claudio Azoubel / Matheus Mendonça / Rafaela Menoita / Acacio Junio,
+ * 03/08/2026). O horário de chegada original segue preservado no
+ * boardStartedAt e no continuityGroup — nunca no started_at do bloco novo.
+ */
+export function resolveTelegramExplicitContinuationBlock(eventAt: Date) {
+    const blockStartAt = resolveContinuationReferenceBoundary(eventAt);
+    const blockProbe = new Date(blockStartAt.getTime() + 60000);
+    return {
+        blockStartAt,
+        shiftLabel: resolveOperationalShiftWindow(blockProbe).shiftLabel,
+    };
+}
+
 export function resolveTelegramContinuationStartedAt(params: {
     eventAt: Date;
     shiftType: string | null | undefined;
@@ -1841,6 +1869,30 @@ export function shouldForceTelegramTakeoverOnContinuationConflict(params: {
     return params.errorMessage === "arrival_conflicts_with_active_occupancy"
         && !params.parsed.isDeparture
         && params.parsed.isContinuation;
+}
+
+// Rendição legítima tem tolerância: o sucessor pode ter chegado minutos antes
+// de a saída do rendido ser registrada.
+const TELEGRAM_SUCCESSOR_TAKEOVER_TOLERANCE_MS = 15 * 60 * 1000;
+
+/**
+ * Bloqueia o takeover forçado quando o ocupante atual é o SUCESSOR do próprio
+ * continuador: A rendido por B que manda "continua" no MESMO posto derrubava B
+ * (fechado por handoff) e se reinstalava — nenhuma checagem existia. Só vale
+ * para continuação no mesmo alvo (cross-target segue com a semântica antiga de
+ * assumir o posto novo); fonte ainda aberta ou ocupante mais antigo que o fim
+ * da fonte = takeover legítimo de ocupação velha/esquecida.
+ */
+export function shouldBlockTelegramContinuationTakeoverBySuccessor(params: {
+    isCrossTargetContinuation: boolean;
+    sourceEndedAt: Date | null;
+    conflictingStartedAt: Date;
+}) {
+    if (params.isCrossTargetContinuation || !params.sourceEndedAt) {
+        return false;
+    }
+
+    return params.conflictingStartedAt.getTime() >= params.sourceEndedAt.getTime() - TELEGRAM_SUCCESSOR_TAKEOVER_TOLERANCE_MS;
 }
 
 export function resolveTelegramForcedTakeoverAt(params: {
@@ -3127,6 +3179,12 @@ async function handleOperationalBaseStateCommand(params: {
                 `${isRegulation ? "Ramal" : "Base"} ${command.targetCode} ${isRegulation ? "desativado" : "desativada"} às ${formatTelegramReplyTime(eventAt)}.${result.closedOccupancyIds.length > 0 ? ` ${result.closedOccupancyIds.length} cobertura${result.closedOccupancyIds.length > 1 ? "s foram" : " foi"} encerrada${result.closedOccupancyIds.length > 1 ? "s" : ""} com auditoria.` : " Quadro atualizado."}`,
                 message.message_id,
             );
+            // Anúncio da retirada (com o desfecho da régua) nos chats de anúncio.
+            void announceDeactivationDepartures({
+                domain: isRegulation ? "regulation" : "intervention",
+                targetId: target.id,
+                closedOccupancies: result.closedOccupancies,
+            });
             return { ok: true, updated: true };
         }
 
@@ -6865,9 +6923,11 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             return { ok: true, ignored: true };
         }
 
+        // /retirar é decisão da chefia: aplica a régua de saída antecipada
+        // (early-departure.ts) e o desfecho entra no aviso do grupo.
         const updated = command.sector === "REGULATION"
-            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null))
-            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null));
+            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefWithdrawal: true }, resolveCommandAuditUserId(null))
+            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefWithdrawal: true }, resolveCommandAuditUserId(null));
         const doctorName = doctor.fullName;
 
         await markTelegramProcessed(logId, {
@@ -6879,11 +6939,15 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             relatedOccupancyId: updated.id,
             resolutionData: { actorRoles: actor.roles, commandName: command.name, usedActiveDoctorFallback },
         });
-        await sendMessage(message.chat.id, pickTelegramReply("command_removed", message.message_id, {
+        const removedReply = pickTelegramReply("command_removed", message.message_id, {
             target: command.targetCode,
             name: doctorName,
             time: formatTelegramReplyTime(eventAt),
-        }), message.message_id);
+        });
+        const removedOutcomeLine = isStoredEarlyDepartureOutcome(updated.earlyDepartureOutcome)
+            ? `\n${buildEarlyDepartureSummary(updated.earlyDepartureOutcome, { name: doctorName })}`
+            : "";
+        await sendMessage(message.chat.id, `${removedReply}${removedOutcomeLine}`, message.message_id);
         return { ok: true, occupancyId: updated.id };
     }
 
@@ -8620,12 +8684,16 @@ async function applyParsedEntry(params: {
                 }, null);
                 occupancyId = continued.id;
                 treatedAsContinuation = true;
-                replyTimeAt = activeOccupancy.startedAt;
-                effectiveShiftType = "P";
+                // Resposta e interpretação sempre com a chegada ORIGINAL da cadeia:
+                // num "continua" repetido a ativa é o bloco novo (started 19:00+) e
+                // responder com o started dele fazia o bot "esquecer" que o médico
+                // estava desde a manhã (queixa recorrente dos plantonistas de P).
+                replyTimeAt = activeOccupancy.boardStartedAt ?? activeOccupancy.startedAt;
+                effectiveShiftType = continued.shiftLabel ?? "P";
                 extendedLongShift = isExtendedLongShift(continued.boardStartedAt, continued.scheduledEndAt);
                 continuityInterpretation = buildContinuityInterpretation({
                     doctorSurfaceName: resolvedDoctor.displayName ?? resolvedDoctor.fullName,
-                    anchorStartedAt: activeOccupancy.startedAt,
+                    anchorStartedAt: activeOccupancy.boardStartedAt ?? activeOccupancy.startedAt,
                     scheduledEndBefore: activeOccupancy.scheduledEndAt,
                     continuedBoardStartedAt: continued.boardStartedAt,
                     continuedScheduledEndAt: continued.scheduledEndAt,
@@ -8729,15 +8797,25 @@ async function applyParsedEntry(params: {
                 const crossShiftExpiry = shouldUseContinuityContext
                     ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
                     : null;
+                // Continuação explícita: o bloco novo começa na virada referenciada
+                // (nunca no âncora da manhã — ver resolveTelegramExplicitContinuationBlock).
+                // Se o âncora já cai dentro do bloco novo (chegada real depois da
+                // virada), ele prevalece para não creditar tempo não trabalhado.
+                const explicitContinuationBlock = shouldUseContinuityContext && parsed.isContinuation
+                    ? resolveTelegramExplicitContinuationBlock(eventAt)
+                    : null;
                 const effectiveContinuationStartedAt = isCrossTargetContinuation
                     ? eventAt
-                    : (crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
-                        ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
-                        : continuationStartedAt);
+                    : explicitContinuationBlock
+                        ? new Date(Math.max(explicitContinuationBlock.blockStartAt.getTime(), continuationStartedAt.getTime()))
+                        : (crossShiftExpiry && crossShiftExpiry.getTime() <= eventAt.getTime()
+                            ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
+                            : continuationStartedAt);
                 if (shouldUseContinuityContext && continuityContext?.source) {
                     // O bloco novo é o turno da chegada (resolveArrivalShiftLabel já vira para o
                     // turno seguinte quando o médico avisa pouco antes da virada).
-                    effectiveShiftType = resolveArrivalShiftLabel(effectiveContinuationStartedAt);
+                    effectiveShiftType = explicitContinuationBlock?.shiftLabel
+                        ?? resolveArrivalShiftLabel(effectiveContinuationStartedAt);
                 }
 
                 const createRegulationArrival = (startedAtOverride?: Date) => startRegulationOccupancy({
@@ -8781,6 +8859,16 @@ async function applyParsedEntry(params: {
                         throw error;
                     }
 
+                    // A rendido que manda "continua" no mesmo posto não pode derrubar
+                    // o próprio rendedor (risco P0.2 do estudo de continuidade).
+                    if (shouldBlockTelegramContinuationTakeoverBySuccessor({
+                        isCrossTargetContinuation,
+                        sourceEndedAt: continuityContext?.source ? resolveTelegramOperationalEndedAt(continuityContext.source) : null,
+                        conflictingStartedAt: conflictingOccupancy.startedAt,
+                    })) {
+                        throw new Error("Posto ja rendido por outro medico apos a sua saida — continuidade nao registrada. Se for engano, procure a chefia.");
+                    }
+
                     const takeoverAt = resolveTelegramForcedTakeoverAt({
                         eventAt,
                         conflictedStartedAt: conflictingOccupancy.startedAt,
@@ -8802,6 +8890,21 @@ async function applyParsedEntry(params: {
                 }
                 occupancyId = regResult.id;
                 if (regResult.autoReactivated) autoReactivated = true;
+
+                // Uma continuação nunca pode materializar uma janela já vencida:
+                // a varredura de auto-close fecharia a linha em segundos e o bot
+                // teria respondido sucesso (bug de 03/08/2026). Vale também para a
+                // continuidade IMPLÍCITA (rótulo P / troca SD↔SN sem a palavra
+                // "continua") — mesma classe de falha, mesmo erro alto (risco P1.6
+                // do estudo). Compara com eventAt, então chegada retroativa legítima
+                // não dispara.
+                if (
+                    shouldUseContinuityContext
+                    && regResult.scheduledEndAt
+                    && regResult.scheduledEndAt.getTime() <= eventAt.getTime()
+                ) {
+                    throw new Error("Continuacao caiu numa janela de turno ja encerrada — registro nao efetivado, avise a regulacao.");
+                }
 
                 if (shouldUseContinuityContext && continuityContext?.source) {
                     treatedAsContinuation = true;
@@ -8917,12 +9020,15 @@ async function applyParsedEntry(params: {
                 }, null);
                 occupancyId = continued.id;
                 treatedAsContinuation = true;
-                replyTimeAt = activeOccupancy.startedAt;
-                effectiveShiftType = "P";
+                // Paridade com a regulação: resposta/interpretação ancoradas na
+                // chegada original da cadeia, e rótulo devolvido pelo service
+                // (reforço repetido mantém o rótulo do bloco, não vira "P").
+                replyTimeAt = activeOccupancy.boardStartedAt ?? activeOccupancy.startedAt;
+                effectiveShiftType = continued.shiftLabel ?? "P";
                 extendedLongShift = isExtendedLongShift(continued.boardStartedAt, continued.scheduledEndAt);
                 continuityInterpretation = buildContinuityInterpretation({
                     doctorSurfaceName: resolvedDoctor.displayName ?? resolvedDoctor.fullName,
-                    anchorStartedAt: activeOccupancy.startedAt,
+                    anchorStartedAt: activeOccupancy.boardStartedAt ?? activeOccupancy.startedAt,
                     scheduledEndBefore: activeOccupancy.scheduledEndAt,
                     continuedBoardStartedAt: continued.boardStartedAt,
                     continuedScheduledEndAt: continued.scheduledEndAt,
@@ -8996,13 +9102,21 @@ async function applyParsedEntry(params: {
                 const crossShiftExpiryIntv = shouldUseContinuityContext
                     ? resolveProlongedShiftExpiry(continuationStartedAt, "P")
                     : null;
+                // Mesma regra da regulação: continuação explícita abre o bloco
+                // depois da virada referenciada (resolveTelegramExplicitContinuationBlock).
+                const explicitContinuationBlockIntv = shouldUseContinuityContext && parsed.isContinuation
+                    ? resolveTelegramExplicitContinuationBlock(eventAt)
+                    : null;
                 const effectiveContinuationStartedAtIntv = isCrossTargetContinuation
                     ? eventAt
-                    : (crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
-                        ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
-                        : continuationStartedAt);
+                    : explicitContinuationBlockIntv
+                        ? new Date(Math.max(explicitContinuationBlockIntv.blockStartAt.getTime(), continuationStartedAt.getTime()))
+                        : (crossShiftExpiryIntv && crossShiftExpiryIntv.getTime() <= eventAt.getTime()
+                            ? resolveContinuationShiftStart(eventAt, parsed.shiftType)
+                            : continuationStartedAt);
                 if (shouldUseContinuityContext && continuityContext?.source) {
-                    effectiveShiftType = resolveArrivalShiftLabel(effectiveContinuationStartedAtIntv);
+                    effectiveShiftType = explicitContinuationBlockIntv?.shiftLabel
+                        ?? resolveArrivalShiftLabel(effectiveContinuationStartedAtIntv);
                 }
 
                 const createInterventionArrival = (startedAtOverride?: Date) => startInterventionOccupancy({
@@ -9043,6 +9157,15 @@ async function applyParsedEntry(params: {
                         throw error;
                     }
 
+                    // Paridade com a regulação: rendido não derruba o próprio rendedor.
+                    if (shouldBlockTelegramContinuationTakeoverBySuccessor({
+                        isCrossTargetContinuation,
+                        sourceEndedAt: continuityContext?.source ? resolveTelegramOperationalEndedAt(continuityContext.source) : null,
+                        conflictingStartedAt: conflictingOccupancy.startedAt,
+                    })) {
+                        throw new Error("Base ja rendida por outro medico apos a sua saida — continuidade nao registrada. Se for engano, procure a chefia.");
+                    }
+
                     const takeoverAt = resolveTelegramForcedTakeoverAt({
                         eventAt,
                         conflictedStartedAt: conflictingOccupancy.startedAt,
@@ -9065,12 +9188,35 @@ async function applyParsedEntry(params: {
                 occupancyId = intResult.id;
                 if (intResult.autoReactivated) autoReactivated = true;
 
+                // Paridade com a regulação: janela já vencida = erro alto, nunca
+                // sucesso silencioso seguido de auto-close — inclusive continuidade
+                // implícita (risco P1.6 do estudo).
+                if (
+                    shouldUseContinuityContext
+                    && intResult.scheduledEndAt
+                    && intResult.scheduledEndAt.getTime() <= eventAt.getTime()
+                ) {
+                    throw new Error("Continuacao caiu numa janela de turno ja encerrada — registro nao efetivado, avise a regulacao.");
+                }
+
                 if (shouldUseContinuityContext && continuityContext?.source) {
                     treatedAsContinuation = true;
                     replyTimeAt = continuityContext.continuityStartedAt ?? continuityContext.source.startedAt;
                     await syncBankHoursByContinuityGroup(db, continuityContext.source.continuityGroupId);
                 }
             }
+        }
+    }
+
+    // Retardatário na divisão de refeições: chegada/continuação de regulação
+    // registrada com a sessão do turno JÁ montada entra no roster na hora, sem
+    // esperar a chefia editar o ramal nem "/jantar reiniciar" (incidente de
+    // 03/08/2026). Best-effort: falha aqui nunca derruba o registro da chegada.
+    if (parsed.sector === "REGULATION" && !parsed.isDeparture && occupancyId && parsed.baseCode) {
+        try {
+            await ensureArrivalInCurrentMealBreakSession({ ramal: parsed.baseCode });
+        } catch (error) {
+            console.error("[telegram] falha ao incluir retardatario na sessao de refeicoes", error);
         }
     }
 
