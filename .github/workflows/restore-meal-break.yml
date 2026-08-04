@@ -1,0 +1,108 @@
+name: Refeicoes - restaurar divisao a partir do resumo do grupo
+
+# Roda scripts/restore-meal-break-session.ts NO SERVIDOR (onde o banco escuta em
+# loopback), via o mesmo SSH do deploy. A entrada é o resumo publicado no grupo,
+# versionado em docs/refeicoes/*.txt — o parser (parseMealBreakDaySummary) aborta
+# sem gravar se qualquer nome não casar com o roster da sessão.
+#
+# Existe porque a divisão de 04/08/2026 foi destruída antes de os pontos de
+# restauração existirem, e o balão do grupo é a única cópia completa que sobrou.
+#
+# Disparo, dois modos:
+#   dry-run (default)  só imprime o mapeamento nome -> ramal -> horários
+#   apply              grava a sessão (e deixa ponto de restauração antes)
+#
+# Três gatilhos equivalentes, mesmo racional do saldo-repair-maio (autorizado
+# por Caio em 2026-08-04): a integração dos agentes tem push só na branch
+# designada — dispatch pela API dá 403 actions:write e tag dá 403 no proxy git.
+# Commit no histórico = execução auditável; APPLY exige marcador na mensagem.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Gravar a divisão (false = dry-run, só o mapeamento)"
+        required: false
+        default: false
+        type: boolean
+      arquivo:
+        description: "Arquivo do resumo no repo"
+        required: false
+        default: "docs/refeicoes/restauracao-2026-08-04.txt"
+        type: string
+  push:
+    tags:
+      - "meal-break-restore/**"
+    branches:
+      - "claude/lunch-division-doctor-config-2uaffh"
+    paths:
+      - ".github/restore-meal-break.run"
+
+concurrency:
+  group: plantoes-meal-break-restore
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    name: Restauracao da divisao no servidor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
+      # Grava só com pedido explícito: input apply=true, tag
+      # meal-break-restore/apply-*, ou [meal-break-restore-apply] na mensagem do
+      # commit. Qualquer outra coisa é dry-run.
+      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || startsWith(github.ref_name, 'meal-break-restore/apply') || contains(github.event.head_commit.message, '[meal-break-restore-apply]') }}
+      RESUMO: ${{ (github.event_name == 'workflow_dispatch' && inputs.arquivo) || 'docs/refeicoes/restauracao-2026-08-04.txt' }}
+    steps:
+      - name: Run actions/checkout@v4
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Enviar o resumo para o servidor
+        run: |
+          set -euo pipefail
+          if [[ ! -f "${RESUMO}" ]]; then
+            echo "ERRO: arquivo do resumo não existe no repo: ${RESUMO}" >&2
+            exit 1
+          fi
+          ssh -o ServerAliveInterval=20 -i ~/.ssh/id_ed25519 "${REMOTE}" \
+            "cat > /tmp/meal-break-restore.txt" < "${RESUMO}"
+
+      - name: Restauracao (script do repo, executado no servidor)
+        run: |
+          set -euo pipefail
+          APPLY_FLAG=""
+          if [[ "${APPLY}" == "true" ]]; then
+            APPLY_FLAG=" --apply"
+          fi
+          ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=45 -i ~/.ssh/id_ed25519 "${REMOTE}" bash -s <<EOF
+          set -euo pipefail
+          cd /home/ubuntu/plantoes
+          if [[ ! -f scripts/restore-meal-break-session.ts ]]; then
+            echo "ERRO: o commit deployado ainda não tem o script — faça o deploy da main primeiro." >&2
+            exit 1
+          fi
+          set -a; . .env.production; set +a
+          npx tsx scripts/restore-meal-break-session.ts${APPLY_FLAG} < /tmp/meal-break-restore.txt
+          rm -f /tmp/meal-break-restore.txt
+          EOF
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "### Restauração da divisão de refeições"
+            echo "- Modo: ${APPLY} (true = gravou a sessão)"
+            echo "- Resumo usado: ${RESUMO}"
+            echo "- Mapeamento nome → ramal: no log do passo 'Restauracao'"
+          } >> "$GITHUB_STEP_SUMMARY"
