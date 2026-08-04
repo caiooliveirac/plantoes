@@ -8,7 +8,7 @@ import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/ba
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 
 export interface StartRegulationOccupancyInput {
@@ -1047,11 +1047,17 @@ export async function continueRegulationOccupancy(
             boardStartedAt: existing.boardStartedAt,
             continuedAt: continuationAt,
         });
+        const nextShiftLabel = resolveContinuationInPlaceShiftLabel({
+            existingStartedAt: existing.startedAt,
+            existingShiftLabel: existing.shiftLabel,
+            fallbackShiftLabel: baseShiftLabel,
+            continuationAt,
+        });
 
         const [updated] = await tx.update(regulationOccupancies)
             .set({
                 boardStartedAt: nextBoardStartedAt,
-                shiftLabel: "P",
+                shiftLabel: nextShiftLabel,
                 scheduledStartAt: inferredScheduledStartAt,
                 scheduledEndAt: nextScheduledEndAt,
                 notes: nextNotes ?? null,

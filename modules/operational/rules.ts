@@ -272,6 +272,27 @@ export function resolveContinuationReferenceBoundary(eventAt: Date): Date {
 }
 
 /**
+ * Rótulo resultante de uma continuação IN-PLACE (mesmo posto, ocupação ativa).
+ *
+ * "P" só quando a linha atravessa a virada referenciada desde ANTES dela —
+ * chegada de manhã que segue para a noite (caso Manuella). Um "continua"
+ * repetido encontra como ativa a linha do BLOCO NOVO (started_at >= virada):
+ * rebatizá-la de "P" dava cobertura de 24h a partir da noite (pagamento do
+ * turno seguinte não trabalhado — classe Ana Beatriz, reintroduzida via
+ * repetição em 03/08/2026). Reforço mantém o rótulo do bloco.
+ */
+export function resolveContinuationInPlaceShiftLabel(params: {
+    existingStartedAt: Date;
+    existingShiftLabel: string | null;
+    fallbackShiftLabel: string;
+    continuationAt: Date;
+}) {
+    return params.existingStartedAt.getTime() < resolveContinuationReferenceBoundary(params.continuationAt).getTime()
+        ? "P"
+        : (params.existingShiftLabel ?? params.fallbackShiftLabel);
+}
+
+/**
  * Fim agendado de uma continuação de intervenção.
  *
  * Extraído da lógica inline de continueInterventionOccupancy para dar paridade

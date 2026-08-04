@@ -231,7 +231,11 @@ function buildDeparturePriorityCandidates(params: {
             roleLabel: row.roleLabel,
             defaultRole: row.defaultRole,
         });
-        const rowStartedAt = row.startedAt;
+        // Âncora da cadeia de continuidade: quem dobra desde a manhã num bloco
+        // "SN" (started 19:00, board 06:41) conta tempo desde 06:41 — sem isso o
+        // continuador era rankeado como chegada das 19:00 (perdia prioridade) e o
+        // cross-target podia até cair fora do corte de 4h.
+        const rowStartedAt = row.boardStartedAt ?? row.startedAt;
         const pushContinuation = () => excludedContinuations.push({
             targetCode: row.postCode,
             name: formatDoctorSurfaceName({
@@ -286,12 +290,13 @@ function buildDeparturePriorityCandidates(params: {
         }
 
         // Chegou há pouco: sem 4h de plantão acumuladas, não entra no ranking de saída.
-        const tenureMs = params.referenceAt.getTime() - new Date(row.startedAt).getTime();
+        // Medido pela âncora da cadeia — continuidade conta o plantão inteiro.
+        const tenureMs = params.referenceAt.getTime() - new Date(rowStartedAt).getTime();
         if (tenureMs < MINIMUM_DEPARTURE_PRIORITY_MS) {
             continue;
         }
 
-        const priorityStartedAt = new Date(resolvePriorityStartedAt(row.startedAt, roleLabel, thresholdAtMs)).toISOString();
+        const priorityStartedAt = new Date(resolvePriorityStartedAt(rowStartedAt, roleLabel, thresholdAtMs)).toISOString();
 
         candidates.push({
             domain: "regulation",
@@ -302,7 +307,7 @@ function buildDeparturePriorityCandidates(params: {
                 fallback: row.postCode,
             }),
             roleLabel,
-            startedAt: row.startedAt,
+            startedAt: rowStartedAt,
             priorityStartedAt,
         });
     }

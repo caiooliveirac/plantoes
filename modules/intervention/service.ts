@@ -7,7 +7,7 @@ import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
-import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveContinuationInPlaceShiftLabel, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
 
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
@@ -1022,12 +1022,18 @@ export async function continueInterventionOccupancy(
             boardStartedAt: existing.boardStartedAt,
             continuedAt: continuationAt,
         });
+        const nextShiftLabel = resolveContinuationInPlaceShiftLabel({
+            existingStartedAt: existing.startedAt,
+            existingShiftLabel: existing.shiftLabel,
+            fallbackShiftLabel: baseShiftLabel,
+            continuationAt,
+        });
 
         const [updated] = await tx
             .update(interventionOccupancies)
             .set({
                 boardStartedAt: nextBoardStartedAt,
-                shiftLabel: "P",
+                shiftLabel: nextShiftLabel,
                 scheduledStartAt: inferredScheduledStartAt,
                 scheduledEndAt: nextScheduledEndAt,
                 notes: nextNotes ?? null,

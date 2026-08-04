@@ -1115,10 +1115,11 @@ function hydrateMealBreakSession(session: MealBreakSession): MealBreakSession {
 }
 
 function resolveNightDinnerDuration(doctor: MealBreakDoctor): MealBreakDinnerDuration {
-    if (doctor.shiftLabel !== "P") {
-        return "half_hour";
-    }
-
+    // Quem dobra desde a manhã janta 1h — decidido pela ÂNCORA da cadeia
+    // (arrivalStartedAt/startedAt do roster já apontam a chegada original),
+    // não pelo rótulo: a continuação explícita cria bloco "SN" com âncora de
+    // manhã, e o rótulo "P" acidental que dava 1h por engano deixou de existir
+    // (reforço repetido não rebatiza mais o bloco).
     const arrivalStartedAt = doctor.arrivalStartedAt ?? doctor.startedAt;
     return resolveArrivalShiftLabel(arrivalStartedAt) === "SD"
         ? "one_hour"

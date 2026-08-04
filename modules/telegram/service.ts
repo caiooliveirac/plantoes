@@ -8644,12 +8644,16 @@ async function applyParsedEntry(params: {
                 }, null);
                 occupancyId = continued.id;
                 treatedAsContinuation = true;
-                replyTimeAt = activeOccupancy.startedAt;
-                effectiveShiftType = "P";
+                // Resposta e interpretação sempre com a chegada ORIGINAL da cadeia:
+                // num "continua" repetido a ativa é o bloco novo (started 19:00+) e
+                // responder com o started dele fazia o bot "esquecer" que o médico
+                // estava desde a manhã (queixa recorrente dos plantonistas de P).
+                replyTimeAt = activeOccupancy.boardStartedAt ?? activeOccupancy.startedAt;
+                effectiveShiftType = continued.shiftLabel ?? "P";
                 extendedLongShift = isExtendedLongShift(continued.boardStartedAt, continued.scheduledEndAt);
                 continuityInterpretation = buildContinuityInterpretation({
                     doctorSurfaceName: resolvedDoctor.displayName ?? resolvedDoctor.fullName,
-                    anchorStartedAt: activeOccupancy.startedAt,
+                    anchorStartedAt: activeOccupancy.boardStartedAt ?? activeOccupancy.startedAt,
                     scheduledEndBefore: activeOccupancy.scheduledEndAt,
                     continuedBoardStartedAt: continued.boardStartedAt,
                     continuedScheduledEndAt: continued.scheduledEndAt,
@@ -8963,12 +8967,15 @@ async function applyParsedEntry(params: {
                 }, null);
                 occupancyId = continued.id;
                 treatedAsContinuation = true;
-                replyTimeAt = activeOccupancy.startedAt;
-                effectiveShiftType = "P";
+                // Paridade com a regulação: resposta/interpretação ancoradas na
+                // chegada original da cadeia, e rótulo devolvido pelo service
+                // (reforço repetido mantém o rótulo do bloco, não vira "P").
+                replyTimeAt = activeOccupancy.boardStartedAt ?? activeOccupancy.startedAt;
+                effectiveShiftType = continued.shiftLabel ?? "P";
                 extendedLongShift = isExtendedLongShift(continued.boardStartedAt, continued.scheduledEndAt);
                 continuityInterpretation = buildContinuityInterpretation({
                     doctorSurfaceName: resolvedDoctor.displayName ?? resolvedDoctor.fullName,
-                    anchorStartedAt: activeOccupancy.startedAt,
+                    anchorStartedAt: activeOccupancy.boardStartedAt ?? activeOccupancy.startedAt,
                     scheduledEndBefore: activeOccupancy.scheduledEndAt,
                     continuedBoardStartedAt: continued.boardStartedAt,
                     continuedScheduledEndAt: continued.scheduledEndAt,
