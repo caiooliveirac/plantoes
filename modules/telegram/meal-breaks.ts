@@ -5273,6 +5273,270 @@ async function runMealBreakRestore(params: {
     };
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Restauração a partir do RESUMO publicado no grupo
+//
+// Ponte para o que é anterior aos pontos de restauração (ou para sessão cuja
+// linha já foi sobrescrita): o balão "✅ Divisão fechada!" que o bot publicou
+// no grupo é uma serialização completa da divisão — buildSessionSummary —, e
+// dá para lê-lo de volta. Só diurno: foi o modo do incidente, e o noturno tem
+// semântica própria (trabalho noturno + janta).
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface MealBreakSummaryEntry {
+    name: string;
+    /** Etiquetas entre parênteses no resumo: RECIP, MRV, COI, RMT, IES... */
+    tags: string[];
+}
+
+export interface MealBreakDaySummaryParse {
+    lunch: Array<MealBreakSummaryEntry & { slot: MealBreakLunchSlot }>;
+    rest: Array<MealBreakSummaryEntry & { slot: MealBreakRestSlot }>;
+    /** Blocos "🚫 FORA DO ..." encontrados: esta ponte NÃO restaura exclusões. */
+    excludedBlocks: string[];
+}
+
+function parseSummaryEntryLine(line: string): MealBreakSummaryEntry | null {
+    const match = line.trim().match(/^[•*-]\s*(.+)$/);
+    if (!match) {
+        return null;
+    }
+
+    const body = match[1]?.trim() ?? "";
+    if (!body || body === "--") {
+        return null;
+    }
+
+    const tagMatch = body.match(/^(.*?)\s*\(([^)]*)\)\s*$/);
+    if (!tagMatch) {
+        return { name: body, tags: [] };
+    }
+
+    return {
+        name: (tagMatch[1] ?? "").trim(),
+        tags: (tagMatch[2] ?? "")
+            .split("/")
+            .map((tag) => normalizeFreeText(tag))
+            .filter(Boolean),
+    };
+}
+
+/**
+ * Lê de volta o resumo diurno publicado no grupo. Tolerante ao que o Telegram
+ * faz com o texto colado (linhas em branco, espaço extra), mas estrito no que
+ * importa: horário desconhecido ou seção fora de ordem devolve null em vez de
+ * restaurar uma divisão pela metade.
+ */
+export function parseMealBreakDaySummary(text: string): MealBreakDaySummaryParse | null {
+    const lines = text.split(/\r?\n/).map((line) => line.trim());
+    let section: "lunch" | "rest" | null = null;
+    let slot: string | null = null;
+    const parsed: MealBreakDaySummaryParse = { lunch: [], rest: [], excludedBlocks: [] };
+
+    for (const line of lines) {
+        if (!line) {
+            continue;
+        }
+
+        const normalized = normalizeFreeText(line);
+        if (normalized.includes("ALMOCO") && !normalized.startsWith("•") && !normalized.includes("FORA DO")) {
+            section = "lunch";
+            slot = null;
+            continue;
+        }
+        if (normalized.includes("DESCANSO") && !normalized.startsWith("•") && !normalized.includes("FORA DO")) {
+            section = "rest";
+            slot = null;
+            continue;
+        }
+        if (normalized.includes("FORA DO")) {
+            parsed.excludedBlocks.push(line);
+            section = null;
+            slot = null;
+            continue;
+        }
+        // Rodapé: chefia (a critério), legenda, dica de reiniciar.
+        if (normalized.includes("CHEFIA") || line.startsWith("ℹ️") || normalized.startsWith("SE PRECISAR")) {
+            section = null;
+            slot = null;
+            continue;
+        }
+
+        const slotMatch = line.match(/^(\d{1,2}:\d{2})$/);
+        if (slotMatch) {
+            slot = slotMatch[1] ?? null;
+            continue;
+        }
+
+        if (!section || !slot) {
+            continue;
+        }
+
+        const entry = parseSummaryEntryLine(line);
+        if (!entry) {
+            continue;
+        }
+
+        if (section === "lunch") {
+            if (!LUNCH_SLOTS.includes(slot as MealBreakLunchSlot)) {
+                return null;
+            }
+            parsed.lunch.push({ ...entry, slot: slot as MealBreakLunchSlot });
+        } else {
+            if (!REST_SLOTS.includes(slot as MealBreakRestSlot)) {
+                return null;
+            }
+            parsed.rest.push({ ...entry, slot: slot as MealBreakRestSlot });
+        }
+    }
+
+    return parsed.lunch.length > 0 || parsed.rest.length > 0 ? parsed : null;
+}
+
+/** O resumo imprime o nome compacto (primeiro + último). Casamos primeiro por
+ *  igualdade exata desse nome — o texto saiu do mesmo renderizador — e só então
+ *  por "todos os tokens presentes", para aguentar edição manual do balão. */
+function matchRosterRamalByCompactName(session: MealBreakSession, name: string) {
+    const needle = normalizeFreeText(name);
+    if (!needle) {
+        return { ramal: null, candidates: [] as MealBreakDoctor[] };
+    }
+
+    const exact = session.roster.filter((doctor) => normalizeFreeText(resolveDoctorCompactName(doctor)) === needle);
+    if (exact.length === 1) {
+        return { ramal: exact[0]!.ramal, candidates: exact };
+    }
+
+    const needleTokens = needle.split(/\s+/).filter(Boolean);
+    const loose = session.roster.filter((doctor) => {
+        const tokens = new Set(normalizeFreeText(doctor.name).split(/\s+/).filter(Boolean));
+        return needleTokens.every((token) => tokens.has(token));
+    });
+
+    return { ramal: loose.length === 1 ? loose[0]!.ramal : null, candidates: loose.length > 0 ? loose : exact };
+}
+
+export interface MealBreakSummaryRestoreReport {
+    matched: Array<{ name: string; ramal: string; lunchSlot: MealBreakLunchSlot | null; restSlot: MealBreakRestSlot | null }>;
+    unmatchedNames: string[];
+    excludedBlocks: string[];
+    recipRamal: string | null;
+    mrvRamals: string[];
+    applied: boolean;
+    session: MealBreakSession | null;
+}
+
+/**
+ * Reaplica no estado vivo a divisão diurna lida de um resumo do grupo. Nunca
+ * grava parcial: um nome que não casa com o roster aborta tudo e volta no
+ * relatório, porque restaurar metade da divisão é pior que não restaurar.
+ * `apply: false` (padrão) só simula e devolve o mapeamento para conferência.
+ */
+export async function restoreDayMealBreakFromSummary(params: {
+    chatId?: string;
+    referenceAt: Date;
+    summaryText: string;
+    actorTelegramId?: string | null;
+    apply?: boolean;
+}): Promise<MealBreakSummaryRestoreReport> {
+    const parsed = parseMealBreakDaySummary(params.summaryText);
+    if (!parsed) {
+        throw new MealBreakUserError("Não reconheci uma divisão de almoço nesse texto — cole o balão inteiro que o bot publicou no grupo.");
+    }
+
+    const operationalDate = formatOperationalDate(params.referenceAt);
+    const resolvedState = params.chatId
+        ? { chatId: params.chatId, session: await loadMealBreakSession(params.chatId, operationalDate, "day") }
+        : await resolveCurrentOperationalMealBreakState(params.referenceAt, "day");
+    const chatId = resolvedState?.chatId ?? null;
+    const baseSession = resolvedState?.session ?? null;
+    if (!baseSession || !chatId) {
+        throw new MealBreakUserError("Não existe sessão diurna deste dia operacional para receber a restauração.");
+    }
+
+    const lunchAssignments: Record<string, MealBreakLunchSlot> = {};
+    const restAssignments: Record<string, MealBreakRestSlot> = {};
+    const byRamal = new Map<string, { name: string; ramal: string; lunchSlot: MealBreakLunchSlot | null; restSlot: MealBreakRestSlot | null }>();
+    const unmatchedNames: string[] = [];
+    const recipRamals = new Set<string>();
+    const mrvRamals = new Set<string>();
+
+    const register = (entry: MealBreakSummaryEntry, slot: MealBreakLunchSlot | MealBreakRestSlot, kind: "lunch" | "rest") => {
+        const { ramal } = matchRosterRamalByCompactName(baseSession, entry.name);
+        if (!ramal) {
+            unmatchedNames.push(entry.name);
+            return;
+        }
+
+        const current = byRamal.get(ramal) ?? { name: entry.name, ramal, lunchSlot: null, restSlot: null };
+        if (kind === "lunch") {
+            lunchAssignments[ramal] = slot as MealBreakLunchSlot;
+            current.lunchSlot = slot as MealBreakLunchSlot;
+        } else {
+            restAssignments[ramal] = slot as MealBreakRestSlot;
+            current.restSlot = slot as MealBreakRestSlot;
+        }
+        byRamal.set(ramal, current);
+
+        if (entry.tags.includes("RECIP")) {
+            recipRamals.add(ramal);
+        }
+        if (entry.tags.includes("MRV")) {
+            mrvRamals.add(ramal);
+        }
+    };
+
+    for (const entry of parsed.lunch) {
+        register(entry, entry.slot, "lunch");
+    }
+    for (const entry of parsed.rest) {
+        register(entry, entry.slot, "rest");
+    }
+
+    const report: MealBreakSummaryRestoreReport = {
+        matched: [...byRamal.values()],
+        unmatchedNames: [...new Set(unmatchedNames)],
+        excludedBlocks: parsed.excludedBlocks,
+        recipRamal: [...recipRamals][0] ?? baseSession.recipRamal,
+        mrvRamals: mrvRamals.size > 0 ? [...mrvRamals] : baseSession.mrvRamals,
+        applied: false,
+        session: null,
+    };
+
+    if (report.unmatchedNames.length > 0) {
+        return report;
+    }
+
+    // mrvLunch1230Ramal é o que destrava a fase de MRV no sync: sem ele o
+    // syncDaySessionState apaga os descansos que acabamos de restaurar.
+    const mrvLunch1230Ramal = report.mrvRamals.find((ramal) => lunchAssignments[ramal] === "12:30")
+        ?? baseSession.mrvLunch1230Ramal
+        ?? report.mrvRamals[0]
+        ?? null;
+
+    const restored = syncDaySessionState(withEvent({
+        ...baseSession,
+        recipRamal: report.recipRamal,
+        mrvRamals: report.mrvRamals,
+        mrvLunch1230Ramal,
+        lunchAssignments,
+        restAssignments,
+        updatedAt: params.referenceAt.toISOString(),
+    }, {
+        type: "session_restored",
+        actorTelegramId: params.actorTelegramId ?? null,
+    }, params.referenceAt));
+
+    report.session = restored;
+    if (!params.apply) {
+        return report;
+    }
+
+    await saveMealBreakSession(chatId, restored, "restored");
+    report.applied = true;
+    return report;
+}
+
 export async function runTelegramMealBreakCommand(params: {
     chatId: string;
     referenceAt: Date;
