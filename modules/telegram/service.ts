@@ -178,6 +178,7 @@ import {
     resolveMealBreakTechnicalErrorDetail,
     isTelegramMealBreakCommandText,
     isTelegramMealBreakExcludeCommandText,
+    ensureArrivalInCurrentMealBreakSession,
     isTelegramMealBreakPriorityCommandText,
     looksLikeMealBreakButtonReply,
     parseTelegramMealBreakCommand,
@@ -1868,6 +1869,30 @@ export function shouldForceTelegramTakeoverOnContinuationConflict(params: {
     return params.errorMessage === "arrival_conflicts_with_active_occupancy"
         && !params.parsed.isDeparture
         && params.parsed.isContinuation;
+}
+
+// Rendição legítima tem tolerância: o sucessor pode ter chegado minutos antes
+// de a saída do rendido ser registrada.
+const TELEGRAM_SUCCESSOR_TAKEOVER_TOLERANCE_MS = 15 * 60 * 1000;
+
+/**
+ * Bloqueia o takeover forçado quando o ocupante atual é o SUCESSOR do próprio
+ * continuador: A rendido por B que manda "continua" no MESMO posto derrubava B
+ * (fechado por handoff) e se reinstalava — nenhuma checagem existia. Só vale
+ * para continuação no mesmo alvo (cross-target segue com a semântica antiga de
+ * assumir o posto novo); fonte ainda aberta ou ocupante mais antigo que o fim
+ * da fonte = takeover legítimo de ocupação velha/esquecida.
+ */
+export function shouldBlockTelegramContinuationTakeoverBySuccessor(params: {
+    isCrossTargetContinuation: boolean;
+    sourceEndedAt: Date | null;
+    conflictingStartedAt: Date;
+}) {
+    if (params.isCrossTargetContinuation || !params.sourceEndedAt) {
+        return false;
+    }
+
+    return params.conflictingStartedAt.getTime() >= params.sourceEndedAt.getTime() - TELEGRAM_SUCCESSOR_TAKEOVER_TOLERANCE_MS;
 }
 
 export function resolveTelegramForcedTakeoverAt(params: {
@@ -8834,6 +8859,16 @@ async function applyParsedEntry(params: {
                         throw error;
                     }
 
+                    // A rendido que manda "continua" no mesmo posto não pode derrubar
+                    // o próprio rendedor (risco P0.2 do estudo de continuidade).
+                    if (shouldBlockTelegramContinuationTakeoverBySuccessor({
+                        isCrossTargetContinuation,
+                        sourceEndedAt: continuityContext?.source ? resolveTelegramOperationalEndedAt(continuityContext.source) : null,
+                        conflictingStartedAt: conflictingOccupancy.startedAt,
+                    })) {
+                        throw new Error("Posto ja rendido por outro medico apos a sua saida — continuidade nao registrada. Se for engano, procure a chefia.");
+                    }
+
                     const takeoverAt = resolveTelegramForcedTakeoverAt({
                         eventAt,
                         conflictedStartedAt: conflictingOccupancy.startedAt,
@@ -8858,10 +8893,13 @@ async function applyParsedEntry(params: {
 
                 // Uma continuação nunca pode materializar uma janela já vencida:
                 // a varredura de auto-close fecharia a linha em segundos e o bot
-                // teria respondido sucesso (bug de 03/08/2026). Melhor errar alto.
+                // teria respondido sucesso (bug de 03/08/2026). Vale também para a
+                // continuidade IMPLÍCITA (rótulo P / troca SD↔SN sem a palavra
+                // "continua") — mesma classe de falha, mesmo erro alto (risco P1.6
+                // do estudo). Compara com eventAt, então chegada retroativa legítima
+                // não dispara.
                 if (
                     shouldUseContinuityContext
-                    && parsed.isContinuation
                     && regResult.scheduledEndAt
                     && regResult.scheduledEndAt.getTime() <= eventAt.getTime()
                 ) {
@@ -9119,6 +9157,15 @@ async function applyParsedEntry(params: {
                         throw error;
                     }
 
+                    // Paridade com a regulação: rendido não derruba o próprio rendedor.
+                    if (shouldBlockTelegramContinuationTakeoverBySuccessor({
+                        isCrossTargetContinuation,
+                        sourceEndedAt: continuityContext?.source ? resolveTelegramOperationalEndedAt(continuityContext.source) : null,
+                        conflictingStartedAt: conflictingOccupancy.startedAt,
+                    })) {
+                        throw new Error("Base ja rendida por outro medico apos a sua saida — continuidade nao registrada. Se for engano, procure a chefia.");
+                    }
+
                     const takeoverAt = resolveTelegramForcedTakeoverAt({
                         eventAt,
                         conflictedStartedAt: conflictingOccupancy.startedAt,
@@ -9142,10 +9189,10 @@ async function applyParsedEntry(params: {
                 if (intResult.autoReactivated) autoReactivated = true;
 
                 // Paridade com a regulação: janela já vencida = erro alto, nunca
-                // sucesso silencioso seguido de auto-close.
+                // sucesso silencioso seguido de auto-close — inclusive continuidade
+                // implícita (risco P1.6 do estudo).
                 if (
                     shouldUseContinuityContext
-                    && parsed.isContinuation
                     && intResult.scheduledEndAt
                     && intResult.scheduledEndAt.getTime() <= eventAt.getTime()
                 ) {
@@ -9158,6 +9205,18 @@ async function applyParsedEntry(params: {
                     await syncBankHoursByContinuityGroup(db, continuityContext.source.continuityGroupId);
                 }
             }
+        }
+    }
+
+    // Retardatário na divisão de refeições: chegada/continuação de regulação
+    // registrada com a sessão do turno JÁ montada entra no roster na hora, sem
+    // esperar a chefia editar o ramal nem "/jantar reiniciar" (incidente de
+    // 03/08/2026). Best-effort: falha aqui nunca derruba o registro da chegada.
+    if (parsed.sector === "REGULATION" && !parsed.isDeparture && occupancyId && parsed.baseCode) {
+        try {
+            await ensureArrivalInCurrentMealBreakSession({ ramal: parsed.baseCode });
+        } catch (error) {
+            console.error("[telegram] falha ao incluir retardatario na sessao de refeicoes", error);
         }
     }
 

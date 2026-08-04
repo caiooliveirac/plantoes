@@ -101,3 +101,38 @@ test("rótulo nulo cai no fallback quando não atravessa a virada", () => {
         continuationAt: sp("2026-08-03T21:00:00"),
     }), "SN");
 });
+
+// ─── Takeover forçado × sucessor (rendido que manda "continua") ──────────────
+import { shouldBlockTelegramContinuationTakeoverBySuccessor } from "@/modules/telegram/service";
+
+test("rendido que continua no MESMO posto não derruba o sucessor", () => {
+    assert.equal(shouldBlockTelegramContinuationTakeoverBySuccessor({
+        isCrossTargetContinuation: false,
+        sourceEndedAt: sp("2026-08-03T07:05:00"), // A rendido às 07:05
+        conflictingStartedAt: sp("2026-08-03T07:00:00"), // B chegou 07:00 (rendição com tolerância)
+    }), true);
+});
+
+test("ocupante velho/esquecido (bem anterior à saída da fonte) segue sofrendo takeover", () => {
+    assert.equal(shouldBlockTelegramContinuationTakeoverBySuccessor({
+        isCrossTargetContinuation: false,
+        sourceEndedAt: sp("2026-08-03T19:15:00"),
+        conflictingStartedAt: sp("2026-08-03T07:02:00"), // ativo desde de manhã, nunca saiu
+    }), false);
+});
+
+test("cross-target mantém a semântica antiga de takeover", () => {
+    assert.equal(shouldBlockTelegramContinuationTakeoverBySuccessor({
+        isCrossTargetContinuation: true,
+        sourceEndedAt: sp("2026-08-03T19:15:00"),
+        conflictingStartedAt: sp("2026-08-03T19:20:00"),
+    }), false);
+});
+
+test("fonte ainda aberta (sem endedAt) não bloqueia takeover", () => {
+    assert.equal(shouldBlockTelegramContinuationTakeoverBySuccessor({
+        isCrossTargetContinuation: false,
+        sourceEndedAt: null,
+        conflictingStartedAt: sp("2026-08-03T19:20:00"),
+    }), false);
+});

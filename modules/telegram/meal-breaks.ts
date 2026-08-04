@@ -90,6 +90,8 @@ export interface MealBreakSessionEvent {
     | "night_dinner_selected"
     | "night_assignment_corrected"
     | "eligibility_corrected"
+    | "latecomer_joined"
+    | "latecomer_rewind"
     | "undo_applied"
     | "session_completed";
     ramal?: string;
@@ -5019,6 +5021,214 @@ export async function shouldPrioritizeTelegramMealBreakReply(params: {
 export async function getCurrentOperationalMealBreakSession(referenceAt = new Date()) {
     const state = await resolveCurrentOperationalMealBreakState(referenceAt, resolveMealBreakModeFromReference(referenceAt));
     return state?.session ?? null;
+}
+
+type MealBreakRewindStageKey = "lunch" | "rest_choice" | "night_work" | "dinner_choice";
+
+export interface MealBreakLatecomerRewind {
+    stage: MealBreakRewindStageKey;
+    pivotRamal: string;
+    /** Horários lotados/bloqueados no momento em que o pivô escolheu. */
+    blockedSlots: string[];
+    /** Pivô + todos que escolheram depois dele na mesma etapa, na ordem original. */
+    clearedRamals: string[];
+}
+
+interface MealBreakRewindStageSpec {
+    key: MealBreakRewindStageKey;
+    pool: readonly string[];
+    oldCapacities: Record<string, number>;
+    newCapacities: Record<string, number>;
+    eventType: MealBreakSessionEvent["type"];
+}
+
+// Última escolha manual por ramal (re-escolhas e undo substituem), na ordem cronológica.
+function listMealBreakStageSelectionEvents(session: MealBreakSession, spec: MealBreakRewindStageSpec) {
+    const byRamal = new Map<string, MealBreakSessionEvent>();
+    for (const event of session.events) {
+        if (event.type !== spec.eventType || !event.ramal || !event.slot) {
+            continue;
+        }
+        if (!spec.pool.includes(event.slot)) {
+            continue;
+        }
+        byRamal.set(event.ramal, event);
+    }
+    return [...byRamal.values()].sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+}
+
+/**
+ * Ponto de rebobina quando um retardatário entra na sessão: repete as escolhas
+ * na ordem em que aconteceram, contra as capacidades ANTIGAS, e para na
+ * primeira escolha que NÃO foi livre — horário já lotado, ou COI bloqueado do
+ * horário do par mesmo havendo vaga. Desse ponto em diante todo mundo escolhe
+ * de novo, agora com as vagas recalculadas; quem escolheu com todas as opções
+ * abertas escolheu por vontade própria e é mantido (decisão do usuário,
+ * 04/08/2026: não dá para saber se quem escolheu sob restrição teria escolhido
+ * o mesmo — então volta até onde a escolha era entre tudo).
+ *
+ * Só rebobina etapas cuja capacidade de fato mudou com o novo total.
+ * ponytail: a reserva preventiva de COI (wouldCoiConflictAfterChoice) e o caso
+ * do jantar cuja capacidade só muda depois de o novato escolher 23:00 não são
+ * detectados — cobrir se aparecer na prática.
+ */
+export function resolveMealBreakLatecomerRewind(params: {
+    before: MealBreakSession;
+    after: MealBreakSession;
+}): MealBreakLatecomerRewind | null {
+    const { before, after } = params;
+    const specs: MealBreakRewindStageSpec[] = before.mode === "night"
+        ? [
+            { key: "night_work", pool: NIGHT_WORK_SLOTS, oldCapacities: before.nightWorkCapacities, newCapacities: after.nightWorkCapacities, eventType: "night_work_selected" },
+            { key: "dinner_choice", pool: DINNER_CHOICE_SLOTS, oldCapacities: before.dinnerChoiceCapacities, newCapacities: after.dinnerChoiceCapacities, eventType: "night_dinner_selected" },
+        ]
+        : [
+            { key: "lunch", pool: LUNCH_SLOTS, oldCapacities: before.lunchCapacities, newCapacities: after.lunchCapacities, eventType: "lunch_selected" },
+            { key: "rest_choice", pool: ["15:30", "16:30"], oldCapacities: before.restChoiceCapacities, newCapacities: after.restChoiceCapacities, eventType: "rest_selected" },
+        ];
+
+    const roleByRamal = new Map(before.roster.map((doctor) => [doctor.ramal, doctor.roleLabel]));
+
+    for (const spec of specs) {
+        const capacitiesChanged = spec.pool.some(
+            (slot) => (spec.oldCapacities[slot] ?? 0) !== (spec.newCapacities[slot] ?? 0),
+        );
+        if (!capacitiesChanged) {
+            continue;
+        }
+
+        const events = listMealBreakStageSelectionEvents(before, spec);
+        const remaining: Record<string, number> = { ...spec.oldCapacities };
+        const coiSlots = new Set<string>();
+
+        for (const [index, event] of events.entries()) {
+            const baseline = spec.pool.filter((slot) => (spec.oldCapacities[slot] ?? 0) > 0);
+            const fullSlots = baseline.filter((slot) => (remaining[slot] ?? 0) <= 0);
+            const isCoi = isSharedPositionRole(roleByRamal.get(event.ramal as string));
+            const coiBlockedSlots = isCoi
+                ? baseline.filter((slot) => coiSlots.has(slot) && (remaining[slot] ?? 0) > 0)
+                : [];
+            const blockedSlots = [...new Set([...fullSlots, ...coiBlockedSlots])];
+
+            if (blockedSlots.length > 0) {
+                return {
+                    stage: spec.key,
+                    pivotRamal: event.ramal as string,
+                    blockedSlots,
+                    clearedRamals: events.slice(index).map((entry) => entry.ramal as string),
+                };
+            }
+
+            remaining[event.slot as string] = (remaining[event.slot as string] ?? 0) - 1;
+            if (isCoi) {
+                coiSlots.add(event.slot as string);
+            }
+        }
+    }
+
+    return null;
+}
+
+// Limpa as escolhas do pivô em diante; a etapa dependente (descanso/janta dos
+// afetados) é refeita pelo sync. Escolhas anteriores ao pivô ficam intactas.
+export function applyMealBreakLatecomerRewind(session: MealBreakSession, rewind: MealBreakLatecomerRewind): MealBreakSession {
+    const next = {
+        ...session,
+        lunchAssignments: { ...session.lunchAssignments },
+        restAssignments: { ...session.restAssignments },
+        nightWorkAssignments: { ...session.nightWorkAssignments },
+        dinnerAssignments: { ...session.dinnerAssignments },
+    };
+    for (const ramal of rewind.clearedRamals) {
+        if (rewind.stage === "lunch") {
+            delete next.lunchAssignments[ramal];
+        } else if (rewind.stage === "rest_choice") {
+            delete next.restAssignments[ramal];
+        } else if (rewind.stage === "night_work") {
+            delete next.nightWorkAssignments[ramal];
+            delete next.dinnerAssignments[ramal];
+        } else {
+            delete next.dinnerAssignments[ramal];
+        }
+    }
+    return next;
+}
+
+/**
+ * Chegada/continuação declarada DEPOIS de a sessão de refeições já estar
+ * montada: inclui o médico no roster automaticamente (mesmo mecanismo da
+ * soberania do chefe), anuncia no grupo o novo total, e rebobina a divisão até
+ * a última escolha 100% livre (ver resolveMealBreakLatecomerRewind) — quem
+ * escolheu sob lotação/bloqueio ganha a escolha de novo com as vagas novas.
+ * Best-effort: retorna false quando não há sessão, o ramal já está no roster ou
+ * o médico não é elegível (PIAM/NUCLEO/outro turno) — nunca lança para o caller.
+ */
+export async function ensureArrivalInCurrentMealBreakSession(params: {
+    ramal: string;
+    referenceAt?: Date;
+}): Promise<boolean> {
+    const referenceAt = params.referenceAt ?? new Date();
+    const mode = resolveMealBreakModeFromReference(referenceAt);
+    const state = await resolveCurrentOperationalMealBreakState(referenceAt, mode);
+    if (!state?.session || !state.chatId) {
+        return false;
+    }
+
+    const ramal = normalizeRamal(params.ramal);
+    if (findDoctor(state.session, ramal)) {
+        return false;
+    }
+
+    const ensured = await ensureMealBreakDoctorInSession({
+        session: state.session,
+        ramal,
+        mode,
+        referenceAt,
+    });
+    if (!ensured || ensured === state.session) {
+        return false;
+    }
+
+    const withJoinEvent = withEvent(ensured, {
+        type: "latecomer_joined",
+        actorTelegramId: null,
+        ramal,
+    }, referenceAt);
+    const sync = mode === "night" ? syncNightSessionState : syncDaySessionState;
+    const syncedNext = sync(withJoinEvent);
+
+    const rewind = resolveMealBreakLatecomerRewind({ before: state.session, after: syncedNext });
+    const final = rewind
+        ? sync(withEvent(applyMealBreakLatecomerRewind(withJoinEvent, rewind), {
+            type: "latecomer_rewind",
+            actorTelegramId: null,
+            ramal: rewind.pivotRamal,
+        }, referenceAt))
+        : syncedNext;
+
+    await saveMealBreakSession(state.chatId, final);
+
+    const newcomer = final.roster.find((doctor) => doctor.ramal === ramal);
+    const mealLabel = mode === "night" ? "jantar" : "almoço";
+    const messages: string[] = [
+        `🍽️ *${newcomer?.name ?? ramal}* (${ramal}) entrou na divisão do ${mealLabel} — agora ${final.roster.length} plantonistas; as vagas por horário foram recalculadas.`,
+    ];
+    if (rewind) {
+        const clearedList = rewind.clearedRamals.map((cleared) => renderDoctorCompactSummary(final, cleared)).join(", ");
+        messages.push(
+            `⏪ Com mais um para dividir, voltei a divisão até ${renderDoctorCompactSummary(final, rewind.pivotRamal)}: quando escolheu, *${rewind.blockedSlots.join("/")}* já não tinha vaga livre. Refazem a escolha (agora com todas as opções): ${clearedList}. Quem escolheu com tudo livre foi mantido.`,
+        );
+    }
+    if (final.stage !== "completed") {
+        messages.push(buildCurrentPrompt(final));
+    }
+    await sendTelegramMealBreakMessages({
+        chatId: state.chatId,
+        messages,
+        replyMarkup: buildMealBreakStageKeyboard(final) ?? undefined,
+        options: MEAL_BREAK_FORMAT_OPTIONS,
+    });
+    return true;
 }
 
 export async function getCurrentMealBreakEligibilityOverrides(referenceAt = new Date()) {
