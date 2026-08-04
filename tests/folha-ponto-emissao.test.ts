@@ -54,3 +54,39 @@ test("local e data sai por extenso, com o mês da emissão (não o do relatório
     assert.equal(localDataDaFolha(2026, 7, "2026-07-15"), "Salvador, 3 de agosto de 2026");
     assert.equal(localDataDaFolha(2026, 12, "2026-12-31"), "Salvador, 4 de janeiro de 2027");
 });
+
+// --- linhas do relatório de atividades ---
+
+import { MIN_LINHAS_RELATORIO, montarLinhasImpressas, montarRelatorio } from "@/lib/folha-ponto/montar";
+import type { Plantao } from "@/lib/folha-ponto/types";
+
+function plantoes(qtd: number): Plantao[] {
+    return Array.from({ length: qtd }, (_, i) => ({
+        dia: (i % 31) + 1,
+        turno: i < 31 ? ("SD" as const) : ("SN" as const),
+        baseNomeCurto: "CRU",
+    }));
+}
+
+test("relatório não corta atividade de quem dá muitos plantões", () => {
+    // O comportamento antigo cravava 25 linhas: quem passava disso tinha
+    // atividade sumindo do relatório assinado.
+    const linhas = montarRelatorio(plantoes(34), 7);
+    assert.equal(linhas.length, 34);
+    assert.equal(montarLinhasImpressas(linhas).length, 34);
+    assert.ok(montarLinhasImpressas(linhas).every((linha) => linha !== null));
+});
+
+test("relatório não inventa linha vazia além do mínimo", () => {
+    // As linhas vazias sobrando é que empurravam a folha para uma segunda página.
+    for (const qtd of [10, 15, 20, 25, 31]) {
+        assert.equal(montarLinhasImpressas(montarRelatorio(plantoes(qtd), 7)).length, qtd);
+    }
+});
+
+test("poucos plantões ainda rendem uma tabela com cara de formulário", () => {
+    const impressas = montarLinhasImpressas(montarRelatorio(plantoes(3), 7));
+    assert.equal(impressas.length, MIN_LINHAS_RELATORIO);
+    assert.equal(impressas.filter((linha) => linha !== null).length, 3);
+    assert.ok(impressas.slice(3).every((linha) => linha === null));
+});

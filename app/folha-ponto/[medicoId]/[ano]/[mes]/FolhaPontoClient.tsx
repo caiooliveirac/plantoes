@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { montarLinhasFrequencia, montarRelatorio } from "@/lib/folha-ponto/montar";
+import { montarLinhasFrequencia, montarLinhasImpressas, montarRelatorio } from "@/lib/folha-ponto/montar";
 import type { DadosFolhaPonto } from "@/lib/folha-ponto/types";
 import prefeituraLogo from "@/components/prefeitura-de-salvador.jpg";
 import samuLogo from "@/components/samu192.png";
@@ -128,7 +128,9 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
         setCampos((prev) => (prev[key] === valor ? prev : { ...prev, [key]: valor }));
     }
 
-    const linhasRelatorioFixas = Array.from({ length: 25 }, (_, i) => linhasRelatorio[i] ?? null);
+    // Uma linha por atividade (ver montarLinhasImpressas): sem completar até um
+    // número fixo, que era o que empurrava a página para uma segunda folha.
+    const linhasRelatorioImpressas = montarLinhasImpressas(linhasRelatorio);
 
     return (
         <div className="folha-ponto-root">
@@ -292,7 +294,7 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
                         </tr>
                     </thead>
                     <tbody>
-                        {linhasRelatorioFixas.map((linha, idx) => (
+                        {linhasRelatorioImpressas.map((linha, idx) => (
                             <tr key={idx}>
                                 <td className="fp-dia">{linha?.data ?? ""}</td>
                                 <td className="fp-atividade">{linha?.atividade ?? ""}</td>
