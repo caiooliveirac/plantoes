@@ -5339,13 +5339,12 @@ export function parseMealBreakDaySummary(text: string): MealBreakDaySummaryParse
         }
 
         const normalized = normalizeFreeText(line);
-        if (normalized.includes("ALMOCO") && !normalized.startsWith("•") && !normalized.includes("FORA DO")) {
-            section = "lunch";
-            slot = null;
-            continue;
-        }
-        if (normalized.includes("DESCANSO") && !normalized.startsWith("•") && !normalized.includes("FORA DO")) {
-            section = "rest";
+
+        // Rodapé ANTES dos cabeçalhos de seção: a legenda fala "descanso
+        // automático de quem almoçou 13:30" e cairia na checagem de seção,
+        // reabrindo o descanso no fim do balão.
+        if (normalized.includes("CHEFIA") || line.startsWith("ℹ️") || normalized.startsWith("SE PRECISAR")) {
+            section = null;
             slot = null;
             continue;
         }
@@ -5355,9 +5354,14 @@ export function parseMealBreakDaySummary(text: string): MealBreakDaySummaryParse
             slot = null;
             continue;
         }
-        // Rodapé: chefia (a critério), legenda, dica de reiniciar.
-        if (normalized.includes("CHEFIA") || line.startsWith("ℹ️") || normalized.startsWith("SE PRECISAR")) {
-            section = null;
+        // "• Almoço a critério" (chefia) não é cabeçalho: por isso o guard do "•".
+        if (normalized.includes("ALMOCO") && !normalized.startsWith("•")) {
+            section = "lunch";
+            slot = null;
+            continue;
+        }
+        if (normalized.includes("DESCANSO") && !normalized.startsWith("•")) {
+            section = "rest";
             slot = null;
             continue;
         }
