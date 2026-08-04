@@ -5021,6 +5021,46 @@ export async function getCurrentOperationalMealBreakSession(referenceAt = new Da
     return state?.session ?? null;
 }
 
+/**
+ * Chegada/continuação declarada DEPOIS de a sessão de refeições já estar
+ * montada: inclui o médico no roster automaticamente, pelo mesmo mecanismo da
+ * soberania do chefe (ensureMealBreakDoctorInSession). Sem isso, o retardatário
+ * ficava fora da divisão do jantar até a chefia editar o ramal ou mandar
+ * "/jantar reiniciar" (metade do incidente de 03/08/2026). Best-effort e
+ * silencioso: retorna false quando não há sessão, o ramal já está no roster ou
+ * o médico não é elegível (PIAM/NUCLEO/outro turno) — nunca lança para o caller.
+ */
+export async function ensureArrivalInCurrentMealBreakSession(params: {
+    ramal: string;
+    referenceAt?: Date;
+}): Promise<boolean> {
+    const referenceAt = params.referenceAt ?? new Date();
+    const mode = resolveMealBreakModeFromReference(referenceAt);
+    const state = await resolveCurrentOperationalMealBreakState(referenceAt, mode);
+    if (!state?.session || !state.chatId) {
+        return false;
+    }
+
+    const ramal = normalizeRamal(params.ramal);
+    if (findDoctor(state.session, ramal)) {
+        return false;
+    }
+
+    const ensured = await ensureMealBreakDoctorInSession({
+        session: state.session,
+        ramal,
+        mode,
+        referenceAt,
+    });
+    if (!ensured || ensured === state.session) {
+        return false;
+    }
+
+    const synced = mode === "night" ? syncNightSessionState(ensured) : syncDaySessionState(ensured);
+    await saveMealBreakSession(state.chatId, synced);
+    return true;
+}
+
 export async function getCurrentMealBreakEligibilityOverrides(referenceAt = new Date()) {
     const mode = resolveMealBreakModeFromReference(referenceAt);
     const operationalDate = formatOperationalDate(referenceAt);
