@@ -1,0 +1,1757 @@
+{
+  "_comentario": "Abas de MAIO/2026 da planilha 2026 CHAMAMENTO 004 (Google Drive, versão de 2026-07-31T20:07:22Z), extraídas por scripts/repair-maio-extrato.ts (readMayTabs). Um registro por linha de médico: saldo no início de maio (col 3), plantões/valores de semana e fds (cols 39-42), TOTAL do mês (col 43) e saldo no fim de maio (col 45). Serve de entrada para npm run saldo:repair-maio -- --data — as validações de idoneidade (cadeia, razão, ciclo) rodam na hora do reparo.",
+  "rows": [
+    {
+      "rawName": "ACACIO JUNIO DE ALMEIDA",
+      "contractNumbers": [
+        "190/2025"
+      ],
+      "startBalance": 11931.840000000002,
+      "monthTotal": null,
+      "closingBalance": 11931.84,
+      "weekdayShifts": null,
+      "weekendShifts": null,
+      "weekdayAmount": null,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "ALESSANDRA BARBOZA RESENDE MARTINEZ",
+      "contractNumbers": [
+        "752/2024"
+      ],
+      "startBalance": 103857.275,
+      "monthTotal": 11962.495,
+      "closingBalance": 91894.78,
+      "weekdayShifts": 8.5,
+      "weekendShifts": 1,
+      "weekdayAmount": 10581.395,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "ALEXANDRE CURI QUINTEIRO",
+      "contractNumbers": [
+        "111/2026"
+      ],
+      "startBalance": 78288.125,
+      "monthTotal": 10776.34,
+      "closingBalance": 67511.785,
+      "weekdayShifts": 2,
+      "weekendShifts": 6,
+      "weekdayAmount": 2489.74,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "ALEXANDRE DE CAMPOS FARIAS",
+      "contractNumbers": [
+        "112/2025"
+      ],
+      "startBalance": 132566.8,
+      "monthTotal": 11748.75,
+      "closingBalance": 120818.05,
+      "weekdayShifts": 5,
+      "weekendShifts": 4,
+      "weekdayAmount": 6224.35,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "ALINE ARAUJO DE CARVALHO",
+      "contractNumbers": [
+        "577/2025"
+      ],
+      "startBalance": 99829.09,
+      "monthTotal": 10503.88,
+      "closingBalance": 89325.21,
+      "weekdayShifts": 4,
+      "weekendShifts": 4,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "ANA BEATRIZ D'ALMEIDA SILVA",
+      "contractNumbers": [
+        "471/2024",
+        "455/2025"
+      ],
+      "startBalance": 189487.79,
+      "monthTotal": 12030.61,
+      "closingBalance": 177457.18,
+      "weekdayShifts": 8,
+      "weekendShifts": 1.5,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 2071.65
+    },
+    {
+      "rawName": "ANA BEATRIZ NUNES BOMFIM",
+      "contractNumbers": [
+        "615/2024"
+      ],
+      "startBalance": 125781.04500000001,
+      "monthTotal": 11476.29,
+      "closingBalance": 114304.755,
+      "weekdayShifts": 7,
+      "weekendShifts": 2,
+      "weekdayAmount": 8714.09,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "ANA LUIZA  ANDRADE ALVES + UPA",
+      "contractNumbers": [
+        "144/2025"
+      ],
+      "startBalance": 271165.32,
+      "monthTotal": 16183.31,
+      "closingBalance": 254982.01,
+      "weekdayShifts": 13,
+      "weekendShifts": 0,
+      "weekdayAmount": 16183.31,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "ANA PAULA PINHEIRO RODRIGUES DE MATTOS",
+      "contractNumbers": [
+        "615/2025"
+      ],
+      "startBalance": 215550.22999999998,
+      "monthTotal": 6360.58,
+      "closingBalance": 209189.65,
+      "weekdayShifts": 4,
+      "weekendShifts": 1,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "ANANDA COUTO DE ANDRADE",
+      "contractNumbers": [
+        "50/2025"
+      ],
+      "startBalance": 277718.52999999997,
+      "monthTotal": 12021.21,
+      "closingBalance": 265697.32,
+      "weekdayShifts": 3,
+      "weekendShifts": 6,
+      "weekdayAmount": 3734.61,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "ANDRE PASCHOAL VIANA",
+      "contractNumbers": [
+        "597/2025"
+      ],
+      "startBalance": 115176.22,
+      "monthTotal": 11048.8,
+      "closingBalance": 104127.42,
+      "weekdayShifts": 0,
+      "weekendShifts": 8,
+      "weekdayAmount": null,
+      "weekendAmount": 11048.8
+    },
+    {
+      "rawName": "ANDRÉ VICTOR CARDOSO CODECEIRA",
+      "contractNumbers": [
+        "061/2026"
+      ],
+      "startBalance": 150948.59000000003,
+      "monthTotal": 12293.67,
+      "closingBalance": 138654.92,
+      "weekdayShifts": 1,
+      "weekendShifts": 8,
+      "weekdayAmount": 1244.87,
+      "weekendAmount": 11048.8
+    },
+    {
+      "rawName": "ANGELO VINICIUS ALMEIDA SPOSITO",
+      "contractNumbers": [
+        "837/2024"
+      ],
+      "startBalance": 114574.89999999998,
+      "monthTotal": 7469.22,
+      "closingBalance": 107105.68,
+      "weekdayShifts": 6,
+      "weekendShifts": 0,
+      "weekdayAmount": 7469.22,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "BEATRIZ PAMPONET BARRETO",
+      "contractNumbers": [
+        "576/2025"
+      ],
+      "startBalance": 93527.23000000003,
+      "monthTotal": 10776.34,
+      "closingBalance": 82750.89,
+      "weekdayShifts": 2,
+      "weekendShifts": 6,
+      "weekdayAmount": 2489.74,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "BRIANG AARON MANUEL SEGUIR IBARRA    (-12h)",
+      "contractNumbers": [
+        "046/2025"
+      ],
+      "startBalance": 283224.13,
+      "monthTotal": 17273.15,
+      "closingBalance": 265950.98,
+      "weekdayShifts": 5,
+      "weekendShifts": 8,
+      "weekdayAmount": 6224.35,
+      "weekendAmount": 11048.8
+    },
+    {
+      "rawName": "BRUNA MICHELI ALVES",
+      "contractNumbers": [
+        "825/2024"
+      ],
+      "startBalance": 249321.38000000003,
+      "monthTotal": 15210.9,
+      "closingBalance": 234110.48,
+      "weekdayShifts": 10,
+      "weekendShifts": 2,
+      "weekdayAmount": 12448.7,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "BRUNO MOTA (PSIQUIATRIA)",
+      "contractNumbers": [
+        "633/2025"
+      ],
+      "startBalance": null,
+      "monthTotal": 1411.47,
+      "closingBalance": -1411.47,
+      "weekdayShifts": 0,
+      "weekendShifts": 1,
+      "weekdayAmount": null,
+      "weekendAmount": 1411.47
+    },
+    {
+      "rawName": "BRUNO SANTANA ALENCAR",
+      "contractNumbers": [
+        "048/2026"
+      ],
+      "startBalance": 149703.72,
+      "monthTotal": 14374.72,
+      "closingBalance": 135329,
+      "weekdayShifts": 6,
+      "weekendShifts": 5,
+      "weekdayAmount": 7469.22,
+      "weekendAmount": 6905.5
+    },
+    {
+      "rawName": "CAIO OLIVEIRA DO CARMO",
+      "contractNumbers": [
+        "903/2024"
+      ],
+      "startBalance": 210514.35000000003,
+      "monthTotal": 24878.6,
+      "closingBalance": 185635.75,
+      "weekdayShifts": 10,
+      "weekendShifts": 9,
+      "weekdayAmount": 12448.7,
+      "weekendAmount": 12429.9
+    },
+    {
+      "rawName": "CAMILA RIBEIRO COUTINHO DE JESUS",
+      "contractNumbers": [
+        "119/2025"
+      ],
+      "startBalance": 311973.57,
+      "monthTotal": 8014.14,
+      "closingBalance": 303959.43,
+      "weekdayShifts": 2,
+      "weekendShifts": 4,
+      "weekdayAmount": 2489.74,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "CAROLINA RESTREPO VILLAFUERTE",
+      "contractNumbers": [
+        "043/2026"
+      ],
+      "startBalance": 141825.81,
+      "monthTotal": 16164.51,
+      "closingBalance": 125661.3,
+      "weekdayShifts": 3,
+      "weekendShifts": 9,
+      "weekdayAmount": 3734.61,
+      "weekendAmount": 12429.9
+    },
+    {
+      "rawName": "CAROLINA TANAJURA MONTEIRO",
+      "contractNumbers": [
+        "733/2024"
+      ],
+      "startBalance": 94932.355,
+      "monthTotal": 16319.54,
+      "closingBalance": 78612.815,
+      "weekdayShifts": 12,
+      "weekendShifts": 1,
+      "weekdayAmount": 14938.44,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "CAROLINE LUANE RABELO DA SILVA",
+      "contractNumbers": [
+        "753/2024"
+      ],
+      "startBalance": 334700.55,
+      "monthTotal": 24061.22,
+      "closingBalance": 310639.33,
+      "weekdayShifts": 16,
+      "weekendShifts": 3,
+      "weekdayAmount": 19917.92,
+      "weekendAmount": 4143.3
+    },
+    {
+      "rawName": "CLAUDIO HENRIQUE CAVALCANTI TEIXEIRA (psiquiatria)",
+      "contractNumbers": [
+        "562/2025"
+      ],
+      "startBalance": 150891.57,
+      "monthTotal": 13444.8,
+      "closingBalance": 137446.77,
+      "weekdayShifts": 6,
+      "weekendShifts": 4,
+      "weekdayAmount": 7798.92,
+      "weekendAmount": 5645.88
+    },
+    {
+      "rawName": "DANIEL DE AZEVEDO CASTELLO BRANCO",
+      "contractNumbers": [
+        "569/2024"
+      ],
+      "startBalance": 122090.97999999998,
+      "monthTotal": 4979.48,
+      "closingBalance": 117111.5,
+      "weekdayShifts": 4,
+      "weekendShifts": 0,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "DAVID GOES DE OLIVEIRA MENEZES",
+      "contractNumbers": [
+        "399/2025"
+      ],
+      "startBalance": 45773.560000000005,
+      "monthTotal": 16028.28,
+      "closingBalance": 29745.28,
+      "weekdayShifts": 4,
+      "weekendShifts": 8,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 11048.8
+    },
+    {
+      "rawName": "EMILY THAYS JARDIM SANTOS",
+      "contractNumbers": [
+        "793/2024"
+      ],
+      "startBalance": 156818.2,
+      "monthTotal": 32484.05,
+      "closingBalance": 124334.15,
+      "weekdayShifts": 15,
+      "weekendShifts": 10,
+      "weekdayAmount": 18673.05,
+      "weekendAmount": 13811
+    },
+    {
+      "rawName": "EMMANUELLE GOUVEIA OLIVEIRA  (-12H)",
+      "contractNumbers": [
+        "648/2024"
+      ],
+      "startBalance": 87676.28000000001,
+      "monthTotal": 18381.79,
+      "closingBalance": 69294.49,
+      "weekdayShifts": 7,
+      "weekendShifts": 7,
+      "weekdayAmount": 8714.09,
+      "weekendAmount": 9667.7
+    },
+    {
+      "rawName": "FELIPE FIGUEIREDO DE CARVALHO",
+      "contractNumbers": [
+        "786/2024"
+      ],
+      "startBalance": 199348.12000000002,
+      "monthTotal": 20871.53,
+      "closingBalance": 178476.59,
+      "weekdayShifts": 9,
+      "weekendShifts": 7,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": 9667.7
+    },
+    {
+      "rawName": "FELIPE RODRIGUES SANTOS CARNEIRO",
+      "contractNumbers": [
+        "567/2024"
+      ],
+      "startBalance": 86469.01000000001,
+      "monthTotal": 18245.56,
+      "closingBalance": 68223.45,
+      "weekdayShifts": 8,
+      "weekendShifts": 6,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "FRANCESCO LATTARULO",
+      "contractNumbers": [
+        "518/2025"
+      ],
+      "startBalance": 64932.815,
+      "monthTotal": 11884.98,
+      "closingBalance": 53047.835,
+      "weekdayShifts": 4,
+      "weekendShifts": 5,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 6905.5
+    },
+    {
+      "rawName": "FRANCISCO ISENSEE DE MACEDO",
+      "contractNumbers": [
+        "797/2024"
+      ],
+      "startBalance": 169156.54999999996,
+      "monthTotal": 16028.28,
+      "closingBalance": 153128.27,
+      "weekdayShifts": 4,
+      "weekendShifts": 8,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 11048.8
+    },
+    {
+      "rawName": "FRANCISCO JOSÉ LIBERATO DE MATTOS CARVALHO NETO (+UPA)",
+      "contractNumbers": [
+        "13/2025"
+      ],
+      "startBalance": 223038.25,
+      "monthTotal": 6905.5,
+      "closingBalance": 216132.75,
+      "weekdayShifts": 0,
+      "weekendShifts": 5,
+      "weekdayAmount": null,
+      "weekendAmount": 6905.5
+    },
+    {
+      "rawName": "GABRIEL CARVALHO MONTEIRO",
+      "contractNumbers": [
+        "566/2025"
+      ],
+      "startBalance": 100218.98,
+      "monthTotal": 9259.01,
+      "closingBalance": 90959.97,
+      "weekdayShifts": 3,
+      "weekendShifts": 4,
+      "weekdayAmount": 3734.61,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "GABRIEL MIRANDA DE SOUZA (Rodrigo Argolo)",
+      "contractNumbers": [
+        "571/2024"
+      ],
+      "startBalance": 124886.15000000001,
+      "monthTotal": 12721.16,
+      "closingBalance": 112164.99,
+      "weekdayShifts": 8,
+      "weekendShifts": 2,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "GABRIEL SAPUCAIA DA SILVA QUEIROZ",
+      "contractNumbers": [
+        "99/2025"
+      ],
+      "startBalance": 291801.99,
+      "monthTotal": 10503.88,
+      "closingBalance": 281298.11,
+      "weekdayShifts": 4,
+      "weekendShifts": 4,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "GABRIEL VITOR DO AMOR DIVINO DE JESUS",
+      "contractNumbers": [
+        "093/2026"
+      ],
+      "startBalance": -9958.96,
+      "monthTotal": 17409.38,
+      "closingBalance": -27368.34,
+      "weekdayShifts": 4,
+      "weekendShifts": 9,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 12429.9
+    },
+    {
+      "rawName": "GERARDSON MACEDO E SILVA E SOUZA",
+      "contractNumbers": [
+        "543/2025"
+      ],
+      "startBalance": 193710.92000000004,
+      "monthTotal": 21299.02,
+      "closingBalance": 172411.9,
+      "weekdayShifts": 16,
+      "weekendShifts": 1,
+      "weekdayAmount": 19917.92,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "GULHERME RABELO MOTA",
+      "contractNumbers": [
+        "583/2025"
+      ],
+      "startBalance": 104808.57,
+      "monthTotal": 18790.48,
+      "closingBalance": 86018.09,
+      "weekdayShifts": 4,
+      "weekendShifts": 10,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 13811
+    },
+    {
+      "rawName": "GUSTAVO BAZIN VIEIRA MAUCHLE",
+      "contractNumbers": [
+        "595/2024"
+      ],
+      "startBalance": 33169.83,
+      "monthTotal": 10503.88,
+      "closingBalance": 22665.95,
+      "weekdayShifts": 4,
+      "weekendShifts": 4,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "GUSTAVO FERNANDES VIEIRA",
+      "contractNumbers": [
+        "158/2026"
+      ],
+      "startBalance": 165732,
+      "monthTotal": 6224.35,
+      "closingBalance": 159507.65,
+      "weekdayShifts": 5,
+      "weekendShifts": 0,
+      "weekdayAmount": 6224.35,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "HELMIRA RAFAELA DA SILVA MENOITA",
+      "contractNumbers": [
+        "543/2024"
+      ],
+      "startBalance": 109250.07500000001,
+      "monthTotal": 16183.31,
+      "closingBalance": 93066.765,
+      "weekdayShifts": 13,
+      "weekendShifts": 0,
+      "weekdayAmount": 16183.31,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "IGOR NOGUEIRA VELOSO CARVALHO",
+      "contractNumbers": [
+        "848/2024"
+      ],
+      "startBalance": 129222.08,
+      "monthTotal": 10095.19,
+      "closingBalance": 119126.89,
+      "weekdayShifts": 7,
+      "weekendShifts": 1,
+      "weekdayAmount": 8714.09,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "INDIRA APARECIDA PARRON COSTA",
+      "contractNumbers": [
+        "35/2025"
+      ],
+      "startBalance": 122744.06999999999,
+      "monthTotal": 8986.55,
+      "closingBalance": 113757.52,
+      "weekdayShifts": 5,
+      "weekendShifts": 2,
+      "weekdayAmount": 6224.35,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "INGRID DÓREA BANDEIRA",
+      "contractNumbers": [
+        "734/2024"
+      ],
+      "startBalance": 114593.7,
+      "monthTotal": 1381.1,
+      "closingBalance": 113212.6,
+      "weekdayShifts": 0,
+      "weekendShifts": 1,
+      "weekdayAmount": null,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "ISABELA BEATRIZ APARICIO ARANHA",
+      "contractNumbers": [
+        "827/2024"
+      ],
+      "startBalance": 97264.15,
+      "monthTotal": 11340.06,
+      "closingBalance": 85924.09,
+      "weekdayShifts": 8,
+      "weekendShifts": 1,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "ISADHORA SOUZA RIBEIRO SANTOS",
+      "contractNumbers": [
+        "54/2025"
+      ],
+      "startBalance": 280062.64,
+      "monthTotal": 22943.18,
+      "closingBalance": 257119.46,
+      "weekdayShifts": 9,
+      "weekendShifts": 8.5,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": 11739.35
+    },
+    {
+      "rawName": "IKARO MACENA FRITELLA",
+      "contractNumbers": [
+        "826/2024"
+      ],
+      "startBalance": 312128.60000000003,
+      "monthTotal": 5388.17,
+      "closingBalance": 306740.43,
+      "weekdayShifts": 1,
+      "weekendShifts": 3,
+      "weekdayAmount": 1244.87,
+      "weekendAmount": 4143.3
+    },
+    {
+      "rawName": "JOÃO MARCOS OLIVEIRA MOURA SANTANA",
+      "contractNumbers": [
+        "580/2024"
+      ],
+      "startBalance": 64507.63999999999,
+      "monthTotal": 16183.31,
+      "closingBalance": 48324.33,
+      "weekdayShifts": 13,
+      "weekendShifts": 0,
+      "weekdayAmount": 16183.31,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "JOÃO PEDRO ALMEIDA DE SOUZA     +UPA",
+      "contractNumbers": [
+        "553/2024"
+      ],
+      "startBalance": 265306.82999999996,
+      "monthTotal": 7469.22,
+      "closingBalance": 257837.61,
+      "weekdayShifts": 6,
+      "weekendShifts": 0,
+      "weekdayAmount": 7469.22,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "JOÃO PEDRO DA SILVA MOREIRA (PSIQUIATRIA)",
+      "contractNumbers": [
+        "807/2024"
+      ],
+      "startBalance": 325403.99999999994,
+      "monthTotal": 2599.64,
+      "closingBalance": 322804.36,
+      "weekdayShifts": 2,
+      "weekendShifts": 0,
+      "weekdayAmount": 2599.64,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "JOÃO PEDRO MIGUEZ PINTO",
+      "contractNumbers": [
+        "219/2025"
+      ],
+      "startBalance": -11466.89,
+      "monthTotal": 13811,
+      "closingBalance": -25277.89,
+      "weekdayShifts": 0,
+      "weekendShifts": 10,
+      "weekdayAmount": null,
+      "weekendAmount": 13811
+    },
+    {
+      "rawName": "JOÃO VICTOR SIMOES CASTRO PERRONE  (+12H)",
+      "contractNumbers": [
+        "842/2024"
+      ],
+      "startBalance": 75690.355,
+      "monthTotal": 9958.96,
+      "closingBalance": 65731.395,
+      "weekdayShifts": 8,
+      "weekendShifts": 0,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "JOILSON DE GUSMÃO GUIMARÃES",
+      "contractNumbers": [
+        "895/2024"
+      ],
+      "startBalance": 187618.17000000004,
+      "monthTotal": 9958.96,
+      "closingBalance": 177659.21,
+      "weekdayShifts": 8,
+      "weekendShifts": 0,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "JOSÉ ANTONIO MARINI JUNIOR",
+      "contractNumbers": [
+        "794/2024"
+      ],
+      "startBalance": 225142.73,
+      "monthTotal": 18323.075,
+      "closingBalance": 206819.655,
+      "weekdayShifts": 12.5,
+      "weekendShifts": 2,
+      "weekdayAmount": 15560.875,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "KAREN SEIFARTH MIRANDA",
+      "contractNumbers": [
+        "518/2024"
+      ],
+      "startBalance": -69571.85999999999,
+      "monthTotal": 20190.38,
+      "closingBalance": -89762.24,
+      "weekdayShifts": 14,
+      "weekendShifts": 2,
+      "weekdayAmount": 17428.18,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "KARLA SANTOS PINTO     (-12H)",
+      "contractNumbers": [
+        "99/2025"
+      ],
+      "startBalance": 286958.73999999993,
+      "monthTotal": 11476.29,
+      "closingBalance": 275482.45,
+      "weekdayShifts": 7,
+      "weekendShifts": 2,
+      "weekdayAmount": 8714.09,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "KETHERYNNE CABRAL FERREIRA DE OLIVEIRA (psiquiatria)",
+      "contractNumbers": [
+        "55/2025"
+      ],
+      "startBalance": -10510.21,
+      "monthTotal": 8245.52,
+      "closingBalance": -18755.73,
+      "weekdayShifts": 2,
+      "weekendShifts": 4,
+      "weekdayAmount": 2599.64,
+      "weekendAmount": 5645.88
+    },
+    {
+      "rawName": "KEMYLLA MACHADO SOUZA",
+      "contractNumbers": [
+        "812/2024"
+      ],
+      "startBalance": 88061.54000000001,
+      "monthTotal": 10503.88,
+      "closingBalance": 77557.66,
+      "weekdayShifts": 4,
+      "weekendShifts": 4,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "LAISSE OLIVEIRA BARBOSA DE MELO",
+      "contractNumbers": [
+        "026/2026"
+      ],
+      "startBalance": 100063.95,
+      "monthTotal": 19899.12,
+      "closingBalance": 80164.83,
+      "weekdayShifts": 6,
+      "weekendShifts": 9,
+      "weekdayAmount": 7469.22,
+      "weekendAmount": 12429.9
+    },
+    {
+      "rawName": "LARISSA ROCHA ATAYDE MOREIRA",
+      "contractNumbers": [
+        "023/2026"
+      ],
+      "startBalance": 124688.88999999998,
+      "monthTotal": 11748.75,
+      "closingBalance": 112940.14,
+      "weekdayShifts": 5,
+      "weekendShifts": 4,
+      "weekdayAmount": 6224.35,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "LEO MARINS MORAIS",
+      "contractNumbers": [
+        "549/2024"
+      ],
+      "startBalance": 30313.63000000002,
+      "monthTotal": 28049.49,
+      "closingBalance": 2264.14,
+      "weekdayShifts": 7,
+      "weekendShifts": 14,
+      "weekdayAmount": 8714.09,
+      "weekendAmount": 19335.4
+    },
+    {
+      "rawName": "LEONARDO COPQUE MAGALHÃES",
+      "contractNumbers": [
+        "247/2025"
+      ],
+      "startBalance": -33141.77,
+      "monthTotal": null,
+      "closingBalance": -33141.77,
+      "weekdayShifts": null,
+      "weekendShifts": null,
+      "weekdayAmount": null,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "LEONARDO PRADO FABEM",
+      "contractNumbers": [
+        "110/2026"
+      ],
+      "startBalance": 75922.9,
+      "monthTotal": 18381.79,
+      "closingBalance": 57541.11,
+      "weekdayShifts": 7,
+      "weekendShifts": 7,
+      "weekdayAmount": 8714.09,
+      "weekendAmount": 9667.7
+    },
+    {
+      "rawName": "LEONARDO SANTANA CABANELAS RIBEIRO",
+      "contractNumbers": [
+        "80/2026"
+      ],
+      "startBalance": 151357.28,
+      "monthTotal": 14102.26,
+      "closingBalance": 137255.02,
+      "weekdayShifts": 8,
+      "weekendShifts": 3,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 4143.3
+    },
+    {
+      "rawName": "LILLIAN BARROS ARAUJO DOS SANTOS   (-12H)",
+      "contractNumbers": [
+        "365/2025"
+      ],
+      "startBalance": 105783.30000000002,
+      "monthTotal": 13071.135,
+      "closingBalance": 92712.165,
+      "weekdayShifts": 10.5,
+      "weekendShifts": null,
+      "weekdayAmount": 13071.135,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "LIVIA ALVES ANDRADE",
+      "contractNumbers": [
+        "824/2024"
+      ],
+      "startBalance": 94985.84000000003,
+      "monthTotal": 10776.34,
+      "closingBalance": 84209.5,
+      "weekdayShifts": 2,
+      "weekendShifts": 6,
+      "weekdayAmount": 2489.74,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "LUAN SAMPAIO EVANGELISTA SANTOS (psiquiatria)",
+      "contractNumbers": [
+        "612/2025"
+      ],
+      "startBalance": -6499.1,
+      "monthTotal": 2599.64,
+      "closingBalance": -9098.74,
+      "weekdayShifts": 2,
+      "weekendShifts": 0,
+      "weekdayAmount": 2599.64,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "LUANA FRANCO SOUZA BORDONI  )",
+      "contractNumbers": [
+        "896/2024"
+      ],
+      "startBalance": 501747.99,
+      "monthTotal": 12721.16,
+      "closingBalance": 489026.83,
+      "weekdayShifts": 8,
+      "weekendShifts": 2,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "LUCAS MAIA SCARDINO FARIA",
+      "contractNumbers": [
+        "564/2024"
+      ],
+      "startBalance": 44178.71500000001,
+      "monthTotal": 11340.06,
+      "closingBalance": 32838.655,
+      "weekdayShifts": 8,
+      "weekendShifts": 1,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "LUIZ AUGUSTO FERREIRA  ALVAREZ",
+      "contractNumbers": [
+        "579/2025"
+      ],
+      "startBalance": 59185.27000000002,
+      "monthTotal": 17623.125,
+      "closingBalance": 41562.145,
+      "weekdayShifts": 7.5,
+      "weekendShifts": 6,
+      "weekdayAmount": 9336.525,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "LUIZ EDUARDO LINS DE VINHAES TORRES",
+      "contractNumbers": [
+        "544/2024"
+      ],
+      "startBalance": 79352.07999999999,
+      "monthTotal": 21707.71,
+      "closingBalance": 57644.37,
+      "weekdayShifts": 13,
+      "weekendShifts": 4,
+      "weekdayAmount": 16183.31,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "LUIZA DE SÁ FERREIRA PAIXÃO",
+      "contractNumbers": [
+        "847/2024"
+      ],
+      "startBalance": 112385.81999999998,
+      "monthTotal": 6769.27,
+      "closingBalance": 105616.55,
+      "weekdayShifts": 1,
+      "weekendShifts": 4,
+      "weekdayAmount": 1244.87,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "MAIANA SANTOS DE OLIVEIRA CARDOSO",
+      "contractNumbers": [
+        "085/2026"
+      ],
+      "startBalance": 161997.39,
+      "monthTotal": 8364.115,
+      "closingBalance": 153633.275,
+      "weekdayShifts": 4.5,
+      "weekendShifts": 2,
+      "weekdayAmount": 5601.915,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "MARCELA ARIMATEA CABRAL",
+      "contractNumbers": [
+        "524/2024"
+      ],
+      "startBalance": 62212.845,
+      "monthTotal": 11340.06,
+      "closingBalance": 50872.785,
+      "weekdayShifts": 8,
+      "weekendShifts": 1,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "MARCELLA MARQUES MACHADO",
+      "contractNumbers": [
+        "790/2024"
+      ],
+      "startBalance": 91972.295,
+      "monthTotal": 8986.55,
+      "closingBalance": 82985.745,
+      "weekdayShifts": 5,
+      "weekendShifts": 2,
+      "weekdayAmount": 6224.35,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "MARIA AUGUSTA AMARAL DE CARVALHO SILVA",
+      "contractNumbers": [
+        "69/2025"
+      ],
+      "startBalance": 95648.19,
+      "monthTotal": 15347.13,
+      "closingBalance": 80301.06,
+      "weekdayShifts": 9,
+      "weekendShifts": 3,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": 4143.3
+    },
+    {
+      "rawName": "MARIA CLARA COPPIETERS GUSMÃO",
+      "contractNumbers": [
+        "157/2026"
+      ],
+      "startBalance": 116792.18000000002,
+      "monthTotal": 12993.62,
+      "closingBalance": 103798.56,
+      "weekdayShifts": 6,
+      "weekendShifts": 4,
+      "weekdayAmount": 7469.22,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "MARIA DECIA PINHEIRO DE ANDRADE",
+      "contractNumbers": [
+        "828/2024"
+      ],
+      "startBalance": 145602.65,
+      "monthTotal": 11203.83,
+      "closingBalance": 134398.82,
+      "weekdayShifts": 9,
+      "weekendShifts": 0,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "MARIA ELISA DOS REIS GARRIDO",
+      "contractNumbers": [
+        "67/2025"
+      ],
+      "startBalance": 125388.83999999995,
+      "monthTotal": 9395.24,
+      "closingBalance": 115993.6,
+      "weekdayShifts": 2,
+      "weekendShifts": 5,
+      "weekdayAmount": 2489.74,
+      "weekendAmount": 6905.5
+    },
+    {
+      "rawName": "MARIA JULIANA FREIRE DE CARVALHO AMORIM",
+      "contractNumbers": [
+        "566/2024"
+      ],
+      "startBalance": 96970.57500000001,
+      "monthTotal": 8636.575,
+      "closingBalance": 88334,
+      "weekdayShifts": 2.5,
+      "weekendShifts": 4,
+      "weekdayAmount": 3112.175,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "MARIANA LACERDA BAHIA MENARDO    (-12H)",
+      "contractNumbers": [
+        "542/2024"
+      ],
+      "startBalance": 206063.6,
+      "monthTotal": 10231.42,
+      "closingBalance": 195832.18,
+      "weekdayShifts": 6,
+      "weekendShifts": 2,
+      "weekdayAmount": 7469.22,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "MATEUS RIBEIRO DE ALMEIDA",
+      "contractNumbers": [
+        "015/2026"
+      ],
+      "startBalance": 115974.80000000002,
+      "monthTotal": 15483.36,
+      "closingBalance": 100491.44,
+      "weekdayShifts": 8,
+      "weekendShifts": 4,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "MATEUS URIEL DA SILVA CERQUEIRA",
+      "contractNumbers": [
+        "044/2026"
+      ],
+      "startBalance": 148458.85,
+      "monthTotal": 13811,
+      "closingBalance": 134647.85,
+      "weekdayShifts": 0,
+      "weekendShifts": 10,
+      "weekdayAmount": null,
+      "weekendAmount": 13811
+    },
+    {
+      "rawName": "MATHEUS HENRIQUE QUEZADO CORDEIRO (+12H)",
+      "contractNumbers": [
+        "397/2025"
+      ],
+      "startBalance": 27819.26,
+      "monthTotal": 12993.62,
+      "closingBalance": 14825.64,
+      "weekdayShifts": 6,
+      "weekendShifts": 4,
+      "weekdayAmount": 7469.22,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "MIRIAM RUTH GOMES DE PAULA",
+      "contractNumbers": [
+        "204/2025"
+      ],
+      "startBalance": 147486.44,
+      "monthTotal": 13266.08,
+      "closingBalance": 134220.36,
+      "weekdayShifts": 4,
+      "weekendShifts": 6,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "MONICA CARRERA DE ARAGÃO",
+      "contractNumbers": [
+        "364/2025"
+      ],
+      "startBalance": 87946.43,
+      "monthTotal": 13966.03,
+      "closingBalance": 73980.4,
+      "weekdayShifts": 9,
+      "weekendShifts": 2,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "MURILO CANDIDO DO MONTE DAMASCENO",
+      "contractNumbers": [
+        "593/2025"
+      ],
+      "startBalance": 27058.280000000006,
+      "monthTotal": 9395.24,
+      "closingBalance": 17663.04,
+      "weekdayShifts": 2,
+      "weekendShifts": 5,
+      "weekdayAmount": 2489.74,
+      "weekendAmount": 6905.5
+    },
+    {
+      "rawName": "MURILO PIMENTEL SODRÉ + UPA B Paz",
+      "contractNumbers": [
+        "627/2024"
+      ],
+      "startBalance": 44702.520000000004,
+      "monthTotal": 2762.2,
+      "closingBalance": 41940.32,
+      "weekdayShifts": 0,
+      "weekendShifts": 2,
+      "weekdayAmount": null,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "NADYJA ELIS CARNEIRO OLIVEIRA",
+      "contractNumbers": [
+        "141/2025"
+      ],
+      "startBalance": 231869.77000000002,
+      "monthTotal": 15210.9,
+      "closingBalance": 216658.87,
+      "weekdayShifts": 10,
+      "weekendShifts": 2,
+      "weekdayAmount": 12448.7,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "NELSON ANDREW RAMIREZ MACHICAO    (+12H)",
+      "contractNumbers": [
+        "643/2024"
+      ],
+      "startBalance": 60037.79499999999,
+      "monthTotal": 21707.71,
+      "closingBalance": 38330.085,
+      "weekdayShifts": 13,
+      "weekendShifts": 4,
+      "weekdayAmount": 16183.31,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "PAULA MAYANA COSTA SANTOS",
+      "contractNumbers": [
+        "492/2024"
+      ],
+      "startBalance": 61162.92000000002,
+      "monthTotal": 16028.28,
+      "closingBalance": 45134.64,
+      "weekdayShifts": 4,
+      "weekendShifts": 8,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 11048.8
+    },
+    {
+      "rawName": "RAFAELA DIAS BEZERRA",
+      "contractNumbers": [
+        "74/2025"
+      ],
+      "startBalance": 297326.3900000001,
+      "monthTotal": 12993.62,
+      "closingBalance": 284332.77,
+      "weekdayShifts": 6,
+      "weekendShifts": 4,
+      "weekdayAmount": 7469.22,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "RANNA ISLE COSTA CARNEIRO",
+      "contractNumbers": [
+        "007/2026"
+      ],
+      "startBalance": 165168.28,
+      "monthTotal": 9395.24,
+      "closingBalance": 155773.04,
+      "weekdayShifts": 2,
+      "weekendShifts": 5,
+      "weekdayAmount": 2489.74,
+      "weekendAmount": 6905.5
+    },
+    {
+      "rawName": "RENÊ REQUIÃO PAIM",
+      "contractNumbers": [
+        "817/2024"
+      ],
+      "startBalance": 109595.42000000001,
+      "monthTotal": 7741.68,
+      "closingBalance": 101853.74,
+      "weekdayShifts": 4,
+      "weekendShifts": 2,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "RENNATTA CRUZ SANTANA",
+      "contractNumbers": [
+        "750/2024"
+      ],
+      "startBalance": 157915.12,
+      "monthTotal": 16728.23,
+      "closingBalance": 141186.89,
+      "weekdayShifts": 9,
+      "weekendShifts": 4,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": 5524.4
+    },
+    {
+      "rawName": "ROBSON JESUS DA SILVA",
+      "contractNumbers": [
+        "785/2024"
+      ],
+      "startBalance": 205497.27,
+      "monthTotal": 29313.16,
+      "closingBalance": 176184.11,
+      "weekdayShifts": 18,
+      "weekendShifts": 5,
+      "weekdayAmount": 22407.66,
+      "weekendAmount": 6905.5
+    },
+    {
+      "rawName": "SADJA CAROLINA SANTOS COSTA",
+      "contractNumbers": [
+        "99/2025"
+      ],
+      "startBalance": 273810.09,
+      "monthTotal": 21007.76,
+      "closingBalance": 252802.33,
+      "weekdayShifts": 8,
+      "weekendShifts": 8,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 11048.8
+    },
+    {
+      "rawName": "SAMARA ALVES MESSIAS VIANA",
+      "contractNumbers": [
+        "618/2025"
+      ],
+      "startBalance": 123035.33000000002,
+      "monthTotal": 13266.08,
+      "closingBalance": 109769.25,
+      "weekdayShifts": 4,
+      "weekendShifts": 6,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "SARA DE JESUS CARNEIRO SANTOS",
+      "contractNumbers": [
+        "109/2025"
+      ],
+      "startBalance": 132721.83,
+      "monthTotal": 2762.2,
+      "closingBalance": 129959.63,
+      "weekdayShifts": 0,
+      "weekendShifts": 2,
+      "weekdayAmount": null,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "STEPHANE IZABOR DE OLIVEIRA COSTA",
+      "contractNumbers": [
+        "156/2026"
+      ],
+      "startBalance": 165732,
+      "monthTotal": 4979.48,
+      "closingBalance": 160752.52,
+      "weekdayShifts": 4,
+      "weekendShifts": 0,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "SYONE DE JESUS FEITOSA   (+12H)",
+      "contractNumbers": [
+        "605/2024"
+      ],
+      "startBalance": 206510.49999999997,
+      "monthTotal": 27795.83,
+      "closingBalance": 178714.67,
+      "weekdayShifts": 19,
+      "weekendShifts": 3,
+      "weekdayAmount": 23652.53,
+      "weekendAmount": 4143.3
+    },
+    {
+      "rawName": "TAIARA LOHANA FIGUEIREDO OLIVEIRA",
+      "contractNumbers": [
+        "751/2024"
+      ],
+      "startBalance": 174643.35000000003,
+      "monthTotal": 9395.24,
+      "closingBalance": 165248.11,
+      "weekdayShifts": 2,
+      "weekendShifts": 5,
+      "weekdayAmount": 2489.74,
+      "weekendAmount": 6905.5
+    },
+    {
+      "rawName": "TAIANE PINTO MENEZES",
+      "contractNumbers": [
+        "554/2024"
+      ],
+      "startBalance": 96597.02999999998,
+      "monthTotal": 18527.42,
+      "closingBalance": 78069.61,
+      "weekdayShifts": 11,
+      "weekendShifts": 3.5,
+      "weekdayAmount": 13693.57,
+      "weekendAmount": 4833.85
+    },
+    {
+      "rawName": "TAISA PASSOS DOS SANTOS MENDONÇA",
+      "contractNumbers": [
+        "639/2025"
+      ],
+      "startBalance": 105275.97500000002,
+      "monthTotal": 12021.21,
+      "closingBalance": 93254.765,
+      "weekdayShifts": 3,
+      "weekendShifts": 6,
+      "weekdayAmount": 3734.61,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "THAINARA DA SILVA MOREIRA",
+      "contractNumbers": [
+        "007/2026"
+      ],
+      "startBalance": 168729.06,
+      "monthTotal": 11340.06,
+      "closingBalance": 157389,
+      "weekdayShifts": 8,
+      "weekendShifts": 1,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "THIAGO BORGHI PETRUS COSTA (PSIQUIATRIA)",
+      "contractNumbers": [],
+      "startBalance": -6499.099999999999,
+      "monthTotal": 5199.28,
+      "closingBalance": -11698.38,
+      "weekdayShifts": 4,
+      "weekendShifts": 0,
+      "weekdayAmount": 5199.28,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "TIAGO CERVINO RATON PEIXOTO",
+      "contractNumbers": [
+        "045/2026"
+      ],
+      "startBalance": 147700.185,
+      "monthTotal": 9667.7,
+      "closingBalance": 138032.485,
+      "weekdayShifts": 0,
+      "weekendShifts": 7,
+      "weekdayAmount": null,
+      "weekendAmount": 9667.7
+    },
+    {
+      "rawName": "TIAGO REZENDE NEVES   (+12H)",
+      "contractNumbers": [
+        "886/2024"
+      ],
+      "startBalance": 98664.05,
+      "monthTotal": 15074.67,
+      "closingBalance": 83589.38,
+      "weekdayShifts": 11,
+      "weekendShifts": 1,
+      "weekdayAmount": 13693.57,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "UEMERSON ALCANTARA REIS SILVA",
+      "contractNumbers": [
+        "893/2024"
+      ],
+      "startBalance": 214948.91,
+      "monthTotal": 32756.51,
+      "closingBalance": 182192.4,
+      "weekdayShifts": 13,
+      "weekendShifts": 12,
+      "weekdayAmount": 16183.31,
+      "weekendAmount": 16573.2
+    },
+    {
+      "rawName": "VAGNER BARROSO DE OLIVEIRA",
+      "contractNumbers": [
+        "787/2024"
+      ],
+      "startBalance": 58865.810000000005,
+      "monthTotal": 12584.93,
+      "closingBalance": 46280.88,
+      "weekdayShifts": 9,
+      "weekendShifts": 1,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "VANER PAULO DA SILVA FONSECA PINHEIRO",
+      "contractNumbers": [
+        "833/2024"
+      ],
+      "startBalance": 224684.72500000003,
+      "monthTotal": 27913.26,
+      "closingBalance": 196771.465,
+      "weekdayShifts": 8,
+      "weekendShifts": 13,
+      "weekdayAmount": 9958.96,
+      "weekendAmount": 17954.3
+    },
+    {
+      "rawName": "VANESSA BRITO RAMOS  SAMU + HELIO MACHADO",
+      "contractNumbers": [
+        "47/2025"
+      ],
+      "startBalance": 283924.08,
+      "monthTotal": 7605.45,
+      "closingBalance": 276318.63,
+      "weekdayShifts": 5,
+      "weekendShifts": 1,
+      "weekdayAmount": 6224.35,
+      "weekendAmount": 1381.1
+    },
+    {
+      "rawName": "VENANDRA RIBEIRO E ANDRADE",
+      "contractNumbers": [
+        "614/2025"
+      ],
+      "startBalance": 178650.41999999998,
+      "monthTotal": 4979.48,
+      "closingBalance": 173670.94,
+      "weekdayShifts": 4,
+      "weekendShifts": 0,
+      "weekdayAmount": 4979.48,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "VICTOR  LUIS PEIXOTO PEREIRA BOTELHO",
+      "contractNumbers": [
+        "609/2024"
+      ],
+      "startBalance": 26616.619999999995,
+      "monthTotal": 11203.83,
+      "closingBalance": 15412.79,
+      "weekdayShifts": 9,
+      "weekendShifts": 0,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "VICTOR RAMOS DA SILVA (PSIQUIATRIA)",
+      "contractNumbers": [
+        "869/2024"
+      ],
+      "startBalance": 333783.73,
+      "monthTotal": 6610.75,
+      "closingBalance": 327172.98,
+      "weekdayShifts": 4,
+      "weekendShifts": 1,
+      "weekdayAmount": 5199.28,
+      "weekendAmount": 1411.47
+    },
+    {
+      "rawName": "VITOR LUIZ VALVERDE MARTINEZ",
+      "contractNumbers": [
+        "079/2026"
+      ],
+      "startBalance": 154255.71000000002,
+      "monthTotal": 9531.47,
+      "closingBalance": 144724.24,
+      "weekdayShifts": 1,
+      "weekendShifts": 6,
+      "weekdayAmount": 1244.87,
+      "weekendAmount": 8286.6
+    },
+    {
+      "rawName": "VINICIUS PEREIRA DE CARVALHO",
+      "contractNumbers": [],
+      "startBalance": null,
+      "monthTotal": null,
+      "closingBalance": null,
+      "weekdayShifts": null,
+      "weekendShifts": null,
+      "weekdayAmount": null,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "VINICIUS RAIMUNDO SANTOS DA SILVA",
+      "contractNumbers": [
+        "016/2026"
+      ],
+      "startBalance": 130077.06000000003,
+      "monthTotal": 17545.61,
+      "closingBalance": 112531.45,
+      "weekdayShifts": 3,
+      "weekendShifts": 10,
+      "weekdayAmount": 3734.61,
+      "weekendAmount": 13811
+    },
+    {
+      "rawName": "VINICIUS SANTOS MOURA DE JESUS + UPA",
+      "contractNumbers": [
+        "612/2024"
+      ],
+      "startBalance": 47351.92000000003,
+      "monthTotal": 13966.03,
+      "closingBalance": 33385.89,
+      "weekdayShifts": 9,
+      "weekendShifts": 2,
+      "weekdayAmount": 11203.83,
+      "weekendAmount": 2762.2
+    },
+    {
+      "rawName": "YNGRA MARIA PIMENTEL NOVAIS",
+      "contractNumbers": [
+        "188/2026"
+      ],
+      "startBalance": 165732,
+      "monthTotal": null,
+      "closingBalance": 165732,
+      "weekdayShifts": null,
+      "weekendShifts": null,
+      "weekdayAmount": null,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "ALECIANNE AZEVEDO BRAGA",
+      "contractNumbers": [
+        "70/2025"
+      ],
+      "startBalance": 169411.87,
+      "monthTotal": null,
+      "closingBalance": 169411.87,
+      "weekdayShifts": null,
+      "weekendShifts": null,
+      "weekdayAmount": null,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "ANA BEATRIZ DE ANDRADE CARVALHO",
+      "contractNumbers": [
+        "737/2024"
+      ],
+      "startBalance": 135942.77,
+      "monthTotal": 15008.73,
+      "closingBalance": 120934.04,
+      "weekdayShifts": 8,
+      "weekendShifts": 3,
+      "weekdayAmount": 10637.28,
+      "weekendAmount": 4371.45
+    },
+    {
+      "rawName": "CECILIA VEIGA MALHEIROS GIL BRAZ",
+      "contractNumbers": [
+        "838/2024"
+      ],
+      "startBalance": 88648.28999999996,
+      "monthTotal": 12221.92,
+      "closingBalance": 76426.37,
+      "weekdayShifts": 7,
+      "weekendShifts": 2,
+      "weekdayAmount": 9307.62,
+      "weekendAmount": 2914.3
+    },
+    {
+      "rawName": "DIEGO FERRAZ DE AGUIAR",
+      "contractNumbers": [
+        "66/2025"
+      ],
+      "startBalance": 45608.03000000001,
+      "monthTotal": 10892.26,
+      "closingBalance": 34715.77,
+      "weekdayShifts": 6,
+      "weekendShifts": 2,
+      "weekdayAmount": 7977.96,
+      "weekendAmount": 2914.3
+    },
+    {
+      "rawName": "FREDERICO AFONSO FOEPPEL DIAS",
+      "contractNumbers": [
+        "431/2024"
+      ],
+      "startBalance": 111908.77999999997,
+      "monthTotal": 12094.43,
+      "closingBalance": 99814.35,
+      "weekdayShifts": 8,
+      "weekendShifts": 1,
+      "weekdayAmount": 10637.28,
+      "weekendAmount": 1457.15
+    },
+    {
+      "rawName": "HUGO CARDOSO DE SOUZA FALCON",
+      "contractNumbers": [
+        "737/2024"
+      ],
+      "startBalance": 136097.63999999998,
+      "monthTotal": 12349.41,
+      "closingBalance": 123748.23,
+      "weekdayShifts": 6,
+      "weekendShifts": 3,
+      "weekdayAmount": 7977.96,
+      "weekendAmount": 4371.45
+    },
+    {
+      "rawName": "LEONARDO COPQUE MAGALHÃES",
+      "contractNumbers": [
+        "184/2026"
+      ],
+      "startBalance": 349716,
+      "monthTotal": 9690.09,
+      "closingBalance": 340025.91,
+      "weekdayShifts": 4,
+      "weekendShifts": 3,
+      "weekdayAmount": 5318.64,
+      "weekendAmount": 4371.45
+    },
+    {
+      "rawName": "MATHEUS  CUNHA MENDONÇA",
+      "contractNumbers": [
+        "853/2024"
+      ],
+      "startBalance": 274289.88,
+      "monthTotal": 14753.75,
+      "closingBalance": 259536.13,
+      "weekdayShifts": 10,
+      "weekendShifts": 1,
+      "weekdayAmount": 13296.6,
+      "weekendAmount": 1457.15
+    },
+    {
+      "rawName": "MAURICIO SANTOS BOMFIM",
+      "contractNumbers": [
+        "737/2024"
+      ],
+      "startBalance": 146862.41000000003,
+      "monthTotal": 8487.92,
+      "closingBalance": 138374.49,
+      "weekdayShifts": 2,
+      "weekendShifts": 4,
+      "weekdayAmount": 2659.32,
+      "weekendAmount": 5828.6
+    },
+    {
+      "rawName": "PAULO DE TARSO MONTEIRO ABRAHÃO",
+      "contractNumbers": [
+        "70/2025"
+      ],
+      "startBalance": 169411.87,
+      "monthTotal": null,
+      "closingBalance": 169411.87,
+      "weekdayShifts": null,
+      "weekendShifts": null,
+      "weekdayAmount": null,
+      "weekendAmount": null
+    },
+    {
+      "rawName": "WILLY OCTAVIO RIVERA AREVALO",
+      "contractNumbers": [
+        "545/2024"
+      ],
+      "startBalance": 73476.13,
+      "monthTotal": 17540.56,
+      "closingBalance": 55935.57,
+      "weekdayShifts": 11,
+      "weekendShifts": 2,
+      "weekdayAmount": 14626.26,
+      "weekendAmount": 2914.3
+    },
+    {
+      "rawName": "UENDERSON ARAUJO BARBOSA   (-12H)",
+      "contractNumbers": [
+        "65/2025"
+      ],
+      "startBalance": 307476.62000000005,
+      "monthTotal": 17194.455,
+      "closingBalance": 290282.165,
+      "weekdayShifts": 8,
+      "weekendShifts": 4.5,
+      "weekdayAmount": 10637.28,
+      "weekendAmount": 6557.175
+    },
+    {
+      "rawName": "VITORIA REGIA BESERRA BARBOSA XIMENES",
+      "contractNumbers": [
+        "792/2024"
+      ],
+      "startBalance": 143000.92,
+      "monthTotal": 11147.24,
+      "closingBalance": 131853.68,
+      "weekdayShifts": 4,
+      "weekendShifts": 4,
+      "weekdayAmount": 5318.64,
+      "weekendAmount": 5828.6
+    },
+    {
+      "rawName": "ZOLAINA MARIA DOS REIS PEREIRA",
+      "contractNumbers": [
+        "518/2024"
+      ],
+      "startBalance": 108784.84999999999,
+      "monthTotal": 13424.09,
+      "closingBalance": 95360.76,
+      "weekdayShifts": 9,
+      "weekendShifts": 1,
+      "weekdayAmount": 11966.94,
+      "weekendAmount": 1457.15
+    }
+  ]
+}

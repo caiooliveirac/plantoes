@@ -108,6 +108,18 @@ function cellNumber(value: Cell): number | null {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+export interface MayRowJson {
+    rawName: string;
+    contractNumbers: string[];
+    startBalance: number | null;
+    monthTotal: number | null;
+    closingBalance: number | null;
+    weekdayShifts: number | null;
+    weekendShifts: number | null;
+    weekdayAmount: number | null;
+    weekendAmount: number | null;
+}
+
 export interface MayRow {
     rawName: string;
     normalized: string;
@@ -121,7 +133,7 @@ export interface MayRow {
     weekendAmount: number | null;
 }
 
-function readMayTabs(workbook: ExcelJS.Workbook): MayRow[] {
+export function readMayTabs(workbook: ExcelJS.Workbook): MayRow[] {
     const rows: MayRow[] = [];
     for (const sheet of workbook.worksheets) {
         if (!/MAIO/i.test(sheet.name)) continue;
@@ -287,14 +299,31 @@ async function loadAliases(): Promise<Map<string, string>> {
 async function main() {
     const args = process.argv.slice(2);
     const fileIndex = args.indexOf("--file");
+    const dataIndex = args.indexOf("--data");
     const sourceFile = fileIndex >= 0 ? args[fileIndex + 1] : "";
+    const dataFile = dataIndex >= 0 ? args[dataIndex + 1] : "";
     const apply = args.includes("--apply");
-    if (!sourceFile) throw new Error("Uso: tsx scripts/repair-maio-extrato.ts --file <planilha.xlsx> [--apply]");
+    if (!sourceFile && !dataFile) {
+        throw new Error("Uso: tsx scripts/repair-maio-extrato.ts (--file <planilha.xlsx> | --data <maio.json>) [--apply]");
+    }
     if (!hasDatabaseUrl()) throw new Error("DATABASE_URL não configurada.");
 
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(sourceFile);
-    const mayRows = readMayTabs(workbook);
+    let mayRows: MayRow[];
+    let sourceLabel: string;
+    if (dataFile) {
+        // JSON extraído da planilha (docs/saldo-contrato/maio-2026-planilha.json):
+        // é a mesma leitura, congelada e versionada — serve para rodar o reparo
+        // onde a planilha não está (ex.: no servidor, via workflow). Todas as
+        // validações de idoneidade rodam do mesmo jeito.
+        const parsed = JSON.parse(await readFile(path.resolve(process.cwd(), dataFile), "utf8")) as { rows: MayRowJson[] };
+        mayRows = parsed.rows.map((row) => ({ ...row, normalized: normalizeDoctorName(row.rawName) }));
+        sourceLabel = dataFile;
+    } else {
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.readFile(sourceFile);
+        mayRows = readMayTabs(workbook);
+        sourceLabel = sourceFile;
+    }
     const aliases = await loadAliases();
 
     // Linhas da planilha indexadas pelo nome como está em doctors.normalizedName.
@@ -428,7 +457,7 @@ async function main() {
     const lines: string[] = [];
     lines.push("# Reparo da linha de maio no extrato — relatório");
     lines.push("");
-    lines.push(`- Origem: \`${path.basename(sourceFile)}\``);
+    lines.push(`- Origem: \`${path.basename(sourceLabel)}\``);
     lines.push(`- Modo: ${apply ? "**--apply** (gravou no banco)" : "**dry-run** (nada gravado)"}`);
     lines.push(`- Aberturas do backfill encontradas em 31/05: **${openings.length}**`);
     lines.push(`- ${apply ? "Reparados" : "Reparáveis"}: **${apply ? applied : results.filter((r) => r.status === "dry_run").length}**`);
