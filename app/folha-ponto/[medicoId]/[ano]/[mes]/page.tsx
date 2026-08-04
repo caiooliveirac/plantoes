@@ -5,6 +5,7 @@ import { doctors } from "@/db/schema";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 import { readAuthenticatedSession, requireAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
+import { localDataDaFolha } from "@/lib/folha-ponto/emissao";
 import type { DadosFolhaPonto, Plantao, Turno } from "@/lib/folha-ponto/types";
 import { FolhaPontoClient } from "./FolhaPontoClient";
 
@@ -121,6 +122,9 @@ export default async function FolhaPontoPage({
         ano,
         mes,
         plantoes,
+        // Resolvida no servidor (fuso SP) para não depender do relógio/fuso do
+        // navegador nem divergir entre render do servidor e hidratação.
+        localData: localDataDaFolha(ano, mes),
     };
 
     return <FolhaPontoClient data={data} />;

@@ -32,13 +32,6 @@ interface CamposEditaveis {
     localData: string;
 }
 
-function formatarLocalDataPadrao(ano: number, mes: number): string {
-    const hoje = new Date();
-    const dia = hoje.getMonth() + 1 === mes && hoje.getFullYear() === ano ? hoje.getDate() : 1;
-    const mesNome = MESES_PT[mes - 1].toLowerCase();
-    return `Salvador, ${dia} de ${mesNome} de ${ano}`;
-}
-
 function storageKey(medicoId: string) {
     return `folhaPonto:${medicoId}`;
 }
@@ -67,7 +60,10 @@ function loadCampos(medicoId: string, fallback: CamposEditaveis): CamposEditavei
             empresa: fallback.empresa || preferStoredValue(parsed.empresa, fallback.empresa),
             cnpj: fallback.cnpj || preferStoredValue(parsed.cnpj, fallback.cnpj),
             razaoSocial: fallback.razaoSocial || preferStoredValue(parsed.razaoSocial, fallback.razaoSocial),
-            localData: preferStoredValue(parsed.localData, fallback.localData),
+            // localData NÃO é restaurado do cache: ele depende do mês da folha e
+            // do dia da emissão. Um valor salvo em outra emissão (ou em outro
+            // mês) reapareceria como data errada no documento impresso.
+            localData: fallback.localData,
         };
     } catch {
         return fallback;
@@ -101,9 +97,9 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
             empresa: data.medico.razaoSocial ?? "",
             cnpj: data.medico.cnpj ?? "",
             razaoSocial: data.medico.razaoSocial ?? "",
-            localData: formatarLocalDataPadrao(data.ano, data.mes),
+            localData: data.localData,
         }),
-        [data.ano, data.medico.cnpj, data.medico.razaoSocial, data.mes],
+        [data.localData, data.medico.cnpj, data.medico.razaoSocial],
     );
 
     const [campos, setCampos] = useState<CamposEditaveis>(fallback);
@@ -305,6 +301,16 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
                         ))}
                     </tbody>
                 </table>
+
+                <section className="fp-localdata-caixa">
+                    <span className="fp-localdata-label">Local e Data:</span>
+                    <Editavel
+                        valor={campos.localData}
+                        placeholder="Salvador, dia de mês de ano"
+                        onChange={(v) => setCampo("localData", v)}
+                        className="fp-localdata-valor"
+                    />
+                </section>
 
                 <section className="fp-assinaturas-pg2">
                     <div className="fp-assinatura-bloco">

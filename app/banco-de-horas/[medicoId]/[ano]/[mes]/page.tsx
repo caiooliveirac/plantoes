@@ -14,6 +14,7 @@
 import { notFound } from "next/navigation";
 import { readAuthenticatedSession, requireAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
+import { dataMinimaEmissao, formatarDataExtenso, hojeEmSaoPaulo } from "@/lib/folha-ponto/emissao";
 import { hasDatabaseUrl } from "@/db";
 import { getBankHoursHistory } from "@/services/bank-hours-history.service";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
@@ -69,7 +70,8 @@ export default async function PainelDoMedicoPage({
     if (!Number.isInteger(ano) || ano < 2020 || ano > 2100) notFound();
     if (!Number.isInteger(mes) || mes < 1 || mes > 12) notFound();
 
-    if (!isValidFolhaToken(t, { medicoId, ano, mes })) {
+    const tokenValido = isValidFolhaToken(t, { medicoId, ano, mes });
+    if (!tokenValido) {
         // Sessão do PRÓPRIO médico (cadastro por codinome+email) também entra;
         // qualquer outra sessão continua exigindo admin.
         const session = await readAuthenticatedSession();
@@ -89,9 +91,23 @@ export default async function PainelDoMedicoPage({
     const paymentRow = board.doctors.find((row) => row.doctorId === medicoId);
     const contracts = paymentRow?.contractBalances ?? [];
 
+    // Navegação de mês só faz sentido para quem está logado: o token do bot vale
+    // para UM mês, então mudar de mês com ele na URL derrubaria o acesso.
+    const mesAnterior = mes === 1 ? { ano: ano - 1, mes: 12 } : { ano, mes: mes - 1 };
+    const mesSeguinte = mes === 12 ? { ano: ano + 1, mes: 1 } : { ano, mes: mes + 1 };
+    const painelHref = (alvo: { ano: number; mes: number }) =>
+        `/banco-de-horas/${medicoId}/${alvo.ano}/${alvo.mes}`;
+    const mesNav = !tokenValido ? (
+        <nav className="panel-month-nav">
+            <a href={painelHref(mesAnterior)}>← mês anterior</a>
+            <a href={painelHref(mesSeguinte)}>próximo mês →</a>
+        </nav>
+    ) : null;
+
     if (!doctor && !paymentRow) {
         return (
             <main className="panel-shell">
+                {mesNav}
                 <section className="hours-empty-state standalone">
                     <strong>Ainda não há nada por aqui.</strong>
                     <span>Assim que seus plantões forem consolidados, tudo aparece nesta página.</span>
@@ -99,6 +115,14 @@ export default async function PainelDoMedicoPage({
             </main>
         );
     }
+
+    // Folha de ponto: até agora só saía por comando no bot (codinome). Aqui ela
+    // fica a um clique de quem está logado. O token do bot, quando é por ele que
+    // a pessoa chegou, é repassado — senão o acesso sem login se perderia.
+    const folhaHref = `/folha-ponto/${medicoId}/${ano}/${String(mes).padStart(2, "0")}`
+        + (tokenValido && t ? `?t=${encodeURIComponent(t)}` : "");
+    const dataMinimaFolha = dataMinimaEmissao(ano, mes);
+    const folhaAindaNaoEmissivel = hojeEmSaoPaulo() <= dataMinimaFolha;
 
     const recentShifts = doctor?.shifts.slice(0, RECENT_SHIFT_LIMIT) ?? [];
     const pendencias = (doctor?.shifts ?? []).filter((shift) =>
@@ -110,6 +134,7 @@ export default async function PainelDoMedicoPage({
                 <p className="reports-kicker">Seu painel</p>
                 <h1>{doctor?.doctorName ?? paymentRow?.doctorName}</h1>
                 <p className="panel-hero-sub">{board.monthLabel}</p>
+                {mesNav}
             </header>
 
             {pendencias.length > 0 ? (
@@ -153,6 +178,23 @@ export default async function PainelDoMedicoPage({
                     </div>
                 </section>
             ) : null}
+
+            {/* ---------------- Folha de ponto ---------------- */}
+            <section className="panel-section">
+                <h2>Folha de ponto de {board.monthLabel}</h2>
+                <p className="panel-note">
+                    A folha de frequência e o relatório de atividades saem prontos, com os
+                    plantões do mês já preenchidos. É só conferir, imprimir e assinar.
+                </p>
+                <a className="panel-action-btn" href={folhaHref}>
+                    Gerar folha de ponto
+                </a>
+                <p className="panel-note">
+                    {folhaAindaNaoEmissivel
+                        ? `A data que sai impressa é ${formatarDataExtenso(dataMinimaFolha)} — o primeiro dia útil do mês seguinte, que é o mais cedo que a folha deste mês pode ser entregue.`
+                        : "A data que sai impressa é a de hoje, o dia em que você gerou a folha."}
+                </p>
+            </section>
 
             {/* ---------------- Saldo de contrato ---------------- */}
             {contracts.length > 0 ? (

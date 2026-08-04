@@ -30,4 +30,10 @@ export interface DadosFolhaPonto {
     ano: number;
     mes: number;
     plantoes: Plantao[];
+    /**
+     * "Local e Data" já resolvido no servidor (fuso SP): a data de hoje, ou o
+     * primeiro dia útil do mês seguinte quando hoje ainda é anterior a ele.
+     * Ver lib/folha-ponto/emissao.ts.
+     */
+    localData: string;
 }
