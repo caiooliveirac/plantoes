@@ -27,7 +27,8 @@
     "provision:initial-access": "tsx scripts/provision-initial-access.ts",
     "deploy:production": "bash scripts/deploy-production.sh",
     "saldo:backfill": "tsx scripts/backfill-saldo-contrato.ts",
-    "saldo:repair-maio": "tsx scripts/repair-maio-extrato.ts"
+    "saldo:repair-maio": "tsx scripts/repair-maio-extrato.ts",
+    "saldo:lancar-tetos": "tsx scripts/lancar-tetos-pendentes.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

@@ -122,7 +122,60 @@ candidato legítimo a "saldo zerado".
 Leonardo Copque Magalhães aparece duas vezes: o 247/2025 fecha maio em −33.141,77 e é
 o contrato **antigo**; o vigente é o 184/2026, com **+340.025,91**.
 
-## 6. O que corrigir
+## 5.1 Leonardo Copque — o teto do contrato novo está errado no razão
+
+O 184/2026 abre maio na planilha em **R$ 349.716,00**, que é o teto de **48h
+especialista**. O backfill leu a coluna CH como 24h e gravou **174.858,00** — metade.
+É o mesmo erro da Karen, do outro lado: teto deduzido de uma coluna CH que não bate
+com o valor de reset que a própria planilha usou.
+
+A cadeia de maio fecha certinho: `349.716,00 − 9.690,09 = 340.025,91`.
+
+## 5.2 Duas linhas onde a própria planilha subestima o consumo
+
+Quando a célula de fechamento de um mês fica vazia, o mês seguinte reabre do zero e a
+cadeia perde o que veio antes. Acontece em dois dos contratos sem teto:
+
+| Médico | Planilha diz | Consumo real do ciclo | Mês perdido |
+|---|---:|---:|---|
+| Ketherynne Cabral F. de Oliveira | 18.755,73 | **22.655,19** | fev/2026 (3.899,46) |
+| Bruno Mota de Almeida | 1.411,47 | **4.234,41** | abr/2026 (2.822,94) |
+
+Importar o número da planilha aqui daria ao médico um saldo maior do que ele tem. Os
+valores lançados são os reconstruídos mês a mês, não os da coluna.
+
+## 6. O que foi lançado (2026-08-04, autorizado por Caio)
+
+`scripts/lancar-tetos-pendentes.ts` + `docs/saldo-contrato/tetos-pendentes.json`.
+Para cada contrato: `opening` com o teto integral na data de início do ciclo, mais um
+`invoice` por mês de consumo já ocorrido até 31/05/2026.
+
+Psiquiatria entra na coluna **especialista** da tabela de referência (12h 87.429,00 ·
+24h 174.858,00) — decisão de Caio. O código hoje
+([backfill-saldo-contrato.ts:301](../../scripts/backfill-saldo-contrato.ts#L301)) joga
+psiquiatria na coluna generalista; a divergência fica registrada aqui.
+
+| Médico | CH | Ciclo desde | Teto | Consumo | Saldo |
+|---|---|---|---:|---:|---:|
+| João Pedro Miguez Pinto | 24h ger | 2026-03-10 | 165.732,00 | 25.277,89 | **140.454,11** |
+| Gabriel Vitor do Amor Divino de Jesus | 24h ger | 2026-03-25 | 165.732,00 | 27.368,34 | **138.363,66** |
+| Ketherynne Cabral F. de Oliveira | 12h psiq | 2026-02-06 | 87.429,00 | 22.655,19 | **64.773,81** |
+| Luan Sampaio Evangelista Santos | 12h psiq | 2025-12-01 | 87.429,00 | 9.098,74 | **78.330,26** |
+| Bruno Mota de Almeida | 12h psiq | 2025-12-01 | 87.429,00 | 4.234,41 | **83.194,59** |
+| Thiago Borghi Petrus Costa | 24h psiq | 2026-04-01 ⚠️ | 174.858,00 | 11.698,38 | **163.159,62** |
+| Leonardo Copque Magalhães (184/2026) | 48h esp | 2026-05-26 | 349.716,00 | 9.690,09 | **340.025,91** |
+
+⚠️ O ciclo do Thiago é **assumido** (a planilha não traz DATA ADMISSÃO nem número de
+contrato). Ele só entra com `--permitir-ciclo-assumido`.
+
+O 247/2025 do Leonardo é encerrado (`terminated`, 25/05/2026, substituído pelo
+184/2026): sem isso ele fica pedindo saldo para sempre.
+
+Luan e Bruno Mota têm ciclo desde dez/2025, mas **não aparecem em nenhuma página das
+duas planilhas antes de mar/2026 e abr/2026** — busca por nome nos 86 pdf-pages de 2025
+e nos 5 meses de 2026: zero ocorrências. O consumo do ciclo começa onde a linha começa.
+
+## 7. O que ainda corrigir no código
 
 1. **`awaitingOpeningBalance` não pode depender de consumo.** A pergunta certa é "existe
    lançamento de abertura no razão?", não "o médico ficou parado?". Enquanto não houver
