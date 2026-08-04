@@ -53,9 +53,13 @@ jobs:
     env:
       REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
       # Grava só com pedido explícito: input apply=true, tag
-      # meal-break-restore/apply-*, ou [meal-break-restore-apply] na mensagem do
-      # commit. Qualquer outra coisa é dry-run.
-      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || startsWith(github.ref_name, 'meal-break-restore/apply') || contains(github.event.head_commit.message, '[meal-break-restore-apply]') }}
+      # meal-break-restore/apply-*, ou mensagem do commit COMEÇANDO com
+      # [meal-break-restore-apply]. O startsWith é deliberado: com `contains`,
+      # citar o marcador em prosa na própria mensagem dispara a gravação — foi
+      # o que aconteceu em 04/08/2026 e transformou um dry-run em escrita.
+      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || startsWith(github.ref_name, 'meal-break-restore/apply') || startsWith(github.event.head_commit.message, '[meal-break-restore-apply]') }}
+      # Leitura read-only da sessão: mensagem começando com [meal-break-inspect].
+      INSPECT: ${{ startsWith(github.event.head_commit.message, '[meal-break-inspect]') }}
       RESUMO: ${{ (github.event_name == 'workflow_dispatch' && inputs.arquivo) || 'docs/refeicoes/restauracao-2026-08-04.txt' }}
     steps:
       - name: Run actions/checkout@v4
@@ -68,7 +72,26 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
 
+      # Leitura do estado vigente. O script vai daqui porque o servidor roda o
+      # commit DEPLOYADO — um script novo ainda não existe lá. Copiado para
+      # dentro do repo (o alias @/ precisa do tsconfig) e removido no fim: o
+      # working tree de produção tem que ficar limpo.
+      - name: Inspecionar a sessão (read-only)
+        if: env.INSPECT == 'true'
+        run: |
+          set -euo pipefail
+          ssh -o ServerAliveInterval=20 -i ~/.ssh/id_ed25519 "${REMOTE}" \
+            "cat > /home/ubuntu/plantoes/scripts/_inspect-tmp.ts" < scripts/inspect-meal-break-session.ts
+          ssh -o ServerAliveInterval=20 -i ~/.ssh/id_ed25519 "${REMOTE}" bash -s <<'EOF'
+          set -euo pipefail
+          cd /home/ubuntu/plantoes
+          set -a; . .env.production; set +a
+          npx tsx scripts/_inspect-tmp.ts || true
+          rm -f scripts/_inspect-tmp.ts
+          EOF
+
       - name: Enviar o resumo para o servidor
+        if: env.INSPECT != 'true'
         run: |
           set -euo pipefail
           if [[ ! -f "${RESUMO}" ]]; then
@@ -79,6 +102,7 @@ jobs:
             "cat > /tmp/meal-break-restore.txt" < "${RESUMO}"
 
       - name: Restauracao (script do repo, executado no servidor)
+        if: env.INSPECT != 'true'
         run: |
           set -euo pipefail
           APPLY_FLAG=""
