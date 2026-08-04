@@ -2,6 +2,15 @@
  * Backfill do saldo contratual (docs/saldo-contrato/SPEC.md §9, revisado pelas
  * decisões do usuário em 2026-07-31).
  *
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │ ANTES DE MEXER AQUI, LEIA docs/saldo-contrato/README.md.                │
+ * │                                                                          │
+ * │ Este script lê uma planilha editada à mão, e os erros dela não se veem   │
+ * │ olhando o código. Três detectores daqui têm defeito conhecido e ainda    │
+ * │ não corrigido (README §"Defeitos do backfill"). ELE JÁ RODOU EM          │
+ * │ PRODUÇÃO: rodar de novo sem ler o dossiê refaz os mesmos erros.          │
+ * └─────────────────────────────────────────────────────────────────────────┘
+ *
  *   npm run saldo:backfill -- --file "<planilha.xlsx>" [--apply]
  *
  * O que ele importa: UM número por contrato — o saldo de maio/2026, a coluna
@@ -67,7 +76,18 @@ const MONTHS = [
 const SEED_MONTH = MONTHS[MONTHS.length - 1];
 const TOLERANCE = 0.05;
 
-/** Tetos habituais por CH/categoria (SPEC §3.3). Só pré-preenchem o cadastro. */
+/**
+ * Tetos habituais por CH/categoria (SPEC §3.3). Só pré-preenchem o cadastro.
+ *
+ * DIVERGÊNCIA DELIBERADA com os dados: aqui não há coluna de psiquiatria, e
+ * `planContract` joga psiquiatria em `generalista` (linha ~321). Mas Caio decidiu
+ * em 2026-08-04 que psiquiatria usa a coluna ESPECIALISTA, e é assim que
+ * docs/saldo-contrato/tetos-pendentes.json está montado. Ver README §"Armadilhas"
+ * item 6 antes de unificar — mexer em um lado só troca o teto de quatro médicos.
+ *
+ * A coluna CH da planilha também mente em alguns casos (Karla Santos Pinto,
+ * Leonardo Copque): quando ela discorda do valor de reset, vale o reset.
+ */
 const REFERENCE_CEILINGS: Record<string, { generalista: number; especialista: number }> = {
     "12": { generalista: 82866, especialista: 87429 },
     "24": { generalista: 165732, especialista: 174858 },
@@ -353,6 +373,14 @@ function buildContractPlan(
     // A planilha abriu este contrato em R$ 0,00 e foi acumulando negativo: o
     // número dela é consumo, não saldo. É o caso de Gabriel Vitor e João Pedro
     // Miguez, que o SPEC §1 lista como estourados — não estão.
+    //
+    // DEFEITO CONHECIDO (docs/saldo-contrato/03-validacao-alertas-08-2026.md §2):
+    // `firstLegible` é o primeiro mês com célula PREENCHIDA, e a guarda exige que
+    // ela seja exatamente 0,00. Nos psiquiatras a célula nasce VAZIA e só aparece
+    // um mês depois, já negativa — aí o teste falha e o contrato entra como
+    // "estouro real". Foi o que aconteceu com Ketherynne, Luan e Bruno Mota.
+    // A regra que falta: célula vazia seguida de série monotonicamente
+    // decrescente e negativa é o mesmo padrão.
     const firstLegible = ordered.find(({ row }) => row!.openingBalance != null)?.row ?? null;
     if (firstLegible && Math.abs(firstLegible.openingBalance!) <= TOLERANCE && (firstLegible.total ?? 0) > 0) {
         plan.status = "teto_nao_carregado";
@@ -366,6 +394,17 @@ function buildContractPlan(
     // PRIMEIRO ciclo não é renovação: contrato que nasceu em 2026 começa dentro
     // da janela por definição, e não há nada para resetar. Sem esta distinção o
     // detector marca todo contrato novo como pendente.
+    //
+    // DEFEITO CONHECIDO (docs/saldo-contrato/03-validacao-alertas-08-2026.md §5):
+    // `sawReset` compara a abertura de um mês com o FECHAMENTO DO ANTERIOR, então
+    // não enxerga o reset quando ele está na PRIMEIRA linha do contrato no arquivo
+    // — o caso de todo contrato aberto dentro da janela lida, onde `index > 0`
+    // nunca é satisfeito no mês da virada. Oito contratos que a planilha tinha
+    // resetado direito entraram como "renovação pendente" por isso.
+    // A regra que falta: a primeira abertura legível igual ao teto de referência
+    // JÁ É o reset. Vale conferir junto a inferência de ano da DATA ADMISSÃO —
+    // quando a célula não traz o ano, `isFirstCycle` dá false num contrato que
+    // está no primeiro ciclo, e é a combinação dos dois que produz o carimbo errado.
     const isFirstCycle = plan.cycle.start.slice(0, 7) === anniversary.slice(0, 7);
     const renewedInWindow = !isFirstCycle && plan.cycle.start >= MONTHS[0].lastDay;
     const sawReset = ordered.some(({ row }, index) => index > 0

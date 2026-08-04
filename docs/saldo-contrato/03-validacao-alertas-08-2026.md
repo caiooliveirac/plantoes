@@ -14,14 +14,14 @@ Só um médico da lista estourou de verdade, e o valor dele está inflado em tre
 O backfill deixa o saldo de abertura **em branco** de propósito quando a planilha não
 dá um número confiável (18 contratos, ver [backfill-report.md](backfill-report.md)).
 Chutar seria pior. O alerta sabe disso e tem uma guarda
-([contract-balance-alerts.ts:118](../../modules/telegram/contract-balance-alerts.ts#L118)):
+([contract-balance-alerts.ts:126](../../modules/telegram/contract-balance-alerts.ts#L126)):
 
 ```ts
 if (row.awaitingOpeningBalance) continue;
 ```
 
 Só que a flag é calculada assim
-([contract-balance.service.ts:393](../../services/contract-balance.service.ts#L393)):
+([contract-balance.service.ts:405](../../services/contract-balance.service.ts#L405)):
 
 ```ts
 awaitingOpeningBalance: openingCents === 0 && settledConsumedCents === 0 && emAberto.amountCents === 0
@@ -37,7 +37,7 @@ O valor que o bot mostra não é estouro: é a soma do que o médico produziu de
 ## 2. O detector de "teto não carregado" só pega quem abre exatamente em R$ 0,00
 
 Segundo defeito, no backfill
-([backfill-saldo-contrato.ts:356](../../scripts/backfill-saldo-contrato.ts#L356)):
+([backfill-saldo-contrato.ts:384](../../scripts/backfill-saldo-contrato.ts#L384)):
 
 ```ts
 const firstLegible = ordered.find(({ row }) => row!.openingBalance != null)?.row ?? null;
@@ -105,7 +105,7 @@ deles a planilha RESETOU direito**. A primeira linha de cada um abre exatamente 
 R$ 165.732,00. Quem não enxergou o reset foi o backfill.
 
 O detector procura o reset comparando a abertura de um mês com o fechamento do mês
-anterior ([backfill-saldo-contrato.ts:371](../../scripts/backfill-saldo-contrato.ts#L371)):
+anterior ([backfill-saldo-contrato.ts:410](../../scripts/backfill-saldo-contrato.ts#L410)):
 
 ```ts
 const sawReset = ordered.some(({ row }, index) => index > 0 && ...)
@@ -168,7 +168,7 @@ Para cada contrato: `opening` com o teto integral na data de início do ciclo, m
 
 Psiquiatria entra na coluna **especialista** da tabela de referência (12h 87.429,00 ·
 24h 174.858,00) — decisão de Caio. O código hoje
-([backfill-saldo-contrato.ts:301](../../scripts/backfill-saldo-contrato.ts#L301)) joga
+([backfill-saldo-contrato.ts:321](../../scripts/backfill-saldo-contrato.ts#L321)) joga
 psiquiatria na coluna generalista; a divergência fica registrada aqui.
 
 | Médico | CH | Ciclo desde | Teto | Consumo | Saldo |

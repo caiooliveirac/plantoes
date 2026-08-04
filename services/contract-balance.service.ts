@@ -4,6 +4,11 @@
  *
  * Nenhuma regra de negócio mora aqui — o cálculo é do módulo puro, a soma é da
  * view. Este arquivo só busca, converte para centavos e monta o read model.
+ *
+ * Vai mexer no saldo de contrato? Leia docs/saldo-contrato/README.md antes. O
+ * saldo veio de uma planilha editada à mão, e o que parece bug de cálculo aqui
+ * costuma ser dado de origem torto — inclusive saldo negativo que na verdade é
+ * consumo acumulado num contrato sem teto lançado.
  */
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
