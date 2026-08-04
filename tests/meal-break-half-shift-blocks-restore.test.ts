@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HALF_SHIFT_ROLE_LABEL } from "@/modules/operational/half-shift";
 import {
+    dropHalfShiftFromMealBreakSession,
     syncDaySessionState,
     type MealBreakDoctor,
     type MealBreakLunchSlot,
@@ -129,4 +130,62 @@ test("sem o MEIO plantão no roster a divisão volta inteira e fecha", () => {
             ["2154", "12:30"],
         ],
     );
+});
+
+// A regra fixa também precisa alcançar a sessão JÁ PERSISTIDA: o roster fica
+// gravado no payload e não é recalculado, então o deploy da regra sozinho não
+// tira o meio plantão de uma divisão em curso (foi o que manteve a 1361 na
+// enquete depois do redeploy de 04/08/2026).
+function boardRow(ramal: string, roleLabel: string | null) {
+    return {
+        postId: Number(ramal.replace(/\D/g, "")) || 1,
+        occupancyId: `reg-${ramal}`,
+        postCode: ramal,
+        postLabel: ramal,
+        defaultRole: "MR",
+        doctorId: `doc-${ramal}`,
+        doctorName: `Medico ${ramal}`,
+        displayName: `Medico ${ramal}`,
+        startedAt: "2026-08-04T10:00:00.000Z",
+        boardStartedAt: "2026-08-04T10:00:00.000Z",
+        scheduledEndAt: "2026-08-04T22:00:00.000Z",
+        shiftLabel: "SD" as const,
+        roleLabel,
+        ramalLabel: ramal,
+        status: "active" as const,
+        liveSource: "operations_v2",
+        liveUpdatedAt: null,
+    };
+}
+
+test("dropHalfShiftFromMealBreakSession destrava a divisão em curso", () => {
+    const board = {
+        generatedAt: "2026-08-04T19:00:00.000Z",
+        regulation: ROSTER.map((member) => boardRow(member.ramal, member.roleLabel)),
+        intervention: [],
+    };
+
+    const cleaned = dropHalfShiftFromMealBreakSession({ session: sessionWith(ROSTER), board });
+
+    assert.equal(cleaned.roster.some((doctor) => doctor.ramal === "1361"), false);
+    assert.deepEqual(cleaned.lunchQueue, []);
+    assert.equal(cleaned.stage, "completed");
+    // Os descansos do balão sobrevivem porque a fase de almoço fechou.
+    assert.equal(Object.keys(cleaned.restAssignments).length, 9);
+});
+
+test("papel vivo do quadro tem precedência: função virou MEIO no painel durante o turno", () => {
+    // No roster o 2152 é regulador comum; no quadro a chefia já trocou para MEIO.
+    const board = {
+        generatedAt: "2026-08-04T19:00:00.000Z",
+        regulation: ROSTER.map((member) => boardRow(
+            member.ramal,
+            member.ramal === "2152" ? HALF_SHIFT_ROLE_LABEL : member.roleLabel,
+        )),
+        intervention: [],
+    };
+
+    const cleaned = dropHalfShiftFromMealBreakSession({ session: sessionWith(ROSTER), board });
+    assert.equal(cleaned.roster.some((doctor) => doctor.ramal === "2152"), false);
+    assert.equal(cleaned.lunchAssignments["2152"], undefined);
 });

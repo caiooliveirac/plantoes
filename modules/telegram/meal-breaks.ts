@@ -2430,6 +2430,60 @@ function buildMealBreakRosterEntries(
     };
 }
 
+/**
+ * Tira do roster JÁ PERSISTIDO quem está como meio plantão. A regra fixa
+ * (04/08/2026) vale na montagem, mas o roster é gravado no payload da sessão e
+ * não é recalculado a cada leitura — uma sessão montada antes da regra, ou um
+ * médico cuja função virou MEIO no painel durante o turno, continuavam dentro
+ * da divisão. Consequência real: ele nunca escolhe, a fase de almoço não fecha
+ * e o sync apaga os descansos de todo mundo (incidente de 04/08/2026, ramal
+ * 1361).
+ *
+ * O papel vivo do quadro tem precedência sobre o do roster: é ele que a chefia
+ * edita no painel.
+ */
+export function dropHalfShiftFromMealBreakSession(params: {
+    session: MealBreakSession;
+    board: OperationalBoard;
+}) {
+    const liveRoleByRamal = new Map(
+        params.board.regulation
+            .filter((row) => row.status === "active")
+            .map((row) => [normalizeRamal(row.postCode), row.roleLabel] as const),
+    );
+
+    const halfShiftRamals = params.session.roster
+        .filter((doctor) => {
+            const liveRole = liveRoleByRamal.get(doctor.ramal);
+            return isHalfShiftRoleLabel(liveRole ?? doctor.roleLabel);
+        })
+        .map((doctor) => doctor.ramal);
+
+    if (halfShiftRamals.length === 0) {
+        return params.session;
+    }
+
+    const without = <TSlot extends string>(assignments: Record<string, TSlot>) =>
+        Object.fromEntries(
+            Object.entries(assignments).filter(([ramal]) => !halfShiftRamals.includes(ramal)),
+        ) as Record<string, TSlot>;
+
+    const next: MealBreakSession = {
+        ...params.session,
+        roster: params.session.roster.filter((doctor) => !halfShiftRamals.includes(doctor.ramal)),
+        mrvRamals: params.session.mrvRamals.filter((ramal) => !halfShiftRamals.includes(ramal)),
+        recipRamal: params.session.recipRamal && halfShiftRamals.includes(params.session.recipRamal)
+            ? null
+            : params.session.recipRamal,
+        lunchAssignments: without(params.session.lunchAssignments),
+        restAssignments: without(params.session.restAssignments),
+        nightWorkAssignments: without(params.session.nightWorkAssignments),
+        dinnerAssignments: without(params.session.dinnerAssignments),
+    };
+
+    return params.session.mode === "night" ? syncNightSessionState(next) : syncDaySessionState(next);
+}
+
 export function applyMealBreakContinuityStarts(params: {
     roster: MealBreakDoctor[];
     continuityStartedAtByRamal: Record<string, string>;
@@ -4699,6 +4753,9 @@ async function loadMealBreakSession(chatId: string, operationalDate: string, mod
             board,
         });
     }
+    // Meio plantão não participa da divisão nem quando a sessão foi montada
+    // antes dessa regra: sem isto ele trava a fila e o sync apaga os descansos.
+    session = dropHalfShiftFromMealBreakSession({ session, board });
 
     return session;
 }
