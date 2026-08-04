@@ -9,7 +9,7 @@
       "weeklyHours": 24,
       "category": "generalista",
       "ceilingBrl": 165732.0,
-      "expectedCycleStart": "2026-03-10",
+      "expectedCycleStart": "2026-03-01",
       "months": [
         {
           "month": "2026-04",
@@ -25,7 +25,7 @@
         }
       ],
       "expectedBalanceBrl": 140454.11,
-      "nota": "Março/2026 é o mês de entrada e ele não plantonou (a planilha fecha março em R$ 0,00). A planilha mostra −25.277,89, que é exatamente a soma de abril e maio."
+      "nota": "Março/2026 é o mês de entrada e ele não plantonou (a planilha fecha março em R$ 0,00). A planilha mostra −25.277,89, que é exatamente a soma de abril e maio. Ciclo corrigido de 2026-03-10 para 2026-03-01 em 2026-08-04: o dry-run mostrou que o banco usa o DIA 1 DO MÊS da admissão (a regra de 01-conferencia §3.1), não a data exata que o backfill-report exibe."
     },
     {
       "doctorName": "Gabriel Vitor do Amor Divino de Jesus",
@@ -33,7 +33,7 @@
       "weeklyHours": 24,
       "category": "generalista",
       "ceilingBrl": 165732.0,
-      "expectedCycleStart": "2026-03-25",
+      "expectedCycleStart": "2026-03-01",
       "months": [
         {
           "month": "2026-04",
@@ -49,7 +49,7 @@
         }
       ],
       "expectedBalanceBrl": 138363.66,
-      "nota": "Março/2026 fecha em R$ 0,00. A planilha mostra −27.368,34 = abril + maio."
+      "nota": "Março/2026 fecha em R$ 0,00. A planilha mostra −27.368,34 = abril + maio. Ciclo corrigido de 2026-03-25 para 2026-03-01 em 2026-08-04: o dry-run mostrou que o banco usa o DIA 1 DO MÊS da admissão (a regra de 01-conferencia §3.1), não a data exata que o backfill-report exibe."
     },
     {
       "doctorName": "Ketherynne Cabral Ferreira de Oliveira",
