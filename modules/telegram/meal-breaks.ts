@@ -1090,8 +1090,25 @@ function shouldExcludeRamalFromMealBreak(ramal: string) {
     return isPiamRegulationPost(ramal) || isNucleoRegulationPost(ramal);
 }
 
-function sanitizeMealBreakRosterForMode(roster: MealBreakDoctor[], _mode: MealBreakMode) {
-    return roster.filter((doctor) => !shouldExcludeRamalFromMealBreak(doctor.ramal));
+/** As MESMAS três regras fixas de `mapRegulationBoardEntry`: PIAM e NÚCLEO pelo
+ *  posto, MEIO plantão pela função.
+ *
+ *  Existem dois portões para o roster e a regra precisa valer nos dois. O
+ *  quadro ao vivo passa por `mapRegulationBoardEntry`; tudo que RECONSTRÓI uma
+ *  sessão (sanitizeMealBreakSessionState ao carregar do banco, buildSessionState
+ *  ao montar/reiniciar, e a restauração a partir do resumo do grupo) passa por
+ *  aqui. Enquanto este portão olhava só o ramal, um meio plantão que já
+ *  estivesse no roster gravado sobrevivia à reconstrução: voltava a ser chamado
+ *  para escolher almoço e, por ocupar vaga, mudava a capacidade dos horários —
+ *  derrubando escolhas já fechadas de quem estava certo. */
+function shouldExcludeDoctorFromMealBreak(doctor: Pick<MealBreakDoctor, "ramal" | "roleLabel">) {
+    return shouldExcludeRamalFromMealBreak(doctor.ramal) || isHalfShiftRoleLabel(doctor.roleLabel);
+}
+
+/** Exportada para o teste de regressão: é o portão que deixou o meio plantão
+ *  voltar para a divisão depois de a sessão ser reconstruída. */
+export function sanitizeMealBreakRosterForMode(roster: MealBreakDoctor[], _mode: MealBreakMode) {
+    return roster.filter((doctor) => !shouldExcludeDoctorFromMealBreak(doctor));
 }
 
 function sanitizeMealBreakSessionState(session: MealBreakSession, mode: MealBreakMode): MealBreakSession {
