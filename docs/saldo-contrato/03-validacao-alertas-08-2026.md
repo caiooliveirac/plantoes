@@ -177,10 +177,13 @@ e nos 5 meses de 2026: zero ocorrências. O consumo do ciclo começa onde a linh
 
 ## 7. O que ainda corrigir no código
 
-1. **`awaitingOpeningBalance` não pode depender de consumo.** A pergunta certa é "existe
-   lançamento de abertura no razão?", não "o médico ficou parado?". Enquanto não houver
-   abertura, o contrato não entra em nenhum alerta de saldo — entra numa lista de
-   pendência de cadastro, que é outra conversa.
+1. ~~**`awaitingOpeningBalance` não pode depender de consumo.**~~ **Feito em 2026-08-04.**
+   A flag passou a ser `ledger.openingDate == null` — existe lançamento de abertura no
+   razão, sim ou não. O sinal já estava carregado em `loadLedgerBreakdown`, então não
+   custou query nem migration. Enquanto não houver abertura, o contrato fica fora de
+   todo alerta de saldo e aparece só na contagem "aguardando o saldo de abertura" do
+   digest. Cobre os 13 de renovação pendente, que continuam sem abertura.
+   Regressão em [tests/contract-balance-alerts.test.ts](../../tests/contract-balance-alerts.test.ts).
 2. **Detector de teto não carregado**: aceitar célula vazia seguida de série
    monotonicamente decrescente e negativa, não só o `0,00` exato.
 3. **Reimportar Francisco** a partir da planilha corrigida (+153.128,27 em 31/05).
