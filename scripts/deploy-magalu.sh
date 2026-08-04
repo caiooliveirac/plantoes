@@ -73,7 +73,11 @@ if [ "$RUN_MIGRATIONS" = "--run-migrations" ]; then
   echo "=== backup do banco antes das migrações ==="
   mkdir -p "$BACKUP_DIR"
   ts=$(date +%Y%m%dT%H%M%S)
-  pg_dump "$DATABASE_URL" | gzip > "$BACKUP_DIR/db-$ts.sql.gz"
+  # Tabelas backup_* são snapshots ad-hoc de scripts de reparo, muitas vezes
+  # criadas por outro role (o pg_dump falha com "permission denied" ao lockeá-las
+  # — caso backup_20260804_reparo_continuidade). Não precisam entrar no backup
+  # pré-migração: são elas mesmas backups.
+  pg_dump "$DATABASE_URL" --exclude-table='*.backup_*' | gzip > "$BACKUP_DIR/db-$ts.sql.gz"
   ls -t "$BACKUP_DIR"/db-*.sql.gz | tail -n +6 | xargs -r rm
   echo "backup: db-$ts.sql.gz"
   echo "=== npm run db:migrate ==="
