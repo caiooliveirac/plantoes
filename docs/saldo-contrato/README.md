@@ -63,19 +63,41 @@ Dados versionados: [saldo-overrides.json](saldo-overrides.json),
    174.858,00), e é assim que `tetos-pendentes.json` está montado. **O código e os
    dados divergem de propósito** — se for unificar, mexa nos dois.
 
+## Estado verificado em produção — 2026-08-04
+
+> **Esta seção vale mais que o `backfill-report.md`.** Foi levantada rodando os scripts
+> em dry-run contra o banco de produção (runs `30932415540` e `30933358801`), não lida
+> de documento nenhum. Foi ela que desmentiu duas suposições que eu tinha tirado do
+> relatório do backfill.
+
+O razão está **muito mais completo** do que os documentos anteriores sugerem:
+
+- Os cinco overrides de [saldo-overrides.json](saldo-overrides.json) **estão aplicados**:
+  Acacio 140.834,60 · Karen −6.896,24 · Karla 284.605,23 · Renê 137.391,25 ·
+  Venandra 168.691,46.
+- **Francisco Isensee está correto**: abertura de 169.156,55 em 01/05, fecha maio em
+  +153.128,27. O −46.778,94 que o `backfill-report.md` registra **nunca esteve** no
+  razão vivo — é retrato de uma execução anterior.
+- O `247/2025` do Leonardo Copque já está `terminated`.
+- Dos 19 contratos de [tetos-pendentes.json](tetos-pendentes.json), **17 já tinham
+  abertura**. Os dois que faltavam foram lançados em 2026-08-04 (run `30933586587`):
+  João Pedro Miguez Pinto **140.454,11** e Gabriel Vitor do Amor Divino **138.363,66**.
+
+Lição para a próxima vez: **rode o dry-run antes de acreditar em qualquer documento
+desta pasta.** Os scripts leem o banco; os documentos são fotografias que envelhecem.
+
 ## Quem ainda pode dar problema
 
-Estado em 2026-08-04, depois do dossiê §03. Nada aqui dispara alerta falso (o
+Estado em 2026-08-04, verificado em produção. Nada aqui dispara alerta falso (o
 `awaitingOpeningBalance` foi consertado), mas nada aqui tem teto vigiado.
 
 | Quem | Situação | O que falta |
 |---|---|---|
-| Thiago Borghi Petrus Costa | Saldo calculado (163.159,62), ciclo **assumido** a partir da 1ª aparição | Data de admissão real. Só entra com `--permitir-ciclo-assumido`. |
-| Stephane Izabor de Oliveira Costa | Saldo confiável (160.752,52), ciclo **assumido** | Idem. |
+| Thiago Borghi Petrus Costa | **Não tem contrato no banco** (o dry-run devolve `SEM_CONTRATO`). Saldo calculado seria 163.159,62, com ciclo assumido | Criar o contrato: número, data de admissão e janela do ciclo. Só depois o lançamento funciona, e ainda exige `--permitir-ciclo-assumido`. |
+| Stephane Izabor de Oliveira Costa | Contrato existe e **já tem abertura** (160.752,52) | Só a data de admissão, para a janela do ciclo deixar de ser suposta. |
 | Vinicius Pereira de Carvalho | Linha em branco na planilha, sem nº de contrato | Cadastro completo: contrato, ciclo e saldo. |
 | Lucyane Santana Teixeira · Giulia Santos dos Reis Souza · Gabriela Alves Costa · Isabella Pereira da Nóbrega · Antonio Elcio Santos Silva · Larissa Osthues Revert Silva · Victor Vilas Boas Mangabeira | Plantonando e sendo pagos, **sem contrato nenhum** no sistema (grupo C de [02-pendencias](02-pendencias-pos-deploy.md)) | Cadastro completo. São os que mais doem: produzem sem nenhum controle de teto. |
 | Caroline Luane Rabelo da Silva | CH "72" fora da tabela de referência | Teto definido à mão. |
-| Leonardo Copque Magalhães (247/2025) | Contrato antigo, substituído pelo 184/2026 | Encerramento — já previsto em `tetos-pendentes.json`. |
 
 Os **estatutários** (36 médicos, grupo D de [02-pendencias](02-pendencias-pos-deploy.md))
 não têm teto PJ e **não devem** receber saldo. Se algum aparecer pedindo cadastro na
