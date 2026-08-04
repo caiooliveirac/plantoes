@@ -1,2 +1,2 @@
-APPLY em 2026-08-04: lancamento do teto de Joao Miguez e Gabriel Vitor.
-Dry-run confirmatorio: run 30933358801, 2 alteracoes, numeros conferidos.
+Dry-run de confirmacao pos-apply em 2026-08-04.
+Esperado: os dois agora reportam JA_LANCADO.
