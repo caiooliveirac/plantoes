@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { modalBackdrop, modalPanel } from "@/lib/board/motion";
+import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { buildEarlyDepartureCreditNote, buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 
 interface DeactivateDialogProps {
     open: boolean;
@@ -16,6 +18,11 @@ interface DeactivateDialogProps {
     targetCode: string;
     targetLabel: string;
     occupantName: string | null;
+    /** Dados da ocupação ativa para o preview da régua de saída antecipada. */
+    occupantStartedAt?: string | null;
+    occupantScheduledStartAt?: string | null;
+    occupantScheduledEndAt?: string | null;
+    occupantRoleLabel?: string | null;
     isReactivate: boolean;
     onSaved?: () => void;
 }
@@ -38,6 +45,10 @@ export function DeactivateDialog({
     targetCode,
     targetLabel,
     occupantName,
+    occupantStartedAt = null,
+    occupantScheduledStartAt = null,
+    occupantScheduledEndAt = null,
+    occupantRoleLabel = null,
     isReactivate,
     onSaved,
 }: DeactivateDialogProps) {
@@ -55,6 +66,28 @@ export function DeactivateDialog({
 
     const subject = domain === "regulation" ? "ramal" : "USA";
     const action = isReactivate ? "Reativar" : "Desativar";
+
+    // Desativar com ocupante é uma retirada: preview da mesma régua que o
+    // servidor aplica (early-departure.ts), com o texto oficial da coordenação.
+    const earlyDeparturePreview = useMemo(() => {
+        if (isReactivate || !occupantName || !effectiveAt || !isEarlyDepartureEligible({ roleLabel: occupantRoleLabel })) {
+            return null;
+        }
+        const departureAt = new Date(effectiveAt);
+        if (Number.isNaN(departureAt.getTime())) {
+            return null;
+        }
+        const classification = classifyEarlyDeparture({
+            departureAt,
+            scheduledStartAt: occupantScheduledStartAt,
+            scheduledEndAt: occupantScheduledEndAt,
+            startedAt: occupantStartedAt,
+        });
+        return {
+            summary: buildEarlyDepartureSummary(classification.outcome, { name: occupantName }),
+            creditNote: buildEarlyDepartureCreditNote(classification),
+        };
+    }, [isReactivate, occupantName, effectiveAt, occupantRoleLabel, occupantScheduledStartAt, occupantScheduledEndAt, occupantStartedAt]);
 
     const submit = async () => {
         if (!effectiveAt) {
@@ -142,6 +175,16 @@ export function DeactivateDialog({
                                         <p>
                                             Esta hora é a que vai para o <strong>banco de horas</strong> de {occupantName}.
                                             Se a saída foi antes ou depois, ajuste agora — depois fica como auditoria.
+                                        </p>
+                                    </div>
+                                )}
+
+                                {earlyDeparturePreview && (
+                                    <div className="board-modal-warning">
+                                        <strong>O que esta retirada significa</strong>
+                                        <p>
+                                            {earlyDeparturePreview.summary}
+                                            {earlyDeparturePreview.creditNote ? ` ${earlyDeparturePreview.creditNote}` : ""}
                                         </p>
                                     </div>
                                 )}

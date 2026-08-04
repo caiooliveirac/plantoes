@@ -209,6 +209,54 @@ Banco de horas nao deve reutilizar automaticamente a regra visual do board.
 
 Essas duas tolerancias existem por motivos diferentes e nao devem ser fundidas sem revisao de negocio.
 
+## Retirada/saida antecipada decidida pela chefia
+
+Regra nova (2026-08), fonte: `modules/operational/early-departure.ts`. Alem dos
+tres relogios classicos, ela mexe num quarto eixo: o de **pagamento** (fracao do
+plantao assinado). Vale para intervencao E regulacao.
+
+Tudo e medido a partir da JANELA do turno (a agendada da ocupacao, recortada
+pelo turno operacional em que a saida acontece), nunca da chegada do medico.
+"Horas trabalhadas" comecam em `max(chegada, inicio da janela)`: chegar cedo
+nao infla credito; chegar atrasado so credita o que foi cumprido.
+
+| Momento da retirada (janela de 12h) | Desfecho | Pagamento | Banco de horas |
+| --- | --- | --- | --- |
+| antes de completar 6h de janela | `bank_only` | nao assina o plantao | horas trabalhadas viram credito |
+| 6h completas, faltando mais de 2h | `half_shift` | assina MEIO plantao | excedente de 6h trabalhadas vira credito |
+| faltando 2h ou menos para o fim | `full_shift` | assina inteiro | regra normal (sem faixa) |
+
+Gatilhos que aplicam a regua automaticamente (decisao da chefia):
+
+- botao "Retirar" do painel (`chiefKick` em `POST /api/*/occupancies/[id]/end`)
+- desativar posto/base com ocupante (`deactivateRegulationPost` /
+  `deactivateInterventionBase`)
+- `/retirar` e `/desativar` no bot do Telegram
+
+Saida declarada pelo proprio medico segue a regra normal — MAS, no verificador
+de saida do chefe (`DepartureVerifier`), quando a saida confirmada cai na faixa
+6h–10h, o chefe pode optar por "Creditar MEIO plantao" (`creditHalfShift` no
+`/confirm-departure`).
+
+Detalhes de implementacao:
+
+- desfecho persistido em `early_departure_outcome` nas duas tabelas de ocupacao
+  (migration 0041); `full_shift` e so auditoria, sem efeito.
+- banco de horas: rule codes `EARLY_DEPARTURE_BANK_ONLY` /
+  `EARLY_DEPARTURE_HALF_CREDIT` substituem a matematica padrao do grupo; sem
+  tolerancia de 15 min (a hora e a confirmada pela chefia) e sem debito.
+- pagamento: `paymentUnit` vira 0 (`bank_only`) ou 0.5 (`half_shift`) no slot em
+  que a saida caiu; um "P" retirado no segundo turno mantem o primeiro inteiro.
+  Plantao `bank_only` nao entra na folha de ponto.
+- INDEPENDENTE do meio plantao declarado na chegada (`role_label MEIO_PLANTAO`,
+  janela 11:30–17:00): aquele e uma funcao com janela propria e NAO entra nesta
+  regua. Sao dois caminhos distintos para a fracao 0.5 na nota.
+- os textos exibidos no painel e anunciados pelo bot sao os oficiais da
+  coordenacao, em `modules/operational/early-departure-copy.ts` — o robo so
+  interpola nome/hora.
+- o bot anuncia o desfecho no grupo em toda retirada via `chiefKick`, `/retirar`
+  e (novidade) tambem quando uma desativacao fecha cobertura de alguem.
+
 ## Invariantes para evolucao
 
 Toda mudanca futura deve preservar estas invariantes:

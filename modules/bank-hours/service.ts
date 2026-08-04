@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import { BANK_HOURS_RULE_VERSION, applyAnomalyGuard, calculateBankHours } from "@/modules/bank-hours/calculator";
+import { BANK_HOURS_RULE_VERSION, applyAnomalyGuard, buildEarlyDepartureBankHours, calculateBankHours } from "@/modules/bank-hours/calculator";
 import { buildContinuityBankHoursSpan } from "@/modules/bank-hours/continuity";
+import { EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES, classifyEarlyDeparture, isPaymentAffectingEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { getDb } from "@/db";
 import { bankHoursBalanceOverrides, bankHoursEntries, doctors, interventionOccupancies, regulationOccupancies } from "@/db/schema";
 import { extractDoctorIsResidente, extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
@@ -109,6 +110,7 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
             scheduledStartAt: occupancy.scheduledStartAt,
             scheduledEndAt: occupancy.scheduledEndAt,
             shiftLabel: occupancy.shiftLabel,
+            earlyDepartureOutcome: occupancy.earlyDepartureOutcome,
         })),
         ...intervention.map((occupancy: typeof interventionOccupancies.$inferSelect) => ({
             occupancyId: occupancy.id,
@@ -122,6 +124,7 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
             scheduledStartAt: occupancy.scheduledStartAt,
             scheduledEndAt: occupancy.scheduledEndAt,
             shiftLabel: occupancy.shiftLabel,
+            earlyDepartureOutcome: occupancy.earlyDepartureOutcome,
         })),
     ];
 }
@@ -199,7 +202,36 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
         actualStartAt: span.actualStartAt,
         actualEndAt: span.actualEndAt,
     });
-    const calculation = applyAnomalyGuard(rawCalculation);
+
+    // Retirada/saída antecipada decidida pela chefia: o desfecho gravado no
+    // ÚLTIMO membro do grupo substitui a matemática padrão — o saldo passa a
+    // ser o crédito da faixa (bank_only: horas trabalhadas; half_shift:
+    // excedente de 6h). Turnos anteriores da cadeia já são plantões completos;
+    // a régua mede só o segmento da janela em que a saída ocorreu.
+    const tailOccupancyId = span.memberOccupancyIds[span.memberOccupancyIds.length - 1];
+    const tailOccupancy = meaningful.find((o) => o.occupancyId === tailOccupancyId) ?? null;
+    const earlyDepartureCalculation = tailOccupancy
+        && isPaymentAffectingEarlyDepartureOutcome(tailOccupancy.earlyDepartureOutcome)
+        ? (() => {
+            const classification = classifyEarlyDeparture({
+                departureAt: span.actualEndAt!,
+                scheduledStartAt: tailOccupancy.scheduledStartAt,
+                scheduledEndAt: tailOccupancy.scheduledEndAt,
+                startedAt: span.actualStartAt,
+            });
+            const outcome = tailOccupancy.earlyDepartureOutcome as "bank_only" | "half_shift";
+            return buildEarlyDepartureBankHours({
+                outcome,
+                workedMinutes: classification.workedMinutes,
+                bankCreditMinutes: outcome === "bank_only"
+                    ? classification.workedMinutes
+                    : Math.max(0, classification.workedMinutes - EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES),
+                arrivalDelayMinutes: rawCalculation.arrivalDelayMinutes,
+            });
+        })()
+        : null;
+
+    const calculation = earlyDepartureCalculation ?? applyAnomalyGuard(rawCalculation);
     const override = (await listBankHoursBalanceOverridesByContinuityGroupIds(db, [continuityGroupId])).get(continuityGroupId) ?? null;
     const balanceMinutes = override?.balanceMinutes ?? calculation.balanceMinutes;
     const ruleCode = override ? MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE : calculation.ruleCode;

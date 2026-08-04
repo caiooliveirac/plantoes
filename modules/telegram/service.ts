@@ -52,6 +52,9 @@ import {
     setDoctorPreferredOperationalRole,
     updateDoctorDirectoryEntry,
 } from "@/modules/doctors/service";
+import { isStoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
+import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
+import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
 import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, isSameOperationalShiftArrival, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
@@ -3151,6 +3154,12 @@ async function handleOperationalBaseStateCommand(params: {
                 `${isRegulation ? "Ramal" : "Base"} ${command.targetCode} ${isRegulation ? "desativado" : "desativada"} às ${formatTelegramReplyTime(eventAt)}.${result.closedOccupancyIds.length > 0 ? ` ${result.closedOccupancyIds.length} cobertura${result.closedOccupancyIds.length > 1 ? "s foram" : " foi"} encerrada${result.closedOccupancyIds.length > 1 ? "s" : ""} com auditoria.` : " Quadro atualizado."}`,
                 message.message_id,
             );
+            // Anúncio da retirada (com o desfecho da régua) nos chats de anúncio.
+            void announceDeactivationDepartures({
+                domain: isRegulation ? "regulation" : "intervention",
+                targetId: target.id,
+                closedOccupancies: result.closedOccupancies,
+            });
             return { ok: true, updated: true };
         }
 
@@ -6889,9 +6898,11 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             return { ok: true, ignored: true };
         }
 
+        // /retirar é decisão da chefia: aplica a régua de saída antecipada
+        // (early-departure.ts) e o desfecho entra no aviso do grupo.
         const updated = command.sector === "REGULATION"
-            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null))
-            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt }, resolveCommandAuditUserId(null));
+            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefWithdrawal: true }, resolveCommandAuditUserId(null))
+            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefWithdrawal: true }, resolveCommandAuditUserId(null));
         const doctorName = doctor.fullName;
 
         await markTelegramProcessed(logId, {
@@ -6903,11 +6914,15 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             relatedOccupancyId: updated.id,
             resolutionData: { actorRoles: actor.roles, commandName: command.name, usedActiveDoctorFallback },
         });
-        await sendMessage(message.chat.id, pickTelegramReply("command_removed", message.message_id, {
+        const removedReply = pickTelegramReply("command_removed", message.message_id, {
             target: command.targetCode,
             name: doctorName,
             time: formatTelegramReplyTime(eventAt),
-        }), message.message_id);
+        });
+        const removedOutcomeLine = isStoredEarlyDepartureOutcome(updated.earlyDepartureOutcome)
+            ? `\n${buildEarlyDepartureSummary(updated.earlyDepartureOutcome, { name: doctorName })}`
+            : "";
+        await sendMessage(message.chat.id, `${removedReply}${removedOutcomeLine}`, message.message_id);
         return { ok: true, occupancyId: updated.id };
     }
 

@@ -25,6 +25,18 @@ function baseNomeCurto(domain: "regulation" | "intervention"): string {
 const MEIO_PLANTAO_ENTRADA = "11:00";
 const MEIO_PLANTAO_SAIDA = "17:00";
 
+function horaSaoPaulo(value: string | null): string | null {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "America/Sao_Paulo",
+    });
+}
+
 export default async function FolhaPontoPage({
     params,
     searchParams,
@@ -70,16 +82,27 @@ export default async function FolhaPontoPage({
 
     const plantoes: Plantao[] = board.payableShifts
         .filter((shift) => shift.doctorId === medicoId)
+        // Retirada antecipada antes de 6h de janela: o plantão não é assinado
+        // (paymentUnit 0, só banco de horas) — não entra na folha.
+        .filter((shift) => shift.paymentUnit > 0)
         .map((shift) => {
             // Plantão cheio usa o horário padrão do turno (07–19 / 19–07). Meio
             // plantão (paymentUnit < 1) entra com horário FIXO cravado 11:00–17:00,
-            // independentemente do horário real de chegada.
+            // independentemente do horário real de chegada. Exceção: meio plantão
+            // por RETIRADA antecipada usa os horários reais de chegada/saída —
+            // cravar 11:00–17:00 inventaria uma janela que não aconteceu.
             const meioPlantao = shift.paymentUnit < 1;
+            const meioPorRetirada = shift.earlyDepartureOutcome === "half_shift";
+            const horaEntradaReal = meioPorRetirada ? horaSaoPaulo(shift.startedAt) : null;
+            const horaSaidaReal = meioPorRetirada ? horaSaoPaulo(shift.endedAt) : null;
+            const horarioReal = horaEntradaReal && horaSaidaReal
+                ? { horaEntrada: horaEntradaReal, horaSaida: horaSaidaReal }
+                : null;
             return {
                 dia: dayFromOperationalDate(shift.operationalDate),
                 turno: shift.shiftLabel as Turno,
                 baseNomeCurto: baseNomeCurto(shift.domain),
-                ...(meioPlantao ? { horaEntrada: MEIO_PLANTAO_ENTRADA, horaSaida: MEIO_PLANTAO_SAIDA } : {}),
+                ...(horarioReal ?? (meioPlantao ? { horaEntrada: MEIO_PLANTAO_ENTRADA, horaSaida: MEIO_PLANTAO_SAIDA } : {})),
             };
         })
         .filter((p) => p.dia >= 1 && p.dia <= 31);

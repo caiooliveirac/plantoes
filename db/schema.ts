@@ -255,6 +255,12 @@ export const regulationOccupancies = operationsV2.table(
         departureConfirmedAt: timestamp("departure_confirmed_at", { withTimezone: true }),
         departureConfirmedByUserId: uuid("departure_confirmed_by_user_id").references(() => users.id),
         departureConfirmedNote: text("departure_confirmed_note"),
+        // Desfecho de retirada/saída antecipada decidida pela chefia, medido a
+        // partir da JANELA do turno: 'bank_only' (não assina, horas viram banco),
+        // 'half_shift' (assina meio, excedente de 6h vira banco), 'full_shift'
+        // (assina inteiro — só auditoria). NULL = sem decisão. Independente do
+        // role_label MEIO_PLANTAO. Régua: modules/operational/early-departure.ts.
+        earlyDepartureOutcome: varchar("early_departure_outcome", { length: 10 }),
     },
     (table) => [
         index("regulation_occupancies_doctor_idx").on(table.doctorId),
@@ -298,6 +304,8 @@ export const interventionOccupancies = operationsV2.table(
         departureConfirmedAt: timestamp("departure_confirmed_at", { withTimezone: true }),
         departureConfirmedByUserId: uuid("departure_confirmed_by_user_id").references(() => users.id),
         departureConfirmedNote: text("departure_confirmed_note"),
+        // Mesmo contrato da coluna homônima em regulation_occupancies — ver lá.
+        earlyDepartureOutcome: varchar("early_departure_outcome", { length: 10 }),
     },
     (table) => [
         index("intervention_occupancies_doctor_idx").on(table.doctorId),
