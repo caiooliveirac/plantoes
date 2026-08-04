@@ -94,12 +94,38 @@ export interface MealBreakSessionEvent {
     | "latecomer_joined"
     | "latecomer_rewind"
     | "session_restored"
+    | "chief_pin_applied"
+    | "chief_pin_rewind"
     | "undo_applied"
     | "session_completed";
     ramal?: string;
     slot?: MealBreakLunchSlot | MealBreakRestSlot | MealBreakDinnerSlot | MealBreakNightWorkSlot;
     actorTelegramId: string | null;
     recordedAt: string;
+}
+
+/**
+ * Horários FIXADOS pela chefia no painel logado. Autoridade absoluta: são
+ * reaplicados no fim de todo sync, passando por cima das regras que, de outra
+ * forma, desfariam a mudança no mesmo instante — apagamento de descanso
+ * enquanto a fase de almoço não fecha, 14:30 automático de quem almoçou 13:30,
+ * separação de par COI, capacidade do horário e exclusões de elegibilidade.
+ *
+ * Existe porque o clique do chefe gravava e o sync desfazia logo depois: a API
+ * respondia 200 e o horário sumia da tela, o que parecia bug (relato de
+ * 04/08/2026 — "clico e não funciona diversas vezes").
+ *
+ * Fixar `null` desfixa (volta a valer a regra automática).
+ */
+export interface MealBreakChiefPins {
+    lunch: Record<string, MealBreakLunchSlot>;
+    rest: Record<string, MealBreakRestSlot>;
+    nightWork: Record<string, MealBreakNightWorkSlot>;
+    dinner: Record<string, MealBreakDinnerSlot>;
+}
+
+export function emptyMealBreakChiefPins(): MealBreakChiefPins {
+    return { lunch: {}, rest: {}, nightWork: {}, dinner: {} };
 }
 
 export interface MealBreakUndoSnapshot {
@@ -142,6 +168,8 @@ export interface MealBreakSession {
     nightWorkQueue: string[];
     dinnerQueue: string[];
     undoSnapshots: MealBreakUndoSnapshot[];
+    /** Fixações da chefia (painel). Ausente em sessões antigas — ver hydrate. */
+    chiefPins?: MealBreakChiefPins;
     createdAt: string;
     updatedAt: string;
     events: MealBreakSessionEvent[];
@@ -1149,6 +1177,10 @@ function hydrateMealBreakSession(session: MealBreakSession): MealBreakSession {
         lunchQueue: sanitizedSession.lunchQueue ?? [],
         restQueue: sanitizedSession.restQueue ?? [],
         undoSnapshots: sanitizedSession.undoSnapshots ?? [],
+        chiefPins: {
+            ...emptyMealBreakChiefPins(),
+            ...(sanitizedSession.chiefPins ?? {}),
+        },
     };
 
     return mode === "night" ? syncNightSessionState(hydrated) : syncDaySessionState(hydrated);
@@ -2002,7 +2034,84 @@ export function resolveMealBreakLunchCapacities(totalDoctors: number) {
     return resolveThreeSlotCapacities(totalDoctors);
 }
 
+export /**
+ * Reaplica as fixações da chefia DEPOIS de toda a lógica automática e recalcula
+ * as filas em cima do resultado. É o último passo do sync de propósito: as
+ * regras anteriores podem ter apagado ou remanejado o horário fixado, e a
+ * fixação tem que sobreviver a todas elas (autoridade absoluta do painel).
+ */
+function applyMealBreakChiefPins(session: MealBreakSession): MealBreakSession {
+    const pins = session.chiefPins;
+    if (!pins) {
+        return session;
+    }
+
+    const rosterRamals = new Set(session.roster.map((doctor) => doctor.ramal));
+    const pinnedIn = <TSlot extends string>(source: Record<string, TSlot>) =>
+        Object.entries(source).filter(([ramal]) => rosterRamals.has(ramal));
+
+    const lunchPins = pinnedIn(pins.lunch ?? {});
+    const restPins = pinnedIn(pins.rest ?? {});
+    const nightWorkPins = pinnedIn(pins.nightWork ?? {});
+    const dinnerPins = pinnedIn(pins.dinner ?? {});
+    if (lunchPins.length + restPins.length + nightWorkPins.length + dinnerPins.length === 0) {
+        return session;
+    }
+
+    const lunchAssignments = { ...session.lunchAssignments, ...Object.fromEntries(lunchPins) };
+    const restAssignments = { ...session.restAssignments, ...Object.fromEntries(restPins) };
+    const nightWorkAssignments = { ...session.nightWorkAssignments, ...Object.fromEntries(nightWorkPins) };
+    const dinnerAssignments = { ...session.dinnerAssignments, ...Object.fromEntries(dinnerPins) };
+
+    // Quem foi fixado sai das filas de pendência — já tem horário por decisão da
+    // chefia, não pode continuar sendo cobrado a escolher.
+    const lunchQueue = session.lunchQueue.filter((ramal) => !lunchAssignments[ramal]);
+    const restQueue = session.restQueue.filter((ramal) => !restAssignments[ramal]);
+    const nightWorkQueue = session.nightWorkQueue.filter((ramal) => !nightWorkAssignments[ramal]);
+    const dinnerQueue = session.dinnerQueue.filter((ramal) => !dinnerAssignments[ramal]);
+
+    const stage = session.stage === "awaiting_confirmation"
+        ? "awaiting_confirmation"
+        : session.mode === "night"
+            ? (nightWorkQueue.length > 0
+                ? "awaiting_night_work_choice"
+                : dinnerQueue.length > 0 ? "awaiting_dinner_choice" : "completed")
+            : (!session.recipRamal
+                ? "awaiting_recip"
+                : !session.mrvLunch1230Ramal
+                    ? "awaiting_mrv_lunch"
+                    : lunchQueue.length > 0
+                        ? "awaiting_lunch_choice"
+                        : restQueue.length > 0
+                            ? "awaiting_rest_choice"
+                            : "completed");
+
+    return {
+        ...session,
+        lunchAssignments,
+        restAssignments,
+        nightWorkAssignments,
+        dinnerAssignments,
+        lunchQueue,
+        restQueue,
+        nightWorkQueue,
+        dinnerQueue,
+        stage,
+    } satisfies MealBreakSession;
+}
+
+// As fixações da chefia entram DEPOIS de todo o resto — ver
+// applyMealBreakChiefPins. Qualquer caminho que sincronize a sessão passa por
+// aqui, então não existe rota que desfaça o clique do painel.
 export function syncDaySessionState(session: MealBreakSession) {
+    return applyMealBreakChiefPins(syncDaySessionStateCore(session));
+}
+
+export function syncNightSessionState(session: MealBreakSession) {
+    return applyMealBreakChiefPins(syncNightSessionStateCore(session));
+}
+
+function syncDaySessionStateCore(session: MealBreakSession) {
     const isolatedRamals = resolveDayMealBreakIsolatedRamals(session);
     const isolatedSet = new Set(isolatedRamals);
     const discretionaryRamals = resolveDayMealBreakDiscretionaryRamals(session);
@@ -2131,7 +2240,7 @@ export function syncDaySessionState(session: MealBreakSession) {
     } satisfies MealBreakSession;
 }
 
-function syncNightSessionState(session: MealBreakSession) {
+function syncNightSessionStateCore(session: MealBreakSession) {
     const dinnerDurationAssignments = Object.fromEntries(
         session.roster.map((doctor) => [doctor.ramal, resolveNightDinnerDuration(doctor)]),
     ) as Record<string, MealBreakDinnerDuration>;
@@ -2452,8 +2561,21 @@ export function dropHalfShiftFromMealBreakSession(params: {
             .map((row) => [normalizeRamal(row.postCode), row.roleLabel] as const),
     );
 
+    // Fixação da chefia vence a regra automática: se ela deu horário a alguém de
+    // meio plantão pelo painel, ele fica (autoridade absoluta do botão).
+    const pins = params.session.chiefPins;
+    const pinnedRamals = new Set([
+        ...Object.keys(pins?.lunch ?? {}),
+        ...Object.keys(pins?.rest ?? {}),
+        ...Object.keys(pins?.nightWork ?? {}),
+        ...Object.keys(pins?.dinner ?? {}),
+    ]);
+
     const halfShiftRamals = params.session.roster
         .filter((doctor) => {
+            if (pinnedRamals.has(doctor.ramal)) {
+                return false;
+            }
             const liveRole = liveRoleByRamal.get(doctor.ramal);
             return isHalfShiftRoleLabel(liveRole ?? doctor.roleLabel);
         })
@@ -6104,6 +6226,128 @@ async function ensureMealBreakDoctorInSession(params: {
     };
 }
 
+/**
+ * Inclui no roster um ramal que a inclusão automática recusaria (PIAM/NUCLEO,
+ * meio plantão, outro turno), porque a chefia mandou explicitamente pelo painel.
+ * Só recusa o que é impossível: ramal sem ninguém ativo no quadro — aí não há
+ * médico a quem atribuir horário.
+ */
+async function forceMealBreakDoctorIntoSession(params: {
+    session: MealBreakSession;
+    ramal: string;
+    mode: MealBreakMode;
+    referenceAt: Date;
+    reason: MealBreakOutOfDivisionReason;
+}): Promise<MealBreakSession> {
+    if (params.reason === "inactive") {
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(params.ramal, "inactive"));
+    }
+
+    const board = await getOperationalBoard();
+    const row = board.regulation.find(
+        (candidate) => candidate.status === "active" && normalizeRamal(candidate.postCode) === params.ramal,
+    );
+    if (!row || !row.doctorId || !row.startedAt) {
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(params.ramal, "inactive"));
+    }
+
+    return {
+        ...params.session,
+        roster: [
+            ...params.session.roster,
+            {
+                doctorId: row.doctorId,
+                ramal: params.ramal,
+                name: formatDoctorSurfaceName({
+                    fullName: row.doctorName,
+                    displayName: row.displayName,
+                    fallback: row.postCode,
+                }),
+                domain: "regulation",
+                arrivalStartedAt: row.startedAt,
+                startedAt: row.boardStartedAt ?? row.startedAt,
+                shiftLabel: params.mode === "night" ? "SN" : "SD",
+                roleLabel: nullifyGenericRegulatorRole(resolveOperationalRoleLabel({
+                    domain: "regulation",
+                    code: params.ramal,
+                    shiftLabel: params.mode === "night" ? "SN" : "SD",
+                    roleLabel: row.roleLabel,
+                    defaultRole: row.defaultRole,
+                })),
+            },
+        ],
+    };
+}
+
+/**
+ * Rebobina provocada por uma fixação da chefia no meio da divisão. Mesma régua
+ * do retardatário: quem escolheu quando o horário fixado JÁ estava lotado (ou
+ * ficou lotado agora por causa da fixação) não escolheu entre todas as opções,
+ * e reescolhe. Quem escolheu com tudo livre é mantido.
+ *
+ * O pivô nunca é o próprio fixado, e escolhas anteriores à fixação que não
+ * tocam o horário afetado ficam intactas — é o "voltar ao ponto onde a troca
+ * não interfere em nada".
+ */
+export function resolveMealBreakChiefRewind(params: {
+    before: MealBreakSession;
+    after: MealBreakSession;
+    pinnedRamal: string;
+}): MealBreakLatecomerRewind | null {
+    const { before, after, pinnedRamal } = params;
+    const specs: MealBreakRewindStageSpec[] = before.mode === "night"
+        ? [
+            { key: "night_work", pool: NIGHT_WORK_SLOTS, oldCapacities: before.nightWorkCapacities, newCapacities: after.nightWorkCapacities, eventType: "night_work_selected" },
+            { key: "dinner_choice", pool: DINNER_CHOICE_SLOTS, oldCapacities: before.dinnerChoiceCapacities, newCapacities: after.dinnerChoiceCapacities, eventType: "night_dinner_selected" },
+        ]
+        : [
+            { key: "lunch", pool: LUNCH_SLOTS, oldCapacities: before.lunchCapacities, newCapacities: after.lunchCapacities, eventType: "lunch_selected" },
+            { key: "rest_choice", pool: ["15:30", "16:30"], oldCapacities: before.restChoiceCapacities, newCapacities: after.restChoiceCapacities, eventType: "rest_selected" },
+        ];
+
+    for (const spec of specs) {
+        const assignmentsAfter = spec.key === "lunch"
+            ? after.lunchAssignments
+            : spec.key === "rest_choice"
+                ? after.restAssignments
+                : spec.key === "night_work"
+                    ? after.nightWorkAssignments
+                    : after.dinnerAssignments;
+
+        const pinnedSlot = assignmentsAfter[pinnedRamal] as string | undefined;
+        if (!pinnedSlot || !spec.pool.includes(pinnedSlot)) {
+            continue;
+        }
+
+        // Ocupação da etapa DEPOIS da fixação, contando só quem já tem horário.
+        const remaining: Record<string, number> = { ...spec.newCapacities };
+        remaining[pinnedSlot] = (remaining[pinnedSlot] ?? 0) - 1;
+
+        const events = listMealBreakStageSelectionEvents(before, spec)
+            .filter((event) => event.ramal !== pinnedRamal);
+
+        for (const [index, event] of events.entries()) {
+            const baseline = spec.pool.filter((slot) => (spec.newCapacities[slot] ?? 0) > 0);
+            const fullSlots = baseline.filter((slot) => (remaining[slot] ?? 0) <= 0);
+
+            // Só rebobina se a lotação que ele enfrenta agora envolve o horário
+            // fixado: é a interferência que a troca criou.
+            if (fullSlots.includes(pinnedSlot) && event.slot !== pinnedSlot) {
+                return {
+                    stage: spec.key,
+                    pivotRamal: event.ramal as string,
+                    blockedSlots: fullSlots,
+                    clearedRamals: events.slice(index).map((entry) => entry.ramal as string),
+                };
+            }
+
+            remaining[event.slot as string] = (remaining[event.slot as string] ?? 0) - 1;
+        }
+    }
+
+    return null;
+}
+
 // Mensagem clara para os casos em que o medico legitimamente nao entra na divisao, no lugar
 // do generico "nao participa da divisao atual" que confundia o chefe. O meio plantao ganha
 // o caminho da correcao: a funcao e editavel no painel, o posto PIAM/NUCLEO nao.
@@ -6151,10 +6395,16 @@ export async function updateNightMealBreakAssignment(params: {
         mode: "night",
         referenceAt: params.referenceAt,
     });
-    if (ensured.status !== "ready") {
-        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(ramal, ensured.reason));
-    }
-    const session = ensured.session;
+    // Soberania do painel: ver updateDayMealBreakAssignment.
+    const session = ensured.status === "ready"
+        ? ensured.session
+        : await forceMealBreakDoctorIntoSession({
+            session: baseSession,
+            ramal,
+            mode: "night",
+            referenceAt: params.referenceAt,
+            reason: ensured.reason,
+        });
 
     const hasNightWorkPatch = Object.prototype.hasOwnProperty.call(params, "nightWorkSlot");
     const hasDinnerPatch = Object.prototype.hasOwnProperty.call(params, "dinnerSlot");
@@ -6207,17 +6457,47 @@ export async function updateNightMealBreakAssignment(params: {
         }
     }
 
-    const nextSession = syncNightSessionState(withEvent({
+    const pins = { ...emptyMealBreakChiefPins(), ...(session.chiefPins ?? {}) };
+    const nightWorkPins = { ...pins.nightWork };
+    const dinnerPins = { ...pins.dinner };
+    if (hasNightWorkPatch) {
+        if (nightWorkAssignments[ramal]) {
+            nightWorkPins[ramal] = nightWorkAssignments[ramal];
+        } else {
+            delete nightWorkPins[ramal];
+        }
+    }
+    if (hasDinnerPatch || hasNightWorkPatch) {
+        if (dinnerAssignments[ramal]) {
+            dinnerPins[ramal] = dinnerAssignments[ramal];
+        } else {
+            delete dinnerPins[ramal];
+        }
+    }
+
+    const pinned = syncNightSessionState(withEvent({
         ...session,
         nightWorkAssignments,
         dinnerAssignments,
+        chiefPins: { ...pins, nightWork: nightWorkPins, dinner: dinnerPins },
         updatedAt: params.referenceAt.toISOString(),
     }, {
-        type: "night_assignment_corrected",
+        type: "chief_pin_applied",
         actorTelegramId: params.actorTelegramId,
         ramal,
         slot: effectiveNightWorkSlot ?? dinnerAssignments[ramal] ?? undefined,
     }, params.referenceAt));
+
+    const rewind = pinned.stage === "completed"
+        ? null
+        : resolveMealBreakChiefRewind({ before: session, after: pinned, pinnedRamal: ramal });
+    const nextSession = rewind
+        ? syncNightSessionState(withEvent(applyMealBreakLatecomerRewind(pinned, rewind), {
+            type: "chief_pin_rewind",
+            actorTelegramId: params.actorTelegramId,
+            ramal: rewind.pivotRamal,
+        }, params.referenceAt))
+        : pinned;
 
     await saveMealBreakSession(chatId, nextSession, "chief_correction");
     return nextSession;
@@ -6366,40 +6646,72 @@ export async function updateDayMealBreakAssignment(params: {
         mode: "day",
         referenceAt: params.referenceAt,
     });
-    if (ensured.status !== "ready") {
-        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(ramal, ensured.reason));
-    }
-    const session = ensured.session;
+    // Soberania do painel: nem "fora da divisão" barra o clique do chefe. Se o
+    // ramal está ativo no quadro, ele entra no roster para receber o horário —
+    // PIAM/NUCLEO/MEIO só ficam de fora da inclusão AUTOMÁTICA, não de uma
+    // decisão explícita da chefia.
+    const session = ensured.status === "ready"
+        ? ensured.session
+        : await forceMealBreakDoctorIntoSession({
+            session: baseSession,
+            ramal,
+            mode: "day",
+            referenceAt: params.referenceAt,
+            reason: ensured.reason,
+        });
 
+    const pins = { ...emptyMealBreakChiefPins(), ...(session.chiefPins ?? {}) };
+    const lunchPins = { ...pins.lunch };
+    const restPins = { ...pins.rest };
     const lunchAssignments = { ...session.lunchAssignments };
     const restAssignments = { ...session.restAssignments };
 
     if (hasLunchPatch) {
         if (params.lunchSlot === null) {
             delete lunchAssignments[ramal];
+            delete lunchPins[ramal];
         } else if (params.lunchSlot) {
             lunchAssignments[ramal] = params.lunchSlot as MealBreakLunchSlot;
+            lunchPins[ramal] = params.lunchSlot as MealBreakLunchSlot;
         }
     }
 
     if (hasRestPatch) {
         if (params.restSlot === null) {
             delete restAssignments[ramal];
+            delete restPins[ramal];
         } else if (params.restSlot) {
             restAssignments[ramal] = params.restSlot as MealBreakRestSlot;
+            restPins[ramal] = params.restSlot as MealBreakRestSlot;
         }
     }
 
-    const nextSession = syncDaySessionState(withEvent({
+    const pinned = syncDaySessionState(withEvent({
         ...session,
         lunchAssignments,
         restAssignments,
+        chiefPins: { ...pins, lunch: lunchPins, rest: restPins },
         updatedAt: params.referenceAt.toISOString(),
     }, {
-        type: "eligibility_corrected",
+        type: "chief_pin_applied",
         actorTelegramId: params.actorTelegramId,
         ramal,
+        slot: (params.lunchSlot ?? params.restSlot ?? undefined) as MealBreakSessionEvent["slot"],
     }, params.referenceAt));
+
+    // Divisão ainda em andamento: a mudança da chefia mexe nas vagas de quem
+    // ainda vai escolher, então rebobina até o ponto em que ela não interfere —
+    // mesma régua do retardatário (decisão do usuário, 04/08/2026).
+    const rewind = pinned.stage === "completed"
+        ? null
+        : resolveMealBreakChiefRewind({ before: session, after: pinned, pinnedRamal: ramal });
+    const nextSession = rewind
+        ? syncDaySessionState(withEvent(applyMealBreakLatecomerRewind(pinned, rewind), {
+            type: "chief_pin_rewind",
+            actorTelegramId: params.actorTelegramId,
+            ramal: rewind.pivotRamal,
+        }, params.referenceAt))
+        : pinned;
 
     await saveMealBreakSession(chatId, nextSession, "chief_correction");
     return nextSession;
