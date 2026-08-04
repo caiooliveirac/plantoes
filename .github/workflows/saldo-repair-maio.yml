@@ -14,12 +14,14 @@ name: Saldo contrato - reparo da linha de maio
 # Pré-requisito: o commit deployado no servidor precisa conter o script e o
 # JSON (qualquer main >= PR do reparo). O job confere isso antes de rodar.
 
-# Dois gatilhos equivalentes:
+# Três gatilhos equivalentes:
 #   - workflow_dispatch (botão "Run workflow" na UI);
-#   - push de tag saldo-repair-maio/dry-run-* ou saldo-repair-maio/apply-* —
-#     aprovado por Caio em 2026-08-04: a integração dos agentes tem permissão
-#     de conteúdo (push), mas não actions:write para o dispatch via API. A tag
-#     fica no histórico, então cada execução é auditável por definição.
+#   - push de tag saldo-repair-maio/dry-run-* ou saldo-repair-maio/apply-*;
+#   - push do arquivo-marcador .github/saldo-repair-maio.run na branch
+#     designada dos agentes — autorizado por Caio em 2026-08-04: a integração
+#     dos agentes tem permissão de push só nessa branch (API dispatch: 403
+#     actions:write; tag: 403 no proxy git). Commit no histórico = execução
+#     auditável; o modo APPLY exige "[saldo-repair-apply]" na mensagem.
 
 on:
   workflow_dispatch:
@@ -32,6 +34,10 @@ on:
   push:
     tags:
       - "saldo-repair-maio/**"
+    branches:
+      - "claude/contract-balance-calculation-286h5k"
+    paths:
+      - ".github/saldo-repair-maio.run"
 
 concurrency:
   group: plantoes-saldo-repair-maio
@@ -47,9 +53,10 @@ jobs:
     timeout-minutes: 15
     env:
       REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
-      # Grava só com pedido explícito: input apply=true no dispatch, ou tag
-      # saldo-repair-maio/apply-*. Qualquer outra coisa é dry-run.
-      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || startsWith(github.ref_name, 'saldo-repair-maio/apply') }}
+      # Grava só com pedido explícito: input apply=true no dispatch, tag
+      # saldo-repair-maio/apply-*, ou marcador [saldo-repair-apply] na
+      # mensagem do commit. Qualquer outra coisa é dry-run.
+      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || startsWith(github.ref_name, 'saldo-repair-maio/apply') || contains(github.event.head_commit.message, '[saldo-repair-apply]') }}
     steps:
       - name: Setup SSH
         run: |
@@ -73,6 +80,14 @@ jobs:
             exit 1
           fi
           set -a; . .env.production; set +a
+          # 1) Ciclos dos 7 contratos com DATA ADMISSÃO no ano errado (dossiê
+          #    2026-08-04). Idempotente e com guardas; precisa vir ANTES do
+          #    reparo de maio, que respeita a fronteira do ciclo.
+          if [[ -f scripts/repair-ciclos-2026.ts ]]; then
+            npx tsx scripts/repair-ciclos-2026.ts${APPLY_FLAG}
+            echo
+          fi
+          # 2) Reparo da linha de maio (pega os 7 acima automaticamente).
           npm run saldo:repair-maio -- --data docs/saldo-contrato/maio-2026-planilha.json${APPLY_FLAG}
           echo
           echo "===== docs/saldo-contrato/repair-maio-report.md ====="
