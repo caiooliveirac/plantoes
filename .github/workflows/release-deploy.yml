@@ -79,7 +79,10 @@ jobs:
     timeout-minutes: 20
     env:
       REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
-      RUN_MIGRATIONS: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_migrations) || startsWith(github.ref, 'refs/tags/deploy/migrate-') }}
+      # Terceiro gatilho de migrations: marcador [run-migrations] na mensagem do
+      # commit de push (o proxy git dos agentes aceita push de branch, mas não de
+      # tag — 403). O merge commit do PR pode carregar o marcador no título.
+      RUN_MIGRATIONS: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_migrations) || startsWith(github.ref, 'refs/tags/deploy/migrate-') || contains(github.event.head_commit.message, '[run-migrations]') }}
     steps:
       - uses: actions/checkout@v4
 
