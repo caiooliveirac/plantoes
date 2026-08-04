@@ -60,6 +60,10 @@ async function main() {
     }
     console.log(`\nRECIP: ${report.recipRamal ?? "(nenhum)"} · MRV: ${report.mrvRamals.join(", ") || "(nenhum)"}`);
 
+    if (report.halfShiftRemoved.length > 0) {
+        console.log(`\nMEIO plantão retirado do roster (regra fixa, não participa da divisão): ${report.halfShiftRemoved.join(", ")}`);
+    }
+
     if (report.excludedBlocks.length > 0) {
         console.log("\nAtenção — blocos de exclusão NÃO são restaurados por este script:");
         for (const block of report.excludedBlocks) {

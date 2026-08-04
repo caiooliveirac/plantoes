@@ -5423,6 +5423,8 @@ function matchRosterRamalByCompactName(session: MealBreakSession, name: string) 
 export interface MealBreakSummaryRestoreReport {
     matched: Array<{ name: string; ramal: string; lunchSlot: MealBreakLunchSlot | null; restSlot: MealBreakRestSlot | null }>;
     unmatchedNames: string[];
+    /** Ramais de MEIO plantão retirados do roster persistido (regra fixa). */
+    halfShiftRemoved: string[];
     excludedBlocks: string[];
     recipRamal: string | null;
     mrvRamals: string[];
@@ -5453,10 +5455,32 @@ export async function restoreDayMealBreakFromSummary(params: {
         ? { chatId: params.chatId, session: await loadMealBreakSession(params.chatId, operationalDate, "day") }
         : await resolveCurrentOperationalMealBreakState(params.referenceAt, "day");
     const chatId = resolvedState?.chatId ?? null;
-    const baseSession = resolvedState?.session ?? null;
-    if (!baseSession || !chatId) {
+    const loadedSession = resolvedState?.session ?? null;
+    if (!loadedSession || !chatId) {
         throw new MealBreakUserError("Não existe sessão diurna deste dia operacional para receber a restauração.");
     }
+
+    // O roster é PERSISTIDO, não recalculado a cada leitura: uma sessão montada
+    // antes da regra que tira o meio plantão da divisão (04/08/2026) ainda o
+    // carrega. Restaurar sem removê-lo não funciona — ele nunca escolhe, a fase
+    // de almoço não fecha, e o syncDaySessionState apaga os descansos que
+    // acabaram de ser restaurados (foi o que aconteceu na restauração de
+    // 04/08/2026: os 9 almoços voltaram e os 14:30/15:30/16:30 sumiram).
+    const halfShiftRamals = loadedSession.roster
+        .filter((doctor) => isHalfShiftRoleLabel(doctor.roleLabel))
+        .map((doctor) => doctor.ramal);
+    const baseSession: MealBreakSession = halfShiftRamals.length === 0
+        ? loadedSession
+        : {
+            ...loadedSession,
+            roster: loadedSession.roster.filter((doctor) => !halfShiftRamals.includes(doctor.ramal)),
+            lunchAssignments: Object.fromEntries(
+                Object.entries(loadedSession.lunchAssignments).filter(([ramal]) => !halfShiftRamals.includes(ramal)),
+            ) as Record<string, MealBreakLunchSlot>,
+            restAssignments: Object.fromEntries(
+                Object.entries(loadedSession.restAssignments).filter(([ramal]) => !halfShiftRamals.includes(ramal)),
+            ) as Record<string, MealBreakRestSlot>,
+        };
 
     const lunchAssignments: Record<string, MealBreakLunchSlot> = {};
     const restAssignments: Record<string, MealBreakRestSlot> = {};
@@ -5500,6 +5524,7 @@ export async function restoreDayMealBreakFromSummary(params: {
     const report: MealBreakSummaryRestoreReport = {
         matched: [...byRamal.values()],
         unmatchedNames: [...new Set(unmatchedNames)],
+        halfShiftRemoved: halfShiftRamals,
         excludedBlocks: parsed.excludedBlocks,
         recipRamal: [...recipRamals][0] ?? baseSession.recipRamal,
         mrvRamals: mrvRamals.size > 0 ? [...mrvRamals] : baseSession.mrvRamals,
