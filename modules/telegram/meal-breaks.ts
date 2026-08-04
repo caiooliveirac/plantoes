@@ -988,15 +988,31 @@ function resolveMealBreakDoctorShiftLabel(params: {
         : "P";
 }
 
-function mapRegulationDoctor(row: OperationalBoard["regulation"][number], mode: MealBreakMode, referenceAt: Date): MealBreakRosterDoctor | null {
+/** Por que um ramal ativo do quadro fica fora da divisão. `fixed_post` (PIAM/
+ *  NUCLEO) e `half_shift` (MEIO plantão) são regra fixa: nem participam nem
+ *  interferem no cálculo das vagas. */
+export type MealBreakOutOfDivisionReason = "inactive" | "fixed_post" | "other_shift" | "half_shift";
+
+type MealBreakBoardEntry =
+    | { kind: "doctor"; doctor: MealBreakRosterDoctor }
+    | { kind: "excluded"; reason: MealBreakOutOfDivisionReason; ramal: string; name: string };
+
+function mapRegulationBoardEntry(row: OperationalBoard["regulation"][number], mode: MealBreakMode, referenceAt: Date): MealBreakBoardEntry {
+    const ramal = normalizeRamal(row.postCode);
+    const name = formatDoctorSurfaceName({
+        fullName: row.doctorName,
+        displayName: row.displayName,
+        fallback: row.postCode,
+    });
+
     if (row.status !== "active" || !row.doctorId || !row.startedAt) {
-        return null;
+        return { kind: "excluded", reason: "inactive", ramal, name };
     }
 
     // PIAM e NUCLEO nunca participam de divisao (almoco/jantar/descanso/trabalho noturno),
     // em qualquer modo. Sao postos fora do esquema de prioridade ordenada.
     if (isPiamRegulationPost(row.postCode) || isNucleoRegulationPost(row.postCode)) {
-        return null;
+        return { kind: "excluded", reason: "fixed_post", ramal, name };
     }
 
     const effectiveShiftLabel = resolveMealBreakDoctorShiftLabel({
@@ -1006,34 +1022,50 @@ function mapRegulationDoctor(row: OperationalBoard["regulation"][number], mode: 
     });
 
     if (mode === "day" && effectiveShiftLabel === "SN") {
-        return null;
+        return { kind: "excluded", reason: "other_shift", ramal, name };
     }
 
     if (mode === "night" && effectiveShiftLabel === "SD") {
-        return null;
+        return { kind: "excluded", reason: "other_shift", ramal, name };
+    }
+
+    const roleLabel = nullifyGenericRegulatorRole(resolveOperationalRoleLabel({
+        domain: "regulation",
+        code: ramal,
+        shiftLabel: effectiveShiftLabel,
+        roleLabel: row.roleLabel,
+        defaultRole: row.defaultRole,
+    }));
+
+    // MEIO plantão (janela 11:30–17:00) segue a mesma regra fixa de PIAM/NUCLEO:
+    // não participa nem interfere na divisão — não entra na fila, não consome
+    // vaga e não muda a capacidade dos horários de ninguém (decisão do usuário,
+    // 04/08/2026). Sai como "excluído", e não como linha inexistente, para o bot
+    // conseguir avisar QUEM ficou de fora e POR QUE: se a função estiver errada,
+    // a chefia troca no painel e reinicia a divisão.
+    if (isHalfShiftRoleLabel(roleLabel)) {
+        return { kind: "excluded", reason: "half_shift", ramal, name };
     }
 
     return {
-        doctorId: row.doctorId,
-        occupancyId: row.occupancyId,
-        ramal: normalizeRamal(row.postCode),
-        name: formatDoctorSurfaceName({
-            fullName: row.doctorName,
-            displayName: row.displayName,
-            fallback: row.postCode,
-        }),
-        domain: "regulation",
-        arrivalStartedAt: row.startedAt,
-        startedAt: row.boardStartedAt ?? row.startedAt,
-        shiftLabel: effectiveShiftLabel,
-        roleLabel: nullifyGenericRegulatorRole(resolveOperationalRoleLabel({
+        kind: "doctor",
+        doctor: {
+            doctorId: row.doctorId,
+            occupancyId: row.occupancyId,
+            ramal,
+            name,
             domain: "regulation",
-            code: normalizeRamal(row.postCode),
+            arrivalStartedAt: row.startedAt,
+            startedAt: row.boardStartedAt ?? row.startedAt,
             shiftLabel: effectiveShiftLabel,
-            roleLabel: row.roleLabel,
-            defaultRole: row.defaultRole,
-        })),
+            roleLabel,
+        },
     };
+}
+
+function mapRegulationDoctor(row: OperationalBoard["regulation"][number], mode: MealBreakMode, referenceAt: Date): MealBreakRosterDoctor | null {
+    const entry = mapRegulationBoardEntry(row, mode, referenceAt);
+    return entry.kind === "doctor" ? entry.doctor : null;
 }
 
 function isMealBreakSession(value: unknown): value is MealBreakSession {
@@ -1847,6 +1879,29 @@ function buildConfirmationPrompt(session: MealBreakSession) {
     ].join("\n");
 }
 
+/**
+ * Aviso de quem ficou fora da divisão por estar como MEIO plantão. É a única
+ * exclusão fixa que nasce de um dado editável (a função no quadro), então o
+ * balão sempre diz o caminho da correção: trocar a função no painel logado e
+ * reiniciar a divisão. PIAM/NUCLEO não entram aqui — lá o posto é a regra.
+ */
+function buildHalfShiftOutOfDivisionNotice(params: {
+    excluded: Array<{ ramal: string; name: string }>;
+    mode: MealBreakMode;
+}) {
+    if (params.excluded.length === 0) {
+        return null;
+    }
+
+    const mealLabel = params.mode === "night" ? "jantar" : "almoço";
+    const restartCmd = params.mode === "night" ? "/jantar reiniciar" : "/almoco reiniciar";
+    return [
+        `ℹ️ Fora da divisão do ${mealLabel} por estar como *MEIO plantão*:`,
+        ...params.excluded.map((doctor) => `• ${resolveDoctorCompactName(doctor)} · ${doctor.ramal}`),
+        `Meio plantão não participa nem muda as vagas dos horários (mesma regra fixa de PIAM e NÚCLEO). Se a função estiver errada, corrija no ${resolveMealBreakPanelLabel()} e mande ${restartCmd}.`,
+    ].join("\n");
+}
+
 function buildCurrentPrompt(session: MealBreakSession) {
     if (session.stage === "awaiting_confirmation") {
         return buildConfirmationPrompt(session);
@@ -2331,9 +2386,17 @@ function buildMealBreakRosterEntries(
         throw new MealBreakUserError("Fluxo de jantar vale apenas no plantão noturno.");
     }
 
-    const regulation = board.regulation
-        .map((row) => mapRegulationDoctor(row, mode, referenceAt))
+    const boardEntries = board.regulation.map((row) => mapRegulationBoardEntry(row, mode, referenceAt));
+    const regulation = boardEntries
+        .map((entry) => (entry.kind === "doctor" ? entry.doctor : null))
         .filter((doctor): doctor is MealBreakRosterDoctor => Boolean(doctor));
+    // Quem está de MEIO plantão fica fora por regra, mas o grupo precisa saber —
+    // é a única exclusão fixa que vem de um dado editável (a função no painel).
+    const halfShiftExcluded = boardEntries.flatMap((entry) =>
+        entry.kind === "excluded" && entry.reason === "half_shift"
+            ? [{ ramal: entry.ramal, name: entry.name }]
+            : [],
+    );
     const consistencyIssues = buildMealBreakConsistencyIssues({
         regulation,
         mode,
@@ -2358,6 +2421,7 @@ function buildMealBreakRosterEntries(
         chiefRamal: chief?.ramal ?? null,
         mrvRamals,
         warnings: deduped.warnings,
+        halfShiftExcluded,
     };
 }
 
@@ -2790,6 +2854,7 @@ async function buildMealBreakPriorityContext(params: {
         chiefRamal: built.chiefRamal,
         mrvRamals: built.mrvRamals,
         warnings: built.warnings,
+        halfShiftExcluded: built.halfShiftExcluded,
         updatedAt: overrides?.updatedAt ?? params.referenceAt.toISOString(),
         entries,
     };
@@ -4966,10 +5031,14 @@ export async function runTelegramMealBreakCommand(params: {
     const intro = existing && params.forceRestart
         ? "Divisão anterior descartada. Vamos reiniciar."
         : null;
+    const halfShiftNotice = buildHalfShiftOutOfDivisionNotice({
+        excluded: priorityContext.halfShiftExcluded,
+        mode,
+    });
 
     return {
         session,
-        messages: [intro, buildStartPrompt(session)].filter((value): value is string => Boolean(value)),
+        messages: [intro, buildStartPrompt(session), halfShiftNotice].filter((value): value is string => Boolean(value)),
         status: "started" as const,
     };
 }
@@ -5168,9 +5237,10 @@ export type MealBreakLatecomerSkipReason = "division_completed" | "half_shift";
  *   combinados — gente que já saiu para comer perderia o horário. Quem chega
  *   depois de fechada fica de fora; a chefia decide caso a caso (reiniciar a
  *   divisão ou ajustar pelo painel).
- * - `half_shift`: meio plantão (janela 11:30–17:00) chega já dentro do próprio
- *   horário de almoço, com a divisão do turno inteiro rodando desde as 09:00.
- *   Ele não redivide o almoço de quem já escolheu.
+ * - `half_shift`: meio plantão não participa da divisão em circunstância
+ *   nenhuma — a exclusão principal é no mapRegulationBoardEntry (ele nem chega
+ *   ao roster). Este guard é a rede: sessão montada antes de a chefia trocar a
+ *   função para MEIO no painel guarda o rótulo antigo no roster.
  *
  * Vale para os dois modos: a divisão do jantar tem a mesma regra.
  */
@@ -5216,24 +5286,46 @@ export async function ensureArrivalInCurrentMealBreakSession(params: {
         return false;
     }
 
+    const mealLabel = mode === "night" ? "jantar" : "almoço";
+    const restartCmd = mode === "night" ? "/jantar reiniciar" : "/almoco reiniciar";
     const ensured = await ensureMealBreakDoctorInSession({
         session: state.session,
         ramal,
         mode,
         referenceAt,
     });
-    if (!ensured || ensured === state.session) {
+
+    // Chegou de MEIO plantão: fica fora por regra (nem participa, nem muda as
+    // vagas de ninguém), mas o grupo é avisado de quem ficou de fora e de que a
+    // função é editável no painel. PIAM/NUCLEO e outro turno saem em silêncio —
+    // ali não há nada a corrigir.
+    if (ensured.status !== "ready") {
+        if (ensured.reason === "half_shift") {
+            const notice = buildHalfShiftOutOfDivisionNotice({
+                excluded: [{ ramal, name: ensured.name }],
+                mode,
+            });
+            if (notice) {
+                await sendTelegramMealBreakMessages({
+                    chatId: state.chatId,
+                    messages: [notice],
+                    options: MEAL_BREAK_FORMAT_OPTIONS,
+                });
+            }
+        }
         return false;
     }
 
-    const mealLabel = mode === "night" ? "jantar" : "almoço";
-    const restartCmd = mode === "night" ? "/jantar reiniciar" : "/almoco reiniciar";
-    const joining = findDoctor(ensured, ramal);
-    const joiningName = joining?.name ?? ramal;
+    if (ensured.session === state.session) {
+        return false;
+    }
 
-    // Divisão fechada / meio plantão: não mexe em nada — nem roster, nem vagas,
-    // nem rebobina (ver resolveMealBreakLatecomerSkip). Só avisa o grupo, e a
-    // sessão salva continua exatamente a mesma.
+    const joining = findDoctor(ensured.session, ramal);
+    const joiningName = joining ? resolveDoctorCompactName(joining) : escapeTelegramMarkdown(ramal);
+
+    // Divisão fechada: não mexe em nada — nem roster, nem vagas, nem rebobina
+    // (ver resolveMealBreakLatecomerSkip). Só avisa o grupo, e a sessão salva
+    // continua exatamente a mesma.
     const skipReason = resolveMealBreakLatecomerSkip({
         session: state.session,
         roleLabel: joining?.roleLabel ?? null,
@@ -5243,7 +5335,7 @@ export async function ensureArrivalInCurrentMealBreakSession(params: {
             chatId: state.chatId,
             messages: [
                 skipReason === "half_shift"
-                    ? `🍽️ *${joiningName}* (${ramal}) chegou de meio plantão — a divisão do ${mealLabel} segue como está, sem refazer as escolhas.`
+                    ? `🍽️ *${joiningName}* (${ramal}) está como meio plantão — a divisão do ${mealLabel} segue como está, sem refazer as escolhas.`
                     : `🍽️ *${joiningName}* (${ramal}) chegou com a divisão do ${mealLabel} já fechada — mantive os horários de todo mundo. Para incluir na divisão, chefia: ${restartCmd}.`,
             ],
             options: MEAL_BREAK_FORMAT_OPTIONS,
@@ -5251,7 +5343,7 @@ export async function ensureArrivalInCurrentMealBreakSession(params: {
         return false;
     }
 
-    const withJoinEvent = withEvent(ensured, {
+    const withJoinEvent = withEvent(ensured.session, {
         type: "latecomer_joined",
         actorTelegramId: null,
         ramal,
@@ -5309,15 +5401,19 @@ export async function getCurrentMealBreakEligibilityOverrides(referenceAt = new 
 // (ainda) nao esta no roster da sessao — tipicamente chegada tardia ou remanejamento para um
 // ramal novo — nos o incluimos a partir do board ao vivo em vez de recusar com erro. PIAM/
 // NUCLEO e medicos de outro turno seguem fora por regra (mapRegulationDoctor devolve null).
+type EnsureMealBreakDoctorResult =
+    | { status: "ready"; session: MealBreakSession }
+    | { status: "out_of_division"; reason: MealBreakOutOfDivisionReason; name: string };
+
 async function ensureMealBreakDoctorInSession(params: {
     session: MealBreakSession;
     ramal: string;
     mode: MealBreakMode;
     referenceAt: Date;
     board?: OperationalBoard;
-}): Promise<MealBreakSession | null> {
+}): Promise<EnsureMealBreakDoctorResult> {
     if (findDoctor(params.session, params.ramal)) {
-        return params.session;
+        return { status: "ready", session: params.session };
     }
 
     const board = params.board ?? await getOperationalBoard();
@@ -5325,25 +5421,35 @@ async function ensureMealBreakDoctorInSession(params: {
         (candidate) => candidate.status === "active" && normalizeRamal(candidate.postCode) === params.ramal,
     );
     if (!row) {
-        return null;
+        return { status: "out_of_division", reason: "inactive", name: params.ramal };
     }
 
-    const rosterDoctor = mapRegulationDoctor(row, params.mode, params.referenceAt);
-    if (!rosterDoctor) {
-        return null;
+    const entry = mapRegulationBoardEntry(row, params.mode, params.referenceAt);
+    if (entry.kind !== "doctor") {
+        return { status: "out_of_division", reason: entry.reason, name: entry.name };
     }
 
     return {
-        ...params.session,
-        roster: [...params.session.roster, stripMealBreakRosterDoctor(rosterDoctor)],
+        status: "ready",
+        session: {
+            ...params.session,
+            roster: [...params.session.roster, stripMealBreakRosterDoctor(entry.doctor)],
+        },
     };
 }
 
 // Mensagem clara para os casos em que o medico legitimamente nao entra na divisao, no lugar
-// do generico "nao participa da divisao atual" que confundia o chefe.
-function resolveMealBreakOutOfDivisionMessage(ramal: string) {
-    if (isPiamRegulationPost(ramal) || isNucleoRegulationPost(ramal)) {
+// do generico "nao participa da divisao atual" que confundia o chefe. O meio plantao ganha
+// o caminho da correcao: a funcao e editavel no painel, o posto PIAM/NUCLEO nao.
+function resolveMealBreakOutOfDivisionMessage(ramal: string, reason: MealBreakOutOfDivisionReason = "inactive") {
+    if (reason === "half_shift") {
+        return `O ramal ${ramal} está como MEIO plantão e por isso não entra na divisão de almoço/jantar (regra fixa, igual a PIAM/NÚCLEO): não participa nem muda as vagas dos horários. Se a função estiver errada, corrija no ${resolveMealBreakPanelLabel()} e reinicie a divisão.`;
+    }
+    if (reason === "fixed_post" || isPiamRegulationPost(ramal) || isNucleoRegulationPost(ramal)) {
         return `O posto ${ramal} (PIAM/NUCLEO) não entra na divisão de almoço/jantar por regra fixa.`;
+    }
+    if (reason === "other_shift") {
+        return `O ramal ${ramal} está no outro turno, então não entra nesta divisão.`;
     }
     return `O posto ${ramal} não está ativo na regulação agora, então não dá para incluir na divisão.`;
 }
@@ -5373,15 +5479,16 @@ export async function updateNightMealBreakAssignment(params: {
     }
 
     const ramal = normalizeRamal(params.ramal);
-    const session = await ensureMealBreakDoctorInSession({
+    const ensured = await ensureMealBreakDoctorInSession({
         session: baseSession,
         ramal,
         mode: "night",
         referenceAt: params.referenceAt,
     });
-    if (!session) {
-        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(ramal));
+    if (ensured.status !== "ready") {
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(ramal, ensured.reason));
     }
+    const session = ensured.session;
 
     const hasNightWorkPatch = Object.prototype.hasOwnProperty.call(params, "nightWorkSlot");
     const hasDinnerPatch = Object.prototype.hasOwnProperty.call(params, "dinnerSlot");
@@ -5533,15 +5640,16 @@ export async function updateDayMealBreakEligibility(params: {
         return { session: null, overrides };
     }
 
-    const session = await ensureMealBreakDoctorInSession({
+    const ensured = await ensureMealBreakDoctorInSession({
         session: baseSession,
         ramal: normalizedRamal,
         mode: "day",
         referenceAt: params.referenceAt,
     });
-    if (!session) {
-        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(normalizedRamal));
+    if (ensured.status !== "ready") {
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(normalizedRamal, ensured.reason));
     }
+    const session = ensured.session;
 
     const nextSession = syncDaySessionState(withEvent({
         ...session,
@@ -5586,15 +5694,16 @@ export async function updateDayMealBreakAssignment(params: {
     }
 
     const ramal = normalizeRamal(params.ramal);
-    const session = await ensureMealBreakDoctorInSession({
+    const ensured = await ensureMealBreakDoctorInSession({
         session: baseSession,
         ramal,
         mode: "day",
         referenceAt: params.referenceAt,
     });
-    if (!session) {
-        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(ramal));
+    if (ensured.status !== "ready") {
+        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(ramal, ensured.reason));
     }
+    const session = ensured.session;
 
     const lunchAssignments = { ...session.lunchAssignments };
     const restAssignments = { ...session.restAssignments };

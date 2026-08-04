@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HALF_SHIFT_ROLE_LABEL } from "@/modules/operational/half-shift";
 import {
+    buildMealBreakRoster,
     resolveMealBreakLatecomerSkip,
     type MealBreakDoctor,
     type MealBreakSession,
@@ -96,4 +97,53 @@ test("divisão fechada prevalece sobre o motivo do meio plantão", () => {
         resolveMealBreakLatecomerSkip({ session: session({ stage: "completed" }), roleLabel: HALF_SHIFT_ROLE_LABEL }),
         "division_completed",
     );
+});
+
+type Board = Parameters<typeof buildMealBreakRoster>[0];
+
+function regulationRow(params: { postId: number; postCode: string; name: string; roleLabel: string | null }): Board["regulation"][number] {
+    return {
+        postId: params.postId,
+        occupancyId: `reg-${params.postCode}`,
+        postCode: params.postCode,
+        postLabel: params.postCode,
+        defaultRole: "MR",
+        doctorId: `doc-${params.postCode}`,
+        doctorName: params.name,
+        displayName: params.name,
+        startedAt: "2026-08-04T10:00:00.000Z",
+        boardStartedAt: "2026-08-04T10:00:00.000Z",
+        scheduledEndAt: "2026-08-04T22:00:00.000Z",
+        shiftLabel: "SD",
+        roleLabel: params.roleLabel,
+        ramalLabel: params.postCode,
+        status: "active",
+        liveSource: "operations_v2",
+        liveUpdatedAt: null,
+    };
+}
+
+function boardWithHalfShift(): Board {
+    return {
+        generatedAt: "2026-08-04T15:00:00.000Z",
+        regulation: [
+            regulationRow({ postId: 1, postCode: "2035", name: "Renata Lima", roleLabel: null }),
+            regulationRow({ postId: 2, postCode: "2036", name: "Bia Nunes", roleLabel: null }),
+            regulationRow({ postId: 3, postCode: "2037", name: "Tarde Meia", roleLabel: HALF_SHIFT_ROLE_LABEL }),
+            regulationRow({ postId: 4, postCode: "PIAM", name: "Paula Piam", roleLabel: null }),
+        ],
+        intervention: [],
+    };
+}
+
+test("MEIO plantão fica fora do roster da divisão, como PIAM/NUCLEO", () => {
+    const built = buildMealBreakRoster(boardWithHalfShift(), new Date("2026-08-04T12:00:00-03:00"), "day");
+    assert.deepEqual(built.roster.map((doctor) => doctor.ramal), ["2035", "2036"]);
+});
+
+test("MEIO plantão em ramal de função fixa (COI) também fica fora", () => {
+    const board = boardWithHalfShift();
+    board.regulation[2] = regulationRow({ postId: 3, postCode: "1367", name: "Tarde Meia", roleLabel: HALF_SHIFT_ROLE_LABEL });
+    const built = buildMealBreakRoster(board, new Date("2026-08-04T12:00:00-03:00"), "day");
+    assert.equal(built.roster.some((doctor) => doctor.ramal === "1367"), false);
 });
