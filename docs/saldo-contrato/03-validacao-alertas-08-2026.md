@@ -97,11 +97,27 @@ Mas [backfill-report.md](backfill-report.md) registra a importação de **−46.
 porque rodou sobre a versão antiga do arquivo. **Se o razão ainda tiver esse número, é
 um falso positivo de ~R$ 200 mil.** Conferir na tela antes de repassar qualquer coisa.
 
-## 5. Os 13 com renovação pendente
+## 5. Os 13 com renovação pendente — e a maioria não era renovação pendente
 
-Mesmo mecanismo da §1: ciclo virou, planilha não resetou, backfill deixou o saldo em
-branco. Todos fecham maio com saldo **alto e positivo** no ciclo velho — nenhum é
-candidato legítimo a "saldo zerado".
+Todos fecham maio com saldo **alto e positivo** — nenhum é candidato legítimo a
+"saldo zerado". Mas conferindo mês a mês (2026-08-04) apareceu outra coisa: **oito
+deles a planilha RESETOU direito**. A primeira linha de cada um abre exatamente em
+R$ 165.732,00. Quem não enxergou o reset foi o backfill.
+
+O detector procura o reset comparando a abertura de um mês com o fechamento do mês
+anterior ([backfill-saldo-contrato.ts:371](../../scripts/backfill-saldo-contrato.ts#L371)):
+
+```ts
+const sawReset = ordered.some(({ row }, index) => index > 0 && ...)
+```
+
+São contratos de 2026 cuja **primeira linha no arquivo é justamente o mês da virada**.
+Não existe mês anterior para comparar, então `sawReset` nasce `false`. O reset estava
+visível o tempo todo, na forma mais óbvia: a primeira abertura é o próprio teto.
+
+Só **quatro** não foram resetados de verdade — 190/2025, 111/2026, 110/2026 e 157/2026.
+Caio confirmou em 2026-08-04 que é erro de edição: "não se viu ali onde colocar saldo
+novo".
 
 | Médico | Contrato | Fecha maio |
 |---|---|---:|
@@ -165,6 +181,43 @@ psiquiatria na coluna generalista; a divergência fica registrada aqui.
 | Thiago Borghi Petrus Costa | 24h psiq | 2026-04-01 ⚠️ | 174.858,00 | 11.698,38 | **163.159,62** |
 | Leonardo Copque Magalhães (184/2026) | 48h esp | 2026-05-26 | 349.716,00 | 9.690,09 | **340.025,91** |
 
+E os 12 da §5, todos 24h generalista, teto 165.732,00. Os oito de reset limpo têm o
+saldo **conferido contra o fechamento de maio da própria planilha** — a reconstrução
+mês a mês reproduz o número dela ao centavo, o que é a prova de que o reset existia:
+
+| Médico | Ciclo desde | Consumo | Saldo | Planilha fecha maio em |
+|---|---|---:|---:|---:|
+| André Victor Cardoso Codeceira | 2026-03-13 | 27.077,08 | **138.654,92** | 138.654,92 ✓ |
+| Bruno Santana Alencar | 2026-03-03 | 30.403,00 | **135.329,00** | 135.329,00 ✓ |
+| Leonardo Santana Cabanelas Ribeiro | 2026-03-20 | 28.476,98 | **137.255,02** | 137.255,02 ✓ |
+| Vitor Luiz Valverde Martinez | 2026-03-20 | 21.007,76 | **144.724,24** | 144.724,24 ✓ |
+| Gustavo Fernandes Vieira | 2026-04-30 | 6.224,35 | **159.507,65** | 159.507,65 ✓ |
+| Yngra Maria Pimentel Novais | 2026-05-29 | 0,00 | **165.732,00** | 165.732,00 ✓ |
+| Maiana Santos Oliveira Cardoso | 2026-03-26 | 12.098,73 | **153.633,27** | 153.633,28 ⁽¹⁾ |
+| Stephane Izabor de Oliveira Costa | 2026-04-01 ⚠️ | 4.979,48 | **160.752,52** | 160.752,52 ✓ |
+
+⁽¹⁾ 1 centavo: 4,5 plantões de semana em maio dão 5.601,915 e a planilha arredonda na
+exibição. Vale o valor aritmético, que é o que o razão soma.
+
+Os quatro que a planilha realmente não resetou — aqui o saldo **não** está na planilha,
+é o teto menos o consumo desde a virada:
+
+| Médico | Ciclo desde | Consumo | Saldo | Planilha mostra |
+|---|---|---:|---:|---:|
+| Acacio Junio de Almeida | 2026-03-18 | 24.897,40 | **140.834,60** | 11.931,84 |
+| Alexandre Curi Quinteiro | 2026-04-09 | 13.266,08 | **152.465,92** | 67.511,79 |
+| Leonardo Prado Faben | 2026-04-10 | 20.871,53 | **144.860,47** | 57.541,11 |
+| Maria Clara Coppieters Gusmão | 2026-04-29 | 12.993,62 | **152.738,38** | 103.798,56 |
+
+Acacio chega ao mesmo número do override já aprovado em
+[saldo-overrides.json](saldo-overrides.json). Abril e maio dele vêm do sistema, não da
+planilha: a planilha traz fórmula sem resultado nesses dois meses, mas **os dias dele
+estão marcados** — tratar como zero daria saldo otimista, que é o erro que o SPEC §9.4
+manda evitar.
+
+Fora da lista: **Vinicius Pereira de Carvalho** — linha em branco na planilha, sem
+número de contrato e sem valores. Não há de onde tirar número; precisa de cadastro.
+
 ⚠️ O ciclo do Thiago é **assumido** (a planilha não traz DATA ADMISSÃO nem número de
 contrato). Ele só entra com `--permitir-ciclo-assumido`.
 
@@ -186,6 +239,12 @@ e nos 5 meses de 2026: zero ocorrências. O consumo do ciclo começa onde a linh
    Regressão em [tests/contract-balance-alerts.test.ts](../../tests/contract-balance-alerts.test.ts).
 2. **Detector de teto não carregado**: aceitar célula vazia seguida de série
    monotonicamente decrescente e negativa, não só o `0,00` exato.
+3. **Detector de reset** (§5): `sawReset` só compara com o mês anterior, e por isso não
+   reconhece o reset quando ele está na PRIMEIRA linha do contrato no arquivo — o caso
+   de todo contrato aberto dentro da janela lida. Regra que faltava, e que teria pego
+   os oito: *a primeira abertura legível é igual ao teto de referência*. Vale também
+   olhar a inferência de ano da DATA ADMISSÃO, que é o que faz `isFirstCycle` dar
+   `false` num contrato que está no primeiro ciclo.
 3. ~~**Reimportar Francisco**~~ e ~~**Karen**~~ — **Feito em 2026-08-04.**
    `scripts/corrigir-aberturas-seed.ts` + [aberturas-a-corrigir.json](aberturas-a-corrigir.json).
    Francisco: −46.778,94 → **+153.128,27** (diferença de R$ 199.907,21 escondida no

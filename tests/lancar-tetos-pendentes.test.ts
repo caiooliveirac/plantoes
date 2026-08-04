@@ -91,6 +91,43 @@ test("ciclo assumido só passa com a flag explícita", () => {
     assert.equal(planejar(thiago, ativo(thiago), true).status, "lancar");
 });
 
+test("só Thiago Borghi e Stephane têm ciclo assumido — o resto vem da planilha", () => {
+    const assumidos = dados.contratos.filter((item) => item.cycleStartIsAssumed).map((item) => item.contractNumber);
+    assert.deepEqual(assumidos.sort(), ["156/2026", "SEM NÚMERO"]);
+});
+
+test("os oito de reset limpo batem com o fechamento de maio da planilha", () => {
+    // Cross-check independente: a reconstrução mês a mês tem que reproduzir o
+    // número que a própria planilha fecha em 31/05. Onde bate, o saldo não é
+    // decisão de ninguém — o reset já estava lá e o backfill é que não viu.
+    const fechamentoDaPlanilha: Record<string, number> = {
+        "061/2026": 138654.92,
+        "048/2026": 135329.00,
+        "80/2026": 137255.02,
+        "079/2026": 144724.24,
+        "158/2026": 159507.65,
+        "188/2026": 165732.00,
+        "156/2026": 160752.52,
+    };
+    for (const [contractNumber, fechamento] of Object.entries(fechamentoDaPlanilha)) {
+        const contrato = dados.contratos.find((item) => item.contractNumber === contractNumber)!;
+        assert.ok(
+            Math.abs(contrato.expectedBalanceBrl - fechamento) <= TOLERANCE,
+            `${contrato.doctorName}: reconstruído ${contrato.expectedBalanceBrl.toFixed(2)}, planilha ${fechamento.toFixed(2)}`,
+        );
+    }
+    // Maiana fica 1 centavo abaixo do que a planilha exibe: 4,5 plantões de
+    // semana em maio dão 5.601,915 e a planilha arredonda na exibição. Vale o
+    // valor aritmético, que é o que o razão vai somar.
+    const maiana = dados.contratos.find((item) => item.contractNumber === "085/2026")!;
+    assert.equal(maiana.expectedBalanceBrl, 153633.27);
+});
+
+test("Acacio chega no mesmo número do override já aprovado", () => {
+    const acacio = dados.contratos.find((item) => item.contractNumber === "190/2025")!;
+    assert.ok(Math.abs(acacio.expectedBalanceBrl - 140834.60) <= TOLERANCE);
+});
+
 test("mês de consumo fora do ciclo bloqueia", () => {
     const contrato = dados.contratos.find((item) => item.contractNumber === "219/2025")!;
     const plano = planejar(contrato, { ...ativo(contrato, "2026-04-01"), cycleStart: contrato.expectedCycleStart }, false);

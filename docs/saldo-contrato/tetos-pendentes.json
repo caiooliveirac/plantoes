@@ -1,21 +1,28 @@
 {
   "_comentario": "Tetos e consumo dos contratos que o backfill deixou sem saldo de abertura porque a planilha nunca carregou o teto deles (a coluna SALDO CONTRATO nasce vazia e vira um contador de consumo com sinal trocado). Autorizado por Caio em 2026-08-04. Cada número foi conferido linha a linha nos PDFs 2026 CHAMAMENTO 004 e 2025 CHAMAMENTO NOVO — derivação em 03-validacao-alertas-08-2026.md.",
-
   "_tetos": "Tabela de referência de scripts/backfill-saldo-contrato.ts:71. Psiquiatria entra na coluna ESPECIALISTA (12h 87.429,00 · 24h 174.858,00), por decisão de Caio em 2026-08-04 ('um pouco maior para psiquiatras'). O código hoje joga psiquiatria na coluna generalista — divergência registrada no dossiê.",
-
   "_metodo": "Para cada contrato: lançamento 'opening' com o TETO INTEGRAL na data de início do ciclo, e um 'invoice' por mês de consumo já ocorrido até 31/05/2026. De junho em diante quem desconta é o fechamento assinado no próprio sistema. Saldo resultante = teto − soma dos invoices.",
-
   "contratos": [
     {
       "doctorName": "João Pedro Miguez Pinto",
       "contractNumber": "219/2025",
       "weeklyHours": 24,
       "category": "generalista",
-      "ceilingBrl": 165732.00,
+      "ceilingBrl": 165732.0,
       "expectedCycleStart": "2026-03-10",
       "months": [
-        { "month": "2026-04", "amountBrl": 11466.89, "weekdayShifts": 2, "weekendShifts": 6.5 },
-        { "month": "2026-05", "amountBrl": 13811.00, "weekdayShifts": 0, "weekendShifts": 10 }
+        {
+          "month": "2026-04",
+          "amountBrl": 11466.89,
+          "weekdayShifts": 2,
+          "weekendShifts": 6.5
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 13811.0,
+          "weekdayShifts": 0,
+          "weekendShifts": 10
+        }
       ],
       "expectedBalanceBrl": 140454.11,
       "nota": "Março/2026 é o mês de entrada e ele não plantonou (a planilha fecha março em R$ 0,00). A planilha mostra −25.277,89, que é exatamente a soma de abril e maio."
@@ -25,11 +32,21 @@
       "contractNumber": "093/2026",
       "weeklyHours": 24,
       "category": "generalista",
-      "ceilingBrl": 165732.00,
+      "ceilingBrl": 165732.0,
       "expectedCycleStart": "2026-03-25",
       "months": [
-        { "month": "2026-04", "amountBrl": 9958.96, "weekdayShifts": 8, "weekendShifts": 0 },
-        { "month": "2026-05", "amountBrl": 17409.38, "weekdayShifts": 4, "weekendShifts": 9 }
+        {
+          "month": "2026-04",
+          "amountBrl": 9958.96,
+          "weekdayShifts": 8,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 17409.38,
+          "weekdayShifts": 4,
+          "weekendShifts": 9
+        }
       ],
       "expectedBalanceBrl": 138363.66,
       "nota": "Março/2026 fecha em R$ 0,00. A planilha mostra −27.368,34 = abril + maio."
@@ -39,13 +56,33 @@
       "contractNumber": "55/2025",
       "weeklyHours": 12,
       "category": "psiquiatria",
-      "ceilingBrl": 87429.00,
+      "ceilingBrl": 87429.0,
       "expectedCycleStart": "2026-02-06",
       "months": [
-        { "month": "2026-02", "amountBrl": 3899.46, "weekdayShifts": 3, "weekendShifts": 0 },
-        { "month": "2026-03", "amountBrl": 7798.92, "weekdayShifts": 6, "weekendShifts": 0 },
-        { "month": "2026-04", "amountBrl": 2711.29, "weekdayShifts": 1, "weekendShifts": 1 },
-        { "month": "2026-05", "amountBrl": 8245.52, "weekdayShifts": 2, "weekendShifts": 4 }
+        {
+          "month": "2026-02",
+          "amountBrl": 3899.46,
+          "weekdayShifts": 3,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-03",
+          "amountBrl": 7798.92,
+          "weekdayShifts": 6,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-04",
+          "amountBrl": 2711.29,
+          "weekdayShifts": 1,
+          "weekendShifts": 1
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 8245.52,
+          "weekdayShifts": 2,
+          "weekendShifts": 4
+        }
       ],
       "expectedBalanceBrl": 64773.81,
       "nota": "ATENÇÃO: a planilha mostra −18.755,73, que SUBESTIMA o consumo. Fevereiro (primeiro mês) fechou em −3.899,46, mas março reabriu em branco em vez de −3.899,46 e a cadeia perdeu o mês. Consumo real do ciclo = 22.655,19."
@@ -55,12 +92,27 @@
       "contractNumber": "612/2025",
       "weeklyHours": 12,
       "category": "psiquiatria",
-      "ceilingBrl": 87429.00,
+      "ceilingBrl": 87429.0,
       "expectedCycleStart": "2025-12-01",
       "months": [
-        { "month": "2026-03", "amountBrl": 3899.46, "weekdayShifts": 3, "weekendShifts": 0 },
-        { "month": "2026-04", "amountBrl": 2599.64, "weekdayShifts": 2, "weekendShifts": 0 },
-        { "month": "2026-05", "amountBrl": 2599.64, "weekdayShifts": 2, "weekendShifts": 0 }
+        {
+          "month": "2026-03",
+          "amountBrl": 3899.46,
+          "weekdayShifts": 3,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-04",
+          "amountBrl": 2599.64,
+          "weekdayShifts": 2,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 2599.64,
+          "weekdayShifts": 2,
+          "weekendShifts": 0
+        }
       ],
       "expectedBalanceBrl": 78330.26,
       "nota": "Ciclo começa 01/12/2025 (já corrigido por repair-ciclos-2026). Não tem linha em nenhum mês de 2025 nem em jan/fev de 2026 — busca por nome nos 86 pdf-pages de 2025 e nos 5 meses de 2026: zero ocorrências. Consumo do ciclo começa em março."
@@ -70,11 +122,21 @@
       "contractNumber": "633/2025",
       "weeklyHours": 12,
       "category": "psiquiatria",
-      "ceilingBrl": 87429.00,
+      "ceilingBrl": 87429.0,
       "expectedCycleStart": "2025-12-01",
       "months": [
-        { "month": "2026-04", "amountBrl": 2822.94, "weekdayShifts": 0, "weekendShifts": 2 },
-        { "month": "2026-05", "amountBrl": 1411.47, "weekdayShifts": 0, "weekendShifts": 1 }
+        {
+          "month": "2026-04",
+          "amountBrl": 2822.94,
+          "weekdayShifts": 0,
+          "weekendShifts": 2
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 1411.47,
+          "weekdayShifts": 0,
+          "weekendShifts": 1
+        }
       ],
       "expectedBalanceBrl": 83194.59,
       "nota": "ATENÇÃO: a planilha mostra −1.411,47, que SUBESTIMA o consumo. A célula de fechamento de abril ficou vazia, então maio reabriu do zero. Consumo real do ciclo = 4.234,41. Sem linha em 2025."
@@ -84,12 +146,22 @@
       "contractNumber": "SEM NÚMERO",
       "weeklyHours": 24,
       "category": "psiquiatria",
-      "ceilingBrl": 174858.00,
+      "ceilingBrl": 174858.0,
       "expectedCycleStart": "2026-04-01",
       "cycleStartIsAssumed": true,
       "months": [
-        { "month": "2026-04", "amountBrl": 6499.10, "weekdayShifts": 5, "weekendShifts": 0 },
-        { "month": "2026-05", "amountBrl": 5199.28, "weekdayShifts": 4, "weekendShifts": 0 }
+        {
+          "month": "2026-04",
+          "amountBrl": 6499.1,
+          "weekdayShifts": 5,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 5199.28,
+          "weekdayShifts": 4,
+          "weekendShifts": 0
+        }
       ],
       "expectedBalanceBrl": 163159.62,
       "nota": "A planilha não traz DATA ADMISSÃO nem número de contrato para ele. O ciclo 01/04/2026 é ASSUMIDO a partir da primeira aparição dele na planilha (abril/2026). Precisa ser confirmado contra o contrato físico — por isso o script exige --permitir-ciclo-assumido para tocar nesta linha."
@@ -99,16 +171,303 @@
       "contractNumber": "184/2026",
       "weeklyHours": 48,
       "category": "especialista",
-      "ceilingBrl": 349716.00,
+      "ceilingBrl": 349716.0,
       "expectedCycleStart": "2026-05-26",
       "seedClosingBrl": 340025.91,
       "months": [],
       "expectedBalanceBrl": 340025.91,
       "nota": "Caso diferente dos outros: a cadeia da planilha está íntegra. Maio abre em 349.716,00 (teto de 48h ESPECIALISTA — o backfill leu a coluna CH como 24h e gravou 174.858,00, que está errado), gasta 9.690,09 e fecha em 340.025,91. Semeado como os outros 117 contratos: uma abertura em 31/05 com o saldo de fechamento.",
       "supersedes": "247/2025"
+    },
+    {
+      "doctorName": "André Victor Cardoso Codeceira",
+      "contractNumber": "061/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-03-13",
+      "months": [
+        {
+          "month": "2026-03",
+          "amountBrl": 3734.61,
+          "weekdayShifts": 3,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-04",
+          "amountBrl": 11048.8,
+          "weekdayShifts": 0,
+          "weekendShifts": 8
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 12293.67,
+          "weekdayShifts": 1,
+          "weekendShifts": 8
+        }
+      ],
+      "expectedBalanceBrl": 138654.92,
+      "nota": "Reset LIMPO na planilha: março abre em 165.732,00. O backfill marcou como renovação pendente por engano (ver _porque_os_de_reset). Reconstrução mês a mês bate ao centavo com o fechamento de maio da planilha (138.654,92)."
+    },
+    {
+      "doctorName": "Bruno Santana Alencar",
+      "contractNumber": "048/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-03-03",
+      "months": [
+        {
+          "month": "2026-03",
+          "amountBrl": 7741.68,
+          "weekdayShifts": 4,
+          "weekendShifts": 2
+        },
+        {
+          "month": "2026-04",
+          "amountBrl": 8286.6,
+          "weekdayShifts": 0,
+          "weekendShifts": 6
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 14374.72,
+          "weekdayShifts": 6,
+          "weekendShifts": 5
+        }
+      ],
+      "expectedBalanceBrl": 135329.0,
+      "nota": "Reset LIMPO: março abre em 165.732,00. Reconstrução bate ao centavo com o fechamento de maio (135.329,00)."
+    },
+    {
+      "doctorName": "Leonardo Santana Cabanelas Ribeiro",
+      "contractNumber": "80/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-03-20",
+      "months": [
+        {
+          "month": "2026-03",
+          "amountBrl": 2625.97,
+          "weekdayShifts": 1,
+          "weekendShifts": 1
+        },
+        {
+          "month": "2026-04",
+          "amountBrl": 11748.75,
+          "weekdayShifts": 5,
+          "weekendShifts": 4
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 14102.26,
+          "weekdayShifts": 8,
+          "weekendShifts": 3
+        }
+      ],
+      "expectedBalanceBrl": 137255.02,
+      "nota": "Reset LIMPO: março abre em 165.732,00. Reconstrução bate ao centavo com o fechamento de maio (137.255,02)."
+    },
+    {
+      "doctorName": "Maiana Santos Oliveira Cardoso",
+      "contractNumber": "085/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-03-26",
+      "months": [
+        {
+          "month": "2026-04",
+          "amountBrl": 3734.61,
+          "weekdayShifts": 3,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 8364.12,
+          "weekdayShifts": 4.5,
+          "weekendShifts": 2
+        }
+      ],
+      "expectedBalanceBrl": 153633.27,
+      "nota": "Reset LIMPO: março abre em 165.732,00 e ela não plantonou em março (admitida 26/03). Reconstrução dá 153.633,27 contra 153.633,28 da planilha — 1 centavo de arredondamento nos 4,5 plantões de semana de maio (4,5 x 1.244,87 = 5.601,915). Vale o valor aritmético."
+    },
+    {
+      "doctorName": "Vitor Luiz Valverde Martinez",
+      "contractNumber": "079/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-03-20",
+      "months": [
+        {
+          "month": "2026-03",
+          "amountBrl": 2489.74,
+          "weekdayShifts": 2,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-04",
+          "amountBrl": 8986.55,
+          "weekdayShifts": 5,
+          "weekendShifts": 2
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 9531.47,
+          "weekdayShifts": 1,
+          "weekendShifts": 6
+        }
+      ],
+      "expectedBalanceBrl": 144724.24,
+      "nota": "Reset LIMPO: março abre em 165.732,00. Reconstrução bate ao centavo com o fechamento de maio (144.724,24)."
+    },
+    {
+      "doctorName": "Gustavo Fernandes Vieira",
+      "contractNumber": "158/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-04-30",
+      "months": [
+        {
+          "month": "2026-05",
+          "amountBrl": 6224.35,
+          "weekdayShifts": 5,
+          "weekendShifts": 0
+        }
+      ],
+      "expectedBalanceBrl": 159507.65,
+      "nota": "Reset LIMPO: maio abre em 165.732,00 (admitido 30/04, sem linha em abril). Reconstrução bate ao centavo (159.507,65)."
+    },
+    {
+      "doctorName": "Yngra Maria Pimentel Novais",
+      "contractNumber": "188/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-05-29",
+      "months": [],
+      "expectedBalanceBrl": 165732.0,
+      "nota": "Reset LIMPO: maio abre em 165.732,00 e ela não plantonou (admitida 29/05). Teto intacto."
+    },
+    {
+      "doctorName": "Stephane Izabor de Oliveira Costa",
+      "contractNumber": "156/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-04-01",
+      "months": [
+        {
+          "month": "2026-05",
+          "amountBrl": 4979.48,
+          "weekdayShifts": 4,
+          "weekendShifts": 0
+        }
+      ],
+      "expectedBalanceBrl": 160752.52,
+      "cycleStartIsAssumed": true,
+      "nota": "Reset LIMPO: abril abre em 165.732,00. O valor é confiável; o que falta é a JANELA DO CICLO — a planilha não traz DATA ADMISSÃO para ela. O ciclo 01/04/2026 é ASSUMIDO a partir da primeira aparição, por isso exige --permitir-ciclo-assumido."
+    },
+    {
+      "doctorName": "Acacio Junio de Almeida",
+      "contractNumber": "190/2025",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-03-18",
+      "months": [
+        {
+          "month": "2026-03",
+          "amountBrl": 7469.22,
+          "weekdayShifts": 6,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-04",
+          "amountBrl": 9958.96,
+          "weekdayShifts": 8,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 7469.22,
+          "weekdayShifts": 6,
+          "weekendShifts": 0
+        }
+      ],
+      "expectedBalanceBrl": 140834.6,
+      "nota": "NÃO resetou: o ciclo virou em 18/03/2026 e a planilha seguiu debitando o ciclo anterior (fecha maio em 11.931,84). Março vem da planilha (7.469,22); abril e maio a planilha traz fórmula sem resultado, mas os dias dele ESTÃO marcados na linha — tratar como zero daria saldo otimista. Os valores de abril (9.958,96) e maio (7.469,22) vêm do sistema, que tem cobertura completa dos dois meses. Resultado idêntico ao override já versionado em saldo-overrides.json (140.834,60), que nunca alcançou produção."
+    },
+    {
+      "doctorName": "Alexandre Curi Quinteiro",
+      "contractNumber": "111/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-04-09",
+      "months": [
+        {
+          "month": "2026-04",
+          "amountBrl": 2489.74,
+          "weekdayShifts": 2,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 10776.34,
+          "weekdayShifts": 2,
+          "weekendShifts": 6
+        }
+      ],
+      "expectedBalanceBrl": 152465.92,
+      "nota": "NÃO resetou: abril abre em 80.777,87, que é sobra do ciclo anterior, em vez do teto. Caio confirmou em 2026-08-04 que é erro de quem edita a planilha — não se viu ali onde colocar o saldo novo."
+    },
+    {
+      "doctorName": "Leonardo Prado Faben",
+      "contractNumber": "110/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-04-10",
+      "months": [
+        {
+          "month": "2026-04",
+          "amountBrl": 2489.74,
+          "weekdayShifts": 2,
+          "weekendShifts": 0
+        },
+        {
+          "month": "2026-05",
+          "amountBrl": 18381.79,
+          "weekdayShifts": 7,
+          "weekendShifts": 7
+        }
+      ],
+      "expectedBalanceBrl": 144860.47,
+      "nota": "NÃO resetou: abril abre em 78.412,64 em vez do teto. Mesmo erro de edição da planilha, confirmado por Caio em 2026-08-04."
+    },
+    {
+      "doctorName": "Maria Clara Coppieters Gusmão",
+      "contractNumber": "157/2026",
+      "weeklyHours": 24,
+      "category": "generalista",
+      "ceilingBrl": 165732.0,
+      "expectedCycleStart": "2026-04-29",
+      "months": [
+        {
+          "month": "2026-05",
+          "amountBrl": 12993.62,
+          "weekdayShifts": 6,
+          "weekendShifts": 4
+        }
+      ],
+      "expectedBalanceBrl": 152738.38,
+      "nota": "NÃO resetou: abril abre em 116.792,18 em vez do teto, e ela não plantonou em abril (admitida 29/04). Mesmo erro de edição da planilha, confirmado por Caio em 2026-08-04."
     }
   ],
-
   "encerrar": [
     {
       "doctorName": "Leonardo Copque Magalhães",
@@ -117,5 +476,7 @@
       "supersededBy": "184/2026",
       "nota": "Contrato antigo, substituído pelo 184/2026. Fecha maio em −33.141,77 na planilha e não tem abertura no razão, então hoje dispara alerta de 'saldo zerado' eternamente. Encerrar é o que tira ele da conta sem inventar saldo nenhum."
     }
-  ]
+  ],
+  "_porque_os_de_reset": "Oito destes contratos JÁ tinham reset limpo na planilha — a primeira linha deles abre exatamente no teto de referência. O backfill os marcou como 'renovação pendente' porque o detector (backfill-saldo-contrato.ts:371) procura o reset comparando a abertura de um mês com o FECHAMENTO DO MÊS ANTERIOR, e são contratos de 2026 cuja primeira linha no arquivo é justamente o mês da virada: não existe mês anterior para comparar, então sawReset nasce false. Para estes o saldo não é decisão de ninguém — está na planilha, e a reconstrução mês a mês aqui bate ao centavo com o fechamento de maio dela.",
+  "_porque_os_sem_reset": "Quatro contratos (190/2025, 111/2026, 110/2026, 157/2026) realmente não foram resetados: a virada do ciclo passou e a planilha seguiu debitando o saldo velho. Caio confirmou em 2026-08-04 que é erro de edição — 'não se viu ali onde colocar saldo novo'. Recebem o teto integral no início do ciclo, menos o consumo desde a virada, que é a mesma regra dos overrides já aprovados em saldo-overrides.json."
 }
