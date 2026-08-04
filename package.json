@@ -55,7 +55,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^20.19.18",
+    "@types/node": "^26.1.2",
     "@types/nodemailer": "^8.0.1",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
