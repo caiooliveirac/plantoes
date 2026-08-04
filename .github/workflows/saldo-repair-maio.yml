@@ -14,6 +14,13 @@ name: Saldo contrato - reparo da linha de maio
 # Pré-requisito: o commit deployado no servidor precisa conter o script e o
 # JSON (qualquer main >= PR do reparo). O job confere isso antes de rodar.
 
+# Dois gatilhos equivalentes:
+#   - workflow_dispatch (botão "Run workflow" na UI);
+#   - push de tag saldo-repair-maio/dry-run-* ou saldo-repair-maio/apply-* —
+#     aprovado por Caio em 2026-08-04: a integração dos agentes tem permissão
+#     de conteúdo (push), mas não actions:write para o dispatch via API. A tag
+#     fica no histórico, então cada execução é auditável por definição.
+
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +29,9 @@ on:
         required: false
         default: false
         type: boolean
+  push:
+    tags:
+      - "saldo-repair-maio/**"
 
 concurrency:
   group: plantoes-saldo-repair-maio
@@ -32,12 +42,14 @@ permissions:
 
 jobs:
   repair:
-    name: Reparo de maio no servidor (${{ inputs.apply && 'APPLY' || 'dry-run' }})
+    name: Reparo de maio no servidor
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
-      APPLY: ${{ inputs.apply }}
+      # Grava só com pedido explícito: input apply=true no dispatch, ou tag
+      # saldo-repair-maio/apply-*. Qualquer outra coisa é dry-run.
+      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || startsWith(github.ref_name, 'saldo-repair-maio/apply') }}
     steps:
       - name: Setup SSH
         run: |
