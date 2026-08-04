@@ -7,6 +7,7 @@ import {
 import { buildPiamAlreadyPresentReply, resolvePiamShiftBounds } from "@/modules/telegram/service";
 import { isRegulationShadowOccupancyNotes } from "@/modules/regulation/service";
 import { resolveDoctorPaymentProfile } from "@/modules/reporting/payable-shifts";
+import { applyDoctorPaymentProfileFlags } from "@/services/payment-attestation.service";
 
 test("parseTelegramRoleCommand recognizes assign by bare name", () => {
     const parsed = parseTelegramRoleCommand("/piam Aline Cardoso");
@@ -147,4 +148,51 @@ test("buildPiamAlreadyPresentReply: titular (não-sombra) noturno sem o sufixo d
     const reply = buildPiamAlreadyPresentReply("Diego", { role: "PIAM", shiftLabel: "SN", isShadow: false });
     assert.match(reply, /SN \(noturno\)/);
     assert.doesNotMatch(reply, /cobertura \*sombra\*/);
+});
+
+// Switch PSIQ do /admin/payment-closing: grava o MESMO carimbo do /psiq do bot,
+// então marcar/desmarcar na tela tem de resolver para a tabela de psiquiatria e
+// não pode atropelar outro papel operacional (PIAM/CP) ao desmarcar.
+test("applyDoctorPaymentProfileFlags marca psiquiatra com o mesmo carimbo do /psiq", () => {
+    const updated = applyDoctorPaymentProfileFlags({}, { isPsychiatry: true });
+    assert.equal((updated as { preferredOperationalRole?: unknown }).preferredOperationalRole, "PSIQ");
+    assert.equal(resolveDoctorPaymentProfile(updated), "psychiatry");
+});
+
+test("applyDoctorPaymentProfileFlags desmarca psiquiatra apagando o papel PSIQ", () => {
+    const updated = applyDoctorPaymentProfileFlags({ preferredOperationalRole: "PSIQ" }, { isPsychiatry: false });
+    assert.equal("preferredOperationalRole" in (updated as Record<string, unknown>), false);
+    assert.equal(resolveDoctorPaymentProfile(updated), "generalist");
+});
+
+test("applyDoctorPaymentProfileFlags nao derruba PIAM ao desmarcar psiquiatra", () => {
+    const updated = applyDoctorPaymentProfileFlags({ preferredOperationalRole: "PIAM" }, { isPsychiatry: false });
+    assert.equal((updated as { preferredOperationalRole?: unknown }).preferredOperationalRole, "PIAM");
+    assert.equal(resolveDoctorPaymentProfile(updated), "specialist");
+});
+
+test("applyDoctorPaymentProfileFlags preserva aliases e demais metadados", () => {
+    const updated = applyDoctorPaymentProfileFlags(
+        { aliases: ["Fulana"], employmentType: "estatutario", paymentProfile: { isSpecialist: true } },
+        { isPsychiatry: true },
+    ) as Record<string, unknown>;
+    assert.deepEqual(updated.aliases, ["Fulana"]);
+    assert.equal(updated.employmentType, "estatutario");
+    assert.deepEqual(updated.paymentProfile, { isSpecialist: true });
+    // PSIQ tem precedência sobre a flag de especialista.
+    assert.equal(resolveDoctorPaymentProfile(updated), "psychiatry");
+});
+
+test("applyDoctorPaymentProfileFlags: desmarcar PSIQ de quem tem ESP volta para especialista", () => {
+    const updated = applyDoctorPaymentProfileFlags(
+        { preferredOperationalRole: "PSIQ", paymentProfile: { isSpecialist: true } },
+        { isPsychiatry: false },
+    );
+    assert.equal(resolveDoctorPaymentProfile(updated), "specialist");
+});
+
+test("applyDoctorPaymentProfileFlags altera so a flag informada", () => {
+    const updated = applyDoctorPaymentProfileFlags({ preferredOperationalRole: "PSIQ" }, { isSpecialist: true });
+    assert.equal((updated as { preferredOperationalRole?: unknown }).preferredOperationalRole, "PSIQ");
+    assert.equal(resolveDoctorPaymentProfile(updated), "psychiatry");
 });
