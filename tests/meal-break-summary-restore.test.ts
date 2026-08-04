@@ -125,3 +125,58 @@ test("slot vazio do resumo (• --) não vira médico", () => {
     assert.ok(parsed);
     assert.deepEqual(parsed.lunch.map((entry) => `${entry.slot}:${entry.name}`), ["12:30:Ana Alves"]);
 });
+
+// Variante que o Telegram entrega no copiar/colar: sem linhas em branco, sem o
+// cabeçalho "✅ Divisão fechada!" e terminando na legenda — que fala em
+// "descanso automático" e não pode ser lida como cabeçalho de seção.
+const SUMMARY_COLADO = `🍽️ ALMOÇO
+11:30
+• Ana Alves (RECIP)
+• José Marini
+• Gabriel Jesus (RMT)
+12:30
+• Carolina Restrepo (COI)
+• Briang Seguir (MRV)
+• Uenderson Barbosa (RMT)
+13:30
+• Mariana Bahia (COI)
+• Ronaldo Acacio (MRV)
+• Angelo Sposito (IES)
+😴 DESCANSO
+14:30
+• Mariana Bahia (COI)
+• Angelo Sposito (IES)
+15:30
+• José Marini
+• Uenderson Barbosa (RMT)
+16:30
+• Gabriel Jesus (RMT)
+• Carolina Restrepo (COI)
+18:00
+• Ronaldo Acacio (MRV)
+• Ana Alves (RECIP)
+• Briang Seguir (MRV)
+👑 CHEFIA
+• Almoço a critério
+• Descanso a critério
+ℹ️ 14:30: descanso automático de quem almoçou 13:30 · 18:00: fixo de RECIP, MRV e PSIQ`;
+
+test("balão colado do Telegram (sem linhas em branco) lê igual ao original", () => {
+    const parsed = parseMealBreakDaySummary(SUMMARY_COLADO);
+    assert.ok(parsed);
+
+    assert.equal(parsed.lunch.length, 9);
+    assert.equal(parsed.rest.length, 9);
+    assert.equal(new Set([...parsed.lunch, ...parsed.rest].map((entry) => entry.name)).size, 9);
+    // "• Almoço a critério" / "• Descanso a critério" da chefia não viram médico.
+    assert.equal([...parsed.lunch, ...parsed.rest].some((entry) => entry.name.includes("critério")), false);
+});
+
+test("a legenda final não reabre a seção de descanso", () => {
+    // Linha solta depois da legenda (mudança futura de texto) não pode entrar
+    // na divisão: a legenda encerra a seção.
+    const parsed = parseMealBreakDaySummary(`${SUMMARY_COLADO}\n18:00\n• Fantasma Intruso (MRV)`);
+    assert.ok(parsed);
+    assert.equal(parsed.rest.length, 9);
+    assert.equal([...parsed.rest].some((entry) => entry.name === "Fantasma Intruso"), false);
+});
