@@ -1,0 +1,109 @@
+name: Saldo contrato - corrigir aberturas semeadas
+
+# Corrige o saldo de abertura de Francisco Isensee (797/2024) e Karen Seifarth
+# (518/2024) NO SERVIDOR, via o mesmo SSH do deploy. Entrada versionada em
+# docs/saldo-contrato/aberturas-a-corrigir.json; derivação em
+# docs/saldo-contrato/03-validacao-alertas-08-2026.md §4.
+#
+# A ORDEM DAS TRÊS ETAPAS IMPORTA:
+#
+#   1. reparo de maio  — divide a abertura de 31/05 em 01/05 + gasto do mês.
+#      Recolhe a Karen (o razão dela bate com a planilha). PULA o Francisco,
+#      porque o razão dele tem -46.778,94 e a planilha fecha em +153.128,27.
+#   2. correção        — Karen pela variante de 01/05 (+82.866,00), Francisco
+#      pela de 31/05 (-46.778,94 → +153.128,27).
+#   3. reparo de maio  — agora o Francisco bate com a planilha e a linha de maio
+#      dele é recolhida. Idempotente para todo o resto.
+#
+# Rodar fora dessa ordem não corrompe nada — o script casa por data + valor
+# exato e reporta "valor_divergente" em vez de escrever — mas pode deixar o
+# extrato de maio de um deles sem a linha do mês.
+#
+# Disparo manual, dois modos:
+#   apply=false (default)  dry-run: só imprime o plano no log
+#   apply=true             grava no razão (idempotente)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Gravar no banco (false = dry-run, só o plano)"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "saldo-corrigir-aberturas/**"
+    branches:
+      - "claude/validar-medicos-contrato-ipcdu7"
+    paths:
+      - ".github/saldo-corrigir-aberturas.run"
+
+concurrency:
+  group: plantoes-saldo-repair-maio
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  corrigir:
+    name: Corrigir aberturas no servidor
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
+      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || startsWith(github.ref_name, 'saldo-corrigir-aberturas/apply') || contains(github.event.head_commit.message, '[saldo-aberturas-apply]') }}
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Correção (scripts do repo, executados no servidor)
+        run: |
+          set -euo pipefail
+          APPLY_FLAG=""
+          if [[ "${APPLY}" == "true" ]]; then
+            APPLY_FLAG=" --apply"
+          fi
+          ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=45 -i ~/.ssh/id_ed25519 "${REMOTE}" bash -s <<EOF
+          set -euo pipefail
+          cd /home/ubuntu/plantoes
+          if [[ ! -f scripts/corrigir-aberturas-seed.ts || ! -f docs/saldo-contrato/aberturas-a-corrigir.json ]]; then
+            echo "ERRO: o commit deployado ainda não tem o script/JSON — faça o deploy da main primeiro." >&2
+            exit 1
+          fi
+          set -a; . .env.production; set +a
+
+          echo "===== 1/3 reparo de maio (recolhe a Karen, pula o Francisco) ====="
+          npm run saldo:repair-maio -- --data docs/saldo-contrato/maio-2026-planilha.json${APPLY_FLAG}
+          rm -f docs/saldo-contrato/repair-maio-report.md
+
+          echo
+          echo "===== 2/3 correção das aberturas ====="
+          npx tsx scripts/corrigir-aberturas-seed.ts${APPLY_FLAG}
+
+          echo
+          echo "===== 3/3 reparo de maio de novo (agora recolhe o Francisco) ====="
+          npm run saldo:repair-maio -- --data docs/saldo-contrato/maio-2026-planilha.json${APPLY_FLAG}
+          echo
+          echo "===== docs/saldo-contrato/repair-maio-report.md ====="
+          cat docs/saldo-contrato/repair-maio-report.md
+          # O working tree de produção precisa ficar limpo (o deploy usa git
+          # reset --hard). O log do job é o registro.
+          rm -f docs/saldo-contrato/repair-maio-report.md
+          EOF
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "### Correção das aberturas semeadas (saldo contratual)"
+            echo "- Modo: ${APPLY} (true = gravou no razão)"
+            echo "- Francisco Isensee 797/2024: -46.778,94 → +153.128,27"
+            echo "- Karen Seifarth 518/2024: +82.866,00 (teto de 36h no reset de ago/2025)"
+            echo "- Plano completo: no log do passo 'Correção'"
+          } >> "$GITHUB_STEP_SUMMARY"

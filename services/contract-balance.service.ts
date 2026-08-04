@@ -4,6 +4,11 @@
  *
  * Nenhuma regra de negócio mora aqui — o cálculo é do módulo puro, a soma é da
  * view. Este arquivo só busca, converte para centavos e monta o read model.
+ *
+ * Vai mexer no saldo de contrato? Leia docs/saldo-contrato/README.md antes. O
+ * saldo veio de uma planilha editada à mão, e o que parece bug de cálculo aqui
+ * costuma ser dado de origem torto — inclusive saldo negativo que na verdade é
+ * consumo acumulado num contrato sem teto lançado.
  */
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
@@ -354,7 +359,6 @@ export async function loadContractBalances(params: {
         const profile = resolveDoctorPaymentProfile(row.metadata);
         const rates = RATE_CENTS[profile];
         const settledBalanceCents = toCents(row.balance) ?? 0;
-        const openingCents = toCents(row.opening_balance) ?? 0;
         const settledConsumedCents = toCents(row.consumed) ?? 0;
         const emAberto = pendente.get(row.contract_id) ?? { amountCents: 0, weekdayShifts: 0, weekendShifts: 0 };
 
@@ -390,7 +394,15 @@ export async function loadContractBalances(params: {
             cycleStart: row.cycle_start,
             cycleEnd: row.cycle_end,
             ceilingCents: toCents(row.ceiling),
-            awaitingOpeningBalance: openingCents === 0 && settledConsumedCents === 0 && emAberto.amountCents === 0,
+            // A pergunta é "existe lançamento de abertura no razão?", NÃO "o médico
+            // ficou parado?". A versão antiga também exigia consumo zero, e com
+            // isso a flag caía no primeiro plantão depois da carga: o contrato sem
+            // teto passava a valer `0 − consumo` e o alerta das 08:00 anunciava
+            // como "saldo zerado" um número que era a produção do médico. Foi o que
+            // aconteceu com João Miguez e mais seis (dossiê 03-validacao-alertas-08-2026).
+            // openingDate só é não-nulo quando existe entry do tipo 'opening' —
+            // inclusive uma abertura de R$ 0,00 digitada de propósito pelo chefe.
+            awaitingOpeningBalance: ledger.get(row.contract_id)?.openingDate == null,
             settledBalanceCents,
             pendingConsumptionCents: emAberto.amountCents,
             metrics: computeCycleMetrics(input),

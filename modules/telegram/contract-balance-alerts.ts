@@ -115,6 +115,14 @@ export function buildContractAlerts(rows: ContractBalanceRow[], referenceDate: D
         const m = row.metrics;
         // Contrato esperando o coordenador não tem o que alertar: o saldo é zero
         // porque ninguém digitou, não porque acabou.
+        //
+        // ESTA GUARDA JÁ FALHOU UMA VEZ, e o custo foi uma lista de alertas
+        // falsos enviada à chefia — sete médicos anunciados como "saldo zerado"
+        // com o valor da própria produção deles. A flag exigia consumo zero, então
+        // morria no primeiro plantão depois da carga. Hoje ela pergunta a coisa
+        // certa (existe lançamento 'opening' no razão?), mas se você for mexer no
+        // que alimenta `awaitingOpeningBalance`, leia antes
+        // docs/saldo-contrato/03-validacao-alertas-08-2026.md §1.
         if (row.awaitingOpeningBalance) continue;
 
         if (m.balanceCents <= 0) {

@@ -1,0 +1,104 @@
+name: Saldo contrato - lançar tetos pendentes
+
+# Roda scripts/lancar-tetos-pendentes.ts NO SERVIDOR (onde o banco escuta em
+# loopback), via o mesmo SSH do deploy. A entrada é o JSON versionado em
+# docs/saldo-contrato/tetos-pendentes.json — conferido linha a linha contra os
+# PDFs 2026 CHAMAMENTO 004 e 2025 CHAMAMENTO NOVO (derivação em
+# docs/saldo-contrato/03-validacao-alertas-08-2026.md). Toda a validação de
+# idoneidade (aritmética, ciclo, duplicidade, sinal do saldo) roda dentro do
+# próprio script antes de qualquer escrita.
+#
+# Disparo manual, dois modos:
+#   apply=false (default)  dry-run: só imprime o plano no log
+#   apply=true             grava no razão (idempotente: contrato que já tem
+#                          lançamento de abertura é pulado)
+#
+# Pré-requisito: o commit deployado no servidor precisa conter o script e o
+# JSON. O job confere isso antes de rodar.
+#
+# Três gatilhos equivalentes, iguais aos do reparo de maio:
+#   - workflow_dispatch (botão "Run workflow" na UI);
+#   - push de tag saldo-lancar-tetos/dry-run-* ou saldo-lancar-tetos/apply-*;
+#   - push do arquivo-marcador .github/saldo-lancar-tetos.run na branch dos
+#     agentes. O modo APPLY exige "[saldo-tetos-apply]" na mensagem do commit.
+#
+# Thiago Borghi não tem DATA ADMISSÃO na planilha e o ciclo dele é assumido a
+# partir da primeira aparição (abril/2026). Ele só entra com o input
+# ciclo_assumido=true — de propósito: é o único número aqui que não vem da
+# planilha.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Gravar no banco (false = dry-run, só o plano)"
+        required: false
+        default: false
+        type: boolean
+      ciclo_assumido:
+        description: "Incluir Thiago Borghi (ciclo assumido, sem data de admissão na planilha)"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "saldo-lancar-tetos/**"
+    branches:
+      - "claude/validar-medicos-contrato-ipcdu7"
+    paths:
+      - ".github/saldo-lancar-tetos.run"
+
+concurrency:
+  group: plantoes-saldo-lancar-tetos
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  lancar:
+    name: Lançar tetos pendentes no servidor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REMOTE: ${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}
+      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || startsWith(github.ref_name, 'saldo-lancar-tetos/apply') || contains(github.event.head_commit.message, '[saldo-tetos-apply]') }}
+      CICLO_ASSUMIDO: ${{ (github.event_name == 'workflow_dispatch' && inputs.ciclo_assumido) || contains(github.event.head_commit.message, '[saldo-tetos-ciclo-assumido]') }}
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.PROD_SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Lançamento (script do repo, executado no servidor)
+        run: |
+          set -euo pipefail
+          FLAGS=""
+          if [[ "${APPLY}" == "true" ]]; then
+            FLAGS="${FLAGS} --apply"
+          fi
+          if [[ "${CICLO_ASSUMIDO}" == "true" ]]; then
+            FLAGS="${FLAGS} --permitir-ciclo-assumido"
+          fi
+          ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=45 -i ~/.ssh/id_ed25519 "${REMOTE}" bash -s <<EOF
+          set -euo pipefail
+          cd /home/ubuntu/plantoes
+          if [[ ! -f scripts/lancar-tetos-pendentes.ts || ! -f docs/saldo-contrato/tetos-pendentes.json ]]; then
+            echo "ERRO: o commit deployado ainda não tem o script/JSON — faça o deploy da main primeiro." >&2
+            exit 1
+          fi
+          set -a; . .env.production; set +a
+          npx tsx scripts/lancar-tetos-pendentes.ts${FLAGS}
+          EOF
+
+      - name: Resumo
+        if: always()
+        run: |
+          {
+            echo "### Lançamento dos tetos pendentes (saldo contratual)"
+            echo "- Modo: ${APPLY} (true = gravou no razão)"
+            echo "- Ciclo assumido (Thiago Borghi): ${CICLO_ASSUMIDO}"
+            echo "- Plano completo: no log do passo 'Lançamento'"
+          } >> "$GITHUB_STEP_SUMMARY"

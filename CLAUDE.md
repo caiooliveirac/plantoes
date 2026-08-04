@@ -53,6 +53,8 @@ db/                     # schema.ts, index.ts (conexão), migrations/ (SQL numer
 scripts/                # CLIs: migrations, imports, repair scripts, worker do Telegram
 tests/                  # node:test + tsx, um arquivo por área
 docs/                   # Runbooks, regras de negócio, ADRs, auditorias
+                        #   docs/saldo-contrato/README.md — leitura obrigatória
+                        #   antes de mexer em contrato/teto/saldo
 ```
 
 **Páginas principais** (`app/`): `/` é a mesa operacional ao vivo (quadro de
@@ -83,6 +85,10 @@ telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
   ocupações nos dois domínios paralelos (regulação = ramais telefônicos; intervenção =
   bases de ambulância)
 - `modules/bank-hours/` — cálculo de banco de horas (atraso, hora extra, continuidade)
+- `lib/contracts/` (puro) + `services/contract-balance.service.ts` + as varreduras de
+  `modules/telegram/contract-balance-alerts.ts` — saldo de contrato: métricas do ciclo,
+  read model e os avisos que saem às 8h para os admins. Domínio com armadilhas de dado
+  documentadas — ver [docs/saldo-contrato/README.md](docs/saldo-contrato/README.md).
 - `modules/reporting/` — turnos pagáveis, histórico de banco de horas, relatório mensal
   (inclui exportação XLSX)
 - `modules/telegram/` — o maior módulo do repo; `service.ts` é um "god module" de
@@ -149,8 +155,20 @@ Tabelas por domínio:
   `/admin/payment-closing`: `adminExtraShifts` (plantões extra/bônus/penalidade
   lançados manualmente pelo admin, não são ocupações reais), `paymentClosingMeta`
   (nota fiscal/nº processo por médico/mês, upsert), `paymentClosingAttestations`
-  (assinatura do admin por médico/mês), `doctorContracts` (teto em R$ + mês semente
-  — saldo contratual é calculado, não armazenado).
+  (assinatura do admin por médico/mês).
+- **Saldo contratual** — `contracts` (um por vínculo: `ceilingAmount` nullable,
+  janela `cycleStart`/`cycleEnd`, `supersededByContractId` para renovação) e
+  `contractLedger` (razão append-only: `opening`, `invoice`, `invoice_reversal`,
+  `manual_adjustment`). **O saldo não é armazenado** — é a soma do razão, pela única
+  view SQL do repo, `operations_v2.contract_balance` (migration `0038`). A tabela
+  antiga `doctorContracts` (teto + mês semente) foi substituída por este modelo.
+
+  > ⚠️ **Leia [docs/saldo-contrato/README.md](docs/saldo-contrato/README.md) antes de
+  > mexer em qualquer coisa de contrato, teto ou saldo.** Os dados vieram de uma
+  > planilha editada à mão e as armadilhas não se enxergam pelo código: saldo negativo
+  > que é consumo acumulado, célula vazia que não é zero, coluna CH que discorda do teto
+  > real. Já produziu uma lista de alertas falsos enviada à chefia. O README traz o
+  > registro de quem ainda está sem teto vigiado e os defeitos de carga em aberto.
 - **Payment attestation slots** — o que alimenta a auditoria de presença por turno
   (`/admin/payment-attestation`, `/admin/slot-audit`): `paymentAttestationSlots`
   (snapshot de um turno num dia — `operationalDate`+`shiftLabel` únicos, status

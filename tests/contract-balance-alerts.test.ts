@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { computeCycleMetrics, type CycleMetricsInput } from "@/lib/contracts/balance-metrics";
-import { buildContractAlerts, shouldRunContractBalanceCycle } from "@/modules/telegram/contract-balance-alerts";
+import { buildContractAlerts, buildWeeklyDigest, shouldRunContractBalanceCycle } from "@/modules/telegram/contract-balance-alerts";
 import type { ContractBalanceRow } from "@/services/contract-balance.service";
 
 const brl = (value: number) => Math.round(value * 100);
@@ -87,6 +87,37 @@ describe("buildContractAlerts — o que merece alerta", () => {
             row({ awaitingOpeningBalance: true }, { balanceCents: 0, observedConsumptionCents: 0 }),
         ], HOJE);
         assert.equal(alerts.length, 0);
+    });
+
+    // Regressão do caso João Miguez (dossiê 03-validacao-alertas-08-2026): o
+    // contrato sem teto lançado que JÁ PRODUZIU. Antes do conserto,
+    // `awaitingOpeningBalance` exigia consumo zero, então a flag caía no
+    // primeiro plantão e o bot anunciava "saldo zerado" com o valor da própria
+    // produção do médico. Aqui a flag é `true` mesmo com consumo — que é o que
+    // o serviço passa a devolver quando não há lançamento de abertura no razão.
+    it("contrato sem abertura no razão não alerta nem depois de o médico produzir", () => {
+        const alerts = buildContractAlerts([
+            row({ awaitingOpeningBalance: true, pendingConsumptionCents: brl(25277.89) }, {
+                balanceCents: brl(-25277.89),
+                observedConsumptionCents: brl(25277.89),
+                observedSince: new Date("2026-03-10T00:00:00Z"),
+            }),
+        ], HOJE);
+        assert.deepEqual(alerts, []);
+    });
+
+    it("o digest conta esse contrato como aguardando, não como estourado", () => {
+        const digest = buildWeeklyDigest([
+            row({ awaitingOpeningBalance: true, pendingConsumptionCents: brl(25277.89) }, {
+                balanceCents: brl(-25277.89),
+                observedConsumptionCents: brl(25277.89),
+            }),
+            row({ contractId: "c-2", doctorName: "Outro Médico" }),
+        ], HOJE);
+        assert.ok(digest);
+        assert.match(digest, /1 aguardando o saldo de abertura/);
+        assert.match(digest, /\*0\* com saldo zerado/);
+        assert.doesNotMatch(digest, /Médico Teste/);
     });
 
     it("amostra curta não vira alerta de projeção", () => {

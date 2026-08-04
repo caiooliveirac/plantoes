@@ -766,6 +766,12 @@ export const contractLedgerEntryTypeEnum = operationsV2.enum("contract_ledger_en
 // Um médico pode ter mais de um contrato ativo: a atribuição fechamento ->
 // contrato é por data, pela janela [startedAt, endedAt). Renovar = criar outro
 // registro, apontando supersededByContractId do antigo para o novo.
+//
+// O saldo NÃO mora aqui: é a soma do razão (contractLedger), pela view
+// operations_v2.contract_balance. `ceilingAmount` é nullable de propósito — nem
+// todo contrato tem teto conhecido, e chutar um é pior que deixar vazio.
+// Antes de mexer em contrato/razão/saldo, leia docs/saldo-contrato/README.md:
+// os dados de origem vieram de planilha e têm armadilhas documentadas.
 export const contracts = operationsV2.table(
     "contracts",
     {
