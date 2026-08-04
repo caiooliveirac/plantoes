@@ -24,6 +24,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { interventionOccupancies, regulationOccupancies, telegramBotNotices, telegramIngestedMessages } from "@/db/schema";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
+import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { isRemoteOperationalRole, isRemotePriorityRegulationCode, normalizeOperationalRoleLabel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { getSaoPauloParts, resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import type { TelegramFormatOptions, TelegramUpdate } from "@/modules/telegram/api";
@@ -5154,12 +5155,48 @@ export function applyMealBreakLatecomerRewind(session: MealBreakSession, rewind:
     return next;
 }
 
+export type MealBreakLatecomerSkipReason = "division_completed" | "half_shift";
+
+/**
+ * Chegadas tardias que NÃO entram na divisão já montada — a inclusão automática
+ * é para quem chega com o fluxo ainda rolando, não para desmanchar o que já
+ * está combinado (decisão do usuário, 04/08/2026, depois de a rebobina melar
+ * quadro pronto):
+ *
+ * - `division_completed`: todos já escolheram e a divisão fechou. Incluir mais
+ *   um reabre a etapa, recalcula as vagas e (no diurno) apaga os descansos já
+ *   combinados — gente que já saiu para comer perderia o horário. Quem chega
+ *   depois de fechada fica de fora; a chefia decide caso a caso (reiniciar a
+ *   divisão ou ajustar pelo painel).
+ * - `half_shift`: meio plantão (janela 11:30–17:00) chega já dentro do próprio
+ *   horário de almoço, com a divisão do turno inteiro rodando desde as 09:00.
+ *   Ele não redivide o almoço de quem já escolheu.
+ *
+ * Vale para os dois modos: a divisão do jantar tem a mesma regra.
+ */
+export function resolveMealBreakLatecomerSkip(params: {
+    session: MealBreakSession;
+    roleLabel: string | null | undefined;
+}): MealBreakLatecomerSkipReason | null {
+    if (params.session.stage === "completed") {
+        return "division_completed";
+    }
+
+    if (isHalfShiftRoleLabel(params.roleLabel)) {
+        return "half_shift";
+    }
+
+    return null;
+}
+
 /**
  * Chegada/continuação declarada DEPOIS de a sessão de refeições já estar
  * montada: inclui o médico no roster automaticamente (mesmo mecanismo da
  * soberania do chefe), anuncia no grupo o novo total, e rebobina a divisão até
  * a última escolha 100% livre (ver resolveMealBreakLatecomerRewind) — quem
  * escolheu sob lotação/bloqueio ganha a escolha de novo com as vagas novas.
+ * Exceções em resolveMealBreakLatecomerSkip (divisão já fechada, meio plantão):
+ * nesses casos nada é salvo, só um aviso no grupo.
  * Best-effort: retorna false quando não há sessão, o ramal já está no roster ou
  * o médico não é elegível (PIAM/NUCLEO/outro turno) — nunca lança para o caller.
  */
@@ -5189,6 +5226,31 @@ export async function ensureArrivalInCurrentMealBreakSession(params: {
         return false;
     }
 
+    const mealLabel = mode === "night" ? "jantar" : "almoço";
+    const restartCmd = mode === "night" ? "/jantar reiniciar" : "/almoco reiniciar";
+    const joining = findDoctor(ensured, ramal);
+    const joiningName = joining?.name ?? ramal;
+
+    // Divisão fechada / meio plantão: não mexe em nada — nem roster, nem vagas,
+    // nem rebobina (ver resolveMealBreakLatecomerSkip). Só avisa o grupo, e a
+    // sessão salva continua exatamente a mesma.
+    const skipReason = resolveMealBreakLatecomerSkip({
+        session: state.session,
+        roleLabel: joining?.roleLabel ?? null,
+    });
+    if (skipReason) {
+        await sendTelegramMealBreakMessages({
+            chatId: state.chatId,
+            messages: [
+                skipReason === "half_shift"
+                    ? `🍽️ *${joiningName}* (${ramal}) chegou de meio plantão — a divisão do ${mealLabel} segue como está, sem refazer as escolhas.`
+                    : `🍽️ *${joiningName}* (${ramal}) chegou com a divisão do ${mealLabel} já fechada — mantive os horários de todo mundo. Para incluir na divisão, chefia: ${restartCmd}.`,
+            ],
+            options: MEAL_BREAK_FORMAT_OPTIONS,
+        });
+        return false;
+    }
+
     const withJoinEvent = withEvent(ensured, {
         type: "latecomer_joined",
         actorTelegramId: null,
@@ -5208,10 +5270,8 @@ export async function ensureArrivalInCurrentMealBreakSession(params: {
 
     await saveMealBreakSession(state.chatId, final);
 
-    const newcomer = final.roster.find((doctor) => doctor.ramal === ramal);
-    const mealLabel = mode === "night" ? "jantar" : "almoço";
     const messages: string[] = [
-        `🍽️ *${newcomer?.name ?? ramal}* (${ramal}) entrou na divisão do ${mealLabel} — agora ${final.roster.length} plantonistas; as vagas por horário foram recalculadas.`,
+        `🍽️ *${joiningName}* (${ramal}) entrou na divisão do ${mealLabel} — agora ${final.roster.length} plantonistas; as vagas por horário foram recalculadas.`,
     ];
     if (rewind) {
         const clearedList = rewind.clearedRamals.map((cleared) => renderDoctorCompactSummary(final, cleared)).join(", ");
