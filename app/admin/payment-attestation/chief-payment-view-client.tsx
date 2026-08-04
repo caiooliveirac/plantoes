@@ -696,6 +696,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                 return {
                     ...doctor,
                     cells: nextCells,
+                    // Espelha o override otimista: sem isto o badge ESP/PSIQ da linha só
+                    // mudava no refresh, enquanto os totais já usavam o perfil novo.
+                    paymentProfile,
                     employmentType,
                     totalSD,
                     totalSN,
@@ -1277,9 +1280,23 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     }
 
     async function toggleDoctorSpecialistProfile(doctorId: string, isSpecialist: boolean) {
+        await updateDoctorPaymentProfile(doctorId, { isSpecialist });
+    }
+
+    /**
+     * PSIQ é o mesmo carimbo do /psiq do bot (metadata.preferredOperationalRole):
+     * marcar aqui muda tarifa, função na chegada e regra de refeição.
+     */
+    async function toggleDoctorPsychiatryProfile(doctorId: string, isPsychiatry: boolean) {
+        await updateDoctorPaymentProfile(doctorId, { isPsychiatry });
+    }
+
+    async function updateDoctorPaymentProfile(doctorId: string, flags: { isSpecialist?: boolean; isPsychiatry?: boolean }) {
         const baseDoctor = board.doctors.find((doctor) => doctor.doctorId === doctorId);
         const previousProfile = doctorProfileOverrides[doctorId] ?? ((baseDoctor?.paymentProfile ?? "generalist") as DoctorProfile);
-        const nextProfile: DoctorProfile = isSpecialist ? "specialist" : "generalist";
+        const nextProfile: DoctorProfile = flags.isPsychiatry !== undefined
+            ? (flags.isPsychiatry ? "psychiatry" : "generalist")
+            : (flags.isSpecialist ? "specialist" : "generalist");
 
         setProfileBusyDoctorId(doctorId);
         setManualError(null);
@@ -1298,16 +1315,30 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                 body: JSON.stringify({
                     action: "set_doctor_payment_profile",
                     doctorId,
-                    isSpecialist,
+                    ...flags,
                 }),
             });
 
-            const body = await response.json().catch(() => null) as { error?: string } | null;
+            const body = await response.json().catch(() => null) as {
+                error?: string;
+                doctor?: { paymentProfile?: DoctorProfile };
+            } | null;
             if (!response.ok) {
                 throw new Error(body?.error ?? "Não foi possível atualizar o perfil de pagamento do médico.");
             }
 
+            // O servidor é quem resolve o perfil final (desmarcar PSIQ pode cair em
+            // "especialista" se a flag de ESP continuar ligada no cadastro).
+            const resolvedProfile = body?.doctor?.paymentProfile;
+            if (resolvedProfile && resolvedProfile !== nextProfile) {
+                setDoctorProfileOverrides((current) => ({
+                    ...current,
+                    [doctorId]: resolvedProfile,
+                }));
+            }
+
             setManualFeedback("Perfil de pagamento atualizado.");
+            requestRouterRefresh();
         } catch (error) {
             setDoctorProfileOverrides((current) => ({
                 ...current,
@@ -2320,6 +2351,19 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                             <span>ESP</span>
                                         </label>
                                     ) : null}
+                                    {/* Mesmo carimbo do /psiq no bot: tarifa de psiquiatria, função PSIQ na
+                                        chegada e refeição fora da divisão automática. */}
+                                    <label className="chief-payable-specialist-toggle" title="Tarifa de psiquiatria (mesmo efeito do /psiq no bot: função PSIQ na chegada e refeição fixa)">
+                                        <input
+                                            type="checkbox"
+                                            checked={(doctorProfileOverrides[selectedDoctor.doctorId] ?? selectedDoctor.paymentProfile ?? "generalist") === "psychiatry"}
+                                            onChange={(event) => {
+                                                void toggleDoctorPsychiatryProfile(selectedDoctor.doctorId, event.target.checked);
+                                            }}
+                                            disabled={!canManageClosing || profileBusyDoctorId === selectedDoctor.doctorId}
+                                        />
+                                        <span>PSIQ</span>
+                                    </label>
                                 </div>
                             </div>
                             <div className="chief-payable-modal-header-actions">

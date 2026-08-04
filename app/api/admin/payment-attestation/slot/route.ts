@@ -13,7 +13,7 @@ import {
     refreshPaymentAttestationSlot,
     reopenPaymentAttestationSlot,
     setDoctorEmploymentType,
-    setDoctorPaymentSpecialistProfile,
+    setDoctorPaymentProfileFlags,
 } from "@/services/payment-attestation.service";
 
 const actionSchema = z.object({
@@ -26,6 +26,7 @@ const actionSchema = z.object({
     disabledReason: z.string().trim().min(3).max(255).optional(),
     doctorId: z.string().uuid().optional(),
     isSpecialist: z.boolean().optional(),
+    isPsychiatry: z.boolean().optional(),
     employmentType: z.enum(["pj", "estatutario"]).optional(),
     occupancyId: z.string().uuid().optional(),
 });
@@ -118,8 +119,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (parsed.data.action === "set_doctor_payment_profile") {
-        if (!parsed.data.doctorId || parsed.data.isSpecialist === undefined) {
-            return NextResponse.json({ error: "Para atualizar perfil de pagamento informe medico e flag especialista." }, { status: 400 });
+        if (!parsed.data.doctorId || (parsed.data.isSpecialist === undefined && parsed.data.isPsychiatry === undefined)) {
+            return NextResponse.json({ error: "Para atualizar perfil de pagamento informe medico e a flag especialista ou psiquiatra." }, { status: 400 });
         }
     }
 
@@ -151,9 +152,10 @@ export async function POST(request: NextRequest) {
         }
 
         if (parsed.data.action === "set_doctor_payment_profile") {
-            const doctor = await setDoctorPaymentSpecialistProfile({
+            const doctor = await setDoctorPaymentProfileFlags({
                 doctorId: parsed.data.doctorId as string,
-                isSpecialist: parsed.data.isSpecialist as boolean,
+                isSpecialist: parsed.data.isSpecialist,
+                isPsychiatry: parsed.data.isPsychiatry,
             });
 
             await getDb().insert(auditLogs).values({
@@ -164,6 +166,7 @@ export async function POST(request: NextRequest) {
                 details: {
                     doctorName: doctor.fullName,
                     isSpecialist: doctor.isSpecialist,
+                    isPsychiatry: doctor.isPsychiatry,
                     paymentProfile: doctor.paymentProfile,
                 },
             });

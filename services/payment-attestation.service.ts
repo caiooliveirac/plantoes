@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "@/db";
 import { bankHoursEntries, doctors, interventionBaseDeactivations, interventionOccupancies, paymentAttestationSlotEntries, paymentAttestationSlots, regulationOccupancies, regulationPostDeactivations, users, type paymentAttestationSlotStatusEnum } from "@/db/schema";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
-import { listDoctorSearchTerms } from "@/modules/doctors/directory";
+import { listDoctorSearchTerms, mergeDoctorDirectoryMetadata } from "@/modules/doctors/directory";
 import { normalizeDoctorName } from "@/modules/doctors/importer";
 import { getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
 
@@ -1181,9 +1181,50 @@ export async function applyManualRemoveAssignment(params: {
     };
 }
 
-export async function setDoctorPaymentSpecialistProfile(params: {
+/**
+ * Aplica as flags de perfil de pagamento sobre o metadata do médico.
+ *
+ * Especialista é flag própria do pagamento (`paymentProfile.isSpecialist`).
+ * Psiquiatra NÃO tem flag própria: é o mesmo `preferredOperationalRole=PSIQ`
+ * que o `/psiq` do bot grava — marcar aqui é marcar lá (função na chegada,
+ * refeição fixa, tabela de psiquiatria). Desmarcar só apaga o papel quando ele
+ * é de fato PSIQ, para não derrubar um PIAM/CP por engano.
+ *
+ * Pura de propósito: é o miolo testável de setDoctorPaymentProfileFlags.
+ */
+export function applyDoctorPaymentProfileFlags(
+    metadata: unknown,
+    flags: { isSpecialist?: boolean; isPsychiatry?: boolean },
+): DoctorPaymentMetadata {
+    const current = normalizeDoctorPaymentMetadata(metadata);
+    let updated: DoctorPaymentMetadata = { ...current };
+
+    if (flags.isSpecialist !== undefined) {
+        updated = {
+            ...updated,
+            paymentProfile: {
+                ...(current.paymentProfile ?? {}),
+                isSpecialist: flags.isSpecialist,
+            },
+        };
+    }
+
+    if (flags.isPsychiatry !== undefined) {
+        const currentRole = String(current.preferredOperationalRole ?? "").trim().toUpperCase();
+        if (flags.isPsychiatry) {
+            updated = mergeDoctorDirectoryMetadata(updated, { preferredOperationalRole: "PSIQ" }) as DoctorPaymentMetadata;
+        } else if (currentRole === "PSIQ") {
+            updated = mergeDoctorDirectoryMetadata(updated, { preferredOperationalRole: null }) as DoctorPaymentMetadata;
+        }
+    }
+
+    return updated;
+}
+
+export async function setDoctorPaymentProfileFlags(params: {
     doctorId: string;
-    isSpecialist: boolean;
+    isSpecialist?: boolean;
+    isPsychiatry?: boolean;
 }) {
     const [doctor] = await getDb().select({
         id: doctors.id,
@@ -1197,14 +1238,10 @@ export async function setDoctorPaymentSpecialistProfile(params: {
         throw new Error("Medico nao encontrado para atualizar perfil de pagamento.");
     }
 
-    const current = normalizeDoctorPaymentMetadata(doctor.metadata);
-    const updatedMetadata: DoctorPaymentMetadata = {
-        ...current,
-        paymentProfile: {
-            ...(current.paymentProfile ?? {}),
-            isSpecialist: params.isSpecialist,
-        },
-    };
+    const updatedMetadata = applyDoctorPaymentProfileFlags(doctor.metadata, {
+        isSpecialist: params.isSpecialist,
+        isPsychiatry: params.isPsychiatry,
+    });
 
     await getDb().update(doctors)
         .set({
@@ -1218,6 +1255,7 @@ export async function setDoctorPaymentSpecialistProfile(params: {
         id: doctor.id,
         fullName: doctor.fullName,
         isSpecialist: updatedMetadata.paymentProfile?.isSpecialist === true,
+        isPsychiatry: paymentProfile === "psychiatry",
         paymentProfile,
     };
 }
