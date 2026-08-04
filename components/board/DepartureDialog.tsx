@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { modalBackdrop, modalPanel } from "@/lib/board/motion";
+import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { buildEarlyDepartureCreditNote, buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 
 interface DepartureDialogProps {
     open: boolean;
@@ -23,6 +25,11 @@ interface DepartureDialogProps {
      * the bank AND to the group alert.
      */
     chiefKick?: boolean;
+    /** Dados da ocupação para o preview da régua de saída antecipada (chiefKick). */
+    startedAt?: string | null;
+    scheduledStartAt?: string | null;
+    scheduledEndAt?: string | null;
+    roleLabel?: string | null;
 }
 
 const CHIEF_KICK_DEFAULT_NOTE = "Saída por encerramento de turno (retirada pelo chefe)";
@@ -46,11 +53,39 @@ export function DepartureDialog({
     doctorName,
     onSaved,
     chiefKick = false,
+    startedAt = null,
+    scheduledStartAt = null,
+    scheduledEndAt = null,
+    roleLabel = null,
 }: DepartureDialogProps) {
     const router = useRouter();
     const [endedAt, setEndedAt] = useState(isoNowLocal());
     const [reason, setReason] = useState("");
     const [submitting, setSubmitting] = useState(false);
+
+    // Preview da régua de retirada antecipada: mesma classificação que o servidor
+    // vai aplicar (modules/operational/early-departure.ts), recalculada a cada
+    // mudança do horário. O texto é o oficial da coordenação.
+    const earlyDeparturePreview = useMemo(() => {
+        if (!chiefKick || !endedAt || !isEarlyDepartureEligible({ roleLabel })) {
+            return null;
+        }
+        const departureAt = new Date(endedAt);
+        if (Number.isNaN(departureAt.getTime())) {
+            return null;
+        }
+        const classification = classifyEarlyDeparture({
+            departureAt,
+            scheduledStartAt,
+            scheduledEndAt,
+            startedAt,
+        });
+        return {
+            summary: buildEarlyDepartureSummary(classification.outcome, { name: doctorName }),
+            creditNote: buildEarlyDepartureCreditNote(classification),
+            outcome: classification.outcome,
+        };
+    }, [chiefKick, endedAt, roleLabel, scheduledStartAt, scheduledEndAt, startedAt, doctorName]);
 
     useEffect(() => {
         if (open) {
@@ -141,6 +176,16 @@ export function DepartureDialog({
                                             : `Essa hora é a que vai contar para o banco de horas de ${doctorName}. Confirme com cuidado antes de salvar.`}
                                     </p>
                                 </div>
+
+                                {earlyDeparturePreview && (
+                                    <div className="board-modal-warning">
+                                        <strong>O que esta retirada significa</strong>
+                                        <p>
+                                            {earlyDeparturePreview.summary}
+                                            {earlyDeparturePreview.creditNote ? ` ${earlyDeparturePreview.creditNote}` : ""}
+                                        </p>
+                                    </div>
+                                )}
 
                                 <div className="board-modal-fields">
                                     <label className="board-modal-field">

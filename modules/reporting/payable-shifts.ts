@@ -1,11 +1,17 @@
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
 import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_ROLE_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
+import { isPaymentAffectingEarlyDepartureOutcome, resolveEarlyDeparturePaymentUnit } from "@/modules/operational/early-departure";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 import type { ContractStatementMonth } from "@/lib/contracts/statement";
 
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const MIN_SEGMENT_MINUTES = 45;
+
+// Rótulos exibidos no fechamento para os desfechos de retirada antecipada.
+export const EARLY_DEPARTURE_BANK_ONLY_DISPLAY_LABEL = "Retirada antecipada — só banco de horas";
+export const EARLY_DEPARTURE_HALF_DISPLAY_LABEL = "Retirada antecipada — meio plantão";
+export const EARLY_DEPARTURE_BANK_ONLY_TAG_LABEL = "BANCO";
 
 export type DoctorPaymentProfile = "generalist" | "specialist" | "psychiatry";
 
@@ -107,6 +113,8 @@ export interface PayableShift {
     roleLabel: string | null;
     paymentUnit: number;
     paymentTag: string | null;
+    /** Desfecho da régua de retirada antecipada aplicado a ESTE slot (ou null). */
+    earlyDepartureOutcome: "bank_only" | "half_shift" | null;
 }
 
 /**
@@ -176,6 +184,7 @@ export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): Payabl
         // de vermelho quando paymentUnit < 0; verdes (extra/bonus) ficam +1.
         paymentUnit,
         paymentTag: isHalfExtra ? HALF_SHIFT_TAG_LABEL : null,
+        earlyDepartureOutcome: null,
     } satisfies PayableShift;
 }
 
@@ -621,6 +630,23 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
     const operationalDate = toOperationalDate(board.startedAt);
 
     const isHalfShift = isHalfShiftRoleLabel(row.roleLabel);
+
+    // Desfecho de retirada/saída antecipada (early-departure.ts): vale só no
+    // slot em que a saída de fato caiu — um "P" retirado no segundo turno
+    // mantém o primeiro turno pagável por inteiro.
+    const rowEndedAtMs = row.endedAt ? new Date(row.endedAt).getTime() : null;
+    const earlyOutcome = isPaymentAffectingEarlyDepartureOutcome(row.earlyDepartureOutcome)
+        && rowEndedAtMs !== null
+        && rowEndedAtMs > new Date(board.startedAt).getTime()
+        && rowEndedAtMs <= new Date(board.endedAt).getTime()
+        ? row.earlyDepartureOutcome
+        : null;
+    const earlyOutcomeLabel = earlyOutcome === "bank_only"
+        ? EARLY_DEPARTURE_BANK_ONLY_DISPLAY_LABEL
+        : earlyOutcome === "half_shift"
+            ? EARLY_DEPARTURE_HALF_DISPLAY_LABEL
+            : null;
+
     return {
         payableShiftId: [row.doctorId, board.startedAt, board.shiftLabel, row.domain, row.targetCode].join("|"),
         occupancyId: row.occupancyId,
@@ -640,11 +666,22 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
         durationMinutes,
         paymentStatus: row.paymentStatus,
         auditStatus: row.paymentStatus === "ready_for_payment" ? "clean" : "review",
-        issues: isHalfShift ? [...row.issues, HALF_SHIFT_DISPLAY_LABEL] : [...row.issues],
+        issues: [
+            ...row.issues,
+            ...(isHalfShift ? [HALF_SHIFT_DISPLAY_LABEL] : []),
+            ...(earlyOutcomeLabel ? [earlyOutcomeLabel] : []),
+        ],
         source: row.source,
         roleLabel: row.roleLabel,
-        paymentUnit: resolvePaymentUnitFromRole(row.roleLabel),
-        paymentTag: isHalfShift ? HALF_SHIFT_TAG_LABEL : null,
+        paymentUnit: resolveEarlyDeparturePaymentUnit(earlyOutcome) ?? resolvePaymentUnitFromRole(row.roleLabel),
+        paymentTag: earlyOutcome === "half_shift"
+            ? HALF_SHIFT_TAG_LABEL
+            : earlyOutcome === "bank_only"
+                ? EARLY_DEPARTURE_BANK_ONLY_TAG_LABEL
+                : isHalfShift
+                    ? HALF_SHIFT_TAG_LABEL
+                    : null,
+        earlyDepartureOutcome: earlyOutcome,
     } satisfies PayableShift;
 }
 

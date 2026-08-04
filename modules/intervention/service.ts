@@ -7,6 +7,7 @@ import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveContinuationInPlaceShiftLabel, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
 
 type Executor = any;
@@ -836,13 +837,26 @@ export async function deactivateInterventionBase(input: DeactivateInterventionBa
         }).returning();
 
         const closedOccupancyIds: string[] = [];
+        const closedOccupancies: Array<{ id: string; doctorId: string; endedAt: Date; earlyDepartureOutcome: string | null }> = [];
         for (const occupancy of openOccupancies) {
             const endedAt = clampOccupancyEndAt(occupancy.startedAt, input.deactivatedAt);
+
+            // Desativar com ocupante é uma retirada decidida pela chefia:
+            // aplica a régua de saída antecipada e grava o desfecho.
+            const earlyDepartureOutcome = isEarlyDepartureEligible({ roleLabel: occupancy.roleLabel })
+                ? classifyEarlyDeparture({
+                    departureAt: endedAt,
+                    scheduledStartAt: occupancy.scheduledStartAt,
+                    scheduledEndAt: occupancy.scheduledEndAt,
+                    startedAt: occupancy.startedAt,
+                }).outcome
+                : occupancy.earlyDepartureOutcome;
 
             await tx.update(interventionOccupancies)
                 .set({
                     endedAt,
                     actualEndedAt: endedAt,
+                    earlyDepartureOutcome,
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
                 })
@@ -850,11 +864,13 @@ export async function deactivateInterventionBase(input: DeactivateInterventionBa
 
             await syncInterventionBankHours(tx, occupancy.id);
             closedOccupancyIds.push(occupancy.id);
+            closedOccupancies.push({ id: occupancy.id, doctorId: occupancy.doctorId, endedAt, earlyDepartureOutcome });
         }
 
         return {
             state: created,
             closedOccupancyIds,
+            closedOccupancies,
         };
     });
 
@@ -864,7 +880,15 @@ export async function deactivateInterventionBase(input: DeactivateInterventionBa
 
 export async function endInterventionOccupancy(
     id: string,
-    input: { endedAt: Date; actualEndedAt?: Date | null; chiefConfirmed?: boolean; handoffClosure?: boolean },
+    input: {
+        endedAt: Date;
+        actualEndedAt?: Date | null;
+        chiefConfirmed?: boolean;
+        handoffClosure?: boolean;
+        /** Retirada decidida pela chefia: aplica a régua de saída antecipada
+         *  (modules/operational/early-departure.ts) e grava o desfecho. */
+        chiefWithdrawal?: boolean;
+    },
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
@@ -891,11 +915,22 @@ export async function endInterventionOccupancy(
             ? (updatedByUserId ?? null)
             : existing.departureConfirmedByUserId;
 
+        const earlyDepartureOutcome = input.chiefWithdrawal
+            && isEarlyDepartureEligible({ roleLabel: existing.roleLabel })
+            ? classifyEarlyDeparture({
+                departureAt: actualEndedAt ?? input.endedAt,
+                scheduledStartAt: existing.scheduledStartAt,
+                scheduledEndAt: existing.scheduledEndAt,
+                startedAt: existing.startedAt,
+            }).outcome
+            : existing.earlyDepartureOutcome;
+
         const [updated] = await tx
             .update(interventionOccupancies)
             .set({
                 endedAt: input.endedAt,
                 actualEndedAt,
+                earlyDepartureOutcome,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: now,
                 departureConfirmedAt,

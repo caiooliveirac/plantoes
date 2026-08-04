@@ -3168,6 +3168,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     targetCode={cardCode(kickModalCard)}
                     doctorName={kickModalCard.displayName || kickModalCard.doctorName || "Plantonista"}
                     chiefKick
+                    startedAt={kickModalCard.startedAt}
+                    scheduledStartAt={(kickModalCard as { scheduledStartAt?: string | null }).scheduledStartAt ?? null}
+                    scheduledEndAt={kickModalCard.scheduledEndAt}
+                    roleLabel={kickModalCard.roleLabel}
                     onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
                 />
             )}
@@ -3199,7 +3203,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     targetId={deactivateModalCard.domain === "regulation" ? deactivateModalCard.postId : deactivateModalCard.baseId}
                     targetCode={cardCode(deactivateModalCard)}
                     targetLabel={cardLabel(deactivateModalCard)}
-                    occupantName={null}
+                    occupantName={deactivateModalCard.occupancyId
+                        ? (deactivateModalCard.displayName || deactivateModalCard.doctorName)
+                        : null}
+                    occupantStartedAt={deactivateModalCard.startedAt}
+                    occupantScheduledStartAt={(deactivateModalCard as { scheduledStartAt?: string | null }).scheduledStartAt ?? null}
+                    occupantScheduledEndAt={deactivateModalCard.scheduledEndAt}
+                    occupantRoleLabel={deactivateModalCard.roleLabel}
                     isReactivate={deactivateModalCard.status === "disabled"}
                     onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
                 />

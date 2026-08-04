@@ -40,13 +40,19 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
             endedAt,
             actualEndedAt: parsed.data.actualEndedAt ? new Date(parsed.data.actualEndedAt) : null,
             chiefConfirmed: true,
+            chiefWithdrawal: parsed.data.chiefKick === true,
         }, session.user.id);
         await db.insert(auditLogs).values({
             actorUserId: session.user.id,
             action: "intervention_occupancy.ended",
             entityType: "intervention_occupancy",
             entityId: updated.id,
-            details: { endedAt: updated.endedAt, actualEndedAt: updated.actualEndedAt, notes: parsed.data.notes ?? null },
+            details: {
+                endedAt: updated.endedAt,
+                actualEndedAt: updated.actualEndedAt,
+                notes: parsed.data.notes ?? null,
+                earlyDepartureOutcome: updated.earlyDepartureOutcome ?? null,
+            },
         });
         if (parsed.data.chiefKick) {
             const base = await db.query.interventionBases.findFirst({ where: eq(interventionBases.id, updated.baseId) });
@@ -55,6 +61,7 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
                 doctorId: updated.doctorId,
                 targetCode: base?.code ?? String(updated.baseId),
                 endedAt,
+                earlyDepartureOutcome: updated.earlyDepartureOutcome,
             });
         }
         return NextResponse.json({ occupancy: updated });

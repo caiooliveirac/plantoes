@@ -5,10 +5,14 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, regulationOccupancies } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { correctRegulationOccupancy } from "@/modules/operational/corrections";
+import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 
 const schema = z.object({
     actualEndedAt: z.string().datetime().optional(),
     note: z.union([z.string().trim().max(2000), z.null()]).optional(),
+    // Opção do chefe na confirmação: saída na faixa 6h–10h de janela pode ser
+    // fechada como MEIO plantão, com o excedente de 6h indo para o banco.
+    creditHalfShift: z.boolean().optional(),
 });
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -46,7 +50,32 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         return NextResponse.json({ error: "Horario de saida nao pode ser anterior a chegada." }, { status: 400 });
     }
 
+    // Creditar meio plantão só vale quando a saída confirmada cai de fato na
+    // faixa 6h–10h da janela do turno (modules/operational/early-departure.ts).
+    if (parsed.data.creditHalfShift) {
+        if (!isEarlyDepartureEligible({ roleLabel: existing.roleLabel })) {
+            return NextResponse.json({ error: "Ocupacao de meio plantao declarado nao entra na regua de saida antecipada." }, { status: 400 });
+        }
+        const classification = classifyEarlyDeparture({
+            departureAt: nextActualEndedAt,
+            scheduledStartAt: existing.scheduledStartAt,
+            scheduledEndAt: existing.scheduledEndAt,
+            startedAt: existing.startedAt,
+        });
+        if (classification.outcome !== "half_shift") {
+            return NextResponse.json({ error: "Essa saida nao cai na faixa de meio plantao (entre 6h e 10h de janela)." }, { status: 400 });
+        }
+    }
+
     try {
+        if (parsed.data.creditHalfShift) {
+            // Antes da correção: o recálculo do banco dentro de correctRegulationOccupancy
+            // já precisa ler o desfecho gravado.
+            await db.update(regulationOccupancies)
+                .set({ earlyDepartureOutcome: "half_shift" })
+                .where(eq(regulationOccupancies.id, id));
+        }
+
         const updated = await correctRegulationOccupancy(id, {
             actualEndedAt: nextActualEndedAt,
             chiefConfirmed: true,
@@ -68,6 +97,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
                 confirmedActualEndedAt: nextActualEndedAt.toISOString(),
                 edited: nextActualEndedAt.getTime() !== existing.actualEndedAt.getTime(),
                 note: parsed.data.note ?? null,
+                creditHalfShift: parsed.data.creditHalfShift === true,
             },
         });
 

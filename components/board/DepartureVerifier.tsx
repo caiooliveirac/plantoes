@@ -9,6 +9,8 @@ import { TimeScrubber } from "@/components/board/TimeScrubber";
 import { EventTimeline } from "@/components/board/EventTimeline";
 import { modalBackdrop, modalPanel, tapFeedback } from "@/lib/board/motion";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
+import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 
 export interface DepartureVerifierProps {
     target: PendingDepartureConfirmation | null;
@@ -59,13 +61,32 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
 
     const [valueMs, setValueMs] = useState(verbalizedMs);
     const [submitting, setSubmitting] = useState(false);
+    const [creditHalfShift, setCreditHalfShift] = useState(false);
 
     useEffect(() => {
         // Reset when target changes (modal opens for a new card).
         if (target) {
             setValueMs(new Date(target.actualEndedAt).getTime());
+            setCreditHalfShift(false);
         }
     }, [target]);
+
+    // Saída dentro da faixa 6h–10h de janela: o chefe pode optar por fechar como
+    // MEIO plantão (excedente de 6h vira crédito no banco). Mesma régua do
+    // servidor — modules/operational/early-departure.ts.
+    const halfShiftOption = useMemo(() => {
+        if (!target || !isEarlyDepartureEligible({ roleLabel: target.roleLabel })) {
+            return null;
+        }
+        const classification = classifyEarlyDeparture({
+            departureAt: new Date(valueMs),
+            scheduledStartAt: target.scheduledStartAt,
+            scheduledEndAt: target.scheduledEndAt,
+            startedAt: target.startedAt,
+        });
+        return classification.outcome === "half_shift" ? classification : null;
+    }, [target, valueMs]);
+    const halfShiftEnabled = creditHalfShift && halfShiftOption !== null;
 
     const suspect = useMemo(() => {
         if (!target) return false;
@@ -103,7 +124,13 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             const response = await fetch(`/api/${target.domain}/occupancies/${target.occupancyId}/confirm-departure`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ actualEndedAt, note }),
+                body: JSON.stringify({
+                    actualEndedAt,
+                    note,
+                    // Só a confirmação direta pode fechar como meio plantão — editar
+                    // para a janela / recusar puxam a saída para o fim da janela paga.
+                    ...(action === "confirm" && halfShiftEnabled ? { creditHalfShift: true } : {}),
+                }),
             });
             if (!response.ok) {
                 const body = await response.json().catch(() => ({})) as { error?: string };
@@ -186,6 +213,21 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                     <span>Atraso versus fim de janela (verbalizado): {target.delayMinutes > 0 ? "+" : ""}{target.delayMinutes}min</span>
                                                 )}
                                             </div>
+                                            {halfShiftOption && (
+                                                <label className="departure-verifier-half-option" style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: "0.82rem", cursor: "pointer" }}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={creditHalfShift}
+                                                        onChange={(event) => setCreditHalfShift(event.target.checked)}
+                                                        style={{ marginTop: 2 }}
+                                                    />
+                                                    <span>
+                                                        <strong>Creditar MEIO plantão</strong>
+                                                        {" — "}
+                                                        {buildEarlyDepartureSummary("half_shift", { name: target.displayName ?? target.doctorName })}
+                                                    </span>
+                                                </label>
+                                            )}
                                         </div>
 
                                         <div className="departure-verifier-body__col">
