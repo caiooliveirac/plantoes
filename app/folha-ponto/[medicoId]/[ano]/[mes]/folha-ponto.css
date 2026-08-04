@@ -154,8 +154,8 @@
 
 .fp-meta {
     border: 1px solid #000;
-    padding: 4px 8px;
-    margin-bottom: 4mm;
+    padding: 3px 8px;
+    margin-bottom: 3mm;
 }
 
 .fp-meta-pg1 {
@@ -255,7 +255,18 @@
 }
 
 .fp-tabela-relatorio {
-    margin-bottom: 6mm;
+    margin-bottom: 5mm;
+}
+
+/* Se o mês tiver atividade demais para uma folha, a tabela quebra sozinha e
+   repete o cabeçalho — nunca corta uma linha ao meio nem some com atividade. */
+.fp-tabela-relatorio thead {
+    display: table-header-group;
+}
+
+.fp-tabela-relatorio tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
 }
 
 .fp-tabela-relatorio col.fp-col-data {
@@ -263,7 +274,7 @@
 }
 
 .fp-tabela-relatorio tbody tr {
-    height: 7mm;
+    height: 6mm;
 }
 
 .fp-tabela-relatorio .fp-dia {
@@ -278,8 +289,10 @@
 .fp-localdata-caixa {
     border: 1px solid #000;
     width: 40%;
-    height: 12mm;
-    margin-top: 6mm;
+    /* min-height, não height: com altura fixa a data transbordava a caixa e a
+       borda inferior cortava o texto ao meio. */
+    min-height: 11mm;
+    margin-top: 5mm;
     padding: 2mm 3mm;
     display: flex;
     flex-direction: column;
@@ -323,8 +336,8 @@
 }
 
 .fp-cabecalho-logo-relatorio {
-    width: 72mm;
-    max-height: 26mm;
+    width: 58mm;
+    max-height: 18mm;
     object-fit: contain;
     display: block;
 }
@@ -363,11 +376,19 @@
 /* Quando o "Local e Data" antecede as assinaturas (pg. 2), aperta o espaço
    vertical para o bloco de assinaturas + endereço continuarem na mesma folha. */
 .fp-localdata-caixa + .fp-assinaturas-pg2 {
-    margin-top: 6mm;
+    margin-top: 5mm;
 }
 
 .fp-localdata-caixa + .fp-assinaturas-pg2 .fp-linha-assinatura {
-    margin-top: 10mm;
+    margin-top: 9mm;
+}
+
+/* O rodapé da pg. 2 (data + assinaturas + endereço) não se separa: se a tabela
+   crescer a ponto de virar a folha, ele vai inteiro para a página seguinte. */
+.fp-localdata-caixa + .fp-assinaturas-pg2,
+.fp-assinaturas-pg2 + .fp-endereco {
+    break-before: avoid;
+    page-break-before: avoid;
 }
 
 .fp-assinatura-bloco {
@@ -378,7 +399,7 @@
 }
 
 .fp-endereco {
-    margin-top: 10mm;
+    margin-top: 6mm;
     font-size: 8pt;
     text-align: center;
     color: #333;

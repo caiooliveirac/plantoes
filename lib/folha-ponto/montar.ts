@@ -25,6 +25,27 @@ export function montarLinhasFrequencia(plantoes: Plantao[]): Record<number, Linh
     return dias;
 }
 
+/**
+ * Piso de linhas do relatório de atividades: só para a tabela não virar um toco
+ * de duas linhas para quem deu poucos plantões.
+ */
+export const MIN_LINHAS_RELATORIO = 10;
+
+/**
+ * Linhas que vão para o papel: uma por atividade, sem completar até um número
+ * fixo. O comportamento antigo era cravar 25 linhas — o que ao mesmo tempo
+ * empurrava a página para uma segunda folha em quem dá muitos plantões (as
+ * linhas vazias sobrando) e ESCONDIA atividade de quem passava de 25 (o resto
+ * era cortado fora do relatório assinado).
+ */
+export function montarLinhasImpressas(
+    linhas: LinhaRelatorio[],
+    minimo = MIN_LINHAS_RELATORIO,
+): (LinhaRelatorio | null)[] {
+    const faltam = Math.max(0, minimo - linhas.length);
+    return [...linhas, ...Array.from({ length: faltam }, () => null)];
+}
+
 export function montarRelatorio(plantoes: Plantao[], mes: number): LinhaRelatorio[] {
     const ordenados = [...plantoes].sort((a, b) => {
         if (a.dia !== b.dia) return a.dia - b.dia;
