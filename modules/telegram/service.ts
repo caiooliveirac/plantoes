@@ -4462,6 +4462,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 trigger: "manual",
                 mode: mealBreakCommand.mode,
                 forceRestart: mealBreakCommand.forceRestart,
+                action: mealBreakCommand.action,
+                restorePosition: mealBreakCommand.restorePosition,
                 actorTelegramId: resolveTelegramMealBreakSenderId(update),
             });
 
@@ -4472,6 +4474,8 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     commandName: mealBreakCommand.name,
                     mealBreakMode: mealBreakCommand.mode,
                     forceRestart: mealBreakCommand.forceRestart,
+                    mealBreakAction: mealBreakCommand.action,
+                    restorePosition: mealBreakCommand.restorePosition,
                     resultStatus: result.status,
                     ...resolveMealBreakLogDetails(result.session),
                 },

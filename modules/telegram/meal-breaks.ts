@@ -19,7 +19,7 @@
  *   - Break slots respect minimum coverage constraints
  *   - Stage sequence: lunch → rest (SD) or dinner → night-work (SN)
  */
-import { and, desc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, like, lt, lte, notInArray } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { interventionOccupancies, regulationOccupancies, telegramBotNotices, telegramIngestedMessages } from "@/db/schema";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
@@ -93,6 +93,7 @@ export interface MealBreakSessionEvent {
     | "eligibility_corrected"
     | "latecomer_joined"
     | "latecomer_rewind"
+    | "session_restored"
     | "undo_applied"
     | "session_completed";
     ramal?: string;
@@ -150,6 +151,10 @@ export interface TelegramMealBreakCommand {
     name: "meal_break";
     mode: MealBreakMode;
     forceRestart: boolean;
+    /** `restore_list` = mostrar os pontos de restauração; `restore_apply` = voltar
+     *  para o ponto `restorePosition` (1 = o mais recente). */
+    action: "start" | "restore_list" | "restore_apply";
+    restorePosition: number | null;
     rawBody: string;
 }
 
@@ -4753,7 +4758,123 @@ async function resolveCurrentOperationalMealBreakState(referenceAt: Date, mode: 
     return available[0] ?? null;
 }
 
-async function saveMealBreakSession(chatId: string, session: MealBreakSession) {
+/**
+ * Ponto de restauração: TODA gravação da sessão deixa uma cópia completa do
+ * estado, com o motivo da gravação. A linha viva é um upsert (uma por chat+modo)
+ * — sem isto, qualquer bug que mexa nas escolhas apaga o que havia antes e a
+ * divisão do dia se perde de vez, que foi o incidente de 04/08/2026.
+ *
+ * Guardado no mesmo `telegram_bot_notices` (payload jsonb) para não depender de
+ * migration: a chave carrega chat+modo+dia+instante, então revisões nunca se
+ * sobrescrevem e a poda é um `like` no prefixo.
+ */
+const REVISION_NOTICE_STAGE = "meal_break_revision";
+/** Revisões mantidas por chat+modo+dia. ~20KB cada no pior caso: 40 ≈ 800KB/dia. */
+const MEAL_BREAK_REVISION_LIMIT = 40;
+/** Dias de retenção das revisões de dias anteriores (a poda roda a cada gravação). */
+const MEAL_BREAK_REVISION_RETENTION_DAYS = 7;
+
+export type MealBreakSaveReason =
+    | "session_started"
+    | "session_restarted"
+    | "choice"
+    | "chief_correction"
+    | "latecomer_joined"
+    | "latecomer_rewind"
+    | "undo"
+    | "restored";
+
+const MEAL_BREAK_SAVE_REASON_LABELS: Record<MealBreakSaveReason, string> = {
+    session_started: "divisão iniciada",
+    session_restarted: "divisão reiniciada",
+    choice: "escolha registrada",
+    chief_correction: "correção da chefia",
+    latecomer_joined: "retardatário entrou",
+    latecomer_rewind: "rebobina do retardatário",
+    undo: "desfazer",
+    restored: "restauração de ponto",
+};
+
+export function resolveMealBreakSaveReasonLabel(reason: string | null | undefined) {
+    return MEAL_BREAK_SAVE_REASON_LABELS[reason as MealBreakSaveReason] ?? "gravação";
+}
+
+interface MealBreakRevisionPayload {
+    kind: "telegram_meal_break_revision";
+    reason: MealBreakSaveReason;
+    savedAt: string;
+    session: MealBreakSession;
+}
+
+function resolveRevisionNoticeKeyPrefix(chatId: string, mode: MealBreakMode, operationalDate: string) {
+    return `${chatId}:meal_break:revision:${mode}:${operationalDate}:`;
+}
+
+function resolveRevisionNoticeKeyChatPrefix(chatId: string, mode: MealBreakMode) {
+    return `${chatId}:meal_break:revision:${mode}:`;
+}
+
+function isMealBreakRevisionPayload(value: unknown): value is MealBreakRevisionPayload {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+    const candidate = value as Partial<MealBreakRevisionPayload>;
+    return candidate.kind === "telegram_meal_break_revision"
+        && typeof candidate.savedAt === "string"
+        && isMealBreakSession(candidate.session);
+}
+
+// Best-effort: a revisão é rede de segurança, nunca pode derrubar a gravação da
+// sessão em si (o médico perder a escolha por causa do backup seria o oposto do
+// objetivo). Falha aqui vira log e segue.
+async function appendMealBreakSessionRevision(chatId: string, session: MealBreakSession, reason: MealBreakSaveReason) {
+    const db = getDb();
+    const savedAt = new Date().toISOString();
+    const prefix = resolveRevisionNoticeKeyPrefix(chatId, session.mode, session.operationalDate);
+
+    await db.insert(telegramBotNotices)
+        .values({
+            noticeKey: `${prefix}${savedAt}`,
+            chatId,
+            stage: REVISION_NOTICE_STAGE,
+            payload: {
+                kind: "telegram_meal_break_revision",
+                reason,
+                savedAt,
+                session,
+            } satisfies MealBreakRevisionPayload,
+        })
+        .onConflictDoNothing();
+
+    // Poda 1: dias antigos deste chat+modo saem inteiros.
+    await db.delete(telegramBotNotices)
+        .where(and(
+            eq(telegramBotNotices.stage, REVISION_NOTICE_STAGE),
+            like(telegramBotNotices.noticeKey, `${resolveRevisionNoticeKeyChatPrefix(chatId, session.mode)}%`),
+            lt(telegramBotNotices.createdAt, new Date(Date.now() - (MEAL_BREAK_REVISION_RETENTION_DAYS * 24 * 60 * 60 * 1000))),
+        ));
+
+    // Poda 2: dentro do dia, mantém só as MEAL_BREAK_REVISION_LIMIT mais novas.
+    const surviving = await db.query.telegramBotNotices.findMany({
+        where: and(
+            eq(telegramBotNotices.stage, REVISION_NOTICE_STAGE),
+            like(telegramBotNotices.noticeKey, `${prefix}%`),
+        ),
+        columns: { noticeKey: true },
+        orderBy: [desc(telegramBotNotices.createdAt)],
+        limit: MEAL_BREAK_REVISION_LIMIT,
+    });
+    if (surviving.length >= MEAL_BREAK_REVISION_LIMIT) {
+        await db.delete(telegramBotNotices)
+            .where(and(
+                eq(telegramBotNotices.stage, REVISION_NOTICE_STAGE),
+                like(telegramBotNotices.noticeKey, `${prefix}%`),
+                notInArray(telegramBotNotices.noticeKey, surviving.map((row) => row.noticeKey)),
+            ));
+    }
+}
+
+async function saveMealBreakSession(chatId: string, session: MealBreakSession, reason: MealBreakSaveReason = "choice") {
     const db = getDb();
     await db.insert(telegramBotNotices)
         .values({
@@ -4770,10 +4891,75 @@ async function saveMealBreakSession(chatId: string, session: MealBreakSession) {
             },
         });
 
+    try {
+        await appendMealBreakSessionRevision(chatId, session, reason);
+    } catch (error) {
+        console.error("[meal-breaks] falha ao gravar ponto de restauração", error);
+    }
+
     // O painel assina /api/board/stream e faz router.refresh() a cada evento —
     // sem publicar aqui, o almoço/descanso registrado no bot só aparecia no
     // próximo refresh casual do quadro, nunca "em tempo real".
     publishBoardUpdate(`meal-break:session:${session.mode}`);
+}
+
+export interface MealBreakRevisionSummary {
+    /** 1 = mais recente. É o número que a chefia digita no /almoco restaurar. */
+    position: number;
+    savedAt: string;
+    reason: MealBreakSaveReason;
+    reasonLabel: string;
+    stage: MealBreakStage;
+    /** Quantos já tinham horário definido naquele ponto (almoço+descanso ou noturno+jantar). */
+    assignedCount: number;
+    rosterCount: number;
+    session: MealBreakSession;
+}
+
+function countMealBreakAssignments(session: MealBreakSession) {
+    return session.mode === "night"
+        ? Object.keys(session.nightWorkAssignments).length + Object.keys(session.dinnerAssignments).length
+        : Object.keys(session.lunchAssignments).length + Object.keys(session.restAssignments).length;
+}
+
+export function summarizeMealBreakRevisions(
+    revisions: Array<{ reason: MealBreakSaveReason; savedAt: string; session: MealBreakSession }>,
+): MealBreakRevisionSummary[] {
+    return [...revisions]
+        .sort((left, right) => right.savedAt.localeCompare(left.savedAt))
+        .map((revision, index) => ({
+            position: index + 1,
+            savedAt: revision.savedAt,
+            reason: revision.reason,
+            reasonLabel: resolveMealBreakSaveReasonLabel(revision.reason),
+            stage: revision.session.stage,
+            assignedCount: countMealBreakAssignments(revision.session),
+            rosterCount: revision.session.roster.length,
+            session: revision.session,
+        }));
+}
+
+async function loadMealBreakSessionRevisions(chatId: string, mode: MealBreakMode, operationalDate: string) {
+    const db = getDb();
+    const rows = await db.query.telegramBotNotices.findMany({
+        where: and(
+            eq(telegramBotNotices.stage, REVISION_NOTICE_STAGE),
+            like(telegramBotNotices.noticeKey, `${resolveRevisionNoticeKeyPrefix(chatId, mode, operationalDate)}%`),
+        ),
+        orderBy: [desc(telegramBotNotices.createdAt)],
+        limit: MEAL_BREAK_REVISION_LIMIT,
+    });
+
+    return summarizeMealBreakRevisions(
+        rows
+            .map((row) => row.payload)
+            .filter(isMealBreakRevisionPayload)
+            .map((payload) => ({
+                reason: payload.reason,
+                savedAt: payload.savedAt,
+                session: hydrateMealBreakSession(payload.session),
+            })),
+    );
 }
 
 async function reserveMealBreakAutoNotice(chatId: string, operationalDate: string, mode: MealBreakMode) {
@@ -4809,15 +4995,25 @@ export function isTelegramMealBreakPriorityCommandText(text: string) {
 export function parseTelegramMealBreakCommand(text: string): TelegramMealBreakCommand | null {
     const trimmed = text.trim();
     const normalized = trimmed.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    const match = normalized.match(/^\/(almoco|jantar)(?:@(\w+))?(?:\s+(reiniciar))?\s*$/i);
+    // "restaurar" (opcionalmente com o número do ponto) e "voltar" como sinônimo:
+    // na hora do aperto ninguém lembra qual das duas palavras é a certa.
+    const match = normalized.match(/^\/(almoco|jantar)(?:@(\w+))?(?:\s+(reiniciar|restaurar|voltar)(?:\s+(\d{1,2}))?)?\s*$/i);
     if (!match) {
         return null;
     }
 
+    const verb = match[3]?.toLowerCase() ?? null;
+    const isRestore = verb === "restaurar" || verb === "voltar";
+    const restorePosition = isRestore && match[4] ? Number(match[4]) : null;
+
     return {
         name: "meal_break",
         mode: match[1]?.toLowerCase() === "jantar" ? "night" : "day",
-        forceRestart: Boolean(match[3]),
+        forceRestart: verb === "reiniciar",
+        action: isRestore
+            ? (restorePosition ? "restore_apply" : "restore_list")
+            : "start",
+        restorePosition,
         rawBody: normalized.replace(/^\/(?:almoco|jantar)(?:@\w+)?/i, "").trim(),
     };
 }
@@ -4961,7 +5157,7 @@ export function buildMealBreakPriorityReplyMessages(view: MealBreakPriorityView,
 }
 
 export function buildMealBreakCommandUsageReply() {
-    return "Use /almoco para a divisão diurna ou /jantar para a divisão noturna. Acrescente reiniciar para recomeçar o fluxo atual.";
+    return "Use /almoco para a divisão diurna ou /jantar para a divisão noturna. Acrescente reiniciar para recomeçar o fluxo atual, ou restaurar para ver os pontos de restauração (e restaurar <número> para voltar a divisão para um deles).";
 }
 
 export function buildMealBreakPriorityCommandUsageReply() {
@@ -4981,18 +5177,128 @@ export async function runTelegramMealBreakPriorityCommand(params: {
     };
 }
 
+function formatRevisionClock(savedAt: string) {
+    const parts = getSaoPauloParts(new Date(savedAt));
+    return `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
+}
+
+export function buildMealBreakRestoreListMessage(params: {
+    mode: MealBreakMode;
+    revisions: MealBreakRevisionSummary[];
+}) {
+    const mealLabel = params.mode === "night" ? "jantar" : "almoço";
+    const restoreCmd = params.mode === "night" ? "/jantar restaurar" : "/almoco restaurar";
+    if (params.revisions.length === 0) {
+        return `Não há ponto de restauração guardado para a divisão do ${mealLabel} de hoje.`;
+    }
+
+    // O ponto 1 é o estado atual (última gravação): quem quer VOLTAR precisa
+    // escolher do 2 em diante, e o texto diz isso para não parecer no-op.
+    const lines = params.revisions.map((revision) => {
+        const marker = revision.position === 1 ? " ← estado atual" : "";
+        return `${revision.position}) ${formatRevisionClock(revision.savedAt)} · ${revision.reasonLabel} · ${revision.assignedCount} horário(s) definido(s)${marker}`;
+    });
+
+    return [
+        `🗂️ Pontos de restauração da divisão do ${mealLabel} (mais recente primeiro):`,
+        ...lines,
+        "",
+        `Para voltar, mande \`${restoreCmd} <número>\` — ex.: \`${restoreCmd} 2\`. A restauração também vira ponto, então dá para voltar atrás dela.`,
+    ].join("\n");
+}
+
+/**
+ * Volta a divisão para um ponto de restauração. Existe porque a linha viva da
+ * sessão é um upsert: qualquer bug que mexa nas escolhas apagava o que havia
+ * antes e a divisão do dia se perdia. Restaurar é uma gravação como outra
+ * qualquer — vira ponto também, então uma restauração errada se desfaz.
+ */
+async function runMealBreakRestore(params: {
+    chatId: string;
+    mode: MealBreakMode;
+    operationalDate: string;
+    referenceAt: Date;
+    actorTelegramId: string | null;
+    position: number | null;
+    current: MealBreakSession | null;
+}) {
+    const revisions = await loadMealBreakSessionRevisions(params.chatId, params.mode, params.operationalDate);
+    const mealLabel = params.mode === "night" ? "jantar" : "almoço";
+
+    if (params.position === null) {
+        return {
+            session: params.current,
+            messages: [buildMealBreakRestoreListMessage({ mode: params.mode, revisions })],
+            status: "restore_listed" as const,
+        };
+    }
+
+    const target = revisions.find((revision) => revision.position === params.position) ?? null;
+    if (!target) {
+        return {
+            session: params.current,
+            messages: [
+                revisions.length === 0
+                    ? `Não há ponto de restauração guardado para a divisão do ${mealLabel} de hoje.`
+                    : `Não achei o ponto ${params.position}. Os pontos disponíveis vão de 1 a ${revisions.length}.`,
+                buildMealBreakRestoreListMessage({ mode: params.mode, revisions }),
+            ],
+            status: "restore_failed" as const,
+        };
+    }
+
+    const sync = params.mode === "night" ? syncNightSessionState : syncDaySessionState;
+    const restored = sync(withEvent({
+        ...target.session,
+        updatedAt: params.referenceAt.toISOString(),
+    }, {
+        type: "session_restored",
+        actorTelegramId: params.actorTelegramId,
+    }, params.referenceAt));
+
+    await saveMealBreakSession(params.chatId, restored, "restored");
+
+    const messages = [
+        `↩️ Divisão do ${mealLabel} restaurada para o ponto ${target.position} (${formatRevisionClock(target.savedAt)} · ${target.reasonLabel}): ${countMealBreakAssignments(restored)} horário(s) definido(s).`,
+        buildSessionSummary(restored),
+    ];
+    if (restored.stage !== "completed") {
+        messages.push(buildCurrentPrompt(restored));
+    }
+
+    return {
+        session: restored,
+        messages,
+        status: "restored" as const,
+    };
+}
+
 export async function runTelegramMealBreakCommand(params: {
     chatId: string;
     referenceAt: Date;
     trigger: "manual" | "automatic";
     mode?: MealBreakMode;
     forceRestart: boolean;
+    action?: TelegramMealBreakCommand["action"];
+    restorePosition?: number | null;
     actorTelegramId: string | null;
     board?: OperationalBoard;
 }) {
     const mode = params.mode ?? resolveMealBreakModeFromReference(params.referenceAt);
     const operationalDate = formatOperationalDate(params.referenceAt);
     const existing = await loadMealBreakSession(params.chatId, operationalDate, mode);
+
+    if (params.action === "restore_list" || params.action === "restore_apply") {
+        return runMealBreakRestore({
+            chatId: params.chatId,
+            mode,
+            operationalDate,
+            referenceAt: params.referenceAt,
+            actorTelegramId: params.actorTelegramId,
+            position: params.action === "restore_apply" ? params.restorePosition ?? null : null,
+            current: existing,
+        });
+    }
 
     if (existing && !params.forceRestart) {
         return {
@@ -5026,7 +5332,11 @@ export async function runTelegramMealBreakCommand(params: {
         restExcludedRamals: eligibilityExclusions.restExcludedRamals,
     });
 
-    await saveMealBreakSession(params.chatId, session);
+    await saveMealBreakSession(
+        params.chatId,
+        session,
+        existing && params.forceRestart ? "session_restarted" : "session_started",
+    );
 
     const intro = existing && params.forceRestart
         ? "Divisão anterior descartada. Vamos reiniciar."
@@ -5066,7 +5376,13 @@ export async function handleTelegramMealBreakReply(params: {
         return null;
     }
 
-    await saveMealBreakSession(params.chatId, result.session);
+    // O "↩️ Desfazer" também passa por aqui: rotula como undo para o ponto de
+    // restauração ficar legível na lista.
+    await saveMealBreakSession(
+        params.chatId,
+        result.session,
+        normalizeFreeText(params.text) === normalizeFreeText(UNDO_TEXT) ? "undo" : "choice",
+    );
     return result;
 }
 
@@ -5360,7 +5676,7 @@ export async function ensureArrivalInCurrentMealBreakSession(params: {
         }, referenceAt))
         : syncedNext;
 
-    await saveMealBreakSession(state.chatId, final);
+    await saveMealBreakSession(state.chatId, final, rewind ? "latecomer_rewind" : "latecomer_joined");
 
     const messages: string[] = [
         `🍽️ *${joiningName}* (${ramal}) entrou na divisão do ${mealLabel} — agora ${final.roster.length} plantonistas; as vagas por horário foram recalculadas.`,
@@ -5553,7 +5869,7 @@ export async function updateNightMealBreakAssignment(params: {
         slot: effectiveNightWorkSlot ?? dinnerAssignments[ramal] ?? undefined,
     }, params.referenceAt));
 
-    await saveMealBreakSession(chatId, nextSession);
+    await saveMealBreakSession(chatId, nextSession, "chief_correction");
     return nextSession;
 }
 
@@ -5662,7 +5978,7 @@ export async function updateDayMealBreakEligibility(params: {
         ramal: normalizedRamal,
     }, params.referenceAt));
 
-    await saveMealBreakSession(chatId, nextSession);
+    await saveMealBreakSession(chatId, nextSession, "chief_correction");
     return { session: nextSession, overrides };
 }
 
@@ -5735,7 +6051,7 @@ export async function updateDayMealBreakAssignment(params: {
         ramal,
     }, params.referenceAt));
 
-    await saveMealBreakSession(chatId, nextSession);
+    await saveMealBreakSession(chatId, nextSession, "chief_correction");
     return nextSession;
 }
 

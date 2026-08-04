@@ -510,7 +510,7 @@ test("resolveMealBreakLunchCapacities segue a distribuicao proporcional esperada
     assert.deepEqual(resolveMealBreakLunchCapacities(5), { "11:30": 2, "12:30": 1, "13:30": 2 });
 });
 
-test("parseTelegramMealBreakCommand reconhece o comando e o reinicio", () => {
+test("parseTelegramMealBreakCommand reconhece o comando, o reinicio e a restauracao", () => {
     assert.equal(isTelegramMealBreakCommandText("/almoco"), true);
     assert.equal(isTelegramMealBreakCommandText("/almoço"), true);
     assert.equal(isTelegramMealBreakCommandText("/almoco reiniciar"), true);
@@ -520,33 +520,70 @@ test("parseTelegramMealBreakCommand reconhece o comando e o reinicio", () => {
         name: "meal_break",
         mode: "day",
         forceRestart: false,
+        action: "start",
+        restorePosition: null,
         rawBody: "",
     });
     assert.deepEqual(parseTelegramMealBreakCommand("/almoço"), {
         name: "meal_break",
         mode: "day",
         forceRestart: false,
+        action: "start",
+        restorePosition: null,
         rawBody: "",
     });
     assert.deepEqual(parseTelegramMealBreakCommand("/almoco reiniciar"), {
         name: "meal_break",
         mode: "day",
         forceRestart: true,
+        action: "start",
+        restorePosition: null,
         rawBody: "reiniciar",
     });
     assert.deepEqual(parseTelegramMealBreakCommand("/almoço reiniciar"), {
         name: "meal_break",
         mode: "day",
         forceRestart: true,
+        action: "start",
+        restorePosition: null,
         rawBody: "reiniciar",
     });
     assert.deepEqual(parseTelegramMealBreakCommand("/jantar reiniciar"), {
         name: "meal_break",
         mode: "night",
         forceRestart: true,
+        action: "start",
+        restorePosition: null,
         rawBody: "reiniciar",
     });
+    // Restauracao: sem numero lista os pontos, com numero volta para ele.
+    assert.deepEqual(parseTelegramMealBreakCommand("/almoco restaurar"), {
+        name: "meal_break",
+        mode: "day",
+        forceRestart: false,
+        action: "restore_list",
+        restorePosition: null,
+        rawBody: "restaurar",
+    });
+    assert.deepEqual(parseTelegramMealBreakCommand("/almoço restaurar 3"), {
+        name: "meal_break",
+        mode: "day",
+        forceRestart: false,
+        action: "restore_apply",
+        restorePosition: 3,
+        rawBody: "restaurar 3",
+    });
+    // "voltar" e sinonimo de "restaurar" — na hora do aperto vale as duas.
+    assert.deepEqual(parseTelegramMealBreakCommand("/jantar voltar 2"), {
+        name: "meal_break",
+        mode: "night",
+        forceRestart: false,
+        action: "restore_apply",
+        restorePosition: 2,
+        rawBody: "voltar 2",
+    });
     assert.equal(parseTelegramMealBreakCommand("/almoco agora"), null);
+    assert.equal(parseTelegramMealBreakCommand("/almoco restaurar tudo"), null);
 });
 
 test("parseTelegramMealBreakPriorityCommand reconhece singular e plural", () => {
