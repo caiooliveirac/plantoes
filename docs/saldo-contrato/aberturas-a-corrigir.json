@@ -1,0 +1,32 @@
+{
+  "_comentario": "Correção do lançamento de abertura de dois contratos cujo saldo semeado pelo backfill está errado. Autorizado por Caio em 2026-08-04. Derivação em docs/saldo-contrato/03-validacao-alertas-08-2026.md §4 e em 01-conferencia-2025.md §1–2.",
+
+  "_porque_na_abertura": "Nos dois casos o erro está no SALDO DE ABERTURA, não no consumo. Francisco: o backfill leu uma versão do arquivo anterior à correção de dez/2025. Karen: a planilha resetou em ago/2025 com o teto de 24h sendo ela 36h. Lançar isso como manual_adjustment inflaria a coluna 'consumed' da view contract_balance (que é -sum dos lançamentos que não são abertura) e o percentual consumido sairia errado. Corrigir a carga na própria linha é o mesmo padrão de scripts/repair-maio-extrato.ts.",
+
+  "_duas_variantes": "O reparo de maio (scripts/repair-maio-extrato.ts) move a abertura de 31/05 para 01/05 e lança o gasto do mês à parte. Como não dá para saber daqui se ele já rodou com --apply, cada correção declara as duas formas possíveis do lançamento. O script casa por data + valor exato: se não for nenhuma das duas, não toca.",
+
+  "correcoes": [
+    {
+      "doctorName": "Francisco Isensee de Macedo",
+      "contractNumber": "797/2024",
+      "expectedCeilingBrl": 248598.00,
+      "variantes": [
+        { "entryDate": "2026-05-31", "deBrl": -46778.94, "paraBrl": 153128.27 }
+      ],
+      "motivo": "O backfill rodou sobre a versão do arquivo ANTERIOR à correção da virada de dez/2025. A planilha corrigida (2026 CHAMAMENTO 004, versão de 2026-08-04) traz a série jan→mai/2026 assim: 233.678,36 · 224.146,89 · 205.356,41 · 185.321,06 · abre maio em 169.156,55, gasta 16.028,28 e fecha em 153.128,27. Ele NÃO estourou: o ciclo dele vira em dezembro e o teto de 248.598,00 já estava disponível em 01/12/2025.",
+      "nota": "Só a variante de 31/05 existe: o reparo de maio pulou este contrato com status 'saldo_diferente_do_razao' (a planilha fecha em 153.128,27 e o razão tinha -46.778,94). Depois desta correção os dois passam a bater, e o reparo de maio recolhe a linha de maio dele automaticamente na próxima rodada."
+    },
+    {
+      "doctorName": "Karen Seifarth Miranda",
+      "contractNumber": "518/2024",
+      "expectedCeilingBrl": 248598.00,
+      "deltaBrl": 82866.00,
+      "variantes": [
+        { "entryDate": "2026-05-31", "deBrl": -89762.24, "paraBrl": -6896.24 },
+        { "entryDate": "2026-05-01", "deBrl": -69571.86, "paraBrl": 13294.14 }
+      ],
+      "motivo": "A planilha resetou no mês certo (ago/2025, aniversário em 16/08) mas com o teto errado: 165.732,00, que é o de 24h. A coluna CH dela diz 36h nos 17 meses da série — conferido em jul/2025 (abre -44.223,54, CH 36h) e nos 5 meses de 2026. Teto certo 248.598,00, diferença exata de 82.866,00. Ela estourou de verdade, mas em 6.896,24 e não em 89.762,24.",
+      "nota": "O override já estava versionado em saldo-overrides.json, mas o backfill de produção rodou antes de o arquivo existir (backfill-report.md é do commit 9ad2951; o override veio no a7a69c6, ambos de 2026-07-31). O ciclo dela termina em 16/08/2026 — o número certo é o que vai para a mesa da renovação."
+    }
+  ]
+}

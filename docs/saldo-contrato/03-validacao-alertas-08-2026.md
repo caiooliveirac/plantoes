@@ -186,9 +186,23 @@ e nos 5 meses de 2026: zero ocorrências. O consumo do ciclo começa onde a linh
    Regressão em [tests/contract-balance-alerts.test.ts](../../tests/contract-balance-alerts.test.ts).
 2. **Detector de teto não carregado**: aceitar célula vazia seguida de série
    monotonicamente decrescente e negativa, não só o `0,00` exato.
-3. **Reimportar Francisco** a partir da planilha corrigida (+153.128,27 em 31/05).
-4. **Karen**: aplicar o override já versionado em
-   [saldo-overrides.json](saldo-overrides.json) (−6.896,24, teto 248.598,00).
-5. **Piso de sanidade no alerta**: saldo negativo cujo módulo é menor que o consumo
+3. ~~**Reimportar Francisco**~~ e ~~**Karen**~~ — **Feito em 2026-08-04.**
+   `scripts/corrigir-aberturas-seed.ts` + [aberturas-a-corrigir.json](aberturas-a-corrigir.json).
+   Francisco: −46.778,94 → **+153.128,27** (diferença de R$ 199.907,21 escondida no
+   razão). Karen: **+82.866,00**, chegando a −6.896,24 — o override de
+   [saldo-overrides.json](saldo-overrides.json) nunca alcançou produção porque o
+   backfill rodou antes de o arquivo existir.
+
+   A correção é no lançamento de **abertura**, não `manual_adjustment`: nos dois casos
+   o errado é o saldo de partida, e a view calcula
+   `consumed = -sum(amount) filter (type <> 'opening')` — um ajuste manual mexeria no
+   consumo e no percentual do teto. Mesmo padrão e mesma justificativa do
+   `repair-maio-extrato.ts`: a abertura do backfill é carga de dados, não ato de negócio.
+
+   Como o reparo de maio pode ou não ter movido a abertura de 31/05 para 01/05, cada
+   correção declara as **duas variantes** e o script casa por data + valor exato. A
+   ordem no workflow é reparo → correção → reparo, para que os dois fiquem com o
+   extrato de maio completo além do saldo certo.
+4. **Piso de sanidade no alerta**: saldo negativo cujo módulo é menor que o consumo
    observado no ciclo é aritmeticamente impossível num contrato com teto lançado. É a
    assinatura exata desse bug e dá para barrar o aviso na origem.
