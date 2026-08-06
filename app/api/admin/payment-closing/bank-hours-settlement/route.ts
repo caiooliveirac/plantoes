@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { auditLogs } from "@/db/schema";
+import { auditLogs, doctors } from "@/db/schema";
+import { notifyDoctorBankHoursSettlement } from "@/modules/telegram/bank-hours-doctor-notice";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
 import {
@@ -100,7 +102,27 @@ export async function POST(request: NextRequest) {
             actorUserId: session.user.id,
         });
 
-        return NextResponse.json({ settlement: result });
+        // Aviso privado ao médico (best-effort: falha de Telegram nunca desfaz o
+        // acerto; sem chat conhecido fica registrado como não entregue).
+        const [doctorRow] = await getDb()
+            .select({ fullName: doctors.fullName, displayName: doctors.displayName })
+            .from(doctors)
+            .where(eq(doctors.id, result.doctorId))
+            .limit(1);
+        const firstName = (doctorRow?.displayName?.trim() || doctorRow?.fullName || "doutor(a)").split(/\s+/)[0];
+        const residualMinutes = parsed.data.kind === "bonus"
+            ? balance.bonusEligibleMinutes - Math.abs(result.deltaMinutes)
+            : balance.penaltyEligibleMinutes + Math.abs(result.deltaMinutes);
+        const notice = await notifyDoctorBankHoursSettlement({
+            settlementId: result.settlementId,
+            doctorId: result.doctorId,
+            doctorFirstName: firstName,
+            monthKey: result.monthKey,
+            kind: result.kind,
+            residualMinutes,
+        });
+
+        return NextResponse.json({ settlement: result, doctorNotice: notice });
     } catch (error) {
         return NextResponse.json(
             { error: error instanceof Error ? error.message : "Não foi possível lançar o acerto do banco de horas." },

@@ -10,6 +10,11 @@ import {
     translateOccupancyAuditAction,
 } from "@/modules/reporting/bank-hours-labels";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
+import {
+    formatSignedHours,
+    resolveBankHoursPendingAction,
+    type BankHoursPendingAction,
+} from "@/modules/bank-hours/pending-actions";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 
 const SAO_PAULO_TIME_ZONE = "America/Sao_Paulo";
@@ -86,6 +91,24 @@ function formatSignedMinutes(value: number) {
 
 /** Gatilho do acerto de banco de horas: ±12h em minutos. */
 const BANK_HOURS_SETTLEMENT_MINUTES = 12 * 60;
+
+/**
+ * Pendência acionável do médico (múltiplos de ±12h da régua de elegibilidade),
+ * derivada do mesmo saldo que os botões de acerto usam.
+ */
+function resolveDoctorPendingAction(doctor: BankHoursDoctorHistory): BankHoursPendingAction {
+    const balance = resolveBankHoursSettlementBalance({
+        oldMinutes: doctor.legacy?.preMay2025Minutes ?? 0,
+        recentMinutes: (doctor.legacy?.spreadsheetPeriodMinutes ?? 0) + doctor.applicationBalanceMinutes,
+    });
+    return resolveBankHoursPendingAction({
+        bonusEligibleMinutes: balance.bonusEligibleMinutes,
+        penaltyEligibleMinutes: balance.penaltyEligibleMinutes,
+        settlementDeltaMinutes: doctor.settlements.reduce((sum, settlement) => sum + settlement.deltaMinutes, 0),
+    });
+}
+
+type PendingFilter = "all" | "bonus" | "penalty" | "inconsistency" | "settled";
 
 function shiftBalanceClass(value: number | null) {
     if (value === null || value === 0) {
@@ -349,6 +372,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const [savingShiftKey, setSavingShiftKey] = useState<string | null>(null);
     const [isSaving, startSavingTransition] = useTransition();
     const [settlementMonth, setSettlementMonth] = useState(settlementMonths[0]?.key ?? "");
+    const [pendingFilter, setPendingFilter] = useState<PendingFilter>("all");
+    const [reversingSettlementId, setReversingSettlementId] = useState<string | null>(null);
     // Gaveta "Como ler" da faixa de comando (absorveu o herói e os princípios).
     const [guideOpen, setGuideOpen] = useState(false);
     const detailPanelRef = useRef<HTMLElement | null>(null);
@@ -413,14 +438,50 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         setSavingShiftKey(null);
     }, [history.generatedAt, history.doctors]);
 
+    const pendingByDoctor = useMemo(() => {
+        const map = new Map<string, BankHoursPendingAction>();
+        for (const doctor of history.doctors) {
+            map.set(doctor.doctorId, resolveDoctorPendingAction(doctor));
+        }
+        return map;
+    }, [history.doctors]);
+
+    const pendingTotals = useMemo(() => {
+        let bonusDoctors = 0;
+        let penaltyDoctors = 0;
+        let bonusUnits = 0;
+        let penaltyUnits = 0;
+        let inconsistencies = 0;
+        for (const action of pendingByDoctor.values()) {
+            if (action.direction === "bonus") {
+                bonusDoctors += 1;
+                bonusUnits += action.pendingUnits;
+            } else if (action.direction === "penalty") {
+                penaltyDoctors += 1;
+                penaltyUnits += action.pendingUnits;
+            }
+            if (action.inconsistency) inconsistencies += 1;
+        }
+        return { bonusDoctors, penaltyDoctors, bonusUnits, penaltyUnits, inconsistencies };
+    }, [pendingByDoctor]);
+
     const filteredDoctors = useMemo(() => {
         const normalized = normalizeSearch(deferredSearch);
+        let doctors = history.doctors;
+        if (pendingFilter !== "all") {
+            doctors = doctors.filter((doctor) => {
+                const action = pendingByDoctor.get(doctor.doctorId);
+                if (pendingFilter === "settled") return doctor.settlements.length > 0;
+                if (pendingFilter === "inconsistency") return action?.inconsistency === true;
+                return action?.direction === pendingFilter;
+            });
+        }
         if (!normalized) {
-            return history.doctors;
+            return doctors;
         }
 
-        return history.doctors.filter((doctor) => summarizeDoctorSearch(doctor).includes(normalized));
-    }, [deferredSearch, history.doctors]);
+        return doctors.filter((doctor) => summarizeDoctorSearch(doctor).includes(normalized));
+    }, [deferredSearch, history.doctors, pendingByDoctor, pendingFilter]);
 
     const globalTotals = useMemo(() => {
         let delayCount = 0;
@@ -543,6 +604,32 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         router.refresh();
     }
 
+    async function reverseSettlement(settlementId: string) {
+        const reason = window.prompt("Justificativa do estorno (obrigatória, mín. 3 caracteres):")?.trim();
+        if (!reason || reason.length < 3) {
+            return;
+        }
+        if (!window.confirm("Confirmar estorno? Um lançamento compensatório será criado no mesmo mês — nada é apagado, e o médico será avisado.")) {
+            return;
+        }
+        setReversingSettlementId(settlementId);
+        try {
+            const response = await fetch("/api/admin/payment-closing/bank-hours-settlement/reverse", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ settlementId, reason }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) {
+                window.alert(body?.error || "Não foi possível estornar o acerto.");
+                return;
+            }
+            router.refresh();
+        } finally {
+            setReversingSettlementId(null);
+        }
+    }
+
     return (
         <main className="hours-shell">
             {/* Faixa de comando compacta: busca + KPIs + gaveta "Como ler" + navegação ••• */}
@@ -619,6 +706,43 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 ) : null}
             </section>
 
+            {/* Banco de horas — ações pendentes: quem já formou múltiplos de ±12h. */}
+            <section className="hours-settlements hours-pending-strip">
+                <p className="reports-summary-label">Banco de horas — ações pendentes</p>
+                <div className="hours-events-chips">
+                    <span className="reports-badge ok" title="Médicos com saldo elegível ≥ +12h">
+                        {pendingTotals.bonusDoctors} a pagar · {pendingTotals.bonusUnits} plantões verdes
+                    </span>
+                    <span className="reports-badge danger" title="Médicos com saldo elegível ≤ -12h">
+                        {pendingTotals.penaltyDoctors} a descontar · {pendingTotals.penaltyUnits} plantões vermelhos
+                    </span>
+                    {pendingTotals.inconsistencies > 0 && (
+                        <span className="reports-badge warn" title="Saldo mudou na direção contrária a acertos já lançados">
+                            {pendingTotals.inconsistencies} para revisar
+                        </span>
+                    )}
+                </div>
+                <div className="hours-events-chips" role="group" aria-label="Filtrar médicos por pendência">
+                    {([
+                        ["all", "Todos"],
+                        ["bonus", "Pagar plantão"],
+                        ["penalty", "Descontar plantão"],
+                        ["inconsistency", "Revisão necessária"],
+                        ["settled", "Já ajustados"],
+                    ] as Array<[PendingFilter, string]>).map(([value, label]) => (
+                        <button
+                            key={value}
+                            type="button"
+                            className={`admin-bar-filters-toggle ${pendingFilter === value ? "open" : ""}`.trim()}
+                            aria-pressed={pendingFilter === value}
+                            onClick={() => setPendingFilter(value)}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                </div>
+            </section>
+
             <section className={`hours-grid ${selectedDoctor ? "detail-open" : "list-only"}`.trim()}>
                 <div className="hours-directory-column" ref={directoryRef}>
                     <header className="hours-directory-header">
@@ -635,6 +759,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                         </article>
                     ) : filteredDoctors.map((doctor) => {
                         const bonusShifts = countBonusShifts(doctor);
+                        const pending = pendingByDoctor.get(doctor.doctorId);
                         return (
                             <button
                                 key={doctor.doctorId}
@@ -660,6 +785,15 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     )}
                                     {doctor.correctionCount > 0 && (
                                         <span className="reports-badge warn">{doctor.correctionCount} {doctor.correctionCount === 1 ? "correção" : "correções"}</span>
+                                    )}
+                                    {pending?.direction === "bonus" && (
+                                        <span className="reports-badge ok">pagar {pending.pendingUnits}×12h</span>
+                                    )}
+                                    {pending?.direction === "penalty" && (
+                                        <span className="reports-badge danger">descontar {pending.pendingUnits}×12h</span>
+                                    )}
+                                    {pending?.inconsistency && (
+                                        <span className="reports-badge warn">revisar</span>
                                     )}
                                 </div>
                             </button>
@@ -785,22 +919,48 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                 <section className="hours-settlements">
                                     <p className="reports-summary-label">Acertos lançados no fechamento</p>
                                     <ul className="hours-settlements-list">
-                                        {selectedDoctor.settlements.map((settlement) => (
-                                            <li
-                                                key={settlement.id}
-                                                className={`hours-settlement-row ${settlement.kind === "bonus" ? "bonus" : "penalty"}`}
-                                            >
-                                                <span className="hours-settlement-tag">
-                                                    {settlement.kind === "bonus" ? "Bônus" : "Punição"}
-                                                </span>
-                                                <span className="hours-settlement-month">{settlement.monthKey}</span>
-                                                <span className="hours-settlement-delta">
-                                                    {settlement.deltaMinutes > 0 ? "+" : ""}
-                                                    {formatMinutesForHumans(settlement.deltaMinutes)}
-                                                </span>
-                                                <span className="hours-settlement-notes">{settlement.notes}</span>
-                                            </li>
-                                        ))}
+                                        {(() => {
+                                            // Estornos referenciam o acerto original em notes ("reversal:<id> — motivo").
+                                            const reversedIds = new Set(
+                                                selectedDoctor.settlements
+                                                    .filter((settlement) => settlement.notes.startsWith("reversal:"))
+                                                    .map((settlement) => settlement.notes.slice("reversal:".length).split(" ")[0]),
+                                            );
+                                            return selectedDoctor.settlements.map((settlement) => {
+                                                const isReversal = settlement.notes.startsWith("reversal:");
+                                                const isReversed = reversedIds.has(settlement.id);
+                                                return (
+                                                    <li
+                                                        key={settlement.id}
+                                                        className={`hours-settlement-row ${settlement.kind === "bonus" ? "bonus" : "penalty"}`}
+                                                    >
+                                                        <span className="hours-settlement-tag">
+                                                            {isReversal ? "Estorno" : settlement.kind === "bonus" ? "Bônus" : "Punição"}
+                                                        </span>
+                                                        <span className="hours-settlement-month">{settlement.monthKey}</span>
+                                                        <span className="hours-settlement-delta">
+                                                            {settlement.deltaMinutes > 0 ? "+" : ""}
+                                                            {formatMinutesForHumans(settlement.deltaMinutes)}
+                                                        </span>
+                                                        <span className="hours-settlement-notes">{settlement.notes}</span>
+                                                        {isReversed ? (
+                                                            <span className="reports-badge warn">estornado</span>
+                                                        ) : null}
+                                                        {canManageOverrides && !isReversal && !isReversed ? (
+                                                            <button
+                                                                type="button"
+                                                                className="admin-bar-filters-toggle"
+                                                                disabled={reversingSettlementId === settlement.id}
+                                                                onClick={() => void reverseSettlement(settlement.id)}
+                                                                title="Cria um lançamento compensatório (nada é apagado) e avisa o médico"
+                                                            >
+                                                                {reversingSettlementId === settlement.id ? "Estornando…" : "Estornar"}
+                                                            </button>
+                                                        ) : null}
+                                                    </li>
+                                                );
+                                            });
+                                        })()}
                                     </ul>
                                     <p className="hours-settlement-hint">
                                         Cada acerto move o saldo 12h em direção a zero e gera um plantão {""}
@@ -836,25 +996,39 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                             oldMinutes: selectedDoctor.legacy?.preMay2025Minutes ?? 0,
                                             recentMinutes: (selectedDoctor.legacy?.spreadsheetPeriodMinutes ?? 0) + selectedDoctor.applicationBalanceMinutes,
                                         });
+                                        const pending = pendingByDoctor.get(selectedDoctor.doctorId);
+                                        const pendingSummary = pending?.direction ? (
+                                            <p className="hours-settlement-hint">
+                                                {pending.direction === "bonus"
+                                                    ? `${pending.pendingUnits} ${pending.pendingUnits === 1 ? "plantão de 12h disponível" : "plantões de 12h disponíveis"} para pagar`
+                                                    : `${pending.pendingUnits} ${pending.pendingUnits === 1 ? "plantão de 12h a descontar" : "plantões de 12h a descontar"}`}
+                                                {" — sobra "}{formatSignedHours(pending.residualMinutes)} após aplicar tudo.
+                                                {pending.inconsistency
+                                                    ? " ⚠️ O saldo anda na direção CONTRÁRIA aos acertos já lançados — revise antes de aplicar (um plantão pode ter sido invalidado depois do acerto)."
+                                                    : ""}
+                                            </p>
+                                        ) : null;
                                         if (settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_MINUTES) {
-                                            return (
+                                            return (<>
+                                                {pendingSummary}
                                                 <a
                                                     className="payment-button bank-bonus"
                                                     href={`/admin/payment-closing?month=${encodeURIComponent(settlementMonth)}&doctor=${encodeURIComponent(selectedDoctor.doctorId)}`}
                                                 >
                                                     Lançar bônus (+1 plantão verde) no fechamento →
                                                 </a>
-                                            );
+                                            </>);
                                         }
                                         if (settleBalance.penaltyEligibleMinutes <= -BANK_HOURS_SETTLEMENT_MINUTES) {
-                                            return (
+                                            return (<>
+                                                {pendingSummary}
                                                 <a
                                                     className="payment-button bank-penalty"
                                                     href={`/admin/payment-closing?month=${encodeURIComponent(settlementMonth)}&doctor=${encodeURIComponent(selectedDoctor.doctorId)}`}
                                                 >
                                                     Lançar punição (1 plantão vermelho) no fechamento →
                                                 </a>
-                                            );
+                                            </>);
                                         }
                                         if (settleBalance.oldMinutes < 0 && settleBalance.recentMinutes > 0) {
                                             return (

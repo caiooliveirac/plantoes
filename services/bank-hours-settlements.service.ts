@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
 import { getDb } from "@/db";
-import { adminExtraShifts, bankHoursSettlements } from "@/db/schema";
+import { adminExtraShifts, bankHoursSettlements, users } from "@/db/schema";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 
 /** Cada acerto move o saldo do banco de horas em exatamente 12h (720 min). */
@@ -20,6 +20,7 @@ export interface BankHoursSettlementRow {
     operationalDate: string | null;
     notes: string;
     createdAt: string;
+    createdByEmail: string | null;
 }
 
 function normalizeKind(value: string): BankHoursSettlementKind {
@@ -42,9 +43,11 @@ export async function loadBankHoursSettlementsForMonth(
             operationalDate: adminExtraShifts.operationalDate,
             notes: bankHoursSettlements.notes,
             createdAt: bankHoursSettlements.createdAt,
+            createdByEmail: users.email,
         })
         .from(bankHoursSettlements)
         .leftJoin(adminExtraShifts, eq(adminExtraShifts.id, bankHoursSettlements.adminExtraShiftId))
+        .leftJoin(users, eq(users.id, bankHoursSettlements.createdByUserId))
         .where(eq(bankHoursSettlements.monthKey, monthKey));
 
     const map = new Map<string, BankHoursSettlementRow[]>();
@@ -59,6 +62,7 @@ export async function loadBankHoursSettlementsForMonth(
             operationalDate: row.operationalDate ?? null,
             notes: row.notes,
             createdAt: row.createdAt.toISOString(),
+            createdByEmail: row.createdByEmail ?? null,
         };
         const bucket = map.get(row.doctorId) ?? [];
         bucket.push(entry);
@@ -236,5 +240,108 @@ export async function settleBankHours(params: {
             shiftUnit: unit,
             label,
         } satisfies SettleBankHoursResult;
+    });
+}
+
+/** Prefixo que marca (nas notes) o acerto que estorna outro. */
+export const BANK_HOURS_REVERSAL_NOTE_PREFIX = "reversal:";
+
+export function isReversalSettlementNote(notes: string) {
+    return notes.startsWith(BANK_HOURS_REVERSAL_NOTE_PREFIX);
+}
+
+/**
+ * Estorno formal de um acerto: nada é apagado. Cria o par compensatório —
+ * settlement com delta oposto + plantão de sinal oposto no MESMO dia — e marca
+ * o vínculo em notes (`reversal:<id> — motivo`). O saldo e o pagamento voltam
+ * ao estado anterior pela própria soma do razão.
+ *
+ * Idempotente: um acerto só pode ser estornado uma vez (guard dentro da mesma
+ * transação, com lock na linha original — duplo clique/abas concorrentes caem
+ * no erro, não em estorno dobrado).
+ */
+export async function reverseBankHoursSettlement(params: {
+    settlementId: string;
+    actorUserId: string;
+    reason: string;
+}): Promise<SettleBankHoursResult & { reversedSettlementId: string }> {
+    const reason = params.reason.trim();
+    if (!reason) {
+        throw new Error("O estorno exige uma justificativa.");
+    }
+
+    const db = getDb();
+    return db.transaction(async (tx) => {
+        const [original] = await tx
+            .select()
+            .from(bankHoursSettlements)
+            .where(eq(bankHoursSettlements.id, params.settlementId))
+            .for("update");
+        if (!original) {
+            throw new Error("Acerto de banco de horas não encontrado.");
+        }
+        if (isReversalSettlementNote(original.notes)) {
+            throw new Error("Este lançamento já é um estorno — não pode ser estornado.");
+        }
+        const [existingReversal] = await tx
+            .select({ id: bankHoursSettlements.id })
+            .from(bankHoursSettlements)
+            .where(like(bankHoursSettlements.notes, `${BANK_HOURS_REVERSAL_NOTE_PREFIX}${original.id}%`))
+            .limit(1);
+        if (existingReversal) {
+            throw new Error("Este acerto já foi estornado.");
+        }
+
+        const originalKind = normalizeKind(original.kind);
+        const reversalKind: BankHoursSettlementKind = originalKind === "bonus" ? "penalty" : "bonus";
+        const unit = reversalKind === "bonus" ? 1 : -1;
+        // Mesmo dia do plantão original: o par verde/vermelho se anula no dia.
+        const [originalExtra] = original.adminExtraShiftId
+            ? await tx
+                .select({ operationalDate: adminExtraShifts.operationalDate })
+                .from(adminExtraShifts)
+                .where(eq(adminExtraShifts.id, original.adminExtraShiftId))
+            : [];
+        const operationalDate = originalExtra?.operationalDate ?? pickRandomWeekday(original.monthKey);
+        const label = `Estorno banco de horas`.slice(0, 40);
+
+        const [extra] = await tx
+            .insert(adminExtraShifts)
+            .values({
+                doctorId: original.doctorId,
+                operationalDate,
+                shiftLabel: "SD",
+                label,
+                kind: reversalKind,
+                unit,
+                createdByUserId: params.actorUserId,
+            })
+            .returning({ id: adminExtraShifts.id });
+
+        const [settlement] = await tx
+            .insert(bankHoursSettlements)
+            .values({
+                doctorId: original.doctorId,
+                monthKey: original.monthKey,
+                deltaMinutes: -original.deltaMinutes,
+                kind: reversalKind,
+                adminExtraShiftId: extra.id,
+                notes: `${BANK_HOURS_REVERSAL_NOTE_PREFIX}${original.id} — ${reason}`,
+                createdByUserId: params.actorUserId,
+            })
+            .returning({ id: bankHoursSettlements.id });
+
+        return {
+            settlementId: settlement.id,
+            reversedSettlementId: original.id,
+            adminExtraShiftId: extra.id,
+            doctorId: original.doctorId,
+            monthKey: original.monthKey,
+            kind: reversalKind,
+            deltaMinutes: -original.deltaMinutes,
+            operationalDate,
+            shiftUnit: unit,
+            label,
+        };
     });
 }

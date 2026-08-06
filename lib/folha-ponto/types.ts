@@ -20,6 +20,19 @@ export interface LinhaRelatorio {
     atividade: string;
 }
 
+/** Acerto de banco de horas do mês, para o aviso destacado na folha. */
+export interface AjusteBancoHoras {
+    kind: "bonus" | "penalty";
+    /** ISO — quando o coordenador lançou. */
+    lancadoEm: string;
+    lancadoPor: string | null;
+    /** Dia do plantão verde/vermelho gerado (YYYY-MM-DD), se houver. */
+    dataPlantao: string | null;
+    observacao: string;
+    /** true quando este lançamento estorna um acerto anterior. */
+    estorno: boolean;
+}
+
 export interface DadosFolhaPonto {
     medico: {
         id: string;
@@ -36,4 +49,6 @@ export interface DadosFolhaPonto {
      * Ver lib/folha-ponto/emissao.ts.
      */
     localData: string;
+    /** Acertos de banco de horas do mês (aviso destacado, não sai na impressão). */
+    ajustesBancoHoras: AjusteBancoHoras[];
 }
