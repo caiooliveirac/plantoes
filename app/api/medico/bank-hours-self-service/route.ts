@@ -51,11 +51,13 @@ export async function POST(request: NextRequest) {
     const { medicoId, monthKey, action, operationalDate } = parsed.data;
     const [ano, mes] = monthKey.split("-").map(Number);
 
-    // Identidade: sessão do PRÓPRIO médico ou token assinado deste médico/mês.
+    // Identidade: sessão do PRÓPRIO médico, token assinado deste médico/mês, ou
+    // sessão ADMIN (coordenador registrando em nome do médico, direto da tela dele).
     const session = await readAuthenticatedSession();
     const isOwnSession = Boolean(session?.user.doctorId && session.user.doctorId === medicoId);
+    const isAdmin = Boolean(session?.user.roles.includes("admin"));
     const tokenValido = isValidFolhaToken(parsed.data.t, { medicoId, ano, mes });
-    if (!isOwnSession && !tokenValido) {
+    if (!isOwnSession && !tokenValido && !isAdmin) {
         return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
     }
 
@@ -137,7 +139,8 @@ export async function POST(request: NextRequest) {
                 kind: action,
                 operationalDate,
                 shiftLabel,
-                viaToken: !isOwnSession,
+                viaToken: !isOwnSession && !isAdmin,
+                actedByAdmin: isAdmin && !isOwnSession,
                 chiefBypass: isChief,
                 balanceBeforeMinutes: balance.totalMinutes,
                 bonusEligibleBefore: balance.bonusEligibleMinutes,
