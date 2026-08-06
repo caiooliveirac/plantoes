@@ -124,6 +124,15 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
 
     const mesLabel = MESES_PT[data.mes - 1] ?? "";
 
+    const formatarDataHora = (iso: string) => new Date(iso).toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "America/Sao_Paulo",
+    });
+
     function setCampo<K extends keyof CamposEditaveis>(key: K, valor: string) {
         setCampos((prev) => (prev[key] === valor ? prev : { ...prev, [key]: valor }));
     }
@@ -140,6 +149,29 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
                 </button>
                 <small>Clique em qualquer campo cinza-claro para editar. Os valores ficam salvos neste navegador.</small>
             </div>
+
+            {data.ajustesBancoHoras.length > 0 && (
+                <aside className="folha-ponto-aviso-banco no-print" role="note">
+                    <strong>Ajuste de banco de horas</strong>
+                    <ul>
+                        {data.ajustesBancoHoras.map((ajuste, idx) => (
+                            <li key={idx} className={ajuste.estorno ? "estorno" : ajuste.kind}>
+                                {ajuste.estorno
+                                    ? `Estorno de um acerto de banco de horas nesta folha (${mesLabel.toLowerCase()}/${data.ano}).`
+                                    : ajuste.kind === "bonus"
+                                        ? `Foi acrescentado 1 plantão de 12h à sua folha de ${mesLabel.toLowerCase()}/${data.ano}`
+                                            + `${ajuste.dataPlantao ? ` (dia ${ajuste.dataPlantao.slice(8, 10)})` : ""} pelo saldo positivo de banco de horas.`
+                                        : `Foi descontado 1 plantão de 12h do pagamento de ${mesLabel.toLowerCase()}/${data.ano} pelo saldo negativo de banco de horas`
+                                            + ` (os dias trabalhados continuam registrados abaixo).`}
+                                <small>
+                                    {ajuste.lancadoPor ? `Lançado por ${ajuste.lancadoPor} · ` : ""}
+                                    {formatarDataHora(ajuste.lancadoEm)}
+                                </small>
+                            </li>
+                        ))}
+                    </ul>
+                </aside>
+            )}
 
             <section className="folha-ponto-page page-break">
                 <header className="fp-cabecalho">

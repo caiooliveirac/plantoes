@@ -6,7 +6,11 @@ import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 import { readAuthenticatedSession, requireAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
 import { localDataDaFolha } from "@/lib/folha-ponto/emissao";
-import type { DadosFolhaPonto, Plantao, Turno } from "@/lib/folha-ponto/types";
+import type { AjusteBancoHoras, DadosFolhaPonto, Plantao, Turno } from "@/lib/folha-ponto/types";
+import {
+    isReversalSettlementNote,
+    loadBankHoursSettlementsForMonth,
+} from "@/services/bank-hours-settlements.service";
 import { FolhaPontoClient } from "./FolhaPontoClient";
 
 export const dynamic = "force-dynamic";
@@ -79,7 +83,23 @@ export default async function FolhaPontoPage({
     if (!doctor) notFound();
 
     const monthKey = `${anoStr.padStart(4, "0")}-${String(mes).padStart(2, "0")}`;
-    const board = await getChiefPayableShiftsBoard(monthKey);
+    const [board, settlementsByDoctor] = await Promise.all([
+        getChiefPayableShiftsBoard(monthKey),
+        loadBankHoursSettlementsForMonth(monthKey),
+    ]);
+    // Acertos de banco de horas do mês: viram aviso destacado na folha (o
+    // plantão verde do bônus já entra na frequência via payableShifts; o
+    // vermelho da punição só reduz o pagamento, nunca apaga dia trabalhado).
+    const ajustesBancoHoras: AjusteBancoHoras[] = (settlementsByDoctor.get(medicoId) ?? [])
+        .map((settlement) => ({
+            kind: settlement.kind,
+            lancadoEm: settlement.createdAt,
+            lancadoPor: settlement.createdByEmail,
+            dataPlantao: settlement.operationalDate,
+            observacao: settlement.notes,
+            estorno: isReversalSettlementNote(settlement.notes),
+        }))
+        .sort((a, b) => a.lancadoEm.localeCompare(b.lancadoEm));
 
     const plantoes: Plantao[] = board.payableShifts
         .filter((shift) => shift.doctorId === medicoId)
@@ -125,6 +145,7 @@ export default async function FolhaPontoPage({
         // Resolvida no servidor (fuso SP) para não depender do relógio/fuso do
         // navegador nem divergir entre render do servidor e hidratação.
         localData: localDataDaFolha(ano, mes),
+        ajustesBancoHoras,
     };
 
     return <FolhaPontoClient data={data} />;

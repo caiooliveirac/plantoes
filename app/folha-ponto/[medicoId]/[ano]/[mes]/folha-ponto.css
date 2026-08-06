@@ -46,6 +46,35 @@
     color: #666;
 }
 
+/* Aviso de ajuste de banco de horas: só na tela, nunca no papel (.no-print). */
+.folha-ponto-aviso-banco {
+    margin: 12px auto 0;
+    max-width: 210mm;
+    padding: 12px 16px;
+    border: 1px solid #e0b95c;
+    border-radius: 6px;
+    background: #fff8e5;
+    color: #4a3b00;
+    font-size: 14px;
+}
+
+.folha-ponto-aviso-banco strong {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.folha-ponto-aviso-banco ul {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 6px;
+}
+
+.folha-ponto-aviso-banco li small {
+    display: block;
+    color: #7a6a2f;
+}
+
 @media screen {
     body {
         background: #f0f0f0;
