@@ -118,3 +118,34 @@ test("resumo diário: null sem pendências, mensagem única agrupada com pendên
     assert.match(message, /Total: 3 médicos aguardando ação\./);
     assert.match(message, /https:\/\/example\.test\/admin\/bank-hours/);
 });
+
+// ------------------------------------------------------------------
+// Retirada de plantão da folha (autoatendimento)
+// ------------------------------------------------------------------
+import { aplicarRetiradasBancoHoras } from "@/lib/folha-ponto/montar";
+
+test("retirada remove só o plantão do dia/turno escolhidos", () => {
+    const plantoes = [
+        { dia: 3, turno: "SD" as const, baseNomeCurto: "CRU" },
+        { dia: 3, turno: "SN" as const, baseNomeCurto: "CRU" },
+        { dia: 10, turno: "SD" as const, baseNomeCurto: "CRU" },
+    ];
+    const result = aplicarRetiradasBancoHoras(plantoes, [{ dia: 3, turno: "SD" }]);
+    assert.equal(result.length, 2);
+    assert.ok(!result.some((p) => p.dia === 3 && p.turno === "SD"));
+    assert.ok(result.some((p) => p.dia === 3 && p.turno === "SN"));
+});
+
+test("retirada sem correspondência não mexe na folha", () => {
+    const plantoes = [{ dia: 5, turno: "SD" as const, baseNomeCurto: "CRU" }];
+    assert.equal(aplicarRetiradasBancoHoras(plantoes, [{ dia: 6, turno: "SD" }]).length, 1);
+});
+
+test("duas retiradas iguais removem dois plantões iguais, uma remove um", () => {
+    const plantoes = [
+        { dia: 7, turno: "SN" as const, baseNomeCurto: "CRU" },
+        { dia: 7, turno: "SN" as const, baseNomeCurto: "CRU" },
+    ];
+    assert.equal(aplicarRetiradasBancoHoras(plantoes, [{ dia: 7, turno: "SN" }]).length, 1);
+    assert.equal(aplicarRetiradasBancoHoras(plantoes, [{ dia: 7, turno: "SN" }, { dia: 7, turno: "SN" }]).length, 0);
+});
