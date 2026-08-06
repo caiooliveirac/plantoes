@@ -1920,7 +1920,25 @@ function isOperationalParsedEntry(entry: ParsedMessage): entry is ParsedMessage 
     return Boolean(entry.baseCode && entry.sector);
 }
 
-async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
+// Até onde a mensagem de HOJE pode enxergar um plantão aberto do médico. Uma
+// ocupação aberta antiga NÃO é "o plantão atual dele": é lixo que escapou do
+// reaper (P sem saída, janela não expirada ainda). Sem esta trava, uma chegada
+// digitada dias depois virava remanejamento retroativo — movia a ocupação
+// ANTIGA para o ramal novo, preservando o started_at original e reescrevendo o
+// passado (incidente 08/07/2026: "CAROLINA TANAJURA 2031 P" levou o plantão
+// dela de 01/07 do 1366 para o 2031 e derrubou a Bruna do SD da chefia).
+// O critério é a JANELA da ocupação, não a idade dela: vale enquanto o plantão
+// ainda cobre o agora (com 3h de folga para a mensagem que chega atrasada).
+// Continuidade declarada estende o scheduledEndAt e por isso continua alcançável
+// mesmo com started_at de dois dias atrás; plantão que passou da janela e ficou
+// aberto por silêncio, não.
+const ACTIVE_OCCUPANCY_GRACE_MS = 3 * 60 * 60 * 1000;
+
+export function resolveActiveOccupancyCoverageFloor(referenceAt: Date): Date {
+    return new Date(referenceAt.getTime() - ACTIVE_OCCUPANCY_GRACE_MS);
+}
+
+async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new Date()): Promise<{
     sector: "REGULATION" | "INTERVENTION";
     baseCode: string;
     occupancyId: string;
@@ -1930,6 +1948,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
     boardStartedAt: Date | null;
 } | null> {
     const db = getDb();
+    const coverageFloor = resolveActiveOccupancyCoverageFloor(referenceAt);
 
     const regOcc = await db
         .select({
@@ -1941,7 +1960,11 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
             boardStartedAt: regulationOccupancies.boardStartedAt,
         })
         .from(regulationOccupancies)
-        .where(and(eq(regulationOccupancies.doctorId, doctorId), isNull(regulationOccupancies.endedAt)))
+        .where(and(
+            eq(regulationOccupancies.doctorId, doctorId),
+            isNull(regulationOccupancies.endedAt),
+            gte(regulationOccupancies.scheduledEndAt, coverageFloor),
+        ))
         .orderBy(desc(regulationOccupancies.startedAt))
         .limit(1);
 
@@ -1970,7 +1993,11 @@ async function findActiveOccupancyByDoctorId(doctorId: string): Promise<{
             boardStartedAt: interventionOccupancies.boardStartedAt,
         })
         .from(interventionOccupancies)
-        .where(and(eq(interventionOccupancies.doctorId, doctorId), isNull(interventionOccupancies.endedAt)))
+        .where(and(
+            eq(interventionOccupancies.doctorId, doctorId),
+            isNull(interventionOccupancies.endedAt),
+            gte(interventionOccupancies.scheduledEndAt, coverageFloor),
+        ))
         .orderBy(desc(interventionOccupancies.startedAt))
         .limit(1);
 
@@ -2120,7 +2147,7 @@ async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageT
     }
 
     const eventAt = resolveTelegramEventTime(referenceAt, rawParsed.arrivalTime);
-    const activeOcc = await findActiveOccupancyByDoctorId(resolvedDoctor.id);
+    const activeOcc = await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt);
     let recoveredSector: "REGULATION" | "INTERVENTION" | null = activeOcc?.sector ?? null;
     let recoveredBaseCode: string | null = activeOcc?.baseCode ?? null;
     let recoveredShiftLabel: string | null = activeOcc?.shiftLabel ?? null;
@@ -2218,7 +2245,7 @@ async function resolveDepartureWithoutBase(rawParsed: ParsedMessage, messageText
         return null;
     }
 
-    const activeOcc = await findActiveOccupancyByDoctorId(resolved.doctor.id);
+    const activeOcc = await findActiveOccupancyByDoctorId(resolved.doctor.id, referenceAt ?? new Date());
     // Fallback p/ ocupacoes recem-fechadas (audit 2026-05): medico declara
     // saida apos o auto-close, ex.: Jose Marini saida 19:26 com auto-close
     // 19:11. Sem este fallback caia em no_operational_match.
@@ -8018,7 +8045,7 @@ async function handleTelegramReassignment(params: {
     const piamRouting = params.piamRouting ?? { applied: false, originalCode: null };
 
     // Step 1: Find the doctor's current active occupancy (any domain)
-    const activeOcc = params.activeOcc ?? await findActiveOccupancyByDoctorId(resolvedDoctor.id);
+    const activeOcc = params.activeOcc ?? await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt);
     if (!activeOcc) {
         throw new Error("Medico nao tem ocupacao ativa para remanejar. Registre a chegada normalmente.");
     }
@@ -8508,7 +8535,7 @@ async function applyParsedEntry(params: {
     }
 
     const activeOcc = !parsed.isDeparture
-        ? await findActiveOccupancyByDoctorId(resolvedDoctor.id)
+        ? await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt)
         : null;
 
     const implicitReassignment = shouldTreatTelegramArrivalAsImplicitReassignment({
