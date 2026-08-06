@@ -6,8 +6,10 @@
  * de contrato, e o banco de horas completo (/admin/bank-hours) com a validação
  * da chefia — que é o que vinha gerando questionamento.
  *
- * Nada aqui edita nada. Não existe rota de mutação chamada por esta página, e o
- * card de contrato entra em modo readOnly.
+ * Exceção de escrita: o autoatendimento do banco de horas (registrar plantão
+ * extra / retirar um plantão da folha), servido por
+ * /api/medico/bank-hours-self-service — que revalida identidade, saldo e
+ * competência no servidor. Todo o resto é leitura pura.
  *
  * Acesso: token assinado do bot (validade de 7 dias) OU sessão admin.
  */
@@ -22,6 +24,13 @@ import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 import type { BankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
 import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
 import { ApprovalBadge } from "@/components/doctor-panel/approval-badge";
+import { SelfServiceBankHours, type SelfServiceShiftOption } from "@/components/doctor-panel/self-service-bank-hours";
+import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
+import { getSaoPauloParts } from "@/modules/operational/board-rules";
+import {
+    BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES,
+    isChiefByPost2031,
+} from "@/services/bank-hours-settlements.service";
 
 export const dynamic = "force-dynamic";
 
@@ -123,6 +132,31 @@ export default async function PainelDoMedicoPage({
         + (tokenValido && t ? `?t=${encodeURIComponent(t)}` : "");
     const dataMinimaFolha = dataMinimaEmissao(ano, mes);
     const folhaAindaNaoEmissivel = hojeEmSaoPaulo() <= dataMinimaFolha;
+
+    // Autoatendimento: só no mês corrente (SP). Verde = data livre para o extra
+    // (saldo elegível ≥ +12h, ou chefia 2031 sem gate); vermelho = escolher um
+    // plantão real do mês para retirar (saldo elegível ≤ -12h).
+    const nowParts = getSaoPauloParts(new Date());
+    const isCurrentMonth = monthKey === `${nowParts.year}-${String(nowParts.month).padStart(2, "0")}`;
+    const settleBalance = resolveBankHoursSettlementBalance({
+        oldMinutes: doctor?.legacy?.preMay2025Minutes ?? 0,
+        recentMinutes: (doctor?.legacy?.spreadsheetPeriodMinutes ?? 0) + (doctor?.applicationBalanceMinutes ?? 0),
+    });
+    const isChief = isCurrentMonth ? await isChiefByPost2031(medicoId) : false;
+    const canBonus = isCurrentMonth
+        && (settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES || isChief);
+    const canPenalty = isCurrentMonth
+        && settleBalance.penaltyEligibleMinutes <= -BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES;
+    const selfServiceShiftOptions: SelfServiceShiftOption[] = canPenalty
+        ? board.payableShifts
+            .filter((shift) => shift.doctorId === medicoId && shift.paymentUnit > 0 && shift.source !== "admin_extra")
+            .map((shift) => ({
+                operationalDate: shift.operationalDate,
+                shiftLabel: shift.shiftLabel,
+                label: `${shift.operationalDate.split("-").reverse().slice(0, 2).join("/")} · ${shift.shiftLabel} · ${shift.targetCode}`,
+            }))
+            .sort((a, b) => a.operationalDate.localeCompare(b.operationalDate))
+        : [];
 
     const recentShifts = doctor?.shifts.slice(0, RECENT_SHIFT_LIMIT) ?? [];
     const pendencias = (doctor?.shifts ?? []).filter((shift) =>
@@ -262,6 +296,15 @@ export default async function PainelDoMedicoPage({
                         </ul>
                     </section>
 
+                    <SelfServiceBankHours
+                        medicoId={medicoId}
+                        monthKey={monthKey}
+                        token={tokenValido && t ? t : null}
+                        canBonus={canBonus}
+                        canPenalty={canPenalty}
+                        shiftOptions={selfServiceShiftOptions}
+                    />
+
                     {doctor.settlements.length > 0 ? (
                         <section className="panel-section">
                             <h2>Acertos lançados no fechamento</h2>
@@ -361,7 +404,7 @@ export default async function PainelDoMedicoPage({
             ) : null}
 
             <footer className="panel-footer">
-                Esta página é só de leitura. Para corrigir qualquer coisa, fale com a chefia de plantão.
+                Para corrigir qualquer coisa, fale com a chefia de plantão.
             </footer>
         </main>
     );

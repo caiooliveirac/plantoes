@@ -12129,6 +12129,57 @@ button.chief-payable-tag:focus-visible {
     background: linear-gradient(180deg, #1d4ed8, #1e40af);
 }
 
+/* Autoatendimento do banco de horas (data verde / retirada vermelha). */
+.panel-self-service {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.panel-self-service-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.panel-self-service-row input[type="date"],
+.panel-self-service-row select {
+    padding: 9px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    background: #fff;
+    font-size: 0.9rem;
+    min-width: 180px;
+}
+
+.panel-action-btn.bonus {
+    background: linear-gradient(180deg, #16a34a, #15803d);
+}
+
+.panel-action-btn.bonus:hover {
+    background: linear-gradient(180deg, #15803d, #166534);
+}
+
+.panel-action-btn.penalty {
+    background: linear-gradient(180deg, #dc2626, #b91c1c);
+}
+
+.panel-action-btn.penalty:hover {
+    background: linear-gradient(180deg, #b91c1c, #991b1b);
+}
+
+.panel-action-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.panel-self-service-error {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #b91c1c;
+}
+
 .panel-footer {
     text-align: center;
     font-size: 0.78rem;

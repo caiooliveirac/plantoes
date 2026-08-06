@@ -8,9 +8,11 @@ import { isValidFolhaToken } from "@/lib/folha-ponto/token";
 import { localDataDaFolha } from "@/lib/folha-ponto/emissao";
 import type { AjusteBancoHoras, DadosFolhaPonto, Plantao, Turno } from "@/lib/folha-ponto/types";
 import {
+    BANK_HOURS_FOLHA_RETIRADA_MARKER,
     isReversalSettlementNote,
     loadBankHoursSettlementsForMonth,
 } from "@/services/bank-hours-settlements.service";
+import { aplicarRetiradasBancoHoras } from "@/lib/folha-ponto/montar";
 import { FolhaPontoClient } from "./FolhaPontoClient";
 
 export const dynamic = "force-dynamic";
@@ -128,6 +130,25 @@ export default async function FolhaPontoPage({
         })
         .filter((p) => p.dia >= 1 && p.dia <= 31);
 
+    // Retiradas do autoatendimento: o plantão real escolhido pelo médico sai da
+    // frequência (o vermelho já desconta no pagamento). Estornadas não retiram.
+    const settlementsDoMedico = settlementsByDoctor.get(medicoId) ?? [];
+    const idsEstornados = new Set(
+        settlementsDoMedico
+            .filter((s) => isReversalSettlementNote(s.notes))
+            .map((s) => s.notes.slice("reversal:".length).split(" ")[0]),
+    );
+    const retiradas = settlementsDoMedico
+        .filter((s) => s.kind === "penalty"
+            && s.notes.includes(BANK_HOURS_FOLHA_RETIRADA_MARKER)
+            && !idsEstornados.has(s.id)
+            && s.operationalDate?.startsWith(monthKey))
+        .map((s) => ({
+            dia: dayFromOperationalDate(s.operationalDate!),
+            turno: (s.shiftLabel === "SN" ? "SN" : "SD") as Turno,
+        }));
+    const plantoesNaFolha = aplicarRetiradasBancoHoras(plantoes, retiradas);
+
     const metadata = (doctor.metadata ?? {}) as Record<string, unknown>;
     const cnpj = typeof metadata.cnpj === "string" ? metadata.cnpj : null;
     const razaoSocial = typeof metadata.razaoSocial === "string" ? metadata.razaoSocial : null;
@@ -141,7 +162,7 @@ export default async function FolhaPontoPage({
         },
         ano,
         mes,
-        plantoes,
+        plantoes: plantoesNaFolha,
         // Resolvida no servidor (fuso SP) para não depender do relógio/fuso do
         // navegador nem divergir entre render do servidor e hidratação.
         localData: localDataDaFolha(ano, mes),

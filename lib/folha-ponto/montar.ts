@@ -1,9 +1,28 @@
-import type { Plantao, LinhaFreq, LinhaRelatorio } from "./types";
+import type { Plantao, LinhaFreq, LinhaRelatorio, Turno } from "./types";
 
 const HORA_SD_ENTRADA_DEFAULT = "07:00";
 const HORA_SD_SAIDA_DEFAULT = "19:00";
 const HORA_SN_ENTRADA_DEFAULT = "19:00";
 const HORA_SN_SAIDA_DEFAULT = "07:00";
+
+/**
+ * Retiradas de banco de horas escolhidas pelo médico (autoatendimento): cada
+ * retirada remove UM plantão real do dia/turno indicados da folha. Plantões sem
+ * retirada correspondente ficam intactos — a folha nunca perde dia por acaso.
+ */
+export function aplicarRetiradasBancoHoras(
+    plantoes: Plantao[],
+    retiradas: Array<{ dia: number; turno: Turno }>,
+): Plantao[] {
+    const restantes = [...plantoes];
+    for (const retirada of retiradas) {
+        const index = restantes.findIndex((p) => p.dia === retirada.dia && p.turno === retirada.turno);
+        if (index >= 0) {
+            restantes.splice(index, 1);
+        }
+    }
+    return restantes;
+}
 
 export function montarLinhasFrequencia(plantoes: Plantao[]): Record<number, LinhaFreq> {
     const dias: Record<number, LinhaFreq> = {};

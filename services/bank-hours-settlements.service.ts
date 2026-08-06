@@ -1,4 +1,4 @@
-import { eq, like } from "drizzle-orm";
+import { eq, like, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { adminExtraShifts, bankHoursSettlements, users } from "@/db/schema";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
@@ -18,10 +18,14 @@ export interface BankHoursSettlementRow {
     kind: BankHoursSettlementKind;
     adminExtraShiftId: string | null;
     operationalDate: string | null;
+    shiftLabel: string | null;
     notes: string;
     createdAt: string;
     createdByEmail: string | null;
 }
+
+/** Marcador (em notes) da retirada de um plantão real da folha pelo autoatendimento. */
+export const BANK_HOURS_FOLHA_RETIRADA_MARKER = "retirada da folha";
 
 function normalizeKind(value: string): BankHoursSettlementKind {
     return value === "penalty" ? "penalty" : "bonus";
@@ -41,6 +45,7 @@ export async function loadBankHoursSettlementsForMonth(
             kind: bankHoursSettlements.kind,
             adminExtraShiftId: bankHoursSettlements.adminExtraShiftId,
             operationalDate: adminExtraShifts.operationalDate,
+            shiftLabel: adminExtraShifts.shiftLabel,
             notes: bankHoursSettlements.notes,
             createdAt: bankHoursSettlements.createdAt,
             createdByEmail: users.email,
@@ -60,6 +65,7 @@ export async function loadBankHoursSettlementsForMonth(
             kind: normalizeKind(row.kind),
             adminExtraShiftId: row.adminExtraShiftId,
             operationalDate: row.operationalDate ?? null,
+            shiftLabel: row.shiftLabel ?? null,
             notes: row.notes,
             createdAt: row.createdAt.toISOString(),
             createdByEmail: row.createdByEmail ?? null,
@@ -184,9 +190,13 @@ export async function settleBankHours(params: {
     doctorId: string;
     monthKey: string;
     kind: BankHoursSettlementKind;
-    actorUserId: string;
+    /** null = autoatendimento via link assinado do bot (médico sem conta). */
+    actorUserId: string | null;
     note?: string | null;
     operationalDate?: string;
+    /** Turno do plantão verde/vermelho (default SD). A retirada de um plantão
+     * real precisa casar o turno para o pagamento e a folha netarem no dia certo. */
+    shiftLabel?: "SD" | "SN";
 }): Promise<SettleBankHoursResult> {
     const kind = params.kind;
     const isBonus = kind === "bonus";
@@ -208,7 +218,7 @@ export async function settleBankHours(params: {
             .values({
                 doctorId: params.doctorId,
                 operationalDate,
-                shiftLabel: "SD",
+                shiftLabel: params.shiftLabel ?? "SD",
                 label,
                 kind,
                 unit,
@@ -241,6 +251,21 @@ export async function settleBankHours(params: {
             label,
         } satisfies SettleBankHoursResult;
     });
+}
+
+/**
+ * O médico já deu plantão no ramal 2031 (chefia de plantão)? Chefia registra
+ * plantão extra pelo autoatendimento sem o gate de +12h — o coordenador revisa.
+ */
+export async function isChiefByPost2031(doctorId: string): Promise<boolean> {
+    const result = await getDb().execute(sql`
+        select 1
+        from operations_v2.regulation_occupancies ro
+        join operations_v2.regulation_posts rp on rp.id = ro.post_id
+        where ro.doctor_id = ${doctorId} and rp.code = '2031'
+        limit 1
+    `);
+    return (result as unknown as unknown[]).length > 0;
 }
 
 /** Prefixo que marca (nas notes) o acerto que estorna outro. */
