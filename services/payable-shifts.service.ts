@@ -1,7 +1,7 @@
 import { asc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { doctors } from "@/db/schema";
-import { extractDoctorIsResidente } from "@/modules/doctors/directory";
+import { extractDoctorIsNaoPlantonista, extractDoctorIsResidente } from "@/modules/doctors/directory";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
 import {
     buildAdminExtraPayableShift,
@@ -793,7 +793,9 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         allDoctorNames: visibleDoctorRows.map((row) => row.fullName),
         // Quadro inteiro de médicos ativos: quem não deu plantão no mês aparece
         // como linha vazia, só para o modal ficar a um clique em qualquer mês.
-        rosterDoctors: visibleDoctorRows.map((row) => ({
+        // Fora o não plantonista (conta de sistema, coordenação, contratado que
+        // não escala): ele nunca fecha mês, só poluiria a lista e os filtros.
+        rosterDoctors: visibleDoctorRows.filter((row) => !extractDoctorIsNaoPlantonista(row.metadata)).map((row) => ({
             doctorId: row.id,
             doctorName: row.fullName,
             displayName: row.displayName,

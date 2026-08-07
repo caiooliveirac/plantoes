@@ -21,7 +21,7 @@ if (row.awaitingOpeningBalance) continue;
 ```
 
 Só que a flag é calculada assim
-([contract-balance.service.ts:416](../../services/contract-balance.service.ts#L416)):
+([contract-balance.service.ts:420](../../services/contract-balance.service.ts#L420)):
 
 ```ts
 awaitingOpeningBalance: openingCents === 0 && settledConsumedCents === 0 && emAberto.amountCents === 0

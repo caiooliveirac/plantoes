@@ -32,6 +32,7 @@ function row(overrides: Partial<ContractBalanceRow> = {}): ContractBalanceRow {
         category: "generalista",
         paymentProfile: "generalist",
         employmentType: "pj",
+        isNaoPlantonista: false,
         weeklyHours: 24,
         cycleStart,
         cycleEnd,

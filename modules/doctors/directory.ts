@@ -3,6 +3,7 @@ import { normalizeOperationalRoleLabel } from "@/modules/operational/roles";
 
 const DOCTOR_METADATA_PREFERRED_ROLE_KEY = "preferredOperationalRole";
 const DOCTOR_METADATA_IS_RESIDENTE_KEY = "isResidente";
+const DOCTOR_METADATA_IS_NAO_PLANTONISTA_KEY = "isNaoPlantonista";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -66,12 +67,30 @@ export function extractDoctorIsResidente(metadata: unknown) {
     return metadata[DOCTOR_METADATA_IS_RESIDENTE_KEY] === true;
 }
 
+/**
+ * Não plantonista: cadastro que existe por outro motivo (conta de sistema,
+ * coordenação, contratado que não entra na escala) e nunca dá plantão. Some do
+ * quadro do fechamento e do acompanhamento de saldo contratual — se um dia
+ * cumprir plantão, ele aparece pelo plantão, como qualquer um.
+ *
+ * Não confundir com `isActive = false` (saiu do serviço) nem com
+ * [[isResidente]] (coringa que ocupa qualquer posto).
+ */
+export function extractDoctorIsNaoPlantonista(metadata: unknown) {
+    if (!isPlainObject(metadata)) {
+        return false;
+    }
+
+    return metadata[DOCTOR_METADATA_IS_NAO_PLANTONISTA_KEY] === true;
+}
+
 export function mergeDoctorDirectoryMetadata(
     metadata: unknown,
     params: {
         aliases?: string[];
         preferredOperationalRole?: string | null;
         isResidente?: boolean;
+        isNaoPlantonista?: boolean;
     },
 ) {
     const nextMetadata = isPlainObject(metadata) ? { ...metadata } : {};
@@ -93,6 +112,12 @@ export function mergeDoctorDirectoryMetadata(
         nextMetadata[DOCTOR_METADATA_IS_RESIDENTE_KEY] = true;
     } else if (params.isResidente !== undefined) {
         delete nextMetadata[DOCTOR_METADATA_IS_RESIDENTE_KEY];
+    }
+
+    if (params.isNaoPlantonista) {
+        nextMetadata[DOCTOR_METADATA_IS_NAO_PLANTONISTA_KEY] = true;
+    } else if (params.isNaoPlantonista !== undefined) {
+        delete nextMetadata[DOCTOR_METADATA_IS_NAO_PLANTONISTA_KEY];
     }
 
     return nextMetadata;
