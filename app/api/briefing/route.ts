@@ -19,6 +19,7 @@ import { sql } from "drizzle-orm";
 
 import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
+import { loadBriefingBankHours } from "@/lib/briefing/bank-hours";
 import { findPendingRenewals } from "@/lib/contracts/renewal";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { buildContractAlerts, isImmediateAlert } from "@/modules/telegram/contract-balance-alerts";
@@ -53,9 +54,10 @@ export async function GET(request: NextRequest) {
     // pagar a apuração inteira para responder "quem está na IT30" é desperdício.
     const soBases = request.nextUrl.searchParams.get("parte") === "bases";
 
-    const [board, saldos] = await Promise.all([
+    const [board, saldos, bancoDeHoras] = await Promise.all([
         listInterventionBoard(),
         soBases ? Promise.resolve({ rows: [] }) : loadContractBalances({ asOf }),
+        soBases ? Promise.resolve(null) : loadBriefingBankHours(),
     ]);
     const { rows } = saldos;
 
@@ -132,6 +134,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
         generatedAt: asOf.toISOString(),
         bases: { semMedico, desativadas, ocupadas },
+        bancoDeHoras,
         medicos,
         contratos: {
             zerados: alerts
