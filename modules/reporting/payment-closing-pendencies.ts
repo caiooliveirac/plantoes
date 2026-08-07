@@ -44,6 +44,8 @@ export interface PendencyDoctorInput {
     /** "estatutario" é remunerado fora deste sistema. */
     employmentType?: "pj" | "estatutario" | null;
     paymentProfile?: "generalist" | "specialist" | "psychiatry" | null;
+    /** Cadastro que não dá plantão (conta de sistema, coordenação, contratado fora da escala). */
+    isNaoPlantonista?: boolean;
 }
 
 /**
@@ -52,9 +54,14 @@ export interface PendencyDoctorInput {
  * Sem contrato para acompanhar, tudo que a tela mostrasse sobre saldo — pendência,
  * ritmo, projeção — seria invenção. O psiquiatra continua com o cálculo de valor
  * por plantão (tarifa própria); o que some é só a parte de contrato.
+ *
+ * O não plantonista sai pelo mesmo motivo prático: contrato dormente de quem não
+ * escala vira aviso diário que ninguém vai atender.
  */
 export function tracksContractBalance(doctor: PendencyDoctorInput): boolean {
-    return doctor.employmentType !== "estatutario" && doctor.paymentProfile !== "psychiatry";
+    return doctor.employmentType !== "estatutario"
+        && doctor.paymentProfile !== "psychiatry"
+        && doctor.isNaoPlantonista !== true;
 }
 
 export function resolveDoctorPendencies(doctor: PendencyDoctorInput): PaymentClosingPendency[] {

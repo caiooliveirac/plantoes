@@ -30,6 +30,7 @@ import {
     type DoctorEmploymentType,
     type DoctorPaymentProfile,
 } from "@/modules/reporting/payable-shifts";
+import { extractDoctorIsNaoPlantonista } from "@/modules/doctors/directory";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
 import { getDoctorMonthlyPayableBreakdown } from "@/services/payable-shifts.service";
 
@@ -210,6 +211,8 @@ export interface ContractBalanceRow {
      */
     paymentProfile: DoctorPaymentProfile;
     employmentType: DoctorEmploymentType;
+    /** Cadastro que não dá plantão (conta de sistema, coordenação): fora das varreduras. */
+    isNaoPlantonista: boolean;
     weeklyHours: number | null;
     cycleStart: string;
     cycleEnd: string;
@@ -401,6 +404,7 @@ export async function loadContractBalances(params: {
             category: row.category,
             paymentProfile: profile,
             employmentType: resolveDoctorEmploymentType(row.metadata),
+            isNaoPlantonista: extractDoctorIsNaoPlantonista(row.metadata),
             weeklyHours: row.weekly_hours === null ? null : Number(row.weekly_hours),
             cycleStart: row.cycle_start,
             cycleEnd: row.cycle_end,

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
     resolveDoctorPendencies,
+    tracksContractBalance,
     type PendencyContractInput,
     type PendencyDoctorInput,
 } from "@/modules/reporting/payment-closing-pendencies";
@@ -105,6 +106,15 @@ describe("pendências do fechamento", () => {
             resolveDoctorPendencies({ ...semContrato, employmentType: "pj", paymentProfile: "generalist" }),
             ["contract_missing"],
         );
+    });
+
+    it("não plantonista também sai do acompanhamento de contrato", () => {
+        assert.deepEqual(
+            resolveDoctorPendencies({ contractBalances: [], isNaoPlantonista: true }),
+            [],
+        );
+        assert.equal(tracksContractBalance({ isNaoPlantonista: true }), false);
+        assert.equal(tracksContractBalance({ employmentType: "pj", paymentProfile: "generalist" }), true);
     });
 
     it("banco de horas continua valendo para estatutário e psiquiatra", () => {
