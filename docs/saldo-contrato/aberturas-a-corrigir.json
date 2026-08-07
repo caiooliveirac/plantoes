@@ -27,6 +27,32 @@
       ],
       "motivo": "A planilha resetou no mês certo (ago/2025, aniversário em 16/08) mas com o teto errado: 165.732,00, que é o de 24h. A coluna CH dela diz 36h nos 17 meses da série — conferido em jul/2025 (abre -44.223,54, CH 36h) e nos 5 meses de 2026. Teto certo 248.598,00, diferença exata de 82.866,00. Ela estourou de verdade, mas em 6.896,24 e não em 89.762,24.",
       "nota": "O override já estava versionado em saldo-overrides.json, mas o backfill de produção rodou antes de o arquivo existir (backfill-report.md é do commit 9ad2951; o override veio no a7a69c6, ambos de 2026-07-31). O ciclo dela termina em 16/08/2026 — o número certo é o que vai para a mesa da renovação."
+    },
+    {
+      "doctorName": "Leonardo Prado Faben",
+      "contractNumber": "110/2026",
+      "expectedCeilingBrl": 165732.00,
+      "deltaBrl": 87319.36,
+      "descricao": "Saldo de 01/05/2026 corrigido em 2026-08-07 (fechamento de maio = 144.860,47 — scripts/corrigir-aberturas-seed.ts)",
+      "variantes": [
+        { "entryDate": "2026-05-01", "deBrl": 75922.90, "paraBrl": 163242.26 },
+        { "entryDate": "2026-05-31", "deBrl": 57541.11, "paraBrl": 144860.47 }
+      ],
+      "motivo": "Caio informou em 2026-08-07 que o fechamento de maio/2026 correto é 144.860,47; a planilha lida pelo backfill fechava em 57.541,11. Com o consumo de maio inalterado (18.381,79, sete plantões de semana + sete de fim de semana), a abertura de 01/05 sobe de 75.922,90 para 163.242,26 — exatamente o teto de 165.732,00 menos 2.489,74, um plantão de semana, o único de abril. O ciclo começou em 01/04/2026, então a série fecha sozinha.",
+      "nota": "O erro é do saldo de partida, não do consumo: os fechamentos de junho (-10.640,11) e julho (-12.021,21), atestados no sistema, continuam valendo. Saldo depois da correção: 122.199,15."
+    },
+    {
+      "doctorName": "Murilo Candido do Monte Damasceno",
+      "contractNumber": "593/2025",
+      "expectedCeilingBrl": 165732.00,
+      "deltaBrl": 100000.00,
+      "descricao": "Saldo de 01/05/2026 corrigido em 2026-08-07 (dígito da centena de milhar perdido na planilha — scripts/corrigir-aberturas-seed.ts)",
+      "variantes": [
+        { "entryDate": "2026-05-01", "deBrl": 27058.28, "paraBrl": 127058.28 },
+        { "entryDate": "2026-05-31", "deBrl": 17663.04, "paraBrl": 117663.04 }
+      ],
+      "motivo": "Caio informou em 2026-08-07 que ele tem exatamente R$ 100.000,00 a mais de saldo. Renovou em dezembro/2025 com algo em torno de 163 mil e, na virada de janeiro, a planilha perdeu o dígito da centena de milhar — todos os meses seguintes carregaram o erro. É subtração de 100.000,00 exatos, não consumo.",
+      "nota": "O ciclo cadastrado começa em 01/11/2025, mas Caio descreve a renovação como sendo de dezembro. A abertura vai corrigida de qualquer forma (o valor é o mesmo); conferir a data do ciclo na próxima renovação. Saldo depois da correção: 102.724,60."
     }
   ]
 }

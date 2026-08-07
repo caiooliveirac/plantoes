@@ -105,5 +105,7 @@ jobs:
             echo "- Modo: ${APPLY} (true = gravou no razão)"
             echo "- Francisco Isensee 797/2024: -46.778,94 → +153.128,27"
             echo "- Karen Seifarth 518/2024: +82.866,00 (teto de 36h no reset de ago/2025)"
+            echo "- Leonardo Prado Faben 110/2026: +87.319,36 (maio fecha em 144.860,47)"
+            echo "- Murilo Candido do Monte Damasceno 593/2025: +100.000,00 (dígito perdido na planilha)"
             echo "- Plano completo: no log do passo 'Correção'"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -82,8 +82,12 @@ test("delta declarado que não bate com a variante é barrado", () => {
     assert.equal(planejar(adulterado, abertura("2026-05-31", -89762.24)).status, "valor_divergente");
 });
 
-test("os dois contratos têm o teto de 36h generalista", () => {
+test("todo contrato declara um teto da tabela de referência", () => {
+    // 248.598 = 36h generalista (Francisco, Karen); 165.732 = 24h generalista.
     for (const correcao of dados.correcoes) {
-        assert.equal(correcao.expectedCeilingBrl, 248598.0, correcao.doctorName);
+        assert.ok(
+            [248598.0, 165732.0].includes(correcao.expectedCeilingBrl),
+            `${correcao.doctorName}: teto ${correcao.expectedCeilingBrl} fora da tabela`,
+        );
     }
 });
