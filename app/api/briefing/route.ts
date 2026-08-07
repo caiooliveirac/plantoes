@@ -44,10 +44,16 @@ export async function GET(request: NextRequest) {
     }
 
     const asOf = new Date();
-    const [board, { rows }] = await Promise.all([
+    // ?parte=bases pula a apuração mês a mês de todos os contratos. O quadro
+    // precisa estar fresco a cada pergunta; o contrato não muda em uma hora, e
+    // pagar a apuração inteira para responder "quem está na IT30" é desperdício.
+    const soBases = request.nextUrl.searchParams.get("parte") === "bases";
+
+    const [board, saldos] = await Promise.all([
         listInterventionBoard(),
-        loadContractBalances({ asOf }),
+        soBases ? Promise.resolve({ rows: [] }) : loadContractBalances({ asOf }),
     ]);
+    const { rows } = saldos;
 
     const semMedico = board
         .filter((row) => row.status === "waiting")
@@ -68,9 +74,43 @@ export async function GET(request: NextRequest) {
         };
     };
 
+    // O quadro ao vivo, para responder "quem está na IT30 agora".
+    const ocupadas = board
+        .filter((row) => row.status === "active")
+        .map((row) => ({
+            code: row.baseCode,
+            label: row.baseLabel,
+            doctorName: row.displayName ?? row.doctorName,
+            shiftLabel: row.shiftLabel,
+            scheduledEndAt: row.scheduledEndAt,
+        }));
+
+    // Um registro por contrato ativo, com o que responde "quanto o fulano ainda
+    // pode dar de plantão". Sai inteiro porque quem consome guarda em cache e
+    // responde de lá: refazer a apuração a cada pergunta custa segundos.
+    const medicos = rows.map((row) => ({
+        doctorName: row.doctorName,
+        contractNumber: row.contractNumber,
+        cycleEnd: row.cycleEnd,
+        ceilingCents: row.ceilingCents,
+        balanceCents: row.metrics.balanceCents,
+        consumedPct: row.metrics.consumedPct,
+        paceIndex: row.metrics.paceIndex,
+        riskLevel: row.metrics.riskLevel,
+        awaitingOpeningBalance: row.awaitingOpeningBalance,
+        hasReliableBurnRate: row.metrics.hasReliableBurnRate,
+        projectedDepletionDate: row.metrics.projectedDepletionDate?.toISOString().slice(0, 10) ?? null,
+        /** Quantos plantões cabem no saldo até o fim do ciclo, no mix do médico. */
+        remainingShiftsAtOwnMix: row.metrics.remainingShiftsAtOwnMix,
+        /** Ritmo que chega inteiro ao fim do ciclo. */
+        monthlyShiftsAtOwnMix: row.metrics.monthlyShiftsAtOwnMix,
+        healthyMonthlyBudgetCents: row.metrics.healthyMonthlyBudgetCents,
+    }));
+
     return NextResponse.json({
         generatedAt: asOf.toISOString(),
-        bases: { semMedico, desativadas },
+        bases: { semMedico, desativadas, ocupadas },
+        medicos,
         contratos: {
             zerados: alerts
                 .filter((alert) => alert.trigger === "depleted")
