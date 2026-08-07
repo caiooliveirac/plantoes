@@ -21,6 +21,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
 import { loadBriefingBankHours } from "@/lib/briefing/bank-hours";
 import { findPendingRenewals } from "@/lib/contracts/renewal";
+import { tracksContractBalance } from "@/modules/reporting/payment-closing-pendencies";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { buildContractAlerts, isImmediateAlert } from "@/modules/telegram/contract-balance-alerts";
 import { listInterventionBoard } from "@/services/board.service";
@@ -59,7 +60,9 @@ export async function GET(request: NextRequest) {
         soBases ? Promise.resolve({ rows: [] }) : loadContractBalances({ asOf }),
         soBases ? Promise.resolve(null) : loadBriefingBankHours(),
     ]);
-    const { rows } = saldos;
+    // Mesmo corte do fechamento e dos avisos: estatutário e psiquiatra não têm
+    // teto acompanhado, então não entram em saldo, alerta nem renovação pendente.
+    const rows = saldos.rows.filter(tracksContractBalance);
 
     const semMedico = board
         .filter((row) => row.status === "waiting")

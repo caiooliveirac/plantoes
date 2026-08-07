@@ -25,7 +25,9 @@ import {
     type StatementMonthMovements,
 } from "@/lib/contracts/statement";
 import {
+    resolveDoctorEmploymentType,
     resolveDoctorPaymentProfile,
+    type DoctorEmploymentType,
     type DoctorPaymentProfile,
 } from "@/modules/reporting/payable-shifts";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
@@ -201,6 +203,13 @@ export interface ContractBalanceRow {
     contractNumber: string;
     companyName: string | null;
     category: "generalista" | "especialista" | "psiquiatria";
+    /**
+     * Perfil e vínculo do MÉDICO (metadata), não do contrato. É por eles que as
+     * varreduras decidem quem tem saldo acompanhado — ver `tracksContractBalance`
+     * em modules/reporting/payment-closing-pendencies.ts.
+     */
+    paymentProfile: DoctorPaymentProfile;
+    employmentType: DoctorEmploymentType;
     weeklyHours: number | null;
     cycleStart: string;
     cycleEnd: string;
@@ -390,6 +399,8 @@ export async function loadContractBalances(params: {
             contractNumber: row.contract_number,
             companyName: row.company_name,
             category: row.category,
+            paymentProfile: profile,
+            employmentType: resolveDoctorEmploymentType(row.metadata),
             weeklyHours: row.weekly_hours === null ? null : Number(row.weekly_hours),
             cycleStart: row.cycle_start,
             cycleEnd: row.cycle_end,

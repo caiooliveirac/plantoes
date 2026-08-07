@@ -27,6 +27,7 @@ import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import { syncContractLedgerForMonthBatch } from "@/services/contract-ledger.service";
 import { loadContractBalances, type ContractBalanceRow } from "@/services/contract-balance.service";
+import { tracksContractBalance } from "@/modules/reporting/payment-closing-pendencies";
 
 const STAGE = "contract-balance";
 /** Não repetir o mesmo alerta antes disto (SPEC §8). */
@@ -315,7 +316,11 @@ export async function sendContractBalanceCycle(referenceDate = new Date()) {
         return { sent: 0, evaluated: 0 };
     }
 
-    const { rows } = await loadContractBalances({ asOf: referenceDate });
+    // Estatutário e psiquiatra não têm saldo acompanhado: avisar sobre o teto
+    // deles seria cobrar ação que a coordenação não toma (mesmo corte do
+    // fechamento). A reconciliação do razão acima segue valendo para todos.
+    const { rows: todasAsLinhas } = await loadContractBalances({ asOf: referenceDate });
+    const rows = todasAsLinhas.filter(tracksContractBalance);
     // Avulso só o que exige ação hoje; o resto vai no digest de segunda.
     const alerts = buildContractAlerts(rows, referenceDate).filter(isImmediateAlert);
     const digest = shouldSendWeeklyDigest(referenceDate) ? buildWeeklyDigest(rows, referenceDate) : null;
