@@ -4,6 +4,7 @@ import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operatio
 import { isPaymentAffectingEarlyDepartureOutcome, resolveEarlyDeparturePaymentUnit } from "@/modules/operational/early-departure";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 import type { ContractStatementMonth } from "@/lib/contracts/statement";
+import type { RenewalKind } from "@/lib/contracts/renewal";
 
 const SAO_PAULO_OFFSET_MINUTES = -180;
 const MIN_SEGMENT_MINUTES = 45;
@@ -262,11 +263,21 @@ export interface ChiefPayableDoctorRow {
     bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
     /** Contratos ativos do médico com saldo e métricas. Mais de um = seletor. */
     contractBalances?: ContractBalanceSummary[];
+    /** Renovação pendente do contrato mais recente (lib/contracts/renewal.ts). */
+    contractPendingRenewal?: ChiefPayableContractRenewal | null;
     /** Plantões cumpridos em USA (intervenção/ambulância) no mês — só linhas com unidade positiva. */
     usaShiftCount: number;
     /** Plantões cumpridos em CRU (regulação/ramais) no mês — só linhas com unidade positiva. */
     cruShiftCount: number;
     cells: ChiefPayableCell[];
+}
+
+/** Pendência de renovação já resolvida no servidor — a tela só exibe/filtra. */
+export interface ChiefPayableContractRenewal {
+    kind: RenewalKind;
+    /** Dias corridos desde o vencimento. 0 em `sem_saldo_de_abertura`. */
+    daysOverdue: number;
+    cycleEnd: string;
 }
 
 export interface ChiefPayableBankHoursSettlement {
@@ -296,6 +307,8 @@ export interface ContractBalanceSummary {
     consumedCents: number;
     consumedPct: number | null;
     elapsedPct: number;
+    /** Consumo / esperado até hoje. `null` sem teto. > 1 = acima do ritmo. */
+    paceIndex: number | null;
     riskLevel: "safe" | "watch" | "warning" | "critical" | "depleted";
     hasReliableBurnRate: boolean;
     projectedDepletionDate: string | null;
@@ -341,6 +354,7 @@ export interface DoctorFinancialExtras {
     bankHoursSettlement?: ChiefPayableBankHoursSettlement | null;
     /** Contratos ativos do médico. Mais de um = seletor no bloco de saldo. */
     contractBalances?: ContractBalanceSummary[];
+    contractPendingRenewal?: ChiefPayableContractRenewal | null;
 }
 
 export interface ChiefPayableBoardModel {
@@ -1033,6 +1047,7 @@ export function buildChiefPayableBoard(params: {
             contractSeedMonth: params.doctorFinancials?.[doctorId]?.contractSeedMonth ?? null,
             contractBalanceBrl: params.doctorFinancials?.[doctorId]?.contractBalanceBrl ?? null,
             contractBalances: params.doctorFinancials?.[doctorId]?.contractBalances ?? [],
+            contractPendingRenewal: params.doctorFinancials?.[doctorId]?.contractPendingRenewal ?? null,
             bankHoursMinutes: params.doctorFinancials?.[doctorId]?.bankHoursMinutes ?? null,
             bankHoursOldMinutes: params.doctorFinancials?.[doctorId]?.bankHoursOldMinutes ?? null,
             bankHoursRecentMinutes: params.doctorFinancials?.[doctorId]?.bankHoursRecentMinutes ?? null,

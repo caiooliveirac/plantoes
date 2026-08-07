@@ -9,6 +9,7 @@ import { ContractBalanceCard } from "@/components/payment-closing/contract-balan
 import { fetchComLimite } from "@/lib/fetch-com-limite";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
+import { resolveDoctorPendencies, type PaymentClosingPendency } from "@/modules/reporting/payment-closing-pendencies";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
 
 interface Props {
@@ -43,6 +44,16 @@ type SortMode = "name" | "total" | "pending" | "weekday" | "weekend";
 type DoctorProfile = "generalist" | "specialist" | "psychiatry";
 type DoctorEmploymentType = "pj" | "estatutario";
 type EmploymentTypeFilter = "all" | DoctorEmploymentType;
+/** Filtro de antecipação: banco de horas já no gatilho e defeitos de contrato. */
+type PendencyFilter = "all" | PaymentClosingPendency;
+
+const PENDENCY_CHIPS: Array<{ value: PaymentClosingPendency; label: string; tone: string; title: string }> = [
+    { value: "bank_bonus", label: "Pagar plantão (+12h)", tone: "good", title: "Saldo elegível já passou de +12h: lance o plantão verde antes de assinar." },
+    { value: "bank_penalty", label: "Descontar plantão (−12h)", tone: "danger", title: "Saldo elegível já passou de −12h: lance o plantão vermelho antes de assinar." },
+    { value: "contract_pace", label: "Acima do ritmo", tone: "warning", title: "Consumo do contrato passou do previsto para o tempo de ciclo já decorrido." },
+    { value: "contract_depleted", label: "Saldo zerado/negativo", tone: "danger", title: "Contrato sem saldo: os plantões deste mês já estouram o teto." },
+    { value: "contract_missing", label: "Falta lançar contrato", tone: "warning", title: "Sem contrato, contrato vencido sem renovação, ou renovação sem teto lançado." },
+];
 
 const MONEY_FORMATTER = new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -262,6 +273,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("all");
     const [domainFilter, setDomainFilter] = useState<DomainFilter>("all");
     const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("all");
+    const [pendencyFilter, setPendencyFilter] = useState<PendencyFilter>("all");
     const [targetFilter, setTargetFilter] = useState("all");
     const [sortMode, setSortMode] = useState<SortMode>("name");
     const [flash, setFlash] = useState<FlashRecord | null>(null);
@@ -407,8 +419,30 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         domainFilter !== "all",
         coverageFilter !== "all",
         targetFilter !== "all",
+        pendencyFilter !== "all",
         normalizedTarget.length > 0,
     ].filter(Boolean).length;
+
+    // Pendências por médico: mesma régua de ±12h da aba banco de horas e os três
+    // defeitos de contrato. Vale para TODOS os médicos do mês (não só os
+    // filtrados) — os contadores dos chips precisam do universo inteiro.
+    const pendenciesByDoctor = useMemo(() => {
+        const map = new Map<string, Set<PaymentClosingPendency>>();
+        for (const doctor of board.doctors) {
+            map.set(doctor.doctorId, new Set(resolveDoctorPendencies(doctor)));
+        }
+        return map;
+    }, [board.doctors]);
+
+    const pendencyTotals = useMemo(() => {
+        const counts = new Map<PaymentClosingPendency, number>();
+        for (const pendencies of pendenciesByDoctor.values()) {
+            for (const pendency of pendencies) {
+                counts.set(pendency, (counts.get(pendency) ?? 0) + 1);
+            }
+        }
+        return counts;
+    }, [pendenciesByDoctor]);
 
     const targetPills = useMemo(() => {
         const filtered = board.targetOptions.filter((target) => {
@@ -724,6 +758,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                     return false;
                 }
 
+                if (pendencyFilter !== "all" && !pendenciesByDoctor.get(doctor.doctorId)?.has(pendencyFilter)) {
+                    return false;
+                }
+
                 if (normalized) {
                     const haystack = normalize([doctor.doctorName, doctor.displayName ?? ""].join(" "));
                     if (!haystack.includes(normalized)) {
@@ -755,7 +793,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         });
 
         return sorted;
-    }, [board.doctors, coverageFilter, doctorProfileOverrides, doctorEmploymentTypeOverrides, doctorMetaOverrides, domainFilter, employmentTypeFilter, normalized, normalizedTarget, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
+    }, [board.doctors, coverageFilter, doctorProfileOverrides, doctorEmploymentTypeOverrides, doctorMetaOverrides, domainFilter, employmentTypeFilter, normalized, normalizedTarget, pendenciesByDoctor, pendencyFilter, pendingRemovals, shiftFilter, sortMode, status, targetFilter]);
 
     useEffect(() => {
         // Reconcile optimistic removals with server truth: if a payableShiftId
@@ -1761,6 +1799,43 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                 ) : null}
             </AnimatePresence>
 
+            {/* Antecipação: quem já tem acerto de ±12h formado e quem está com o
+                contrato defeituoso. Some quando o mês não tem nenhuma pendência. */}
+            {pendencyTotals.size > 0 ? (
+                <div className="admin-bar-pending-strip">
+                    <span className="admin-bar-pending-label">Antecipar</span>
+                    <div className="chief-payable-chip-row" role="group" aria-label="Filtrar médicos por pendência">
+                        <button
+                            type="button"
+                            className={`chief-payable-chip ${pendencyFilter === "all" ? "active" : ""}`.trim()}
+                            aria-pressed={pendencyFilter === "all"}
+                            onClick={() => setPendencyFilter("all")}
+                        >
+                            Todos ({board.summary.doctorCount})
+                        </button>
+                        {PENDENCY_CHIPS.map((chip) => {
+                            const count = pendencyTotals.get(chip.value) ?? 0;
+                            if (count === 0) {
+                                return null;
+                            }
+
+                            return (
+                                <button
+                                    key={chip.value}
+                                    type="button"
+                                    className={`chief-payable-chip ${chip.tone} ${pendencyFilter === chip.value ? "active" : ""}`.trim()}
+                                    aria-pressed={pendencyFilter === chip.value}
+                                    title={chip.title}
+                                    onClick={() => setPendencyFilter(pendencyFilter === chip.value ? "all" : chip.value)}
+                                >
+                                    {chip.label} ({count})
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            ) : null}
+
             <div className="admin-bar-inserts">
             {(manualError || manualFeedback) ? (
                 <section className={`payment-inline-banner ${manualError ? "danger" : "ok"}`.trim()}>
@@ -2105,6 +2180,47 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                         </button>
                                                     );
                                                 })() : null}
+
+                                                {/* Destaque do defeito de contrato na própria linha — a mesma
+                                                    classificação que alimenta os chips de antecipação. */}
+                                                {(() => {
+                                                    const pendencies = pendenciesByDoctor.get(doctor.doctorId);
+                                                    const contractPendency = (["contract_missing", "contract_depleted", "contract_pace"] as const)
+                                                        .find((pendency) => pendencies?.has(pendency));
+                                                    if (!contractPendency) {
+                                                        return null;
+                                                    }
+
+                                                    const renewal = doctor.contractPendingRenewal;
+                                                    const label = contractPendency === "contract_missing"
+                                                        ? (renewal?.kind === "vencido"
+                                                            ? "contrato vencido"
+                                                            : renewal?.kind === "sem_saldo_de_abertura"
+                                                                ? "sem saldo de abertura"
+                                                                : (doctor.contractBalances?.length ?? 0) === 0
+                                                                    ? "sem contrato"
+                                                                    : "sem teto")
+                                                        : contractPendency === "contract_depleted"
+                                                            ? "saldo zerado"
+                                                            : "acima do ritmo";
+                                                    const title = contractPendency === "contract_missing"
+                                                        ? `Falta lançar o valor do contrato${renewal?.kind === "vencido" ? ` — vencido há ${renewal.daysOverdue} dia(s), ciclo terminou em ${renewal.cycleEnd}` : ""}. Abra o médico para cadastrar.`
+                                                        : contractPendency === "contract_depleted"
+                                                            ? "Contrato sem saldo: os plantões deste mês já estouram o teto."
+                                                            : "Consumo acima do previsto para o tempo de ciclo decorrido.";
+
+                                                    return (
+                                                        <button
+                                                            type="button"
+                                                            className={`chief-payable-bank-chip ${contractPendency === "contract_depleted" ? "contract-danger" : "contract-warn"}`}
+                                                            onClick={() => setSelectedDoctorId(doctor.doctorId)}
+                                                            title={title}
+                                                        >
+                                                            <strong>contrato</strong>
+                                                            <span>{label}</span>
+                                                        </button>
+                                                    );
+                                                })()}
                                             </div>
                                         </td>
 
