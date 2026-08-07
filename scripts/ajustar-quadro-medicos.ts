@@ -29,7 +29,7 @@
  * diferentes. Nome que não bater exatamente um médico ativo aborta o script
  * antes de qualquer escrita.
  */
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { doctors } from "@/db/schema";
 import { mergeDoctorDirectoryMetadata } from "@/modules/doctors/directory";
@@ -74,6 +74,10 @@ async function main() {
     const alvos = Object.entries(QUADRO).flatMap(([acao, nomes]) =>
         nomes.map((nome) => ({ acao: acao as Acao, nome, normalizado: normalizeDoctorName(nome) })));
 
+    // Tabela pequena: lê tudo e casa em memória. `normalized_name` no banco nem
+    // sempre é o nome completo normalizado — "Oswaldo Alves Bastos Neves" está
+    // gravado como "OSWALDO NEVES" (veio de um import com nome curto). Por isso
+    // o casamento aceita as duas formas.
     const rows = await db
         .select({
             id: doctors.id,
@@ -82,12 +86,13 @@ async function main() {
             isActive: doctors.isActive,
             metadata: doctors.metadata,
         })
-        .from(doctors)
-        .where(inArray(doctors.normalizedName, alvos.map((alvo) => alvo.normalizado)));
+        .from(doctors);
 
     const porNome = new Map<string, typeof rows>();
     for (const row of rows) {
-        porNome.set(row.normalizedName, [...(porNome.get(row.normalizedName) ?? []), row]);
+        for (const chave of new Set([normalizeDoctorName(row.fullName), row.normalizedName])) {
+            porNome.set(chave, [...(porNome.get(chave) ?? []), row]);
+        }
     }
 
     const problemas: string[] = [];
