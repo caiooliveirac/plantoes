@@ -14,14 +14,14 @@ Só um médico da lista estourou de verdade, e o valor dele está inflado em tre
 O backfill deixa o saldo de abertura **em branco** de propósito quando a planilha não
 dá um número confiável (18 contratos, ver [backfill-report.md](backfill-report.md)).
 Chutar seria pior. O alerta sabe disso e tem uma guarda
-([contract-balance-alerts.ts:126](../../modules/telegram/contract-balance-alerts.ts#L126)):
+([contract-balance-alerts.ts:127](../../modules/telegram/contract-balance-alerts.ts#L127)):
 
 ```ts
 if (row.awaitingOpeningBalance) continue;
 ```
 
 Só que a flag é calculada assim
-([contract-balance.service.ts:405](../../services/contract-balance.service.ts#L405)):
+([contract-balance.service.ts:416](../../services/contract-balance.service.ts#L416)):
 
 ```ts
 awaitingOpeningBalance: openingCents === 0 && settledConsumedCents === 0 && emAberto.amountCents === 0

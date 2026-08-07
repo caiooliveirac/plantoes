@@ -204,6 +204,11 @@ function targetComparator(
     return left.targetCode.localeCompare(right.targetCode, "pt-BR") || left.targetLabel.localeCompare(right.targetLabel, "pt-BR");
 }
 
+/** O board traz o quadro inteiro; sem plantão no mês a linha é só atalho do modal. */
+function hasMonthShifts(doctor: { cells: Array<{ shifts: unknown[] }> }) {
+    return doctor.cells.some((cell) => cell.shifts.length > 0);
+}
+
 function normalize(value: string) {
     return value
         .normalize("NFD")
@@ -492,8 +497,11 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
 
     const filterSummary = useMemo(() => {
         const visiblePayableShifts = board.payableShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
-        const readyDoctors = board.doctors.filter((doctor) => doctor.paymentStatus === "ready_for_payment").length;
-        const reviewDoctors = board.doctors.length - readyDoctors;
+        // Só quem deu plantão no mês: as linhas vazias do quadro não são
+        // "prontas para pagamento", são atalho para o modal.
+        const monthDoctors = board.doctors.filter(hasMonthShifts);
+        const readyDoctors = monthDoctors.filter((doctor) => doctor.paymentStatus === "ready_for_payment").length;
+        const reviewDoctors = monthDoctors.length - readyDoctors;
         const sdCount = visiblePayableShifts
             .filter((shift) => shift.shiftLabel === "SD")
             .reduce((sum, shift) => sum + shift.paymentUnit, 0);
@@ -656,8 +664,17 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     const maxDayLoad = useMemo(() => Math.max(...dayLoad.map((entry) => entry.count), 1), [dayLoad]);
 
     const filteredDoctors = useMemo(() => {
+        // Filtro que fala de PLANTÃO. Com qualquer um deles ligado, a lista é a
+        // dos plantões — as linhas vazias do quadro sairiam como ruído.
+        const shiftScopedFilter = shiftFilter !== "all"
+            || domainFilter !== "all"
+            || coverageFilter !== "all"
+            || targetFilter !== "all"
+            || normalizedTarget.length > 0;
+
         const doctors = board.doctors
             .map((doctor) => {
+                const doctorHasMonthShifts = hasMonthShifts(doctor);
                 const nextCells = doctor.cells.map((cell) => ({
                     ...cell,
                     shifts: cell.shifts.filter((shift) => {
@@ -739,6 +756,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
 
                 return {
                     ...doctor,
+                    hasMonthShifts: doctorHasMonthShifts,
                     cells: nextCells,
                     // Espelha o override otimista: sem isto o badge ESP/PSIQ da linha só
                     // mudava no refresh, enquanto os totais já usavam o perfil novo.
@@ -779,10 +797,21 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                     }
                 }
 
+                // Linha vazia do quadro: existe só para abrir o modal deste médico
+                // em qualquer mês. Some quando o chefe está caçando plantão.
+                if (!doctor.hasMonthShifts) {
+                    return !shiftScopedFilter;
+                }
+
                 return doctor.total > 0;
             });
 
         const sorted = [...doctors].sort((left, right) => {
+            // Quem trabalhou no mês vem primeiro, sempre — o fechamento é deles.
+            if (left.hasMonthShifts !== right.hasMonthShifts) {
+                return left.hasMonthShifts ? -1 : 1;
+            }
+
             if (sortMode === "name") {
                 return left.doctorName.localeCompare(right.doctorName, "pt-BR");
             }
@@ -2099,6 +2128,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                         className={[
                                             isDoctorAttested(doctor) ? "chief-payable-row-attested" : "",
                                             singleFunction ? "chief-payable-row-single-function" : "",
+                                            doctor.hasMonthShifts ? "" : "chief-payable-row-idle",
                                         ].filter(Boolean).join(" ") || undefined}
                                     >
                                         <td className="sticky-col doctor">
@@ -2128,18 +2158,25 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                 </div>
 
                                                 {/* Toggles Estatutário/ESP moveram para o modal do médico —
-                                                    a linha fica só com assinar + banco de horas (coluna estreita). */}
-                                                <label className={`chief-payable-attest-toggle ${isDoctorAttested(doctor) ? "on" : ""}`.trim()} title="Conferido e assinado">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={isDoctorAttested(doctor)}
-                                                        onChange={(event) => {
-                                                            void toggleDoctorAttestation(doctor.doctorId, event.target.checked);
-                                                        }}
-                                                        disabled={!canManageClosing || attestBusyDoctorId === doctor.doctorId}
-                                                    />
-                                                    <span>{isDoctorAttested(doctor) ? "✓ assinado" : "assinar"}</span>
-                                                </label>
+                                                    a linha fica só com assinar + banco de horas (coluna estreita).
+                                                    Sem plantão no mês não há produtividade para assinar. */}
+                                                {doctor.hasMonthShifts ? (
+                                                    <label className={`chief-payable-attest-toggle ${isDoctorAttested(doctor) ? "on" : ""}`.trim()} title="Conferido e assinado">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isDoctorAttested(doctor)}
+                                                            onChange={(event) => {
+                                                                void toggleDoctorAttestation(doctor.doctorId, event.target.checked);
+                                                            }}
+                                                            disabled={!canManageClosing || attestBusyDoctorId === doctor.doctorId}
+                                                        />
+                                                        <span>{isDoctorAttested(doctor) ? "✓ assinado" : "assinar"}</span>
+                                                    </label>
+                                                ) : (
+                                                    <span className="chief-payable-idle-badge" title={`Sem plantão em ${board.monthLabel} — a linha está aqui para abrir o modal (contrato, banco de horas, NF).`}>
+                                                        sem plantão no mês
+                                                    </span>
+                                                )}
 
                                                 {doctor.bankHoursMinutes != null || doctor.bankHoursSettlement ? (() => {
                                                     // Saldo do banco de horas na linha, pela régua de elegibilidade:

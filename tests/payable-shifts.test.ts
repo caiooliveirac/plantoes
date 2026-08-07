@@ -1080,3 +1080,52 @@ test("plantão extra entra no board, na coluna do dia e no total a pagar", () =>
     assert.equal(cell?.shifts.length, 1);
     assert.equal(cell?.shifts[0]?.source, "admin_extra");
 });
+
+test("médico sem plantão no mês entra como linha vazia, fora de todo o resumo", () => {
+    const payableShifts = buildPayableShiftsFromBoards([
+        makeBoard({
+            operationalDate: "2026-04-10T12:00:00.000Z",
+            shiftLabel: "SD",
+            startedAt: "2026-04-10T10:00:00.000Z",
+            endedAt: "2026-04-10T22:00:00.000Z",
+        }),
+    ]);
+
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-04",
+        monthLabel: "abril de 2026",
+        presetMonths: [{ key: "2026-04", label: "abril de 2026" }],
+        rangeStartIso: "2026-04-01T10:00:00.000Z",
+        rangeEndIso: "2026-05-01T10:00:00.000Z",
+        payableShifts,
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: buildPayableTargetOptions({ payableShifts, disabledTargets: [], uncoveredTargets: [] }),
+        attestationSegments: [],
+        allDoctorNames: [],
+        rosterDoctors: [
+            { doctorId: "doc-1", doctorName: "Quem Deu Plantao" },
+            { doctorId: "doc-ausente", doctorName: "Quem Nao Deu", displayName: "Ausente" },
+        ],
+        doctorFinancials: {
+            "doc-ausente": { contractCeilingBrl: 1000, bankHoursMinutes: 720 },
+        },
+    });
+
+    const comPlantao = board.doctors.filter((entry) => entry.cells.some((cell) => cell.shifts.length > 0));
+    const ausente = board.doctors.find((entry) => entry.doctorId === "doc-ausente");
+
+    assert.ok(ausente, "médico sem plantão precisa aparecer no board");
+    assert.equal(ausente?.displayName, "Ausente");
+    assert.equal(ausente?.total, 0);
+    assert.equal(ausente?.totalDue, 0);
+    assert.equal(ausente?.cells.every((cell) => cell.shifts.length === 0), true);
+    // O modal precisa do financeiro dele mesmo sem plantão no mês.
+    assert.equal(ausente?.contractCeilingBrl, 1000);
+    assert.equal(ausente?.bankHoursMinutes, 720);
+    // Nada do resumo pode contar a linha vazia.
+    assert.equal(board.summary.doctorCount, comPlantao.length);
+    assert.equal(board.summary.byEmploymentType.pj.doctorCount, comPlantao.length);
+    // E ela nunca duplica quem já apareceu pelos plantões.
+    assert.equal(board.doctors.filter((entry) => entry.doctorId === "doc-1").length, 1);
+});
