@@ -50,6 +50,8 @@ export interface Correcao {
     contractNumber: string;
     expectedCeilingBrl: number;
     deltaBrl?: number;
+    /** Sobrescreve o texto gravado no razão. Sem isso, vale a descrição das correções de 2026-08-04. */
+    descricao?: string;
     variantes: Variante[];
     motivo?: string;
     nota?: string;
@@ -195,7 +197,8 @@ async function main() {
             await tx.update(contractLedger)
                 .set({
                     amount: paraBrl.toFixed(2),
-                    description: "Saldo de MAIO/2026 importado da planilha"
+                    description: correcao.descricao
+                        ?? "Saldo de MAIO/2026 importado da planilha"
                         + " (corrigido em 2026-08-04 — scripts/corrigir-aberturas-seed.ts)",
                 })
                 .where(eq(contractLedger.id, ledgerId));
