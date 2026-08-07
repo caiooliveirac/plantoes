@@ -17,7 +17,7 @@ import {
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationContinuationScheduledEndAt } from "@/modules/regulation/service";
 import { dedupeOperationalIdentityLabels, describeFixedRoleTransferImpact, isOperationalRoleRemovalSentinel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
-import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveContinuationReferenceBoundary, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolveTelegramEventTime } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveContinuationReferenceBoundary, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
 
@@ -1933,4 +1933,35 @@ test("Ana Beatriz: continuidade avisada às 07:10 cobre 12h, não invade a noite
         explicitScheduledEndAt: null,
     });
     assert.equal(janelaReg.scheduledEndAt?.toISOString(), new Date("2026-07-31T19:15:00-03:00").toISOString());
+});
+
+// Janela de chegada adiantada = 3h (04:00–06:59 → SD; 16:00–18:59 → SN). É a régua
+// única: cobertura, quadro E a fala do bot (balão de chegada, botão de reversão do P)
+// derivam daqui — nenhuma camada pode ter uma janela própria de 5/17h.
+test("turno-base de chegada adiantada: 4h/16h em diante já apontam o turno entrante", () => {
+    // 04:10 SP (07:10Z) — sem turno declarado e como P: ambos viram SD.
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T07:10:00Z"), null), "SD");
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T07:10:00Z"), "P"), "SD");
+    // 16:10 SP (19:10Z) — viram SN.
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T19:10:00Z"), null), "SN");
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T19:10:00Z"), "P"), "SN");
+});
+
+test("turno-base: 3h48 antes da virada ainda é o turno corrente", () => {
+    // 03:12 SP (06:12Z) — fora da janela de 3h: segue SN (turno em curso).
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T06:12:00Z"), null), "SN");
+    // 15:12 SP (18:12Z) — segue SD.
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T18:12:00Z"), null), "SD");
+});
+
+// Dentro da janela adiantada, o rótulo IGUAL ao turno que está acabando também vira:
+// é o default do quadro/parser, não uma escolha ("SN" digitado às 04:10 é o médico do
+// SD entrante). Só o rótulo OPOSTO ao turno corrente é respeitado como declaração.
+test("turno-base: rótulo igual ao turno que acaba vira; rótulo oposto é respeitado", () => {
+    // 04:10 SP (turno corrente SN): "SN" vira SD, "SD" segue SD.
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T07:10:00Z"), "SN"), "SD");
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T07:10:00Z"), "SD"), "SD");
+    // 16:10 SP (turno corrente SD): "SD" vira SN, "SN" segue SN.
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T19:10:00Z"), "SD"), "SN");
+    assert.equal(resolvePShiftAwareBaseShiftLabel(new Date("2026-08-07T19:10:00Z"), "SN"), "SN");
 });
