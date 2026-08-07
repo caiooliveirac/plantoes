@@ -7,7 +7,7 @@ const OPERATIONAL_LOCAL_OFFSET_MINUTES = -180;
 const EARLY_ARRIVAL_WINDOW_MS = 3 * 60 * 60 * 1000;
 const NUCLEO_SD_START_HOUR = 8;
 
-function resolvePShiftAwareBaseShiftLabel(startedAt: Date, normalizedShiftLabel: string | null) {
+export function resolvePShiftAwareBaseShiftLabel(startedAt: Date, normalizedShiftLabel: string | null) {
     const window = resolveOperationalShiftWindow(startedAt);
     const msToNextBoundary = window.nextBoundaryAt.getTime() - startedAt.getTime();
     if (msToNextBoundary > 0 && msToNextBoundary <= EARLY_ARRIVAL_WINDOW_MS) {

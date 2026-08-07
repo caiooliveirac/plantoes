@@ -66,7 +66,7 @@ import {
 } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
-import { resolveContinuationReferenceBoundary, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
+import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
@@ -215,6 +215,7 @@ import {
     type ContinuityRevertDomain,
     evaluateContinuityRevert,
     parseContinuityRevertCallbackData,
+    resolveContinuityRevertTarget,
 } from "@/modules/telegram/continuity-revert";
 import {
     buildFiscalSuggestionCallbackData,
@@ -258,8 +259,13 @@ import {
     type PendingShiftChoice,
 } from "@/modules/telegram/pending-buttons";
 
-/** Botão "Foi só esta noite" para reverter um P forward noturno. Null = sem botão. */
-type ForwardContinuityPrompt = { occupancyId: string; domain: ContinuityRevertDomain } | null;
+/** Botão de reversão rápida de um P forward. Null = sem botão. */
+type ForwardContinuityPrompt = {
+    occupancyId: string;
+    domain: ContinuityRevertDomain;
+    /** Turno-base real do P: "SN" (19h→19h) ou "SD" (07h→07h, chegada adiantada). */
+    baseShiftLabel: "SD" | "SN";
+} | null;
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
 import { buildCandidatePromptReply, buildGroupCorrectionAnnouncement, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
 import { getOperationalBoard, getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
@@ -9257,17 +9263,22 @@ async function applyParsedEntry(params: {
         effectiveShiftType,
     }) && parsed.sector === "REGULATION" && !parsed.isDeparture;
 
-    // "P forward": chegada NOTURNA registrada como P que vai cobrir também o SD de
-    // amanhã. Só oferecemos o botão de reverter quando NÃO é continuidade do dia
+    // "P forward": chegada registrada como P que vai cobrir também o turno seguinte.
+    // Só oferecemos o botão de reverter quando NÃO é continuidade do dia
     // (treatedAsContinuation) — espelha a regra do pagamento: quem tem SD no dia
     // fecha às 07h e não avança (ver board.service.ts). Backward não ganha botão.
-    const isNightForwardP = effectiveShiftType === "P"
+    // O turno-base vem de resolveContinuityRevertTarget (mesma regra da cobertura),
+    // não do relógio: quem chega 06:xx declarando P é P do DIA, 07h→07h de amanhã.
+    const isForwardP = effectiveShiftType === "P"
         && !parsed.isDeparture
         && !treatedAsContinuation
-        && occupancyId !== null
-        && resolveOperationalShiftWindow(eventAt).shiftLabel === "SN";
-    const forwardContinuityPrompt: ForwardContinuityPrompt = isNightForwardP && occupancyId
-        ? { occupancyId, domain: parsed.sector === "REGULATION" ? "regulation" : "intervention" }
+        && occupancyId !== null;
+    const forwardContinuityPrompt: ForwardContinuityPrompt = isForwardP && occupancyId
+        ? {
+            occupancyId,
+            domain: parsed.sector === "REGULATION" ? "regulation" : "intervention",
+            baseShiftLabel: resolveContinuityRevertTarget(eventAt),
+        }
         : null;
 
     return {
@@ -9485,13 +9496,14 @@ async function maybeSendContinuityForwardPrompt(
 
     // O balão de sucesso logo acima já explicou o P — aqui só o dado novo (até
     // quando cobre) e a ação, sem repetir a explicação (auditoria §3.1#19).
+    const isNight = prompt.baseShiftLabel === "SN";
     await sendMessage(
         chatId,
-        "⚠️ Entendi como *P* — cobre até as *19h de amanhã*."
-        + "\nSe foi só esta noite, toque abaixo nos próximos 2 min.",
+        `⚠️ Entendi como *P* — cobre até as *${isNight ? "19h" : "7h"} de amanhã*.`
+        + `\nSe foi só ${isNight ? "esta noite" : "este dia"}, toque abaixo nos próximos 2 min.`,
         replyToMessageId,
         buildInlineKeyboard([[{
-            text: "Foi só esta noite (SN)",
+            text: isNight ? "Foi só esta noite (SN)" : "Foi só este dia (SD)",
             callback_data: buildContinuityRevertCallbackData(prompt.domain, prompt.occupancyId),
         }]]),
     );
@@ -9584,21 +9596,16 @@ async function sendSuccessReply(
         && !forceContinuation
         && (replyKind === "arrival_recorded" || replyKind === "arrival_p_recorded")
         && !useArrivalRuleCopy) {
-        // Resolve the TARGET shift, not the clock-based current shift.
-        // Pre-shift windows: 05:00–06:59 → target SD; 17:00–18:59 → target SN.
-        // Explicit shiftType from the parser always overrides clock inference.
+        // Turno-ALVO, nunca o do relógio: a janela de chegada adiantada é de 3h
+        // (04:00–06:59 → SD; 16:00–18:59 → SN), a MESMA que rules.ts usa para montar
+        // a cobertura. Esta cópia tinha uma régua própria de 5/17h — quem chegava
+        // 04:30 ou 16:30 recebia "⏱ 570min após as 19:00", medindo o atraso contra o
+        // turno que está ACABANDO. Turno explícito na mensagem continua mandando.
         const clockShiftWindow = resolveOperationalShiftWindow(eventAt);
-        const eventParts = getSaoPauloParts(eventAt);
-        const isTargetSN = parsed.shiftType === "SN"
-            || (parsed.shiftType !== "SD" && eventParts.hour >= 17 && eventParts.hour < 19);
-        const isTargetSD = parsed.shiftType === "SD"
-            || (parsed.shiftType !== "SN" && eventParts.hour >= 5 && eventParts.hour < 7);
-        let targetShiftWindow = clockShiftWindow;
-        if (isTargetSN && clockShiftWindow.shiftLabel === "SD") {
-            targetShiftWindow = resolveOperationalShiftWindow(clockShiftWindow.nextBoundaryAt);
-        } else if (isTargetSD && clockShiftWindow.shiftLabel === "SN") {
-            targetShiftWindow = resolveOperationalShiftWindow(clockShiftWindow.nextBoundaryAt);
-        }
+        const targetShiftLabel = resolvePShiftAwareBaseShiftLabel(eventAt, parsed.shiftType ?? null);
+        const targetShiftWindow = targetShiftLabel === clockShiftWindow.shiftLabel
+            ? clockShiftWindow
+            : resolveOperationalShiftWindow(clockShiftWindow.nextBoundaryAt);
 
         const shiftStartTime = targetShiftWindow.startedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
         const delayMs = eventAt.getTime() - targetShiftWindow.startedAt.getTime();
@@ -12279,19 +12286,24 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
         return { ok: true, reverted: false, outcome };
     }
 
-    // Rebaixa P -> SN: correctXxxOccupancy recalcula a janela agendada (só a noite).
+    // Rebaixa P -> turno-base real da chegada (SN para P noturno; SD para chegada
+    // adiantada de madrugada, que é P do dia). correctXxxOccupancy recalcula a
+    // janela agendada. Marcar SN aqui de forma fixa jogava a chegada das 06:xx
+    // para a noite (caso Syone BR60, 07/08/2026).
+    const target = resolveContinuityRevertTarget(occupancy!.startedAt);
     if (parsed.domain === "regulation") {
-        await correctRegulationOccupancy(parsed.occupancyId, { shiftLabel: "SN" }, null);
+        await correctRegulationOccupancy(parsed.occupancyId, { shiftLabel: target }, null);
     } else {
-        await correctInterventionOccupancy(parsed.occupancyId, { shiftLabel: "SN" }, null);
+        await correctInterventionOccupancy(parsed.occupancyId, { shiftLabel: target }, null);
     }
 
-    await answerCallbackQuery(callbackQuery.id, "Pronto! Marquei como SN — cobre só esta noite.");
+    const scope = target === "SN" ? "só esta noite" : "só este dia";
+    await answerCallbackQuery(callbackQuery.id, `Pronto! Marquei como ${target} — cobre ${scope}.`);
     if (chat && messageId) {
         await editMessageText(
             chat.id,
             messageId,
-            "✅ Corrigido para *SN (noturno)* — cobre só esta noite, sem o dia de amanhã.",
+            `✅ Corrigido para *${target === "SN" ? "SN (noturno)" : "SD (diurno)"}* — cobre ${scope}, sem o turno seguinte.`,
         );
     }
     return { ok: true, reverted: true };

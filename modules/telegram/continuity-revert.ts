@@ -8,7 +8,23 @@
 // codificação/decodificação do callback_data e o portão de validade (TTL + estado).
 // O handler com efeito (DB + Telegram) vive em modules/telegram/service.ts.
 
+import { resolvePShiftAwareBaseShiftLabel } from "@/modules/operational/rules";
+
 export type ContinuityRevertDomain = "regulation" | "intervention";
+
+/**
+ * Turno-base que um P declarado em `startedAt` realmente assume — a MESMA regra
+ * que a camada de domínio usa para montar a cobertura (rules.ts), não o relógio.
+ *
+ * Chegada adiantada (04:00–06:59) é P do DIA: cobre 07h→07h de amanhã. Só quem
+ * declara P já dentro da noite (ou adiantado para ela, 16:00–18:59) é P noturno,
+ * 19h→19h de amanhã. Antes, o botão de reversão olhava só o relógio e oferecia
+ * "Foi só esta noite (SN)" a quem chegou às 06:xx para o SD (caso Syone BR60,
+ * 07/08/2026): rótulo errado, e a reversão teria jogado a médica para a noite.
+ */
+export function resolveContinuityRevertTarget(startedAt: Date): "SD" | "SN" {
+    return resolvePShiftAwareBaseShiftLabel(startedAt, "P") === "SN" ? "SN" : "SD";
+}
 
 /** Prefixo curto do callback_data (limite de 64 bytes do Telegram). */
 export const CONTINUITY_REVERT_CALLBACK_PREFIX = "pSN";
