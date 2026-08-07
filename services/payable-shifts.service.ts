@@ -30,6 +30,7 @@ import { loadDoctorContracts } from "@/services/doctor-contracts.service";
 import { loadBankHoursSettlementsForMonth } from "@/services/bank-hours-settlements.service";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
 import { loadContractBalances } from "@/services/contract-balance.service";
+import { findPendingRenewals } from "@/lib/contracts/renewal";
 import {
     buildPaymentAllocationBoardModel,
     preparePaymentAllocationCandidateContext,
@@ -683,6 +684,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             consumedCents: row.metrics.consumedCents,
             consumedPct: row.metrics.consumedPct,
             elapsedPct: row.metrics.elapsedPct,
+            paceIndex: row.metrics.paceIndex,
             riskLevel: row.metrics.riskLevel,
             hasReliableBurnRate: row.metrics.hasReliableBurnRate,
             projectedDepletionDate: row.metrics.projectedDepletionDate?.toISOString() ?? null,
@@ -705,6 +707,13 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         list.push(summary);
         contractBalancesByDoctor.set(row.doctorId, list);
     }
+
+    // Renovação pendente pela MESMA regra dos avisos do Telegram e do briefing:
+    // contrato vencido sem sucessor, ou renovação já valendo com o razão vazio.
+    const pendingRenewalByDoctor = new Map(
+        findPendingRenewals(contractBalances.rows, contractBalances.asOf)
+            .map((renewal) => [renewal.doctorId, renewal] as const),
+    );
 
     // Saldo contratual = teto - pagamentos acumulados desde a semente até o mês.
     const contractBalanceByDoctor = new Map<string, number>();
@@ -742,6 +751,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             ? settlements.slice().sort((left, right) => left.createdAt.localeCompare(right.createdAt)).at(-1) ?? null
             : null;
         const contract = contracts.get(doctorId) ?? null;
+        const renewal = pendingRenewalByDoctor.get(doctorId) ?? null;
         doctorFinancials[doctorId] = {
             invoiceNumber: paymentMeta.get(doctorId)?.invoiceNumber ?? null,
             paymentProcessNumber: paymentMeta.get(doctorId)?.paymentProcessNumber ?? null,
@@ -752,6 +762,9 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             bankHoursOldMinutes: bankBalances.get(doctorId)?.oldMinutes ?? null,
             bankHoursRecentMinutes: bankBalances.get(doctorId)?.recentMinutes ?? null,
             contractBalances: contractBalancesByDoctor.get(doctorId) ?? [],
+            contractPendingRenewal: renewal
+                ? { kind: renewal.kind, daysOverdue: renewal.daysOverdue, cycleEnd: renewal.cycleEnd }
+                : null,
             bankHoursSettlement: lastSettlement
                 ? {
                     kind: lastSettlement.kind,

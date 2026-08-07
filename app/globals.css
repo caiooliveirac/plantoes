@@ -5295,6 +5295,62 @@ button.ops-doctor-line.shadow.clickable:hover {
     color: #ffedcf;
 }
 
+/* Defeito de contrato na linha do médico (falta lançar / ritmo / saldo). */
+.chief-payable-bank-chip.contract-warn {
+    color: #ffedcf;
+    border-color: rgba(255, 184, 77, 0.42);
+    background: rgba(99, 63, 16, 0.42);
+}
+
+.chief-payable-bank-chip.contract-danger {
+    color: #ffd2d2;
+    border-color: rgba(255, 96, 96, 0.5);
+    background: rgba(58, 12, 12, 0.6);
+}
+
+.chief-payable-bank-chip.contract-warn:hover,
+.chief-payable-bank-chip.contract-warn:focus-visible {
+    border-color: rgba(255, 198, 122, 0.7);
+    color: #fff6e6;
+}
+
+.chief-payable-bank-chip.contract-danger:hover,
+.chief-payable-bank-chip.contract-danger:focus-visible {
+    border-color: rgba(255, 130, 130, 0.8);
+    color: #ffe9e9;
+}
+
+/* Faixa de antecipação: chips de pendência sob a barra do fechamento. */
+.admin-bar-pending-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 16px;
+    background: rgba(7, 12, 20, 0.72);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.admin-bar-pending-label {
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.chief-payable-chip.good.active {
+    border-color: rgba(35, 201, 134, 0.62);
+    color: #c7ffe6;
+    background: rgba(13, 48, 34, 0.55);
+}
+
+.chief-payable-chip.danger.active {
+    border-color: rgba(255, 96, 96, 0.6);
+    color: #ffd2d2;
+    background: rgba(58, 12, 12, 0.6);
+}
+
 /* Card de atestação dentro do modal do médico. */
 .chief-payable-attest-card {
     margin-top: 16px;
