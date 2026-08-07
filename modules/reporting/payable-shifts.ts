@@ -917,6 +917,12 @@ export function buildChiefPayableBoard(params: {
     targetOptions: PayableTargetOption[];
     attestationSegments: AttestationSegment[];
     allDoctorNames: string[];
+    /**
+     * Quadro de médicos ativos. Quem não deu plantão no mês entra como linha
+     * vazia — o fechamento é a porta de entrada do modal (contrato, banco de
+     * horas, NF) e trocar de mês só para achar o médico era o atrito.
+     */
+    rosterDoctors?: Array<{ doctorId: string; doctorName: string; displayName?: string | null }>;
     doctorPaymentProfiles?: Record<string, DoctorPaymentProfile>;
     doctorEmploymentTypes?: Record<string, DoctorEmploymentType>;
     doctorAttestations?: Record<string, string>;
@@ -1066,6 +1072,47 @@ export function buildChiefPayableBoard(params: {
         } satisfies ChiefPayableDoctorRow;
     }).sort((left, right) => left.doctorName.localeCompare(right.doctorName, "pt-BR"));
 
+    // Linhas vazias do quadro: entram DEPOIS de todo o resumo, para não contarem
+    // como médico do mês nem mexerem em unidade, valor ou pendência.
+    const rosterOnlyDoctors: ChiefPayableDoctorRow[] = (params.rosterDoctors ?? [])
+        .filter((doctor) => !grouped.has(doctor.doctorId))
+        .map((doctor) => {
+            const financials = params.doctorFinancials?.[doctor.doctorId];
+            return {
+                doctorId: doctor.doctorId,
+                doctorName: doctor.doctorName,
+                displayName: doctor.displayName ?? null,
+                paymentStatus: "ready_for_payment",
+                totalSD: 0,
+                totalSN: 0,
+                total: 0,
+                totalSDDue: 0,
+                totalSNDue: 0,
+                totalDue: 0,
+                weekdayShiftCount: 0,
+                weekendShiftCount: 0,
+                paymentProfile: params.doctorPaymentProfiles?.[doctor.doctorId] ?? "generalist",
+                employmentType: params.doctorEmploymentTypes?.[doctor.doctorId] ?? "pj",
+                pendingCount: 0,
+                attestedAt: params.doctorAttestations?.[doctor.doctorId] ?? null,
+                invoiceNumber: financials?.invoiceNumber ?? null,
+                paymentProcessNumber: financials?.paymentProcessNumber ?? null,
+                contractCeilingBrl: financials?.contractCeilingBrl ?? null,
+                contractSeedMonth: financials?.contractSeedMonth ?? null,
+                contractBalanceBrl: financials?.contractBalanceBrl ?? null,
+                contractBalances: financials?.contractBalances ?? [],
+                contractPendingRenewal: financials?.contractPendingRenewal ?? null,
+                bankHoursMinutes: financials?.bankHoursMinutes ?? null,
+                bankHoursOldMinutes: financials?.bankHoursOldMinutes ?? null,
+                bankHoursRecentMinutes: financials?.bankHoursRecentMinutes ?? null,
+                bankHoursSettlement: financials?.bankHoursSettlement ?? null,
+                usaShiftCount: 0,
+                cruShiftCount: 0,
+                cells: days.map((day) => ({ day, shifts: [] })),
+            } satisfies ChiefPayableDoctorRow;
+        })
+        .sort((left, right) => left.doctorName.localeCompare(right.doctorName, "pt-BR"));
+
     const byEmploymentType: Record<DoctorEmploymentType, {
         doctorCount: number;
         payableShiftCount: number;
@@ -1106,7 +1153,7 @@ export function buildChiefPayableBoard(params: {
             byEmploymentType,
         },
         targetOptions: params.targetOptions,
-        doctors,
+        doctors: [...doctors, ...rosterOnlyDoctors],
         payableShifts: params.payableShifts,
         disabledTargets: params.disabledTargets,
         uncoveredTargets: params.uncoveredTargets,

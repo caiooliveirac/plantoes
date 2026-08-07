@@ -5197,6 +5197,30 @@ button.ops-doctor-line.shadow.clickable:hover {
     background: rgba(74, 51, 20, 0.98);
 }
 
+/* Médico sem plantão no mês: a linha existe só como atalho para o modal. */
+.chief-payable-row-idle td {
+    opacity: 0.55;
+}
+
+.chief-payable-row-idle:hover td,
+.chief-payable-row-idle:focus-within td {
+    opacity: 1;
+}
+
+.chief-payable-idle-badge {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 1px dashed rgba(145, 170, 205, 0.32);
+    color: var(--muted);
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
 .chief-payable-single-function-badge {
     display: inline-flex;
     align-items: center;

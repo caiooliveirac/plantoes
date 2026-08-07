@@ -44,6 +44,12 @@ function buildMainSheet(workbook: ExcelJS.Workbook, board: ChiefPayableBoardMode
     setHeaderStyle(header);
 
     for (const doctor of board.doctors) {
+        // O board carrega o quadro inteiro para a tela; a planilha do mês só
+        // quer quem deu plantão.
+        if (doctor.cells.every((cell) => cell.shifts.length === 0)) {
+            continue;
+        }
+
         const encodedDays = doctor.cells.map((cell) => encodeCellShifts(cell.shifts));
         const row = sheet.addRow([
             doctor.doctorName,

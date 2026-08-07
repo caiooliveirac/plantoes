@@ -41,6 +41,20 @@ export interface PendencyDoctorInput {
     bankHoursMinutes?: number | null;
     contractBalances?: PendencyContractInput[];
     contractPendingRenewal?: { kind: RenewalKind } | null;
+    /** "estatutario" é remunerado fora deste sistema. */
+    employmentType?: "pj" | "estatutario" | null;
+    paymentProfile?: "generalist" | "specialist" | "psychiatry" | null;
+}
+
+/**
+ * Estatutário e psiquiatria ficam FORA do acompanhamento de saldo contratual:
+ * o pagamento deles corre por outra via e a coordenação não segue teto nem ciclo.
+ * Sem contrato para acompanhar, tudo que a tela mostrasse sobre saldo — pendência,
+ * ritmo, projeção — seria invenção. O psiquiatra continua com o cálculo de valor
+ * por plantão (tarifa própria); o que some é só a parte de contrato.
+ */
+export function tracksContractBalance(doctor: PendencyDoctorInput): boolean {
+    return doctor.employmentType !== "estatutario" && doctor.paymentProfile !== "psychiatry";
 }
 
 export function resolveDoctorPendencies(doctor: PendencyDoctorInput): PaymentClosingPendency[] {
@@ -55,6 +69,10 @@ export function resolveDoctorPendencies(doctor: PendencyDoctorInput): PaymentClo
         pendencies.push("bank_bonus");
     } else if (action.direction === "penalty") {
         pendencies.push("bank_penalty");
+    }
+
+    if (!tracksContractBalance(doctor)) {
+        return pendencies;
     }
 
     const contracts = doctor.contractBalances ?? [];

@@ -17,8 +17,8 @@ const ANCORAS: { arquivo: string; linha: number; contem: string }[] = [
     { arquivo: "scripts/backfill-saldo-contrato.ts", linha: 321, contem: 'category === "psiquiatria"' },
     { arquivo: "scripts/backfill-saldo-contrato.ts", linha: 384, contem: "firstLegible" },
     { arquivo: "scripts/backfill-saldo-contrato.ts", linha: 410, contem: "sawReset" },
-    { arquivo: "services/contract-balance.service.ts", linha: 405, contem: "awaitingOpeningBalance" },
-    { arquivo: "modules/telegram/contract-balance-alerts.ts", linha: 126, contem: "awaitingOpeningBalance" },
+    { arquivo: "services/contract-balance.service.ts", linha: 416, contem: "awaitingOpeningBalance" },
+    { arquivo: "modules/telegram/contract-balance-alerts.ts", linha: 127, contem: "awaitingOpeningBalance" },
 ];
 
 test("cada âncora citada nos docs mostra mesmo o símbolo que promete", () => {

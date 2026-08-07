@@ -96,6 +96,28 @@ describe("pendências do fechamento", () => {
         );
     });
 
+    it("estatutário e psiquiatra ficam fora do acompanhamento de contrato", () => {
+        const semContrato = { contractBalances: [], contractPendingRenewal: { kind: "vencido" as const } };
+        assert.deepEqual(resolveDoctorPendencies({ ...semContrato, employmentType: "estatutario" }), []);
+        assert.deepEqual(resolveDoctorPendencies({ ...semContrato, paymentProfile: "psychiatry" }), []);
+        // O PJ generalista na mesma situação continua sendo cobrado.
+        assert.deepEqual(
+            resolveDoctorPendencies({ ...semContrato, employmentType: "pj", paymentProfile: "generalist" }),
+            ["contract_missing"],
+        );
+    });
+
+    it("banco de horas continua valendo para estatutário e psiquiatra", () => {
+        assert.deepEqual(
+            resolveDoctorPendencies({ contractBalances: [], employmentType: "estatutario", bankHoursRecentMinutes: 720 }),
+            ["bank_bonus"],
+        );
+        assert.deepEqual(
+            resolveDoctorPendencies({ contractBalances: [], paymentProfile: "psychiatry", bankHoursRecentMinutes: -800 }),
+            ["bank_penalty"],
+        );
+    });
+
     it("banco e contrato acumulam no mesmo médico", () => {
         const pendencias = resolveDoctorPendencies(medico({
             bankHoursRecentMinutes: 900,

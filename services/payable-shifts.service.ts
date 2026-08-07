@@ -589,6 +589,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             .select({
                 id: doctors.id,
                 fullName: doctors.fullName,
+                displayName: doctors.displayName,
                 metadata: doctors.metadata,
             })
             .from(doctors)
@@ -790,6 +791,13 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         targetOptions,
         attestationSegments,
         allDoctorNames: visibleDoctorRows.map((row) => row.fullName),
+        // Quadro inteiro de médicos ativos: quem não deu plantão no mês aparece
+        // como linha vazia, só para o modal ficar a um clique em qualquer mês.
+        rosterDoctors: visibleDoctorRows.map((row) => ({
+            doctorId: row.id,
+            doctorName: row.fullName,
+            displayName: row.displayName,
+        })),
         doctorPaymentProfiles,
         doctorEmploymentTypes,
         doctorAttestations,

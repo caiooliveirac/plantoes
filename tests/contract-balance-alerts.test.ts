@@ -33,6 +33,8 @@ function row(overrides: Partial<ContractBalanceRow> = {}, inputOverrides: Partia
         contractNumber: "123/2025",
         companyName: null,
         category: "generalista",
+        paymentProfile: "generalist",
+        employmentType: "pj",
         weeklyHours: 24,
         cycleStart: input.cycleStart.toISOString().slice(0, 10),
         cycleEnd: input.cycleEnd.toISOString().slice(0, 10),
