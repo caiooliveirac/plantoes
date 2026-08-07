@@ -9,7 +9,7 @@ import { ContractBalanceCard } from "@/components/payment-closing/contract-balan
 import { fetchComLimite } from "@/lib/fetch-com-limite";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
-import { resolveDoctorPendencies, type PaymentClosingPendency } from "@/modules/reporting/payment-closing-pendencies";
+import { resolveDoctorPendencies, tracksContractBalance, type PaymentClosingPendency } from "@/modules/reporting/payment-closing-pendencies";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
 
 interface Props {
@@ -394,6 +394,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setMetaFeedback(null);
         setContractError(null);
         setBankError(null);
+        // O bloqueio por estouro é do médico anterior: quem não mostra card de
+        // saldo (estatutário, psiquiatra, sem contrato) nunca o desligaria.
+        setOverrunBlocked(false);
         // Semeado só ao (re)abrir o modal de um médico — não a cada refresh do board,
         // para não apagar o feedback de "salvos" nem o que o admin está digitando.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -429,10 +432,17 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     const pendenciesByDoctor = useMemo(() => {
         const map = new Map<string, Set<PaymentClosingPendency>>();
         for (const doctor of board.doctors) {
-            map.set(doctor.doctorId, new Set(resolveDoctorPendencies(doctor)));
+            // Perfil e vínculo saem dos overrides otimistas: marcar PSIQ ou
+            // estatutário tira o médico do acompanhamento de contrato na hora,
+            // sem esperar o refresh do board.
+            map.set(doctor.doctorId, new Set(resolveDoctorPendencies({
+                ...doctor,
+                paymentProfile: doctorProfileOverrides[doctor.doctorId] ?? doctor.paymentProfile ?? "generalist",
+                employmentType: doctorEmploymentTypeOverrides[doctor.doctorId] ?? doctor.employmentType ?? "pj",
+            })));
         }
         return map;
-    }, [board.doctors]);
+    }, [board.doctors, doctorProfileOverrides, doctorEmploymentTypeOverrides]);
 
     const pendencyTotals = useMemo(() => {
         const counts = new Map<PaymentClosingPendency, number>();
@@ -2623,7 +2633,19 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     {metaFeedback ? <p className="chief-payable-extra-feedback ok">{metaFeedback}</p> : null}
                                 </div>
 
-                                {(selectedDoctor.contractBalances?.length ?? 0) > 0 ? (
+                                {!tracksContractBalance(selectedDoctor) ? (
+                                    // Estatutário e psiquiatria não têm teto acompanhado aqui: sem contrato,
+                                    // qualquer saldo/projeção na tela seria inventado. O cálculo de valor por
+                                    // plantão (tarifa própria do psiquiatra) continua acima, intacto.
+                                    <article className="chief-payable-modal-card">
+                                        <span>Saldo contratual</span>
+                                        <small>
+                                            {selectedDoctor.employmentType === "estatutario"
+                                                ? "Estatutário: remunerado fora deste sistema, sem teto de contrato acompanhado."
+                                                : "Psiquiatria: pagamento por fora do teto de contrato — sem saldo acompanhado aqui."}
+                                        </small>
+                                    </article>
+                                ) : (selectedDoctor.contractBalances?.length ?? 0) > 0 ? (
                                     <ContractBalanceCard
                                         contracts={selectedDoctor.contractBalances ?? []}
                                         draft={{
