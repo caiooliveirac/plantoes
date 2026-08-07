@@ -15,8 +15,12 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
-import { hasDatabaseUrl } from "@/db";
+import { sql } from "drizzle-orm";
+
+import { getDb, hasDatabaseUrl } from "@/db";
+import { doctors } from "@/db/schema";
 import { findPendingRenewals } from "@/lib/contracts/renewal";
+import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { buildContractAlerts, isImmediateAlert } from "@/modules/telegram/contract-balance-alerts";
 import { listInterventionBoard } from "@/services/board.service";
 import { loadContractBalances } from "@/services/contract-balance.service";
@@ -62,12 +66,29 @@ export async function GET(request: NextRequest) {
         .filter((row) => row.status === "disabled")
         .map((row) => ({ code: row.baseCode, label: row.baseLabel, motivo: row.disabledReason ?? null }));
 
+    // O nome curto do painel (display_name), que é como o coordenador conhece
+    // cada médico. `loadContractBalances` só traz o full_name — em vez de mexer
+    // no serviço do saldo por causa de rótulo, o de-para vem numa consulta à
+    // parte. Os dois nomes saem no payload: o curto para mostrar, o completo
+    // para o secretário reconhecer quem foi citado na pergunta.
+    const nomeCurto = new Map<string, string>();
+    if (rows.length > 0) {
+        const doctorRows = await getDb()
+            .select({ id: doctors.id, fullName: doctors.fullName, displayName: doctors.displayName })
+            .from(doctors)
+            .where(sql`${doctors.id} = any(${sql.raw(`array[${[...new Set(rows.map((row) => `'${row.doctorId}'`))].join(",")}]::uuid[]`)})`);
+        for (const doctor of doctorRows) {
+            nomeCurto.set(doctor.id, formatDoctorSurfaceName(doctor));
+        }
+    }
+
     const alerts = buildContractAlerts(rows, asOf).filter(isImmediateAlert);
     const porContrato = new Map(rows.map((row) => [row.contractId, row]));
     const contrato = (contractId: string) => {
         const row = porContrato.get(contractId)!;
         return {
             doctorName: row.doctorName,
+            displayName: nomeCurto.get(row.doctorId) ?? row.doctorName,
             contractNumber: row.contractNumber,
             balanceCents: row.metrics.balanceCents,
             cycleEnd: row.cycleEnd,
@@ -90,6 +111,7 @@ export async function GET(request: NextRequest) {
     // responde de lá: refazer a apuração a cada pergunta custa segundos.
     const medicos = rows.map((row) => ({
         doctorName: row.doctorName,
+        displayName: nomeCurto.get(row.doctorId) ?? row.doctorName,
         contractNumber: row.contractNumber,
         cycleEnd: row.cycleEnd,
         ceilingCents: row.ceilingCents,
@@ -122,7 +144,10 @@ export async function GET(request: NextRequest) {
                     projectedDepletionDate:
                         porContrato.get(alert.contractId)!.metrics.projectedDepletionDate?.toISOString().slice(0, 10) ?? null,
                 })),
-            renovacaoPendente: findPendingRenewals(rows, asOf),
+            renovacaoPendente: findPendingRenewals(rows, asOf).map((item) => ({
+                ...item,
+                displayName: nomeCurto.get(item.doctorId) ?? item.doctorName,
+            })),
         },
     });
 }
