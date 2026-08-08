@@ -2,6 +2,7 @@
  * Briefing operacional para o secretário (app `tom`), que entrega no WhatsApp.
  *
  * Só LEITURA, e nenhuma regra nova: o furo de base vem de listInterventionBoard
+ * e o da regulação de listRegulationBoard
  * (mesmo read model do quadro ao vivo), o risco de saldo vem de
  * buildContractAlerts e a pendência de renovação de findPendingRenewals. Se um
  * número aqui divergir do que a tela mostra, o defeito é da origem — este
@@ -12,7 +13,6 @@
  * Autenticação: header `x-briefing-token` contra BRIEFING_TOKEN. Sem a variável
  * a rota responde 503 — endpoint aberto com dado de contrato de médico, não.
  */
-import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { sql } from "drizzle-orm";
@@ -20,33 +20,20 @@ import { sql } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
 import { loadBriefingBankHours } from "@/lib/briefing/bank-hours";
+import { guardBriefingRequest } from "@/lib/briefing/token";
 import { findPendingRenewals } from "@/lib/contracts/renewal";
 import { tracksContractBalance } from "@/modules/reporting/payment-closing-pendencies";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { buildContractAlerts, isImmediateAlert } from "@/modules/telegram/contract-balance-alerts";
-import { listInterventionBoard } from "@/services/board.service";
+import { listInterventionBoard, listRegulationBoard } from "@/services/board.service";
 import { loadContractBalances } from "@/services/contract-balance.service";
 
 export const dynamic = "force-dynamic";
 
-function tokenOk(received: string, expected: string): boolean {
-    const a = Buffer.from(received);
-    const b = Buffer.from(expected);
-    // timingSafeEqual exige o mesmo tamanho; comparar antes já vaza o tamanho,
-    // e tamanho de token não é o segredo.
-    return a.length === b.length && timingSafeEqual(a, b);
-}
-
 export async function GET(request: NextRequest) {
-    const expected = process.env.BRIEFING_TOKEN?.trim();
-    if (!expected) {
-        return NextResponse.json({ error: "BRIEFING_TOKEN is not configured." }, { status: 503 });
-    }
-    if (!tokenOk(request.headers.get("x-briefing-token") ?? "", expected)) {
-        return NextResponse.json({ error: "Invalid briefing token." }, { status: 401 });
-    }
-    if (!hasDatabaseUrl()) {
-        return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
+    const recusa = guardBriefingRequest(request);
+    if (recusa) {
+        return recusa;
     }
 
     const asOf = new Date();
@@ -55,8 +42,12 @@ export async function GET(request: NextRequest) {
     // pagar a apuração inteira para responder "quem está na IT30" é desperdício.
     const soBases = request.nextUrl.searchParams.get("parte") === "bases";
 
-    const [board, saldos, bancoDeHoras] = await Promise.all([
+    const [board, regulacao, saldos, bancoDeHoras] = await Promise.all([
         listInterventionBoard(),
+        // A regulação sai junto do quadro, inclusive em ?parte=bases: ramal
+        // descoberto é furo de agora, mesma urgência da base sem médico. Mesmo
+        // read model da tela ao vivo — nenhuma regra nova aqui.
+        listRegulationBoard(),
         soBases ? Promise.resolve({ rows: [] }) : loadContractBalances({ asOf }),
         soBases ? Promise.resolve(null) : loadBriefingBankHours(),
     ]);
@@ -111,6 +102,30 @@ export async function GET(request: NextRequest) {
             scheduledEndAt: row.scheduledEndAt,
         }));
 
+    // A regulação, na mesma forma das bases — quem entrega não precisa de dois
+    // formatos. Aqui `code` é o RAMAL, que é como o coordenador chama o posto, e
+    // `roleLabel` é a função (CP, MRV, RECIP, COI, IES, RMT, PSIQ, PIAM): é o que
+    // responde "quem está no COI" e "quem está remoto". Sem função lançada cai
+    // no `defaultRole` do posto — o painel mostra o mesmo.
+    const postos = {
+        ocupados: regulacao
+            .filter((row) => row.status === "active")
+            .map((row) => ({
+                code: row.postCode,
+                label: row.postLabel,
+                doctorName: row.displayName ?? row.doctorName,
+                shiftLabel: row.shiftLabel,
+                roleLabel: row.roleLabel ?? row.defaultRole,
+                scheduledEndAt: row.scheduledEndAt,
+            })),
+        semMedico: regulacao
+            .filter((row) => row.status === "waiting")
+            .map((row) => ({ code: row.postCode, label: row.postLabel, roleLabel: row.defaultRole })),
+        desativados: regulacao
+            .filter((row) => row.status === "disabled")
+            .map((row) => ({ code: row.postCode, label: row.postLabel, motivo: row.disabledReason ?? null })),
+    };
+
     // Um registro por contrato ativo, com o que responde "quanto o fulano ainda
     // pode dar de plantão". Sai inteiro porque quem consome guarda em cache e
     // responde de lá: refazer a apuração a cada pergunta custa segundos.
@@ -137,6 +152,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
         generatedAt: asOf.toISOString(),
         bases: { semMedico, desativadas, ocupadas },
+        postos,
         bancoDeHoras,
         medicos,
         contratos: {
