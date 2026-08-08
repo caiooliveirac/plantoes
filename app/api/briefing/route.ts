@@ -13,7 +13,6 @@
  * Autenticação: header `x-briefing-token` contra BRIEFING_TOKEN. Sem a variável
  * a rota responde 503 — endpoint aberto com dado de contrato de médico, não.
  */
-import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { sql } from "drizzle-orm";
@@ -21,6 +20,7 @@ import { sql } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
 import { loadBriefingBankHours } from "@/lib/briefing/bank-hours";
+import { guardBriefingRequest } from "@/lib/briefing/token";
 import { findPendingRenewals } from "@/lib/contracts/renewal";
 import { tracksContractBalance } from "@/modules/reporting/payment-closing-pendencies";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
@@ -30,24 +30,10 @@ import { loadContractBalances } from "@/services/contract-balance.service";
 
 export const dynamic = "force-dynamic";
 
-function tokenOk(received: string, expected: string): boolean {
-    const a = Buffer.from(received);
-    const b = Buffer.from(expected);
-    // timingSafeEqual exige o mesmo tamanho; comparar antes já vaza o tamanho,
-    // e tamanho de token não é o segredo.
-    return a.length === b.length && timingSafeEqual(a, b);
-}
-
 export async function GET(request: NextRequest) {
-    const expected = process.env.BRIEFING_TOKEN?.trim();
-    if (!expected) {
-        return NextResponse.json({ error: "BRIEFING_TOKEN is not configured." }, { status: 503 });
-    }
-    if (!tokenOk(request.headers.get("x-briefing-token") ?? "", expected)) {
-        return NextResponse.json({ error: "Invalid briefing token." }, { status: 401 });
-    }
-    if (!hasDatabaseUrl()) {
-        return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
+    const recusa = guardBriefingRequest(request);
+    if (recusa) {
+        return recusa;
     }
 
     const asOf = new Date();
