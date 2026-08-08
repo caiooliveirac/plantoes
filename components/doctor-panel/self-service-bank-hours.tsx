@@ -9,68 +9,114 @@ export interface SelfServiceShiftOption {
     label: string;
 }
 
+export interface SelfDeclaredExtra {
+    settlementId: string;
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+}
+
 interface Props {
     medicoId: string;
     monthKey: string;
     token: string | null;
-    /** Saldo elegível ≥ +12h (ou chefia 2031, que registra sem gate). */
+    /** Saldo elegível ≥ +12h (ou liberado a declarar, que registra sem gate). */
     canBonus: boolean;
     /** Saldo elegível ≤ -12h. */
     canPenalty: boolean;
     /** Plantões reais do mês, para a retirada escolher um. */
     shiftOptions: SelfServiceShiftOption[];
+    /** Extras que ele mesmo declarou no mês — pode trocar dia/turno ou tirar. */
+    declaredExtras: SelfDeclaredExtra[];
+}
+
+function formatDia(operationalDate: string) {
+    return operationalDate.split("-").reverse().slice(0, 2).join("/");
 }
 
 /**
- * Autoatendimento do banco de horas na área do médico. Sem texto explicativo,
- * de propósito: um campo de data (verde) e/ou um seletor de plantão (vermelho).
+ * Autoatendimento do banco de horas na área do médico: um campo de data + turno
+ * (verde) e/ou um seletor de plantão (vermelho), mais a lista do que ele mesmo
+ * declarou no mês — que ele pode remarcar ou tirar enquanto o mês está aberto.
  * Auditoria e revisão vivem nas telas do coordenador.
  */
-export function SelfServiceBankHours({ medicoId, monthKey, token, canBonus, canPenalty, shiftOptions }: Props) {
+export function SelfServiceBankHours({
+    medicoId,
+    monthKey,
+    token,
+    canBonus,
+    canPenalty,
+    shiftOptions,
+    declaredExtras,
+}: Props) {
     const router = useRouter();
     const [bonusDate, setBonusDate] = useState("");
+    const [bonusShift, setBonusShift] = useState<"SD" | "SN">("SD");
     const [penaltyPick, setPenaltyPick] = useState("");
-    const [busy, setBusy] = useState<"bonus" | "penalty" | null>(null);
+    const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [editing, setEditing] = useState<string | null>(null);
+    const [editDate, setEditDate] = useState("");
+    const [editShift, setEditShift] = useState<"SD" | "SN">("SD");
 
-    if (!canBonus && !canPenalty) return null;
+    if (!canBonus && !canPenalty && declaredExtras.length === 0) return null;
 
     const [ano, mes] = monthKey.split("-");
     const minDate = `${monthKey}-01`;
     const maxDate = `${monthKey}-${String(new Date(Number(ano), Number(mes), 0).getDate()).padStart(2, "0")}`;
 
-    async function submit(action: "bonus" | "penalty") {
-        const operationalDate = action === "bonus" ? bonusDate : penaltyPick.split("|")[0];
-        const shiftLabel = action === "penalty" ? penaltyPick.split("|")[1] : undefined;
-        if (!operationalDate) return;
-        if (!window.confirm(`Confirmar dia ${operationalDate.split("-").reverse().join("/")}?`)) return;
-
-        setBusy(action);
+    async function call(
+        method: "POST" | "PATCH" | "DELETE",
+        payload: Record<string, unknown>,
+        busyKey: string,
+    ): Promise<boolean> {
+        setBusy(busyKey);
         setError(null);
         try {
             const response = await fetch("/api/medico/bank-hours-self-service", {
-                method: "POST",
+                method,
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    medicoId,
-                    monthKey,
-                    action,
-                    operationalDate,
-                    ...(shiftLabel ? { shiftLabel } : {}),
-                    ...(token ? { t: token } : {}),
-                }),
+                body: JSON.stringify({ medicoId, ...payload, ...(token ? { t: token } : {}) }),
             });
             const body = await response.json().catch(() => null) as { error?: string } | null;
             if (!response.ok) {
-                setError(body?.error ?? "Não foi possível registrar.");
-                return;
+                setError(body?.error ?? "Não foi possível concluir.");
+                return false;
             }
-            setBonusDate("");
-            setPenaltyPick("");
             router.refresh();
+            return true;
         } finally {
             setBusy(null);
         }
+    }
+
+    async function submit(action: "bonus" | "penalty") {
+        const operationalDate = action === "bonus" ? bonusDate : penaltyPick.split("|")[0];
+        const shiftLabel = action === "bonus" ? bonusShift : penaltyPick.split("|")[1];
+        if (!operationalDate) return;
+        if (!window.confirm(`Confirmar dia ${formatDia(operationalDate)} (${shiftLabel})?`)) return;
+
+        const ok = await call("POST", { monthKey, action, operationalDate, shiftLabel }, action);
+        if (ok) {
+            setBonusDate("");
+            setPenaltyPick("");
+        }
+    }
+
+    async function saveEdit(settlementId: string) {
+        if (!editDate) return;
+        const ok = await call("PATCH", {
+            settlementId,
+            operationalDate: editDate,
+            shiftLabel: editShift,
+        }, settlementId);
+        if (ok) setEditing(null);
+    }
+
+    async function remove(extra: SelfDeclaredExtra) {
+        if (!window.confirm(`Tirar o plantão extra de ${formatDia(extra.operationalDate)} (${extra.shiftLabel})?`)) {
+            return;
+        }
+        await call("DELETE", { settlementId: extra.settlementId }, extra.settlementId);
     }
 
     return (
@@ -86,6 +132,14 @@ export function SelfServiceBankHours({ medicoId, monthKey, token, canBonus, canP
                             onChange={(event) => setBonusDate(event.target.value)}
                             aria-label="Data do plantão extra"
                         />
+                        <select
+                            value={bonusShift}
+                            onChange={(event) => setBonusShift(event.target.value === "SN" ? "SN" : "SD")}
+                            aria-label="Turno do plantão extra"
+                        >
+                            <option value="SD">Diurno (SD)</option>
+                            <option value="SN">Noturno (SN)</option>
+                        </select>
                         <button
                             type="button"
                             className="panel-action-btn bonus"
@@ -122,6 +176,82 @@ export function SelfServiceBankHours({ medicoId, monthKey, token, canBonus, canP
                         >
                             {busy === "penalty" ? "Retirando…" : "Retirar este plantão (12h)"}
                         </button>
+                    </div>
+                ) : null}
+
+                {declaredExtras.length > 0 ? (
+                    <div className="panel-declared-extras">
+                        <p className="panel-declared-extras-head">
+                            Plantões extra que você declarou neste mês
+                        </p>
+                        <ul>
+                            {declaredExtras.map((extra) => (
+                                <li key={extra.settlementId}>
+                                    {editing === extra.settlementId ? (
+                                        <div className="panel-self-service-row">
+                                            <input
+                                                type="date"
+                                                value={editDate}
+                                                min={minDate}
+                                                max={maxDate}
+                                                onChange={(event) => setEditDate(event.target.value)}
+                                                aria-label="Nova data do plantão extra"
+                                            />
+                                            <select
+                                                value={editShift}
+                                                onChange={(event) => setEditShift(event.target.value === "SN" ? "SN" : "SD")}
+                                                aria-label="Novo turno do plantão extra"
+                                            >
+                                                <option value="SD">Diurno (SD)</option>
+                                                <option value="SN">Noturno (SN)</option>
+                                            </select>
+                                            <button
+                                                type="button"
+                                                className="panel-action-btn"
+                                                disabled={!editDate || busy !== null}
+                                                onClick={() => void saveEdit(extra.settlementId)}
+                                            >
+                                                {busy === extra.settlementId ? "Salvando…" : "Salvar"}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="panel-link-btn"
+                                                onClick={() => setEditing(null)}
+                                            >
+                                                Cancelar
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <span className="panel-declared-extra-when">
+                                                {formatDia(extra.operationalDate)} · {extra.shiftLabel}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                className="panel-link-btn"
+                                                disabled={busy !== null}
+                                                onClick={() => {
+                                                    setEditing(extra.settlementId);
+                                                    setEditDate(extra.operationalDate);
+                                                    setEditShift(extra.shiftLabel);
+                                                    setError(null);
+                                                }}
+                                            >
+                                                Trocar dia/turno
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="panel-link-btn danger"
+                                                disabled={busy !== null}
+                                                onClick={() => void remove(extra)}
+                                            >
+                                                Tirar
+                                            </button>
+                                        </>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
                     </div>
                 ) : null}
 

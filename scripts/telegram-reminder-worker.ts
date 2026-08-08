@@ -6,6 +6,7 @@ import { sendBankHoursPendingCycle } from "@/modules/telegram/bank-hours-pending
 import { sendContractBalanceCycle } from "@/modules/telegram/contract-balance-alerts";
 import { sendTelegramPaymentDigestCycle } from "@/modules/telegram/payment-digest";
 import { sendTelegramReminderCycle } from "@/modules/telegram/reminders";
+import { sendSelfDeclaredExtraCycle } from "@/modules/telegram/self-declared-extra-alerts";
 import { syncTelegramAdminCommandMenus } from "@/modules/telegram/admin-menu";
 import { expireResidenteOccupancies } from "@/modules/operational/residente-auto-close";
 
@@ -19,7 +20,16 @@ async function runCycle() {
     running = true;
     try {
         const referenceDate = new Date();
-        const [reminders, mealBreak, mealBreakNudges, paymentDigest, residenteAutoClose, contractBalance, bankHoursPending] = await Promise.all([
+        const [
+            reminders,
+            mealBreak,
+            mealBreakNudges,
+            paymentDigest,
+            residenteAutoClose,
+            contractBalance,
+            bankHoursPending,
+            selfDeclaredExtra,
+        ] = await Promise.all([
             sendTelegramReminderCycle(referenceDate),
             sendTelegramMealBreakCycle(referenceDate),
             sendTelegramMealBreakTurnNudges(referenceDate),
@@ -29,11 +39,15 @@ async function runCycle() {
             sendContractBalanceCycle(referenceDate),
             // Resumo diário das pendências de ±12h do banco de horas.
             sendBankHoursPendingCycle(referenceDate),
+            // Extra declarado que caiu em turno depois trabalhado: remarca e avisa.
+            sendSelfDeclaredExtraCycle(referenceDate),
         ]);
         const evaluated = reminders.evaluated + mealBreak.evaluated + mealBreakNudges.evaluated
-            + paymentDigest.evaluated + contractBalance.evaluated + bankHoursPending.evaluated;
+            + paymentDigest.evaluated + contractBalance.evaluated + bankHoursPending.evaluated
+            + selfDeclaredExtra.evaluated;
         const sent = reminders.sent + mealBreak.sent + mealBreakNudges.sent
-            + paymentDigest.sent + contractBalance.sent + bankHoursPending.sent;
+            + paymentDigest.sent + contractBalance.sent + bankHoursPending.sent
+            + selfDeclaredExtra.sent;
         if (evaluated > 0 || sent > 0) {
             console.log(`[telegram-reminder-worker] evaluated=${evaluated} sent=${sent}`);
         }

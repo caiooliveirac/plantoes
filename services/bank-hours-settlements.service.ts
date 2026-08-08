@@ -1,4 +1,4 @@
-import { eq, like, sql } from "drizzle-orm";
+import { and, eq, like, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { adminExtraShifts, bankHoursSettlements, users } from "@/db/schema";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
@@ -26,6 +26,19 @@ export interface BankHoursSettlementRow {
 
 /** Marcador (em notes) da retirada de um plantão real da folha pelo autoatendimento. */
 export const BANK_HOURS_FOLHA_RETIRADA_MARKER = "retirada da folha";
+
+/** Marcador (em notes) de tudo que o próprio médico lançou pelo painel dele. */
+export const BANK_HOURS_SELF_SERVICE_MARKER = "autoatendimento";
+
+/**
+ * Tag que o extra declarado pelo médico carrega no board do coordenador — é o
+ * `label` do plantão verde, que vira o código exibido no chip do payment-closing.
+ */
+export const SELF_DECLARED_EXTRA_LABEL = "EXTRA DECLARADO";
+
+export function isSelfServiceSettlementNote(notes: string) {
+    return notes.includes(BANK_HOURS_SELF_SERVICE_MARKER);
+}
 
 function normalizeKind(value: string): BankHoursSettlementKind {
     return value === "penalty" ? "penalty" : "bonus";
@@ -197,6 +210,8 @@ export async function settleBankHours(params: {
     /** Turno do plantão verde/vermelho (default SD). A retirada de um plantão
      * real precisa casar o turno para o pagamento e a folha netarem no dia certo. */
     shiftLabel?: "SD" | "SN";
+    /** Tag do plantão no board do coordenador (default "Banco de horas ±12h"). */
+    label?: string;
 }): Promise<SettleBankHoursResult> {
     const kind = params.kind;
     const isBonus = kind === "bonus";
@@ -206,7 +221,7 @@ export async function settleBankHours(params: {
     const unit = isBonus ? 1 : -1;
     const operationalDate = params.operationalDate ?? pickRandomWeekday(params.monthKey);
     const baseLabel = isBonus ? "Banco de horas +12h" : "Banco de horas -12h";
-    const label = baseLabel.slice(0, 40);
+    const label = (params.label?.trim() || baseLabel).slice(0, 40);
     const note = params.note?.trim()
         ? `${baseLabel} — ${params.note.trim()}`
         : `${baseLabel} (acerto automático de banco de horas)`;
@@ -254,18 +269,177 @@ export async function settleBankHours(params: {
 }
 
 /**
- * O médico já deu plantão no ramal 2031 (chefia de plantão)? Chefia registra
- * plantão extra pelo autoatendimento sem o gate de +12h — o coordenador revisa.
+ * Nomes normalizados liberados a declarar o próprio plantão extra mesmo sem
+ * histórico na 2031 — liberação nominal da coordenação, uma linha por pessoa.
  */
-export async function isChiefByPost2031(doctorId: string): Promise<boolean> {
+export const SELF_DECLARED_EXTRA_ALLOWLIST = [
+    "MARIA ELISA DOS REIS GARRIDO",
+];
+
+/**
+ * O médico pode declarar o próprio plantão extra sem o gate de +12h? Vale para
+ * quem já deu plantão no ramal 2031 (chefia de plantão) e para quem está na
+ * allowlist nominal. O saldo desconta igual e o coordenador revisa depois.
+ */
+export async function canSelfDeclareExtraShift(doctorId: string): Promise<boolean> {
     const result = await getDb().execute(sql`
         select 1
-        from operations_v2.regulation_occupancies ro
-        join operations_v2.regulation_posts rp on rp.id = ro.post_id
-        where ro.doctor_id = ${doctorId} and rp.code = '2031'
+        from operations_v2.doctors d
+        where d.id = ${doctorId}
+          and (
+            d.normalized_name in (${sql.join(SELF_DECLARED_EXTRA_ALLOWLIST.map((name) => sql`${name}`), sql`, `)})
+            or exists (
+                select 1
+                from operations_v2.regulation_occupancies ro
+                join operations_v2.regulation_posts rp on rp.id = ro.post_id
+                where ro.doctor_id = d.id and rp.code = '2031'
+            )
+          )
         limit 1
     `);
     return (result as unknown as unknown[]).length > 0;
+}
+
+export interface SelfDeclaredExtraRow {
+    settlementId: string;
+    adminExtraShiftId: string;
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+    createdAt: string;
+}
+
+/** Os plantões extra declarados pelos próprios médicos no mês. */
+export async function loadSelfDeclaredExtrasForMonth(
+    monthKey: string,
+    doctorId?: string,
+): Promise<Array<SelfDeclaredExtraRow & { doctorId: string }>> {
+    const rows = await getDb()
+        .select({
+            settlementId: bankHoursSettlements.id,
+            doctorId: bankHoursSettlements.doctorId,
+            adminExtraShiftId: adminExtraShifts.id,
+            operationalDate: adminExtraShifts.operationalDate,
+            shiftLabel: adminExtraShifts.shiftLabel,
+            notes: bankHoursSettlements.notes,
+            createdAt: bankHoursSettlements.createdAt,
+        })
+        .from(bankHoursSettlements)
+        .innerJoin(adminExtraShifts, eq(adminExtraShifts.id, bankHoursSettlements.adminExtraShiftId))
+        .where(and(
+            eq(bankHoursSettlements.monthKey, monthKey),
+            eq(bankHoursSettlements.kind, "bonus"),
+            ...(doctorId ? [eq(bankHoursSettlements.doctorId, doctorId)] : []),
+        ));
+
+    return rows
+        .filter((row) => isSelfServiceSettlementNote(row.notes))
+        .map((row) => ({
+            settlementId: row.settlementId,
+            doctorId: row.doctorId,
+            adminExtraShiftId: row.adminExtraShiftId,
+            operationalDate: row.operationalDate,
+            shiftLabel: (row.shiftLabel === "SN" ? "SN" : "SD") as "SD" | "SN",
+            createdAt: row.createdAt.toISOString(),
+        }))
+        .sort((a, b) => a.operationalDate.localeCompare(b.operationalDate));
+}
+
+/** Os plantões extra que o próprio médico declarou no mês (para ele revisar). */
+export async function loadSelfDeclaredExtras(
+    doctorId: string,
+    monthKey: string,
+): Promise<SelfDeclaredExtraRow[]> {
+    return loadSelfDeclaredExtrasForMonth(monthKey, doctorId);
+}
+
+/**
+ * Remarca o plantão extra (usado pelo remanejo automático, que não passa pelo
+ * guard do médico — quem dispara é a varredura, não a pessoa).
+ */
+export async function moveSelfDeclaredExtra(params: {
+    adminExtraShiftId: string;
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+}): Promise<void> {
+    await getDb()
+        .update(adminExtraShifts)
+        .set({ operationalDate: params.operationalDate, shiftLabel: params.shiftLabel })
+        .where(eq(adminExtraShifts.id, params.adminExtraShiftId));
+}
+
+/**
+ * Guard do que o médico pode mexer sozinho: só o extra que ELE declarou, no mês
+ * corrente. Estorno de qualquer outro acerto continua sendo do coordenador.
+ */
+export function canDoctorManageSettlement(
+    settlement: { doctorId: string; monthKey: string; kind: string; notes: string },
+    context: { doctorId: string; currentMonthKey: string },
+): boolean {
+    return settlement.doctorId === context.doctorId
+        && settlement.monthKey === context.currentMonthKey
+        && normalizeKind(settlement.kind) === "bonus"
+        && isSelfServiceSettlementNote(settlement.notes)
+        && !isReversalSettlementNote(settlement.notes);
+}
+
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+async function loadManageableSettlement(tx: Tx, params: {
+    settlementId: string;
+    doctorId: string;
+    currentMonthKey: string;
+}) {
+    const [row] = await tx
+        .select()
+        .from(bankHoursSettlements)
+        .where(eq(bankHoursSettlements.id, params.settlementId))
+        .for("update");
+    if (!row || !canDoctorManageSettlement(row, params) || !row.adminExtraShiftId) {
+        throw new Error("Este lançamento não pode mais ser alterado por aqui.");
+    }
+    return row;
+}
+
+/** Troca dia/turno de um extra declarado pelo próprio médico. */
+export async function updateSelfDeclaredExtra(params: {
+    settlementId: string;
+    doctorId: string;
+    currentMonthKey: string;
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+}): Promise<void> {
+    await getDb().transaction(async (tx) => {
+        const settlement = await loadManageableSettlement(tx, params);
+        await tx
+            .update(adminExtraShifts)
+            .set({ operationalDate: params.operationalDate, shiftLabel: params.shiftLabel })
+            .where(eq(adminExtraShifts.id, settlement.adminExtraShiftId!));
+    });
+}
+
+/**
+ * Apaga o extra declarado pelo próprio médico (o par plantão verde + acerto).
+ * É apagar mesmo, não estornar: enquanto o coordenador não revisou, um par
+ * verde/vermelho no mesmo dia só confundiria o fechamento. O rastro fica no
+ * audit_logs de quem apagou.
+ */
+export async function deleteSelfDeclaredExtra(params: {
+    settlementId: string;
+    doctorId: string;
+    currentMonthKey: string;
+}): Promise<{ operationalDate: string; shiftLabel: string }> {
+    return getDb().transaction(async (tx) => {
+        const settlement = await loadManageableSettlement(tx, params);
+        await tx.delete(bankHoursSettlements).where(eq(bankHoursSettlements.id, settlement.id));
+        const [extra] = await tx
+            .delete(adminExtraShifts)
+            .where(eq(adminExtraShifts.id, settlement.adminExtraShiftId!))
+            .returning({
+                operationalDate: adminExtraShifts.operationalDate,
+                shiftLabel: adminExtraShifts.shiftLabel,
+            });
+        return { operationalDate: extra?.operationalDate ?? "", shiftLabel: extra?.shiftLabel ?? "SD" };
+    });
 }
 
 /** Prefixo que marca (nas notes) o acerto que estorna outro. */
