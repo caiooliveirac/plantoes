@@ -12260,6 +12260,66 @@ button.chief-payable-tag:focus-visible {
     color: #b91c1c;
 }
 
+/* Lista dos extras que o próprio médico declarou no mês — o que ele ainda pode
+   remarcar ou tirar enquanto o coordenador não fechou o mês. */
+.panel-declared-extras {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.panel-declared-extras-head {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #475569;
+}
+
+.panel-declared-extras ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.panel-declared-extras li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(22, 163, 74, 0.35);
+    border-radius: 10px;
+    background: rgba(22, 163, 74, 0.07);
+}
+
+.panel-declared-extra-when {
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-right: auto;
+}
+
+.panel-link-btn {
+    border: 0;
+    background: none;
+    padding: 6px 2px;
+    font-size: 0.85rem;
+    color: #15803d;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.panel-link-btn.danger {
+    color: #b91c1c;
+}
+
+.panel-link-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
 .panel-footer {
     text-align: center;
     font-size: 0.78rem;

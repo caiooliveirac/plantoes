@@ -29,7 +29,8 @@ import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hour
 import { getSaoPauloParts } from "@/modules/operational/board-rules";
 import {
     BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES,
-    isChiefByPost2031,
+    canSelfDeclareExtraShift,
+    loadSelfDeclaredExtras,
 } from "@/services/bank-hours-settlements.service";
 
 export const dynamic = "force-dynamic";
@@ -142,9 +143,9 @@ export default async function PainelDoMedicoPage({
         oldMinutes: doctor?.legacy?.preMay2025Minutes ?? 0,
         recentMinutes: (doctor?.legacy?.spreadsheetPeriodMinutes ?? 0) + (doctor?.applicationBalanceMinutes ?? 0),
     });
-    const isChief = isCurrentMonth ? await isChiefByPost2031(medicoId) : false;
+    const podeDeclararExtra = isCurrentMonth ? await canSelfDeclareExtraShift(medicoId) : false;
     const canBonus = isCurrentMonth
-        && (settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES || isChief);
+        && (settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES || podeDeclararExtra);
     const canPenalty = isCurrentMonth
         && settleBalance.penaltyEligibleMinutes <= -BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES;
     const selfServiceShiftOptions: SelfServiceShiftOption[] = canPenalty
@@ -157,6 +158,9 @@ export default async function PainelDoMedicoPage({
             }))
             .sort((a, b) => a.operationalDate.localeCompare(b.operationalDate))
         : [];
+
+    // O que ele mesmo declarou no mês — é o que ele pode trocar de dia/turno ou tirar.
+    const extrasDeclarados = isCurrentMonth ? await loadSelfDeclaredExtras(medicoId, monthKey) : [];
 
     const recentShifts = doctor?.shifts.slice(0, RECENT_SHIFT_LIMIT) ?? [];
     const pendencias = (doctor?.shifts ?? []).filter((shift) =>
@@ -303,6 +307,7 @@ export default async function PainelDoMedicoPage({
                         canBonus={canBonus}
                         canPenalty={canPenalty}
                         shiftOptions={selfServiceShiftOptions}
+                        declaredExtras={extrasDeclarados}
                     />
 
                     {doctor.settlements.length > 0 ? (
