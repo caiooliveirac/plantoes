@@ -12420,3 +12420,100 @@ button.chief-payable-tag:focus-visible {
     color: #fde68a;
     line-height: 1.5;
 }
+
+/* Termos do contrato (teto + mês de início) no modal do médico. */
+.contract-terms-card {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 12px;
+    padding: 12px 16px;
+    background: rgba(15, 23, 42, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.contract-terms-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.contract-terms-summary > span {
+    font-size: 0.85rem;
+    color: #cbd5f5;
+}
+
+.contract-terms-summary .payment-button.subtle {
+    min-height: 34px;
+    padding: 0 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.contract-terms-presets {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+}
+
+.contract-terms-presets button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(12, 19, 29, 0.92);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.75rem;
+}
+
+.contract-terms-presets button strong {
+    font-size: 0.82rem;
+}
+
+.contract-terms-presets button.active {
+    border-color: rgba(89, 166, 255, 0.55);
+    background: rgba(19, 55, 92, 0.92);
+}
+
+.contract-terms-presets button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.contract-terms-fields {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.contract-terms-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+
+.contract-terms-fields input {
+    min-height: 40px;
+    padding: 0 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(12, 19, 29, 0.92);
+    color: var(--text);
+    color-scheme: dark;
+}
+
+.contract-terms-note {
+    margin: 0;
+    font-size: 0.78rem;
+    color: #94a3b8;
+    line-height: 1.5;
+}

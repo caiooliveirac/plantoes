@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
+import { ContractTermsCard } from "@/components/payment-closing/contract-terms-card";
 // Nenhuma ação desta tela pode ficar pendurada esperando o servidor.
 import { fetchComLimite } from "@/lib/fetch-com-limite";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
@@ -2624,6 +2625,28 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                         </p>
                                     ) : null}
                                 </div>
+                            );
+                        })()}
+
+                        {(() => {
+                            // Termos do contrato acima do acompanhamento: teto e mês de
+                            // início, com correção/renovação antecipada pelo admin. Com
+                            // mais de um contrato ativo, mostra o de ciclo mais recente.
+                            if (!tracksContractBalance(selectedDoctor)) return null;
+                            const balances = selectedDoctor.contractBalances ?? [];
+                            if (balances.length === 0) return null;
+                            const current = balances.reduce((latest, item) =>
+                                item.cycleEnd > latest.cycleEnd ? item : latest);
+                            return (
+                                <ContractTermsCard
+                                    key={current.contractId}
+                                    contractId={current.contractId}
+                                    contractNumber={current.contractNumber}
+                                    cycleStart={current.cycleStart.slice(0, 10)}
+                                    ceilingCents={current.ceilingCents}
+                                    canManage={canManageClosing}
+                                    onSaved={requestRouterRefresh}
+                                />
                             );
                         })()}
 
