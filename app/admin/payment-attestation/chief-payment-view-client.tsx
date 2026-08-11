@@ -804,7 +804,11 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                     return !shiftScopedFilter;
                 }
 
-                return doctor.total > 0;
+                // Total líquido zero não pode sumir com a linha: o médico que
+                // retirou o próprio plantão (banco de horas) neta 0 e o chefe
+                // precisa VER o par plantão real + vermelho. Some só quem ficou
+                // sem nenhum plantão visível após os filtros.
+                return doctor.cells.some((cell) => cell.shifts.length > 0);
             });
 
         const sorted = [...doctors].sort((left, right) => {

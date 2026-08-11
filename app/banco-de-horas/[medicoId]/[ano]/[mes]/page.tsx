@@ -162,6 +162,13 @@ export default async function PainelDoMedicoPage({
     // O que ele mesmo declarou no mês — é o que ele pode trocar de dia/turno ou tirar.
     const extrasDeclarados = isCurrentMonth ? await loadSelfDeclaredExtras(medicoId, monthKey) : [];
 
+    // Crédito anterior a mai/2025 não paga nada (fora da régua do acerto), mas
+    // segue no cálculo interno — só sai da VISÃO do médico para não inflar
+    // expectativa. Dívida antiga continua visível: as horas novas a amortizam.
+    const legacyOldMinutes = doctor?.legacy?.preMay2025Minutes ?? 0;
+    const hiddenLegacyCredit = Math.max(legacyOldMinutes, 0);
+    const displayedBalanceMinutes = (doctor?.balanceMinutes ?? 0) - hiddenLegacyCredit;
+
     const recentShifts = doctor?.shifts.slice(0, RECENT_SHIFT_LIMIT) ?? [];
     const pendencias = (doctor?.shifts ?? []).filter((shift) =>
         shift.approval.state === "aguardando_chefia" || shift.approval.state === "ocorrencia_nao_informada");
@@ -260,8 +267,8 @@ export default async function PainelDoMedicoPage({
                     <section className="panel-section">
                         <div className="panel-balance-head">
                             <h2>Seu banco de horas</h2>
-                            <span className={`hours-balance-pill large ${balanceClass(doctor.balanceMinutes)}`}>
-                                {formatSignedMinutes(doctor.balanceMinutes)}
+                            <span className={`hours-balance-pill large ${balanceClass(displayedBalanceMinutes)}`}>
+                                {formatSignedMinutes(displayedBalanceMinutes)}
                             </span>
                         </div>
                         <p className="panel-note">
@@ -271,12 +278,14 @@ export default async function PainelDoMedicoPage({
                         <ul className="panel-composition">
                             {doctor.legacy ? (
                                 <>
-                                    <li>
-                                        <span>Saldo até 30/abr/2025</span>
-                                        <span className={`hours-balance-pill ${balanceClass(doctor.legacy.preMay2025Minutes)}`}>
-                                            {formatSignedMinutes(doctor.legacy.preMay2025Minutes)}
-                                        </span>
-                                    </li>
+                                    {legacyOldMinutes < 0 ? (
+                                        <li>
+                                            <span>Dívida até 30/abr/2025</span>
+                                            <span className={`hours-balance-pill ${balanceClass(legacyOldMinutes)}`}>
+                                                {formatSignedMinutes(legacyOldMinutes)}
+                                            </span>
+                                        </li>
+                                    ) : null}
                                     <li>
                                         <span>Saldo mai/2025 → mai/2026</span>
                                         <span className={`hours-balance-pill ${balanceClass(doctor.legacy.spreadsheetPeriodMinutes)}`}>
@@ -293,8 +302,8 @@ export default async function PainelDoMedicoPage({
                             </li>
                             <li className="total">
                                 <span>Saldo final</span>
-                                <span className={`hours-balance-pill ${balanceClass(doctor.balanceMinutes)}`}>
-                                    {formatSignedMinutes(doctor.balanceMinutes)}
+                                <span className={`hours-balance-pill ${balanceClass(displayedBalanceMinutes)}`}>
+                                    {formatSignedMinutes(displayedBalanceMinutes)}
                                 </span>
                             </li>
                         </ul>

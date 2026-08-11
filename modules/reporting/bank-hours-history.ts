@@ -896,19 +896,6 @@ export function buildBankHoursHistoryModel(
         current.shifts.push(shift);
     }
 
-    // Dobra os acertos do fechamento no saldo do médico: o saldo da página passa a
-    // ser o EFETIVO (bruto + acertos), igual ao que o modal do payment-closing usa.
-    let settlementTotalMinutes = 0;
-    for (const doctor of doctorsMap.values()) {
-        const entries = (settlementsByDoctor.get(doctor.doctorId) ?? [])
-            .slice()
-            .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-        doctor.settlements = entries;
-        const delta = entries.reduce((sum, entry) => sum + entry.deltaMinutes, 0);
-        doctor.balanceMinutes += delta;
-        settlementTotalMinutes += delta;
-    }
-
     // Soma o saldo legado da planilha por cima do apurado pela aplicação, sem
     // misturar as parcelas: applicationBalanceMinutes preserva o que a aplicação
     // apurou e legacy carrega a composição da planilha para a view. Plantonista
@@ -949,6 +936,22 @@ export function buildBankHoursHistoryModel(
         if (!doctor.legacy) {
             doctor.applicationBalanceMinutes = doctor.balanceMinutes;
         }
+    }
+
+    // Dobra os acertos do fechamento no saldo do médico: o saldo da página passa a
+    // ser o EFETIVO (bruto + acertos), igual ao que o modal do payment-closing usa.
+    // Roda DEPOIS do merge do legado: médico só-planilha (sem plantão apurado)
+    // também precisa ver o acerto descontado — senão o gate de ±12h nunca fecha.
+    let settlementTotalMinutes = 0;
+    for (const doctor of doctorsMap.values()) {
+        const entries = (settlementsByDoctor.get(doctor.doctorId) ?? [])
+            .slice()
+            .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+        doctor.settlements = entries;
+        const delta = entries.reduce((sum, entry) => sum + entry.deltaMinutes, 0);
+        doctor.balanceMinutes += delta;
+        doctor.applicationBalanceMinutes += delta;
+        settlementTotalMinutes += delta;
     }
 
     const doctors = Array.from(doctorsMap.values()).sort(compareDoctors);
