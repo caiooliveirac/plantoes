@@ -83,6 +83,35 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             return NextResponse.json({ error: "Este contrato já foi substituído." }, { status: 400 });
         }
 
+        // Mês informado é o mesmo em que o contrato atual já começou: não é uma
+        // redefinição de ciclo, é só o teto que veio errado (ex.: preset trocado
+        // no cadastro). Terminar+criar bateria em contracts_window_ordered
+        // (ended_at > started_at é estrito) porque ended_at cairia igual a
+        // started_at. Corrige o teto no lugar, sem mexer no razão.
+        if (newCycleStart === old.startedAt) {
+            await db.update(contracts)
+                .set({ ceilingAmount: ceilingBrl.toFixed(2), updatedAt: new Date() })
+                .where(eq(contracts.id, old.id));
+            await db.insert(auditLogs).values({
+                actorUserId: session.user.id,
+                action: "contract.ceiling_correction",
+                entityType: "contract",
+                entityId: old.id,
+                details: { previousCeilingAmount: old.ceilingAmount, ceilingBrl, startMonth },
+            });
+            revalidatePath("/admin/payment-closing");
+            return NextResponse.json(
+                { contractId: old.id, cycleStart: old.cycleStart, cycleEnd: old.cycleEnd },
+                { status: 200 },
+            );
+        }
+        if (newCycleStart < old.startedAt) {
+            return NextResponse.json(
+                { error: "O mês informado é anterior ao início do contrato atual." },
+                { status: 400 },
+            );
+        }
+
         const newContractId = await db.transaction(async (tx) => {
             // O antigo sai de cena PRIMEIRO: o índice único (médico, nº) só vale
             // para status 'active', e o novo nasce com o mesmo número.
