@@ -6,6 +6,7 @@ import { Shield } from "lucide-react";
 import { PendingDepartureCard } from "@/components/board/PendingDepartureCard";
 import { fadeRise, staggerList } from "@/lib/board/motion";
 import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
+import { triagePendingDeparture } from "@/modules/operational/departure-triage";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
 
 export interface AuditRailProps {
@@ -98,6 +99,30 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
         [pendingDepartures, hiddenIds],
     );
 
+    // Triagem: casos com decisão de pagamento/banco em jogo vêm primeiro; o
+    // resto é rotina, confirmável em lote.
+    const { attention, routine } = useMemo(() => {
+        const attention: PendingDepartureConfirmation[] = [];
+        const routine: PendingDepartureConfirmation[] = [];
+        for (const item of visible) {
+            const triage = triagePendingDeparture({
+                actualEndedAt: item.actualEndedAt,
+                scheduledStartAt: item.scheduledStartAt,
+                scheduledEndAt: item.scheduledEndAt,
+                startedAt: item.startedAt,
+                roleLabel: item.roleLabel,
+                delayMinutes: item.delayMinutes,
+                reasonCode: item.reasonCode,
+                occurrenceNumberMissing: item.occurrenceNumberMissing,
+                reasonOccurrenceCount30d: item.reasonOccurrenceCount30d,
+            });
+            (triage.attention ? attention : routine).push(item);
+        }
+        return { attention, routine };
+    }, [visible]);
+
+    const [confirmingAll, setConfirmingAll] = useState(false);
+
     const handleQuickConfirm = useCallback(async (pending: PendingDepartureConfirmation) => {
         setBusyIds((current) => new Set(current).add(pending.occupancyId));
         // Optimistic removal — re-add on failure so the chefe doesn't lose the card.
@@ -117,6 +142,17 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
             return next;
         });
     }, [quickConfirm]);
+
+    // Confirma toda a rotina em sequência pelo endpoint existente. ponytail:
+    // loop sequencial, sem endpoint de lote — a fila de rotina raramente passa
+    // de algumas dezenas; criar API nova se virar gargalo.
+    const handleConfirmAllRoutine = useCallback(async () => {
+        setConfirmingAll(true);
+        for (const item of routine) {
+            await handleQuickConfirm(item);
+        }
+        setConfirmingAll(false);
+    }, [routine, handleQuickConfirm]);
 
     return (
         <motion.aside
@@ -150,25 +186,67 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                     Nenhuma saída verbalizada aguardando revisão. Crédito flui automaticamente quando o sistema fecha por boundary ou você encerra direto.
                 </div>
             ) : (
-                <motion.ul
-                    className="board-audit-rail__list"
-                    variants={staggerList}
-                    initial="initial"
-                    animate="animate"
-                >
-                    <AnimatePresence initial={false}>
-                        {visible.map((pending) => (
-                            <PendingDepartureCard
-                                key={pending.occupancyId}
-                                pending={pending}
-                                onOpenVerifier={onOpenVerifier}
-                                onQuickConfirm={handleQuickConfirm}
-                                isFresh={freshIds.has(pending.occupancyId)}
-                                busy={busyIds.has(pending.occupancyId)}
-                            />
-                        ))}
-                    </AnimatePresence>
-                </motion.ul>
+                <>
+                    {attention.length > 0 && (
+                        <>
+                            <div className="board-audit-rail__section">Precisa de decisão · {attention.length}</div>
+                            <motion.ul
+                                className="board-audit-rail__list"
+                                variants={staggerList}
+                                initial="initial"
+                                animate="animate"
+                            >
+                                <AnimatePresence initial={false}>
+                                    {attention.map((pending) => (
+                                        <PendingDepartureCard
+                                            key={pending.occupancyId}
+                                            pending={pending}
+                                            onOpenVerifier={onOpenVerifier}
+                                            onQuickConfirm={handleQuickConfirm}
+                                            isFresh={freshIds.has(pending.occupancyId)}
+                                            busy={busyIds.has(pending.occupancyId)}
+                                        />
+                                    ))}
+                                </AnimatePresence>
+                            </motion.ul>
+                        </>
+                    )}
+                    {routine.length > 0 && (
+                        <>
+                            <div className="board-audit-rail__section board-audit-rail__section--routine">
+                                <span>Rotina · {routine.length}</span>
+                                <button
+                                    type="button"
+                                    className="board-audit-rail__confirm-all"
+                                    onClick={() => { void handleConfirmAllRoutine(); }}
+                                    disabled={confirmingAll}
+                                    title="Confirma todas as saídas sem impacto em pagamento ou banco de horas."
+                                >
+                                    {confirmingAll ? "Confirmando…" : `Confirmar todas (${routine.length})`}
+                                </button>
+                            </div>
+                            <motion.ul
+                                className="board-audit-rail__list"
+                                variants={staggerList}
+                                initial="initial"
+                                animate="animate"
+                            >
+                                <AnimatePresence initial={false}>
+                                    {routine.map((pending) => (
+                                        <PendingDepartureCard
+                                            key={pending.occupancyId}
+                                            pending={pending}
+                                            onOpenVerifier={onOpenVerifier}
+                                            onQuickConfirm={handleQuickConfirm}
+                                            isFresh={freshIds.has(pending.occupancyId)}
+                                            busy={busyIds.has(pending.occupancyId) || confirmingAll}
+                                        />
+                                    ))}
+                                </AnimatePresence>
+                            </motion.ul>
+                        </>
+                    )}
+                </>
             )}
         </motion.aside>
     );

@@ -8227,10 +8227,15 @@ export function buildTakeoverWarningReply(params: {
     sinceTime: string;
 }) {
     const occupant = escapeTelegramMarkdown(params.occupantName);
+    const occupantLoud = escapeTelegramMarkdown(params.occupantName.toUpperCase());
     const target = escapeTelegramMarkdown(params.targetLabel);
     const turno = params.shiftLabel ? ` (${escapeTelegramMarkdown(params.shiftLabel)})` : "";
-    return `⚠️ *${target}* já está ocupado por *${occupant}*${turno}, desde *${params.sinceTime}*.`
-        + `\nVai assumir no lugar? Toque abaixo — ou responda \`confirmo ${sanitizeTelegramCodeSpan(params.targetLabel)}\` (ou reenvie a chegada exata) em até *30 min*.`
+    // Barulhento de propósito: quem chega num posto ocupado precisa VER quem está
+    // lá e entender a consequência de insistir — nada de deslocar em silêncio.
+    return `🚨🚨 *ATENÇÃO — POSTO OCUPADO* 🚨🚨`
+        + `\n\n⚠️ *${target}* já está ocupado por *${occupant}*${turno}, desde *${params.sinceTime}*.`
+        + `\n\n👉 Se você confirmar, *${occupantLoud} SERÁ RETIRADO(A) DO QUADRO* deste posto.`
+        + `\n\nVai assumir no lugar? Toque abaixo — ou responda \`confirmo ${sanitizeTelegramCodeSpan(params.targetLabel)}\` (ou reenvie a chegada exata) em até *30 min*.`
         + `\n🔁 A chegada de ${occupant} fica preservada: dá para declarar uma nova posição depois, sem contar atraso.`;
 }
 
@@ -10705,6 +10710,64 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
             message.message_id,
         );
         return { ok: true, ignored: true };
+    }
+
+    // Mesma validação de tomada do fluxo normal (caso Yngra, 13/08): destino
+    // ocupado no mesmo turno NÃO desloca nem encerra ninguém automaticamente —
+    // vira pendência de confirmação explícita, com aviso de quem está lá.
+    const takeoverSenderId = String(message.from.id);
+    const wantsBoardOnRamal = !parsedEntry.isDeparture
+        && !parsedEntry.isContinuation
+        && !resolveTelegramShadowFlag(parsedEntry, reconstructedText)
+        && Boolean(parsedEntry.baseCode);
+    if (wantsBoardOnRamal && parsedEntry.baseCode) {
+        const occupant = await findActiveSameTurnoBoardCarrierOnTarget({
+            sector: parsedEntry.sector,
+            targetCode: parsedEntry.baseCode,
+            eventAt,
+            excludeDoctorId: resolvedDoctor.id,
+        });
+        if (occupant) {
+            await markTelegramProcessed(pending.id, {
+                status: "pending_takeover_confirmation",
+                parsedDomain: parsedEntry.sector,
+                parsedTargetCode: parsedEntry.baseCode,
+                parsedAction: resolveTelegramParsedAction(parsedEntry),
+                parsedDoctorName: resolvedDoctor.fullName,
+                errorMessage: "takeover_confirmation_required",
+                resolutionData: {
+                    kind: "takeover_confirmation",
+                    sector: parsedEntry.sector,
+                    targetCode: parsedEntry.baseCode,
+                    arrivingDoctorId: resolvedDoctor.id,
+                    occupantDoctorId: occupant.doctorId,
+                    occupantOccupancyId: occupant.occupancyId,
+                    arrivingMessageText: reconstructedText,
+                    senderTelegramId: takeoverSenderId,
+                } satisfies TakeoverPendingData,
+            });
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                parsedDomain: parsedEntry.sector,
+                parsedTargetCode: parsedEntry.baseCode,
+                parsedAction: resolveTelegramParsedAction(parsedEntry),
+                parsedDoctorName: resolvedDoctor.fullName,
+                errorMessage: "takeover_confirmation_required",
+            });
+            await sendMessage(
+                message.chat.id,
+                buildTakeoverWarningReply({
+                    occupantName: occupant.doctorName,
+                    targetLabel: parsedEntry.baseCode,
+                    shiftLabel: occupant.shiftLabel,
+                    sinceTime: formatTelegramReplyTime(occupant.startedAt),
+                }),
+                message.message_id,
+                buildTakeoverDecisionKeyboard(parsedEntry.baseCode, pending.id),
+                { parseMode: "Markdown" },
+            );
+            return { ok: true, ignored: true, pending: true };
+        }
     }
 
     try {
