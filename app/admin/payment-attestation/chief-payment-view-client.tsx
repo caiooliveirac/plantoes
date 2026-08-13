@@ -377,6 +377,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     const [metaError, setMetaError] = useState<string | null>(null);
     const [metaFeedback, setMetaFeedback] = useState<string | null>(null);
     const [contractDraft, setContractDraft] = useState("");
+    const [contractMonthDraft, setContractMonthDraft] = useState("");
+    const [contractOpeningDraft, setContractOpeningDraft] = useState("");
+    // Contrato já definido: o form só reaparece quando o admin clica em "corrigir".
+    const [contractEditing, setContractEditing] = useState(false);
     const [contractBusy, setContractBusy] = useState(false);
     const [contractError, setContractError] = useState<string | null>(null);
     const [bankBusy, setBankBusy] = useState(false);
@@ -398,6 +402,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setInvoiceDraft(metaOverride?.invoiceNumber ?? baseDoctor?.invoiceNumber ?? "");
         setProcessDraft(metaOverride?.paymentProcessNumber ?? baseDoctor?.paymentProcessNumber ?? "");
         setContractDraft("");
+        setContractMonthDraft("");
+        setContractOpeningDraft("");
+        setContractEditing(false);
         setMetaError(null);
         setMetaFeedback(null);
         setContractError(null);
@@ -1285,10 +1292,25 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     }
 
     async function submitContractSeed(doctorId: string) {
-        const ceiling = Number(contractDraft);
+        const ceiling = Number(contractDraft.replace(",", "."));
         if (!Number.isFinite(ceiling) || ceiling <= 0) {
             setContractError("Informe um teto de contrato em reais maior que zero.");
             return;
+        }
+        const seedMonth = contractMonthDraft || board.monthKey;
+        if (!/^\d{4}-\d{2}$/.test(seedMonth)) {
+            setContractError("Informe o mês inicial do contrato (AAAA-MM).");
+            return;
+        }
+        // Saldo inicial vazio = parte do teto; preenchido pode ser <= 0 (contrato
+        // que entra no sistema já estourado).
+        let openingBalanceBrl: number | null = null;
+        if (contractOpeningDraft.trim() !== "") {
+            openingBalanceBrl = Number(contractOpeningDraft.replace(",", "."));
+            if (!Number.isFinite(openingBalanceBrl)) {
+                setContractError("Saldo inicial inválido.");
+                return;
+            }
         }
         setContractBusy(true);
         setContractError(null);
@@ -1296,12 +1318,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
             const response = await fetchComLimite("/api/admin/payment-closing/contract", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ doctorId, ceilingBrl: ceiling, seedMonth: board.monthKey }),
+                body: JSON.stringify({ doctorId, ceilingBrl: ceiling, openingBalanceBrl, seedMonth }),
             });
             const body = await response.json().catch(() => null) as { error?: string } | null;
             if (!response.ok) {
                 throw new Error(body?.error ?? "Não foi possível salvar o contrato.");
             }
+            setContractEditing(false);
             requestRouterRefresh();
         } catch (error) {
             setContractError(error instanceof Error ? error.message : "Falha ao salvar o contrato.");
@@ -2729,11 +2752,11 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                 ) : (
                                 <article className="chief-payable-modal-card">
                                     <span>Saldo contratual</span>
-                                    {selectedDoctor.contractCeilingBrl == null ? (
+                                    {selectedDoctor.contractCeilingBrl == null || contractEditing ? (
                                         <>
                                             <small>
                                                 {canManageClosing
-                                                    ? "Informe o teto do contrato (R$). A partir daí vira cálculo automático."
+                                                    ? "Informe o teto (R$) e o mês inicial. Saldo inicial só quando o contrato entra com parte do teto já consumida — vazio, o cálculo parte do teto."
                                                     : "Teto de contrato ainda não definido para este médico."}
                                             </small>
                                             {canManageClosing ? (
@@ -2745,8 +2768,24 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             step="0.01"
                                                             value={contractDraft}
                                                             onChange={(event) => setContractDraft(event.target.value)}
-                                                            placeholder="ex.: 120000.00"
+                                                            placeholder="teto, ex.: 120000.00"
                                                             disabled={contractBusy}
+                                                        />
+                                                        <input
+                                                            type="month"
+                                                            value={contractMonthDraft || board.monthKey}
+                                                            onChange={(event) => setContractMonthDraft(event.target.value)}
+                                                            disabled={contractBusy}
+                                                            aria-label="Mês inicial do contrato"
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            step="0.01"
+                                                            value={contractOpeningDraft}
+                                                            onChange={(event) => setContractOpeningDraft(event.target.value)}
+                                                            placeholder="saldo inicial (vazio = teto)"
+                                                            disabled={contractBusy}
+                                                            aria-label="Saldo no início do mês inicial"
                                                         />
                                                         <button
                                                             type="button"
@@ -2754,8 +2793,18 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             onClick={() => void submitContractSeed(selectedDoctor.doctorId)}
                                                             disabled={contractBusy}
                                                         >
-                                                            {contractBusy ? "Salvando..." : "Definir teto"}
+                                                            {contractBusy ? "Salvando..." : "Salvar contrato"}
                                                         </button>
+                                                        {contractEditing ? (
+                                                            <button
+                                                                type="button"
+                                                                className="payment-button secondary"
+                                                                onClick={() => setContractEditing(false)}
+                                                                disabled={contractBusy}
+                                                            >
+                                                                Cancelar
+                                                            </button>
+                                                        ) : null}
                                                     </div>
                                                     {contractError ? <p className="chief-payable-extra-feedback danger">{contractError}</p> : null}
                                                 </>
@@ -2768,8 +2817,31 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                             </strong>
                                             <small>
                                                 Teto {formatCurrency(selectedDoctor.contractCeilingBrl)}
+                                                {selectedDoctor.contractOpeningBalanceBrl != null
+                                                    ? ` · saldo inicial ${formatCurrency(selectedDoctor.contractOpeningBalanceBrl)}`
+                                                    : ""}
                                                 {selectedDoctor.contractSeedMonth ? ` desde ${selectedDoctor.contractSeedMonth}` : ""} · calculado
                                             </small>
+                                            {canManageClosing ? (
+                                                <button
+                                                    type="button"
+                                                    className="payment-button secondary"
+                                                    onClick={() => {
+                                                        // Semeia o form com o que está gravado: corrigir não é redigitar.
+                                                        setContractDraft(String(selectedDoctor.contractCeilingBrl ?? ""));
+                                                        setContractMonthDraft(selectedDoctor.contractSeedMonth ?? board.monthKey);
+                                                        setContractOpeningDraft(
+                                                            selectedDoctor.contractOpeningBalanceBrl != null
+                                                                ? String(selectedDoctor.contractOpeningBalanceBrl)
+                                                                : "",
+                                                        );
+                                                        setContractError(null);
+                                                        setContractEditing(true);
+                                                    }}
+                                                >
+                                                    Corrigir contrato
+                                                </button>
+                                            ) : null}
                                         </>
                                     )}
                                 </article>
