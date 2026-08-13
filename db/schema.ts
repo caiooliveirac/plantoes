@@ -367,6 +367,9 @@ export const doctorContracts = operationsV2.table(
         id: uuid("id").primaryKey().defaultRandom(),
         doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
         ceilingBrl: numeric("ceiling_brl", { precision: 12, scale: 2 }).notNull(),
+        // Saldo que valia no início do seed_month. Nulo = parte do teto (médico
+        // que começou o ciclo sem consumo anterior).
+        openingBalanceBrl: numeric("opening_balance_brl", { precision: 12, scale: 2 }),
         seedMonth: varchar("seed_month", { length: 7 }).notNull(),
         createdByUserId: uuid("created_by_user_id").references(() => users.id),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -734,7 +734,10 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
                     }
                 }
             }
-            contractBalanceByDoctor.set(doctorId, Number((contract.ceilingBrl - consumed).toFixed(2)));
+            // Saldo inicial informado vence o teto: médico que entrou no sistema
+            // com parte do teto já consumida parte do saldo real, não do cheio.
+            const startingBalance = contract.openingBalanceBrl ?? contract.ceilingBrl;
+            contractBalanceByDoctor.set(doctorId, Number((startingBalance - consumed).toFixed(2)));
         }
     }
 
@@ -757,6 +760,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
             invoiceNumber: paymentMeta.get(doctorId)?.invoiceNumber ?? null,
             paymentProcessNumber: paymentMeta.get(doctorId)?.paymentProcessNumber ?? null,
             contractCeilingBrl: contract?.ceilingBrl ?? null,
+            contractOpeningBalanceBrl: contract?.openingBalanceBrl ?? null,
             contractSeedMonth: contract?.seedMonth ?? null,
             contractBalanceBrl: contractBalanceByDoctor.get(doctorId) ?? null,
             bankHoursMinutes: bankBalances.get(doctorId)?.totalMinutes ?? null,

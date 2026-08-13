@@ -6,6 +6,8 @@ export interface DoctorContractRow {
     doctorId: string;
     /** Teto do contrato em reais. */
     ceilingBrl: number;
+    /** Saldo em reais no início do seedMonth. Nulo = parte do teto. */
+    openingBalanceBrl: number | null;
     /** Mês (YYYY-MM) a partir do qual os pagamentos passam a consumir o teto. */
     seedMonth: string;
 }
@@ -26,6 +28,7 @@ export async function loadDoctorContracts(): Promise<Map<string, DoctorContractR
         .select({
             doctorId: doctorContracts.doctorId,
             ceilingBrl: doctorContracts.ceilingBrl,
+            openingBalanceBrl: doctorContracts.openingBalanceBrl,
             seedMonth: doctorContracts.seedMonth,
         })
         .from(doctorContracts);
@@ -35,6 +38,7 @@ export async function loadDoctorContracts(): Promise<Map<string, DoctorContractR
         {
             doctorId: row.doctorId,
             ceilingBrl: Number(row.ceilingBrl),
+            openingBalanceBrl: row.openingBalanceBrl === null ? null : Number(row.openingBalanceBrl),
             seedMonth: row.seedMonth,
         },
     ]));
@@ -48,12 +52,19 @@ export async function loadDoctorContracts(): Promise<Map<string, DoctorContractR
 export async function setDoctorContract(params: {
     doctorId: string;
     ceilingBrl: number;
+    /** Saldo no início do seedMonth. Omitido/nulo = parte do teto. Pode ser negativo. */
+    openingBalanceBrl?: number | null;
     seedMonth: string;
     actorUserId: string;
 }): Promise<DoctorContractRow> {
     if (!Number.isFinite(params.ceilingBrl) || params.ceilingBrl <= 0) {
         throw new Error("Informe um teto de contrato em reais maior que zero.");
     }
+    const openingRaw = params.openingBalanceBrl ?? null;
+    if (openingRaw !== null && !Number.isFinite(openingRaw)) {
+        throw new Error("Saldo inicial inválido.");
+    }
+    const opening = openingRaw === null ? null : Number(openingRaw.toFixed(2));
     const seedMonth = normalizeMonthKey(params.seedMonth);
     const ceiling = Number(params.ceilingBrl.toFixed(2));
 
@@ -63,6 +74,7 @@ export async function setDoctorContract(params: {
         .values({
             doctorId: params.doctorId,
             ceilingBrl: ceiling.toFixed(2),
+            openingBalanceBrl: opening === null ? null : opening.toFixed(2),
             seedMonth,
             createdByUserId: params.actorUserId,
             updatedAt: new Date(),
@@ -71,6 +83,7 @@ export async function setDoctorContract(params: {
             target: doctorContracts.doctorId,
             set: {
                 ceilingBrl: ceiling.toFixed(2),
+                openingBalanceBrl: opening === null ? null : opening.toFixed(2),
                 seedMonth,
                 updatedAt: new Date(),
             },
@@ -78,12 +91,14 @@ export async function setDoctorContract(params: {
         .returning({
             doctorId: doctorContracts.doctorId,
             ceilingBrl: doctorContracts.ceilingBrl,
+            openingBalanceBrl: doctorContracts.openingBalanceBrl,
             seedMonth: doctorContracts.seedMonth,
         });
 
     return {
         doctorId: saved.doctorId,
         ceilingBrl: Number(saved.ceilingBrl),
+        openingBalanceBrl: saved.openingBalanceBrl === null ? null : Number(saved.openingBalanceBrl),
         seedMonth: saved.seedMonth,
     };
 }

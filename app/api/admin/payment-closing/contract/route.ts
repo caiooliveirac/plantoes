@@ -9,6 +9,8 @@ import { setDoctorContract } from "@/services/doctor-contracts.service";
 const payloadSchema = z.object({
     doctorId: z.string().uuid(),
     ceilingBrl: z.number().finite().positive(),
+    /** Saldo no início do seedMonth. Pode ser negativo. Nulo = parte do teto. */
+    openingBalanceBrl: z.number().finite().nullish(),
     seedMonth: z.string().regex(/^\d{4}-\d{2}$/),
 });
 
@@ -34,6 +36,7 @@ export async function POST(request: NextRequest) {
         const contract = await setDoctorContract({
             doctorId: parsed.data.doctorId,
             ceilingBrl: parsed.data.ceilingBrl,
+            openingBalanceBrl: parsed.data.openingBalanceBrl ?? null,
             seedMonth: parsed.data.seedMonth,
             actorUserId: session.user.id,
         });
@@ -46,6 +49,7 @@ export async function POST(request: NextRequest) {
             details: {
                 doctorId: contract.doctorId,
                 ceilingBrl: contract.ceilingBrl,
+                openingBalanceBrl: contract.openingBalanceBrl,
                 seedMonth: contract.seedMonth,
             },
         });

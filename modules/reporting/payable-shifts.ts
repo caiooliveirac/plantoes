@@ -256,6 +256,8 @@ export interface ChiefPayableDoctorRow {
     paymentProcessNumber?: string | null;
     /** Teto do contrato em R$ (semente); null quando ainda não cadastrado. */
     contractCeilingBrl?: number | null;
+    /** Saldo em R$ no início do seedMonth; null = parte do teto. */
+    contractOpeningBalanceBrl?: number | null;
     /** Mês inicial do contrato (YYYY-MM) a partir do qual o teto é consumido. */
     contractSeedMonth?: string | null;
     /** Saldo contratual calculado até este mês (teto - pagamentos acumulados). */
@@ -353,6 +355,7 @@ export interface DoctorFinancialExtras {
     invoiceNumber?: string | null;
     paymentProcessNumber?: string | null;
     contractCeilingBrl?: number | null;
+    contractOpeningBalanceBrl?: number | null;
     contractSeedMonth?: string | null;
     contractBalanceBrl?: number | null;
     bankHoursMinutes?: number | null;
@@ -1060,6 +1063,7 @@ export function buildChiefPayableBoard(params: {
             invoiceNumber: params.doctorFinancials?.[doctorId]?.invoiceNumber ?? null,
             paymentProcessNumber: params.doctorFinancials?.[doctorId]?.paymentProcessNumber ?? null,
             contractCeilingBrl: params.doctorFinancials?.[doctorId]?.contractCeilingBrl ?? null,
+            contractOpeningBalanceBrl: params.doctorFinancials?.[doctorId]?.contractOpeningBalanceBrl ?? null,
             contractSeedMonth: params.doctorFinancials?.[doctorId]?.contractSeedMonth ?? null,
             contractBalanceBrl: params.doctorFinancials?.[doctorId]?.contractBalanceBrl ?? null,
             contractBalances: params.doctorFinancials?.[doctorId]?.contractBalances ?? [],
@@ -1108,6 +1112,7 @@ export function buildChiefPayableBoard(params: {
                 invoiceNumber: financials?.invoiceNumber ?? null,
                 paymentProcessNumber: financials?.paymentProcessNumber ?? null,
                 contractCeilingBrl: financials?.contractCeilingBrl ?? null,
+                contractOpeningBalanceBrl: financials?.contractOpeningBalanceBrl ?? null,
                 contractSeedMonth: financials?.contractSeedMonth ?? null,
                 contractBalanceBrl: financials?.contractBalanceBrl ?? null,
                 contractBalances: financials?.contractBalances ?? [],
