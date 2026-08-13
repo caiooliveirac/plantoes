@@ -50,11 +50,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     if (!existing) {
         return NextResponse.json({ error: "Regulation occupancy not found." }, { status: 404 });
     }
-    if (!existing.actualEndedAt) {
+    // Sem saída registrada, só dá para confirmar se o chamador INFORMAR a saída
+    // (fluxo do payment-closing sobre ocupação fechada por handoff/boundary).
+    if (!existing.actualEndedAt && !parsed.data.actualEndedAt) {
         return NextResponse.json({ error: "Esta ocupacao ainda nao tem saida registrada para confirmar." }, { status: 400 });
     }
 
-    const nextActualEndedAt = parsed.data.actualEndedAt ? new Date(parsed.data.actualEndedAt) : existing.actualEndedAt;
+    const nextActualEndedAt = parsed.data.actualEndedAt ? new Date(parsed.data.actualEndedAt) : existing.actualEndedAt!;
     const nextStartedAt = parsed.data.startedAt ? new Date(parsed.data.startedAt) : existing.startedAt;
     if (nextActualEndedAt.getTime() < nextStartedAt.getTime()) {
         return NextResponse.json({ error: "Horario de saida nao pode ser anterior a chegada." }, { status: 400 });
@@ -113,11 +115,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             entityType: "regulation_occupancy",
             entityId: updated.id,
             details: {
-                previousActualEndedAt: existing.actualEndedAt.toISOString(),
+                previousActualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
                 confirmedActualEndedAt: nextActualEndedAt.toISOString(),
                 previousStartedAt: existing.startedAt.toISOString(),
                 confirmedStartedAt: nextStartedAt.toISOString(),
-                edited: nextActualEndedAt.getTime() !== existing.actualEndedAt.getTime()
+                edited: nextActualEndedAt.getTime() !== (existing.actualEndedAt?.getTime() ?? null)
                     || nextStartedAt.getTime() !== existing.startedAt.getTime(),
                 note: parsed.data.note ?? null,
                 earlyDepartureOutcome: requestedOutcome,

@@ -10549,6 +10549,146 @@ button.chief-payable-tag:focus-visible {
     cursor: progress;
 }
 
+/* Conversão INTEIRO ⇄ MEIO no modal do médico (payment-closing) */
+
+.half-shift-decision-trigger {
+    appearance: none;
+    background: var(--surface-elevated);
+    border: 1px solid var(--accent-warn);
+    color: var(--accent-warn);
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.half-shift-decision-trigger:hover {
+    background: var(--accent-warn-soft);
+}
+
+.half-shift-decision-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.half-shift-decision-panel {
+    width: min(460px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px 20px;
+    border-radius: 14px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    box-shadow: var(--shadow-elevated);
+}
+
+.half-shift-decision-panel header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.half-shift-decision-panel header span {
+    font-size: 0.8rem;
+    color: var(--muted-strong);
+}
+
+.half-shift-decision-times {
+    display: flex;
+    gap: 16px;
+}
+
+.half-shift-decision-times label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.half-shift-decision-times input[type="time"] {
+    appearance: none;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--text);
+    border-radius: 9px;
+    font-size: 1.05rem;
+    padding: 6px 8px;
+}
+
+.half-shift-decision-before {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
+.half-shift-decision-note {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.half-shift-decision-note textarea {
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--text);
+    border-radius: 9px;
+    padding: 8px;
+    font-size: 0.85rem;
+    resize: vertical;
+}
+
+.half-shift-decision-error {
+    margin: 0;
+    color: var(--accent-fraud);
+    font-size: 0.8rem;
+}
+
+.half-shift-decision-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.half-shift-decision-actions button {
+    appearance: none;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-glass);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 0.86rem;
+    cursor: pointer;
+}
+
+.half-shift-decision-actions button.primary {
+    background: var(--accent-confirm);
+    border-color: transparent;
+    color: #07120f;
+}
+
+.half-shift-decision-actions button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
 @media (max-width: 720px) {
     .departure-verifier-body {
         grid-template-columns: 1fr;
