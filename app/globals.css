@@ -5987,7 +5987,8 @@ button.chief-payable-tag:focus-visible {
 
 .chief-payable-modal-shift-row {
     display: grid;
-    grid-template-columns: 64px 32px minmax(60px, 1fr) 110px 130px 100px;
+    /* Última coluna: gatilho compacto MEIO/INTEIRO (half-shift-decision). */
+    grid-template-columns: 64px 32px minmax(60px, 1fr) 110px 130px 100px minmax(0, max-content);
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
@@ -6327,8 +6328,14 @@ button.chief-payable-tag:focus-visible {
         grid-template-areas:
             "date turn"
             "target kind"
-            "rate value";
+            "rate value"
+            "action action";
         gap: 4px 8px;
+    }
+
+    .chief-payable-modal-shift-row .half-shift-decision-trigger {
+        grid-area: action;
+        justify-self: start;
     }
 
     .chief-payable-modal-shift-date { grid-area: date; }
@@ -10556,13 +10563,15 @@ button.chief-payable-tag:focus-visible {
     background: var(--surface-elevated);
     border: 1px solid var(--accent-warn);
     color: var(--accent-warn);
-    padding: 4px 8px;
-    border-radius: 8px;
-    font-size: 0.68rem;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    line-height: 1.4;
     font-weight: 700;
     letter-spacing: 0.04em;
     cursor: pointer;
     white-space: nowrap;
+    justify-self: end;
 }
 
 .half-shift-decision-trigger:hover {

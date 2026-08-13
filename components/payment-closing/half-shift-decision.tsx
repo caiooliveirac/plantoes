@@ -148,8 +148,10 @@ export function HalfShiftDecision({ shift }: { shift: PayableShift }) {
                 type="button"
                 className="half-shift-decision-trigger"
                 onClick={() => { setOpen(true); setError(null); setNote(""); }}
+                title={mode === "to_half" ? "Pagar só MEIO plantão" : "Pagar plantão inteiro"}
+                aria-label={mode === "to_half" ? "Pagar só MEIO plantão" : "Pagar plantão inteiro"}
             >
-                {mode === "to_half" ? "PAGAR SÓ MEIO PLANTÃO" : "PAGAR PLANTÃO INTEIRO"}
+                {mode === "to_half" ? "½ MEIO" : "INTEIRO"}
             </button>
 
             {open ? (
