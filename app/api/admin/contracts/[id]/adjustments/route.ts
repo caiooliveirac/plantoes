@@ -9,14 +9,28 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { recordManualAdjustment } from "@/services/contract-ledger.service";
+import { recordBalanceAnchor, recordManualAdjustment } from "@/services/contract-ledger.service";
 
-const payloadSchema = z.object({
-    /** Positivo credita saldo, negativo consome. Zero é recusado. */
-    amountBrl: z.number().finite().refine((value) => value !== 0, "O ajuste não pode ser zero."),
-    description: z.string().trim().min(5, "Descreva o motivo do ajuste."),
-    entryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-});
+// Dois modos. Delta: o admin sabe o valor do ajuste (glosa, dobra). Âncora: o
+// admin sabe o SALDO que valia no início de uma data ("em 01/05 era R$ X") e o
+// servidor calcula o delta contra o razão — nunca confiar num delta vindo do
+// cliente para este caso, o razão pode ter mudado entre a leitura e o clique.
+const payloadSchema = z.union([
+    z.object({
+        mode: z.literal("anchor"),
+        targetBalanceBrl: z.number().finite(),
+        /** O saldo informado vale no início deste dia. */
+        anchorDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        description: z.string().trim().min(5, "Descreva o motivo da correção."),
+    }),
+    z.object({
+        mode: z.literal("delta").optional(),
+        /** Positivo credita saldo, negativo consome. Zero é recusado. */
+        amountBrl: z.number().finite().refine((value) => value !== 0, "O ajuste não pode ser zero."),
+        description: z.string().trim().min(5, "Descreva o motivo do ajuste."),
+        entryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }),
+]);
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
     if (!hasDatabaseUrl()) {
@@ -40,8 +54,36 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         );
     }
 
-    const entryDate = parsed.data.entryDate ?? new Date().toISOString().slice(0, 10);
     try {
+        if (parsed.data.mode === "anchor") {
+            const { targetBalanceBrl, anchorDate, description } = parsed.data;
+            const result = await recordBalanceAnchor({
+                contractId: id,
+                targetBalanceCents: Math.round(targetBalanceBrl * 100),
+                anchorDate,
+                description,
+                actorUserId: session.user.id,
+            });
+
+            await getDb().insert(auditLogs).values({
+                actorUserId: session.user.id,
+                action: "contract.balance_anchor",
+                entityType: "contract",
+                entityId: id,
+                details: {
+                    targetBalanceBrl,
+                    anchorDate,
+                    description,
+                    deltaBrl: result.deltaCents / 100,
+                    balanceBeforeBrl: result.balanceBeforeCents / 100,
+                },
+            });
+
+            revalidatePath("/admin/payment-closing");
+            return NextResponse.json({ contractId: id, anchorDate, deltaBrl: result.deltaCents / 100 });
+        }
+
+        const entryDate = parsed.data.entryDate ?? new Date().toISOString().slice(0, 10);
         await recordManualAdjustment({
             contractId: id,
             amountCents: Math.round(parsed.data.amountBrl * 100),

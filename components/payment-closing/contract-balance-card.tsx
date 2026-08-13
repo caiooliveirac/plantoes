@@ -118,6 +118,16 @@ export function ContractBalanceCard({
     const [renewalDraft, setRenewalDraft] = useState<string | null>(null);
     const [renewalBusy, setRenewalBusy] = useState(false);
     const [renewalError, setRenewalError] = useState<string | null>(null);
+    // Âncora de saldo: "no início de <data> o saldo era R$ X". Corrige o saldo
+    // dali em diante SEM redefinir o contrato — teto e ciclo (e o alerta de
+    // renovação no aniversário) ficam como estão. Para trocar teto/mês do
+    // padrão, o botão é outro: "Corrigir valor/mês" no card de termos.
+    const [anchorOpen, setAnchorOpen] = useState(false);
+    const [anchorDate, setAnchorDate] = useState("");
+    const [anchorValue, setAnchorValue] = useState("");
+    const [anchorReason, setAnchorReason] = useState("");
+    const [anchorBusy, setAnchorBusy] = useState(false);
+    const [anchorError, setAnchorError] = useState<string | null>(null);
 
     const selected = contracts.find((item) => item.contractId === selectedId) ?? contracts[0];
 
@@ -211,6 +221,46 @@ export function ContractBalanceCard({
             setRenewalError(error instanceof Error ? error.message : "Falha ao renovar o contrato.");
         } finally {
             setRenewalBusy(false);
+        }
+    }
+
+    async function submitBalanceAnchor() {
+        const value = Number(anchorValue.replace(",", "."));
+        if (!Number.isFinite(value)) {
+            setAnchorError("Informe o saldo em reais que valia na data.");
+            return;
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(anchorDate)) {
+            setAnchorError("Informe a data da âncora.");
+            return;
+        }
+        if (anchorReason.trim().length < 5) {
+            setAnchorError("Descreva o motivo da correção — fica no histórico do contrato.");
+            return;
+        }
+        setAnchorBusy(true);
+        setAnchorError(null);
+        try {
+            const response = await fetch(`/api/admin/contracts/${selected.contractId}/adjustments`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    mode: "anchor",
+                    targetBalanceBrl: value,
+                    anchorDate,
+                    description: anchorReason.trim(),
+                }),
+            });
+            const body = await response.json().catch(() => null) as { error?: string } | null;
+            if (!response.ok) throw new Error(body?.error ?? "Não foi possível corrigir o saldo.");
+            setAnchorOpen(false);
+            setAnchorValue("");
+            setAnchorReason("");
+            onOpeningBalanceSaved?.();
+        } catch (error) {
+            setAnchorError(error instanceof Error ? error.message : "Falha ao corrigir o saldo.");
+        } finally {
+            setAnchorBusy(false);
         }
     }
 
@@ -377,6 +427,70 @@ export function ContractBalanceCard({
                             ))}
                         </tbody>
                     </table>
+                </div>
+            ) : null}
+
+            {canManage && !readOnly ? (
+                <div className="contract-balance-anchor">
+                    <button
+                        type="button"
+                        className="payment-button subtle"
+                        onClick={() => {
+                            setAnchorOpen((open) => !open);
+                            setAnchorError(null);
+                            // Default: início do mês em edição — o caso típico é
+                            // "o saldo no início de maio era X".
+                            if (!anchorDate) setAnchorDate(monthKey ? `${monthKey}-01` : new Date().toISOString().slice(0, 10));
+                        }}
+                    >
+                        {anchorOpen ? "Cancelar correção de saldo" : "Corrigir saldo em uma data"}
+                    </button>
+                    {anchorOpen ? (
+                        <div className="contract-balance-anchor-form">
+                            <p className="contract-balance-anchor-note">
+                                Informe o saldo que valia no <strong>início do dia</strong> escolhido.
+                                O sistema lança o ajuste que faz a conta bater e os meses seguintes
+                                passam a descontar desse valor. Teto, ciclo e alerta de renovação
+                                não mudam — para isso use &quot;Corrigir valor/mês&quot;.
+                            </p>
+                            <div className="contract-balance-opening">
+                                <input
+                                    type="date"
+                                    value={anchorDate}
+                                    onChange={(event) => setAnchorDate(event.target.value)}
+                                    disabled={anchorBusy}
+                                    aria-label="Data da âncora"
+                                />
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={anchorValue}
+                                    onChange={(event) => setAnchorValue(event.target.value)}
+                                    placeholder="saldo na data, ex.: 120000.00"
+                                    disabled={anchorBusy}
+                                    aria-label="Saldo em reais no início da data"
+                                />
+                            </div>
+                            <div className="contract-balance-opening">
+                                <input
+                                    type="text"
+                                    value={anchorReason}
+                                    onChange={(event) => setAnchorReason(event.target.value)}
+                                    placeholder="motivo (ex.: saldo conferido na planilha de maio)"
+                                    disabled={anchorBusy}
+                                />
+                                <button
+                                    type="button"
+                                    className="payment-button"
+                                    onClick={() => void submitBalanceAnchor()}
+                                    disabled={anchorBusy || anchorValue.trim() === "" || anchorReason.trim() === ""}
+                                >
+                                    {anchorBusy ? "Corrigindo..." : "Corrigir saldo"}
+                                </button>
+                            </div>
+                            {anchorError ? <p className="chief-payable-extra-feedback danger">{anchorError}</p> : null}
+                        </div>
+                    ) : null}
                 </div>
             ) : null}
 

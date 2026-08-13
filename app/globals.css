@@ -12192,6 +12192,26 @@ button.chief-payable-tag:focus-visible {
     min-width: 0;
 }
 
+.contract-balance-anchor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.contract-balance-anchor-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+}
+
+.contract-balance-anchor-note {
+    font-size: 0.82rem;
+    opacity: 0.85;
+    margin: 0;
+}
+
 @media (max-width: 640px) {
     .contract-balance-values {
         grid-template-columns: 1fr;

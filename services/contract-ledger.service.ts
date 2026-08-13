@@ -434,6 +434,49 @@ export async function recordManualAdjustment(params: {
     });
 }
 
+
+/**
+ * Âncora de saldo: o admin informa "no início de <data> o saldo era R$ X" e o
+ * serviço converte isso no ajuste manual que faz a soma do razão bater — sem
+ * tocar teto, ciclo ou histórico (append-only: correção vira lançamento).
+ *
+ * "Início da data" = lançamentos com entry_date < anchorDate. Os invoices
+ * mensais são datados no último dia do mês, então âncora em 01/05 pega tudo
+ * até abril e deixa o consumo de maio em diante descontar do valor informado.
+ */
+export async function recordBalanceAnchor(params: {
+    contractId: string;
+    targetBalanceCents: number;
+    /** AAAA-MM-DD; o saldo informado vale no início deste dia. */
+    anchorDate: string;
+    description: string;
+    actorUserId: string;
+}): Promise<{ deltaCents: number; balanceBeforeCents: number }> {
+    const db = getDb();
+    const [row] = await db
+        .select({ total: sql<string>`coalesce(sum(${contractLedger.amount}), 0)` })
+        .from(contractLedger)
+        .where(and(
+            eq(contractLedger.contractId, params.contractId),
+            sql`${contractLedger.entryDate} < ${params.anchorDate}`,
+        ));
+    const balanceBeforeCents = Math.round(Number(row?.total ?? 0) * 100);
+    const deltaCents = params.targetBalanceCents - balanceBeforeCents;
+    if (deltaCents === 0) {
+        throw new Error(
+            "O saldo calculado nessa data já é exatamente esse — nenhum ajuste necessário.",
+        );
+    }
+    await recordManualAdjustment({
+        contractId: params.contractId,
+        amountCents: deltaCents,
+        entryDate: params.anchorDate,
+        description: params.description,
+        actorUserId: params.actorUserId,
+    });
+    return { deltaCents, balanceBeforeCents };
+}
+
 /**
  * Crédito de abertura do contrato: o saldo que o coordenador digita quando a
  * planilha não trouxe número confiável, e o que o chefe define ao renovar.
