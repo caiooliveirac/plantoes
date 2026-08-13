@@ -3090,6 +3090,9 @@ test("buildTakeoverWarningReply: avisa ocupante, cita a janela de 30 min e mant�
     assert.match(reply, /reenvie a chegada exata/);
     assert.match(reply, /chegada de Fulano fica preservada/);
     assert.match(reply, /sem contar atraso/);
+    // Barulhento de propósito: cabeçalho de alerta + consequência em caixa alta.
+    assert.match(reply, /🚨🚨 \*ATENÇÃO — POSTO OCUPADO\* 🚨🚨/);
+    assert.match(reply, /\*FULANO SERÁ RETIRADO\(A\) DO QUADRO\*/);
 });
 
 test("buildTakeoverWarningReply escapa markdown nas interpolações (nome com asterisco)", () => {

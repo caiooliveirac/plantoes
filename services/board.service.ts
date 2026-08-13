@@ -2106,6 +2106,9 @@ export async function listPendingDepartureConfirmations(
     where ro.actual_ended_at is not null
       and ro.departure_confirmed_at is null
       and ro.actual_ended_at >= ${cutoffAt}
+      -- PIAM auto-fecha na janela fixa (07:00/19:00) já na chegada: não é uma
+      -- saída verbalizada e não precisa de clique do chefe.
+      and not (rp.code = 'PIAM' and ro.actual_ended_at = ro.scheduled_end_at)
 
     union all
 

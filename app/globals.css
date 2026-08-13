@@ -10431,6 +10431,124 @@ button.chief-payable-tag:focus-visible {
     cursor: progress;
 }
 
+/* Triagem das saídas: frase-motivo, botões de desfecho e ajuste simples */
+
+.departure-verifier-headline {
+    margin: 0;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: var(--text);
+}
+
+.departure-verifier-decisions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.departure-verifier-decision {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.departure-verifier-decision .departure-verifier-action {
+    text-align: left;
+}
+
+.departure-verifier-decision__hint {
+    font-size: 0.76rem;
+    color: var(--muted-strong);
+    line-height: 1.4;
+    padding: 0 2px;
+}
+
+.departure-verifier-note,
+.departure-verifier-adjust {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 12px;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+}
+
+.departure-verifier-note textarea,
+.departure-verifier-adjust input[type="time"] {
+    appearance: none;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--text);
+    border-radius: 9px;
+}
+
+.departure-verifier-adjust__balance {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+}
+
+.pending-departure-card__headline {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--muted-strong);
+}
+
+.pending-departure-card__headline[data-attention="true"] {
+    color: var(--accent-warn);
+}
+
+/* Anomalia (saída minutos após a chegada): alerta de ERRO, não de decisão. */
+.pending-departure-card__headline[data-kind="short_anomaly"] {
+    color: var(--accent-fraud);
+    font-weight: 600;
+}
+
+.board-audit-rail__section {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-strong);
+    padding: 2px 2px 0;
+}
+
+.board-audit-rail__confirm-all {
+    appearance: none;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 9px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.board-audit-rail__confirm-all:hover {
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+.board-audit-rail__confirm-all:disabled {
+    opacity: 0.55;
+    cursor: progress;
+}
+
 @media (max-width: 720px) {
     .departure-verifier-body {
         grid-template-columns: 1fr;

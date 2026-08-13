@@ -1,9 +1,10 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Check, PencilLine } from "lucide-react";
+import { Check, PencilLine, Scale } from "lucide-react";
 import { PatternBadge } from "@/components/board/PatternBadge";
 import { staggerChild, pulseAttention, tapFeedback } from "@/lib/board/motion";
+import { triagePendingDeparture } from "@/modules/operational/departure-triage";
 import type { PendingDepartureConfirmation, TelegramLateDepartureReasonCode } from "@/services/board.service";
 
 const REASON_SHORT: Record<TelegramLateDepartureReasonCode, string> = {
@@ -54,6 +55,17 @@ export interface PendingDepartureCardProps {
 export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, isFresh, busy }: PendingDepartureCardProps) {
     const delay = formatDelay(pending.delayMinutes);
     const suspect = (pending.delayMinutes ?? 0) >= 60 || pending.reasonOccurrenceCount30d >= 3;
+    const triage = triagePendingDeparture({
+        actualEndedAt: pending.actualEndedAt,
+        scheduledStartAt: pending.scheduledStartAt,
+        scheduledEndAt: pending.scheduledEndAt,
+        startedAt: pending.startedAt,
+        roleLabel: pending.roleLabel,
+        delayMinutes: pending.delayMinutes,
+        reasonCode: pending.reasonCode,
+        occurrenceNumberMissing: pending.occurrenceNumberMissing,
+        reasonOccurrenceCount30d: pending.reasonOccurrenceCount30d,
+    });
 
     return (
         <motion.li
@@ -63,7 +75,7 @@ export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, 
             animate={isFresh ? { ...pulseAttention, opacity: 1, y: 0, scale: 1 } : "animate"}
             exit={{ opacity: 0, x: 40, transition: { duration: 0.22 } }}
             className="pending-departure-card"
-            data-suspect={suspect}
+            data-suspect={suspect || triage.kind === "short_anomaly"}
         >
             <button
                 type="button"
@@ -111,29 +123,49 @@ export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, 
                 </p>
             )}
 
+            <p className="pending-departure-card__headline" data-attention={triage.attention} data-kind={triage.kind}>
+                {triage.kind === "short_anomaly" ? "⚠︎ Provável erro de registro — " : ""}{triage.headline}
+            </p>
+
             <div className="pending-departure-card__actions">
-                <motion.button
-                    type="button"
-                    className="pending-departure-card__btn primary"
-                    onClick={(event) => { event.stopPropagation(); void onQuickConfirm(pending); }}
-                    whileTap={tapFeedback}
-                    disabled={busy}
-                    aria-label={`Confirmar saída às ${formatHourMinute(pending.actualEndedAt)}`}
-                >
-                    <Check size={14} strokeWidth={2.6} style={{ marginRight: 6, verticalAlign: "-2px" }} />
-                    Confirmar {formatHourMinute(pending.actualEndedAt)}
-                </motion.button>
-                <motion.button
-                    type="button"
-                    className="pending-departure-card__btn"
-                    onClick={(event) => { event.stopPropagation(); onOpenVerifier(pending); }}
-                    whileTap={tapFeedback}
-                    disabled={busy}
-                    aria-label="Abrir verificador para editar horário"
-                >
-                    <PencilLine size={14} strokeWidth={2.4} style={{ marginRight: 6, verticalAlign: "-2px" }} />
-                    Editar
-                </motion.button>
+                {triage.attention ? (
+                    <motion.button
+                        type="button"
+                        className="pending-departure-card__btn primary"
+                        onClick={(event) => { event.stopPropagation(); onOpenVerifier(pending); }}
+                        whileTap={tapFeedback}
+                        disabled={busy}
+                        aria-label={`Decidir pagamento e banco de horas de ${pending.displayName ?? pending.doctorName}`}
+                    >
+                        <Scale size={14} strokeWidth={2.4} style={{ marginRight: 6, verticalAlign: "-2px" }} />
+                        Decidir
+                    </motion.button>
+                ) : (
+                    <>
+                        <motion.button
+                            type="button"
+                            className="pending-departure-card__btn primary"
+                            onClick={(event) => { event.stopPropagation(); void onQuickConfirm(pending); }}
+                            whileTap={tapFeedback}
+                            disabled={busy}
+                            aria-label={`Confirmar saída às ${formatHourMinute(pending.actualEndedAt)}`}
+                        >
+                            <Check size={14} strokeWidth={2.6} style={{ marginRight: 6, verticalAlign: "-2px" }} />
+                            Confirmar {formatHourMinute(pending.actualEndedAt)}
+                        </motion.button>
+                        <motion.button
+                            type="button"
+                            className="pending-departure-card__btn"
+                            onClick={(event) => { event.stopPropagation(); onOpenVerifier(pending); }}
+                            whileTap={tapFeedback}
+                            disabled={busy}
+                            aria-label="Abrir verificador para revisar esta saída"
+                        >
+                            <PencilLine size={14} strokeWidth={2.4} style={{ marginRight: 6, verticalAlign: "-2px" }} />
+                            Revisar
+                        </motion.button>
+                    </>
+                )}
             </div>
         </motion.li>
     );
