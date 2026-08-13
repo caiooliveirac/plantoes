@@ -106,6 +106,10 @@ export interface PayableShift {
     slotEndedAt: string;
     startedAt: string;
     endedAt: string | null;
+    /** Saída real verbalizada/registrada (null = fechado por handoff/boundary). */
+    actualEndedAt: string | null;
+    scheduledStartAt: string | null;
+    scheduledEndAt: string | null;
     durationMinutes: number | null;
     paymentStatus: "ready_for_payment" | "needs_review";
     auditStatus: "clean" | "review";
@@ -175,6 +179,9 @@ export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): Payabl
         slotEndedAt,
         startedAt: slotStartedAt,
         endedAt: slotEndedAt,
+        actualEndedAt: null,
+        scheduledStartAt: null,
+        scheduledEndAt: null,
         durationMinutes: 12 * 60,
         paymentStatus: "ready_for_payment",
         auditStatus: "clean",
@@ -677,6 +684,9 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
         slotEndedAt: board.endedAt,
         startedAt: row.startedAt ?? board.startedAt,
         endedAt: row.endedAt,
+        actualEndedAt: row.actualEndedAt,
+        scheduledStartAt: row.scheduledStartAt,
+        scheduledEndAt: row.scheduledEndAt,
         durationMinutes,
         paymentStatus: row.paymentStatus,
         auditStatus: row.paymentStatus === "ready_for_payment" ? "clean" : "review",

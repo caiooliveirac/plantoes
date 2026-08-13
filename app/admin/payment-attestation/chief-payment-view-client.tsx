@@ -9,6 +9,8 @@ import { ContractTermsCard } from "@/components/payment-closing/contract-terms-c
 // Nenhuma ação desta tela pode ficar pendurada esperando o servidor.
 import { fetchComLimite } from "@/lib/fetch-com-limite";
 import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
+import { HalfShiftDecision } from "@/components/payment-closing/half-shift-decision";
+import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
 import { resolveDoctorPendencies, tracksContractBalance, type PaymentClosingPendency } from "@/modules/reporting/payment-closing-pendencies";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
@@ -3008,6 +3010,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             {shift.paymentUnit !== 1 ? <em> × {formatUnits(shift.paymentUnit)}</em> : null}
                                                         </span>
                                                         <span className="chief-payable-modal-shift-value">{formatCurrency(value)}</span>
+                                                        {canManageClosing
+                                                            && shift.source !== "admin_extra"
+                                                            && shift.occupancyId
+                                                            && !isHalfShiftRoleLabel(shift.roleLabel)
+                                                            ? <HalfShiftDecision shift={shift} />
+                                                            : null}
                                                     </li>
                                                 );
                                             })}
