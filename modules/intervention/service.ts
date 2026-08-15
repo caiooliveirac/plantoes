@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, isNull, isNotNull, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, isNotNull, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
 import { doctors, interventionBaseDeactivations, interventionBases, interventionOccupancies, regulationOccupancies } from "@/db/schema";
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
@@ -8,11 +8,19 @@ import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/ba
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
+import {
+    describeContestedDeparture,
+    resolveContestedBoardDecision,
+    type ContestedDepartureContinuation,
+} from "@/modules/operational/contested-departure";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveContinuationInPlaceShiftLabel, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
 
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
 const MIN_SAFE_OCCUPANCY_DURATION_MS = 60 * 1000;
+/** Até onde procurar o plantão fechado que a chegada nova vem reabrir (P de 24h cabe). */
+const ARRIVAL_MERGE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Remanejamento herda continuity_group_id do plantão aberto em outra base só quando a
@@ -406,6 +414,189 @@ async function assertInterventionBaseExists(baseId: number) {
     return base;
 }
 
+/**
+ * Ocupação fechada do mesmo médico nesta base que esta chegada vem reabrir.
+ * Janela de busca larga (24h) porque um "P" de 24h fechado por engano às 19h
+ * ainda é o mesmo plantão às 19h48; quem decide de fato é resolveArrivalIdentity.
+ */
+async function resolveInterventionArrivalMergeTarget(tx: Executor, params: {
+    baseId: number;
+    doctorId: string;
+    startedAt: Date;
+}) {
+    const candidates = await tx.query.interventionOccupancies.findMany({
+        where: and(
+            eq(interventionOccupancies.baseId, params.baseId),
+            eq(interventionOccupancies.doctorId, params.doctorId),
+            isNotNull(interventionOccupancies.endedAt),
+            gte(interventionOccupancies.startedAt, new Date(params.startedAt.getTime() - ARRIVAL_MERGE_LOOKBACK_MS)),
+        ),
+        orderBy: [desc(interventionOccupancies.startedAt)],
+    });
+
+    const identity = resolveArrivalIdentity({
+        startedAt: params.startedAt,
+        existing: candidates.map((occupancy: typeof interventionOccupancies.$inferSelect) => ({
+            id: occupancy.id,
+            doctorId: occupancy.doctorId,
+            startedAt: occupancy.startedAt,
+            endedAt: occupancy.endedAt,
+            actualEndedAt: occupancy.actualEndedAt,
+            scheduledEndAt: occupancy.scheduledEndAt,
+            isShadow: isInterventionShadowOccupancyNotes(occupancy.notes)
+                || isInterventionDisplacedOccupancyNotes(occupancy.notes),
+            departureConfirmed: occupancy.departureConfirmedAt !== null,
+        })),
+    });
+
+    if (identity.kind !== "merge") {
+        return null;
+    }
+
+    const occupancy = candidates.find(
+        (candidate: typeof interventionOccupancies.$inferSelect) => candidate.id === identity.occupancyId,
+    );
+    return occupancy ? { occupancy, identity } : null;
+}
+
+/**
+ * Junta a chegada nova com o plantão fechado: reabre a linha em vez de criar
+ * outra. A saída anterior deixa de valer (era errada), então o desfecho de
+ * pagamento e a confirmação da chefia caem junto — quem confirmou confirmou uma
+ * saída que não aconteceu. O que a saída foi fica escrito na nota.
+ */
+async function mergeInterventionArrival(tx: Executor, params: {
+    target: typeof interventionOccupancies.$inferSelect;
+    keptStartedAt: Date;
+    previousDepartureAt: Date | null;
+    arrivalAt: Date;
+    notes: string | null;
+    shiftLabel: string | null;
+    updatedByUserId: string | null;
+}) {
+    // Se outro médico assumiu o quadro nesta base, reabrir com board violaria o
+    // índice de um titular por base: volta fora do quadro, como deslocado.
+    const boardHeldByOther = await tx.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.baseId, params.target.baseId),
+            isNotNull(interventionOccupancies.boardStartedAt),
+            isNull(interventionOccupancies.endedAt),
+            ne(interventionOccupancies.id, params.target.id),
+        ),
+    });
+
+    const mergeNote = describeMergedArrival({
+        previousDepartureAt: params.previousDepartureAt,
+        arrivalAt: params.arrivalAt,
+    });
+
+    const [updated] = await tx.update(interventionOccupancies)
+        .set({
+            startedAt: params.keptStartedAt,
+            endedAt: null,
+            actualEndedAt: null,
+            boardStartedAt: boardHeldByOther
+                ? null
+                : (params.target.boardStartedAt ?? params.keptStartedAt),
+            departureConfirmedAt: null,
+            departureConfirmedByUserId: null,
+            departureConfirmedNote: null,
+            earlyDepartureOutcome: null,
+            shiftLabel: params.shiftLabel ?? params.target.shiftLabel,
+            notes: [params.target.notes, mergeNote, params.notes]
+                .filter(Boolean)
+                .join("\n")
+                .trim(),
+            updatedByUserId: params.updatedByUserId,
+            updatedAt: new Date(),
+        })
+        .where(eq(interventionOccupancies.id, params.target.id))
+        .returning();
+
+    return updated;
+}
+
+/**
+ * "NÃO SAIU": a chefia contesta a saída registrada. Reabre a ocupação que já
+ * existe — sem criar outra, sem derrubar quem estiver no quadro — e derruba o
+ * desfecho de pagamento que tinha sido decidido sobre a saída contestada.
+ */
+export async function reopenContestedInterventionDeparture(occupancyId: string, input: {
+    continuation: ContestedDepartureContinuation;
+    continuedAtLabel?: string | null;
+    note?: string | null;
+    updatedByUserId?: string | null;
+}) {
+    const db = getDb();
+    const result = await db.transaction(async (tx: Executor) => {
+        const existing = await tx.query.interventionOccupancies.findFirst({
+            where: eq(interventionOccupancies.id, occupancyId),
+        });
+        if (!existing) {
+            throw new Error("Intervention occupancy not found.");
+        }
+        const contestedDepartureAt = existing.actualEndedAt ?? existing.endedAt;
+        if (!contestedDepartureAt) {
+            throw new Error("Esta ocupacao nao tem saida registrada para contestar.");
+        }
+
+        const carrier = await tx.query.interventionOccupancies.findFirst({
+            where: and(
+                eq(interventionOccupancies.baseId, existing.baseId),
+                isNotNull(interventionOccupancies.boardStartedAt),
+                isNull(interventionOccupancies.endedAt),
+                ne(interventionOccupancies.id, existing.id),
+            ),
+            orderBy: [desc(interventionOccupancies.boardStartedAt)],
+        });
+        const carrierDoctor = carrier
+            ? await tx.query.doctors.findFirst({ where: eq(doctors.id, carrier.doctorId), columns: { fullName: true } })
+            : null;
+
+        const decision = resolveContestedBoardDecision({
+            continuation: input.continuation,
+            boardHeldByOther: carrier
+                ? {
+                    doctorName: carrierDoctor?.fullName ?? "Outro médico",
+                    since: carrier.boardStartedAt ?? carrier.startedAt,
+                }
+                : null,
+            previousBoardStartedAt: existing.boardStartedAt,
+            startedAt: existing.startedAt,
+        });
+
+        const [updated] = await tx.update(interventionOccupancies)
+            .set({
+                endedAt: null,
+                actualEndedAt: null,
+                boardStartedAt: decision.boardStartedAt,
+                departureConfirmedAt: null,
+                departureConfirmedByUserId: null,
+                departureConfirmedNote: null,
+                earlyDepartureOutcome: null,
+                notes: [
+                    existing.notes,
+                    describeContestedDeparture({
+                        contestedDepartureAt,
+                        continuation: input.continuation,
+                        continuedAtLabel: input.continuedAtLabel ?? null,
+                    }),
+                    input.note,
+                ].filter(Boolean).join("\n").trim(),
+                updatedByUserId: input.updatedByUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .where(eq(interventionOccupancies.id, existing.id))
+            .returning();
+
+        await syncInterventionBankHours(tx, existing.id);
+        return { occupancy: updated, contestedDepartureAt, outOfBoardReason: decision.outOfBoardReason };
+    });
+
+    publishBoardUpdate(`intervention:reopen:${result.occupancy.baseId}`);
+    return result;
+}
+
 export async function startInterventionOccupancy(input: StartInterventionOccupancyInput) {
     const db = getDb();
     const now = new Date();
@@ -599,6 +790,33 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
 
             await syncInterventionBankHours(tx, existingSameDoctor.id);
             return updated;
+        }
+
+        // Plantão do mesmo médico nesta base JÁ FECHADO, mas cuja janela ainda
+        // cobre esta chegada: é o mesmo plantão sendo redeclarado depois de uma
+        // saída errada (ou de uma rendição indevida), não um plantão novo.
+        // Sem isto nascia a duplicata — 131 dos 149 pares sobrepostos dos últimos
+        // 4 meses caíram exatamente aqui.
+        const mergeTarget = input.isShadow || historicalCorrectionEndAt
+            ? null
+            : await resolveInterventionArrivalMergeTarget(tx, {
+                baseId: input.baseId,
+                doctorId: input.doctorId,
+                startedAt: input.startedAt,
+            });
+
+        if (mergeTarget) {
+            const merged = await mergeInterventionArrival(tx, {
+                target: mergeTarget.occupancy,
+                keptStartedAt: mergeTarget.identity.keptStartedAt,
+                previousDepartureAt: mergeTarget.identity.previousDepartureAt,
+                arrivalAt: input.startedAt,
+                notes: input.notes ?? null,
+                shiftLabel: input.shiftLabel ?? null,
+                updatedByUserId: input.createdByUserId ?? null,
+            });
+            await syncInterventionBankHours(tx, merged.id);
+            return merged;
         }
 
         const otherBaseOccupancy = await tx.query.interventionOccupancies.findFirst({

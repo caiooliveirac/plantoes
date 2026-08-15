@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, isNotNull, isNull, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, isNull, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
 import { doctors, interventionOccupancies, regulationOccupancies, regulationPostDeactivations, regulationPosts } from "@/db/schema";
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
@@ -7,6 +7,12 @@ import { publishBoardUpdate } from "@/lib/board-live";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
+import {
+    describeContestedDeparture,
+    resolveContestedBoardDecision,
+    type ContestedDepartureContinuation,
+} from "@/modules/operational/contested-departure";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
@@ -71,6 +77,8 @@ export function resolveHistoricalAdminCorrectionEndAt(params: {
 
 type Executor = any;
 const AUTO_CONTINUITY_RECENT_CLOSED_WINDOW_MS = 2 * 60 * 60 * 1000;
+/** Até onde procurar o plantão fechado que a chegada nova vem reabrir (P de 24h cabe). */
+const ARRIVAL_MERGE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 // Simétrico à intervenção: uma desativação de posto vale até a VIRADA do turno em que
 // foi feita (07:00/19:00 SP). Passada a fronteira, o posto volta a 'waiting' (→
@@ -363,6 +371,182 @@ export function resolveRegulationContinuationScheduledEndAt(params: {
     return requiredEndAt.getTime() > fromExisting.getTime()
         ? requiredEndAt
         : fromExisting;
+}
+
+/** Ocupação fechada do mesmo médico neste ramal que esta chegada vem reabrir. */
+async function resolveRegulationArrivalMergeTarget(tx: Executor, params: {
+    postId: number;
+    doctorId: string;
+    startedAt: Date;
+}) {
+    const candidates = await tx.query.regulationOccupancies.findMany({
+        where: and(
+            eq(regulationOccupancies.postId, params.postId),
+            eq(regulationOccupancies.doctorId, params.doctorId),
+            isNotNull(regulationOccupancies.endedAt),
+            gte(regulationOccupancies.startedAt, new Date(params.startedAt.getTime() - ARRIVAL_MERGE_LOOKBACK_MS)),
+        ),
+        orderBy: [desc(regulationOccupancies.startedAt)],
+    });
+
+    const identity = resolveArrivalIdentity({
+        startedAt: params.startedAt,
+        existing: candidates.map((occupancy: typeof regulationOccupancies.$inferSelect) => ({
+            id: occupancy.id,
+            doctorId: occupancy.doctorId,
+            startedAt: occupancy.startedAt,
+            endedAt: occupancy.endedAt,
+            actualEndedAt: occupancy.actualEndedAt,
+            scheduledEndAt: occupancy.scheduledEndAt,
+            isShadow: isRegulationShadowOccupancyNotes(occupancy.notes)
+                || isRegulationDisplacedOccupancyNotes(occupancy.notes),
+            departureConfirmed: occupancy.departureConfirmedAt !== null,
+        })),
+    });
+
+    if (identity.kind !== "merge") {
+        return null;
+    }
+
+    const occupancy = candidates.find(
+        (candidate: typeof regulationOccupancies.$inferSelect) => candidate.id === identity.occupancyId,
+    );
+    return occupancy ? { occupancy, identity } : null;
+}
+
+/**
+ * Junta a chegada nova com o plantão fechado: reabre a linha em vez de criar
+ * outra. Desfecho de pagamento e confirmação de saída caem junto — foram
+ * decididos sobre uma saída que a chegada nova desmente.
+ */
+async function mergeRegulationArrival(tx: Executor, params: {
+    target: typeof regulationOccupancies.$inferSelect;
+    keptStartedAt: Date;
+    previousDepartureAt: Date | null;
+    arrivalAt: Date;
+    notes: string | null;
+    shiftLabel: string | null;
+    updatedByUserId: string | null;
+}) {
+    const boardHeldByOther = await tx.query.regulationOccupancies.findFirst({
+        where: and(
+            eq(regulationOccupancies.postId, params.target.postId),
+            isNotNull(regulationOccupancies.boardStartedAt),
+            isNull(regulationOccupancies.endedAt),
+            ne(regulationOccupancies.id, params.target.id),
+        ),
+    });
+
+    const mergeNote = describeMergedArrival({
+        previousDepartureAt: params.previousDepartureAt,
+        arrivalAt: params.arrivalAt,
+    });
+
+    const [updated] = await tx.update(regulationOccupancies)
+        .set({
+            startedAt: params.keptStartedAt,
+            endedAt: null,
+            actualEndedAt: null,
+            boardStartedAt: boardHeldByOther
+                ? null
+                : (params.target.boardStartedAt ?? params.keptStartedAt),
+            departureConfirmedAt: null,
+            departureConfirmedByUserId: null,
+            departureConfirmedNote: null,
+            earlyDepartureOutcome: null,
+            shiftLabel: params.shiftLabel ?? params.target.shiftLabel,
+            notes: [params.target.notes, mergeNote, params.notes]
+                .filter(Boolean)
+                .join("\n")
+                .trim(),
+            updatedByUserId: params.updatedByUserId,
+            updatedAt: new Date(),
+        })
+        .where(eq(regulationOccupancies.id, params.target.id))
+        .returning();
+
+    return updated;
+}
+
+/**
+ * "NÃO SAIU": a chefia contesta a saída registrada. Reabre a ocupação existente
+ * — sem criar outra, sem derrubar quem estiver no quadro — e derruba o desfecho
+ * de pagamento decidido sobre a saída contestada.
+ */
+export async function reopenContestedRegulationDeparture(occupancyId: string, input: {
+    continuation: ContestedDepartureContinuation;
+    continuedAtLabel?: string | null;
+    note?: string | null;
+    updatedByUserId?: string | null;
+}) {
+    const db = getDb();
+    const result = await db.transaction(async (tx: Executor) => {
+        const existing = await tx.query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, occupancyId),
+        });
+        if (!existing) {
+            throw new Error("Regulation occupancy not found.");
+        }
+        const contestedDepartureAt = existing.actualEndedAt ?? existing.endedAt;
+        if (!contestedDepartureAt) {
+            throw new Error("Esta ocupacao nao tem saida registrada para contestar.");
+        }
+
+        const carrier = await tx.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, existing.postId),
+                isNotNull(regulationOccupancies.boardStartedAt),
+                isNull(regulationOccupancies.endedAt),
+                ne(regulationOccupancies.id, existing.id),
+            ),
+            orderBy: [desc(regulationOccupancies.boardStartedAt)],
+        });
+        const carrierDoctor = carrier
+            ? await tx.query.doctors.findFirst({ where: eq(doctors.id, carrier.doctorId), columns: { fullName: true } })
+            : null;
+
+        const decision = resolveContestedBoardDecision({
+            continuation: input.continuation,
+            boardHeldByOther: carrier
+                ? {
+                    doctorName: carrierDoctor?.fullName ?? "Outro médico",
+                    since: carrier.boardStartedAt ?? carrier.startedAt,
+                }
+                : null,
+            previousBoardStartedAt: existing.boardStartedAt,
+            startedAt: existing.startedAt,
+        });
+
+        const [updated] = await tx.update(regulationOccupancies)
+            .set({
+                endedAt: null,
+                actualEndedAt: null,
+                boardStartedAt: decision.boardStartedAt,
+                departureConfirmedAt: null,
+                departureConfirmedByUserId: null,
+                departureConfirmedNote: null,
+                earlyDepartureOutcome: null,
+                notes: [
+                    existing.notes,
+                    describeContestedDeparture({
+                        contestedDepartureAt,
+                        continuation: input.continuation,
+                        continuedAtLabel: input.continuedAtLabel ?? null,
+                    }),
+                    input.note,
+                ].filter(Boolean).join("\n").trim(),
+                updatedByUserId: input.updatedByUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .where(eq(regulationOccupancies.id, existing.id))
+            .returning();
+
+        await syncRegulationBankHours(tx, existing.id);
+        return { occupancy: updated, contestedDepartureAt, outOfBoardReason: decision.outOfBoardReason };
+    });
+
+    publishBoardUpdate(`regulation:reopen:${result.occupancy.postId}`);
+    return result;
 }
 
 export async function startRegulationOccupancy(input: StartRegulationOccupancyInput) {
@@ -671,6 +855,32 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 await syncRegulationBankHours(tx, existing.id);
                 return updated;
             }
+        }
+
+        // Plantão do mesmo médico neste ramal JÁ FECHADO, com a janela ainda
+        // cobrindo esta chegada: redeclaração depois de uma saída errada, não
+        // plantão novo. Espelha o mesmo desfecho da intervenção — sem isto,
+        // nascia a duplicata que paga em dobro.
+        const mergeTarget = arrivingIsShadow || historicalCorrectionEndAt
+            ? null
+            : await resolveRegulationArrivalMergeTarget(tx, {
+                postId: input.postId,
+                doctorId: input.doctorId,
+                startedAt: input.startedAt,
+            });
+
+        if (mergeTarget) {
+            const merged = await mergeRegulationArrival(tx, {
+                target: mergeTarget.occupancy,
+                keptStartedAt: mergeTarget.identity.keptStartedAt,
+                previousDepartureAt: mergeTarget.identity.previousDepartureAt,
+                arrivalAt: input.startedAt,
+                notes: input.notes ?? null,
+                shiftLabel: input.shiftLabel ?? null,
+                updatedByUserId: input.createdByUserId ?? null,
+            });
+            await syncRegulationBankHours(tx, merged.id);
+            return merged;
         }
 
         const shouldPreserveCurrentTargetOccupancy = Boolean(

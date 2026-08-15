@@ -5,6 +5,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, interventionOccupancies } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { correctInterventionOccupancy } from "@/modules/operational/corrections";
+import { reopenContestedInterventionDeparture } from "@/modules/intervention/service";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { isValidOverrideNote, OVERRIDE_NOTE_MIN_LENGTH } from "@/modules/operational/departure-triage";
 
@@ -22,6 +23,14 @@ const schema = z.object({
     //   full_shift → assina inteiro apesar da saída antecipada (<6h ou 6h–10h;
     //                exige justificativa quando a régua diria bank_only)
     outcome: z.enum(["bank_only", "half_shift", "full_shift"]).optional(),
+    /**
+     * A saída não aconteceu — a chefia contesta o registro em vez de decidir o
+     * pagamento dele. Reabre a ocupação existente; nunca cria outra.
+     */
+    contestDeparture: z.object({
+        continuation: z.enum(["same_target", "other_target", "unknown"]),
+        continuedAtLabel: z.union([z.string().trim().max(120), z.null()]).optional(),
+    }).optional(),
 });
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -50,6 +59,43 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     if (!existing) {
         return NextResponse.json({ error: "Intervention occupancy not found." }, { status: 404 });
     }
+    // "NÃO SAIU": desmentir a saída é outro caminho — não passa pela régua de
+    // pagamento, porque não há saída a classificar.
+    if (parsed.data.contestDeparture) {
+        try {
+            const contested = await reopenContestedInterventionDeparture(id, {
+                continuation: parsed.data.contestDeparture.continuation,
+                continuedAtLabel: parsed.data.contestDeparture.continuedAtLabel ?? null,
+                note: parsed.data.note ?? null,
+                updatedByUserId: session.user.id,
+            });
+
+            await db.insert(auditLogs).values({
+                actorUserId: session.user.id,
+                action: "intervention_occupancy.departure_contested",
+                entityType: "intervention_occupancy",
+                entityId: contested.occupancy.id,
+                details: {
+                    contestedActualEndedAt: contested.contestedDepartureAt.toISOString(),
+                    continuation: parsed.data.contestDeparture.continuation,
+                    continuedAtLabel: parsed.data.contestDeparture.continuedAtLabel ?? null,
+                    outOfBoardReason: contested.outOfBoardReason,
+                    note: parsed.data.note ?? null,
+                },
+            });
+
+            return NextResponse.json({
+                occupancy: contested.occupancy,
+                outOfBoardReason: contested.outOfBoardReason,
+            });
+        } catch (error) {
+            return NextResponse.json(
+                { error: error instanceof Error ? error.message : "Unable to contest departure." },
+                { status: 400 },
+            );
+        }
+    }
+
     // Sem saída registrada, só dá para confirmar se o chamador INFORMAR a saída
     // (fluxo do payment-closing sobre ocupação fechada por handoff/boundary).
     if (!existing.actualEndedAt && !parsed.data.actualEndedAt) {
