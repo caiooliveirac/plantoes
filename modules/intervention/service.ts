@@ -9,6 +9,11 @@ import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
+import {
+    describeContestedDeparture,
+    resolveContestedBoardDecision,
+    type ContestedDepartureContinuation,
+} from "@/modules/operational/contested-departure";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveContinuationInPlaceShiftLabel, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
 
 type Executor = any;
@@ -509,6 +514,87 @@ async function mergeInterventionArrival(tx: Executor, params: {
         .returning();
 
     return updated;
+}
+
+/**
+ * "NÃO SAIU": a chefia contesta a saída registrada. Reabre a ocupação que já
+ * existe — sem criar outra, sem derrubar quem estiver no quadro — e derruba o
+ * desfecho de pagamento que tinha sido decidido sobre a saída contestada.
+ */
+export async function reopenContestedInterventionDeparture(occupancyId: string, input: {
+    continuation: ContestedDepartureContinuation;
+    continuedAtLabel?: string | null;
+    note?: string | null;
+    updatedByUserId?: string | null;
+}) {
+    const db = getDb();
+    const result = await db.transaction(async (tx: Executor) => {
+        const existing = await tx.query.interventionOccupancies.findFirst({
+            where: eq(interventionOccupancies.id, occupancyId),
+        });
+        if (!existing) {
+            throw new Error("Intervention occupancy not found.");
+        }
+        const contestedDepartureAt = existing.actualEndedAt ?? existing.endedAt;
+        if (!contestedDepartureAt) {
+            throw new Error("Esta ocupacao nao tem saida registrada para contestar.");
+        }
+
+        const carrier = await tx.query.interventionOccupancies.findFirst({
+            where: and(
+                eq(interventionOccupancies.baseId, existing.baseId),
+                isNotNull(interventionOccupancies.boardStartedAt),
+                isNull(interventionOccupancies.endedAt),
+                ne(interventionOccupancies.id, existing.id),
+            ),
+            orderBy: [desc(interventionOccupancies.boardStartedAt)],
+        });
+        const carrierDoctor = carrier
+            ? await tx.query.doctors.findFirst({ where: eq(doctors.id, carrier.doctorId), columns: { fullName: true } })
+            : null;
+
+        const decision = resolveContestedBoardDecision({
+            continuation: input.continuation,
+            boardHeldByOther: carrier
+                ? {
+                    doctorName: carrierDoctor?.fullName ?? "Outro médico",
+                    since: carrier.boardStartedAt ?? carrier.startedAt,
+                }
+                : null,
+            previousBoardStartedAt: existing.boardStartedAt,
+            startedAt: existing.startedAt,
+        });
+
+        const [updated] = await tx.update(interventionOccupancies)
+            .set({
+                endedAt: null,
+                actualEndedAt: null,
+                boardStartedAt: decision.boardStartedAt,
+                departureConfirmedAt: null,
+                departureConfirmedByUserId: null,
+                departureConfirmedNote: null,
+                earlyDepartureOutcome: null,
+                notes: [
+                    existing.notes,
+                    describeContestedDeparture({
+                        contestedDepartureAt,
+                        continuation: input.continuation,
+                        continuedAtLabel: input.continuedAtLabel ?? null,
+                    }),
+                    input.note,
+                ].filter(Boolean).join("\n").trim(),
+                updatedByUserId: input.updatedByUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .where(eq(interventionOccupancies.id, existing.id))
+            .returning();
+
+        await syncInterventionBankHours(tx, existing.id);
+        return { occupancy: updated, contestedDepartureAt, outOfBoardReason: decision.outOfBoardReason };
+    });
+
+    publishBoardUpdate(`intervention:reopen:${result.occupancy.baseId}`);
+    return result;
 }
 
 export async function startInterventionOccupancy(input: StartInterventionOccupancyInput) {

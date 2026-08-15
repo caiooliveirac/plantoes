@@ -9,6 +9,7 @@ import { EventTimeline } from "@/components/board/EventTimeline";
 import { modalBackdrop, modalPanel, tapFeedback } from "@/lib/board/motion";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
 import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import type { ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
 import {
     isValidOverrideNote,
     OVERRIDE_NOTE_MIN_LENGTH,
@@ -94,7 +95,10 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
     );
 
     const [submitting, setSubmitting] = useState(false);
-    const [view, setView] = useState<"decide" | "adjust">("decide");
+    const [view, setView] = useState<"decide" | "adjust" | "contest">("decide");
+    // "NÃO SAIU": onde o médico ficou depois da saída que o chefe está desmentindo.
+    const [contestContinuation, setContestContinuation] = useState<ContestedDepartureContinuation>("same_target");
+    const [contestLabel, setContestLabel] = useState("");
     // Ação escolhida que exige justificativa — o textarea aparece e o envio
     // fica travado até a nota ter 8+ caracteres.
     const [pendingAction, setPendingAction] = useState<DecisionAction | null>(null);
@@ -107,6 +111,8 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             setView("decide");
             setPendingAction(null);
             setNoteText("");
+            setContestContinuation("same_target");
+            setContestLabel("");
             setAdjustStart(toTimeInputValue(target.startedAt));
             setAdjustEnd(toTimeInputValue(target.actualEndedAt));
         }
@@ -177,6 +183,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
         startedAt?: string;
         note?: string | null;
         outcome?: "bank_only" | "half_shift" | "full_shift";
+        contestDeparture?: { continuation: ContestedDepartureContinuation; continuedAtLabel?: string | null };
     }, successLabel: string) => {
         if (!target) return;
         setSubmitting(true);
@@ -186,11 +193,17 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),
             });
+            const payload = await response.json().catch(() => ({})) as
+                { error?: string; outOfBoardReason?: string | null };
             if (!response.ok) {
-                const payload = await response.json().catch(() => ({})) as { error?: string };
                 throw new Error(payload.error || "Falha ao confirmar saída.");
             }
             toast.success(`${target.displayName ?? target.doctorName}: ${successLabel}`);
+            // A contestação nunca derruba quem está no quadro — quando sobra
+            // conflito, o chefe precisa VER de quem é a chegada a corrigir.
+            if (payload.outOfBoardReason) {
+                toast.warning(payload.outOfBoardReason, { duration: 12000 });
+            }
             onClose();
             startTransition(() => {
                 router.refresh();
@@ -432,6 +445,22 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                             <span className="departure-verifier-decision__hint">{button.hint}</span>
                                                         </div>
                                                     ))}
+                                                    <div className="departure-verifier-decision">
+                                                        <motion.button
+                                                            type="button"
+                                                            className="departure-verifier-action reject"
+                                                            onClick={() => setView("contest")}
+                                                            whileTap={tapFeedback}
+                                                            disabled={submitting || pendingAction !== null}
+                                                        >
+                                                            {`${target.displayName ?? target.doctorName} NÃO SAIU`}
+                                                        </motion.button>
+                                                        <span className="departure-verifier-decision__hint">
+                                                            A saída registrada não aconteceu (rendição por engano, erro de registro).
+                                                            Reabre este mesmo plantão — nenhuma ocupação nova é criada — e cancela
+                                                            qualquer desfecho de pagamento já decidido sobre ela.
+                                                        </span>
+                                                    </div>
                                                     {(triage.kind === "late_credit" || triage.kind === "routine" || triage.kind === "occurrence_missing" || triage.kind === "pattern" || triage.kind === "short_anomaly") && canAdjust && (
                                                         <div className="departure-verifier-decision">
                                                             <motion.button
@@ -448,6 +477,83 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                             </span>
                                                         </div>
                                                     )}
+                                                </div>
+                                            )}
+
+                                            {view === "contest" && (
+                                                <div className="departure-verifier-note">
+                                                    <p style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+                                                        Onde {target.displayName ?? target.doctorName} ficou depois das {formatLocalHourMinute(verbalizedMs)}?
+                                                    </p>
+                                                    <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.85rem" }}>
+                                                        {([
+                                                            ["same_target", `Continuou no ${target.targetCode}`],
+                                                            ["other_target", "Foi para outro posto/base"],
+                                                            ["unknown", "Não sei dizer"],
+                                                        ] as [ContestedDepartureContinuation, string][]).map(([value, label]) => (
+                                                            <label key={value} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                                                <input
+                                                                    type="radio"
+                                                                    name="departure-verifier-contest"
+                                                                    value={value}
+                                                                    checked={contestContinuation === value}
+                                                                    onChange={() => setContestContinuation(value)}
+                                                                />
+                                                                {label}
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                    {contestContinuation === "other_target" && (
+                                                        <input
+                                                            type="text"
+                                                            value={contestLabel}
+                                                            onChange={(event) => setContestLabel(event.target.value)}
+                                                            placeholder="Qual posto/base (ex.: CB02, 2032)"
+                                                            style={{ width: "100%", fontSize: "0.85rem", padding: 8 }}
+                                                        />
+                                                    )}
+                                                    <textarea
+                                                        value={noteText}
+                                                        onChange={(event) => setNoteText(event.target.value)}
+                                                        rows={2}
+                                                        placeholder="O que aconteceu (opcional) — vai para a auditoria."
+                                                        style={{ width: "100%", resize: "vertical", fontSize: "0.85rem", padding: 8 }}
+                                                    />
+                                                    <span className="departure-verifier-decision__hint">
+                                                        O quadro não muda de dono aqui: se outro médico assumiu este alvo, ele
+                                                        continua onde está e a tela diz de quem é a chegada a corrigir. Mudança de
+                                                        posto/base se faz pelo remanejamento, que move este mesmo plantão.
+                                                    </span>
+                                                    <div style={{ display: "flex", gap: 8 }}>
+                                                        <motion.button
+                                                            type="button"
+                                                            className="departure-verifier-action reject"
+                                                            whileTap={tapFeedback}
+                                                            disabled={submitting || (contestContinuation === "other_target" && contestLabel.trim().length === 0)}
+                                                            onClick={() => {
+                                                                void submit({
+                                                                    contestDeparture: {
+                                                                        continuation: contestContinuation,
+                                                                        continuedAtLabel: contestContinuation === "other_target"
+                                                                            ? contestLabel.trim()
+                                                                            : null,
+                                                                    },
+                                                                    note: noteText.trim().length > 0 ? noteText.trim() : null,
+                                                                }, "saída desmentida — plantão reaberto, sem ocupação nova.");
+                                                            }}
+                                                        >
+                                                            Registrar que não saiu
+                                                        </motion.button>
+                                                        <motion.button
+                                                            type="button"
+                                                            className="departure-verifier-action edit"
+                                                            whileTap={tapFeedback}
+                                                            disabled={submitting}
+                                                            onClick={() => { setView("decide"); setNoteText(""); }}
+                                                        >
+                                                            Voltar
+                                                        </motion.button>
+                                                    </div>
                                                 </div>
                                             )}
 

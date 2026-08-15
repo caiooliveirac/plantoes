@@ -8,6 +8,11 @@ import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/ba
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
+import {
+    describeContestedDeparture,
+    resolveContestedBoardDecision,
+    type ContestedDepartureContinuation,
+} from "@/modules/operational/contested-departure";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
@@ -461,6 +466,87 @@ async function mergeRegulationArrival(tx: Executor, params: {
         .returning();
 
     return updated;
+}
+
+/**
+ * "NÃO SAIU": a chefia contesta a saída registrada. Reabre a ocupação existente
+ * — sem criar outra, sem derrubar quem estiver no quadro — e derruba o desfecho
+ * de pagamento decidido sobre a saída contestada.
+ */
+export async function reopenContestedRegulationDeparture(occupancyId: string, input: {
+    continuation: ContestedDepartureContinuation;
+    continuedAtLabel?: string | null;
+    note?: string | null;
+    updatedByUserId?: string | null;
+}) {
+    const db = getDb();
+    const result = await db.transaction(async (tx: Executor) => {
+        const existing = await tx.query.regulationOccupancies.findFirst({
+            where: eq(regulationOccupancies.id, occupancyId),
+        });
+        if (!existing) {
+            throw new Error("Regulation occupancy not found.");
+        }
+        const contestedDepartureAt = existing.actualEndedAt ?? existing.endedAt;
+        if (!contestedDepartureAt) {
+            throw new Error("Esta ocupacao nao tem saida registrada para contestar.");
+        }
+
+        const carrier = await tx.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, existing.postId),
+                isNotNull(regulationOccupancies.boardStartedAt),
+                isNull(regulationOccupancies.endedAt),
+                ne(regulationOccupancies.id, existing.id),
+            ),
+            orderBy: [desc(regulationOccupancies.boardStartedAt)],
+        });
+        const carrierDoctor = carrier
+            ? await tx.query.doctors.findFirst({ where: eq(doctors.id, carrier.doctorId), columns: { fullName: true } })
+            : null;
+
+        const decision = resolveContestedBoardDecision({
+            continuation: input.continuation,
+            boardHeldByOther: carrier
+                ? {
+                    doctorName: carrierDoctor?.fullName ?? "Outro médico",
+                    since: carrier.boardStartedAt ?? carrier.startedAt,
+                }
+                : null,
+            previousBoardStartedAt: existing.boardStartedAt,
+            startedAt: existing.startedAt,
+        });
+
+        const [updated] = await tx.update(regulationOccupancies)
+            .set({
+                endedAt: null,
+                actualEndedAt: null,
+                boardStartedAt: decision.boardStartedAt,
+                departureConfirmedAt: null,
+                departureConfirmedByUserId: null,
+                departureConfirmedNote: null,
+                earlyDepartureOutcome: null,
+                notes: [
+                    existing.notes,
+                    describeContestedDeparture({
+                        contestedDepartureAt,
+                        continuation: input.continuation,
+                        continuedAtLabel: input.continuedAtLabel ?? null,
+                    }),
+                    input.note,
+                ].filter(Boolean).join("\n").trim(),
+                updatedByUserId: input.updatedByUserId ?? null,
+                updatedAt: new Date(),
+            })
+            .where(eq(regulationOccupancies.id, existing.id))
+            .returning();
+
+        await syncRegulationBankHours(tx, existing.id);
+        return { occupancy: updated, contestedDepartureAt, outOfBoardReason: decision.outOfBoardReason };
+    });
+
+    publishBoardUpdate(`regulation:reopen:${result.occupancy.postId}`);
+    return result;
 }
 
 export async function startRegulationOccupancy(input: StartRegulationOccupancyInput) {
