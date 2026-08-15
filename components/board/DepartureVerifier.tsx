@@ -512,6 +512,32 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                             style={{ width: "100%", fontSize: "0.85rem", padding: 8 }}
                                                         />
                                                     )}
+                                                    {contestContinuation === "unknown" && (
+                                                        <div
+                                                            role="alert"
+                                                            style={{
+                                                                border: "3px solid #b91c1c",
+                                                                background: "#b91c1c",
+                                                                color: "#fff",
+                                                                borderRadius: 10,
+                                                                padding: "18px 16px",
+                                                                textAlign: "center",
+                                                                display: "flex",
+                                                                flexDirection: "column",
+                                                                gap: 8,
+                                                            }}
+                                                        >
+                                                            <strong style={{ fontSize: "1.6rem", letterSpacing: "0.04em", lineHeight: 1.1 }}>
+                                                                LIGUE PARA {(target.displayName ?? target.doctorName).toUpperCase()}
+                                                            </strong>
+                                                            <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>
+                                                                Chefe logado não pode não saber onde está o plantonista dele.
+                                                            </span>
+                                                            <span style={{ fontSize: "0.82rem", opacity: 0.9 }}>
+                                                                Descubra e escolha uma das duas primeiras opções. Este aviso não sai daqui.
+                                                            </span>
+                                                        </div>
+                                                    )}
                                                     <textarea
                                                         value={noteText}
                                                         onChange={(event) => setNoteText(event.target.value)}
@@ -529,7 +555,9 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                             type="button"
                                                             className="departure-verifier-action reject"
                                                             whileTap={tapFeedback}
-                                                            disabled={submitting || (contestContinuation === "other_target" && contestLabel.trim().length === 0)}
+                                                            disabled={submitting
+                                                                || contestContinuation === "unknown"
+                                                                || (contestContinuation === "other_target" && contestLabel.trim().length === 0)}
                                                             onClick={() => {
                                                                 void submit({
                                                                     contestDeparture: {
