@@ -2339,7 +2339,44 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             });
 
             let responseBody = await response.json().catch(() => null) as
-                { error?: string; needsDuplicateConfirmation?: boolean } | null;
+                {
+                    error?: string;
+                    needsDuplicateConfirmation?: boolean;
+                    needsMergeConfirmation?: boolean;
+                    mergeable?: { occupancyId: string; targetCode: string; startedAt: string; departureAt: string | null };
+                } | null;
+
+            // O servidor achou o MESMO plantão deste médico neste alvo, já fechado
+            // mas com a janela ainda aberta. Lançar de novo criaria a duplicata que
+            // paga em dobro: pergunta o horário verdadeiro de chegada e junta.
+            if (response.status === 409 && responseBody?.needsMergeConfirmation && responseBody.mergeable) {
+                const chegadaAtual = toLocalDateTimeValue(responseBody.mergeable.startedAt);
+                const informado = window.prompt(
+                    `${responseBody.error ?? "Já existe plantão deste médico neste alvo."}\n\n`
+                    + "Horário verdadeiro de chegada (o mais cedo entre este e o registrado é o que vale):",
+                    chegadaAtual,
+                );
+                if (informado === null) {
+                    setErrorMessage("Lançamento cancelado — o plantão que já existe foi mantido.");
+                    return;
+                }
+                const chegadaVerdadeira = new Date(informado);
+                if (Number.isNaN(chegadaVerdadeira.getTime())) {
+                    setErrorMessage("Horário de chegada inválido — nada foi lançado.");
+                    return;
+                }
+                response = await fetch(endpoint, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        ...payload,
+                        confirmMerge: true,
+                        confirmDuplicate: true,
+                        startedAt: toIsoDateTime(informado),
+                    }),
+                });
+                responseBody = await response.json().catch(() => null) as { error?: string } | null;
+            }
 
             // O servidor viu plantão do mesmo médico no mesmo dia e turno. Não
             // bloqueia — pergunta, porque duplicata infla a nota e passa batido

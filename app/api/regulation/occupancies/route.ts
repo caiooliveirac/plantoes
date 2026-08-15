@@ -4,7 +4,12 @@ import { z } from "zod";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { describeConflicts, findSameDayOccupancies } from "@/services/duplicate-occupancy-guard";
+import {
+    describeConflicts,
+    describeMergeable,
+    findMergeableOccupancy,
+    findSameDayOccupancies,
+} from "@/services/duplicate-occupancy-guard";
 import { startRegulationOccupancy } from "@/modules/regulation/service";
 
 const schema = z.object({
@@ -24,6 +29,12 @@ const schema = z.object({
     notes: z.string().trim().max(2000).optional().nullable(),
     /** Marcado pelo admin depois de ver o aviso de plantão duplicado. */
     confirmDuplicate: z.boolean().optional(),
+    /**
+     * Marcado depois de ver o plantão que já existe nesta janela e informar o
+     * horário verdadeiro de chegada: a chegada JUNTA com ele em vez de criar
+     * uma segunda linha.
+     */
+    confirmMerge: z.boolean().optional(),
 });
 
 export async function GET() {
@@ -96,6 +107,24 @@ export async function POST(request: NextRequest) {
                 error: describeConflicts(conflitos),
                 needsDuplicateConfirmation: true,
                 conflicts: conflitos,
+            }, { status: 409 });
+        }
+    }
+
+    // Mesmo médico, mesmo ramal, janela ainda aberta para esta chegada: não é
+    // plantão novo. Mostra o que existe e pede o horário verdadeiro antes de juntar.
+    if (!parsed.data.confirmMerge) {
+        const mergeable = await findMergeableOccupancy({
+            domain: "regulation",
+            targetId: parsed.data.postId,
+            doctorId: parsed.data.doctorId,
+            startedAt: new Date(parsed.data.startedAt),
+        });
+        if (mergeable) {
+            return NextResponse.json({
+                error: describeMergeable(mergeable),
+                needsMergeConfirmation: true,
+                mergeable,
             }, { status: 409 });
         }
     }
