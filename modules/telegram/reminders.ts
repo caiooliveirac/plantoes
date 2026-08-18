@@ -1,5 +1,6 @@
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
+import { avisarSecretario } from "@/lib/avisos/secretario";
 import { doctors, telegramBotNotices, telegramIngestedMessages } from "@/db/schema";
 import { formatDoctorSurfaceName } from "@/modules/doctors/directory";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
@@ -617,6 +618,50 @@ export function diffCoverageSnapshotStates(
     return { changed, resolvedCodes, addedCodes };
 }
 
+/**
+ * A1 do catálogo do secretário: a pendência de cobertura da virada, dita em uma
+ * linha para o WhatsApp da coordenação.
+ *
+ * Não recalcula nada — come o mesmo estado que o snapshot do Telegram já montou
+ * e o mesmo delta. A diferença é o corte: no Telegram vai o quadro; aqui vai só
+ * o que VIROU pendência agora, porque é o que muda o que ele faz nos próximos
+ * minutos. Sem novidade, `null` — e o tom não recebe nada.
+ */
+export function buildSecretaryCoverageNotice(params: {
+    current: CoverageSnapshotPendingState;
+    previous: CoverageSnapshotPendingState | null;
+    hora: string;
+}): string | null {
+    const { current, previous, hora } = params;
+    const novos = previous
+        ? new Set(diffCoverageSnapshotStates(previous, current).addedCodes)
+        : new Set(pendingOnlyCodes(current));
+    if (novos.size === 0) {
+        return null;
+    }
+
+    const so = (codes: string[]) => codes.filter((code) => novos.has(code));
+    const aguardando = so(current.awaitingInterventionCodes);
+    const semAviso = so(current.missingInterventionCodes);
+    const ramais = so(current.missingRegulationCodes);
+
+    const pedacos: string[] = [];
+    if (aguardando.length > 0) {
+        pedacos.push(`${aguardando.join(", ")} aguardando avançada`);
+    }
+    if (semAviso.length > 0) {
+        pedacos.push(`${semAviso.join(", ")} sem aviso de quem assume`);
+    }
+    if (ramais.length > 0) {
+        pedacos.push(`regulação sem ${ramais.join(", ")}`);
+    }
+    if (pedacos.length === 0) {
+        return null;
+    }
+
+    return `🔴 Cobertura ${hora}: ${pedacos.join("; ")}.`;
+}
+
 function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan | null {
     const shiftWindow = resolveOperationalShiftWindow(params.now);
     const bucket = floorToBucket(params.now, TEN_MINUTES);
@@ -1154,7 +1199,25 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
         });
 
         evaluated += recipients.length;
-        sent += await deliverReminderPlan(plan, recipients);
+        const entregues = await deliverReminderPlan(plan, recipients);
+        sent += entregues;
+
+        // Espelho para o secretário (app `tom`): só a pendência que nasceu
+        // agora, e só se o snapshot realmente saiu. Nunca levanta — aviso que
+        // falha não pode derrubar o ciclo de lembretes.
+        if (plan.stage === "coverage_snapshot" && entregues > 0) {
+            const estadoAtual = (plan.payload as { coverageState?: unknown }).coverageState;
+            if (isCoverageSnapshotPendingState(estadoAtual)) {
+                const texto = buildSecretaryCoverageNotice({
+                    current: estadoAtual,
+                    previous: previousCoverageState,
+                    hora: formatHour(new Date(estadoAtual.bucketAt)),
+                });
+                if (texto) {
+                    await avisarSecretario(texto);
+                }
+            }
+        }
     }
 
     try {

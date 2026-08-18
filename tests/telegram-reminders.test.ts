@@ -3,6 +3,7 @@ import test from "node:test";
 import {
     buildChiefPrivateRegulationAlertPlan,
     buildReminderPlans,
+    buildSecretaryCoverageNotice,
     buildTakeoverConflictPlan,
     diffCoverageSnapshotStates,
     isCoverageSnapshotPendingState,
@@ -1090,4 +1091,50 @@ test("buildTakeoverConflictPlan falls back to neutral labels when names are unkn
     });
 
     assert.match(plan.text, /Tomada pendente em Intervenção \*PM04\*: \*médico chegando\* × \*ocupante atual\*/);
+});
+
+test("buildSecretaryCoverageNotice announces every pendência on the first snapshot", () => {
+    const texto = buildSecretaryCoverageNotice({
+        current: makeCoverageState(),
+        previous: null,
+        hora: "19:20",
+    });
+
+    assert.equal(
+        texto,
+        "🔴 Cobertura 19:20: BR05 aguardando avançada; IT30 sem aviso de quem assume; regulação sem 2032.",
+    );
+});
+
+test("buildSecretaryCoverageNotice only reports what became pendência since the last snapshot", () => {
+    const texto = buildSecretaryCoverageNotice({
+        current: makeCoverageState(),
+        previous: makeCoverageState({ awaitingInterventionCodes: [] }),
+        hora: "19:30",
+    });
+
+    assert.equal(texto, "🔴 Cobertura 19:30: BR05 aguardando avançada.");
+});
+
+test("buildSecretaryCoverageNotice stays silent when nothing new is pending", () => {
+    assert.equal(
+        buildSecretaryCoverageNotice({
+            current: makeCoverageState({ bucketAt: "2026-03-25T22:30:00.000Z" }),
+            previous: makeCoverageState(),
+            hora: "19:30",
+        }),
+        null,
+    );
+    assert.equal(
+        buildSecretaryCoverageNotice({
+            current: makeCoverageState({
+                awaitingInterventionCodes: [],
+                missingInterventionCodes: [],
+                missingRegulationCodes: [],
+            }),
+            previous: null,
+            hora: "19:20",
+        }),
+        null,
+    );
 });
