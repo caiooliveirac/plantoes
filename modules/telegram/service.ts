@@ -2994,6 +2994,38 @@ async function findActiveOccupancyByTarget(parsed: OperationalParsedEntry) {
     return { base, occupancy, post: null };
 }
 
+// Ocupações que dividem o posto/base com o titular sem estar no quadro: sombra e
+// deslocado (board_started_at nulo). Só alcançáveis pelo nome, já que o quadro tem
+// um titular por alvo.
+async function findOffBoardOccupancyOnTarget(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    targetId: number;
+    doctorId: string;
+}) {
+    const db = getDb();
+    if (params.sector === "REGULATION") {
+        return (await db.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, params.targetId),
+                eq(regulationOccupancies.doctorId, params.doctorId),
+                isNull(regulationOccupancies.endedAt),
+                isNull(regulationOccupancies.boardStartedAt),
+            ),
+            orderBy: [desc(regulationOccupancies.startedAt)],
+        })) ?? null;
+    }
+
+    return (await db.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.baseId, params.targetId),
+            eq(interventionOccupancies.doctorId, params.doctorId),
+            isNull(interventionOccupancies.endedAt),
+            isNull(interventionOccupancies.boardStartedAt),
+        ),
+        orderBy: [desc(interventionOccupancies.startedAt)],
+    })) ?? null;
+}
+
 async function findInterventionBaseByCode(code: string) {
     return getDb().query.interventionBases.findFirst({
         where: eq(interventionBases.code, code),
@@ -6621,25 +6653,36 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         try {
             const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), command.time);
 
-            // Preserve boardStartedAt when it differs from startedAt (continuity record).
-            // The hasOwn check in correctRegulationOccupancy / correctInterventionOccupancy
-            // keeps the existing value when boardStartedAt is omitted from input.
-            const existingBoardStartedAt = active.occupancy!.boardStartedAt;
-            const existingStartedAt = active.occupancy!.startedAt;
-            const isContinuityRecord = existingBoardStartedAt
+            // findActiveOccupancyByTarget só enxerga o titular do quadro. Se o nome dado é de
+            // alguém que divide o ramal/base fora do quadro (sombra ou deslocado), a correção
+            // é dele — sem isso, /corrigir trocava o médico do titular pela sombra.
+            const offBoardOccupancy = doctor.id !== active.occupancy!.doctorId
+                ? await findOffBoardOccupancyOnTarget({
+                    sector: command.sector,
+                    targetId: command.sector === "REGULATION" ? active.post!.id : active.base!.id,
+                    doctorId: doctor.id,
+                })
+                : null;
+            const targetOccupancy = offBoardOccupancy ?? active.occupancy!;
+
+            // Só espelha boardStartedAt quando ele hoje coincide com startedAt. Continuidade
+            // (board < started) e sombra (board nulo) mantêm o valor que já têm.
+            const existingBoardStartedAt = targetOccupancy.boardStartedAt;
+            const existingStartedAt = targetOccupancy.startedAt;
+            const mirrorsBoardStartedAt = Boolean(existingBoardStartedAt
                 && existingStartedAt
-                && existingBoardStartedAt.getTime() !== existingStartedAt.getTime();
+                && existingBoardStartedAt.getTime() === existingStartedAt.getTime());
 
             const correctionBase = {
                 doctorId: doctor.id,
                 startedAt: eventAt,
-                notes: `${active.occupancy!.notes ?? ""}\n[telegram /corrigir] ${message.text}`.trim(),
-                ...(isContinuityRecord ? {} : { boardStartedAt: eventAt }),
+                notes: `${targetOccupancy.notes ?? ""}\n[telegram /corrigir] ${message.text}`.trim(),
+                ...(mirrorsBoardStartedAt ? { boardStartedAt: eventAt } : {}),
             };
 
             const updated = command.sector === "REGULATION"
-                ? await correctRegulationOccupancy(active.occupancy!.id, correctionBase, resolveCommandAuditUserId(null))
-                : await correctInterventionOccupancy(active.occupancy!.id, correctionBase, resolveCommandAuditUserId(null));
+                ? await correctRegulationOccupancy(targetOccupancy.id, correctionBase, resolveCommandAuditUserId(null))
+                : await correctInterventionOccupancy(targetOccupancy.id, correctionBase, resolveCommandAuditUserId(null));
 
             await markTelegramProcessed(logId, {
                 status: "accepted",

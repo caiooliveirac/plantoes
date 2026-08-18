@@ -3,6 +3,7 @@ import test from "node:test";
 import {
     filterTransferConflictsToShiftWindow,
     mergeOperationalNotes,
+    resolveCorrectedBoardStartedAt,
     resolveTransferShiftWindow,
     validateChronology,
     validateCorrectionChronology,
@@ -268,4 +269,20 @@ test("desativação futura não conta como ativa (referência antes de deactivat
         referenceAt: new Date("2026-07-23T11:51:00.000Z"),
     });
     assert.equal(active, false);
+});
+
+// ─── resolveCorrectedBoardStartedAt ──────────────────────────────────
+
+test("resolveCorrectedBoardStartedAt keeps a shadow off the board", () => {
+    const eventAt = new Date("2025-04-04T07:00:00Z");
+    assert.equal(resolveCorrectedBoardStartedAt(null, true, eventAt), null);
+    assert.equal(resolveCorrectedBoardStartedAt(null, false, null), null);
+});
+
+test("resolveCorrectedBoardStartedAt applies the requested value for a board holder", () => {
+    const existing = new Date("2025-04-04T07:00:00Z");
+    const eventAt = new Date("2025-04-04T08:00:00Z");
+    assert.equal(resolveCorrectedBoardStartedAt(existing, true, eventAt), eventAt);
+    assert.equal(resolveCorrectedBoardStartedAt(existing, false, null), existing);
+    assert.equal(resolveCorrectedBoardStartedAt(existing, true, null), null);
 });

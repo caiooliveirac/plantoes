@@ -224,6 +224,21 @@ export function filterTransferConflictsToShiftWindow<T extends {
     });
 }
 
+// Sombra (e deslocado) vivem fora do quadro com board_started_at nulo. Corrigir a
+// chegada não pode dar titularidade a eles: o índice único de um titular por posto/base
+// rejeitaria o update (23505) e a correção morreria com erro cru. Quem está fora do
+// quadro continua fora; só a chegada (started_at) muda.
+export function resolveCorrectedBoardStartedAt(
+    existingBoardStartedAt: Date | null,
+    boardStartedAtProvided: boolean,
+    requestedBoardStartedAt: Date | null,
+): Date | null {
+    if (existingBoardStartedAt === null) {
+        return null;
+    }
+    return boardStartedAtProvided ? requestedBoardStartedAt : existingBoardStartedAt;
+}
+
 export function validateChronology(startedAt: Date, boardStartedAt: Date | null, endedAt: Date | null, actualEndedAt: Date | null) {
     if (boardStartedAt && boardStartedAt.getTime() < startedAt.getTime()) {
         throw new Error("Board start cannot be before the recorded arrival.");
@@ -752,7 +767,11 @@ export async function correctRegulationOccupancy(
         }
 
         const startedAt = hasOwn(input, "startedAt") ? input.startedAt as Date : existing.startedAt;
-        const boardStartedAt = hasOwn(input, "boardStartedAt") ? input.boardStartedAt as Date : existing.boardStartedAt;
+        const boardStartedAt = resolveCorrectedBoardStartedAt(
+            existing.boardStartedAt,
+            hasOwn(input, "boardStartedAt"),
+            input.boardStartedAt ?? null,
+        );
         const endedAt = hasOwn(input, "endedAt") ? (input.endedAt ?? null) : existing.endedAt;
         const actualEndedAt = hasOwn(input, "actualEndedAt") ? (input.actualEndedAt ?? null) : existing.actualEndedAt;
         const postId = hasOwn(input, "postId") ? input.postId ?? existing.postId : existing.postId;
@@ -905,7 +924,11 @@ export async function correctInterventionOccupancy(
         }
 
         const startedAt = hasOwn(input, "startedAt") ? input.startedAt as Date : existing.startedAt;
-        const boardStartedAt = hasOwn(input, "boardStartedAt") ? (input.boardStartedAt ?? null) : existing.boardStartedAt;
+        const boardStartedAt = resolveCorrectedBoardStartedAt(
+            existing.boardStartedAt,
+            hasOwn(input, "boardStartedAt"),
+            input.boardStartedAt ?? null,
+        );
         const endedAt = hasOwn(input, "endedAt") ? (input.endedAt ?? null) : existing.endedAt;
         const actualEndedAt = hasOwn(input, "actualEndedAt") ? (input.actualEndedAt ?? null) : existing.actualEndedAt;
 
