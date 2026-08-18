@@ -11,6 +11,8 @@ import {
     resolveDoctorPaymentProfile,
     resolveShiftDueAmount,
     type RawPresenceEvent,
+    type DisabledTargetSnapshot,
+    type UncoveredTargetSnapshot,
 } from "@/modules/reporting/payable-shifts";
 import type { PaymentAllocationBoard } from "@/services/board.service";
 
@@ -78,6 +80,10 @@ function makeBoard(overrides: Partial<PaymentAllocationBoard> = {}): PaymentAllo
                 source: "telegram",
                 notes: null,
                 candidateCount: 1,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
+                earlyDepartureOutcome: null,
                 paymentStatus: "ready_for_payment",
                 issues: [],
                 arrivalDelayMinutes: 3,
@@ -292,6 +298,7 @@ test("buildChiefPayableBoard keeps two payable shifts in the same day cell", () 
             uncoveredTargets: uncovered,
         }),
         attestationSegments: [],
+        allDoctorNames: [],
     });
 
     const doctor = board.doctors[0];
@@ -324,6 +331,7 @@ test("buildChiefPayableBoard conta plantões USA (intervenção) e CRU (regulaç
         uncoveredTargets: [],
         targetOptions: [],
         attestationSegments: [],
+        allDoctorNames: [],
     });
 
     const doctor = board.doctors[0];
@@ -350,6 +358,7 @@ test("buildChiefPayableBoard marca médico que só cumpriu uma função", () => 
         uncoveredTargets: [],
         targetOptions: [],
         attestationSegments: [],
+        allDoctorNames: [],
     });
 
     const doctor = board.doctors[0];
@@ -362,8 +371,8 @@ test("buildChiefPayableBoard marca médico que só cumpriu uma função", () => 
 
 test("buildChiefPayableBoard keeps audit/payment divergence explicit in summary", () => {
     const payableShifts = buildPayableShiftsFromBoards([makeBoard()]);
-    const disabledTargets = [];
-    const uncoveredTargets = [];
+    const disabledTargets: DisabledTargetSnapshot[] = [];
+    const uncoveredTargets: UncoveredTargetSnapshot[] = [];
     const board = buildChiefPayableBoard({
         monthKey: "2026-04",
         monthLabel: "abril de 2026",
@@ -395,6 +404,7 @@ test("buildChiefPayableBoard keeps audit/payment divergence explicit in summary"
                 selectedForPayment: false,
             },
         ],
+        allDoctorNames: [],
     });
 
     assert.equal(board.summary.payableShiftCount, 1);
@@ -574,6 +584,10 @@ test("buildUncoveredTargetsFromBoards ignores regulation ramais", () => {
                 source: null,
                 notes: null,
                 candidateCount: 0,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
+                earlyDepartureOutcome: null,
                 paymentStatus: "needs_review",
                 issues: ["Sem ocupacao identificada para o turno"],
                 arrivalDelayMinutes: null,
@@ -634,6 +648,10 @@ test("buildUncoveredTargetsFromBoards includes PIAM uncovered on both shifts", (
                 source: null,
                 notes: null,
                 candidateCount: 0,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
+                earlyDepartureOutcome: null,
                 paymentStatus: "needs_review",
                 issues: ["Sem ocupacao identificada para o turno"],
                 arrivalDelayMinutes: null,
@@ -702,6 +720,10 @@ test("buildUncoveredTargetsFromBoards includes NUCLEO only on SD", () => {
                 source: null,
                 notes: null,
                 candidateCount: 0,
+                candidateLabels: [],
+                conflictCandidateLabels: [],
+                hasDoctorOverlapConflict: false,
+                earlyDepartureOutcome: null,
                 paymentStatus: "needs_review",
                 issues: ["Sem ocupacao identificada para o turno"],
                 arrivalDelayMinutes: null,

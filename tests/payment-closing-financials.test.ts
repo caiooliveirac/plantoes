@@ -162,6 +162,12 @@ function makeBankShift(overrides: Partial<RawBankHoursHistoryShift> = {}): RawBa
         manualBalanceNotes: null,
         manualBalanceUpdatedAt: null,
         manualBalanceActorEmail: null,
+        departureConfirmedAt: null,
+        lateArrivalAcknowledgedAt: null,
+        lateArrivalAcknowledgedByName: null,
+        lateArrivalAcknowledgedNote: null,
+        departureConfirmedByName: null,
+        departureConfirmedNote: null,
         auditTrail: [],
         ...overrides,
     };

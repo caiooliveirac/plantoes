@@ -18,6 +18,7 @@ import {
     isTelegramMealBreakExcludeCommandText,
     isTelegramMealBreakPriorityCommandText,
     MealBreakUserError,
+    type MealBreakNightWorkSlot,
     parseTelegramMealBreakCommand,
     parseTelegramMealBreakExcludeCommand,
     parseTelegramMealBreakPriorityCommand,
@@ -3349,7 +3350,7 @@ test("COI noturno: nao-COI redirecionado no trabalho quando escolha bloquearia s
     const lastNonCoi = nonCoiRamals[nonCoiRamals.length - 1];
 
     // Fill all but last non-COI and both COIs
-    const assignments: Record<string, string> = { "1368": "03:00" };
+    const assignments: Record<string, MealBreakNightWorkSlot> = { "1368": "03:00" };
     for (const r of nonCoiRamals.slice(0, -1)) {
         assignments[r] = "23:00";
     }
