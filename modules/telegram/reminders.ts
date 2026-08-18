@@ -540,6 +540,11 @@ function buildPreShiftInstructionPlan(now: Date): ReminderPlan | null {
     };
 }
 
+/** O painel que o coordenador abre para ver quem é quem. */
+function resolveBoardUrl(): string {
+    return (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
+}
+
 function buildCoverageSnapshotPendingState(params: {
     shiftStartedAt: Date;
     bucketAt: Date;
@@ -619,18 +624,25 @@ export function diffCoverageSnapshotStates(
 }
 
 /**
- * A1 do catálogo do secretário: a pendência de cobertura da virada, dita em uma
- * linha para o WhatsApp da coordenação.
+ * A1 do catálogo do secretário: a base que entrou em pendência na virada, dita
+ * em uma linha para o WhatsApp da coordenação.
  *
  * Não recalcula nada — come o mesmo estado que o snapshot do Telegram já montou
  * e o mesmo delta. A diferença é o corte: no Telegram vai o quadro; aqui vai só
  * o que VIROU pendência agora, porque é o que muda o que ele faz nos próximos
  * minutos. Sem novidade, `null` — e o tom não recebe nada.
+ *
+ * RAMAL NÃO ENTRA, de propósito. Nem todo ramal é guarnecido em todo turno —
+ * está documentado desde sempre — então "regulação sem 2032" não é notícia, é
+ * o desenho da escala. O que vale para a regulação é o QUANTITATIVO do turno
+ * ficar abaixo do esperado, e esse aviso é do tom (A3), que olha o quadro
+ * inteiro 40 min depois da virada em vez do delta de dez em dez minutos.
  */
 export function buildSecretaryCoverageNotice(params: {
     current: CoverageSnapshotPendingState;
     previous: CoverageSnapshotPendingState | null;
     hora: string;
+    boardUrl?: string;
 }): string | null {
     const { current, previous, hora } = params;
     const novos = previous
@@ -643,23 +655,20 @@ export function buildSecretaryCoverageNotice(params: {
     const so = (codes: string[]) => codes.filter((code) => novos.has(code));
     const aguardando = so(current.awaitingInterventionCodes);
     const semAviso = so(current.missingInterventionCodes);
-    const ramais = so(current.missingRegulationCodes);
 
     const pedacos: string[] = [];
     if (aguardando.length > 0) {
-        pedacos.push(`${aguardando.join(", ")} aguardando avançada`);
+        pedacos.push(`${aguardando.join(", ")} aguardando médico`);
     }
     if (semAviso.length > 0) {
         pedacos.push(`${semAviso.join(", ")} sem aviso de quem assume`);
-    }
-    if (ramais.length > 0) {
-        pedacos.push(`regulação sem ${ramais.join(", ")}`);
     }
     if (pedacos.length === 0) {
         return null;
     }
 
-    return `🔴 Cobertura ${hora}: ${pedacos.join("; ")}.`;
+    const link = params.boardUrl ? `\n${params.boardUrl}` : "";
+    return `🔴 Cobertura ${hora}: ${pedacos.join("; ")}.${link}`;
 }
 
 function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan | null {
@@ -1212,6 +1221,7 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
                     current: estadoAtual,
                     previous: previousCoverageState,
                     hora: formatHour(new Date(estadoAtual.bucketAt)),
+                    boardUrl: resolveBoardUrl(),
                 });
                 if (texto) {
                     await avisarSecretario(texto);
