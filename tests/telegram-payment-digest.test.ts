@@ -34,6 +34,9 @@ function makeShift(overrides: Partial<PayableShift>): PayableShift {
         slotEndedAt: "2026-06-01T22:00:00.000Z",
         startedAt: "2026-06-01T10:00:00.000Z",
         endedAt: "2026-06-01T22:00:00.000Z",
+        actualEndedAt: null,
+        scheduledStartAt: null,
+        scheduledEndAt: null,
         durationMinutes: 720,
         paymentStatus: "ready_for_payment",
         auditStatus: "clean",
@@ -42,6 +45,7 @@ function makeShift(overrides: Partial<PayableShift>): PayableShift {
         roleLabel: null,
         paymentUnit: 1,
         paymentTag: null,
+        earlyDepartureOutcome: null,
         ...overrides,
     };
 }
@@ -91,6 +95,10 @@ function makeBoard(doctors: ChiefPayableDoctorRow[]): ChiefPayableBoardModel {
             discardedSegmentCount: 0,
             disabledTargetCount: 0,
             uncoveredTargetCount: 0,
+            byEmploymentType: {
+                pj: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+                estatutario: { doctorCount: 0, payableShiftCount: 0, payableUnitCount: 0, totalDueAmount: 0 },
+            },
         },
         targetOptions: [],
         doctors,

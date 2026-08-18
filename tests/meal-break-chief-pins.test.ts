@@ -168,7 +168,7 @@ test("rebobina: quem escolheu com o horário fixado já lotado reescolhe", () =>
     });
     const after = {
         ...before,
-        lunchAssignments: { ...before.lunchAssignments, "2037": "11:30" },
+        lunchAssignments: { ...before.lunchAssignments, "2037": "11:30" as const },
         lunchCapacities: { "11:30": 1 as number, "12:30": 2 as number, "13:30": 2 as number },
     };
 
@@ -188,7 +188,7 @@ test("rebobina não dispara quando a fixação não tira vaga de ninguém", () =
             { type: "lunch_selected", ramal: "2035", slot: "11:30", actorTelegramId: null, recordedAt: "2026-08-04T12:10:00.000Z" },
         ],
     });
-    const after = { ...before, lunchAssignments: { ...before.lunchAssignments, "2036": "13:30" } };
+    const after = { ...before, lunchAssignments: { ...before.lunchAssignments, "2036": "13:30" as const } };
 
     assert.equal(resolveMealBreakChiefRewind({ before, after, pinnedRamal: "2036" }), null);
 });
@@ -201,7 +201,7 @@ test("o próprio fixado nunca é o pivô da rebobina", () => {
             { type: "lunch_selected", ramal: "2035", slot: "11:30", actorTelegramId: null, recordedAt: "2026-08-04T12:10:00.000Z" },
         ],
     });
-    const after = { ...before, lunchAssignments: { "2035": "13:30" } };
+    const after = { ...before, lunchAssignments: { "2035": "13:30" as const } };
 
     const rewind = resolveMealBreakChiefRewind({ before, after, pinnedRamal: "2035" });
     assert.equal(rewind?.pivotRamal, undefined);

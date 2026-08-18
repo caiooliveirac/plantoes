@@ -49,6 +49,9 @@ jobs:
       - name: Typecheck (next typegen + tsc)
         run: npm run typecheck
 
+      - name: Typecheck (tests)
+        run: npm run typecheck:tests
+
       - name: Tests
         run: npm run test:deploy
 

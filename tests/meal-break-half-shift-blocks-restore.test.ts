@@ -153,7 +153,7 @@ function boardRow(ramal: string, roleLabel: string | null) {
         roleLabel,
         ramalLabel: ramal,
         status: "active" as const,
-        liveSource: "operations_v2",
+        liveSource: "operations_v2" as const,
         liveUpdatedAt: null,
     };
 }

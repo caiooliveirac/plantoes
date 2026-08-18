@@ -190,8 +190,10 @@ function makeShift(overrides: Partial<PayableShift>): PayableShift {
         payableShiftId: "ps", occupancyId: "occ", domain: "regulation", doctorId: "doc-123",
         doctorName: "Acácio", displayName: null, targetCode: "PR03", targetLabel: "PR03", tagCode: "PR03",
         operationalDate: "2026-06-01", shiftLabel: "SD", slotStartedAt: "", slotEndedAt: "",
-        startedAt: "", endedAt: null, durationMinutes: 720, paymentStatus: "ready_for_payment",
+        startedAt: "", endedAt: null, actualEndedAt: null, scheduledStartAt: null, scheduledEndAt: null,
+        durationMinutes: 720, paymentStatus: "ready_for_payment",
         auditStatus: "clean", issues: [], source: "telegram", roleLabel: null, paymentUnit: 1, paymentTag: null,
+        earlyDepartureOutcome: null,
         ...overrides,
     };
 }

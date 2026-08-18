@@ -37,6 +37,7 @@ function makeRow(overrides: Partial<PaymentAllocationRawRow> = {}): PaymentAlloc
         shiftLabel: "SD",
         roleLabel: null,
         ramalLabel: null,
+        earlyDepartureOutcome: null,
         arrivalDelayMinutes: 0,
         overtimeMinutes: 0,
         creditedOvertimeMinutes: 0,
