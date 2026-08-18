@@ -52,8 +52,7 @@ jobs:
       - name: Tests
         run: npm run test:deploy
 
-      - name: Tests (meal-breaks regression, non-blocking)
-        continue-on-error: true
+      - name: Tests (meal-breaks regression)
         # Node 22 chama a flag de --experimental-test-isolation; ela virou
         # --test-isolation (estável) só no Node 23+. Se subir o major do Node
         # acima, revisar esta flag.
