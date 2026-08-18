@@ -11,9 +11,31 @@ function resolveMigrationsSchema() {
     return schema;
 }
 
+function isLegacyImportMigration(file: string) {
+    return /_import_legacy_/i.test(file);
+}
+
+// As migrations *_import_legacy_* leem tabelas do schema public que só existem
+// no banco de produção. Em ambientes sem elas (CI, dev limpo), checar antes de
+// executar evita que o servidor Postgres registre ERROR "relation does not
+// exist" — o catch abaixo continua existindo só como rede de segurança.
+async function missingLegacyRelations(sqlClient: postgres.Sql, sqlText: string) {
+    const refs = [...new Set(sqlText.match(/\bpublic\.[a-z_][a-z0-9_]*/gi) ?? [])];
+    const missing: string[] = [];
+    for (const ref of refs) {
+        const rows = await sqlClient.unsafe<{ rel: string | null }[]>(
+            "select to_regclass($1)::text as rel",
+            [ref],
+        );
+        if (!rows[0]?.rel) {
+            missing.push(ref);
+        }
+    }
+    return missing;
+}
+
 function shouldSkipLegacyImportMigration(file: string, error: unknown) {
-    const isLegacyImportMigration = /_import_legacy_/i.test(file);
-    if (!isLegacyImportMigration) {
+    if (!isLegacyImportMigration(file)) {
         return false;
     }
 
@@ -55,6 +77,16 @@ async function main() {
         }
 
         const sqlText = await readFile(path.join(migrationsDir, file), "utf8");
+
+        if (isLegacyImportMigration(file)) {
+            const missing = await missingLegacyRelations(sqlClient, sqlText);
+            if (missing.length > 0) {
+                console.warn(`skipped ${file} (legacy relations missing: ${missing.join(", ")})`);
+                await sqlClient.unsafe(`insert into ${migrationsTable} (filename) values ($1) on conflict do nothing`, [file]);
+                continue;
+            }
+        }
+
         try {
             await sqlClient.begin(async (transaction) => {
                 await transaction.unsafe(`set search_path to ${migrationsSchema}, public`);
