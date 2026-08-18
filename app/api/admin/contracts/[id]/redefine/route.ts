@@ -22,7 +22,7 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, contractLedger, contracts } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { planClosingTransfers } from "@/lib/contracts/redefinition";
+import { planCeilingCorrectionAdjustment, planClosingTransfers } from "@/lib/contracts/redefinition";
 import { CLOSING_SOURCE_TYPE, recordOpeningBalance } from "@/services/contract-ledger.service";
 
 const payloadSchema = z.object({
@@ -87,17 +87,69 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         // redefinição de ciclo, é só o teto que veio errado (ex.: preset trocado
         // no cadastro). Terminar+criar bateria em contracts_window_ordered
         // (ended_at > started_at é estrito) porque ended_at cairia igual a
-        // started_at. Corrige o teto no lugar, sem mexer no razão.
+        // started_at. Corrige o teto no lugar.
+        //
+        // O razão vem junto QUANDO a abertura foi derivada do teto errado — é o
+        // caso de todo contrato nascido aqui ou na renovação, que lança
+        // `opening = teto`. Corrigir só `ceiling_amount` deixava abertura e teto
+        // divergentes, e `consumed = teto − saldo` (lib/contracts/balance-metrics.ts)
+        // lia a diferença como consumo que nunca houve: um ciclo de 17 dias
+        // aparecia com 20% gasto e ritmo 363% acima (caso Zolaína, 18/08/2026).
+        // Abertura que NÃO bate com o teto anterior foi medida (saldo de planilha,
+        // âncora do coordenador) e não se mexe: ela não veio do número errado.
         if (newCycleStart === old.startedAt) {
-            await db.update(contracts)
-                .set({ ceilingAmount: ceilingBrl.toFixed(2), updatedAt: new Date() })
-                .where(eq(contracts.id, old.id));
+            const openingRows = await db
+                .select({ amount: contractLedger.amount })
+                .from(contractLedger)
+                .where(and(
+                    eq(contractLedger.contractId, old.id),
+                    eq(contractLedger.type, "opening"),
+                ));
+            const openingCents = openingRows.reduce(
+                (total, row) => total + Math.round(Number(row.amount) * 100),
+                0,
+            );
+            const deltaCents = planCeilingCorrectionAdjustment({
+                openingCents,
+                openingEntryCount: openingRows.length,
+                previousCeilingCents: old.ceilingAmount === null
+                    ? null
+                    : Math.round(Number(old.ceilingAmount) * 100),
+                newCeilingCents: ceilingCents,
+            });
+
+            await db.transaction(async (tx) => {
+                await tx.update(contracts)
+                    .set({ ceilingAmount: ceilingBrl.toFixed(2), updatedAt: new Date() })
+                    .where(eq(contracts.id, old.id));
+                // Append-only: a abertura errada continua no histórico, o
+                // complemento é que faz a soma bater. Tipo 'opening', NÃO
+                // 'manual_adjustment': a view contract_balance conta todo
+                // não-'opening' como consumo (migration 0038), e um ajuste aqui
+                // deixaria o consumo negativo — matando burn rate, runway e
+                // projeção do contrato até o consumo real passar do delta.
+                if (deltaCents !== 0) {
+                    await tx.insert(contractLedger).values({
+                        contractId: old.id,
+                        entryDate: old.cycleStart,
+                        type: "opening",
+                        amount: centsToNumeric(deltaCents),
+                        description: `Complemento da abertura: teto corrigido de ${centsToNumeric(openingCents)} para ${ceilingBrl.toFixed(2)}`,
+                        createdByUserId: session.user.id,
+                    });
+                }
+            });
             await db.insert(auditLogs).values({
                 actorUserId: session.user.id,
                 action: "contract.ceiling_correction",
                 entityType: "contract",
                 entityId: old.id,
-                details: { previousCeilingAmount: old.ceilingAmount, ceilingBrl, startMonth },
+                details: {
+                    previousCeilingAmount: old.ceilingAmount,
+                    ceilingBrl,
+                    startMonth,
+                    openingAdjustmentCents: deltaCents,
+                },
             });
             revalidatePath("/admin/payment-closing");
             return NextResponse.json(
