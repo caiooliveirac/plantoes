@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { planClosingTransfers, type ClosingLedgerRow } from "@/lib/contracts/redefinition";
+import {
+    planCeilingCorrectionAdjustment,
+    planClosingTransfers,
+    type ClosingLedgerRow,
+} from "@/lib/contracts/redefinition";
 
 const DOCTOR = "d1";
 const OLD = "contrato-antigo";
@@ -84,5 +88,41 @@ describe("planClosingTransfers", () => {
             newCycleEnd: "2027-05-01",
         });
         assert.deepEqual(transfers.map((transfer) => transfer.monthKey), ["2026-05", "2026-07"]);
+    });
+});
+
+describe("planCeilingCorrectionAdjustment", () => {
+    it("lança a diferença quando a abertura veio do teto errado (caso Zolaína)", () => {
+        assert.equal(
+            planCeilingCorrectionAdjustment({
+                openingCents: 33_146_400,
+                openingEntryCount: 1,
+                previousCeilingCents: 33_146_400,
+                newCeilingCents: 41_433_000,
+            }),
+            8_286_600,
+        );
+    });
+
+    it("não mexe na abertura medida, que não deriva do teto", () => {
+        assert.equal(
+            planCeilingCorrectionAdjustment({
+                openingCents: 10_878_485,
+                openingEntryCount: 1,
+                previousCeilingCents: 17_485_800,
+                newCeilingCents: 18_000_000,
+            }),
+            0,
+        );
+    });
+
+    it("nada a lançar sem abertura, sem teto anterior, ou com teto igual", () => {
+        const base = { openingCents: 0, openingEntryCount: 0, previousCeilingCents: 100, newCeilingCents: 200 };
+        assert.equal(planCeilingCorrectionAdjustment(base), 0);
+        assert.equal(planCeilingCorrectionAdjustment({ ...base, openingEntryCount: 1, previousCeilingCents: null }), 0);
+        assert.equal(
+            planCeilingCorrectionAdjustment({ openingCents: 100, openingEntryCount: 1, previousCeilingCents: 100, newCeilingCents: 100 }),
+            0,
+        );
     });
 });

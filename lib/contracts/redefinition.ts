@@ -80,3 +80,32 @@ export function planClosingTransfers(params: {
     }
     return transfers.sort((left, right) => left.monthKey.localeCompare(right.monthKey));
 }
+
+/**
+ * Correção de teto no mês em que o contrato já começou: quanto a abertura
+ * precisa receber, como lançamento 'opening' complementar, para acompanhar o
+ * teto novo.
+ *
+ * Todo contrato nascido da redefinição ou da renovação lança `opening = teto`.
+ * Corrigir só `contracts.ceiling_amount` deixa os dois divergentes, e
+ * `consumed = teto − saldo` (balance-metrics.ts) lê a diferença como consumo que
+ * nunca houve — um ciclo de 17 dias aparecendo com 20% gasto e ritmo 363% acima
+ * (caso Zolaína, 18/08/2026).
+ *
+ * Abertura que NÃO bate com o teto anterior foi MEDIDA (saldo de planilha,
+ * âncora do coordenador) e não deriva do número errado: essa fica quieta.
+ * Devolve 0 quando não há nada a lançar.
+ */
+export function planCeilingCorrectionAdjustment(params: {
+    /** Soma dos lançamentos 'opening' do contrato. */
+    openingCents: number;
+    /** Quantos lançamentos 'opening' existem — zero = razão ainda sem abertura. */
+    openingEntryCount: number;
+    previousCeilingCents: number | null;
+    newCeilingCents: number;
+}): number {
+    if (params.openingEntryCount === 0) return 0;
+    if (params.previousCeilingCents === null) return 0;
+    if (params.openingCents !== params.previousCeilingCents) return 0;
+    return params.newCeilingCents - params.openingCents;
+}
