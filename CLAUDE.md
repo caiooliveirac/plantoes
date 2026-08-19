@@ -234,16 +234,18 @@ npm install            # Node >= 20
 npm run dev            # Next dev server
 npm test               # suíte completa (node --test + tsx)
 npm run test:deploy    # suíte de gate de deploy (exclui meal-breaks, que trava sob isolamento)
-npm run build          # build de produção (faça LOCAL, não no EC2)
+npm run build          # build de produção (faça LOCAL, não no servidor)
 npm run telegram:worker   # roda o worker de lembretes localmente (loop contínuo)
 npm run db:migrate        # aplica migrations SQL pendentes
 ```
 
 Notas de teste conhecidas: `tests/telegram-meal-breaks.test.ts` trava sob isolamento;
-use `--test-isolation=none` quando precisar rodá-lo. Detalhes na memória do projeto.
+rode-o com `--test-isolation=none` (Node 23+; no Node 22 do CI a flag chama
+`--experimental-test-isolation=none`). Detalhes na memória do projeto.
 
 Sem ESLint/Prettier configurados no repo — a única verificação estática automatizada
-é `tsc --noEmit` (TypeScript `strict: true`) + `next typegen`, rodados no CI.
+é `npm run typecheck` (`next typegen` + `tsc --noEmit -p tsconfig.json`, TypeScript
+`strict: true`, cobre produção **e** `tests/`), rodado no CI.
 
 ## Convenções de código observadas
 
@@ -274,29 +276,32 @@ Sem ESLint/Prettier configurados no repo — a única verificação estática au
 
 - **Dev local**: `npm run dev`. `.env.local` para apontar num Postgres local (schema
   `operations_v2`, ver connection string de exemplo em `.env.example`).
-- **CI** ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)), roda no
-  self-hosted runner (o próprio EC2, mas só como executor de CI, não como ambiente
-  de dev): todo push/PR roda `test_smoke` (`npm run test:deploy` + `tsc --noEmit` +
-  `next typegen`); PRs também rodam `test_regression` (`npm run test:full`,
-  `continue-on-error`, inclui os testes flaky de meal-breaks). Deploy só dispara em
-  push a `main` após `test_smoke` passar, e valida que o commit veio de um PR
-  mergeado.
-- **Deploy**: [scripts/deploy-production.sh](scripts/deploy-production.sh) builda
-  **em cima do working tree de produção** (sem `git pull`) com build atômico
-  (`.next` anterior preservado em `.next.prev` para rollback), guard de memória
-  (falha se `< 3GB` livres) e `NODE_OPTIONS="--max-old-space-size=2048"`. Depois
-  reinicia os dois processos PM2 (`plantoes`, `plantoes-telegram-worker`) e valida
-  `/api/health` + `/api/board`.
+- **CI de PR** ([.github/workflows/ci-pr.yml](.github/workflows/ci-pr.yml)), runner
+  `ubuntu-latest` do GitHub com Postgres 16 de serviço: `npm ci` → `db:migrate`
+  (valida que as migrations aplicam limpas; os testes não tocam o banco) →
+  `npm run typecheck` → `npm run test:deploy` → meal-breaks isolado (bloqueante,
+  `--experimental-test-isolation=none` no Node 22) → `npm run build`. Todos os
+  passos são bloqueantes; ~2min no total.
+- **Deploy** ([.github/workflows/release-deploy.yml](.github/workflows/release-deploy.yml)),
+  em push a `main`: job `validate` (mesma bateria do CI de PR, sem meal-breaks e sem
+  build) e depois job `deploy`, que executa
+  [scripts/deploy-magalu.sh](scripts/deploy-magalu.sh) **no servidor via SSH** — o
+  `next build` de produção acontece lá (build atômico com `.next.prev` para
+  rollback, guard de memória), com restart dos dois processos PM2 (`plantoes`,
+  `plantoes-telegram-worker`) e healthcheck de `/api/health` + `/api/board`.
+  Não há mais self-hosted runner nem os jobs antigos `test_smoke`/`test_regression`.
 - **Migrations em produção são manuais**: aplicar `db/migrations/NNNN_*.sql` no
   servidor **antes** do merge (via `npm run db:migrate` com `.env.production`), não
   fazem parte do pipeline de deploy automático.
 
 ## Produção (resumo — runbook completo em docs/agent-operations.md)
 
-- App em `~/plantoes` no EC2; porta `3004`; URL pública `https://plantoes.mnrs.com.br`.
+- App em `~/plantoes` no servidor **magalu** (`ssh magalu`); porta `3004`; URL
+  pública `https://plantoes.mnrs.com.br`.
 - Banco: PostgreSQL do host em `localhost:5432` db `plantoes` (só loopback → acesso
   remoto via túnel SSH).
 - Observabilidade e DB de produção são acessíveis **read-only do Mac via SSH**, sem
-  rodar carga no EC2. Veja o runbook.
-- O deploy ainda compila no EC2 (guard de memória + build atômico com rollback já
-  protegem contra OOM). Meta futura: compilar fora da produção e enviar só o artefato.
+  rodar carga no servidor. Veja o runbook.
+- O deploy ainda compila no servidor (guard de memória + build atômico com rollback
+  já protegem contra OOM). Meta futura: compilar fora da produção e enviar só o
+  artefato.
