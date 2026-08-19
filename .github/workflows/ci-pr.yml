@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   validate:
-    name: Lint, typecheck, tests and build
+    name: Typecheck, tests and build
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -46,11 +46,8 @@ jobs:
       - name: Apply migrations in CI database
         run: npm run db:migrate
 
-      - name: Typecheck (next typegen + tsc)
+      - name: Typecheck (next typegen + tsc, produção e tests)
         run: npm run typecheck
-
-      - name: Typecheck (tests)
-        run: npm run typecheck:tests
 
       - name: Tests
         run: npm run test:deploy
