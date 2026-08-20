@@ -38,6 +38,7 @@ import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modul
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 import { expireStaleRegulationOccupancies, isRegulationPostDeactivationActive } from "@/modules/regulation/service";
+import { hookMealBreakAfterBoardChange } from "@/modules/telegram/meal-break-board-hook";
 
 type OptionalDate = Date | null | undefined;
 type Executor = any;
@@ -908,6 +909,7 @@ export async function correctRegulationOccupancy(
     });
 
     publishBoardUpdate(`regulation:correct:${id}`);
+    await hookMealBreakAfterBoardChange({ actorUserId: updatedByUserId ?? null });
     return updated;
 }
 
@@ -1042,6 +1044,7 @@ export async function removeRegulationOccupancyRecord(id: string, updatedByUserI
     });
 
     publishBoardUpdate(`regulation:remove:${id}`);
+    await hookMealBreakAfterBoardChange({ actorUserId: updatedByUserId ?? null });
     return deleted;
 }
 
@@ -1265,5 +1268,6 @@ export async function transferOperationalOccupancy(
     });
 
     publishBoardUpdate(`operational:transfer:${sourceOccupancyId}`);
+    await hookMealBreakAfterBoardChange({ actorUserId: updatedByUserId ?? null });
     return result;
 }

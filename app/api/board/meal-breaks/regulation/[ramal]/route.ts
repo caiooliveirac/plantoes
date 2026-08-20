@@ -98,7 +98,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/bo
                 },
             });
 
-            return NextResponse.json({ session: result.session, overrides: result.overrides });
+            return NextResponse.json({ session: result.session, overrides: result.overrides, evaluation: result.evaluation });
         }
 
         const updatedSession = await updateNightMealBreakAssignment({
