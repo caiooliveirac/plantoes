@@ -8,6 +8,10 @@ import {
     parseTelegramDepartureCorrectionCommand,
 } from "@/modules/telegram/commands";
 import {
+    isTelegramDisplacedCommandText,
+    parseTelegramDisplacedCommand,
+} from "@/modules/telegram/displaced-commands";
+import {
     buildDeparturePriorityReply,
     getCurrentDeparturePriorityView,
     isTelegramDeparturePriorityCommandText,
@@ -314,6 +318,22 @@ test("parseTelegramCommand parses retirar with target and time", () => {
     assert.equal(parsed?.targetCode, "2031");
     assert.equal(parsed?.time, "19:05");
     assert.equal(parsed?.isDeparture, false);
+});
+
+test("parseTelegramCommand parses retirar with displaced doctor name", () => {
+    const parsed = parseTelegramCommand("/retirar Carolina Restrepo PM04 20:10");
+
+    assert.equal(parsed?.name, "retirar");
+    assert.equal(parsed?.sector, "INTERVENTION");
+    assert.equal(parsed?.targetCode, "PM04");
+    assert.equal(parsed?.doctorName, "Carolina Restrepo");
+    assert.equal(parsed?.time, "20:10");
+});
+
+test("parseTelegramDisplacedCommand is a list command, not /retirar", () => {
+    assert.deepEqual(parseTelegramDisplacedCommand("/deslocados"), { name: "deslocados" });
+    assert.equal(isTelegramDisplacedCommandText("/deslocados"), true);
+    assert.equal(parseTelegramCommand("/deslocados"), null);
 });
 
 test("parseTelegramCommand parses saiu alias as departure command", () => {

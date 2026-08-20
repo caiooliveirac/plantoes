@@ -268,7 +268,17 @@ type ForwardContinuityPrompt = {
 } | null;
 import { pickCandidateFromReply, pickConfidentDoctorCandidate, resolveDoctorCandidates, type TelegramDoctorCandidate, type TelegramDoctorDirectoryEntry } from "@/modules/telegram/name-resolution";
 import { buildCandidatePromptReply, buildGroupCorrectionAnnouncement, buildNameUnresolvedReply, buildTelegramBatchApplyReply, buildTelegramBatchReviewReply, pickTelegramReply } from "@/modules/telegram/replies";
-import { getOperationalBoard, getPaymentAllocationBoard, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
+import { getOperationalBoard, getPaymentAllocationBoard, listOpenDisplacedOccupants, type PaymentAllocationBoard, type PaymentAllocationRow } from "@/services/board.service";
+import {
+    buildDisplacedListReply,
+    buildDisplacedMissingOccupancyReply,
+    buildDisplacedNameMismatchReply,
+    buildDisplacedStaleTimePrompt,
+    isStaleOpenOccupancy,
+    isTelegramDisplacedCommandText,
+    parseTelegramDisplacedCommand,
+    pickCommandOccupancyTarget,
+} from "@/modules/telegram/displaced-commands";
 import { getOperationalSlotAuditReport } from "@/services/slot-audit.service";
 
 import {
@@ -3026,6 +3036,32 @@ async function findOffBoardOccupancyOnTarget(params: {
     })) ?? null;
 }
 
+async function listOffBoardOccupanciesOnTarget(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    targetId: number;
+}) {
+    const db = getDb();
+    if (params.sector === "REGULATION") {
+        return db.query.regulationOccupancies.findMany({
+            where: and(
+                eq(regulationOccupancies.postId, params.targetId),
+                isNull(regulationOccupancies.endedAt),
+                isNull(regulationOccupancies.boardStartedAt),
+            ),
+            orderBy: [desc(regulationOccupancies.startedAt)],
+        });
+    }
+
+    return db.query.interventionOccupancies.findMany({
+        where: and(
+            eq(interventionOccupancies.baseId, params.targetId),
+            isNull(interventionOccupancies.endedAt),
+            isNull(interventionOccupancies.boardStartedAt),
+        ),
+        orderBy: [desc(interventionOccupancies.startedAt)],
+    });
+}
+
 async function findInterventionBaseByCode(code: string) {
     return getDb().query.interventionBases.findFirst({
         where: eq(interventionBases.code, code),
@@ -3976,6 +4012,7 @@ const KNOWN_TELEGRAM_COMMANDS = [
     "excluir", "incluir", "corrigir", "corrigirsaida", "retirar", "remover", "ramal",
     "ativar", "desativar", "ontem", "hoje", "pagamento", "resetcodinome", "rc",
     "desfazer", "slots", "medico", "piam", "banco", "alerta", "saiu", "saindo", "saida",
+    "deslocados", "deslocado",
 ];
 
 // Aliases/erros de digitação frequentes → comando real. Resolvidos ANTES do fuzzy
@@ -5905,6 +5942,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         if (helpIsChief) {
             helpLines.push(
                 "",
+                "🔑 *Chefia:* /deslocados · /retirar Nome PM04 19:00",
                 "🔑 *Chefia (privado):* /pagamento · /pagamento conferir · /pagamento corrigir",
                 "   /rc <Nome ou codinome> — reseta o codinome de um médico",
             );
@@ -6013,8 +6051,12 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "  _/hoje PM04 07:00_",
             "",
             "▸ /retirar — registra saída/encerramento:",
-            "  _/retirar PM04 19:00_",
+            "  _/retirar PM04 19:00_ (titular do quadro)",
+            "  _/retirar Carolina PM04 20:10_ (deslocado/sombra, pelo nome)",
             "  (sinônimos: /saiu, /saindo, /saida)",
+            "",
+            "▸ /deslocados — lista quem está fora do quadro:",
+            "  _/deslocados_",
             "",
             "▸ /ramal — altera função do ramal:",
             "  _/ramal Emily 1363 RMT_",
@@ -6470,6 +6512,50 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         return { ok: true, alerta: true, pending: true };
     }
 
+    const displacedCommand = parseTelegramDisplacedCommand(message.text);
+    if (displacedCommand || isTelegramDisplacedCommandText(message.text)) {
+        if (!displacedCommand) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "displaced_command_usage_invalid",
+                parsedAction: "deslocados",
+            });
+            await sendMessage(message.chat.id, "⛔ Use /deslocados para listar quem está fora do quadro. Para retirar: /retirar Nome PM04 19:00", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const displacedActor = await resolveTelegramCommandActor(message);
+        if (!displacedActor || !displacedActor.roles.some((role) => role === "admin" || role === "chief")) {
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "command_forbidden",
+                parsedAction: "deslocados",
+            });
+            await sendMessage(message.chat.id, "⛔ /deslocados é da chefia.", message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        try {
+            const referenceAt = new Date(message.date * 1000);
+            const items = await listOpenDisplacedOccupants();
+            await markTelegramProcessed(logId, {
+                status: "accepted",
+                parsedAction: "deslocados",
+                resolutionData: { count: items.length, actorRoles: displacedActor.roles },
+            });
+            await sendMessage(message.chat.id, buildDisplacedListReply(items, referenceAt), message.message_id);
+            return { ok: true, displaced: true };
+        } catch (error) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: error instanceof Error ? error.message : "displaced_list_failed",
+                parsedAction: "deslocados",
+            });
+            await sendMessage(message.chat.id, `⛔ Não consegui listar os deslocados. ${resolveTelegramErrorText(error)}`, message.message_id);
+            return { ok: true, ignored: true };
+        }
+    }
+
     const command = parseTelegramCommand(message.text);
     if (!command) {
         if (message.text.trim().startsWith("/")) {
@@ -6603,18 +6689,31 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             });
         }
 
-        await markTelegramProcessed(logId, {
-            status: "error",
-            errorMessage: "command_target_not_found",
-            parsedDomain: command.sector,
-            parsedTargetCode: command.targetCode,
-            parsedAction: command.name,
-        });
-        await sendMessage(message.chat.id, `⛔ Não encontrei ocupação ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
-        return { ok: true, ignored: true };
+        if (command.name !== "retirar" && !command.isDeparture) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: "command_target_not_found",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: command.name,
+            });
+            await sendMessage(message.chat.id, `⛔ Não encontrei ocupação ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
+            return { ok: true, ignored: true };
+        }
     }
 
     if (command.name === "corrigir" && !command.isDeparture) {
+        if (!active.occupancy) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: "command_target_not_found",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: command.name,
+            });
+            await sendMessage(message.chat.id, `⛔ Não encontrei ocupação ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
+            return { ok: true, ignored: true };
+        }
         if (!command.time) {
             await markTelegramProcessed(logId, {
                 status: "ignored",
@@ -6732,6 +6831,17 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     }
 
     if ((command.name === "ontem" || command.name === "hoje") && !command.isDeparture) {
+        if (!active.occupancy) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: "command_target_not_found",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: command.name,
+            });
+            await sendMessage(message.chat.id, `⛔ Não encontrei ocupação ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
+            return { ok: true, ignored: true };
+        }
         if (!command.time) {
             await markTelegramProcessed(logId, {
                 status: "ignored",
@@ -6837,6 +6947,17 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     }
 
     if (command.name === "ramal") {
+        if (!active.occupancy) {
+            await markTelegramProcessed(logId, {
+                status: "error",
+                errorMessage: "command_target_not_found",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: command.name,
+            });
+            await sendMessage(message.chat.id, `⛔ Não encontrei ocupação ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
+            return { ok: true, ignored: true };
+        }
         if (command.sector !== "REGULATION") {
             await markTelegramProcessed(logId, {
                 status: "ignored",
@@ -6981,10 +7102,13 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
     }
 
     if (command.name === "retirar" || command.isDeparture) {
-        const eventAt = resolveTelegramEventTime(new Date(message.date * 1000), command.time);
+        const referenceAt = new Date(message.date * 1000);
+        const titular = active.occupancy
+            ? { id: active.occupancy.id, doctorId: active.occupancy.doctorId }
+            : null;
         const { doctor, candidates, usedActiveDoctorFallback } = await resolveCommandDoctor({
             doctorQuery: command.doctorName,
-            activeDoctorId: active.occupancy.doctorId,
+            activeDoctorId: titular?.doctorId ?? null,
         });
         if (!doctor) {
             await markTelegramProcessed(logId, {
@@ -6995,7 +7119,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 parsedAction: "departure",
                 resolutionData: {
                     doctorQuery: command.doctorName,
-                    activeDoctorId: active.occupancy.doctorId,
+                    activeDoctorId: titular?.doctorId ?? null,
                     candidates: candidates.slice(0, 3),
                 },
             });
@@ -7003,11 +7127,76 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             return { ok: true, ignored: true };
         }
 
+        const targetId = command.sector === "REGULATION" ? active.post!.id : active.base!.id;
+        const offBoardRecord = await findOffBoardOccupancyOnTarget({
+            sector: command.sector,
+            targetId,
+            doctorId: doctor.id,
+        });
+        const pick = pickCommandOccupancyTarget({
+            namedDoctorId: command.doctorName ? doctor.id : null,
+            titular,
+            offBoard: offBoardRecord ? { id: offBoardRecord.id, doctorId: offBoardRecord.doctorId } : null,
+        });
+
+        if (pick.kind === "name_mismatch" || pick.kind === "missing") {
+            const others = await listOffBoardOccupanciesOnTarget({ sector: command.sector, targetId });
+            const offBoardNames: string[] = [];
+            for (const occ of others) {
+                offBoardNames.push(await loadDoctorSurfaceName(occ.doctorId));
+            }
+            const reply = pick.kind === "name_mismatch"
+                ? buildDisplacedNameMismatchReply({
+                    queriedName: resolveTelegramDoctorSurfaceName(doctor),
+                    targetCode: command.targetCode,
+                    titularName: titular ? await loadDoctorSurfaceName(titular.doctorId) : null,
+                    offBoardName: offBoardNames[0] ?? null,
+                })
+                : buildDisplacedMissingOccupancyReply({
+                    targetCode: command.targetCode,
+                    offBoardNames,
+                });
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: pick.kind === "name_mismatch" ? "command_occupancy_name_mismatch" : "command_target_not_found",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: "departure",
+                parsedDoctorName: doctor.fullName,
+            });
+            await sendMessage(message.chat.id, reply, message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const targetOccupancy = pick.kind === "titular" ? active.occupancy! : offBoardRecord!;
+        if (pick.kind === "off_board" && !command.time && isStaleOpenOccupancy(targetOccupancy.scheduledEndAt, referenceAt)) {
+            const staleReply = buildDisplacedStaleTimePrompt({
+                doctorName: resolveTelegramDoctorSurfaceName(doctor),
+                targetCode: command.targetCode,
+                startedAt: targetOccupancy.startedAt,
+                scheduledEndAt: targetOccupancy.scheduledEndAt,
+                referenceAt,
+            });
+            await markTelegramProcessed(logId, {
+                status: "ignored",
+                errorMessage: "displaced_stale_time_required",
+                parsedDomain: command.sector,
+                parsedTargetCode: command.targetCode,
+                parsedAction: "departure",
+                parsedDoctorName: doctor.fullName,
+                relatedOccupancyId: targetOccupancy.id,
+            });
+            await sendMessage(message.chat.id, staleReply, message.message_id);
+            return { ok: true, ignored: true };
+        }
+
+        const eventAt = resolveTelegramEventTime(referenceAt, command.time);
+
         // /retirar é decisão da chefia: aplica a régua de saída antecipada
         // (early-departure.ts) e o desfecho entra no aviso do grupo.
         const updated = command.sector === "REGULATION"
-            ? await endRegulationOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefWithdrawal: true }, resolveCommandAuditUserId(null))
-            : await endInterventionOccupancy(active.occupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefWithdrawal: true }, resolveCommandAuditUserId(null));
+            ? await endRegulationOccupancy(targetOccupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefWithdrawal: true }, resolveCommandAuditUserId(null))
+            : await endInterventionOccupancy(targetOccupancy.id, { endedAt: eventAt, actualEndedAt: eventAt, chiefWithdrawal: true }, resolveCommandAuditUserId(null));
         const doctorName = doctor.fullName;
 
         await markTelegramProcessed(logId, {
@@ -7017,7 +7206,12 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             parsedAction: "departure",
             parsedDoctorName: doctorName,
             relatedOccupancyId: updated.id,
-            resolutionData: { actorRoles: actor.roles, commandName: command.name, usedActiveDoctorFallback },
+            resolutionData: {
+                actorRoles: actor.roles,
+                commandName: command.name,
+                usedActiveDoctorFallback,
+                occupancyKind: pick.kind,
+            },
         });
         const removedReply = pickTelegramReply("command_removed", message.message_id, {
             target: command.targetCode,
@@ -7029,6 +7223,18 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             : "";
         await sendMessage(message.chat.id, `${removedReply}${removedOutcomeLine}`, message.message_id);
         return { ok: true, occupancyId: updated.id };
+    }
+
+    if (!active.occupancy) {
+        await markTelegramProcessed(logId, {
+            status: "error",
+            errorMessage: "command_target_not_found",
+            parsedDomain: command.sector,
+            parsedTargetCode: command.targetCode,
+            parsedAction: command.name,
+        });
+        await sendMessage(message.chat.id, `⛔ Não encontrei ocupação ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
+        return { ok: true, ignored: true };
     }
 
     const deleted = command.sector === "REGULATION"

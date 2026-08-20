@@ -56,6 +56,19 @@ export interface BoardShadowOccupant {
   displayName: string | null;
   startedAt: string | null;
   boardStartedAt: string | null;
+  scheduledEndAt?: string | null;
+  scheduledStartAt?: string | null;
+}
+
+export interface DisplacedOccupantListItem {
+  domain: "regulation" | "intervention";
+  targetCode: string;
+  occupancyId: string;
+  doctorId: string;
+  doctorName: string;
+  displayName: string | null;
+  startedAt: string | null;
+  scheduledEndAt: string | null;
 }
 
 export interface RegulationBoardRow {
@@ -797,6 +810,8 @@ function groupShadowOccupantsByTarget(
       displayName: (raw.displayName ?? null) as string | null,
       startedAt: (raw.startedAt ?? null) as string | null,
       boardStartedAt: (raw.boardStartedAt ?? null) as string | null,
+      scheduledEndAt: (raw.scheduledEndAt ?? null) as string | null,
+      scheduledStartAt: (raw.scheduledStartAt ?? null) as string | null,
     });
     map.set(targetId, list);
   }
@@ -811,7 +826,8 @@ async function listOpenRegulationShadowOccupantsByPost(): Promise<Map<number, Bo
   const result = await db.execute(sql`
     select ro.id as "occupancyId", ro.post_id as "postId", ro.doctor_id as "doctorId",
            d.full_name as "doctorName", d.display_name as "displayName",
-           ro.started_at as "startedAt", ro.board_started_at as "boardStartedAt"
+           ro.started_at as "startedAt", ro.board_started_at as "boardStartedAt",
+           ro.scheduled_end_at as "scheduledEndAt", ro.scheduled_start_at as "scheduledStartAt"
     from operations_v2.regulation_occupancies ro
     join operations_v2.doctors d on d.id = ro.doctor_id
     where ro.ended_at is null and coalesce(ro.notes, '') ~* 'SOMBRA'
@@ -824,7 +840,8 @@ async function listOpenInterventionShadowOccupantsByBase(): Promise<Map<number, 
   const result = await db.execute(sql`
     select io.id as "occupancyId", io.base_id as "baseId", io.doctor_id as "doctorId",
            d.full_name as "doctorName", d.display_name as "displayName",
-           io.started_at as "startedAt", io.board_started_at as "boardStartedAt"
+           io.started_at as "startedAt", io.board_started_at as "boardStartedAt",
+           io.scheduled_end_at as "scheduledEndAt", io.scheduled_start_at as "scheduledStartAt"
     from operations_v2.intervention_occupancies io
     join operations_v2.doctors d on d.id = io.doctor_id
     where io.ended_at is null and coalesce(io.notes, '') ~* 'SOMBRA'
@@ -840,7 +857,8 @@ async function listOpenRegulationDisplacedOccupantsByPost(): Promise<Map<number,
   const result = await db.execute(sql`
     select ro.id as "occupancyId", ro.post_id as "postId", ro.doctor_id as "doctorId",
            d.full_name as "doctorName", d.display_name as "displayName",
-           ro.started_at as "startedAt", ro.board_started_at as "boardStartedAt"
+           ro.started_at as "startedAt", ro.board_started_at as "boardStartedAt",
+           ro.scheduled_end_at as "scheduledEndAt", ro.scheduled_start_at as "scheduledStartAt"
     from operations_v2.regulation_occupancies ro
     join operations_v2.doctors d on d.id = ro.doctor_id
     where ro.ended_at is null and coalesce(ro.notes, '') like '%[DESLOCADO]%'
@@ -853,12 +871,58 @@ async function listOpenInterventionDisplacedOccupantsByBase(): Promise<Map<numbe
   const result = await db.execute(sql`
     select io.id as "occupancyId", io.base_id as "baseId", io.doctor_id as "doctorId",
            d.full_name as "doctorName", d.display_name as "displayName",
-           io.started_at as "startedAt", io.board_started_at as "boardStartedAt"
+           io.started_at as "startedAt", io.board_started_at as "boardStartedAt",
+           io.scheduled_end_at as "scheduledEndAt", io.scheduled_start_at as "scheduledStartAt"
     from operations_v2.intervention_occupancies io
     join operations_v2.doctors d on d.id = io.doctor_id
     where io.ended_at is null and coalesce(io.notes, '') like '%[DESLOCADO]%'
   `);
   return groupShadowOccupantsByTarget(result, "baseId");
+}
+
+function mapDisplacedListRow(
+  raw: Record<string, unknown>,
+  domain: "regulation" | "intervention",
+): DisplacedOccupantListItem {
+  return {
+    domain,
+    targetCode: String(raw.targetCode ?? ""),
+    occupancyId: String(raw.occupancyId),
+    doctorId: String(raw.doctorId),
+    doctorName: String(raw.doctorName ?? ""),
+    displayName: (raw.displayName ?? null) as string | null,
+    startedAt: (raw.startedAt ?? null) as string | null,
+    scheduledEndAt: (raw.scheduledEndAt ?? null) as string | null,
+  };
+}
+
+/** Lista plana de ocupações deslocadas abertas — usada pelo /deslocados da chefia. */
+export async function listOpenDisplacedOccupants(): Promise<DisplacedOccupantListItem[]> {
+  const db = getDb();
+  const regulation = await db.execute(sql`
+    select ro.id as "occupancyId", p.code as "targetCode", ro.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           ro.started_at as "startedAt", ro.scheduled_end_at as "scheduledEndAt"
+    from operations_v2.regulation_occupancies ro
+    join operations_v2.doctors d on d.id = ro.doctor_id
+    join operations_v2.regulation_posts p on p.id = ro.post_id
+    where ro.ended_at is null and coalesce(ro.notes, '') like '%[DESLOCADO]%'
+    order by ro.started_at
+  `);
+  const intervention = await db.execute(sql`
+    select io.id as "occupancyId", b.code as "targetCode", io.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           io.started_at as "startedAt", io.scheduled_end_at as "scheduledEndAt"
+    from operations_v2.intervention_occupancies io
+    join operations_v2.doctors d on d.id = io.doctor_id
+    join operations_v2.intervention_bases b on b.id = io.base_id
+    where io.ended_at is null and coalesce(io.notes, '') like '%[DESLOCADO]%'
+    order by io.started_at
+  `);
+  return [
+    ...(regulation as unknown as Record<string, unknown>[]).map((row) => mapDisplacedListRow(row, "regulation")),
+    ...(intervention as unknown as Record<string, unknown>[]).map((row) => mapDisplacedListRow(row, "intervention")),
+  ];
 }
 
 function normalizeShiftLabel(value: string | null | undefined): "SD" | "SN" | "P" | null {

@@ -899,6 +899,31 @@ button.ops-doctor-line.shadow.clickable:hover {
     opacity: 0.7;
 }
 
+.ops-displaced-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+button.ops-doctor-line.displaced.clickable {
+    cursor: pointer;
+    border-radius: 0 6px 6px 0;
+    transition: background 0.15s, opacity 0.15s;
+    background: transparent;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+
+button.ops-doctor-line.displaced.clickable:hover {
+    opacity: 1;
+    background: rgba(230, 160, 60, 0.14);
+}
+
 /* Toggle "entrar como sombra" no drawer de remanejamento. */
 .chief-shadow-toggle .chief-shadow-toggle__control {
     display: inline-flex;
