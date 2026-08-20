@@ -96,6 +96,8 @@ export interface MealBreakSessionEvent {
     | "session_restored"
     | "chief_pin_applied"
     | "chief_pin_rewind"
+    | "board_reconciled"
+    | "board_rewind"
     | "undo_applied"
     | "session_completed";
     ramal?: string;
@@ -4960,6 +4962,8 @@ export type MealBreakSaveReason =
     | "chief_correction"
     | "latecomer_joined"
     | "latecomer_rewind"
+    | "board_reconcile"
+    | "board_rewind"
     | "undo"
     | "restored";
 
@@ -4970,6 +4974,8 @@ const MEAL_BREAK_SAVE_REASON_LABELS: Record<MealBreakSaveReason, string> = {
     chief_correction: "correção da chefia",
     latecomer_joined: "retardatário entrou",
     latecomer_rewind: "rebobina do retardatário",
+    board_reconcile: "quadro vivo sincronizado",
+    board_rewind: "rebobina por mudança no quadro",
     undo: "desfazer",
     restored: "restauração de ponto",
 };
@@ -6012,6 +6018,470 @@ export function applyMealBreakLatecomerRewind(session: MealBreakSession, rewind:
     return next;
 }
 
+function stageIgnoredRamals(session: MealBreakSession, stage: MealBreakRewindStageKey): Set<string> {
+    if (stage === "lunch") {
+        return new Set([
+            ...(session.lunchExcludedRamals ?? []),
+            ...session.roster.filter((doctor) => isMealBreakDiscretionaryRole(doctor.roleLabel)).map((doctor) => doctor.ramal),
+        ]);
+    }
+    if (stage === "rest_choice") {
+        return new Set([
+            ...(session.restExcludedRamals ?? []),
+            ...session.roster.filter((doctor) => isMealBreakDiscretionaryRole(doctor.roleLabel)).map((doctor) => doctor.ramal),
+        ]);
+    }
+    return new Set();
+}
+
+function assignmentsForImpactStage(session: MealBreakSession, stage: MealBreakRewindStageKey): Record<string, string> {
+    if (stage === "lunch") return session.lunchAssignments;
+    if (stage === "rest_choice") return session.restAssignments;
+    if (stage === "night_work") return session.nightWorkAssignments;
+    return session.dinnerAssignments;
+}
+
+/**
+ * Régua da mudança no quadro (Fora, encerrar, função, remanejar): só rebobina
+ * se a escolha de alguém ficou ilegal depois, ou se essa pessoa teria tido
+ * opção a mais no mundo novo. Capacidade que muda sem liberar escolha de
+ * ninguém não reinicia nada. Diferente da rebobina do retardatário, que é
+ * mais agressiva (qualquer restrição + qualquer mudança de vaga).
+ */
+export function resolveMealBreakChoiceImpact(params: {
+    before: MealBreakSession;
+    after: MealBreakSession;
+}): MealBreakLatecomerRewind | null {
+    const { before, after } = params;
+    const specs: MealBreakRewindStageSpec[] = before.mode === "night"
+        ? [
+            { key: "night_work", pool: NIGHT_WORK_SLOTS, oldCapacities: before.nightWorkCapacities, newCapacities: after.nightWorkCapacities, eventType: "night_work_selected" },
+            { key: "dinner_choice", pool: DINNER_CHOICE_SLOTS, oldCapacities: before.dinnerChoiceCapacities, newCapacities: after.dinnerChoiceCapacities, eventType: "night_dinner_selected" },
+        ]
+        : [
+            { key: "lunch", pool: LUNCH_SLOTS, oldCapacities: before.lunchCapacities, newCapacities: after.lunchCapacities, eventType: "lunch_selected" },
+            { key: "rest_choice", pool: ["15:30", "16:30"], oldCapacities: before.restChoiceCapacities, newCapacities: after.restChoiceCapacities, eventType: "rest_selected" },
+        ];
+
+    const roleBefore = new Map(before.roster.map((doctor) => [doctor.ramal, doctor.roleLabel]));
+    const roleAfter = new Map(after.roster.map((doctor) => [doctor.ramal, doctor.roleLabel]));
+    const afterRoster = new Set(after.roster.map((doctor) => doctor.ramal));
+
+    for (const spec of specs) {
+        const ignoredAfter = stageIgnoredRamals(after, spec.key);
+        const events = listMealBreakStageSelectionEvents(before, spec);
+        const remainingOld: Record<string, number> = { ...spec.oldCapacities };
+        const remainingNew: Record<string, number> = { ...spec.newCapacities };
+        const eventRamals = new Set(events.map((event) => event.ramal as string));
+
+        for (const [ramal, slot] of Object.entries(assignmentsForImpactStage(before, spec.key))) {
+            if (eventRamals.has(ramal) || !spec.pool.includes(slot)) {
+                continue;
+            }
+            remainingOld[slot] = (remainingOld[slot] ?? 0) - 1;
+        }
+        for (const [ramal, slot] of Object.entries(assignmentsForImpactStage(after, spec.key))) {
+            if (eventRamals.has(ramal) || !spec.pool.includes(slot) || ignoredAfter.has(ramal)) {
+                continue;
+            }
+            remainingNew[slot] = (remainingNew[slot] ?? 0) - 1;
+        }
+
+        const coiOld = new Set<string>();
+        const coiNew = new Set<string>();
+
+        const blockedIn = (
+            remaining: Record<string, number>,
+            capacities: Record<string, number>,
+            coiSlots: Set<string>,
+            roleLabel: string | null | undefined,
+        ) => {
+            const baseline = spec.pool.filter((slot) => (capacities[slot] ?? 0) > 0);
+            const fullSlots = baseline.filter((slot) => (remaining[slot] ?? 0) <= 0);
+            const coiBlocked = isSharedPositionRole(roleLabel)
+                ? baseline.filter((slot) => coiSlots.has(slot) && (remaining[slot] ?? 0) > 0)
+                : [];
+            return [...new Set([...fullSlots, ...coiBlocked])];
+        };
+
+        for (const [index, event] of events.entries()) {
+            const ramal = event.ramal as string;
+            const chosen = event.slot as string;
+            const stillHere = afterRoster.has(ramal) && !ignoredAfter.has(ramal);
+
+            if (!stillHere) {
+                remainingOld[chosen] = (remainingOld[chosen] ?? 0) - 1;
+                if (isSharedPositionRole(roleBefore.get(ramal))) {
+                    coiOld.add(chosen);
+                }
+                continue;
+            }
+
+            const blockedOld = blockedIn(remainingOld, spec.oldCapacities, coiOld, roleBefore.get(ramal));
+            const blockedNew = blockedIn(remainingNew, spec.newCapacities, coiNew, roleAfter.get(ramal));
+            const freeOld = new Set(spec.pool.filter((slot) => !blockedOld.includes(slot) && (remainingOld[slot] ?? 0) > 0));
+            const freeNew = new Set(spec.pool.filter((slot) => !blockedNew.includes(slot) && (remainingNew[slot] ?? 0) > 0));
+            const extraOptions = [...freeNew].filter((slot) => !freeOld.has(slot));
+            const choiceIllegalAfter = (remainingNew[chosen] ?? 0) <= 0 || blockedNew.includes(chosen);
+
+            if (choiceIllegalAfter || extraOptions.length > 0) {
+                const clearedRamals = events.slice(index)
+                    .map((entry) => entry.ramal as string)
+                    .filter((cleared) => afterRoster.has(cleared) && !ignoredAfter.has(cleared));
+                return {
+                    stage: spec.key,
+                    pivotRamal: ramal,
+                    blockedSlots: choiceIllegalAfter ? [chosen] : extraOptions,
+                    clearedRamals,
+                };
+            }
+
+            remainingOld[chosen] = (remainingOld[chosen] ?? 0) - 1;
+            remainingNew[chosen] = (remainingNew[chosen] ?? 0) - 1;
+            if (isSharedPositionRole(roleBefore.get(ramal))) {
+                coiOld.add(chosen);
+            }
+            if (isSharedPositionRole(roleAfter.get(ramal))) {
+                coiNew.add(chosen);
+            }
+        }
+    }
+
+    return null;
+}
+
+export type MealBreakBoardChangeKind = "none" | "sync" | "rewind" | "structural" | "stale";
+
+export interface MealBreakBoardEvaluation {
+    kind: MealBreakBoardChangeKind;
+    rewind: MealBreakLatecomerRewind | null;
+    structuralReasons: Array<"recip" | "mrv">;
+    rosterAdded: string[];
+    rosterRemoved: string[];
+    staleHint: string | null;
+    mealLabel: "almoço" | "jantar";
+}
+
+function liveEligibleMealBreakDoctors(
+    board: OperationalBoard,
+    mode: MealBreakMode,
+    referenceAt: Date,
+): MealBreakRosterDoctor[] {
+    return board.regulation
+        .map((row) => mapRegulationDoctor(row, mode, referenceAt))
+        .filter((doctor): doctor is MealBreakRosterDoctor => Boolean(doctor))
+        .filter((doctor) => doctor.ramal !== CHIEF_RAMAL && !isMealBreakDiscretionaryRole(doctor.roleLabel));
+}
+
+export function projectMealBreakSessionOntoBoard(params: {
+    session: MealBreakSession;
+    board: OperationalBoard;
+    lunchExcludedRamals?: string[];
+    restExcludedRamals?: string[];
+    referenceAt: Date;
+}): MealBreakSession {
+    const remapped = reconcileMealBreakSessionRamalsWithBoard({
+        session: params.session,
+        board: params.board,
+    });
+    const liveDoctors = liveEligibleMealBreakDoctors(params.board, remapped.mode, params.referenceAt);
+    const liveByDoctorId = new Map(liveDoctors.map((doctor) => [doctor.doctorId, doctor]));
+    const liveByRamal = new Map(liveDoctors.map((doctor) => [doctor.ramal, doctor]));
+
+    const kept = remapped.roster
+        .filter((doctor) => liveByDoctorId.has(doctor.doctorId) || liveByRamal.has(doctor.ramal))
+        .map((doctor) => {
+            const live = liveByDoctorId.get(doctor.doctorId) ?? liveByRamal.get(doctor.ramal);
+            if (!live) {
+                return doctor;
+            }
+            return {
+                ...doctor,
+                ramal: live.ramal,
+                name: live.name,
+                roleLabel: live.roleLabel,
+                startedAt: live.startedAt,
+                arrivalStartedAt: live.arrivalStartedAt ?? doctor.arrivalStartedAt,
+                shiftLabel: live.shiftLabel,
+            };
+        });
+
+    const keptIds = new Set(kept.map((doctor) => doctor.doctorId));
+    const keptRamals = new Set(kept.map((doctor) => doctor.ramal));
+    const added = liveDoctors
+        .filter((doctor) => !keptIds.has(doctor.doctorId) && !keptRamals.has(doctor.ramal))
+        .map((doctor) => stripMealBreakRosterDoctor(doctor));
+
+    const roster = [...kept, ...added];
+    const rosterRamals = new Set(roster.map((doctor) => doctor.ramal));
+    const mrvRamals = roster
+        .filter((doctor) => doctor.roleLabel === "MRV")
+        .map((doctor) => doctor.ramal);
+    const recipRamal = remapped.recipRamal && rosterRamals.has(remapped.recipRamal)
+        ? remapped.recipRamal
+        : null;
+    const mrvLunch1230Ramal = remapped.mrvLunch1230Ramal && mrvRamals.includes(remapped.mrvLunch1230Ramal)
+        ? remapped.mrvLunch1230Ramal
+        : null;
+
+    const lunchExcludedRamals = (params.lunchExcludedRamals ?? remapped.lunchExcludedRamals)
+        .map(normalizeRamal)
+        .filter((ramal) => rosterRamals.has(ramal));
+    const restExcludedRamals = (params.restExcludedRamals ?? remapped.restExcludedRamals)
+        .map(normalizeRamal)
+        .filter((ramal) => rosterRamals.has(ramal));
+
+    const next: MealBreakSession = {
+        ...remapped,
+        roster,
+        recipRamal,
+        mrvRamals,
+        mrvLunch1230Ramal,
+        lunchExcludedRamals,
+        restExcludedRamals,
+    };
+
+    return remapped.mode === "night" ? syncNightSessionState(next) : syncDaySessionState(next);
+}
+
+export function evaluateMealBreakSessionAgainstBoard(params: {
+    session: MealBreakSession;
+    board: OperationalBoard;
+    lunchExcludedRamals?: string[];
+    restExcludedRamals?: string[];
+    referenceAt?: Date;
+}): { evaluation: MealBreakBoardEvaluation; projected: MealBreakSession } {
+    const referenceAt = params.referenceAt ?? new Date();
+    const projected = projectMealBreakSessionOntoBoard({
+        session: params.session,
+        board: params.board,
+        lunchExcludedRamals: params.lunchExcludedRamals,
+        restExcludedRamals: params.restExcludedRamals,
+        referenceAt,
+    });
+    const mealLabel: MealBreakBoardEvaluation["mealLabel"] = params.session.mode === "night" ? "jantar" : "almoço";
+    const beforeIds = new Set(params.session.roster.map((doctor) => doctor.doctorId));
+    const afterIds = new Set(projected.roster.map((doctor) => doctor.doctorId));
+    const rosterAdded = projected.roster
+        .filter((doctor) => !beforeIds.has(doctor.doctorId))
+        .map((doctor) => doctor.ramal);
+    const rosterRemoved = params.session.roster
+        .filter((doctor) => !afterIds.has(doctor.doctorId))
+        .map((doctor) => doctor.ramal);
+
+    const structuralReasons: Array<"recip" | "mrv"> = [];
+    if (params.session.mode === "day" && params.session.recipRamal && params.session.recipRamal !== projected.recipRamal) {
+        structuralReasons.push("recip");
+    }
+    if (params.session.mode === "day" && params.session.mrvLunch1230Ramal && params.session.mrvLunch1230Ramal !== projected.mrvLunch1230Ramal) {
+        structuralReasons.push("mrv");
+    }
+
+    const rewind = resolveMealBreakChoiceImpact({ before: params.session, after: projected });
+    const rolesChanged = params.session.roster.some((doctor) => {
+        const next = projected.roster.find((candidate) => candidate.doctorId === doctor.doctorId);
+        return Boolean(next && next.roleLabel !== doctor.roleLabel);
+    });
+    const ramalsChanged = params.session.roster.some((doctor) => {
+        const next = projected.roster.find((candidate) => candidate.doctorId === doctor.doctorId);
+        return Boolean(next && next.ramal !== doctor.ramal);
+    });
+    const exclusionsChanged = params.session.mode === "day" && (
+        params.session.lunchExcludedRamals.join() !== projected.lunchExcludedRamals.join()
+        || params.session.restExcludedRamals.join() !== projected.restExcludedRamals.join()
+    );
+
+    const drifted = rosterAdded.length > 0
+        || rosterRemoved.length > 0
+        || structuralReasons.length > 0
+        || Boolean(rewind)
+        || rolesChanged
+        || ramalsChanged
+        || exclusionsChanged;
+
+    const base = {
+        rewind,
+        structuralReasons,
+        rosterAdded,
+        rosterRemoved,
+        mealLabel,
+        staleHint: null as string | null,
+    };
+
+    if (!drifted) {
+        return { evaluation: { ...base, kind: "none" }, projected };
+    }
+
+    if (params.session.stage === "completed" && (rewind || structuralReasons.length > 0 || rosterAdded.length > 0 || rosterRemoved.length > 0 || exclusionsChanged)) {
+        const hint = rewind
+            ? `A divisão do ${mealLabel} já fechou, mas o quadro mudou as vagas. Quem escolheu sem ter as opções de agora precisaria escolher de novo — isso só acontece se a chefia reiniciar.`
+            : rosterRemoved.length > 0
+                ? `A divisão do ${mealLabel} já fechou e tem gente que saiu do quadro. Reiniciar refaz as vagas; manter deixa os horários combinados.`
+                : `A divisão do ${mealLabel} já fechou. Essa mudança no quadro não entra sozinha. Reiniciar descarta os horários combinados.`
+        return {
+            evaluation: { ...base, kind: "stale", staleHint: hint },
+            projected,
+        };
+    }
+
+    if (structuralReasons.length > 0) {
+        return { evaluation: { ...base, kind: "structural" }, projected };
+    }
+    if (rewind) {
+        return { evaluation: { ...base, kind: "rewind" }, projected };
+    }
+    return { evaluation: { ...base, kind: "sync" }, projected };
+}
+
+function buildBoardReconcileMessages(params: {
+    evaluation: MealBreakBoardEvaluation;
+    before: MealBreakSession;
+    after: MealBreakSession;
+}): string[] {
+    const { evaluation, after } = params;
+    if (evaluation.kind === "none" || evaluation.kind === "stale") {
+        return [];
+    }
+
+    const mealLabel = evaluation.mealLabel;
+    const nameOf = (ramal: string) => renderDoctorCompactSummary(after, ramal) || ramal;
+    const messages: string[] = [];
+
+    if (evaluation.rosterRemoved.length > 0) {
+        messages.push(`🍽️ Saíram da divisão do ${mealLabel}: ${evaluation.rosterRemoved.map(nameOf).join(", ")}.`);
+    }
+    if (evaluation.rosterAdded.length > 0) {
+        messages.push(`🍽️ Entraram na divisão do ${mealLabel}: ${evaluation.rosterAdded.map(nameOf).join(", ")} — agora ${after.roster.length} plantonistas.`);
+    }
+    if (evaluation.structuralReasons.includes("recip")) {
+        messages.push("⏪ O RECIP não está mais no quadro. Voltei a essa etapa.");
+    }
+    if (evaluation.structuralReasons.includes("mrv")) {
+        messages.push("⏪ O MRV da divisão não está mais no quadro. Voltei a escolher o almoço dos MRV.");
+    }
+    if (evaluation.rewind) {
+        const clearedList = evaluation.rewind.clearedRamals.map((ramal) => nameOf(ramal)).join(", ");
+        messages.push(
+            `⏪ Recalculei as vagas do ${mealLabel}. Voltei até ${nameOf(evaluation.rewind.pivotRamal)}: ${evaluation.rewind.blockedSlots.join("/")} passou a ser opção (ou a escolha ficou sem vaga). Refazem: ${clearedList}. Quem escolheu com tudo livre foi mantido.`,
+        );
+    } else if (evaluation.kind === "sync" && evaluation.rosterAdded.length === 0 && evaluation.rosterRemoved.length === 0) {
+        return [];
+    }
+
+    if (after.stage !== "completed" && (evaluation.kind === "rewind" || evaluation.kind === "structural" || evaluation.rosterAdded.length > 0 || evaluation.rosterRemoved.length > 0)) {
+        messages.push(buildCurrentPrompt(after));
+    }
+
+    return messages;
+}
+
+export async function maybeReconcileLiveMealBreakSession(params: {
+    trigger: "board_change" | "eligibility" | "manual";
+    actorTelegramId?: string | null;
+    referenceAt?: Date;
+    chatId?: string;
+}): Promise<{ evaluation: MealBreakBoardEvaluation | null; session: MealBreakSession | null }> {
+    const referenceAt = params.referenceAt ?? new Date();
+    const mode = resolveMealBreakModeFromReference(referenceAt);
+    const resolved = params.chatId
+        ? {
+            chatId: params.chatId,
+            session: await loadMealBreakSession(params.chatId, formatOperationalDate(referenceAt), mode),
+        }
+        : await resolveCurrentOperationalMealBreakState(referenceAt, mode);
+    if (!resolved?.session || !resolved.chatId) {
+        return { evaluation: null, session: null };
+    }
+
+    const board = await getOperationalBoard();
+    const eligibility = resolved.session.mode === "day"
+        ? await loadMealBreakEligibilityOverrides(resolved.session.operationalDate, "day")
+            .then((overrides) => resolveMealBreakEligibilityExclusions(overrides, buildBoardRamalMaps(board).ramalByDoctorId))
+        : { lunchExcludedRamals: [] as string[], restExcludedRamals: [] as string[] };
+
+    const { evaluation, projected } = evaluateMealBreakSessionAgainstBoard({
+        session: resolved.session,
+        board,
+        lunchExcludedRamals: eligibility.lunchExcludedRamals,
+        restExcludedRamals: eligibility.restExcludedRamals,
+        referenceAt,
+    });
+
+    if (evaluation.kind === "none" || evaluation.kind === "stale") {
+        return { evaluation, session: resolved.session };
+    }
+
+    const withEventSession = withEvent(projected, {
+        type: evaluation.rewind ? "board_rewind" : "board_reconciled",
+        actorTelegramId: params.actorTelegramId ?? null,
+        ramal: evaluation.rewind?.pivotRamal,
+    }, referenceAt);
+    const sync = resolved.session.mode === "night" ? syncNightSessionState : syncDaySessionState;
+    const rewound = evaluation.rewind
+        ? sync(applyMealBreakLatecomerRewind(withEventSession, evaluation.rewind))
+        : sync(withEventSession);
+
+    await saveMealBreakSession(
+        resolved.chatId,
+        rewound,
+        evaluation.rewind ? "board_rewind" : "board_reconcile",
+    );
+
+    const messages = buildBoardReconcileMessages({
+        evaluation: { ...evaluation, rewind: evaluation.rewind },
+        before: resolved.session,
+        after: rewound,
+    });
+    if (messages.length > 0) {
+        await sendTelegramMealBreakMessages({
+            chatId: resolved.chatId,
+            messages,
+            replyMarkup: buildMealBreakStageKeyboard(rewound) ?? undefined,
+            options: MEAL_BREAK_FORMAT_OPTIONS,
+        });
+    }
+
+    return { evaluation, session: rewound };
+}
+
+export async function restartCurrentMealBreakSession(params: {
+    actorUserId?: string | null;
+    referenceAt?: Date;
+}) {
+    const referenceAt = params.referenceAt ?? new Date();
+    const mode = resolveMealBreakModeFromReference(referenceAt);
+    const resolved = await resolveCurrentOperationalMealBreakState(referenceAt, mode);
+    if (!resolved?.chatId) {
+        throw new MealBreakUserError(
+            mode === "night"
+                ? "Não existe divisão de jantar em curso para reiniciar."
+                : "Não existe divisão de almoço em curso para reiniciar.",
+        );
+    }
+
+    const result = await runTelegramMealBreakCommand({
+        chatId: resolved.chatId,
+        referenceAt,
+        trigger: "manual",
+        mode,
+        forceRestart: true,
+        actorTelegramId: params.actorUserId ?? null,
+    });
+    const restarted = result.session;
+    if (!restarted) {
+        throw new MealBreakUserError("Não consegui reiniciar a divisão agora.");
+    }
+
+    await sendTelegramMealBreakMessages({
+        chatId: resolved.chatId,
+        messages: result.messages,
+        replyMarkup: buildMealBreakStageKeyboard(restarted) ?? undefined,
+        options: MEAL_BREAK_FORMAT_OPTIONS,
+    });
+
+    return { ...result, session: restarted };
+}
+
 export type MealBreakLatecomerSkipReason = "division_completed" | "half_shift";
 
 /**
@@ -6573,43 +7043,14 @@ export async function updateDayMealBreakEligibility(params: {
 
     await saveMealBreakEligibilityOverrides(overrides);
 
-    const resolvedState = params.chatId
-        ? {
-            chatId: params.chatId,
-            session: await loadMealBreakSession(params.chatId, operationalDate, "day"),
-        }
-        : await resolveCurrentOperationalMealBreakState(params.referenceAt, "day");
-    const chatId = resolvedState?.chatId ?? null;
-    const baseSession = resolvedState?.session ?? null;
-
-    if (!baseSession || !chatId) {
-        return { session: null, overrides };
-    }
-
-    const ensured = await ensureMealBreakDoctorInSession({
-        session: baseSession,
-        ramal: normalizedRamal,
-        mode: "day",
-        referenceAt: params.referenceAt,
-    });
-    if (ensured.status !== "ready") {
-        throw new MealBreakUserError(resolveMealBreakOutOfDivisionMessage(normalizedRamal, ensured.reason));
-    }
-    const session = ensured.session;
-
-    const nextSession = syncDaySessionState(withEvent({
-        ...session,
-        lunchExcludedRamals: overrides.lunchExcludedRamals,
-        restExcludedRamals: overrides.restExcludedRamals,
-        updatedAt: params.referenceAt.toISOString(),
-    }, {
-        type: "eligibility_corrected",
+    const reconciled = await maybeReconcileLiveMealBreakSession({
+        trigger: "eligibility",
         actorTelegramId: params.actorTelegramId,
-        ramal: normalizedRamal,
-    }, params.referenceAt));
+        referenceAt: params.referenceAt,
+        chatId: params.chatId,
+    });
 
-    await saveMealBreakSession(chatId, nextSession, "chief_correction");
-    return { session: nextSession, overrides };
+    return { session: reconciled.session, overrides, evaluation: reconciled.evaluation };
 }
 
 export async function updateDayMealBreakAssignment(params: {

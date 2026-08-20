@@ -17,6 +17,7 @@ import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
+import { hookMealBreakAfterBoardChange } from "@/modules/telegram/meal-break-board-hook";
 
 export interface StartRegulationOccupancyInput {
     doctorId: string;
@@ -1059,6 +1060,9 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
     if (autoReactivated) {
         publishBoardUpdate(`regulation:reactivate:${input.postId}`);
     }
+    if (input.source !== "telegram" && input.source !== "import") {
+        await hookMealBreakAfterBoardChange({ actorUserId: input.createdByUserId ?? null });
+    }
     return { ...created, autoReactivated };
 }
 
@@ -1129,6 +1133,7 @@ export async function deactivateRegulationPost(input: DeactivateRegulationPostIn
     });
 
     publishBoardUpdate(`regulation:deactivate:${input.postId}`);
+    await hookMealBreakAfterBoardChange({ actorUserId: input.createdByUserId ?? null });
     return result;
 }
 
@@ -1297,6 +1302,7 @@ export async function continueRegulationOccupancy(
     });
 
     publishBoardUpdate(`regulation:continue:${id}`);
+    await hookMealBreakAfterBoardChange({ actorUserId: updatedByUserId ?? null });
     return updated;
 }
 
@@ -1370,5 +1376,6 @@ export async function endRegulationOccupancy(
     });
 
     publishBoardUpdate(`regulation:end:${id}`);
+    await hookMealBreakAfterBoardChange({ actorUserId: updatedByUserId ?? null });
     return updated;
 }

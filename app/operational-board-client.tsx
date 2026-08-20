@@ -6,6 +6,7 @@ import { OperationalHistoryPanel } from "@/components/operational-history-panel"
 import { buildOperationalRoleChoices, describeFixedRoleTransferImpact, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
+    MealBreakBoardEvaluation,
     MealBreakDinnerDuration,
     MealBreakDinnerSlot,
     MealBreakLunchSlot,
@@ -14,6 +15,7 @@ import type {
     MealBreakRestSlot,
     MealBreakSession,
 } from "@/modules/telegram/meal-breaks";
+import { MealBreakSessionBar } from "@/components/board/MealBreakSessionBar";
 import {
     getSaoPauloParts,
     requiresOvertimeJustification,
@@ -97,6 +99,7 @@ interface OperationalBoardClientProps {
     intervention: InterventionBoardRow[];
     mealBreakSession: MealBreakSession | null;
     mealBreakEligibility: { lunchExcludedRamals: string[]; restExcludedRamals: string[] };
+    mealBreakEvaluation?: MealBreakBoardEvaluation | null;
     previousShift: PreviousOperationalBoard;
     doctors: DoctorOption[];
     session: SessionSummary | null;
@@ -1113,7 +1116,7 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], expectedSchedule = null } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], expectedSchedule = null } = props;
     // Admin abre tudo; payment_closing_limited (ex.: Iasmin) só enxerga o fechamento
     // de pagamento para visualizar e lançar NF/processo — sem editar o quadro.
     const canOpenPaymentClosing = Boolean(
@@ -2764,19 +2767,24 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 }),
             });
 
-            const responseBody = await response.json().catch(() => null) as { error?: string } | null;
+            const responseBody = await response.json().catch(() => null) as { error?: string; evaluation?: MealBreakBoardEvaluation } | null;
             if (!response.ok) {
                 throw new Error(responseBody?.error || "Falha ao atualizar a divisao diurna.");
             }
 
+            const evaluation = responseBody?.evaluation ?? null;
             setSuccessMessage(
-                kind === "lunch"
-                    ? excluded
-                        ? "Medico retirado da divisao de almoco."
-                        : "Medico recolocado na divisao de almoco."
-                    : excluded
-                        ? "Medico retirado da divisao de descanso."
-                        : "Medico recolocado na divisao de descanso.",
+                evaluation?.kind === "stale"
+                    ? (evaluation.staleHint ?? "A divisão já fechou. Use Reiniciar divisão se precisar refazer os horários.")
+                    : evaluation?.kind === "rewind"
+                        ? "Retirado. Recalculei as vagas e o grupo vai pedir de novo só para quem escolheu sem as opções de agora."
+                        : kind === "lunch"
+                            ? excluded
+                                ? "Medico retirado da divisao de almoco."
+                                : "Medico recolocado na divisao de almoco."
+                            : excluded
+                                ? "Medico retirado da divisao de descanso."
+                                : "Medico recolocado na divisao de descanso.",
             );
             startRefresh(() => {
                 router.refresh();
@@ -3799,6 +3807,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             onOpenCriticalQueue={session?.canManage ? () => openDrawer() : undefined}
                         />
 
+                        {session?.canManage && mealBreakSession && (
+                            <MealBreakSessionBar
+                                session={mealBreakSession}
+                                evaluation={mealBreakEvaluation}
+                                generatedAt={generatedAt}
+                            />
+                        )}
+
                         {session?.canManage && (
                             <BoardQuickFilters
                                 roleFilter={boardRoleFilter}
@@ -4721,7 +4737,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                     </div>
 
                                                     <p className="chief-field-hint">
-                                                        Quando retirado, o bot pula este ramal na etapa correspondente e recalcula as vagas restantes da divisao.
+                                                        Retirar tira esta pessoa da etapa. Se a divisão ainda estiver em curso e alguém tiver escolhido um horário sem as opções que passaria a ter, o bot devolve a escolha só para essa gente — não recomeça do zero. Divisão já fechada não mexe sozinha: use Reiniciar divisão no topo do quadro.
                                                     </p>
                                                 </>
                                             )}
@@ -4815,6 +4831,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                             {isMealBreakSaving || isRefreshing ? "Aplicando..." : "Salvar jantar/trabalho"}
                                                         </button>
                                                     </div>
+                                                    <p className="chief-field-hint">
+                                                        Encerrar, remanejar ou mudar função no quadro recalcula as vagas do jantar se a divisão ainda estiver em curso. Só devolve a escolha a quem pegou horário sem as opções de agora. Divisão fechada não mexe sozinha: use Reiniciar divisão no topo.
+                                                    </p>
                                                 </>
                                             )}
                                         </div>

@@ -3,7 +3,7 @@ import { readAuthenticatedSession } from "@/lib/auth/server";
 import { OperationalBoardClient } from "@/app/operational-board-client";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
 import { getExpectedSchedule } from "@/modules/operational/expected-schedule";
-import { getCurrentOperationalMealBreakSession, getCurrentMealBreakEligibilityOverrides } from "@/modules/telegram/meal-breaks";
+import { evaluateMealBreakSessionAgainstBoard, getCurrentOperationalMealBreakSession, getCurrentMealBreakEligibilityOverrides } from "@/modules/telegram/meal-breaks";
 import { getOperationalBoard, getPreviousOperationalBoard } from "@/services/board.service";
 import { listDoctorsForChiefInvite } from "@/services/chief-access.service";
 
@@ -61,6 +61,15 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
             intervention={board.intervention}
             mealBreakSession={mealBreakSession}
             mealBreakEligibility={mealBreakEligibility}
+            mealBreakEvaluation={mealBreakSession
+                ? evaluateMealBreakSessionAgainstBoard({
+                    session: mealBreakSession,
+                    board,
+                    lunchExcludedRamals: mealBreakEligibility.lunchExcludedRamals,
+                    restExcludedRamals: mealBreakEligibility.restExcludedRamals,
+                    referenceAt: new Date(board.generatedAt),
+                }).evaluation
+                : null}
             previousShift={previousShift}
             doctors={doctors}
             initialViewMode={initialViewMode}

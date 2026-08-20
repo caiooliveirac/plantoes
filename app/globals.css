@@ -8144,6 +8144,48 @@ button.chief-payable-tag:focus-visible {
     color: #eef5ff;
 }
 
+.meal-break-session-bar {
+    display: grid;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(103, 145, 206, 0.28);
+    background: linear-gradient(180deg, rgba(10, 24, 40, 0.55), rgba(19, 19, 21, 0.92));
+}
+
+.meal-break-session-bar.is-stale {
+    border-color: rgba(255, 184, 77, 0.4);
+    background: linear-gradient(180deg, rgba(59, 34, 8, 0.48), rgba(19, 19, 21, 0.92));
+}
+
+.meal-break-session-bar.is-drifted {
+    border-color: rgba(103, 176, 206, 0.42);
+}
+
+.meal-break-session-bar__copy {
+    display: grid;
+    gap: 4px;
+}
+
+.meal-break-session-bar__copy strong {
+    color: #eef5ff;
+    font-size: 0.95rem;
+}
+
+.meal-break-session-bar__copy span,
+.meal-break-session-bar__copy p {
+    margin: 0;
+    color: var(--muted-strong);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.meal-break-session-bar__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 @media (max-width: 720px) {
     .chief-day-meal-break-actions {
         grid-template-columns: 1fr;
