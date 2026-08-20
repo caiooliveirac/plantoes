@@ -30,6 +30,8 @@ interface DepartureDialogProps {
     scheduledStartAt?: string | null;
     scheduledEndAt?: string | null;
     roleLabel?: string | null;
+    /** Ocupação fora do quadro (deslocado). Muda o texto e o horário padrão. */
+    displaced?: boolean;
 }
 
 const CHIEF_KICK_DEFAULT_NOTE = "Saída por encerramento de turno (retirada pelo chefe)";
@@ -38,6 +40,25 @@ function isoNowLocal(): string {
     const date = new Date();
     const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
     return local.toISOString().slice(0, 16);
+}
+
+function isoToLocalValue(iso: string): string {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+        return isoNowLocal();
+    }
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+
+function defaultEndedAtLocal(scheduledEndAt?: string | null) {
+    if (scheduledEndAt) {
+        const scheduled = new Date(scheduledEndAt);
+        if (!Number.isNaN(scheduled.getTime()) && scheduled.getTime() < Date.now()) {
+            return isoToLocalValue(scheduledEndAt);
+        }
+    }
+    return isoNowLocal();
 }
 
 function localToIso(value: string): string {
@@ -57,11 +78,15 @@ export function DepartureDialog({
     scheduledStartAt = null,
     scheduledEndAt = null,
     roleLabel = null,
+    displaced = false,
 }: DepartureDialogProps) {
     const router = useRouter();
-    const [endedAt, setEndedAt] = useState(isoNowLocal());
+    const [endedAt, setEndedAt] = useState(() => defaultEndedAtLocal(scheduledEndAt));
     const [reason, setReason] = useState("");
     const [submitting, setSubmitting] = useState(false);
+    const scheduledEndIsPast = Boolean(
+        scheduledEndAt && !Number.isNaN(new Date(scheduledEndAt).getTime()) && new Date(scheduledEndAt).getTime() < Date.now(),
+    );
 
     // Preview da régua de retirada antecipada: mesma classificação que o servidor
     // vai aplicar (modules/operational/early-departure.ts), recalculada a cada
@@ -89,10 +114,10 @@ export function DepartureDialog({
 
     useEffect(() => {
         if (open) {
-            setEndedAt(isoNowLocal());
+            setEndedAt(defaultEndedAtLocal(scheduledEndAt));
             setReason("");
         }
-    }, [open]);
+    }, [open, occupancyId, scheduledEndAt]);
 
     const submit = async () => {
         if (!endedAt) {
@@ -171,11 +196,24 @@ export function DepartureDialog({
                                 <div className="board-modal-warning danger">
                                     <strong>Hora vai para o banco{chiefKick ? " e para o grupo" : ""}</strong>
                                     <p>
-                                        {chiefKick
-                                            ? `Essa hora conta para o banco de horas de ${doctorName} e é a que o grupo do Telegram vai ver no aviso de retirada. Confirme com cuidado.`
-                                            : `Essa hora é a que vai contar para o banco de horas de ${doctorName}. Confirme com cuidado antes de salvar.`}
+                                        {displaced
+                                            ? `${doctorName} está fora do quadro neste posto. Encerrar fecha a ocupação deslocada — não tira o titular. Se o plantão já virou, use o horário real da saída, não agora.`
+                                            : chiefKick
+                                                ? `Essa hora conta para o banco de horas de ${doctorName} e é a que o grupo do Telegram vai ver no aviso de retirada. Confirme com cuidado.`
+                                                : `Essa hora é a que vai contar para o banco de horas de ${doctorName}. Confirme com cuidado antes de salvar.`}
                                     </p>
                                 </div>
+
+                                {(displaced || scheduledEndIsPast) && (
+                                    <div className="board-modal-warning">
+                                        <strong>{displaced ? "Deslocado" : "Plantão previsto já passou"}</strong>
+                                        <p>
+                                            {scheduledEndIsPast
+                                                ? "O horário padrão é o fim previsto do plantão, não o instante atual. Ajuste se a saída real foi outra."
+                                                : "A chegada original fica no histórico; esta ação só tira a linha de deslocado do painel."}
+                                        </p>
+                                    </div>
+                                )}
 
                                 {earlyDeparturePreview && (
                                     <div className="board-modal-warning">

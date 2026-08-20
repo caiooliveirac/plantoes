@@ -79,11 +79,13 @@ interface RegulationCard extends RegulationBoardRow {
     // Marcado quando o card representa uma SOMBRA (sub-linha) sendo acionada, para
     // o drawer de remanejamento inicializar o toggle "entrar como sombra".
     isShadow?: boolean;
+    isDisplaced?: boolean;
 }
 
 interface InterventionCard extends InterventionBoardRow {
     domain: "intervention";
     isShadow?: boolean;
+    isDisplaced?: boolean;
 }
 
 type BoardCard = RegulationCard | InterventionCard;
@@ -325,7 +327,13 @@ function renderShadowOccupantLines(
 
 // Sub-linhas de "deslocado": médico que perdeu o board numa tomada confirmada e
 // segue ativo fora do quadro (chegada preservada) até redeclarar nova posição.
-function renderDisplacedOccupantLines(displacedOccupants: BoardShadowOccupant[] | undefined) {
+function renderDisplacedOccupantLines(
+    displacedOccupants: BoardShadowOccupant[] | undefined,
+    actions?: {
+        onOpen?: (occ: BoardShadowOccupant) => void;
+        onRetirar?: (occ: BoardShadowOccupant) => void;
+    },
+) {
     if (!displacedOccupants || displacedOccupants.length === 0) {
         return null;
     }
@@ -335,15 +343,46 @@ function renderDisplacedOccupantLines(displacedOccupants: BoardShadowOccupant[] 
             {displacedOccupants.map((occ) => {
                 const name = occ.displayName?.trim() || occ.doctorName;
                 const arrival = formatBoardTime(occ.boardStartedAt ?? occ.startedAt);
-                return (
-                    <span
-                        key={occ.occupancyId}
-                        className="ops-doctor-line displaced"
-                        title={`${name} foi deslocado — chegada preservada (${arrival}). Aguardando nova posição.`}
-                    >
+                const content = (
+                    <>
                         <span className="ops-inline-flag displaced">deslocado</span>
                         <span className="ops-shadow-name" title={name}>{name}</span>
                         <span className="ops-shadow-time">{arrival}</span>
+                    </>
+                );
+                const line = actions?.onOpen ? (
+                    <button
+                        key={`${occ.occupancyId}-open`}
+                        type="button"
+                        className="ops-doctor-line displaced clickable"
+                        onClick={(event) => { event.stopPropagation(); actions.onOpen?.(occ); }}
+                        title={`${name} foi deslocado — chegada preservada (${arrival}). Abrir ações (remanejar ou encerrar).`}
+                    >
+                        {content}
+                    </button>
+                ) : (
+                    <span
+                        key={`${occ.occupancyId}-open`}
+                        className="ops-doctor-line displaced"
+                        title={`${name} foi deslocado — chegada preservada (${arrival}). Aguardando nova posição.`}
+                    >
+                        {content}
+                    </span>
+                );
+                if (!actions?.onRetirar) {
+                    return line;
+                }
+                return (
+                    <span key={occ.occupancyId} className="ops-displaced-actions">
+                        {line}
+                        <button
+                            type="button"
+                            className="ops-kick-button"
+                            onClick={(event) => { event.stopPropagation(); actions.onRetirar?.(occ); }}
+                            title={`Encerrar ocupação deslocada de ${name}`}
+                        >
+                            Retirar
+                        </button>
                     </span>
                 );
             })}
@@ -924,7 +963,39 @@ function canContinueIntervention(card: BoardCard, generatedAt: string) {
     return card.domain === "intervention"
         && card.status === "active"
         && Boolean(card.occupancyId)
+        && !card.isDisplaced
+        && !card.isShadow
         && isInterventionAwaitingNews(card, generatedAt);
+}
+
+function overlayOffBoardOccupant(
+    card: BoardCard,
+    occ: BoardShadowOccupant,
+    kind: "shadow" | "displaced",
+): BoardCard {
+    const common = {
+        occupancyId: occ.occupancyId,
+        doctorId: occ.doctorId,
+        doctorName: occ.doctorName,
+        displayName: occ.displayName,
+        startedAt: occ.startedAt,
+        boardStartedAt: occ.boardStartedAt,
+        scheduledEndAt: occ.scheduledEndAt ?? card.scheduledEndAt,
+        status: "active" as const,
+        shadowOccupants: undefined,
+        displacedOccupants: undefined,
+        isShadow: kind === "shadow",
+        isDisplaced: kind === "displaced",
+        roleLabel: null as string | null,
+    };
+    if (card.domain === "intervention") {
+        return {
+            ...card,
+            ...common,
+            scheduledStartAt: occ.scheduledStartAt ?? card.scheduledStartAt,
+        };
+    }
+    return { ...card, ...common, ramalLabel: null };
 }
 
 function requiresReasonForContinuation(card: BoardCard, generatedAt: string) {
@@ -1712,12 +1783,16 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const showDayMealBreakSection = Boolean(
         (mealBreakSession?.mode === "day" || (!mealBreakSession && mealBreakDisplayMode === "day"))
         && selectedCard?.domain === "regulation"
-        && selectedCard.status === "active",
+        && selectedCard.status === "active"
+        && !selectedCard.isDisplaced
+        && !selectedCard.isShadow,
     );
     const showNightMealBreakSection = Boolean(
         mealBreakSession?.mode === "night"
         && selectedCard?.domain === "regulation"
-        && selectedCard.status === "active",
+        && selectedCard.status === "active"
+        && !selectedCard.isDisplaced
+        && !selectedCard.isShadow,
     );
     const filteredDoctors = doctors
         .filter((doctor) => matchesDoctorQuery(doctor, deferredDoctorQuery))
@@ -1789,9 +1864,19 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setSelectedCard(card);
         setTransferAsShadow(Boolean(card.isShadow));
         setIsContinuityEntry(false);
-        setActionMode(card.status === "waiting" ? "start" : canEditActiveCard(card) ? "correct" : null);
+        setActionMode(
+            card.status === "waiting"
+                ? "start"
+                : card.isDisplaced || card.isShadow
+                    ? null
+                    : canEditActiveCard(card) ? "correct" : null,
+        );
         if (card.status === "waiting" || canEditActiveCard(card)) {
-            setFormState(buildInitialForm(card));
+            const initial = buildInitialForm(card);
+            if (card.isDisplaced && card.scheduledEndAt && new Date(card.scheduledEndAt).getTime() < Date.now()) {
+                initial.endedAt = toLocalDateTimeValue(card.scheduledEndAt);
+            }
+            setFormState(initial);
             syncSelectedDoctorLabel(card.doctorId ?? null);
         }
         setQuickExitAt(toLocalDateTimeValue());
@@ -2864,21 +2949,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             {renderCardIdentityTags(card)}
                             {isDisabledRegulation && <span className="ops-inline-flag disabled">Desativado</span>}
                         </div>
-                        {renderShadowOccupantLines(card.shadowOccupants, (shadow) => {
-                            openProfessionalDrawer({
-                                ...card,
-                                occupancyId: shadow.occupancyId,
-                                doctorId: shadow.doctorId,
-                                doctorName: shadow.doctorName,
-                                displayName: shadow.displayName,
-                                startedAt: shadow.startedAt,
-                                boardStartedAt: shadow.boardStartedAt,
-                                status: "active",
-                                shadowOccupants: undefined,
-                                isShadow: true,
-                            });
-                        })}
-                        {renderDisplacedOccupantLines(card.displacedOccupants)}
+                        {renderShadowOccupantLines(card.shadowOccupants, session?.canManage
+                            ? (shadow) => openProfessionalDrawer(overlayOffBoardOccupant(card, shadow, "shadow"))
+                            : undefined)}
+                        {renderDisplacedOccupantLines(card.displacedOccupants, session?.canManage
+                            ? {
+                                onOpen: (occ) => openProfessionalDrawer(overlayOffBoardOccupant(card, occ, "displaced")),
+                                onRetirar: (occ) => setKickModalCard(overlayOffBoardOccupant(card, occ, "displaced")),
+                            }
+                            : undefined)}
                         {renderExpectedHintLine(card, isLeaving)}
                         {isDisabledRegulation ? (
                             <div className="ops-inline-flags subtle">
@@ -3036,21 +3115,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             {renderCardIdentityTags(card)}
                             {isDisabledIntervention && <span className="ops-inline-flag disabled">Desativada</span>}
                         </div>
-                        {renderShadowOccupantLines(card.shadowOccupants, (shadow) => {
-                            openProfessionalDrawer({
-                                ...card,
-                                occupancyId: shadow.occupancyId,
-                                doctorId: shadow.doctorId,
-                                doctorName: shadow.doctorName,
-                                displayName: shadow.displayName,
-                                startedAt: shadow.startedAt,
-                                boardStartedAt: shadow.boardStartedAt,
-                                status: "active",
-                                shadowOccupants: undefined,
-                                isShadow: true,
-                            });
-                        })}
-                        {renderDisplacedOccupantLines(card.displacedOccupants)}
+                        {renderShadowOccupantLines(card.shadowOccupants, session?.canManage
+                            ? (shadow) => openProfessionalDrawer(overlayOffBoardOccupant(card, shadow, "shadow"))
+                            : undefined)}
+                        {renderDisplacedOccupantLines(card.displacedOccupants, session?.canManage
+                            ? {
+                                onOpen: (occ) => openProfessionalDrawer(overlayOffBoardOccupant(card, occ, "displaced")),
+                                onRetirar: (occ) => setKickModalCard(overlayOffBoardOccupant(card, occ, "displaced")),
+                            }
+                            : undefined)}
                         {renderExpectedHintLine(card, isLeaving)}
                         {isDisabledIntervention ? (
                             <div className="ops-inline-flags subtle">
@@ -3209,6 +3282,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     scheduledStartAt={(kickModalCard as { scheduledStartAt?: string | null }).scheduledStartAt ?? null}
                     scheduledEndAt={kickModalCard.scheduledEndAt}
                     roleLabel={kickModalCard.roleLabel}
+                    displaced={Boolean(kickModalCard.isDisplaced)}
                     onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
                 />
             )}
@@ -4113,6 +4187,18 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                 ? "Registrar chegada"
                                                 : displayDoctorName(selectedCard)}
                                         </h2>
+                                        {selectedCard.isDisplaced && (
+                                            <p className="chief-field-hint">
+                                                <span className="ops-inline-flag displaced">deslocado</span>
+                                                {" "}Fora do quadro — chegada preservada. Remaneje para um destino ou encerre se foi erro.
+                                            </p>
+                                        )}
+                                        {selectedCard.isShadow && (
+                                            <p className="chief-field-hint">
+                                                <span className="ops-inline-flag shadow">sombra</span>
+                                                {" "}Acompanha o titular neste posto, sem dono do quadro.
+                                            </p>
+                                        )}
                                     </div>
                                     <button type="button" className="chief-close-button" onClick={closeProfessionalDrawer}>Fechar</button>
                                 </header>
@@ -4182,7 +4268,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     </section>
                                 )}
 
-                                {session?.canManage && canManageCardState(selectedCard) && (
+                                {session?.canManage && canManageCardState(selectedCard) && !selectedCard.isDisplaced && !selectedCard.isShadow && (
                                     <section className="chief-drawer-section">
                                         <div className="chief-departure-strip">
                                             <div>
@@ -4480,6 +4566,23 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                         syncSelectedDoctorLabel(selectedCard.doctorId ?? null);
                                                     }}>
                                                         Corrigir quadro
+                                                    </button>
+                                                )}
+                                                {canEditActiveCard(selectedCard) && (
+                                                    <button type="button" className="chief-secondary-button" onClick={() => {
+                                                        const initial = buildInitialForm(selectedCard);
+                                                        if (selectedCard.isDisplaced && selectedCard.scheduledEndAt && new Date(selectedCard.scheduledEndAt).getTime() < Date.now()) {
+                                                            initial.endedAt = toLocalDateTimeValue(selectedCard.scheduledEndAt);
+                                                        }
+                                                        setFormState(initial);
+                                                        setActionMode("end");
+                                                    }}>
+                                                        Encerrar
+                                                    </button>
+                                                )}
+                                                {canEditActiveCard(selectedCard) && (selectedCard.isDisplaced || selectedCard.isShadow) && (
+                                                    <button type="button" className="chief-primary-button" onClick={() => openRemanejarModal(selectedCard)}>
+                                                        Remanejar
                                                     </button>
                                                 )}
                                                 {selectedCard.status === "waiting" && (
