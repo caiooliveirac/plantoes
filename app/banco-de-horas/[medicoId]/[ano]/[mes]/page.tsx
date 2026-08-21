@@ -35,7 +35,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/** Quantos plantões recentes o médico vê. O saldo é sempre o total, não a fatia. */
+/** Quantos plantões abrem já visíveis. O resto fica atrás de um <details>. */
 const RECENT_SHIFT_LIMIT = 30;
 
 function formatDateTime(value: string | null) {
@@ -63,6 +63,67 @@ function formatSignedMinutes(value: number) {
 
 function formatDomain(domain: BankHoursHistoryShift["domain"]) {
     return domain === "regulation" ? "Regulação" : "Intervenção";
+}
+
+function ShiftCard({ shift }: { shift: BankHoursHistoryShift }) {
+    return (
+        <article className="panel-shift">
+            <header>
+                <div className="panel-shift-title">
+                    <span className={`reports-badge ${shift.domain === "regulation" ? "warn" : "ok"}`}>
+                        {formatDomain(shift.domain)}
+                    </span>
+                    <strong>{shift.targetCode} · {shift.targetLabel}</strong>
+                </div>
+                <span className={`hours-balance-pill ${balanceClass(shift.balanceMinutes)}`}>
+                    {formatMinutesForHumans(shift.balanceMinutes)}
+                </span>
+            </header>
+            <p className="panel-shift-when">
+                {formatDateTime(shift.startedAt)} · {shift.shiftLabel ?? "sem turno"}
+            </p>
+
+            <ApprovalBadge approval={shift.approval} />
+
+            <dl className="panel-shift-metrics">
+                <div><dt>Entrada contada</dt><dd>{formatDateTime(shift.countedStartAt)}</dd></div>
+                <div><dt>Saída no cálculo</dt><dd>{formatDateTime(shift.countedEndAt)}</dd></div>
+                <div><dt>Atraso</dt><dd>{formatMinutesForHumans(shift.arrivalDelayMinutes)}</dd></div>
+                <div><dt>Crédito</dt><dd>{formatMinutesForHumans(shift.creditedOvertimeMinutes)}</dd></div>
+            </dl>
+
+            {shift.corrections.length > 0 ? (
+                <section className="panel-corrections">
+                    <p className="panel-corrections-head">
+                        {shift.corrections.length === 1
+                            ? "Este plantão foi corrigido:"
+                            : `Este plantão foi corrigido ${shift.corrections.length} vezes:`}
+                    </p>
+                    {shift.corrections.map((correction) => (
+                        <div key={correction.id} className={`panel-correction ${correction.undone ? "undone" : ""}`}>
+                            <p className="panel-correction-when">
+                                {formatDateTime(correction.createdAt)}
+                                {correction.chiefOnDutyName ? ` · chefia na 2031: ${correction.chiefOnDutyName}` : ""}
+                                {correction.undone ? " · desfeita" : ""}
+                            </p>
+                            <ul>
+                                {correction.changes.map((change) => <li key={change}>{change}</li>)}
+                            </ul>
+                            {correction.notes ? <p className="panel-correction-note">“{correction.notes}”</p> : null}
+                        </div>
+                    ))}
+                </section>
+            ) : null}
+
+            <details className="panel-proof">
+                <summary>Por que ficou assim</summary>
+                <strong>{shift.proof.summary}</strong>
+                <ul>
+                    {shift.proof.items.map((item) => <li key={item}>{item}</li>)}
+                </ul>
+            </details>
+        </article>
+    );
 }
 
 export default async function PainelDoMedicoPage({
@@ -169,7 +230,9 @@ export default async function PainelDoMedicoPage({
     const hiddenLegacyCredit = Math.max(legacyOldMinutes, 0);
     const displayedBalanceMinutes = (doctor?.balanceMinutes ?? 0) - hiddenLegacyCredit;
 
-    const recentShifts = doctor?.shifts.slice(0, RECENT_SHIFT_LIMIT) ?? [];
+    const allShifts = doctor?.shifts ?? [];
+    const recentShifts = allShifts.slice(0, RECENT_SHIFT_LIMIT);
+    const olderShifts = allShifts.slice(RECENT_SHIFT_LIMIT);
     const pendencias = (doctor?.shifts ?? []).filter((shift) =>
         shift.approval.state === "aguardando_chefia" || shift.approval.state === "ocorrencia_nao_informada");
 
@@ -349,69 +412,21 @@ export default async function PainelDoMedicoPage({
 
                         <div className="panel-shift-list">
                             {recentShifts.map((shift) => (
-                                <article key={`${shift.domain}-${shift.occupancyId}`} className="panel-shift">
-                                    <header>
-                                        <div className="panel-shift-title">
-                                            <span className={`reports-badge ${shift.domain === "regulation" ? "warn" : "ok"}`}>
-                                                {formatDomain(shift.domain)}
-                                            </span>
-                                            <strong>{shift.targetCode} · {shift.targetLabel}</strong>
-                                        </div>
-                                        <span className={`hours-balance-pill ${balanceClass(shift.balanceMinutes)}`}>
-                                            {formatMinutesForHumans(shift.balanceMinutes)}
-                                        </span>
-                                    </header>
-                                    <p className="panel-shift-when">
-                                        {formatDateTime(shift.startedAt)} · {shift.shiftLabel ?? "sem turno"}
-                                    </p>
-
-                                    <ApprovalBadge approval={shift.approval} />
-
-                                    <dl className="panel-shift-metrics">
-                                        <div><dt>Entrada contada</dt><dd>{formatDateTime(shift.countedStartAt)}</dd></div>
-                                        <div><dt>Saída no cálculo</dt><dd>{formatDateTime(shift.countedEndAt)}</dd></div>
-                                        <div><dt>Atraso</dt><dd>{formatMinutesForHumans(shift.arrivalDelayMinutes)}</dd></div>
-                                        <div><dt>Crédito</dt><dd>{formatMinutesForHumans(shift.creditedOvertimeMinutes)}</dd></div>
-                                    </dl>
-
-                                    {shift.corrections.length > 0 ? (
-                                        <section className="panel-corrections">
-                                            <p className="panel-corrections-head">
-                                                {shift.corrections.length === 1
-                                                    ? "Este plantão foi corrigido:"
-                                                    : `Este plantão foi corrigido ${shift.corrections.length} vezes:`}
-                                            </p>
-                                            {shift.corrections.map((correction) => (
-                                                <div key={correction.id} className={`panel-correction ${correction.undone ? "undone" : ""}`}>
-                                                    <p className="panel-correction-when">
-                                                        {formatDateTime(correction.createdAt)}
-                                                        {correction.chiefOnDutyName ? ` · chefia na 2031: ${correction.chiefOnDutyName}` : ""}
-                                                        {correction.undone ? " · desfeita" : ""}
-                                                    </p>
-                                                    <ul>
-                                                        {correction.changes.map((change) => <li key={change}>{change}</li>)}
-                                                    </ul>
-                                                    {correction.notes ? <p className="panel-correction-note">“{correction.notes}”</p> : null}
-                                                </div>
-                                            ))}
-                                        </section>
-                                    ) : null}
-
-                                    <details className="panel-proof">
-                                        <summary>Por que ficou assim</summary>
-                                        <strong>{shift.proof.summary}</strong>
-                                        <ul>
-                                            {shift.proof.items.map((item) => <li key={item}>{item}</li>)}
-                                        </ul>
-                                    </details>
-                                </article>
+                                <ShiftCard key={`${shift.domain}-${shift.occupancyId}`} shift={shift} />
                             ))}
                         </div>
 
-                        {doctor.shifts.length > recentShifts.length ? (
-                            <p className="panel-note">
-                                Mostrando os {RECENT_SHIFT_LIMIT} plantões mais recentes de {doctor.shiftCount}. O saldo acima considera todos.
-                            </p>
+                        {olderShifts.length > 0 ? (
+                            <details className="panel-older-shifts">
+                                <summary>
+                                    Ver os outros {olderShifts.length} plantões (todos desde o começo)
+                                </summary>
+                                <div className="panel-shift-list">
+                                    {olderShifts.map((shift) => (
+                                        <ShiftCard key={`${shift.domain}-${shift.occupancyId}`} shift={shift} />
+                                    ))}
+                                </div>
+                            </details>
                         ) : null}
                     </section>
                 </>

@@ -154,8 +154,13 @@ async function loadLateDeparturesByOccupancy(): Promise<Map<string, BankHoursLat
 // O histórico cobre TODAS as ocupações, então o vínculo com a auditoria é
 // resolvido no banco via EXISTS (índice audit_logs_entity_idx, migration 0036)
 // em vez de mandar milhares de ids num IN — que custava parse/bind por request.
-async function loadAuditTrailByOccupancy() {
+async function loadAuditTrailByOccupancy(doctorId?: string) {
     const db = getDb();
+    // Filtrando por médico, o EXISTS ainda casa pelo mesmo índice
+    // (audit_logs_entity_idx) mas descarta no banco as correções de todo mundo:
+    // é o que permite a página do médico listar o histórico inteiro dele.
+    const regulationOwner = doctorId ? sql`and ro.doctor_id = ${doctorId}` : sql``;
+    const interventionOwner = doctorId ? sql`and io.doctor_id = ${doctorId}` : sql``;
     const result = await db.execute(sql`
         select
             al.id,
@@ -168,10 +173,10 @@ async function loadAuditTrailByOccupancy() {
         from operations_v2.audit_logs al
         left join operations_v2.users u on u.id = al.actor_user_id
         where (al.entity_type = 'regulation_occupancy' and exists (
-                select 1 from operations_v2.regulation_occupancies ro where ro.id::text = al.entity_id
+                select 1 from operations_v2.regulation_occupancies ro where ro.id::text = al.entity_id ${regulationOwner}
             ))
            or (al.entity_type = 'intervention_occupancy' and exists (
-                select 1 from operations_v2.intervention_occupancies io where io.id::text = al.entity_id
+                select 1 from operations_v2.intervention_occupancies io where io.id::text = al.entity_id ${interventionOwner}
             ))
         order by al.created_at desc
     `);
@@ -220,7 +225,7 @@ export async function getBankHoursHistory(options?: { balancesOnly?: boolean; do
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
     const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor, lateDeparturesByOccupancy, manualOverridesByGroup] = await Promise.all([
-        balancesOnly ? new Map<string, MonthlyReportAuditEntry[]>() : loadAuditTrailByOccupancy(),
+        balancesOnly ? new Map<string, MonthlyReportAuditEntry[]>() : loadAuditTrailByOccupancy(options?.doctorId),
         loadAllBankHoursSettlements(),
         loadLegacyBalancesByDoctor(),
         balancesOnly ? new Map<string, BankHoursLateDeparture>() : loadLateDeparturesByOccupancy(),
