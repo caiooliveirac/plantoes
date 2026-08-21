@@ -12884,3 +12884,45 @@ button.chief-payable-tag:focus-visible {
     color: #94a3b8;
     line-height: 1.5;
 }
+
+/* Pedidos de correção da chegada da chefia (2031) — só admin vê. */
+.chief-arrival-rail__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 8px 12px 12px;
+    list-style: none;
+}
+
+.chief-arrival-rail__item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--board-border, rgba(255, 255, 255, 0.12));
+    border-radius: 10px;
+}
+
+.chief-arrival-rail__info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.chief-arrival-rail__info em {
+    font-style: normal;
+    opacity: 0.85;
+}
+
+.chief-arrival-rail__info small {
+    opacity: 0.6;
+}
+
+.chief-arrival-rail__actions {
+    display: flex;
+    gap: 8px;
+}

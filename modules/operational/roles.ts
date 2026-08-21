@@ -44,6 +44,19 @@ export function isStandardOperationalRoleCode(value: string | null | undefined):
     return STANDARD_OPERATIONAL_ROLE_CODES.includes((value ?? "") as StandardOperationalRoleCode);
 }
 
+/**
+ * Ramal da chefia de plantão. Diferente das outras PAs, o chefe só sai quando o
+ * substituto chega — e o substituto frequentemente esquece de avisar. Por isso a
+ * chegada aqui não se autoedita (só admin) e a saída do antecessor é perguntada
+ * de forma obrigatória, nunca deixada na fila comum. Ver
+ * modules/operational/chief-arrival-guard.ts.
+ */
+export const CHIEF_REGULATION_POST_CODE = "2031";
+
+export function isChiefRegulationPostCode(code: string | null | undefined) {
+    return (code ?? "").trim().toUpperCase() === CHIEF_REGULATION_POST_CODE;
+}
+
 export function resolveFixedOperationalRole(params: {
     domain: "regulation" | "intervention";
     code: string;

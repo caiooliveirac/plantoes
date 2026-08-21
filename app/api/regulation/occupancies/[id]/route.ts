@@ -2,9 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { auditLogs, regulationOccupancies, regulationPosts } from "@/db/schema";
+import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { correctRegulationOccupancy, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
+import { avisarSecretario } from "@/lib/avisos/secretario";
+import {
+    buildChiefArrivalBlockNotice,
+    CHIEF_ARRIVAL_ADMIN_ONLY_CODE,
+    CHIEF_ARRIVAL_ADMIN_ONLY_MESSAGE,
+    shouldBlockChiefArrivalEdit,
+    touchesArrival,
+} from "@/modules/operational/chief-arrival-guard";
 
 function serializeOccupancySnapshot(snapshot: {
     id: string;
@@ -120,6 +128,58 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
 
         const nextStartedAt = parsed.data.startedAt ? new Date(parsed.data.startedAt) : null;
         const startedAtChanged = Boolean(nextStartedAt && nextStartedAt.getTime() !== existing.startedAt.getTime());
+
+        // Chegada da chefia (2031) só muda com login de admin. Quem não é admin
+        // deixa um pedido registrado e a coordenação recebe o aviso.
+        const arrivalChanged = touchesArrival({
+            requestedStartedAt: nextStartedAt,
+            requestedBoardStartedAt: parsed.data.boardStartedAt ? new Date(parsed.data.boardStartedAt) : null,
+            existingStartedAt: existing.startedAt,
+            existingBoardStartedAt: existing.boardStartedAt,
+        });
+        if (shouldBlockChiefArrivalEdit({
+            postCode: currentPost.code,
+            isAdmin: session.user.roles.includes("admin"),
+            arrivalChanged,
+        })) {
+            const doctor = await getDb().query.doctors.findFirst({
+                where: eq(doctors.id, existing.doctorId),
+                columns: { fullName: true, displayName: true },
+            });
+            const requestedAt = nextStartedAt ?? (parsed.data.boardStartedAt ? new Date(parsed.data.boardStartedAt) : null);
+
+            await getDb().insert(auditLogs).values({
+                actorUserId: session.user.id,
+                action: "chief_arrival_change.requested",
+                entityType: "regulation_occupancy",
+                entityId: id,
+                details: {
+                    postCode: currentPost.code,
+                    doctorId: existing.doctorId,
+                    doctorName: doctor?.displayName ?? doctor?.fullName ?? null,
+                    currentStartedAt: existing.startedAt.toISOString(),
+                    requestedStartedAt: requestedAt?.toISOString() ?? null,
+                    note: parsed.data.notes ?? null,
+                    channel: "quadro",
+                    actorEmail: session.user.email,
+                },
+            });
+
+            await avisarSecretario(buildChiefArrivalBlockNotice({
+                doctorName: doctor?.displayName ?? doctor?.fullName ?? null,
+                actorLabel: session.user.email,
+                postCode: currentPost.code,
+                currentArrivalAt: existing.startedAt,
+                requestedArrivalAt: requestedAt,
+                note: parsed.data.notes ?? null,
+                channel: "quadro",
+            }));
+
+            return NextResponse.json(
+                { error: CHIEF_ARRIVAL_ADMIN_ONLY_MESSAGE, code: CHIEF_ARRIVAL_ADMIN_ONLY_CODE },
+                { status: 403 },
+            );
+        }
         const postChanged = Boolean(requestedPostId && requestedPostId !== existing.postId);
         const doctorChanged = Boolean(parsed.data.doctorId && parsed.data.doctorId !== existing.doctorId);
         if (startedAtChanged && !parsed.data.notes?.trim()) {

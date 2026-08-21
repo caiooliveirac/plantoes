@@ -139,22 +139,28 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
     // ponytail: usa a janela da própria ocupação; cadeias P longas podem divergir
     // do cálculo por grupo de continuidade do servidor — é um preview, o número
     // final é sempre o do banco de horas gravado.
+    // Janela do BANCO, não a do quadro: na regulação o previsto termina 07:15/19:15
+    // (a rendição), mas o banco conta desde 07:00/19:00. Usar a do quadro mostrava
+    // 15 min de excedente a menos do que o sistema credita de fato.
+    const bankScheduledStartAt = target?.bankScheduledStartAt ?? target?.scheduledStartAt ?? null;
+    const bankScheduledEndAt = target?.bankScheduledEndAt ?? target?.scheduledEndAt ?? null;
+
     const standardBalance = useMemo(() => {
-        if (!target?.scheduledStartAt || !target?.scheduledEndAt) return null;
+        if (!target || !bankScheduledStartAt || !bankScheduledEndAt) return null;
         try {
             return calculateBankHours({
-                scheduledStartAt: target.scheduledStartAt,
-                scheduledEndAt: target.scheduledEndAt,
+                scheduledStartAt: bankScheduledStartAt,
+                scheduledEndAt: bankScheduledEndAt,
                 actualStartAt: target.startedAt,
                 actualEndAt: target.actualEndedAt,
             });
         } catch {
             return null;
         }
-    }, [target]);
+    }, [target, bankScheduledStartAt, bankScheduledEndAt]);
 
     const adjustPreview = useMemo(() => {
-        if (view !== "adjust" || !target?.scheduledStartAt || !target?.scheduledEndAt) return null;
+        if (view !== "adjust" || !target || !bankScheduledStartAt || !bankScheduledEndAt) return null;
         const start = combineWithLocalDate(target.startedAt, adjustStart);
         let end = combineWithLocalDate(target.actualEndedAt, adjustEnd);
         if (!start || !end) return null;
@@ -167,8 +173,8 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                 start,
                 end,
                 calc: calculateBankHours({
-                    scheduledStartAt: target.scheduledStartAt,
-                    scheduledEndAt: target.scheduledEndAt,
+                    scheduledStartAt: bankScheduledStartAt,
+                    scheduledEndAt: bankScheduledEndAt,
                     actualStartAt: start,
                     actualEndAt: end,
                 }),
@@ -176,7 +182,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
         } catch {
             return null;
         }
-    }, [view, target, adjustStart, adjustEnd]);
+    }, [view, target, adjustStart, adjustEnd, bankScheduledStartAt, bankScheduledEndAt]);
 
     const submit = async (body: {
         actualEndedAt?: string;
