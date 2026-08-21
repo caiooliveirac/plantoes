@@ -65,6 +65,16 @@ import {
     resolveHalfShiftScheduledWindow,
 } from "@/modules/operational/half-shift";
 import { correctInterventionOccupancy, correctRegulationOccupancy, removeInterventionOccupancyRecord, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
+import { avisarSecretario } from "@/lib/avisos/secretario";
+import {
+    buildChiefArrivalBlockNotice,
+    CHIEF_ARRIVAL_ADMIN_ONLY_CODE,
+    CHIEF_ARRIVAL_ADMIN_ONLY_MESSAGE,
+} from "@/modules/operational/chief-arrival-guard";
+import { isChiefRegulationPostCode } from "@/modules/operational/roles";
+
+/** Comandos do bot que movem a CHEGADA de uma ocupação já registrada. */
+const ARRIVAL_EDIT_COMMANDS = new Set(["corrigir", "hoje", "ontem"]);
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
@@ -6700,6 +6710,56 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             await sendMessage(message.chat.id, `⛔ Não encontrei ocupação ativa em ${command.targetCode} para aplicar ${command.name}.`, message.message_id);
             return { ok: true, ignored: true };
         }
+    }
+
+    // Chegada da chefia (2031) não se corrige pelo bot. O chefe é o único que só
+    // sai quando o substituto chega — e quem edita a própria chegada fecha o
+    // circuito sozinho. Só admin logado no quadro altera; aqui vira pedido
+    // registrado e aviso à coordenação.
+    if (
+        !command.isDeparture
+        && command.sector === "REGULATION"
+        && ARRIVAL_EDIT_COMMANDS.has(command.name)
+        && isChiefRegulationPostCode(active.post?.code ?? command.targetCode)
+    ) {
+        const chiefDoctor = active.occupancy
+            ? await getDb().query.doctors.findFirst({
+                where: eq(doctors.id, active.occupancy.doctorId),
+                columns: { fullName: true, displayName: true },
+            })
+            : null;
+        const requestedAt = command.time
+            ? resolveTelegramEventTime(new Date(message.date * 1000), command.time)
+            : null;
+
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            errorMessage: CHIEF_ARRIVAL_ADMIN_ONLY_CODE,
+            parsedDomain: command.sector,
+            parsedTargetCode: command.targetCode,
+            parsedAction: command.name,
+            resolutionData: {
+                requestedStartedAt: requestedAt?.toISOString() ?? null,
+                senderName: message.from?.first_name ?? null,
+            },
+        });
+
+        await avisarSecretario(buildChiefArrivalBlockNotice({
+            doctorName: chiefDoctor?.displayName ?? chiefDoctor?.fullName ?? null,
+            actorLabel: message.from?.first_name ?? null,
+            postCode: command.targetCode,
+            currentArrivalAt: active.occupancy?.startedAt ?? new Date(message.date * 1000),
+            requestedArrivalAt: requestedAt,
+            note: message.text ?? null,
+            channel: "telegram",
+        }));
+
+        await sendMessage(
+            message.chat.id,
+            `⛔ ${CHIEF_ARRIVAL_ADMIN_ONLY_MESSAGE}`,
+            message.message_id,
+        );
+        return { ok: true, ignored: true };
     }
 
     if (command.name === "corrigir" && !command.isDeparture) {

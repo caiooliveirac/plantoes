@@ -23,6 +23,8 @@
  */
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
+import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
+import { CHIEF_REGULATION_POST_CODE } from "@/modules/operational/roles";
 import {
   resolveImplicitOccupancyExpiry,
   resolveOperationalShiftWindow,
@@ -1909,6 +1911,11 @@ export interface OperationalBoardSnapshot {
    * the same fixture-compatibility reason as pendingDepartures.
    */
   recentHandoffs?: RecentHandoff[];
+  /**
+   * Saídas de chefe (2031) sem horário. Pergunta obrigatória, fora da fila de
+   * alertas — ver listPendingChiefExits.
+   */
+  pendingChiefExits?: PendingChiefExit[];
 }
 
 export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
@@ -1917,11 +1924,12 @@ export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
   await expireStaleShadowInterventionOccupancies(new Date());
   await expireStaleRegulationOccupancies(new Date());
 
-  const [regulation, intervention, pendingDepartures, recentHandoffs] = await Promise.all([
+  const [regulation, intervention, pendingDepartures, recentHandoffs, pendingChiefExits] = await Promise.all([
     listRegulationBoard(),
     listInterventionBoard(),
     listPendingDepartureConfirmations(),
     listRecentHandoffs(),
+    listPendingChiefExits(),
   ]);
 
   return {
@@ -1930,6 +1938,7 @@ export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
     intervention,
     pendingDepartures,
     recentHandoffs,
+    pendingChiefExits,
   };
 }
 
@@ -2089,6 +2098,14 @@ export interface PendingDepartureConfirmation {
   /** Minutes between scheduledEndAt and actualEndedAt; positive = ran long. */
   delayMinutes: number | null;
   /** Last messages from the bot ingestion referencing this occupancy. */
+  /**
+   * Janela usada pelo BANCO DE HORAS — não é a mesma do quadro. Na regulação o
+   * previsto termina em 07:15/19:15 (inclui a rendição), mas o banco conta a
+   * partir de 07:00/19:00 e só então aplica a tolerância de 15 min. Sem isto o
+   * modal mostrava 15 min a menos de excedente do que o sistema credita.
+   */
+  bankScheduledStartAt: string | null;
+  bankScheduledEndAt: string | null;
   recentMessages: PendingDepartureCorrelatedMessage[];
   /**
    * The single message the late-departure claim was read from — the one whose
@@ -2118,6 +2135,151 @@ function detectLateDepartureReasonCode(text: string | null | undefined): Telegra
     if (pattern.test(normalized)) return code;
   }
   return null;
+}
+
+/**
+ * Saídas de CHEFE (ramal 2031) sem horário informado.
+ *
+ * O chefe só sai quando o substituto chega, e a rendição fecha a ocupação dele
+ * apenas com `ended_at` (fechamento de handoff, sem `actual_ended_at`). Isso
+ * nunca entrou na fila de saídas a confirmar — o horário real dele se perdia em
+ * silêncio e o banco de horas fechava na fronteira do turno. Aqui essas saídas
+ * viram uma pergunta objetiva e obrigatória, fora da lista de alertas.
+ */
+export interface PendingChiefExit {
+  occupancyId: string;
+  targetCode: string;
+  doctorId: string;
+  doctorName: string;
+  displayName: string | null;
+  shiftLabel: "SD" | "SN" | "P" | null;
+  roleLabel: string | null;
+  startedAt: string;
+  scheduledStartAt: string | null;
+  scheduledEndAt: string | null;
+  bankScheduledStartAt: string | null;
+  bankScheduledEndAt: string | null;
+  /** Fechamento da rendição — o palpite padrão do modal. */
+  handoffAt: string;
+  successorName: string | null;
+  successorStartedAt: string | null;
+}
+
+export async function listPendingChiefExits(
+  options: { windowHours?: number } = {},
+): Promise<PendingChiefExit[]> {
+  const db = getDb();
+  const cutoffAt = new Date(Date.now() - (options.windowHours ?? 36) * 60 * 60 * 1000).toISOString();
+
+  const rows = await db.execute<any>(sql`
+    select
+      ro.id as "occupancyId",
+      rp.code as "targetCode",
+      ro.doctor_id as "doctorId",
+      d.full_name as "doctorName",
+      d.display_name as "displayName",
+      ro.shift_label as "shiftLabel",
+      ro.role_label as "roleLabel",
+      ro.started_at as "startedAt",
+      ro.scheduled_start_at as "scheduledStartAt",
+      ro.scheduled_end_at as "scheduledEndAt",
+      coalesce(ro.actual_ended_at, ro.ended_at) as "handoffAt",
+      succ."doctorName" as "successorName",
+      succ."startedAt" as "successorStartedAt"
+    from operations_v2.regulation_occupancies ro
+    inner join operations_v2.regulation_posts rp on rp.id = ro.post_id
+    inner join operations_v2.doctors d on d.id = ro.doctor_id
+    left join lateral (
+      select sd.full_name as "doctorName", so.started_at as "startedAt"
+      from operations_v2.regulation_occupancies so
+      inner join operations_v2.doctors sd on sd.id = so.doctor_id
+      where so.post_id = ro.post_id
+        and so.id <> ro.id
+        and so.started_at >= ro.ended_at - interval '2 hours'
+      order by so.started_at asc
+      limit 1
+    ) succ on true
+    where rp.code = ${CHIEF_REGULATION_POST_CODE}
+      and ro.ended_at is not null
+      and ro.departure_confirmed_at is null
+      and ro.ended_at >= ${cutoffAt}
+      -- Saída do chefe que ninguém verbalizou: ou a rendição fechou sem hora
+      -- real, ou o sistema carimbou a fronteira do turno (07:15/19:15). As duas
+      -- são presunção, não informação — é o que esta pergunta vem desfazer.
+      and (
+        ro.actual_ended_at is null
+        or (ro.scheduled_end_at is not null and ro.actual_ended_at = ro.scheduled_end_at)
+      )
+      and not exists (
+        select 1 from operations_v2.telegram_ingested_messages m
+        where m.related_occupancy_id = ro.id and m.parsed_action = 'departure'
+      )
+    order by ro.ended_at desc
+    limit 20
+  `);
+
+  const items = (rows as unknown as { rows: any[] }).rows ?? (rows as any);
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((row: any): PendingChiefExit => {
+    const bankWindow = resolveBankHoursWindowForRow({
+      domain: "regulation",
+      targetCode: row.targetCode,
+      startedAt: row.startedAt,
+      shiftLabel: row.shiftLabel,
+      scheduledStartAt: row.scheduledStartAt,
+      scheduledEndAt: row.scheduledEndAt,
+      actualEndedAt: row.handoffAt,
+    });
+
+    return {
+      occupancyId: row.occupancyId,
+      targetCode: row.targetCode,
+      doctorId: row.doctorId,
+      doctorName: row.doctorName,
+      displayName: row.displayName ?? null,
+      shiftLabel: row.shiftLabel ?? null,
+      roleLabel: row.roleLabel ?? null,
+      startedAt: row.startedAt,
+      scheduledStartAt: row.scheduledStartAt ?? null,
+      scheduledEndAt: row.scheduledEndAt ?? null,
+      bankScheduledStartAt: bankWindow?.scheduledStartAt?.toISOString() ?? null,
+      bankScheduledEndAt: bankWindow?.scheduledEndAt?.toISOString() ?? null,
+      handoffAt: row.handoffAt,
+      successorName: row.successorName ?? null,
+      successorStartedAt: row.successorStartedAt ?? null,
+    };
+  });
+}
+
+/**
+ * Janela do banco de horas da linha pendente. Falha silenciosa vira null — o
+ * preview cai para a janela do quadro, nunca derruba a fila.
+ */
+function resolveBankHoursWindowForRow(row: {
+  domain: "regulation" | "intervention";
+  targetCode: string;
+  startedAt: string;
+  shiftLabel: "SD" | "SN" | "P" | null;
+  scheduledStartAt: string | null;
+  scheduledEndAt: string | null;
+  actualEndedAt: string | null;
+}) {
+  try {
+    return resolveBankHoursScheduledWindow({
+      domain: row.domain,
+      startedAt: row.startedAt,
+      shiftLabel: row.shiftLabel,
+      scheduledStartAt: row.scheduledStartAt,
+      scheduledEndAt: row.scheduledEndAt,
+      postCode: row.targetCode,
+      actualEndAt: row.actualEndedAt,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export async function listPendingDepartureConfirmations(
@@ -2173,6 +2335,17 @@ export async function listPendingDepartureConfirmations(
       -- PIAM auto-fecha na janela fixa (07:00/19:00) já na chegada: não é uma
       -- saída verbalizada e não precisa de clique do chefe.
       and not (rp.code = 'PIAM' and ro.actual_ended_at = ro.scheduled_end_at)
+      -- Chefe (2031) com saída presumida na fronteira sai da fila comum: vira a
+      -- pergunta obrigatória do ChiefExitGate, para não ser confirmado em lote.
+      and not (
+        rp.code = ${CHIEF_REGULATION_POST_CODE}
+        and ro.scheduled_end_at is not null
+        and ro.actual_ended_at = ro.scheduled_end_at
+        and not exists (
+          select 1 from operations_v2.telegram_ingested_messages m
+          where m.related_occupancy_id = ro.id and m.parsed_action = 'departure'
+        )
+      )
 
     union all
 
@@ -2314,6 +2487,7 @@ export async function listPendingDepartureConfirmations(
     const reasonOccurrenceCount30d = reasonCode
       ? (reasonCountsByDoctor.get(row.doctorId)?.get(reasonCode) ?? 0)
       : 0;
+    const bankWindow = resolveBankHoursWindowForRow(row);
 
     return {
       occupancyId: row.occupancyId,
@@ -2328,6 +2502,8 @@ export async function listPendingDepartureConfirmations(
       startedAt: row.startedAt,
       scheduledStartAt: row.scheduledStartAt,
       scheduledEndAt: row.scheduledEndAt,
+      bankScheduledStartAt: bankWindow?.scheduledStartAt?.toISOString() ?? null,
+      bankScheduledEndAt: bankWindow?.scheduledEndAt?.toISOString() ?? null,
       actualEndedAt: row.actualEndedAt,
       endedAt: row.endedAt,
       reasonCode,

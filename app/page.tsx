@@ -75,6 +75,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
             initialViewMode={initialViewMode}
             pendingDepartures={board.pendingDepartures ?? []}
             recentHandoffs={board.recentHandoffs ?? []}
+            pendingChiefExits={board.pendingChiefExits ?? []}
             expectedSchedule={expectedSchedule}
             session={session ? {
                 email: session.user.email,

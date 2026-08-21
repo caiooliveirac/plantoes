@@ -27,6 +27,7 @@ import type { ExpectedDoctor, ExpectedScheduleData } from "@/modules/operational
 import type {
     BoardShadowOccupant,
     InterventionBoardRow,
+    PendingChiefExit,
     PendingDepartureConfirmation,
     PreviousOperationalBoard,
     PreviousOperationalBucket,
@@ -41,6 +42,8 @@ import { DepartureDialog } from "@/components/board/DepartureDialog";
 import { StartCoverageDialog } from "@/components/board/StartCoverageDialog";
 import { DeactivateDialog } from "@/components/board/DeactivateDialog";
 import { DepartureVerifier } from "@/components/board/DepartureVerifier";
+import { ChiefExitGate } from "@/components/board/ChiefExitGate";
+import { ChiefArrivalRequestsRail } from "@/components/board/ChiefArrivalRequestsRail";
 import { CommandPalette } from "@/components/board/CommandPalette";
 import { BoardHero } from "@/components/board/BoardHero";
 import { BoardQuickFilters, type BoardRoleFilter, type BoardStatusFilter } from "@/components/board/BoardQuickFilters";
@@ -106,6 +109,7 @@ interface OperationalBoardClientProps {
     initialViewMode?: ViewMode;
     pendingDepartures?: PendingDepartureConfirmation[];
     recentHandoffs?: RecentHandoff[];
+    pendingChiefExits?: PendingChiefExit[];
     expectedSchedule?: ExpectedScheduleData | null;
 }
 
@@ -1116,7 +1120,7 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], expectedSchedule = null } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], pendingChiefExits = [], expectedSchedule = null } = props;
     // Admin abre tudo; payment_closing_limited (ex.: Iasmin) só enxerga o fechamento
     // de pagamento para visualizar e lançar NF/processo — sem editar o quadro.
     const canOpenPaymentClosing = Boolean(
@@ -3259,6 +3263,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
     return (
         <>
+            {viewMode === "live" && session?.roles.includes("admin") && (
+                <ChiefArrivalRequestsRail />
+            )}
+
             {viewMode === "live" && session?.canManage && pendingDepartures.length > 0 && (
                 <AuditRail
                     pendingDepartures={pendingDepartures}
@@ -3268,6 +3276,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
             {viewMode === "live" && session?.canManage && recentHandoffs.length > 0 && (
                 <RecentHandoffsRail recentHandoffs={recentHandoffs} />
+            )}
+
+            {session?.canManage && viewMode === "live" && pendingChiefExits.length > 0 && (
+                <ChiefExitGate pendingChiefExits={pendingChiefExits} />
             )}
 
             {session?.canManage && (
