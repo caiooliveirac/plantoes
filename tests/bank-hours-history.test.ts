@@ -131,9 +131,12 @@ test("buildBankHoursHistoryModel reconstructs closed shifts without persisted ba
     const shift = model.doctors[0]?.shifts[0];
     assert.ok(shift);
     assert.equal(shift.proof.mode, "handoff");
-    assert.equal(shift.ruleCode, "ON_TIME_NO_OVERTIME");
+    // A janela do banco recua os 15 min de rendição (19:15 -> 19:00): esses
+    // minutos são handoff, não plantão previsto. Com isso a saída às 19:20 passa
+    // a ser excedente de verdade, em dobro por a chegada ter sido no horário.
+    assert.equal(shift.ruleCode, "ON_TIME_DOUBLE_OVERTIME");
     assert.equal(shift.bankScheduledStartAt, "2026-03-25T10:00:00.000Z");
-    assert.equal(shift.bankScheduledEndAt, "2026-03-25T22:15:00.000Z");
+    assert.equal(shift.bankScheduledEndAt, "2026-03-25T22:00:00.000Z");
     assert.match(shift.proof.items.join(" "), /reconstruída a partir da janela operacional/i);
 });
 
