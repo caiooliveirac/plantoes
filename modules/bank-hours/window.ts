@@ -33,6 +33,28 @@ function getSaoPauloHourMinute(date: Date) {
     return { hour, minute };
 }
 
+/**
+ * Recua 15 min quando o fim previsto caiu na fronteira operacional 07:15/19:15.
+ *
+ * Esses 15 min são a janela de rendição, não trabalho previsto: o banco conta a
+ * partir de 07:00/19:00 e só então aplica a tolerância de saída. Na regulação o
+ * previsto SEMPRE nasce em :15 e o recuo é a regra; na intervenção o normal é
+ * :00, mas algumas ocupações foram gravadas em :15 (16 no histórico) e sem este
+ * recuo o excedente delas era medido do lugar errado — o médico perdia 15 min
+ * de crédito, dobrados quando a chegada foi no horário.
+ */
+function isOperationalQuarterBoundary(date: Date) {
+    const localClock = getSaoPauloHourMinute(date);
+    return localClock.minute === 15 && (localClock.hour === 7 || localClock.hour === 19);
+}
+
+function pullBackOperationalQuarterBoundary(date: Date | null) {
+    if (!date || !isOperationalQuarterBoundary(date)) {
+        return date;
+    }
+    return new Date(date.getTime() - (DEPARTURE_GRACE_MINUTES * 60000));
+}
+
 function normalizeRegulationBankHoursEnd(params: {
     resolvedScheduledEndAt: Date | null;
     operationalScheduledEndAt: Date | null;
@@ -42,12 +64,9 @@ function normalizeRegulationBankHoursEnd(params: {
         return resolvedScheduledEndAt;
     }
 
-    if (resolvedScheduledEndAt.getTime() !== operationalScheduledEndAt.getTime()) {
-        const localClock = getSaoPauloHourMinute(resolvedScheduledEndAt);
-        const isOperationalQuarterBoundary = localClock.minute === 15 && (localClock.hour === 7 || localClock.hour === 19);
-        if (!isOperationalQuarterBoundary) {
-            return resolvedScheduledEndAt;
-        }
+    if (resolvedScheduledEndAt.getTime() !== operationalScheduledEndAt.getTime()
+        && !isOperationalQuarterBoundary(resolvedScheduledEndAt)) {
+        return resolvedScheduledEndAt;
     }
 
     return new Date(resolvedScheduledEndAt.getTime() - (DEPARTURE_GRACE_MINUTES * 60000));
@@ -121,8 +140,8 @@ export function resolveBankHoursScheduledWindow(params: {
         return {
             ...window,
             scheduledEndAt: clampScheduledEndToDeparture({
-                scheduledEndAt: window.scheduledEndAt,
-                baseScheduledEndAt: baseWindow.scheduledEndAt,
+                scheduledEndAt: pullBackOperationalQuarterBoundary(window.scheduledEndAt),
+                baseScheduledEndAt: pullBackOperationalQuarterBoundary(baseWindow.scheduledEndAt),
                 actualEndAt,
             }),
         };

@@ -91,3 +91,45 @@ test("saída na fronteira não credita; um minuto além credita a partir das 07:
     assert.equal(caso2031.overtimeMinutes, 32);
     assert.equal(caso2031.balanceMinutes, 64);
 });
+
+/**
+ * Intervenção: a convenção normal é fechar em :00, mas 16 ocupações do histórico
+ * ficaram gravadas em 07:15/19:15. Sem recuar essa fronteira, o excedente saía
+ * medido de :15 e o médico perdia 15 min (dobrados quando chegou no horário) —
+ * foi o que aconteceu com 3 entradas reais (Karen 08/06, David 08/08,
+ * Matheus 12/08).
+ */
+test("intervenção com previsto gravado em :15 conta o excedente a partir de :00", () => {
+    const startedAt = new Date("2026-08-07T22:00:00.000Z"); // 19:00 SP
+    const actualEndAt = new Date("2026-08-08T10:31:00.000Z"); // 07:31 SP
+    const window = resolveBankHoursScheduledWindow({
+        domain: "intervention",
+        startedAt,
+        shiftLabel: "SN",
+        scheduledStartAt: startedAt,
+        scheduledEndAt: new Date("2026-08-08T10:15:00.000Z"), // 07:15 SP
+        actualEndAt,
+    });
+    const calc = calculateBankHours({
+        scheduledStartAt: window.scheduledStartAt!,
+        scheduledEndAt: window.scheduledEndAt!,
+        actualStartAt: startedAt,
+        actualEndAt,
+    });
+    assert.equal(calc.overtimeMinutes, 31);
+    assert.equal(calc.creditedOvertimeMinutes, 62);
+});
+
+test("intervenção com previsto em :00 não recua nada (convenção normal intacta)", () => {
+    const startedAt = new Date("2026-08-07T22:00:00.000Z"); // 19:00 SP
+    const actualEndAt = new Date("2026-08-08T10:31:00.000Z"); // 07:31 SP
+    const window = resolveBankHoursScheduledWindow({
+        domain: "intervention",
+        startedAt,
+        shiftLabel: "SN",
+        scheduledStartAt: startedAt,
+        scheduledEndAt: new Date("2026-08-08T10:00:00.000Z"), // 07:00 SP
+        actualEndAt,
+    });
+    assert.equal(window.scheduledEndAt!.toISOString(), "2026-08-08T10:00:00.000Z");
+});
