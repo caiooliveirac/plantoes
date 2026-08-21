@@ -12437,6 +12437,19 @@ button.chief-payable-tag:focus-visible {
     gap: 12px;
 }
 
+.panel-older-shifts { margin-top: 12px; }
+
+.panel-older-shifts > summary {
+    cursor: pointer;
+    padding: 10px 12px;
+    border: 1px dashed rgba(148, 163, 184, 0.35);
+    border-radius: 10px;
+    color: #cbd5f5;
+    font-weight: 600;
+}
+
+.panel-older-shifts[open] > summary { margin-bottom: 12px; }
+
 .panel-shift {
     border: 1px solid rgba(148, 163, 184, 0.2);
     border-radius: 12px;
