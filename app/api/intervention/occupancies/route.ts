@@ -10,6 +10,7 @@ import {
     findMergeableOccupancy,
     findSameDayOccupancies,
 } from "@/services/duplicate-occupancy-guard";
+import { conferirChegada } from "@/modules/operational/arrival-check";
 import { startInterventionOccupancy } from "@/modules/intervention/service";
 
 const schema = z.object({
@@ -71,6 +72,22 @@ export async function GET() {
         .orderBy(desc(interventionOccupancies.startedAt));
 
     return NextResponse.json({ occupancies: rows });
+}
+
+/** Nome e código de base para a conferência de chegada — leitura de 1 linha
+    cada, fora do caminho crítico da resposta. */
+async function nomeDoMedico(doctorId: string): Promise<string> {
+    const [linha] = await getDb().select({ nome: doctors.fullName }).from(doctors).where(eq(doctors.id, doctorId)).limit(1);
+    return linha?.nome ?? "";
+}
+
+async function codigoDaBase(baseId: string): Promise<string> {
+    const [linha] = await getDb()
+        .select({ cod: interventionBases.code })
+        .from(interventionBases)
+        .where(eq(interventionBases.id, baseId))
+        .limit(1);
+    return linha?.cod ?? "";
 }
 
 export async function POST(request: NextRequest) {
@@ -169,6 +186,21 @@ export async function POST(request: NextRequest) {
                 displacedDoctorId: displacedOccupancy?.doctorId ?? null,
             },
         });
+
+        /* Chegada × escala (nível A): confere e avisa, sem interromper. Não é
+           await: a resposta ao chefe não pode esperar rede de terceiro, e a
+           conferência não muda o que já foi gravado. conferirChegada nunca
+           lança — mesmo assim o catch fica, porque promessa solta que rejeita
+           derruba o processo no Node. */
+        void conferirChegada({
+            ocupacaoId: created.id,
+            doctorId: created.doctorId,
+            doctorName: await nomeDoMedico(created.doctorId),
+            posto: await codigoDaBase(created.baseId),
+            turno: created.shiftLabel ?? "—",
+            quando: created.startedAt,
+            actorUserId: session.user.id,
+        }).catch((erro) => console.error("[chegada] conferência escapou", erro));
 
         return NextResponse.json({ occupancy: created });
     } catch (error) {
