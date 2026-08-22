@@ -81,7 +81,7 @@ async function nomeDoMedico(doctorId: string): Promise<string> {
     return linha?.nome ?? "";
 }
 
-async function codigoDaBase(baseId: string): Promise<string> {
+async function codigoDaBase(baseId: number): Promise<string> {
     const [linha] = await getDb()
         .select({ cod: interventionBases.code })
         .from(interventionBases)
