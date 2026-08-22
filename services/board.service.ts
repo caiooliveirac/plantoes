@@ -447,6 +447,15 @@ export interface LogicalShiftCandidate extends PreviousOperationalRawRow {
   effectiveEndedAt: string | null;
   invalidTimeline: boolean;
   isShadow: boolean;
+  /**
+   * Presença real SEM titularidade no quadro (board_started_at nulo) que não se
+   * declarou sombra: deslocado numa tomada, registro reaberto enquanto outro
+   * segurava o posto, chegada que nasceu sem board num conflito momentâneo.
+   * Para pagamento vale o mesmo que a sombra declarada — plantão prestado se
+   * assina. `import` fica de fora: a carga de planilha grava tudo sem board por
+   * construção, e tratá-la como presença extra duplicaria junho/2026 inteiro.
+   */
+  isBoardlessPresence: boolean;
   duplicateConflict: boolean;
   durationMinutes: number | null;
   isLikelyNoise: boolean;
@@ -1010,6 +1019,7 @@ function mapLogicalShiftCandidate(row: PreviousOperationalRawRow): LogicalShiftC
     effectiveEndedAt,
     invalidTimeline,
     isShadow: /SOMBRA/.test(normalizeFreeText(row.notes)),
+    isBoardlessPresence: row.boardStartedAt === null && row.source !== "import",
     duplicateConflict: false,
     durationMinutes,
     isLikelyNoise,
@@ -1131,7 +1141,15 @@ function resolveCandidateEffectiveEndedAt(candidate: LogicalShiftCandidate, succ
     candidate.logicalSlotStart,
     candidate.shiftLabel === "P" ? candidate.shiftLabel : candidate.logicalSlot,
   )?.toISOString() ?? null;
-  const canUseSuccessorBasedClosure = !candidate.isShadow;
+  // Fechar pela chegada do sucessor é a regra da RENDIÇÃO: quem assume encerra
+  // quem estava. Não vale para quem perdeu a titularidade e PERMANECEU — ali a
+  // "chegada do sucessor" é um segundo médico simultâneo, não uma rendição.
+  // Sem esta exceção o registro de quem ficou 24h era truncado nos minutos até
+  // o outro chegar, caía abaixo dos 45 min de presença mínima e sumia da folha:
+  // Rafael Santana, 2152, 19/08/2026 — 24h viraram 10 minutos porque Jean Rios
+  // chegou às 07:09. A sombra declarada já era protegida por isShadow; quem não
+  // escreveu a palavra ficava fora da mesma proteção.
+  const canUseSuccessorBasedClosure = !candidate.isShadow && !candidate.isBoardlessPresence;
   const successorBasedClosure = (() => {
     if (!canUseSuccessorBasedClosure || !successorStartedAt || !implicitExpiry) {
       return null;
@@ -1145,7 +1163,14 @@ function resolveCandidateEffectiveEndedAt(candidate: LogicalShiftCandidate, succ
     return extensionMinutes <= MAX_IMPLICIT_HANDOFF_EXTENSION_MINUTES ? successorStartedAt : null;
   })();
 
-  if (explicitEndAt && successorStartedAt && new Date(explicitEndAt).getTime() > new Date(successorStartedAt).getTime()) {
+  // Mesmo motivo do canUseSuccessorBasedClosure acima, e este corte é o que
+  // pegava na prática: quem ficou além da chegada do outro tinha a cobertura
+  // truncada ali, mesmo sendo sombra. Quem perdeu a titularidade e permaneceu
+  // não foi rendido — a saída dele é a que ele mesmo registrou.
+  if (canUseSuccessorBasedClosure
+    && explicitEndAt
+    && successorStartedAt
+    && new Date(explicitEndAt).getTime() > new Date(successorStartedAt).getTime()) {
     return successorStartedAt;
   }
 
@@ -3515,15 +3540,29 @@ function buildAdditionalShadowPaymentAllocationRows(params: {
 }) {
   const rows: PaymentAllocationRow[] = [];
 
+  // Um médico não recebe dois plantões pelo mesmo turno. Quem já foi escolhido
+  // como titular de ALGUMA posição do slot não ganha linha extra por um registro
+  // sem titularidade em outra — o caso real é o médico que aparece no ramal onde
+  // ficou e, sombra, no ramal de onde saiu (Gerardson, 1367 + 2154, 18/08/2026).
+  const doctorsWithChosenRow = new Set(
+    params.targetChoices
+      .map((choice) => choice.chosenCandidate?.doctorId)
+      .filter((doctorId): doctorId is string => Boolean(doctorId)),
+  );
+
   for (const choice of params.targetChoices) {
     if (choice.target.disabledEntireShift) {
       continue;
     }
 
     const chosenOccupancyId = choice.chosenCandidate?.occupancyId ?? null;
+    // Sombra declarada OU presença sem titularidade: as duas pagam. Quem já foi
+    // escolhido para a posição não entra de novo, e o dedup da folha
+    // (médico+slot+posição, buildPayableShiftsFromBoards) fecha o resto.
     const shadowCandidates = choice.candidates.filter((candidate) => (
-      candidate.isShadow
+      (candidate.isShadow || (candidate.isBoardlessPresence && !candidate.isLikelyNoise))
       && candidate.occupancyId !== chosenOccupancyId
+      && !doctorsWithChosenRow.has(candidate.doctorId)
     ));
 
     for (const shadowCandidate of shadowCandidates) {
