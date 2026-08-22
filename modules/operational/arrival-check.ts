@@ -109,6 +109,11 @@ export function textoAviso(args: {
 
 /* --- Canais de aviso ------------------------------------------------------- */
 
+export async function avisarCoordenacao(texto: string, chave: string): Promise<{ telegram: number; whatsapp: number }> {
+    const [telegram, whatsapp] = await Promise.all([avisaTelegram(texto, chave), avisaWhatsApp(texto, chave)]);
+    return { telegram, whatsapp };
+}
+
 async function avisaTelegram(texto: string, chave: string): Promise<number> {
     if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) return 0;
     const admins = [...new Set(getTelegramAdminUserIds().filter(Boolean))];
@@ -207,6 +212,20 @@ export async function conferirChegada(args: {
             indeterminado: veredicto === "indeterminado",
         });
         const [tg, wa] = await Promise.all([avisaTelegram(texto, chave), avisaWhatsApp(texto, chave)]);
+
+        /* NÍVEL B: divergência com certeza vira PERGUNTA com botões, dizendo por
+           nome quem era esperado e quem chegou. Indeterminado não pergunta — a
+           pergunta afirma que houve troca, e no indeterminado não se sabe. */
+        if (veredicto === "divergente") {
+            const { perguntarSobreChegada } = await import("@/modules/operational/arrival-flow");
+            await perguntarSobreChegada({
+                ocupacaoId: args.ocupacaoId,
+                medico: args.doctorName,
+                posto: args.posto,
+                turno: args.turno,
+                esperados: nomes,
+            });
+        }
         console.log(
             `[chegada] ${veredicto} ${JSON.stringify({ medico: args.doctorName, posto: args.posto, telegram: tg, whatsapp: wa })}`,
         );
