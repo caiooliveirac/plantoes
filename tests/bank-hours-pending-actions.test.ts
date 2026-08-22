@@ -149,3 +149,23 @@ test("duas retiradas iguais removem dois plantões iguais, uma remove um", () =>
     assert.equal(aplicarRetiradasBancoHoras(plantoes, [{ dia: 7, turno: "SN" }]).length, 1);
     assert.equal(aplicarRetiradasBancoHoras(plantoes, [{ dia: 7, turno: "SN" }, { dia: 7, turno: "SN" }]).length, 0);
 });
+
+test("resumo mostra os plantões que sustentam a pendência, não só o total", () => {
+    const message = buildBankHoursPendingSummaryMessage([
+        {
+            doctorName: "Murilo Damasceno",
+            direction: "bonus",
+            eligibleMinutes: 780,
+            pendingUnits: 1,
+            residualMinutes: 60,
+            inconsistency: false,
+            storyLines: [
+                "Murilo · PR03 · plantão de 24h (P) · 10/05 · +52 min — Saiu às 07:26 e disse que estava na ocorrência 0594.",
+            ],
+        },
+    ]);
+
+    assert.ok(message);
+    assert.match(message, /Murilo Damasceno: \+13h/);
+    assert.match(message, /ocorrência 0594/);
+});

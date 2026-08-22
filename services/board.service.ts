@@ -441,7 +441,7 @@ export interface HistoricalOperationalPresenceBoard {
 
 type LogicalShiftSlot = "SD" | "SN";
 
-interface LogicalShiftCandidate extends PreviousOperationalRawRow {
+export interface LogicalShiftCandidate extends PreviousOperationalRawRow {
   logicalSlotStart: string;
   logicalSlot: LogicalShiftSlot;
   effectiveEndedAt: string | null;
@@ -1466,16 +1466,32 @@ function buildSourceBankHoursSummary(candidate: LogicalShiftCandidate) {
   };
 }
 
-function isEligibleTitularityCandidate(candidate: LogicalShiftCandidate) {
+export function isEligibleTitularityCandidate(candidate: LogicalShiftCandidate) {
   if (candidate.isShadow || candidate.invalidTimeline || candidate.isLikelyNoise) {
     return false;
   }
 
-  if (candidate.domain === "intervention" && !candidate.boardStartedAt && candidate.shiftLabel !== "P") {
+  // Intervenção sem board_started_at é sombra (nunca assumiu a base) — EXCETO
+  // quando a chefia contestou a saída ("NÃO SAIU"): ali o board foi zerado de
+  // propósito, porque outro médico já ocupa a base ao vivo, e a ocupação
+  // reaberta continua sendo a titularidade do turno auditado. Sem esta exceção,
+  // decidir "não saiu" fazia o médico sumir do Plantão Anterior — e do
+  // fechamento (caso Murilo Damasceno, PR03, 21/08/2026).
+  if (
+    candidate.domain === "intervention"
+    && !candidate.boardStartedAt
+    && candidate.shiftLabel !== "P"
+    && !isContestedDepartureReopen(candidate.notes)
+  ) {
     return false;
   }
 
   return true;
+}
+
+/** Nota deixada por describeContestedDeparture (modal "NÃO SAIU" da chefia). */
+function isContestedDepartureReopen(notes: string | null | undefined) {
+  return normalizeFreeText(notes).includes("[NAO SAIU]");
 }
 
 function isMicroCoverage(candidate: LogicalShiftCandidate) {

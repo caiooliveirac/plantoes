@@ -73,6 +73,13 @@ export function formatSignedHours(minutes: number): string {
 
 export interface BankHoursPendingRow {
     doctorName: string;
+    /**
+     * Os plantões que sustentam a pendência, já contados em português por
+     * buildBankHoursStory (o texto chega pronto para este módulo continuar sem
+     * imports). Sem isso o aviso dizia só o total — e um bônus nascido de um
+     * plantão registrado errado passava sem ninguém estranhar.
+     */
+    storyLines?: string[];
     direction: BankHoursPendingDirection;
     /** Saldo elegível (com sinal) que sustenta a pendência. */
     eligibleMinutes: number;
@@ -101,7 +108,9 @@ export function buildBankHoursPendingSummaryMessage(
             ? `${row.pendingUnits} ${plural(row.pendingUnits, "plantão verde disponível", "plantões verdes disponíveis")}`
             : `retirar ${row.pendingUnits} ${plural(row.pendingUnits, "plantão", "plantões")} (vermelho)`;
         const sobra = row.residualMinutes === 0 ? "zera o saldo" : `sobra ${formatSignedHours(row.residualMinutes)}`;
-        return `• ${row.doctorName}: ${formatSignedHours(row.eligibleMinutes)} — ${acao} — ${sobra}`;
+        const cabecalho = `• ${row.doctorName}: ${formatSignedHours(row.eligibleMinutes)} — ${acao} — ${sobra}`;
+        const historia = (row.storyLines ?? []).map((linha) => `   ${linha}`);
+        return [cabecalho, ...historia].join("\n");
     };
 
     const linhas: string[] = ["*Banco de horas — ações pendentes*"];

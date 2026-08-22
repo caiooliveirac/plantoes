@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
     buildChiefPrivateRegulationAlertPlan,
+    buildOverdueHandoffPlan,
     buildReminderPlans,
     buildSecretaryCoverageNotice,
     buildTakeoverConflictPlan,
@@ -1148,5 +1149,37 @@ test("buildSecretaryCoverageNotice stays silent when nothing new is pending", ()
             hora: "19:20",
         }),
         null,
+    );
+});
+
+
+// Plantão vencido: a base segue "active" com o médico do turno que acabou, e
+// nenhuma contagem de "sem médico" enxergava isso (caso Murilo, PR03, 21/08/2026).
+test("plantão vencido só alarma depois da carência de 30 min", () => {
+    const board = makeBoard();
+    // BR05: SD que terminou às 19:00 (22:00Z) e continua ocupada.
+    assert.equal(buildOverdueHandoffPlan({ now: new Date("2026-03-25T22:20:00Z"), board }), null);
+
+    const plan = buildOverdueHandoffPlan({ now: new Date("2026-03-25T22:40:00Z"), board });
+    assert.ok(plan);
+    assert.equal(plan.stage, "overdue_handoff_alert");
+    assert.match(plan.text, /Plantão vencido/);
+    assert.match(plan.text, /BR05/);
+    assert.deepEqual(plan.payload.codes, ["BR05"]);
+    // PM04 é o SN em curso e IT30 está vazia (isso é "waiting", outro alarme).
+    assert.doesNotMatch(plan.text, /PM04|IT30/);
+});
+
+test("alarme de plantão vencido vai para grupo, admins e chefia", () => {
+    const plan = buildOverdueHandoffPlan({ now: new Date("2026-03-25T23:40:00Z"), board: makeBoard() });
+    assert.ok(plan);
+    assert.deepEqual(
+        resolveReminderRecipientsForPlan({
+            plan,
+            reminderChatIds: ["-100grupo"],
+            adminChatIds: ["111"],
+            chiefPrivateAlertRecipients: ["222"],
+        }),
+        ["-100grupo", "111", "222"],
     );
 });

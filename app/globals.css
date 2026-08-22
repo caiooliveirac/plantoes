@@ -3015,6 +3015,34 @@ button.ops-doctor-line.displaced.clickable:hover {
     gap: 14px;
 }
 
+/* A história do plantão em português — o que a tela diz antes de qualquer
+   número. O passo a passo técnico fica recolhido em .hours-detail-toggle. */
+.hours-story-box {
+    border-left: 3px solid rgba(197, 161, 106, 0.55);
+    padding: 4px 0 4px 14px;
+    margin: 4px 0 12px;
+}
+
+.hours-story-text {
+    margin: 0;
+    font-size: 1rem;
+    line-height: 1.6;
+    color: rgba(238, 243, 249, 0.94);
+}
+
+.hours-detail-toggle > summary {
+    cursor: pointer;
+    font-size: 0.82rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(216, 225, 236, 0.6);
+    padding: 6px 0;
+}
+
+.hours-detail-toggle[open] > summary {
+    color: rgba(216, 225, 236, 0.85);
+}
+
 .hours-doctor-card.selected {
     border-color: rgba(197, 161, 106, 0.32);
     background: rgba(24, 18, 11, 0.9);
