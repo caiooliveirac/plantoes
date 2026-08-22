@@ -1471,18 +1471,7 @@ export function isEligibleTitularityCandidate(candidate: LogicalShiftCandidate) 
     return false;
   }
 
-  // Intervenção sem board_started_at é sombra (nunca assumiu a base) — EXCETO
-  // quando a chefia contestou a saída ("NÃO SAIU"): ali o board foi zerado de
-  // propósito, porque outro médico já ocupa a base ao vivo, e a ocupação
-  // reaberta continua sendo a titularidade do turno auditado. Sem esta exceção,
-  // decidir "não saiu" fazia o médico sumir do Plantão Anterior — e do
-  // fechamento (caso Murilo Damasceno, PR03, 21/08/2026).
-  if (
-    candidate.domain === "intervention"
-    && !candidate.boardStartedAt
-    && candidate.shiftLabel !== "P"
-    && !isContestedDepartureReopen(candidate.notes)
-  ) {
+  if (lacksInterventionBoardTitularity(candidate)) {
     return false;
   }
 
@@ -1492,6 +1481,24 @@ export function isEligibleTitularityCandidate(candidate: LogicalShiftCandidate) 
 /** Nota deixada por describeContestedDeparture (modal "NÃO SAIU" da chefia). */
 function isContestedDepartureReopen(notes: string | null | undefined) {
   return normalizeFreeText(notes).includes("[NAO SAIU]");
+}
+
+/**
+ * Intervenção que nunca assumiu a base: sem board_started_at, é sombra.
+ *
+ * A exceção é a saída contestada pela chefia ("NÃO SAIU"): ali o board foi
+ * zerado DE PROPÓSITO, porque outro médico já ocupa a base ao vivo — e a
+ * ocupação reaberta continua sendo a titularidade daquele turno. Sem a exceção,
+ * um clique em "NÃO SAIU" apagava o médico do Plantão Anterior E do pagamento
+ * (caso Murilo Damasceno, PR03, 21/08/2026). Regra única porque os dois
+ * pipelines — titularidade e presença — usavam a mesma condição duplicada, e
+ * corrigir só um deles conserta a tela e deixa a folha errada.
+ */
+function lacksInterventionBoardTitularity(candidate: LogicalShiftCandidate) {
+  return candidate.domain === "intervention"
+    && !candidate.boardStartedAt
+    && candidate.shiftLabel !== "P"
+    && !isContestedDepartureReopen(candidate.notes);
 }
 
 function isMicroCoverage(candidate: LogicalShiftCandidate) {
@@ -3817,15 +3824,13 @@ function buildOccupiedSlotPresenceRow(params: {
   };
 }
 
-function isEligiblePresenceCandidate(candidate: LogicalShiftCandidate) {
+export function isEligiblePresenceCandidate(candidate: LogicalShiftCandidate) {
   if (candidate.invalidTimeline || candidate.isLikelyNoise) {
     return false;
   }
 
   if (
-    candidate.domain === "intervention"
-    && !candidate.boardStartedAt
-    && candidate.shiftLabel !== "P"
+    lacksInterventionBoardTitularity(candidate)
     && !candidate.isShadow
     && candidate.source !== "admin_correction"
     && candidate.source !== "manual"
