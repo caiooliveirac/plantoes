@@ -1,5 +1,6 @@
 import { DEPARTURE_GRACE_MINUTES } from "@/modules/bank-hours/calculator";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { EARLY_DEPARTURE_FULL_REMAINING_MINUTES } from "@/modules/operational/early-departure";
 import {
     inferInterventionCoverageWindow,
     inferRegulationCoverageWindow,
@@ -91,11 +92,19 @@ function clampScheduledEndToDeparture(params: {
         return scheduledEndAt;
     }
 
-    const toleratedEndAt = new Date(actualEndAt.getTime() + (DEPARTURE_GRACE_MINUTES * 60000));
-    if (scheduledEndAt.getTime() <= toleratedEndAt.getTime()) {
+    // Saiu faltando 2h ou menos para o fim previsto: pela régua da chefia
+    // (classifyEarlyDeparture) o turno foi CUMPRIDO — é plantão assinado, não
+    // permanência extra. Recuar o previsto aqui apagava um turno inteiro de
+    // janela e devolvia as 12h trabalhadas como hora extra em dobro (caso Rafael
+    // Santana, 21→22/08/2026: saiu 18:41 com previsto 19:00 e o banco creditou
+    // 23h22). Abaixo dessa faixa o recuo continua valendo: aí o "P" não se
+    // cumpriu e a permanência é excedente mesmo.
+    const fulfilledEndAt = new Date(actualEndAt.getTime() + (EARLY_DEPARTURE_FULL_REMAINING_MINUTES * 60000));
+    if (scheduledEndAt.getTime() <= fulfilledEndAt.getTime()) {
         return scheduledEndAt;
     }
 
+    const toleratedEndAt = new Date(actualEndAt.getTime() + (DEPARTURE_GRACE_MINUTES * 60000));
     const reachedBoundary = resolveOperationalShiftWindow(toleratedEndAt).startedAt;
     const floor = baseScheduledEndAt ?? scheduledEndAt;
     const clamped = Math.min(scheduledEndAt.getTime(), Math.max(floor.getTime(), reachedBoundary.getTime()));
