@@ -5557,6 +5557,22 @@ button.chief-payable-tag:focus-visible {
     box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.3);
 }
 
+/* Plantão extra de CHEFIA: roxo forte com listras — não é acerto de banco de
+   horas, e o board tem que gritar isso para ninguém confundir com o verde. */
+.chief-payable-tag.admin-chief {
+    background:
+        repeating-linear-gradient(
+            135deg,
+            rgba(167, 139, 250, 0.26) 0 6px,
+            rgba(167, 139, 250, 0.12) 6px 12px
+        );
+    border-color: rgba(167, 139, 250, 0.75);
+    color: #ede9fe;
+    box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.45);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
 /* Plantão vermelho: punição do banco de horas (unit -1, subtrai do total). */
 .chief-payable-tag.admin-penalty {
     background: rgba(211, 100, 100, 0.22);
@@ -6086,6 +6102,11 @@ button.chief-payable-tag:focus-visible {
 .chief-payable-modal-shift-turn.admin-extra {
     background: rgba(52, 211, 153, 0.2);
     color: #8ff0c8;
+}
+
+.chief-payable-modal-shift-turn.admin-chief {
+    background: rgba(167, 139, 250, 0.28);
+    color: #ede9fe;
 }
 
 .chief-payable-modal-shift-turn.admin-penalty {
@@ -12636,6 +12657,15 @@ button.chief-payable-tag:focus-visible {
     background: linear-gradient(180deg, #15803d, #166534);
 }
 
+/* Plantão de chefia: roxo, nunca verde — verde é banco de horas. */
+.panel-action-btn.chief {
+    background: linear-gradient(180deg, #7c3aed, #6d28d9);
+}
+
+.panel-action-btn.chief:hover {
+    background: linear-gradient(180deg, #6d28d9, #5b21b6);
+}
+
 .panel-action-btn.penalty {
     background: linear-gradient(180deg, #dc2626, #b91c1c);
 }
@@ -12706,6 +12736,10 @@ button.chief-payable-tag:focus-visible {
     cursor: pointer;
 }
 
+.panel-link-btn.chief {
+    color: #6d28d9;
+}
+
 .panel-link-btn.danger {
     color: #b91c1c;
 }
@@ -12713,6 +12747,53 @@ button.chief-payable-tag:focus-visible {
 .panel-link-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+}
+
+/* Bloco do plantão de chefia — moldura roxa, faixa e aviso. Fica visualmente a
+   quilômetros do autoatendimento de banco de horas (verde/vermelho). */
+.panel-chief-extra {
+    border: 2px solid rgba(124, 58, 237, 0.55);
+    border-left-width: 8px;
+    background: rgba(124, 58, 237, 0.06);
+}
+
+.panel-chief-extra-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.panel-chief-extra-head h2 {
+    margin: 0;
+    color: #5b21b6;
+}
+
+.panel-chief-extra-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: #7c3aed;
+    color: #f5f3ff;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+}
+
+.panel-chief-extra-warning {
+    margin: 10px 0 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px dashed rgba(124, 58, 237, 0.5);
+    background: rgba(124, 58, 237, 0.08);
+    color: #4c1d95;
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
+.panel-declared-extras.chief li {
+    border-color: rgba(124, 58, 237, 0.4);
+    background: rgba(124, 58, 237, 0.08);
 }
 
 .panel-footer {

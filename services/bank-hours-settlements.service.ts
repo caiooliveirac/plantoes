@@ -268,38 +268,6 @@ export async function settleBankHours(params: {
     });
 }
 
-/**
- * Nomes normalizados liberados a declarar o próprio plantão extra mesmo sem
- * histórico na 2031 — liberação nominal da coordenação, uma linha por pessoa.
- */
-export const SELF_DECLARED_EXTRA_ALLOWLIST = [
-    "MARIA ELISA DOS REIS GARRIDO",
-];
-
-/**
- * O médico pode declarar o próprio plantão extra sem o gate de +12h? Vale para
- * quem já deu plantão no ramal 2031 (chefia de plantão) e para quem está na
- * allowlist nominal. O saldo desconta igual e o coordenador revisa depois.
- */
-export async function canSelfDeclareExtraShift(doctorId: string): Promise<boolean> {
-    const result = await getDb().execute(sql`
-        select 1
-        from operations_v2.doctors d
-        where d.id = ${doctorId}
-          and (
-            d.normalized_name in (${sql.join(SELF_DECLARED_EXTRA_ALLOWLIST.map((name) => sql`${name}`), sql`, `)})
-            or exists (
-                select 1
-                from operations_v2.regulation_occupancies ro
-                join operations_v2.regulation_posts rp on rp.id = ro.post_id
-                where ro.doctor_id = d.id and rp.code = '2031'
-            )
-          )
-        limit 1
-    `);
-    return (result as unknown as unknown[]).length > 0;
-}
-
 export interface SelfDeclaredExtraRow {
     settlementId: string;
     adminExtraShiftId: string;

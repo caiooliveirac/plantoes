@@ -25,11 +25,15 @@ import type { BankHoursHistoryShift } from "@/modules/reporting/bank-hours-histo
 import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
 import { ApprovalBadge } from "@/components/doctor-panel/approval-badge";
 import { SelfServiceBankHours, type SelfServiceShiftOption } from "@/components/doctor-panel/self-service-bank-hours";
+import { ChiefExtraShifts } from "@/components/doctor-panel/chief-extra-shifts";
+import {
+    canDeclareChiefExtraShift,
+    loadChiefExtraShifts,
+} from "@/services/chief-extra-shifts.service";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
 import { getSaoPauloParts } from "@/modules/operational/board-rules";
 import {
     BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES,
-    canSelfDeclareExtraShift,
     loadSelfDeclaredExtras,
 } from "@/services/bank-hours-settlements.service";
 
@@ -196,17 +200,17 @@ export default async function PainelDoMedicoPage({
     const folhaAindaNaoEmissivel = hojeEmSaoPaulo() <= dataMinimaFolha;
 
     // Autoatendimento: só no mês corrente (SP). Verde = data livre para o extra
-    // (saldo elegível ≥ +12h, ou chefia 2031 sem gate); vermelho = escolher um
-    // plantão real do mês para retirar (saldo elegível ≤ -12h).
+    // (exige saldo elegível ≥ +12h); vermelho = escolher um plantão real do mês
+    // para retirar (saldo elegível ≤ -12h). Turno de chefia NÃO entra aqui — tem
+    // bloco próprio, sem relação com saldo.
     const nowParts = getSaoPauloParts(new Date());
     const isCurrentMonth = monthKey === `${nowParts.year}-${String(nowParts.month).padStart(2, "0")}`;
     const settleBalance = resolveBankHoursSettlementBalance({
         oldMinutes: doctor?.legacy?.preMay2025Minutes ?? 0,
         recentMinutes: (doctor?.legacy?.spreadsheetPeriodMinutes ?? 0) + (doctor?.applicationBalanceMinutes ?? 0),
     });
-    const podeDeclararExtra = isCurrentMonth ? await canSelfDeclareExtraShift(medicoId) : false;
     const canBonus = isCurrentMonth
-        && (settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES || podeDeclararExtra);
+        && settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES;
     const canPenalty = isCurrentMonth
         && settleBalance.penaltyEligibleMinutes <= -BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES;
     const selfServiceShiftOptions: SelfServiceShiftOption[] = canPenalty
@@ -219,6 +223,10 @@ export default async function PainelDoMedicoPage({
             }))
             .sort((a, b) => a.operationalDate.localeCompare(b.operationalDate))
         : [];
+
+    // Plantão de chefia: bloco separado, sem nenhuma relação com o banco de horas.
+    const podeDeclararChefia = isCurrentMonth ? await canDeclareChiefExtraShift(medicoId) : false;
+    const plantoesDeChefia = podeDeclararChefia ? await loadChiefExtraShifts(medicoId, monthKey) : [];
 
     // O que ele mesmo declarou no mês — é o que ele pode trocar de dia/turno ou tirar.
     const extrasDeclarados = isCurrentMonth ? await loadSelfDeclaredExtras(medicoId, monthKey) : [];
@@ -285,6 +293,16 @@ export default async function PainelDoMedicoPage({
                         </article>
                     </div>
                 </section>
+            ) : null}
+
+            {/* ---------------- Plantão de chefia (NÃO é banco de horas) ---------------- */}
+            {podeDeclararChefia ? (
+                <ChiefExtraShifts
+                    medicoId={medicoId}
+                    monthKey={monthKey}
+                    token={tokenValido && t ? t : null}
+                    shifts={plantoesDeChefia}
+                />
             ) : null}
 
             {/* ---------------- Folha de ponto ---------------- */}

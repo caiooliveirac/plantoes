@@ -358,6 +358,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         shiftLabel: "SD" | "SN";
         doctorName: string;
         source: string | null;
+        isChiefExtra?: boolean;
     } | null>(null);
     const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(new Set());
     const [shiftActionBusy, setShiftActionBusy] = useState(false);
@@ -2312,9 +2313,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             key={shift.payableShiftId}
                                                             type="button"
                                                             data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
-                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
+                                                            className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.isChiefExtra ? "admin-chief" : shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
                                                             title={shift.source === "admin_extra"
-                                                                ? `${shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.shiftLabel} · ${shift.doctorName}`
+                                                                ? `${shift.isChiefExtra ? "Plantão de chefia (não mexe no banco de horas)" : shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.shiftLabel} · ${shift.doctorName}`
                                                                 : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
                                                             initial={{ opacity: 0, scale: 0.92 }}
                                                             animate={{ opacity: 1, scale: 1 }}
@@ -2331,6 +2332,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                                     shiftLabel: shift.shiftLabel,
                                                                     doctorName: doctor.doctorName,
                                                                     source: shift.source,
+                                                                    isChiefExtra: shift.isChiefExtra,
                                                                 });
                                                             }}
                                                         >
@@ -2457,7 +2459,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                             <strong>
                                 {shiftActionDraft.targetCode} {shiftActionDraft.shiftLabel} · dia {shiftActionDraft.day}/{board.monthKey.slice(5,7)} · {shiftActionDraft.doctorName}
                             </strong>
-                            {shiftActionDraft.source ? <small>Origem: {shiftActionDraft.source === "admin_extra" ? "plantão extra (admin)" : shiftActionDraft.source}</small> : null}
+                            {shiftActionDraft.source ? <small>Origem: {shiftActionDraft.source === "admin_extra" ? (shiftActionDraft.isChiefExtra ? "plantão de chefia (fora do banco de horas)" : "plantão extra (admin)") : shiftActionDraft.source}</small> : null}
                         </header>
 
                         {shiftActionError ? (
@@ -3068,12 +3070,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             <strong>{dayMonth}</strong>
                                                             <small>{weekday}</small>
                                                         </span>
-                                                        <span className={`chief-payable-modal-shift-turn ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""}`.trim()}>
+                                                        <span className={`chief-payable-modal-shift-turn ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.isChiefExtra ? "admin-chief" : shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""}`.trim()}>
                                                             {shift.shiftLabel}
                                                         </span>
                                                         <span className="chief-payable-modal-shift-target">
                                                             {shift.source === "admin_extra" ? (shift.tagCode || "EXTRA") : shift.targetCode}
-                                                            {shift.source === "admin_extra" ? <em className="chief-payable-modal-shift-half">{shift.paymentUnit < 0 ? "punição" : "extra"}</em> : null}
+                                                            {shift.source === "admin_extra" ? <em className="chief-payable-modal-shift-half">{shift.isChiefExtra ? "chefia" : shift.paymentUnit < 0 ? "punição" : "extra"}</em> : null}
                                                             {shift.paymentTag ? <em className="chief-payable-modal-shift-half">{shift.paymentTag}</em> : null}
                                                         </span>
                                                         <span className={`chief-payable-modal-shift-kind ${kindClass}`}>{kindLabel}</span>

@@ -118,6 +118,10 @@ export interface PayableShift {
     roleLabel: string | null;
     paymentUnit: number;
     paymentTag: string | null;
+    /** Plantão extra de CHEFIA: pago como qualquer extra, mas sem nenhuma relação
+     * com o banco de horas. O board pinta diferente para não confundir com o
+     * extra que sai do acerto de ±12h. */
+    isChiefExtra?: boolean;
     /** Desfecho da régua de retirada antecipada aplicado a ESTE slot (ou null). */
     earlyDepartureOutcome: "bank_only" | "half_shift" | null;
 }
@@ -128,6 +132,16 @@ export interface PayableShift {
  * source — distinguindo o que o chefe acrescentou do que o bot registrou.
  */
 export const ADMIN_EXTRA_SHIFT_SOURCE = "admin_extra";
+
+/**
+ * Plantão extra de chefia (kind 'chief' em admin_extra_shifts). É um extra de
+ * pagamento como os outros — e NUNCA um acerto de banco de horas: não nasce de
+ * settlement, não desconta saldo, não aparece nas telas de banco de horas.
+ */
+export const CHIEF_EXTRA_SHIFT_KIND = "chief";
+
+/** Rótulo fixo do chip: quem olha o board sabe na hora que é chefia. */
+export const CHIEF_EXTRA_SHIFT_LABEL = "PLANTÃO DE CHEFIA";
 
 export interface AdminExtraShiftInput {
     id: string;
@@ -153,6 +167,7 @@ export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): Payabl
     const tagCode = input.label?.trim() ? input.label.trim() : "EXTRA";
     const normalizedKind = String(input.kind ?? "extra").trim().toLowerCase();
     const isHalfExtra = normalizedKind === "half_extra";
+    const isChiefExtra = normalizedKind === CHIEF_EXTRA_SHIFT_KIND;
     // Slot local: SD = 06:00–18:00, SN = 18:00–06:00 (offset São Paulo -180min).
     const slotStartedAt = input.shiftLabel === "SD"
         ? `${input.operationalDate}T09:00:00.000Z`
@@ -192,6 +207,7 @@ export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): Payabl
         // de vermelho quando paymentUnit < 0; verdes (extra/bonus) ficam +1.
         paymentUnit,
         paymentTag: isHalfExtra ? HALF_SHIFT_TAG_LABEL : null,
+        isChiefExtra,
         earlyDepartureOutcome: null,
     } satisfies PayableShift;
 }
