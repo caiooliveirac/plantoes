@@ -6,6 +6,7 @@ import {
     isDepartureClosureAuthoritative,
     resolveContinuityEffectiveEndedAt,
 } from "@/modules/bank-hours/continuity";
+import { calculateBankHours } from "@/modules/bank-hours/calculator";
 
 test("rendição (endedAt sem actualEndedAt) fecha o banco autoritativamente, sem precisar de confirmação", () => {
     // Handoff closure: predecessor closed at the handoff time with no verbalized departure.
@@ -184,4 +185,52 @@ test("P cumprido até a virada seguinte mantém o previsto estendido", () => {
     ]);
 
     assert.equal(span.scheduledEndAt?.toISOString(), new Date("2026-07-17T19:00:00-03:00").toISOString());
+});
+
+// Caso real (Rafael Santana Azevedo, 21→22/08/2026): entrou 19:02 na regulação 2152,
+// emendou o dia na 2154 com "P" e saiu 18:41 — 19 min antes do fim previsto. O recuo
+// do previsto tolerava só 15 min, então a janela caía para 22/08 07:00: um turno
+// inteiro trabalhado (SD pagável) virava 11h41 de excedente, dobrado = +23h22 de
+// banco, e o alerta oferecia um "plantão verde" à chefia.
+test("saída faltando menos de 2h para o fim do P não recua o previsto nem vira crédito", () => {
+    const span = buildContinuityBankHoursSpan([
+        {
+            occupancyId: "reg-2152",
+            domain: "regulation",
+            doctorId: "rafael",
+            continuityGroupId: "cg-rafael",
+            startedAt: new Date("2026-08-21T19:02:48-03:00"),
+            endedAt: new Date("2026-08-22T06:52:15-03:00"),
+            actualEndedAt: new Date("2026-08-22T06:53:17-03:00"),
+            departureConfirmedAt: new Date("2026-08-22T07:32:11-03:00"),
+            scheduledStartAt: new Date("2026-08-21T19:00:00-03:00"),
+            scheduledEndAt: new Date("2026-08-22T07:15:00-03:00"),
+            shiftLabel: "SN",
+        },
+        {
+            occupancyId: "reg-2154",
+            domain: "regulation",
+            doctorId: "rafael",
+            continuityGroupId: "cg-rafael",
+            startedAt: new Date("2026-08-22T06:54:51-03:00"),
+            endedAt: new Date("2026-08-22T18:41:42-03:00"),
+            actualEndedAt: new Date("2026-08-22T18:41:42-03:00"),
+            departureConfirmedAt: new Date("2026-08-22T19:00:00-03:00"),
+            scheduledStartAt: new Date("2026-08-22T07:00:00-03:00"),
+            scheduledEndAt: new Date("2026-08-22T19:15:00-03:00"),
+            shiftLabel: "P",
+        },
+    ]);
+
+    assert.equal(span.scheduledEndAt?.toISOString(), new Date("2026-08-22T19:00:00-03:00").toISOString());
+
+    const calculation = calculateBankHours({
+        scheduledStartAt: span.scheduledStartAt!,
+        scheduledEndAt: span.scheduledEndAt!,
+        actualStartAt: span.actualStartAt,
+        actualEndAt: span.actualEndAt!,
+    });
+
+    assert.equal(calculation.overtimeMinutes, 0);
+    assert.equal(calculation.balanceMinutes, 0);
 });

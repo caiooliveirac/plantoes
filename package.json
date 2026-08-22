@@ -16,6 +16,7 @@
     "bank-hours:rebuild": "tsx scripts/rebuild-bank-hours.ts",
     "regulation:arrival": "tsx scripts/register-regulation-arrival.ts",
     "scheduled-windows:repair": "tsx scripts/repair-scheduled-windows.ts",
+    "audit:extended-stay": "tsx scripts/audit-extended-stay-shifts.ts",
     "telegram:continuity:repair": "tsx scripts/repair-telegram-continuity.ts",
     "telegram:review-inputs": "tsx scripts/list-telegram-review-inputs.ts",
     "telegram:suggestions": "tsx scripts/list-telegram-command-suggestions.ts",

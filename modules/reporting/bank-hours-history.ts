@@ -1,5 +1,5 @@
 import { buildContinuityGroups } from "@/modules/bank-hours/continuity";
-import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { applyAnomalyGuard, calculateBankHours } from "@/modules/bank-hours/calculator";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { buildBankHoursBalanceOverrideExplanation, MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE } from "@/modules/bank-hours/service";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
@@ -368,12 +368,15 @@ function resolveBankHoursMetrics(
         return null;
     }
 
-    const calculation = calculateBankHours({
+    // Mesmo guarda do caminho persistido (modules/bank-hours/service.ts): sem ele
+    // uma janela agendada torta virava crédito de 12h+ direto no saldo elegível —
+    // e daí no aviso de "plantão verde disponível" para a chefia.
+    const calculation = applyAnomalyGuard(calculateBankHours({
         scheduledStartAt,
         scheduledEndAt,
         actualStartAt: countedStartAt,
         actualEndAt: countedEndAt,
-    });
+    }));
 
     return {
         arrivalDelayMinutes: calculation.arrivalDelayMinutes,
