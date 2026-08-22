@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Manrope, Space_Grotesk } from "next/font/google";
-import painelOgImage from "@/components/Painel.png";
+import ogImage from "@/components/og.jpg";
 import { Toaster } from "@/components/board/Toaster";
 import "./globals.css";
 
@@ -24,9 +24,9 @@ export const metadata: Metadata = {
         title: "Mesa Operacional SAMU",
         description: "Mesa operacional moderna para regulação, intervenção e comando de plantões SAMU",
         images: [{
-            url: painelOgImage.src,
-            width: painelOgImage.width,
-            height: painelOgImage.height,
+            url: ogImage.src,
+            width: ogImage.width,
+            height: ogImage.height,
             alt: "Mesa Operacional SAMU",
         }],
     },
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
         card: "summary_large_image",
         title: "Mesa Operacional SAMU",
         description: "Mesa operacional moderna para regulação, intervenção e comando de plantões SAMU",
-        images: [painelOgImage.src],
+        images: [ogImage.src],
     },
 };
 
