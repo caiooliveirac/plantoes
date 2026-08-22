@@ -76,6 +76,7 @@ import { isChiefRegulationPostCode } from "@/modules/operational/roles";
 /** Comandos do bot que movem a CHEGADA de uma ocupação já registrada. */
 const ARRIVAL_EDIT_COMMANDS = new Set(["corrigir", "hoje", "ontem"]);
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
+import { resolveHandoffClosure } from "@/modules/operational/handoff-closure";
 import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
@@ -8946,8 +8947,15 @@ async function applyParsedEntry(params: {
                     ),
                 });
                 const handoffClosure = shouldCloseAsHandoff({ hasSuccessor: Boolean(openSuccessor) });
+                // Rendido: a responsabilidade passou quando o sucessor chegou, e o
+                // tempo entre isso e o aviso é saída tardia a validar — não silêncio.
+                const closure = resolveHandoffClosure({
+                    startedAt: occupancy.startedAt,
+                    successorStartedAt: openSuccessor?.boardStartedAt ?? openSuccessor?.startedAt ?? null,
+                    eventAt,
+                });
                 occupancyId = (await endRegulationOccupancy(occupancy.id, handoffClosure
-                    ? { endedAt: eventAt, handoffClosure: true }
+                    ? { endedAt: closure.endedAt, actualEndedAt: closure.actualEndedAt, handoffClosure: true }
                     : { endedAt: eventAt, actualEndedAt: eventAt })).id;
             } else {
                 const recentClosed = await findRecentClosedRegulationOccupancy({
@@ -9289,8 +9297,15 @@ async function applyParsedEntry(params: {
                     ),
                 });
                 const handoffClosure = shouldCloseAsHandoff({ hasSuccessor: Boolean(openSuccessor) });
+                // Mesma regra da regulação: fecha na chegada de quem rendeu e guarda
+                // a saída declarada quando ela veio bem depois (ocorrência, higienização).
+                const closure = resolveHandoffClosure({
+                    startedAt: occupancy.startedAt,
+                    successorStartedAt: openSuccessor?.boardStartedAt ?? openSuccessor?.startedAt ?? null,
+                    eventAt,
+                });
                 occupancyId = (await endInterventionOccupancy(occupancy.id, handoffClosure
-                    ? { endedAt: eventAt, handoffClosure: true }
+                    ? { endedAt: closure.endedAt, actualEndedAt: closure.actualEndedAt, handoffClosure: true }
                     : { endedAt: eventAt, actualEndedAt: eventAt })).id;
             } else {
                 const recentClosed = await findRecentClosedInterventionOccupancy({
