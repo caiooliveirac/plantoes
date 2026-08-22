@@ -9,6 +9,7 @@ import {
     translateBankHoursRuleCode,
     translateOccupancyAuditAction,
 } from "@/modules/reporting/bank-hours-labels";
+import { buildBankHoursStory } from "@/modules/reporting/bank-hours-story";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
 import {
     formatSignedHours,
@@ -1083,6 +1084,40 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                 <span className="hours-chip neutral">{translateBankHoursRuleCode(shift.ruleCode)}</span>
                                             </div>
 
+                                            {(() => {
+                                                // O plantão contado em português: chegada, saída, quem rendeu,
+                                                // por que virou crédito. O passo a passo técnico continua logo
+                                                // abaixo, recolhido, para quem precisar conferir hora a hora.
+                                                const story = buildBankHoursStory({
+                                                    doctorName: shift.displayName ?? shift.doctorName,
+                                                    targetCode: shift.targetCode,
+                                                    shiftLabel: shift.shiftLabel,
+                                                    notes: shift.notes,
+                                                    scheduledStartAt: shift.bankScheduledStartAt,
+                                                    scheduledEndAt: shift.bankScheduledEndAt,
+                                                    startedAt: shift.startedAt,
+                                                    actualEndedAt: shift.actualEndedAt,
+                                                    handoffEndedAt: shift.handoffEndedAt,
+                                                    countedEndAt: shift.countedEndAt,
+                                                    arrivalDelayMinutes: shift.arrivalDelayMinutes,
+                                                    overtimeMinutes: shift.overtimeMinutes,
+                                                    creditedOvertimeMinutes: shift.creditedOvertimeMinutes,
+                                                    balanceMinutes: shift.balanceMinutes,
+                                                    lateDeparture: shift.lateDeparture ?? null,
+                                                    successorDoctorName: shift.successorDoctorName,
+                                                    successorTookOverAt: shift.successorTookOverAt,
+                                                    approvalLabel: shift.approval.label,
+                                                    approvalPending: shift.approval.tone === "pending" || shift.approval.tone === "warn",
+                                                });
+                                                return (
+                                                    <section className="hours-story-box">
+                                                        <p className="hours-story-text">{story.sentences.join(" ")}</p>
+                                                    </section>
+                                                );
+                                            })()}
+
+                                            <details className="hours-detail-toggle">
+                                                <summary>Ver o cálculo passo a passo</summary>
                                             <div className="hours-evidence-grid timeline">
                                                 <div className="timeline-step">
                                                     <span className="hours-evidence-label">Janela do banco</span>
@@ -1118,6 +1153,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                     {shift.proof.items.map((item) => <li key={item}>{item}</li>)}
                                                 </ul>
                                             </section>
+                                            </details>
 
                                             {shift.corrections.length > 0 && (
                                                 <section className="hours-corrections-box">

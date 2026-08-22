@@ -5,6 +5,8 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, doctors } from "@/db/schema";
 import { avisarSecretario } from "@/lib/avisos/secretario";
+import { formatSignedHours } from "@/modules/bank-hours/pending-actions";
+import { loadDoctorBankHoursStoryLines } from "@/services/bank-hours-story.service";
 import { readAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
 import { getSaoPauloParts } from "@/modules/operational/board-rules";
@@ -174,9 +176,18 @@ export async function POST(request: NextRequest) {
         await syncContractLedgerForMonth({ doctorId: medicoId, monthKey, actorUserId: session?.user.id ?? null });
 
         // Aviso imediato à coordenação (best-effort): o coordenador carimba depois.
+        // Vai junto a HISTÓRIA dos plantões que formaram o saldo — só o total não
+        // deixa ninguém desconfiar de um crédito nascido de registro errado.
+        const historia = await loadDoctorBankHoursStoryLines(medicoId, action).catch(() => [] as string[]);
+        const origem = historia.length > 0
+            ? `\n\nDe onde veio o saldo:\n${historia.map((linha) => `• ${linha}`).join("\n")}`
+            : "";
+
         await notifyAdmins(medicoId, (nome) => (action === "bonus"
-            ? `🟢 *${nome}* registrou um plantão extra de 12h em ${operationalDate} (${shiftLabel}) pelo banco de horas${semGate ? " — liberado a declarar, sem gate de saldo" : ""}. Revisar em /admin/bank-hours.`
-            : `🔴 *${nome}* retirou o plantão de ${operationalDate} (${shiftLabel}) da própria folha para compensar saldo negativo. Revisar em /admin/bank-hours.`));
+            ? `🟢 *${nome}* registrou um plantão extra de 12h em ${operationalDate} (${shiftLabel}) pelo banco de horas${semGate ? " — liberado a declarar, sem gate de saldo" : ""}.`
+                + ` Saldo antes: ${formatSignedHours(balance.totalMinutes)}.${origem}\n\nRevisar em /admin/bank-hours.`
+            : `🔴 *${nome}* retirou o plantão de ${operationalDate} (${shiftLabel}) da própria folha para compensar saldo negativo.`
+                + ` Saldo antes: ${formatSignedHours(balance.totalMinutes)}.${origem}\n\nRevisar em /admin/bank-hours.`));
 
         return NextResponse.json({ settlement: result });
     } catch (error) {

@@ -23,6 +23,7 @@ import { getSaoPauloParts } from "@/modules/operational/board-rules";
 import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
+import { loadDoctorBankHoursStoryLines } from "@/services/bank-hours-story.service";
 import { loadBankHoursSettlementDeltaByDoctor } from "@/services/bank-hours-settlements.service";
 
 const STAGE = "bank-hours";
@@ -70,9 +71,26 @@ export async function loadBankHoursPendingRows(): Promise<BankHoursPendingRow[]>
         .where(inArray(doctors.id, pending.map((row) => row.doctorId)));
     const nameById = new Map(nameRows.map((row) => [row.id, row.displayName?.trim() || row.fullName]));
 
-    return pending
-        .map(({ doctorId, ...row }) => ({ ...row, doctorName: nameById.get(doctorId) ?? doctorId }))
-        .sort((left, right) => Math.abs(right.eligibleMinutes) - Math.abs(left.eligibleMinutes));
+    const ordered = pending.sort((left, right) => Math.abs(right.eligibleMinutes) - Math.abs(left.eligibleMinutes));
+
+    // Os plantões que sustentam cada pendência, contados em português. Sem eles o
+    // aviso trazia só o total, e não dava para farejar um bônus nascido de
+    // registro errado (caso Murilo Damasceno, PR03, 21/08/2026).
+    const storiesByDoctor = new Map<string, string[]>();
+    for (const row of ordered) {
+        try {
+            storiesByDoctor.set(row.doctorId, await loadDoctorBankHoursStoryLines(row.doctorId, row.direction));
+        } catch (error) {
+            console.error(`[bank-hours] não consegui contar os plantões de ${row.doctorId}`, error);
+        }
+    }
+
+    return ordered
+        .map(({ doctorId, ...row }) => ({
+            ...row,
+            doctorName: nameById.get(doctorId) ?? doctorId,
+            storyLines: storiesByDoctor.get(doctorId) ?? [],
+        }));
 }
 
 function pad2(value: number) {

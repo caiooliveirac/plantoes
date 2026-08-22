@@ -36,7 +36,7 @@ export interface ReminderBoardSnapshot {
 
 export interface ReminderPlan {
     noticeKey: string;
-    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "payment_checkpoint_public" | "payment_conflict_alert" | "takeover_conflict_alert" | "regulation_confirmation" | "regulation_confirmation_private";
+    stage: "instruction" | "coverage_snapshot" | "coverage_checkpoint" | "payment_checkpoint" | "payment_checkpoint_public" | "payment_conflict_alert" | "takeover_conflict_alert" | "regulation_confirmation" | "regulation_confirmation_private" | "overdue_handoff_alert";
     text: string;
     payload: Record<string, unknown>;
     /**
@@ -77,6 +77,7 @@ interface ReminderPlanningParams {
 }
 
 const TEN_MINUTES = 10 * 60 * 1000;
+const THIRTY_MINUTES = 30 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
 const PAYMENT_CONFLICT_ALERT_BUCKET = 2 * ONE_HOUR;
 
@@ -267,6 +268,12 @@ export function resolveReminderRecipientsForPlan(params: {
             return uniqueChatIds([...params.adminChatIds, ...params.chiefPrivateAlertRecipients]);
         case "regulation_confirmation_private":
             return uniqueChatIds(params.chiefPrivateAlertRecipients);
+        case "overdue_handoff_alert":
+            return uniqueChatIds([
+                ...params.reminderChatIds,
+                ...params.adminChatIds,
+                ...params.chiefPrivateAlertRecipients,
+            ]);
         default:
             return uniqueChatIds(params.reminderChatIds);
     }
@@ -1033,6 +1040,107 @@ function resolveChiefPrivateAlertRecipients() {
     return uniqueChatIds(getTelegramChiefUserIds());
 }
 
+/** Carência antes de gritar: rendição atrasada é rotina, 30 min já é buraco. */
+export const OVERDUE_HANDOFF_GRACE_MINUTES = 30;
+
+export interface OverdueHandoffPosition {
+    baseCode: string;
+    doctorName: string | null;
+    displayName: string | null;
+    shiftLabel: string | null;
+    scheduledEndAt: string;
+    overdueMinutes: number;
+}
+
+/**
+ * Posições de intervenção ocupadas por um turno que JÁ ACABOU e sem ninguém
+ * confirmado para o turno corrente — o buraco que o quadro mostra como
+ * "VERIFICAR" mas que nenhum aviso cobria: `status` continua "active", então as
+ * contagens de "sem médico" (que olham só `waiting`) passavam batido.
+ *
+ * Caso Murilo Damasceno (PR03, 21/08/2026): avisou P, um toque acidental
+ * rebaixou para SD, e a base atravessou a noite inteira sem que ninguém fosse
+ * avisado de que o plantão dele havia terminado às 19h.
+ */
+export function resolveOverdueHandoffPositions(
+    board: ReminderBoardSnapshot,
+    reference: Date,
+): OverdueHandoffPosition[] {
+    const graceMs = OVERDUE_HANDOFF_GRACE_MINUTES * 60000;
+
+    return board.intervention
+        .filter((row) => row.status === "active" && isInterventionAwaitingNews(row, reference))
+        .map((row) => {
+            // Sem scheduledEndAt confiável, a fronteira do turno corrente é o fim
+            // do turno de quem ficou — é ela que estamos cobrando.
+            const boundary = row.scheduledEndAt
+                ? new Date(row.scheduledEndAt)
+                : resolveOperationalShiftWindow(reference).startedAt;
+            return {
+                baseCode: row.baseCode,
+                doctorName: row.doctorName,
+                displayName: row.displayName,
+                shiftLabel: row.shiftLabel,
+                scheduledEndAt: boundary.toISOString(),
+                overdueMinutes: Math.floor((reference.getTime() - boundary.getTime()) / 60000),
+            };
+        })
+        .filter((position) => reference.getTime() - new Date(position.scheduledEndAt).getTime() >= graceMs)
+        .sort((left, right) => left.baseCode.localeCompare(right.baseCode));
+}
+
+function formatOverdueDuration(minutes: number) {
+    if (minutes < 60) {
+        return `${minutes} min`;
+    }
+
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest === 0 ? `${hours}h` : `${hours}h${String(rest).padStart(2, "0")}`;
+}
+
+/**
+ * Alarme de plantão vencido — grupo + privado de admins/chefia. Repete a cada
+ * 30 min enquanto o buraco existir, e sai na hora quando uma base NOVA entra na
+ * lista (a chave inclui os códigos).
+ */
+export function buildOverdueHandoffPlan(params: ReminderPlanningParams): ReminderPlan | null {
+    const positions = resolveOverdueHandoffPositions(params.board, params.now);
+    if (positions.length === 0) {
+        return null;
+    }
+
+    // Repete a cada 30 min enquanto o buraco existir: rendição que não veio é
+    // para insistir, não para avisar uma vez e deixar passar a noite.
+    const bucket = floorToBucket(params.now, THIRTY_MINUTES);
+    const codes = positions.map((position) => position.baseCode);
+    const lines = positions.map((position) => {
+        const name = formatReminderDoctorName(position.doctorName, position.displayName);
+        const shift = position.shiftLabel ? `${position.shiftLabel} ` : "";
+        return `🔴 *${md(position.baseCode)}* — ${name} (${shift}terminou ${formatHour(position.scheduledEndAt)})`
+            + ` | vencido há *${formatOverdueDuration(position.overdueMinutes)}*`;
+    });
+    const shiftLabel = resolveOperationalShiftWindow(params.now).shiftLabel;
+    const exampleCode = codes[0] ?? "PR03";
+
+    return {
+        noticeKey: `overdue-handoff:${codes.join(",")}:${bucket.toISOString()}`,
+        stage: "overdue_handoff_alert",
+        parseMode: "Markdown",
+        payload: {
+            bucketAt: bucket.toISOString(),
+            codes,
+            overdueMinutes: positions.map((position) => position.overdueMinutes),
+        },
+        text: [
+            `⏰ *Plantão vencido* — ${positions.length === 1 ? "1 avançada segue" : `${positions.length} avançadas seguem`} com médico de turno encerrado:`,
+            ...lines,
+            `Quem assumiu avisa agora: ${codeSpan(`Vagner Costa ${exampleCode} ${shiftLabel} ${formatHour(params.now)}`)}`,
+            `Se quem está lá continuou: ${codeSpan(`${exampleCode} continua`)} — sem isso a posição conta como descoberta.`,
+        ].join("\n"),
+    };
+}
+
 export function buildReminderPlans(params: ReminderPlanningParams) {
     return [
         buildPreShiftInstructionPlan(params.now),
@@ -1041,6 +1149,7 @@ export function buildReminderPlans(params: ReminderPlanningParams) {
         buildPaymentCheckpointPlan(params),
         buildPaymentCheckpointPublicPlan(params),
         buildRegulationConfirmationPlan(params),
+        buildOverdueHandoffPlan(params),
     ].filter((plan): plan is ReminderPlan => Boolean(plan));
 }
 

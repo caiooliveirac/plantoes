@@ -76,6 +76,7 @@ import { isChiefRegulationPostCode } from "@/modules/operational/roles";
 /** Comandos do bot que movem a CHEGADA de uma ocupação já registrada. */
 const ARRIVAL_EDIT_COMMANDS = new Set(["corrigir", "hoje", "ontem"]);
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
+import { resolveHandoffClosure } from "@/modules/operational/handoff-closure";
 import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
@@ -221,10 +222,7 @@ import {
     TelegramUserFacingError,
 } from "@/modules/telegram/errors";
 import {
-    buildContinuityRevertCallbackData,
     type ContinuityRevertDomain,
-    evaluateContinuityRevert,
-    parseContinuityRevertCallbackData,
     resolveContinuityRevertTarget,
 } from "@/modules/telegram/continuity-revert";
 import {
@@ -8949,8 +8947,15 @@ async function applyParsedEntry(params: {
                     ),
                 });
                 const handoffClosure = shouldCloseAsHandoff({ hasSuccessor: Boolean(openSuccessor) });
+                // Rendido: a responsabilidade passou quando o sucessor chegou, e o
+                // tempo entre isso e o aviso é saída tardia a validar — não silêncio.
+                const closure = resolveHandoffClosure({
+                    startedAt: occupancy.startedAt,
+                    successorStartedAt: openSuccessor?.boardStartedAt ?? openSuccessor?.startedAt ?? null,
+                    eventAt,
+                });
                 occupancyId = (await endRegulationOccupancy(occupancy.id, handoffClosure
-                    ? { endedAt: eventAt, handoffClosure: true }
+                    ? { endedAt: closure.endedAt, actualEndedAt: closure.actualEndedAt, handoffClosure: true }
                     : { endedAt: eventAt, actualEndedAt: eventAt })).id;
             } else {
                 const recentClosed = await findRecentClosedRegulationOccupancy({
@@ -9292,8 +9297,15 @@ async function applyParsedEntry(params: {
                     ),
                 });
                 const handoffClosure = shouldCloseAsHandoff({ hasSuccessor: Boolean(openSuccessor) });
+                // Mesma regra da regulação: fecha na chegada de quem rendeu e guarda
+                // a saída declarada quando ela veio bem depois (ocorrência, higienização).
+                const closure = resolveHandoffClosure({
+                    startedAt: occupancy.startedAt,
+                    successorStartedAt: openSuccessor?.boardStartedAt ?? openSuccessor?.startedAt ?? null,
+                    eventAt,
+                });
                 occupancyId = (await endInterventionOccupancy(occupancy.id, handoffClosure
-                    ? { endedAt: eventAt, handoffClosure: true }
+                    ? { endedAt: closure.endedAt, actualEndedAt: closure.actualEndedAt, handoffClosure: true }
                     : { endedAt: eventAt, actualEndedAt: eventAt })).id;
             } else {
                 const recentClosed = await findRecentClosedInterventionOccupancy({
@@ -9809,17 +9821,18 @@ async function maybeSendContinuityForwardPrompt(
     }
 
     // O balão de sucesso logo acima já explicou o P — aqui só o dado novo (até
-    // quando cobre) e a ação, sem repetir a explicação (auditoria §3.1#19).
+    // quando cobre), sem ação (auditoria §3.1#19).
+    //
+    // Sem botão de reverter: o "Foi só este dia (SD)" rebaixava o P com um toque
+    // e sem confirmação — o médico tocava por engano, o plantão virava SD, e a
+    // noite seguia com a posição ocupada por um turno já vencido (caso Murilo
+    // Damasceno, PR03, 21/08/2026). Correção agora só por mensagem/chefia.
     const isNight = prompt.baseShiftLabel === "SN";
     await sendMessage(
         chatId,
         `⚠️ Entendi como *P* — cobre até as *${isNight ? "19h" : "7h"} de amanhã*.`
-        + `\nSe foi só ${isNight ? "esta noite" : "este dia"}, toque abaixo nos próximos 2 min.`,
+        + `\nSe não for isso, escreva aqui a correção (ou avise a chefia) — não use botão.`,
         replyToMessageId,
-        buildInlineKeyboard([[{
-            text: isNight ? "Foi só esta noite (SN)" : "Foi só este dia (SD)",
-            callback_data: buildContinuityRevertCallbackData(prompt.domain, prompt.occupancyId),
-        }]]),
     );
 }
 
@@ -12567,9 +12580,8 @@ async function handleFiscalSuggestionCallback(callbackQuery: TelegramCallbackQue
     return { ok: true, pending: true };
 }
 
-// Dispatcher único de callback_query, com dispatch por PREFIXO do callback_data
-// (padrão parseContinuityRevertCallbackData): pSN = reverter P→SN; f6 = turno da
-// chegada F6; nm = candidato de nome; pi = PIAM SD/SN; coi = ramal do COI;
+// Dispatcher único de callback_query, com dispatch por PREFIXO do callback_data:
+// f6 = turno da chegada F6; nm = candidato de nome; pi = PIAM SD/SN; coi = ramal do COI;
 // tk = tomada de ramal; dj = justificativa de saída; dst = destino desconhecido;
 // rta = reset geral de codinomes; fsg = confirmação de dados fiscais sugeridos.
 async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery) {
@@ -12586,8 +12598,7 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
     const departureJustification = parseDepartureJustificationCallbackData(callbackQuery.data);
     const destinationSelection = parseDestinationSelectionCallbackData(callbackQuery.data);
     const resetAll = parseResetAllCallbackData(callbackQuery.data);
-    const parsed = parseContinuityRevertCallbackData(callbackQuery.data);
-    if (!parsed && !shiftSelection && !nameSelection && !piamShift && !coiRamal
+    if (!shiftSelection && !nameSelection && !piamShift && !coiRamal
         && !takeoverDecision && !departureJustification && !destinationSelection && !resetAll) {
         // Callback desconhecido: encerra o "loading" do cliente e ignora.
         await answerCallbackQuery(callbackQuery.id);
@@ -12633,52 +12644,10 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
     if (resetAll) {
         return handleResetAllCallback(callbackQuery, resetAll);
     }
-    if (!parsed) {
-        await answerCallbackQuery(callbackQuery.id);
-        return { ok: true, ignored: true };
-    }
 
-    const db = getDb();
-    const occupancy = parsed.domain === "regulation"
-        ? await db.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, parsed.occupancyId) })
-        : await db.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, parsed.occupancyId) });
-
-    const outcome = evaluateContinuityRevert({
-        occupancy: occupancy ? { shiftLabel: occupancy.shiftLabel, createdAt: occupancy.createdAt } : null,
-        now: new Date(),
-    });
-
-    if (outcome !== "ok") {
-        const text = outcome === "expired"
-            ? "Tempo esgotado: a janela de 2 min para reverter já passou. Se precisar, avise a chefia."
-            : outcome === "already_changed"
-                ? "Já estava ajustado — nada a reverter."
-                : "Não encontrei esse registro para reverter.";
-        await answerCallbackQuery(callbackQuery.id, text, true);
-        return { ok: true, reverted: false, outcome };
-    }
-
-    // Rebaixa P -> turno-base real da chegada (SN para P noturno; SD para chegada
-    // adiantada de madrugada, que é P do dia). correctXxxOccupancy recalcula a
-    // janela agendada. Marcar SN aqui de forma fixa jogava a chegada das 06:xx
-    // para a noite (caso Syone BR60, 07/08/2026).
-    const target = resolveContinuityRevertTarget(occupancy!.startedAt);
-    if (parsed.domain === "regulation") {
-        await correctRegulationOccupancy(parsed.occupancyId, { shiftLabel: target }, null);
-    } else {
-        await correctInterventionOccupancy(parsed.occupancyId, { shiftLabel: target }, null);
-    }
-
-    const scope = target === "SN" ? "só esta noite" : "só este dia";
-    await answerCallbackQuery(callbackQuery.id, `Pronto! Marquei como ${target} — cobre ${scope}.`);
-    if (chat && messageId) {
-        await editMessageText(
-            chat.id,
-            messageId,
-            `✅ Corrigido para *${target === "SN" ? "SN (noturno)" : "SD (diurno)"}* — cobre ${scope}, sem o turno seguinte.`,
-        );
-    }
-    return { ok: true, reverted: true };
+    // Nenhum outro prefixo casou (o gate acima já garante que um deles casou).
+    await answerCallbackQuery(callbackQuery.id);
+    return { ok: true, ignored: true };
 }
 
 export async function processTelegramUpdate(update: TelegramUpdate) {
