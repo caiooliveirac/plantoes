@@ -16,7 +16,6 @@ import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-histo
 import {
     BANK_HOURS_FOLHA_RETIRADA_MARKER,
     BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES,
-    canSelfDeclareExtraShift,
     deleteSelfDeclaredExtra,
     isSelfServiceSettlementNote,
     loadBankHoursSettlementsForMonth,
@@ -43,9 +42,9 @@ const payloadSchema = z.object({
  *  - bonus: registra um plantão extra de 12h numa data escolhida (abate +12h);
  *  - penalty: retira um plantão real escolhido da folha (compensa -12h).
  *
- * Quem já deu plantão na 2031 (chefia) ou está na allowlist nominal registra o
- * extra sem o gate de +12h — o saldo desconta do mesmo jeito e a revisão fica
- * com o coordenador, que vê o lançamento (e pode estorná-lo) nas telas de admin.
+ * Os dois exigem saldo elegível de ±12h. Turno de CHEFIA não passa por aqui:
+ * ele é pago como plantão extra sem tocar no banco de horas, e tem rota própria
+ * (/api/medico/plantao-chefia).
  *
  * PATCH e DELETE (abaixo) só alcançam o extra que o PRÓPRIO médico declarou no
  * mês corrente: trocar dia/turno ou desistir dele.
@@ -99,7 +98,6 @@ export async function POST(request: NextRequest) {
         }
 
         let shiftLabel: "SD" | "SN" = parsed.data.shiftLabel ?? "SD";
-        let semGate = false;
 
         if (action === "bonus") {
             // Extra em cima de turno já trabalhado pagaria o mesmo slot duas vezes.
@@ -110,11 +108,10 @@ export async function POST(request: NextRequest) {
                     { status: 409 },
                 );
             }
+            // Sem saldo, sem lançamento — nem para a chefia. Turno de chefia tem
+            // porta própria (/api/medico/plantao-chefia), que não toca no saldo.
             if (balance.bonusEligibleMinutes < BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES) {
-                semGate = await canSelfDeclareExtraShift(medicoId);
-                if (!semGate) {
-                    return NextResponse.json({ error: "Sem saldo disponível." }, { status: 409 });
-                }
+                return NextResponse.json({ error: "Sem saldo disponível." }, { status: 409 });
             }
         } else {
             if (balance.penaltyEligibleMinutes > -BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES) {
@@ -136,7 +133,7 @@ export async function POST(request: NextRequest) {
 
         const note = action === "penalty"
             ? `${BANK_HOURS_FOLHA_RETIRADA_MARKER} (autoatendimento, ${operationalDate} ${shiftLabel})`
-            : `plantão extra declarado (autoatendimento${semGate ? ", sem gate de saldo" : ""}, ${operationalDate} ${shiftLabel})`;
+            : `plantão extra declarado (autoatendimento, ${operationalDate} ${shiftLabel})`;
 
         const result = await settleBankHours({
             doctorId: medicoId,
@@ -164,7 +161,6 @@ export async function POST(request: NextRequest) {
                 shiftLabel,
                 viaToken: !isOwnSession && !isAdmin,
                 actedByAdmin: isAdmin && !isOwnSession,
-                chiefBypass: semGate,
                 balanceBeforeMinutes: balance.totalMinutes,
                 bonusEligibleBefore: balance.bonusEligibleMinutes,
                 penaltyEligibleBefore: balance.penaltyEligibleMinutes,
@@ -184,7 +180,7 @@ export async function POST(request: NextRequest) {
             : "";
 
         await notifyAdmins(medicoId, (nome) => (action === "bonus"
-            ? `🟢 *${nome}* registrou um plantão extra de 12h em ${operationalDate} (${shiftLabel}) pelo banco de horas${semGate ? " — liberado a declarar, sem gate de saldo" : ""}.`
+            ? `🟢 *${nome}* registrou um plantão extra de 12h em ${operationalDate} (${shiftLabel}) pelo banco de horas.`
                 + ` Saldo antes: ${formatSignedHours(balance.totalMinutes)}.${origem}\n\nRevisar em /admin/bank-hours.`
             : `🔴 *${nome}* retirou o plantão de ${operationalDate} (${shiftLabel}) da própria folha para compensar saldo negativo.`
                 + ` Saldo antes: ${formatSignedHours(balance.totalMinutes)}.${origem}\n\nRevisar em /admin/bank-hours.`));
