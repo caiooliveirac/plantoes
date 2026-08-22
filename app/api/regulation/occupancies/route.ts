@@ -3,6 +3,7 @@ import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
+import { conferirChegada } from "@/modules/operational/arrival-check";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import {
     describeConflicts,
@@ -73,6 +74,24 @@ export async function GET() {
         .orderBy(desc(regulationOccupancies.startedAt));
 
     return NextResponse.json({ occupancies: rows });
+}
+
+async function nomeDoMedicoReg(doctorId: string): Promise<string> {
+    const [linha] = await getDb().select({ nome: doctors.fullName }).from(doctors).where(eq(doctors.id, doctorId)).limit(1);
+    return linha?.nome ?? "";
+}
+
+/** O ramal (CRU-3, COI-1…) vira a família que a escala conhece: CRU, COI ou CH. */
+async function familiaDoPosto(postId: number): Promise<string> {
+    const [linha] = await getDb()
+        .select({ cod: regulationPosts.code })
+        .from(regulationPosts)
+        .where(eq(regulationPosts.id, postId))
+        .limit(1);
+    const cod = (linha?.cod ?? "").toUpperCase();
+    if (cod.startsWith("COI")) return "COI";
+    if (cod.startsWith("CH") || cod.startsWith("CP")) return "CH";
+    return "CRU";
 }
 
 export async function POST(request: NextRequest) {
@@ -172,6 +191,19 @@ export async function POST(request: NextRequest) {
                 displacedDoctorId: displacedOccupancy?.doctorId ?? null,
             },
         });
+
+        /* Chegada × escala (nível A) — ver o gêmeo em intervention/occupancies.
+           Na regulação o "posto" da escala é o conjunto (CRU), o COI e a chefia:
+           o código do ramal vira essa família em nomesEsperados(). */
+        void conferirChegada({
+            ocupacaoId: created.id,
+            doctorId: created.doctorId,
+            doctorName: await nomeDoMedicoReg(created.doctorId),
+            posto: await familiaDoPosto(created.postId),
+            turno: created.shiftLabel ?? "—",
+            quando: created.startedAt,
+            actorUserId: session.user.id,
+        }).catch((erro) => console.error("[chegada] conferência escapou", erro));
 
         return NextResponse.json({ occupancy: created });
     } catch (error) {
