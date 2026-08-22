@@ -4,6 +4,7 @@ import { getDb } from "@/db";
 import { doctors, interventionOccupancies, regulationOccupancies, regulationPostDeactivations, regulationPosts } from "@/db/schema";
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 import { publishBoardUpdate } from "@/lib/board-live";
+import { avisarDeslocamento } from "@/modules/operational/displacement-alert";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
@@ -247,6 +248,8 @@ export async function displaceRegulationOccupant(
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
+    // Deslocar duas vezes é idempotente; só a primeira avisa.
+    let jaEstavaDeslocada = false;
     const updated = await db.transaction(async (tx) => {
         const existing = await tx.query.regulationOccupancies.findFirst({
             where: eq(regulationOccupancies.id, occupancyId),
@@ -258,6 +261,7 @@ export async function displaceRegulationOccupant(
             throw new Error("Only active regulation occupancies can be displaced.");
         }
         if (isRegulationDisplacedOccupancyNotes(existing.notes)) {
+            jaEstavaDeslocada = true;
             return existing;
         }
 
@@ -279,6 +283,22 @@ export async function displaceRegulationOccupant(
     });
 
     publishBoardUpdate(`regulation:displace:${updated.postId}`);
+
+    // Aviso fora da transação e sem await bloqueante do resultado: o
+    // deslocamento já está gravado, e nenhum gateway mudo pode desfazê-lo.
+    if (jaEstavaDeslocada === false) {
+        const [doctor, post] = await Promise.all([
+            db.query.doctors.findFirst({ where: eq(doctors.id, updated.doctorId), columns: { fullName: true } }),
+            db.query.regulationPosts.findFirst({ where: eq(regulationPosts.id, updated.postId), columns: { code: true } }),
+        ]);
+        void avisarDeslocamento({
+            doctorName: doctor?.fullName ?? "Médico não identificado",
+            targetCode: post?.code ?? String(updated.postId),
+            takenByDoctorName: input.takenByDoctorName ?? null,
+            domain: "regulation",
+        });
+    }
+
     return updated;
 }
 

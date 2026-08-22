@@ -4,6 +4,7 @@ import { getDb } from "@/db";
 import { doctors, interventionBaseDeactivations, interventionBases, interventionOccupancies, regulationOccupancies } from "@/db/schema";
 import { extractDoctorPreferredOperationalRole } from "@/modules/doctors/directory";
 import { publishBoardUpdate } from "@/lib/board-live";
+import { avisarDeslocamento } from "@/modules/operational/displacement-alert";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
@@ -298,6 +299,8 @@ export async function displaceInterventionOccupant(
     updatedByUserId?: string | null,
 ) {
     const db = getDb();
+    // Deslocar duas vezes é idempotente; só a primeira avisa.
+    let jaEstavaDeslocada = false;
     const updated = await db.transaction(async (tx) => {
         const existing = await tx.query.interventionOccupancies.findFirst({
             where: eq(interventionOccupancies.id, occupancyId),
@@ -309,6 +312,7 @@ export async function displaceInterventionOccupant(
             throw new Error("Only active intervention occupancies can be displaced.");
         }
         if (isInterventionDisplacedOccupancyNotes(existing.notes)) {
+            jaEstavaDeslocada = true;
             return existing;
         }
 
@@ -330,6 +334,22 @@ export async function displaceInterventionOccupant(
     });
 
     publishBoardUpdate(`intervention:displace:${updated.baseId}`);
+
+    // Ver a nota gêmea em modules/regulation/service.ts: aviso fail-soft depois
+    // do commit, nunca dentro da transação.
+    if (jaEstavaDeslocada === false) {
+        const [doctor, base] = await Promise.all([
+            db.query.doctors.findFirst({ where: eq(doctors.id, updated.doctorId), columns: { fullName: true } }),
+            db.query.interventionBases.findFirst({ where: eq(interventionBases.id, updated.baseId), columns: { code: true } }),
+        ]);
+        void avisarDeslocamento({
+            doctorName: doctor?.fullName ?? "Médico não identificado",
+            targetCode: base?.code ?? String(updated.baseId),
+            takenByDoctorName: input.takenByDoctorName ?? null,
+            domain: "intervention",
+        });
+    }
+
     return updated;
 }
 
