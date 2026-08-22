@@ -29,6 +29,15 @@ for the group are calculated as a single span, not per-occupancy.
 Manual adjustments applied via admin UI. Each override has a rule code
 and explanation. Overrides are additive to the calculated balance.
 
+### Teto de 6h (permanência não é banco)
+
+Excedente de **6h ou mais** além do previsto nunca vira crédito: pela régua de
+`modules/operational/extended-stay.ts` (espelho de `classifyEarlyDeparture`) ele
+vira plantão a assinar na folha — MEIO entre 6h e 10h, INTEIRO de 10h em diante,
+e só o resto abaixo de 6h continua no banco. Consequência: nenhum plantão
+credita mais que 12h (6h brutas em dobro), por construção e não por exceção.
+`npm run audit:extended-stay` lista as permanências que ainda não viraram plantão.
+
 ## Invariants
 
 - Bank hours entries are always tied to an occupancy (occupancyId + domain)

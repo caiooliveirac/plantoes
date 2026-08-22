@@ -1,12 +1,23 @@
-export const BANK_HOURS_RULE_VERSION = 9;
+import {
+    classifyExtendedStay,
+    describeExtendedStay,
+    isPayableExtendedStay,
+    type ExtendedStayClassification,
+} from "@/modules/operational/extended-stay";
+
+export const BANK_HOURS_RULE_VERSION = 10;
 export const ARRIVAL_GRACE_MINUTES = 15;
 export const DEPARTURE_GRACE_MINUTES = 15;
 
 /**
- * Maximum credible delay or overtime in minutes.
- * Any value above this threshold indicates a likely misconfigured scheduled window
- * (e.g., P shift registered as SD, broken continuity chain, wrong scheduledStartAt).
- * Bank hours entries exceeding this are clamped to 0 with ANOMALY_* rule code.
+ * Atraso máximo crível. Acima disso a janela agendada é que está errada (P
+ * registrado como SD, cadeia de continuidade quebrada, scheduledStartAt torto),
+ * e um débito de 12h castigaria o médico por um defeito nosso: zera com
+ * ANOMALY_* e pede revisão humana.
+ *
+ * Do lado do EXCEDENTE não existe mais anomalia: permanência longa é um fato
+ * operacional com desfecho próprio (classifyExtendedStay) — vira plantão na
+ * folha, não crédito no banco.
  */
 export const ANOMALY_THRESHOLD_MINUTES = 360; // 6 hours
 
@@ -25,6 +36,8 @@ export interface BankHoursCalculationResult {
     balanceMinutes: number;
     ruleCode: string;
     explanation: string;
+    /** Plantões que a permanência gerou na folha (null quando não gerou nenhum). */
+    extendedStay: ExtendedStayClassification | null;
 }
 
 function toDate(value: Date | string) {
@@ -78,6 +91,7 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
         balanceMinutes,
         ruleCode,
         explanation,
+        extendedStay: null,
     };
 }
 
@@ -125,40 +139,60 @@ export function buildEarlyDepartureBankHours(params: {
             ? EARLY_DEPARTURE_BANK_ONLY_RULE_CODE
             : EARLY_DEPARTURE_HALF_CREDIT_RULE_CODE,
         explanation,
+        extendedStay: null,
     };
 }
 
+export const EXTENDED_STAY_RULE_CODE = "EXTENDED_STAY_PAYABLE_SHIFT";
+
 /**
- * Detects scheduled window anomalies: delay or overtime above the credible threshold.
- * Returns a clamped result with ANOMALY rule code when the calculated values are implausible.
- * This catches: P shifts misregistered as SD/SN, orphaned scheduledStartAt from deleted
- * continuity chains, or any data integrity issue producing phantom 12h+ credits/debits.
+ * Teto do banco de horas e desfecho da permanência longa.
+ *
+ * Duas coisas, uma passagem obrigatória — todo caminho que calcula banco passa
+ * por aqui (gravação, reconstrução do histórico, quadro ao vivo, scripts):
+ *
+ *  - ATRASO improvável (> 6h) continua sendo anomalia de janela: zera e pede
+ *    revisão, porque a alternativa é debitar 12h de quem não faltou.
+ *
+ *  - EXCEDENTE de 6h ou mais NÃO é banco de horas. Ficar meio turno a mais numa
+ *    posição é plantão prestado, e plantão prestado se assina na folha: a régua
+ *    de classifyExtendedStay (espelho da régua de saída antecipada da chefia)
+ *    diz quantos inteiros e meios aquilo vale, e só o resto abaixo de 6h segue
+ *    como crédito. Sem isso, uma janela agendada torta virava crédito de 12h ou
+ *    23h — e o aviso diário oferecia "plantão verde" à chefia (caso Rafael
+ *    Santana, 21→22/08/2026).
+ *
+ * O teto é estrutural: nenhum plantão credita mais que 6h brutas (12h em dobro).
  */
 export function applyAnomalyGuard(calculation: BankHoursCalculationResult): BankHoursCalculationResult {
     const isAnomalousDelay = calculation.arrivalDelayMinutes > ANOMALY_THRESHOLD_MINUTES;
-    const isAnomalousOvertime = calculation.overtimeMinutes > ANOMALY_THRESHOLD_MINUTES;
 
-    if (!isAnomalousDelay && !isAnomalousOvertime) {
+    if (isAnomalousDelay) {
+        return {
+            ...calculation,
+            creditedOvertimeMinutes: 0,
+            balanceMinutes: 0,
+            extendedStay: null,
+            ruleCode: "ANOMALY_EXCESSIVE_DELAY",
+            explanation: `⚠️ ANOMALIA DETECTADA: Atraso calculado de ${calculation.arrivalDelayMinutes} min excede limite de ${ANOMALY_THRESHOLD_MINUTES} min. Provavel janela agendada incorreta (P registrado como SD/SN, grupo continuidade quebrado, etc). Saldo zerado automaticamente — requer revisao manual.`,
+        };
+    }
+
+    const extendedStay = classifyExtendedStay(calculation.overtimeMinutes);
+    if (!isPayableExtendedStay(extendedStay)) {
         return calculation;
     }
 
-    const anomalyType = isAnomalousDelay && isAnomalousOvertime
-        ? "ANOMALY_DELAY_AND_OVERTIME"
-        : isAnomalousDelay
-            ? "ANOMALY_EXCESSIVE_DELAY"
-            : "ANOMALY_EXCESSIVE_OVERTIME";
-
-    const detail = isAnomalousDelay
-        ? `Atraso calculado de ${calculation.arrivalDelayMinutes} min excede limite de ${ANOMALY_THRESHOLD_MINUTES} min.`
-        : `Overtime calculado de ${calculation.overtimeMinutes} min excede limite de ${ANOMALY_THRESHOLD_MINUTES} min.`;
+    // Só o resto abaixo de 6h continua no banco; o multiplicador da chegada
+    // pontual segue valendo sobre ele.
+    const creditedOvertimeMinutes = extendedStay.bankMinutes * calculation.overtimeMultiplier;
 
     return {
-        arrivalDelayMinutes: calculation.arrivalDelayMinutes,
-        overtimeMinutes: calculation.overtimeMinutes,
-        overtimeMultiplier: calculation.overtimeMultiplier,
-        creditedOvertimeMinutes: 0,
-        balanceMinutes: 0,
-        ruleCode: anomalyType,
-        explanation: `⚠️ ANOMALIA DETECTADA: ${detail} Provavel janela agendada incorreta (P registrado como SD/SN, grupo continuidade quebrado, etc). Saldo zerado automaticamente — requer revisao manual.`,
+        ...calculation,
+        creditedOvertimeMinutes,
+        balanceMinutes: creditedOvertimeMinutes - calculation.arrivalDelayMinutes,
+        extendedStay,
+        ruleCode: EXTENDED_STAY_RULE_CODE,
+        explanation: `Permaneceu ${formatMinutesAsHours(extendedStay.overtimeMinutes)} alem do previsto: acima de 6h a permanencia nao e banco de horas, e plantao a assinar na posicao — ${describeExtendedStay(extendedStay)}.${extendedStay.bankMinutes > 0 ? ` Restam ${formatMinutesAsHours(extendedStay.bankMinutes)} no banco.` : ""}`,
     };
 }

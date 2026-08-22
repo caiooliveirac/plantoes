@@ -253,8 +253,9 @@ test("anomaly guard clamps excessive delay to zero balance", () => {
     assert.ok(guarded.explanation.includes("ANOMALIA"));
 });
 
-test("anomaly guard clamps excessive overtime to zero balance", () => {
-    // SD scheduled 07:00-19:15 but doctor stayed until 07:00 next day = ~720 min overtime
+test("permanencia de 6h ou mais nao vira banco: vira plantao a assinar na folha", () => {
+    // SD previsto 07:00-19:15, ficou ate 06:55 do dia seguinte: quase 12h a mais.
+    // Antes isso virava ANOMALIA zerada em silencio (e, sem a guarda, +23h de credito).
     const raw = calculateBankHours({
         scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
         scheduledEndAt: iso("2026-04-05T19:15:00-03:00"),
@@ -265,9 +266,60 @@ test("anomaly guard clamps excessive overtime to zero balance", () => {
     assert.equal(raw.overtimeMinutes > 360, true);
 
     const guarded = applyAnomalyGuard(raw);
-    assert.equal(guarded.balanceMinutes, 0);
+    assert.equal(guarded.ruleCode, "EXTENDED_STAY_PAYABLE_SHIFT");
+    assert.equal(guarded.extendedStay?.fullShifts, 1);
+    assert.equal(guarded.extendedStay?.halfShifts, 0);
+    assert.equal(guarded.extendedStay?.bankMinutes, 0);
     assert.equal(guarded.creditedOvertimeMinutes, 0);
-    assert.ok(guarded.ruleCode.startsWith("ANOMALY_"));
+    // O atraso de 20 min na chegada continua debitando: sai da folha o plantao,
+    // do banco o atraso.
+    assert.equal(guarded.balanceMinutes, -20);
+});
+
+test("permanencia entre 6h e 10h assina MEIO plantao", () => {
+    const raw = calculateBankHours({
+        scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-05T19:00:00-03:00"),
+        actualStartAt: iso("2026-04-05T07:00:00-03:00"),
+        actualEndAt: iso("2026-04-06T01:45:00-03:00"),
+    });
+
+    const guarded = applyAnomalyGuard(raw);
+    assert.equal(guarded.extendedStay?.halfShifts, 1);
+    assert.equal(guarded.extendedStay?.fullShifts, 0);
+    assert.equal(guarded.balanceMinutes, 0);
+});
+
+test("permanencia abaixo de 6h continua no banco, em dobro se a chegada foi pontual", () => {
+    const raw = calculateBankHours({
+        scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-05T19:00:00-03:00"),
+        actualStartAt: iso("2026-04-05T07:00:00-03:00"),
+        actualEndAt: iso("2026-04-06T00:59:00-03:00"),
+    });
+
+    const guarded = applyAnomalyGuard(raw);
+    assert.deepEqual(guarded, raw);
+    assert.equal(guarded.extendedStay, null);
+    assert.equal(guarded.balanceMinutes, 359 * 2);
+});
+
+// O banco de horas tem teto estrutural: nenhuma permanencia credita mais que 6h
+// brutas (12h em dobro). Acima disso a saida e a folha, nunca o credito.
+test("nenhuma permanencia, por maior que seja, credita mais que 12h no banco", () => {
+    for (let overtimeMinutes = 16; overtimeMinutes <= 48 * 60; overtimeMinutes += 7) {
+        const guarded = applyAnomalyGuard(calculateBankHours({
+            scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
+            scheduledEndAt: iso("2026-04-05T19:00:00-03:00"),
+            actualStartAt: iso("2026-04-05T07:00:00-03:00"),
+            actualEndAt: new Date(new Date(iso("2026-04-05T19:00:00-03:00")).getTime() + overtimeMinutes * 60000).toISOString(),
+        }));
+
+        assert.ok(
+            guarded.balanceMinutes <= 12 * 60,
+            `permanencia de ${overtimeMinutes} min creditou ${guarded.balanceMinutes} min no banco`,
+        );
+    }
 });
 
 test("anomaly guard passes through normal calculations unchanged", () => {

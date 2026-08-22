@@ -18,6 +18,7 @@ const BANK_HOURS_RULE_LABELS: Record<string, string> = {
     LATE_HALF_SHIFT_CARRYOVER: "Meio plantão reconhecido (13h–19h); tempo antes das 13h vira crédito",
     MANUAL_BANK_OVERRIDE: "Saldo fixado manualmente pela administração",
     ANOMALY_EXCESSIVE_DELAY: "Janela do plantão inconsistente (atraso improvável) — saldo zerado por segurança",
+    EXTENDED_STAY_PAYABLE_SHIFT: "Permanência de 6h ou mais além do previsto — plantão a assinar na folha, não banco de horas",
     ANOMALY_EXCESSIVE_OVERTIME: "Janela do plantão inconsistente (excedente improvável) — saldo zerado por segurança",
     ANOMALY_DELAY_AND_OVERTIME: "Janela do plantão inconsistente (atraso e excedente improváveis) — saldo zerado por segurança",
     UNSPECIFIED_RULE: "Sem regra registrada",
