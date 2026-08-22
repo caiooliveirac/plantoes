@@ -205,6 +205,7 @@ import {
 } from "@/modules/telegram/meal-breaks";
 import { buildTelegramShiftReport } from "@/modules/telegram/shift-report";
 import { getTelegramAdminUserIds, getTelegramAnnouncementChatIds, getTelegramChiefUserIds, getTelegramRegulationAlertUserIds, isTelegramChatAllowed, isTelegramPrivateControlUserId, resolveArrivalPhase } from "@/modules/telegram/config";
+import { parseCallbackChegada, registrarQuemPassou, responderChegada } from "@/modules/operational/arrival-flow";
 import { buildChiefPrivateRegulationAlertPlan } from "@/modules/telegram/reminders";
 import {
     isTelegramAdminOnlyCommand,
@@ -12585,6 +12586,26 @@ async function handleFiscalSuggestionCallback(callbackQuery: TelegramCallbackQue
 // tk = tomada de ramal; dj = justificativa de saída; dst = destino desconhecido;
 // rta = reset geral de codinomes; fsg = confirmação de dados fiscais sugeridos.
 async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery) {
+    /* Chegada × escala (nível B): "troquei com o titular" / "peguei de outro" /
+       "erro de registro". Fica antes dos demais porque tem prefixo próprio
+       ("chg:") e não compete com nenhum parser existente. */
+    const chegada = parseCallbackChegada(callbackQuery.data);
+    if (chegada) {
+        const chatChegada = callbackQuery.message?.chat;
+        if (!chatChegada) {
+            await answerCallbackQuery(callbackQuery.id);
+            return { ok: true, ignored: true };
+        }
+        await responderChegada({
+            callbackQueryId: callbackQuery.id,
+            chatId: chatChegada.id,
+            quemRespondeu: callbackQuery.from?.first_name ?? String(callbackQuery.from?.id ?? "—"),
+            acao: chegada.acao,
+            ocupacaoId: chegada.ocupacaoId,
+        });
+        return { ok: true, chegada: chegada.acao };
+    }
+
     const fiscalConfirm = parseFiscalSuggestionCallbackData(callbackQuery.data);
     if (fiscalConfirm !== null) {
         return handleFiscalSuggestionCallback(callbackQuery, fiscalConfirm);
@@ -12658,6 +12679,22 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
     const message = update.message;
     if (!message?.text) {
         return { ok: true, ignored: true };
+    }
+
+    /* Chegada × escala (nível B): o nome de quem passou o plantão chega como
+       RESPOSTA à mensagem que o bot mandou. Identificar pela mensagem
+       respondida evita máquina de estado global e não confunde duas perguntas
+       ao mesmo tempo. Só entra aqui se houver pendência para aquela mensagem;
+       caso contrário o texto segue o caminho normal. */
+    const respondidaId = message.reply_to_message?.message_id;
+    if (respondidaId) {
+        const tratou = await registrarQuemPassou({
+            replyToMessageId: respondidaId,
+            chatId: message.chat.id,
+            texto: message.text,
+            quemRespondeu: message.from?.first_name ?? String(message.from?.id ?? "—"),
+        });
+        if (tratou) return { ok: true, chegada: "nome_registrado" };
     }
 
     // Housekeeping: expire zombie pendings globally (debounced, at most every 5 min)
