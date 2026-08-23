@@ -353,14 +353,17 @@ export async function displaceInterventionOccupant(
     return updated;
 }
 
+// Sombra NUNCA assume o quadro — nem quando a base está vazia. A regra antiga
+// ("sombra sozinha assume") transformava a sombra em titular de fato e fazia o
+// portão de tomada do Telegram disparar contra ela na chegada do titular real.
+// Sombra fica sempre com board_started_at = NULL, fora do índice
+// one-active-board-per-base; o painel a desenha pelo marcador de nota.
 export function resolveInterventionArrivalBoardPolicy(params: {
     source: StartInterventionOccupancyInput["source"];
     isShadow?: boolean | null;
-    hasCurrentBoardCarrier: boolean;
 }) {
     return {
-        shouldTakeBoardImmediately: params.source !== "import"
-            && (!params.isShadow || !params.hasCurrentBoardCarrier),
+        shouldTakeBoardImmediately: params.source !== "import" && !params.isShadow,
     };
 }
 
@@ -943,7 +946,6 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
         const { shouldTakeBoardImmediately } = resolveInterventionArrivalBoardPolicy({
             source: input.source,
             isShadow: input.isShadow ?? false,
-            hasCurrentBoardCarrier: Boolean(currentBoardCarrier),
         });
 
         const shouldPreserveCurrentBoardCarrier = Boolean(

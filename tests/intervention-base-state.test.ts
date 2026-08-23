@@ -276,21 +276,21 @@ test("resolveSameDoctorBoardStartedAt preserva nulo para sombra sem board carrie
         );
 });
 
-test("resolveInterventionArrivalBoardPolicy preserva o titular quando a chegada eh sombra", () => {
+// Espelha a regra de regulacao: sombra nunca assume o quadro, nem em base vazia.
+// Sombra com board virava titular de fato e disparava o portao de tomada contra si.
+test("resolveInterventionArrivalBoardPolicy: sombra nunca toma o board, nem em base vazia", () => {
     assert.deepEqual(resolveInterventionArrivalBoardPolicy({
         source: "telegram",
         isShadow: true,
-        hasCurrentBoardCarrier: true,
     }), {
         shouldTakeBoardImmediately: false,
     });
 });
 
-test("resolveInterventionArrivalBoardPolicy permite board imediato sem titular previo", () => {
+test("resolveInterventionArrivalBoardPolicy: titular real toma o board", () => {
     assert.deepEqual(resolveInterventionArrivalBoardPolicy({
         source: "telegram",
-        isShadow: true,
-        hasCurrentBoardCarrier: false,
+        isShadow: false,
     }), {
         shouldTakeBoardImmediately: true,
     });

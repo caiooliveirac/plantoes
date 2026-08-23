@@ -55,7 +55,7 @@ import {
 import { isStoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
-import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
+import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, isInterventionShadowOccupancyNotes, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, isSameOperationalShiftArrival, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import {
@@ -8591,6 +8591,14 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         if (!occ) {
             return null;
         }
+        // Sombra não é tomada: ela existe para coexistir com o titular e nunca
+        // disputou o posto. Mesmo que algo volte a gravar board numa sombra, a
+        // chegada do titular real segue como chegada comum — sem alarme, sem
+        // confirmação, sem [DESLOCADO], sem aviso no grupo. Mesma regra do domínio
+        // (shouldCloseRegulationOccupantOnArrival).
+        if (isRegulationShadowOccupancyNotes(occ.notes)) {
+            return null;
+        }
         const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
 
         // "Mesmo turno": o ocupante chegou DENTRO da janela de turno atual. Carry-over
@@ -8627,6 +8635,9 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         orderBy: [desc(interventionOccupancies.boardStartedAt)],
     });
     if (!occ) {
+        return null;
+    }
+    if (isInterventionShadowOccupancyNotes(occ.notes)) {
         return null;
     }
     const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
