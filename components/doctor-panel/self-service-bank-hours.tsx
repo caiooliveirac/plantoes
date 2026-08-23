@@ -124,22 +124,26 @@ export function SelfServiceBankHours({
             <div className="panel-self-service">
                 {canBonus ? (
                     <div className="panel-self-service-row bonus">
-                        <input
-                            type="date"
-                            value={bonusDate}
-                            min={minDate}
-                            max={maxDate}
-                            onChange={(event) => setBonusDate(event.target.value)}
-                            aria-label="Data do plantão extra"
-                        />
-                        <select
-                            value={bonusShift}
-                            onChange={(event) => setBonusShift(event.target.value === "SN" ? "SN" : "SD")}
-                            aria-label="Turno do plantão extra"
-                        >
-                            <option value="SD">Diurno (SD)</option>
-                            <option value="SN">Noturno (SN)</option>
-                        </select>
+                        <label className="panel-field">
+                            <span className="panel-field-label">Dia do plantão extra</span>
+                            <input
+                                type="date"
+                                value={bonusDate}
+                                min={minDate}
+                                max={maxDate}
+                                onChange={(event) => setBonusDate(event.target.value)}
+                            />
+                        </label>
+                        <label className="panel-field">
+                            <span className="panel-field-label">Turno</span>
+                            <select
+                                value={bonusShift}
+                                onChange={(event) => setBonusShift(event.target.value === "SN" ? "SN" : "SD")}
+                            >
+                                <option value="SD">Diurno (SD)</option>
+                                <option value="SN">Noturno (SN)</option>
+                            </select>
+                        </label>
                         <button
                             type="button"
                             className="panel-action-btn bonus"
@@ -153,11 +157,12 @@ export function SelfServiceBankHours({
 
                 {canPenalty && shiftOptions.length > 0 ? (
                     <div className="panel-self-service-row penalty">
-                        <select
-                            value={penaltyPick}
-                            onChange={(event) => setPenaltyPick(event.target.value)}
-                            aria-label="Plantão a retirar"
-                        >
+                        <label className="panel-field">
+                            <span className="panel-field-label">Plantão a retirar da folha</span>
+                            <select
+                                value={penaltyPick}
+                                onChange={(event) => setPenaltyPick(event.target.value)}
+                            >
                             <option value="">Escolher plantão…</option>
                             {shiftOptions.map((shift) => (
                                 <option
@@ -167,7 +172,8 @@ export function SelfServiceBankHours({
                                     {shift.label}
                                 </option>
                             ))}
-                        </select>
+                            </select>
+                        </label>
                         <button
                             type="button"
                             className="panel-action-btn penalty"
@@ -189,22 +195,26 @@ export function SelfServiceBankHours({
                                 <li key={extra.settlementId}>
                                     {editing === extra.settlementId ? (
                                         <div className="panel-self-service-row">
-                                            <input
-                                                type="date"
-                                                value={editDate}
-                                                min={minDate}
-                                                max={maxDate}
-                                                onChange={(event) => setEditDate(event.target.value)}
-                                                aria-label="Nova data do plantão extra"
-                                            />
-                                            <select
-                                                value={editShift}
-                                                onChange={(event) => setEditShift(event.target.value === "SN" ? "SN" : "SD")}
-                                                aria-label="Novo turno do plantão extra"
-                                            >
-                                                <option value="SD">Diurno (SD)</option>
-                                                <option value="SN">Noturno (SN)</option>
-                                            </select>
+                                            <label className="panel-field">
+                                                <span className="panel-field-label">Novo dia</span>
+                                                <input
+                                                    type="date"
+                                                    value={editDate}
+                                                    min={minDate}
+                                                    max={maxDate}
+                                                    onChange={(event) => setEditDate(event.target.value)}
+                                                />
+                                            </label>
+                                            <label className="panel-field">
+                                                <span className="panel-field-label">Novo turno</span>
+                                                <select
+                                                    value={editShift}
+                                                    onChange={(event) => setEditShift(event.target.value === "SN" ? "SN" : "SD")}
+                                                >
+                                                    <option value="SD">Diurno (SD)</option>
+                                                    <option value="SN">Noturno (SN)</option>
+                                                </select>
+                                            </label>
                                             <button
                                                 type="button"
                                                 className="panel-action-btn"

@@ -12636,17 +12636,45 @@ button.chief-payable-tag:focus-visible {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    align-items: center;
+    /* Campos agora têm rótulo em cima: alinhar pela base mantém o botão na
+       mesma linha dos campos, não no meio deles. */
+    align-items: flex-end;
 }
 
+/* O painel do médico é escuro: campo branco virava um bloco cego no meio da
+   página. Fundo escuro, texto claro e color-scheme para o ícone do calendário
+   nativo vir claro em vez de preto sobre preto. */
 .panel-self-service-row input[type="date"],
 .panel-self-service-row select {
     padding: 9px 12px;
     border-radius: 10px;
     border: 1px solid rgba(148, 163, 184, 0.45);
-    background: #fff;
+    background: rgba(15, 23, 42, 0.75);
+    color: #e2e8f0;
+    color-scheme: dark;
     font-size: 0.9rem;
     min-width: 180px;
+}
+
+.panel-self-service-row input[type="date"]:focus-visible,
+.panel-self-service-row select:focus-visible {
+    outline: 2px solid rgba(148, 163, 184, 0.8);
+    outline-offset: 1px;
+}
+
+/* Rótulo visível em cima do campo: aria-label sozinho não explica nada a quem
+   está olhando a tela. */
+.panel-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.panel-field-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #94a3b8;
 }
 
 .panel-action-btn.bonus {
@@ -12682,7 +12710,7 @@ button.chief-payable-tag:focus-visible {
 .panel-self-service-error {
     margin: 0;
     font-size: 0.85rem;
-    color: #b91c1c;
+    color: #fca5a5;
 }
 
 /* Lista dos extras que o próprio médico declarou no mês — o que ele ainda pode
@@ -12697,7 +12725,7 @@ button.chief-payable-tag:focus-visible {
     margin: 0;
     font-size: 0.8rem;
     font-weight: 600;
-    color: #475569;
+    color: #cbd5f5;
 }
 
 .panel-declared-extras ul {
@@ -12715,9 +12743,9 @@ button.chief-payable-tag:focus-visible {
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    border: 1px solid rgba(22, 163, 74, 0.35);
+    border: 1px solid rgba(52, 211, 153, 0.45);
     border-radius: 10px;
-    background: rgba(22, 163, 74, 0.07);
+    background: rgba(6, 78, 59, 0.35);
 }
 
 .panel-declared-extra-when {
@@ -12731,17 +12759,17 @@ button.chief-payable-tag:focus-visible {
     background: none;
     padding: 6px 2px;
     font-size: 0.85rem;
-    color: #15803d;
+    color: #6ee7b7;
     text-decoration: underline;
     cursor: pointer;
 }
 
 .panel-link-btn.chief {
-    color: #6d28d9;
+    color: #d8b4fe;
 }
 
 .panel-link-btn.danger {
-    color: #b91c1c;
+    color: #fca5a5;
 }
 
 .panel-link-btn:disabled {
@@ -12752,9 +12780,9 @@ button.chief-payable-tag:focus-visible {
 /* Bloco do plantão de chefia — moldura roxa, faixa e aviso. Fica visualmente a
    quilômetros do autoatendimento de banco de horas (verde/vermelho). */
 .panel-chief-extra {
-    border: 2px solid rgba(124, 58, 237, 0.55);
+    border: 2px solid rgba(167, 139, 250, 0.7);
     border-left-width: 8px;
-    background: rgba(124, 58, 237, 0.06);
+    background: rgba(76, 29, 149, 0.32);
 }
 
 .panel-chief-extra-head {
@@ -12766,15 +12794,15 @@ button.chief-payable-tag:focus-visible {
 
 .panel-chief-extra-head h2 {
     margin: 0;
-    color: #5b21b6;
+    color: #e9d5ff;
 }
 
 .panel-chief-extra-badge {
     display: inline-block;
     padding: 3px 10px;
     border-radius: 999px;
-    background: #7c3aed;
-    color: #f5f3ff;
+    background: #a78bfa;
+    color: #1e1b4b;
     font-size: 0.7rem;
     font-weight: 800;
     letter-spacing: 0.08em;
@@ -12784,16 +12812,16 @@ button.chief-payable-tag:focus-visible {
     margin: 10px 0 14px;
     padding: 10px 12px;
     border-radius: 10px;
-    border: 1px dashed rgba(124, 58, 237, 0.5);
-    background: rgba(124, 58, 237, 0.08);
-    color: #4c1d95;
+    border: 1px dashed rgba(167, 139, 250, 0.65);
+    background: rgba(167, 139, 250, 0.14);
+    color: #ede9fe;
     font-size: 0.85rem;
     line-height: 1.45;
 }
 
 .panel-declared-extras.chief li {
-    border-color: rgba(124, 58, 237, 0.4);
-    background: rgba(124, 58, 237, 0.08);
+    border-color: rgba(167, 139, 250, 0.5);
+    background: rgba(124, 58, 237, 0.22);
 }
 
 .panel-footer {
