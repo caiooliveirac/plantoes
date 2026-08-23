@@ -20,7 +20,7 @@ import {
     type BankHoursPendingRow,
 } from "@/modules/bank-hours/pending-actions";
 import { getSaoPauloParts } from "@/modules/operational/board-rules";
-import { sendMessage } from "@/modules/telegram/api";
+import { sendMessage, splitTelegramMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
 import { loadDoctorBankHoursStoryLines } from "@/services/bank-hours-story.service";
@@ -130,7 +130,9 @@ export async function sendBankHoursPendingCycle(referenceDate = new Date()) {
         if (!reserved) continue;
 
         try {
-            await sendMessage(chatId, message);
+            for (const part of splitTelegramMessage(message)) {
+                await sendMessage(chatId, part);
+            }
             sent += 1;
         } catch (error) {
             // Falhou o envio: solta a reserva para o próximo ciclo tentar de novo.
