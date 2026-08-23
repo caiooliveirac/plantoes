@@ -105,22 +105,26 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
             </p>
 
             <div className="panel-self-service-row">
-                <input
-                    type="date"
-                    value={date}
-                    min={minDate}
-                    max={maxDate}
-                    onChange={(event) => setDate(event.target.value)}
-                    aria-label="Data do plantão de chefia"
-                />
-                <select
-                    value={shift}
-                    onChange={(event) => setShift(event.target.value === "SN" ? "SN" : "SD")}
-                    aria-label="Turno do plantão de chefia"
-                >
-                    <option value="SD">Diurno (SD)</option>
-                    <option value="SN">Noturno (SN)</option>
-                </select>
+                <label className="panel-field">
+                    <span className="panel-field-label">Dia do plantão de chefia</span>
+                    <input
+                        type="date"
+                        value={date}
+                        min={minDate}
+                        max={maxDate}
+                        onChange={(event) => setDate(event.target.value)}
+                    />
+                </label>
+                <label className="panel-field">
+                    <span className="panel-field-label">Turno</span>
+                    <select
+                        value={shift}
+                        onChange={(event) => setShift(event.target.value === "SN" ? "SN" : "SD")}
+                    >
+                        <option value="SD">Diurno (SD)</option>
+                        <option value="SN">Noturno (SN)</option>
+                    </select>
+                </label>
                 <button
                     type="button"
                     className="panel-action-btn chief"
@@ -141,22 +145,26 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
                             <li key={item.id}>
                                 {editing === item.id ? (
                                     <div className="panel-self-service-row">
-                                        <input
-                                            type="date"
-                                            value={editDate}
-                                            min={minDate}
-                                            max={maxDate}
-                                            onChange={(event) => setEditDate(event.target.value)}
-                                            aria-label="Nova data do plantão de chefia"
-                                        />
-                                        <select
-                                            value={editShift}
-                                            onChange={(event) => setEditShift(event.target.value === "SN" ? "SN" : "SD")}
-                                            aria-label="Novo turno do plantão de chefia"
-                                        >
-                                            <option value="SD">Diurno (SD)</option>
-                                            <option value="SN">Noturno (SN)</option>
-                                        </select>
+                                        <label className="panel-field">
+                                            <span className="panel-field-label">Novo dia</span>
+                                            <input
+                                                type="date"
+                                                value={editDate}
+                                                min={minDate}
+                                                max={maxDate}
+                                                onChange={(event) => setEditDate(event.target.value)}
+                                            />
+                                        </label>
+                                        <label className="panel-field">
+                                            <span className="panel-field-label">Novo turno</span>
+                                            <select
+                                                value={editShift}
+                                                onChange={(event) => setEditShift(event.target.value === "SN" ? "SN" : "SD")}
+                                            >
+                                                <option value="SD">Diurno (SD)</option>
+                                                <option value="SN">Noturno (SN)</option>
+                                            </select>
+                                        </label>
                                         <button
                                             type="button"
                                             className="panel-action-btn chief"
