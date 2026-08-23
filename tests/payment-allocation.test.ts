@@ -1131,3 +1131,101 @@ test("buildPaymentAllocationBoardModel: base diurna (dayOnly) entra no SD e some
     assert.ok(!snCodes.includes("GOA"), "base diurna não é alvo no SN — não pode contar como furo noturno");
     assert.ok(snCodes.includes("PM04"), "base normal continua aparecendo no SN");
 });
+
+// Caso real (Rafael Santana, ramal 2152, 19/08/2026): declarou 24h às 07:00,
+// Jean Rios chegou às 07:09 e tomou a titularidade do quadro, Rafael ficou sem
+// board e permaneceu até 07:14 do dia seguinte. A folha truncava a cobertura
+// dele na chegada de Jean — 10 minutos, abaixo da presença mínima — e o plantão
+// inteiro sumia do pagamento. Quem perde a titularidade e FICA não foi rendido.
+test("presença sem titularidade não é truncada pela chegada de quem tomou a posição", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({ domain: "regulation", targetCode: "2152", targetLabel: "Ramal 2152" })],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-titular",
+                domain: "regulation",
+                targetCode: "2152",
+                targetLabel: "Ramal 2152",
+                doctorId: "doc-jean",
+                doctorName: "Jean Rios",
+                startedAt: "2026-08-19T10:09:00.000Z",
+                boardStartedAt: "2026-08-19T10:09:00.000Z",
+                endedAt: "2026-08-19T21:52:00.000Z",
+                actualEndedAt: "2026-08-19T21:52:00.000Z",
+                shiftLabel: "SD",
+                notes: "Jean Rios 2152 SD",
+            }),
+            makeRow({
+                occupancyId: "occ-sem-board",
+                domain: "regulation",
+                targetCode: "2152",
+                targetLabel: "Ramal 2152",
+                doctorId: "doc-rafael",
+                doctorName: "Rafael Santana",
+                startedAt: "2026-08-19T10:00:00.000Z",
+                boardStartedAt: null,
+                endedAt: "2026-08-20T10:14:00.000Z",
+                actualEndedAt: "2026-08-20T10:14:00.000Z",
+                shiftLabel: "P",
+                notes: "Rafael Azevedo 24h 2152",
+            }),
+        ],
+        operationalDate: "2026-08-19",
+        shiftLabel: "SD",
+        startedAt: "2026-08-19T10:00:00.000Z",
+        endedAt: "2026-08-19T22:00:00.000Z",
+    });
+
+    const ocupantes = board.regulation.filter((row) => row.doctorName).map((row) => row.doctorName);
+    assert.ok(ocupantes.includes("Jean Rios"), "o titular do quadro continua pago");
+    assert.ok(ocupantes.includes("Rafael Santana"), "quem ficou sem board e permaneceu também é pago");
+});
+
+// A contrapartida: ninguém recebe dois plantões pelo mesmo turno. Se o médico já
+// é titular de uma posição no slot, o registro sem board dele em OUTRA posição
+// não vira pagamento extra (Gerardson, 1367 + 2154, 18/08/2026).
+test("registro sem titularidade não paga de novo quem já é titular em outra posição do mesmo turno", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [
+            makeTarget({ domain: "regulation", targetCode: "1367", targetLabel: "Ramal 1367" }),
+            makeTarget({ domain: "regulation", targetCode: "2154", targetLabel: "Ramal 2154", sortOrder: 5 }),
+        ],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-titular-2154",
+                domain: "regulation",
+                targetCode: "2154",
+                targetLabel: "Ramal 2154",
+                doctorId: "doc-ger",
+                doctorName: "Gerardson Macedo",
+                startedAt: "2026-08-18T22:00:00.000Z",
+                boardStartedAt: "2026-08-18T22:00:00.000Z",
+                endedAt: "2026-08-19T10:00:00.000Z",
+                actualEndedAt: "2026-08-19T10:00:00.000Z",
+                shiftLabel: "SN",
+                notes: "Gerardson 2154 SN",
+            }),
+            makeRow({
+                occupancyId: "occ-sem-board-1367",
+                domain: "regulation",
+                targetCode: "1367",
+                targetLabel: "Ramal 1367",
+                doctorId: "doc-ger",
+                doctorName: "Gerardson Macedo",
+                startedAt: "2026-08-18T22:00:00.000Z",
+                boardStartedAt: null,
+                endedAt: "2026-08-19T10:00:00.000Z",
+                actualEndedAt: "2026-08-19T10:00:00.000Z",
+                shiftLabel: "SN",
+                notes: "Gerardson 1367",
+            }),
+        ],
+        operationalDate: "2026-08-18",
+        shiftLabel: "SN",
+        startedAt: "2026-08-18T22:00:00.000Z",
+        endedAt: "2026-08-19T10:00:00.000Z",
+    });
+
+    const doGerardson = board.regulation.filter((row) => row.doctorName === "Gerardson Macedo");
+    assert.equal(doGerardson.length, 1, "um plantão por turno, não dois");
+});

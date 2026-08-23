@@ -55,8 +55,28 @@ async function main() {
         join operations_v2.intervention_bases b on b.id = o.base_id
     `) as unknown as OccupancyRow[];
 
-    // Cruzamento obrigatório: a chefia já lançou 163 extras à mão desde abril, e
-    // propor de novo o mesmo dia é pagar duas vezes. Chave por médico+dia.
+    // Cruzamento 1: a folha paga por SLOT ocupado, não por ocupação. Quem ficou
+    // o turno seguinte inteiro aparece nos dois slots e JÁ recebeu os dois —
+    // medido em produção, 23 das 37 permanências estavam nessa situação.
+    // Sem este cruzamento a lista induzia a pagar de novo o que já foi pago.
+    const slotsPorMedico = new Set(
+        ((await db.execute(sql`
+            select e.doctor_id as "doctorId", s.operational_date::text as "day", s.shift_label as "shiftLabel"
+            from operations_v2.payment_attestation_slot_entries e
+            join operations_v2.payment_attestation_slots s on s.id = e.slot_id
+            where e.doctor_id is not null
+        `)) as unknown as Array<{ doctorId: string; day: string; shiftLabel: string }>)
+            .map((row) => `${row.doctorId}:${row.day.slice(0, 10)}:${row.shiftLabel}`),
+    );
+    const mesesComSnapshot = new Set(
+        ((await db.execute(sql`
+            select distinct to_char(operational_date, 'YYYY-MM') as "month"
+            from operations_v2.payment_attestation_slots
+        `)) as unknown as Array<{ month: string }>).map((row) => row.month),
+    );
+
+    // Cruzamento 2: a chefia já lançou extras à mão, e propor de novo o mesmo
+    // dia é pagar duas vezes. Chave por médico+dia.
     const lancados = new Set(
         ((await db.execute(sql`
             select doctor_id as "doctorId", operational_date::text as "operationalDate"
@@ -79,6 +99,8 @@ async function main() {
         halfShifts: number;
         groupId: string;
         alreadyFiled: boolean;
+        /** 'pago' | 'a_lancar' | 'indeterminado' — ver os cruzamentos acima. */
+        cobertura: "pago" | "a_lancar" | "indeterminado";
     }> = [];
 
     for (const [groupId, members] of byGroup) {
@@ -99,7 +121,16 @@ async function main() {
 
         const tail = members[members.length - 1]!;
         const operationalDate = span.scheduledEndAt.toISOString().slice(0, 10);
+
+        // O turno que a permanência cobriu: o slot que COMEÇA no fim previsto.
+        const inicioDaSobra = span.scheduledEndAt;
+        const diaDaSobra = new Date(inicioDaSobra.getTime() - (180 * 60000)).toISOString().slice(0, 10);
+        const turnoDaSobra = new Date(inicioDaSobra.getTime() - (180 * 60000)).getUTCHours() >= 12 ? "SN" : "SD";
+        const pago = slotsPorMedico.has(`${span.doctorId}:${diaDaSobra}:${turnoDaSobra}`);
+        const temSnapshot = mesesComSnapshot.has(diaDaSobra.slice(0, 7));
+
         pendencies.push({
+            cobertura: pago ? "pago" : temSnapshot ? "a_lancar" : "indeterminado",
             alreadyFiled: lancados.has(`${span.doctorId}:${operationalDate}`),
             doctorName: tail.doctorName,
             // O plantão a assinar é o do turno em que a permanência aconteceu:
@@ -116,9 +147,9 @@ async function main() {
     pendencies.sort((left, right) => left.day.localeCompare(right.day));
 
     if (asCsv) {
-        console.log("medico;dia;posicao;permanencia_min;inteiros;meios;ja_lancado;grupo");
+        console.log("medico;dia;posicao;permanencia_min;inteiros;meios;cobertura;ja_lancado;grupo");
         for (const row of pendencies) {
-            console.log([row.doctorName, row.day, row.target, row.overtimeMinutes, row.fullShifts, row.halfShifts, row.alreadyFiled ? "ja_lancado" : "", row.groupId].join(";"));
+            console.log([row.doctorName, row.day, row.target, row.overtimeMinutes, row.fullShifts, row.halfShifts, row.cobertura, row.alreadyFiled ? "ja_lancado" : "", row.groupId].join(";"));
         }
     } else {
         for (const row of pendencies) {
@@ -128,15 +159,24 @@ async function main() {
                 halfShifts: row.halfShifts,
                 bankMinutes: 0,
             });
-            const marca = row.alreadyFiled ? "  [JÁ TEM EXTRA LANÇADO NESSE DIA — conferir antes]" : "";
+            if (row.cobertura === "pago") {
+                continue;
+            }
+            const marca = [
+                row.alreadyFiled ? "[JÁ TEM EXTRA LANÇADO NESSE DIA — conferir antes]" : "",
+                row.cobertura === "indeterminado" ? "[mês sem fechamento — inconclusivo]" : "",
+            ].filter(Boolean).join(" ");
             console.log(`${row.day}  ${row.doctorName} (${row.target}): ficou ${(row.overtimeMinutes / 60).toFixed(1)}h além do previsto — ${proposta}${marca}`);
         }
     }
 
-    const inteiros = pendencies.reduce((sum, row) => sum + row.fullShifts, 0);
-    const meios = pendencies.reduce((sum, row) => sum + row.halfShifts, 0);
-    const conferir = pendencies.filter((row) => row.alreadyFiled).length;
-    console.log(`\n${pendencies.length} permanências a assinar: ${inteiros} plantões inteiros + ${meios} meios.`);
+    const aLancar = pendencies.filter((row) => row.cobertura !== "pago");
+    const inteiros = aLancar.reduce((sum, row) => sum + row.fullShifts, 0);
+    const meios = aLancar.reduce((sum, row) => sum + row.halfShifts, 0);
+    const conferir = aLancar.filter((row) => row.alreadyFiled).length;
+    const pagos = pendencies.length - aLancar.length;
+    console.log(`\n${pendencies.length} permanências de 6h+; ${pagos} já pagas pelo slot do turno seguinte (nada a fazer).`);
+    console.log(`${aLancar.length} a conferir: ${inteiros} plantões inteiros + ${meios} meios.`);
     if (conferir > 0) {
         console.log(`${conferir} já têm plantão extra lançado no mesmo dia — conferir uma a uma antes de lançar.`);
     }
