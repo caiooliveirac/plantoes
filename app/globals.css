@@ -9820,10 +9820,11 @@ button.chief-payable-tag:focus-visible {
     gap: 14px;
     padding: 18px;
     border-radius: 18px;
-    background: var(--surface-glass);
+    /* Opaco de proposito: o rail fica POR CIMA da coluna de intervencao, e com
+       vidro translucido a tabela atras vazava atraves do painel — texto sobre
+       texto, ilegivel para quem loga com a fila cheia. */
+    background: #161c26;
     border: 1px solid var(--surface-elevated-border);
-    backdrop-filter: var(--blur-glass);
-    -webkit-backdrop-filter: var(--blur-glass);
     box-shadow: var(--shadow-elevated);
     overflow: hidden;
 }
