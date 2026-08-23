@@ -14,6 +14,7 @@ import {
     resolveContestedBoardDecision,
     type ContestedDepartureContinuation,
 } from "@/modules/operational/contested-departure";
+import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
@@ -805,15 +806,27 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
                 const PRE_SHIFT_TOLERANCE_MS = 60 * 60 * 1000;
                 const existingBoardStartedAt = existing.boardStartedAt;
+                // Sombra redeclarada SEM a palavra "sombra": assumiu de fato o ramal e
+                // vira titular no lugar — board gravado, marcador fora das notas,
+                // chegada preservada. Sem isto a sombra não tem saída pelo Telegram.
+                const promotingShadow = shouldPromoteShadowToBoardOnRearrival({
+                    existingHasBoard: existingBoardStartedAt !== null,
+                    existingIsShadow: isRegulationShadowOccupancyNotes(existing.notes),
+                    existingIsDisplaced: isRegulationDisplacedOccupancyNotes(existing.notes),
+                    arrivingIsShadow,
+                    hasOtherBoardCarrier: otherActiveOccupancies.some((occ) => occ.boardStartedAt !== null),
+                });
                 // A shadow re-arrival (board anchor null) must stay board-null so it
                 // keeps coexisting without entering the one-active-board-per-post index.
                 const existingAnchorIsStale = existingBoardStartedAt !== null
                     && existingBoardStartedAt.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
-                const keptBoardStartedAt = existingBoardStartedAt === null
-                    ? null
-                    : ((existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existingBoardStartedAt.getTime())
-                        ? effectiveBoardStartedAt
-                        : existingBoardStartedAt);
+                const keptBoardStartedAt = promotingShadow
+                    ? effectiveBoardStartedAt
+                    : existingBoardStartedAt === null
+                        ? null
+                        : ((existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existingBoardStartedAt.getTime())
+                            ? effectiveBoardStartedAt
+                            : existingBoardStartedAt);
 
                 const keptContinuityGroupId = resolvedContinuityGroupId ?? existing.continuityGroupId;
 
@@ -867,7 +880,11 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                             actualPostCode: targetPostCode,
                             requestedRamalLabel: input.ramalLabel ?? existing.ramalLabel,
                         }),
-                        notes: input.notes ? `${existing.notes ?? ""}\n${input.notes}`.trim() : existing.notes,
+                        notes: resolveRearrivalNotes({
+                            existingNotes: existing.notes,
+                            incomingNotes: input.notes,
+                            promotingShadow,
+                        }),
                         updatedByUserId: input.createdByUserId ?? null,
                         updatedAt: new Date(),
                     })
