@@ -113,24 +113,45 @@ test("shouldCloseRegulationOccupantOnArrival: mesma médica re-enviando não fec
     );
 });
 
-test("resolveRegulationArrivalBoardPolicy: sombra com titular presente NÃO toma o board (coexiste com board nulo)", () => {
+// Caso Vaner Paulo / Felipe Carvalho, 2031, 23/08/2026. A 2031 estava vazia (o
+// titular da noite encerrou às 07:15) quando a chefia registrou "Vaner Sombra SD
+// 2031" às 07:48. Pela regra antiga a sombra assumia o quadro; um minuto depois a
+// chegada de Felipe caía no portão de tomada e a sombra levava [DESLOCADO] mais
+// aviso no grupo. Sombra em posto vazio segue sombra.
+test("resolveRegulationArrivalBoardPolicy: sombra nunca toma o board — nem em posto vazio", () => {
     assert.deepEqual(
-        resolveRegulationArrivalBoardPolicy({ source: "telegram", isShadow: true, hasCurrentBoardCarrier: true }),
+        resolveRegulationArrivalBoardPolicy({ source: "telegram", isShadow: true }),
         { shouldTakeBoardImmediately: false },
-    );
-});
-
-test("resolveRegulationArrivalBoardPolicy: sombra em posto vazio toma o board (vira o ocupante visível)", () => {
-    assert.deepEqual(
-        resolveRegulationArrivalBoardPolicy({ source: "telegram", isShadow: true, hasCurrentBoardCarrier: false }),
-        { shouldTakeBoardImmediately: true },
     );
 });
 
 test("resolveRegulationArrivalBoardPolicy: titular real sempre toma o board", () => {
     assert.deepEqual(
-        resolveRegulationArrivalBoardPolicy({ source: "telegram", isShadow: false, hasCurrentBoardCarrier: true }),
+        resolveRegulationArrivalBoardPolicy({ source: "telegram", isShadow: false }),
         { shouldTakeBoardImmediately: true },
+    );
+});
+
+// O portão de tomada do Telegram (findActiveSameTurnoBoardCarrierOnTarget) agora
+// consulta este predicado antes de tratar o ocupante como titular. As notas abaixo
+// são as gravadas em produção no caso Vaner.
+test("isRegulationShadowOccupancyNotes reconhece as notas gravadas no caso Vaner (2031)", () => {
+    assert.equal(
+        isRegulationShadowOccupancyNotes("[telegram sombra] Vaner Sombra SD 2031"),
+        true,
+    );
+});
+
+// A chegada de Felipe não pode fechar nem deslocar a sombra do Vaner.
+test("shouldCloseRegulationOccupantOnArrival: titular real chegando não fecha a sombra", () => {
+    assert.equal(
+        shouldCloseRegulationOccupantOnArrival({
+            currentOccupantDoctorId: "vaner",
+            arrivingDoctorId: "felipe",
+            arrivingIsShadow: false,
+            currentOccupantNotes: "[telegram sombra] Vaner Sombra SD 2031",
+        }),
+        false,
     );
 });
 

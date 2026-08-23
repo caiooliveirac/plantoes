@@ -302,19 +302,20 @@ export async function displaceRegulationOccupant(
     return updated;
 }
 
-// Whether an arrival should take the board immediately. A shadow takes the board
-// ONLY when no titular currently holds it (lone arrival); when a titular is present
-// the shadow coexists with board_started_at = NULL, staying outside the
-// one-active-board-per-post unique index. Mirrors the intervention rule
+// Whether an arrival should take the board immediately. A shadow NEVER takes the
+// board — nem quando o posto está vazio. A regra antiga ("sombra sozinha assume")
+// fazia a sombra virar titular de fato e, na chegada do titular real, disparava o
+// portão de tomada contra ela: alarme, confirmação, [DESLOCADO] e aviso no grupo
+// (caso Vaner Paulo / Felipe Carvalho, 2031, 23/08/2026). Sombra fica sempre com
+// board_started_at = NULL, fora do índice one-active-board-per-post; o painel a
+// desenha pelo marcador de nota, com ou sem titular. Espelha a regra de intervenção
 // (resolveInterventionArrivalBoardPolicy).
 export function resolveRegulationArrivalBoardPolicy(params: {
     source: StartRegulationOccupancyInput["source"];
     isShadow?: boolean | null;
-    hasCurrentBoardCarrier: boolean;
 }) {
     return {
-        shouldTakeBoardImmediately: params.source !== "import"
-            && (!params.isShadow || !params.hasCurrentBoardCarrier),
+        shouldTakeBoardImmediately: params.source !== "import" && !params.isShadow,
     };
 }
 
@@ -1019,15 +1020,10 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
 
         // A coexisting shadow (titular already holds the board) is stored without a
         // board anchor so it stays outside the one-active-board-per-post unique index
-        // and never displaces the titular. A lone arrival (no current carrier) takes
-        // the board normally — including a shadow that arrives to an empty post.
-        const hasCurrentBoardCarrier = otherActiveOccupancies.some(
-            (occupancy) => occupancy.boardStartedAt !== null,
-        );
+        // and never displaces the titular — nem mesmo num posto vazio.
         const { shouldTakeBoardImmediately } = resolveRegulationArrivalBoardPolicy({
             source: input.source,
             isShadow: arrivingIsShadow,
-            hasCurrentBoardCarrier,
         });
         const insertBoardStartedAt = shouldTakeBoardImmediately ? effectiveBoardStartedAt : null;
 
