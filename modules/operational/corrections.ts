@@ -34,6 +34,7 @@ import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulati
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
 import { isBeforeHalfShiftWindow, isHalfShiftRoleLabel, isHalfShiftScheduledWindow, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
+import { applyShadowMarkerToOccupancyNotes } from "@/modules/operational/shadow";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
@@ -555,35 +556,6 @@ async function deleteInterventionOccupancyTx(tx: Executor, occupancy: typeof int
         .returning();
 
     return deleted;
-}
-
-const ADMIN_SHADOW_MARKER = "[sombra]";
-
-function operationalNotesIndicateShadow(notes: string | null | undefined) {
-    const normalized = (notes ?? "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toUpperCase();
-    return normalized.includes("[TELEGRAM SOMBRA]") || /\bSOMBRA\b/.test(normalized);
-}
-
-// Ajusta as notas para refletir o status de sombra desejado, de forma idempotente.
-// asShadow=true  garante um marcador de sombra; asShadow=false remove marcadores e
-// o token "sombra"/"shadow" solto (a detecção em todo o sistema é por notas).
-export function applyShadowMarkerToOccupancyNotes(notes: string | null | undefined, asShadow: boolean): string | null {
-    const base = (notes ?? "").trim();
-    if (asShadow) {
-        return operationalNotesIndicateShadow(base) ? (base || null) : `${ADMIN_SHADOW_MARKER} ${base}`.trim();
-    }
-    const cleaned = base
-        .replace(/\[telegram sombra\]/gi, "")
-        .replace(/\[sombra\]/gi, "")
-        .replace(/\bsombras?\b/gi, "")
-        .replace(/\bshadow\b/gi, "")
-        .replace(/[ \t]{2,}/g, " ")
-        .replace(/^[\s\-–—]+|[\s\-–—]+$/g, "")
-        .trim();
-    return cleaned.length > 0 ? cleaned : null;
 }
 
 async function cloneOccupancyIntoTarget(tx: Executor, params: {

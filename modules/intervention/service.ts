@@ -7,6 +7,7 @@ import { publishBoardUpdate } from "@/lib/board-live";
 import { avisarDeslocamento } from "@/modules/operational/displacement-alert";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
+import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
@@ -763,12 +764,32 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             // operational shift context. A stale anchor from a past shift would cause the
             // occupancy to be invisible on the board (board-rules visibility check would expire it).
             const currentShiftStart = resolveOperationalShiftWindow(input.startedAt).startedAt;
-            const keptBoardStartedAt = resolveSameDoctorBoardStartedAt({
-                existingStartedAt: existingSameDoctor.startedAt,
-                existingBoardStartedAt: existingSameDoctor.boardStartedAt,
-                effectiveBoardStartedAt,
-                currentShiftStart,
+            // Sombra redeclarada SEM a palavra "sombra": assumiu de fato a base e vira
+            // titular no lugar — board gravado, marcador fora das notas, chegada
+            // preservada. Espelha a regra da regulação.
+            const otherBoardCarrier = await tx.query.interventionOccupancies.findFirst({
+                where: and(
+                    eq(interventionOccupancies.baseId, input.baseId),
+                    ne(interventionOccupancies.doctorId, input.doctorId),
+                    isNotNull(interventionOccupancies.boardStartedAt),
+                    isNull(interventionOccupancies.endedAt),
+                ),
             });
+            const promotingShadow = shouldPromoteShadowToBoardOnRearrival({
+                existingHasBoard: existingSameDoctor.boardStartedAt !== null,
+                existingIsShadow: isInterventionShadowOccupancyNotes(existingSameDoctor.notes),
+                existingIsDisplaced: isInterventionDisplacedOccupancyNotes(existingSameDoctor.notes),
+                arrivingIsShadow: Boolean(input.isShadow),
+                hasOtherBoardCarrier: Boolean(otherBoardCarrier),
+            });
+            const keptBoardStartedAt = promotingShadow
+                ? effectiveBoardStartedAt
+                : resolveSameDoctorBoardStartedAt({
+                    existingStartedAt: existingSameDoctor.startedAt,
+                    existingBoardStartedAt: existingSameDoctor.boardStartedAt,
+                    effectiveBoardStartedAt,
+                    currentShiftStart,
+                });
 
             const keptContinuityGroupId = resolvedContinuityGroupId ?? existingSameDoctor.continuityGroupId;
 
@@ -804,7 +825,11 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                     scheduledEndAt: recalcEnd,
                     shiftLabel: input.shiftLabel ?? existingSameDoctor.shiftLabel,
                     roleLabel: nextRoleLabel,
-                    notes: input.notes ? `${existingSameDoctor.notes ?? ""}\n${input.notes}`.trim() : existingSameDoctor.notes,
+                    notes: resolveRearrivalNotes({
+                        existingNotes: existingSameDoctor.notes,
+                        incomingNotes: input.notes,
+                        promotingShadow,
+                    }),
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
                 })
