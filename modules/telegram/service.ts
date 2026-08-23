@@ -363,7 +363,7 @@ interface PendingDepartureCorrectionData {
 }
 
 interface PendingCruCoiRamalData {
-    location: "CRU" | "COI";
+    location: "CRU" | "COI" | "SOMBRA";
     originalText: string;
     originalEventAt: string;
     originalReferenceAt?: string;
@@ -1033,14 +1033,46 @@ const CRU_COI_LOCATION_PATTERN = /\b(CRU|COI)\b/i;
 const COI_EXAMPLE_RAMAIS = ["1367", "1368"];
 const CRU_EXAMPLE_RAMAIS = ["1321", "1361", "2031"];
 
-export function detectLocationWithoutRamal(text: string): { location: "CRU" | "COI" } | null {
+// "Sombra" sem ramal/base é o jeito como a chefia realmente escreve: "Vaner Sombra
+// SD", "GIULIA SOMBRA COM TAIARA", "POLLIANNA RORIZ SOMBRA SD". Em 90 dias, 14 das
+// 47 mensagens com "sombra" morreram no parser — quase todas por falta do código.
+// Cai no MESMO pending do CRU/COI: o bot pergunta só o código e reprocessa.
+const SHADOW_LOCATION_PATTERN = /\b(?:SOMBRA|SHADOW)\b/i;
+
+export function detectLocationWithoutRamal(text: string): { location: "CRU" | "COI" | "SOMBRA" } | null {
     const normalized = text.toUpperCase().replace(/[^A-Z0-9\s]/g, " ");
-    const match = normalized.match(CRU_COI_LOCATION_PATTERN);
-    if (!match) return null;
     const hasRamal = /\b\d{4}\b/.test(normalized);
     const hasBase = /\b[A-Z]{2}\d{2}\b/.test(normalized);
     if (hasRamal || hasBase) return null;
-    return { location: match[1].toUpperCase() as "CRU" | "COI" };
+    const match = normalized.match(CRU_COI_LOCATION_PATTERN);
+    if (match) {
+        return { location: match[1].toUpperCase() as "CRU" | "COI" };
+    }
+    // Só depois do CRU/COI: "Fulano CRU sombra SD" é uma pendência de CRU, e a
+    // reconstrução daquele fluxo já preserva a palavra "sombra" no texto.
+    return SHADOW_LOCATION_PATTERN.test(normalized) ? { location: "SOMBRA" } : null;
+}
+
+// Uma linha, sem exemplo de chegada nem de saída: a única informação que falta é o
+// código. O balão genérico de "não entendi" (dois exemplos completos + diagnóstico)
+// era o que a chefia recebia às 07:47 do caso Vaner — e não leu.
+export function buildShadowWithoutTargetReply() {
+    return "🫥 Sombra de qual ramal ou base? Responda só o código.";
+}
+
+// Monta o texto que será reprocessado depois da resposta curta com o código.
+// Em CRU/COI o código entra NO LUGAR da palavra ("Fulano CRU SD" + 1361 = "Fulano
+// 1361 SD"). Em sombra ele é ANEXADO: trocar "sombra" pelo código apagaria o próprio
+// token que marca a ocupação como sombra, e o registro nasceria titular.
+export function buildRamalReconstructedText(
+    location: "CRU" | "COI" | "SOMBRA",
+    originalText: string,
+    code: string,
+) {
+    if (location === "SOMBRA") {
+        return `${originalText} ${code}`;
+    }
+    return originalText.replace(new RegExp(`\\b${location}\\b`, "i"), code);
 }
 
 export function buildLocationWithoutRamalReply(params: {
@@ -7701,7 +7733,7 @@ function isPendingCruCoiRamalData(value: unknown): value is PendingCruCoiRamalDa
     const candidate = value as Record<string, unknown>;
     return Boolean(
         candidate.location
-        && (candidate.location === "CRU" || candidate.location === "COI")
+        && (candidate.location === "CRU" || candidate.location === "COI" || candidate.location === "SOMBRA")
         && typeof candidate.originalText === "string"
         && typeof candidate.originalEventAt === "string",
     );
@@ -9999,7 +10031,11 @@ async function sendSuccessReply(
     // confirmação + turno + chave do checklist (auditoria de UX 2026-07-17).
     const arrivalHint = "";
     const shadowHint = parsed.isShadow && !parsed.isDeparture
-        ? "\n🫥 Cobertura *sombra* — titular atual mantido no quadro."
+        // "titular atual mantido no quadro" saía mesmo quando não havia titular
+        // nenhum (caso Vaner, 2031, 23/08/2026) — o balão afirmava o que a chefia
+        // acabara de ver não ser verdade. A frase agora só diz o que é sempre certo:
+        // sombra não entra no quadro e não tira ninguém dele.
+        ? "\n🫥 Registrado como *sombra* — fora do quadro, não desloca ninguém."
         : "";
     const piamHint = piamAutoAllocated
         ? (() => {
@@ -10966,16 +11002,19 @@ async function tryHandlePendingRamalSelection(update: TelegramUpdate, logId: str
         return null;
     }
 
-    // Only treat as a ramal reply when the message contains a 4-digit number
-    const ramalMatch = message.text.match(/\b(\d{4})\b/);
+    const location = pending.resolutionData.location;
+    // CRU/COI são sempre ramais de regulação (4 dígitos). Sombra pode ser de base de
+    // intervenção ou do PIAM, então a resposta curta aceita esses formatos também.
+    const ramalMatch = location === "SOMBRA"
+        ? message.text.match(/\b(\d{4}|[A-Za-z]{2}\s?\d{2}|PIAM)\b/i)
+        : message.text.match(/\b(\d{4})\b/);
     if (!ramalMatch) {
         // Not a ramal reply — fall through to normal processing and keep the pending alive
         return null;
     }
 
-    const ramal = ramalMatch[1];
-    const location = pending.resolutionData.location;
-    const reconstructedText = pending.resolutionData.originalText.replace(new RegExp(`\\b${location}\\b`, "i"), ramal);
+    const ramal = ramalMatch[1].toUpperCase().replace(/\s+/g, "");
+    const reconstructedText = buildRamalReconstructedText(location, pending.resolutionData.originalText, ramal);
 
     const parsedEntries = parseMessageMulti(reconstructedText);
     const firstParsed = parsedEntries.find((e) => !e.isDeparture) ?? parsedEntries[0];
@@ -13131,7 +13170,13 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     return { ok: true, ignored: true };
                 }
 
-                const locationHint = detectLocationWithoutRamal(message.text);
+                const rawLocationHint = detectLocationWithoutRamal(message.text);
+                // Saída sem código não vira pendência de sombra: quem sai já tem posto
+                // registrado e o fluxo de saída resolve o alvo pela ocupação ativa.
+                const locationHint = rawLocationHint?.location === "SOMBRA"
+                    && looksLikeDepartureMessage(message.text)
+                    ? null
+                    : rawLocationHint;
                 if (locationHint) {
                     const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null;
                     const rawParsed = parseMessageMulti(message.text)[0];
@@ -13154,15 +13199,17 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     const coiButtons = Boolean(message.from?.id) && locationHint.location === "COI";
                     await sendMessage(
                         message.chat.id,
-                        coiButtons
-                            ? buildCoiRamalPromptText()
-                            : buildLocationWithoutRamalReply({
-                                senderName: rawParsed?.extractedNames[0] ?? senderName ?? "",
-                                location: locationHint.location,
-                                shiftLabel: rawParsed?.shiftType ?? null,
-                                time: rawParsed?.arrivalTime ?? null,
-                                interactive: Boolean(message.from?.id),
-                            }),
+                        locationHint.location === "SOMBRA"
+                            ? buildShadowWithoutTargetReply()
+                            : coiButtons
+                                ? buildCoiRamalPromptText()
+                                : buildLocationWithoutRamalReply({
+                                    senderName: rawParsed?.extractedNames[0] ?? senderName ?? "",
+                                    location: locationHint.location,
+                                    shiftLabel: rawParsed?.shiftType ?? null,
+                                    time: rawParsed?.arrivalTime ?? null,
+                                    interactive: Boolean(message.from?.id),
+                                }),
                         message.message_id,
                         coiButtons ? buildCoiRamalKeyboard(log.id) : undefined,
                         coiButtons ? { parseMode: "Markdown" } : undefined,

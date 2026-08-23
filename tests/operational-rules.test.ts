@@ -19,7 +19,7 @@ import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationC
 import { dedupeOperationalIdentityLabels, describeFixedRoleTransferImpact, isOperationalRoleRemovalSentinel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveContinuationReferenceBoundary, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
-import { buildLocationWithoutRamalReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
+import { buildLocationWithoutRamalReply, buildRamalReconstructedText, buildShadowWithoutTargetReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
 
 test("describeFixedRoleTransferImpact: remanejar nao-COI para 1368 sinaliza COI remoto", () => {
     const impact = describeFixedRoleTransferImpact({
@@ -1704,6 +1704,46 @@ test("detectLocationWithoutRamal identifies CRU/COI without ramal", () => {
     assert.equal(detectLocationWithoutRamal("Fulano 1366 SD 07:00"), null);
     assert.equal(detectLocationWithoutRamal("Fulano SM01 SD"), null);
     assert.equal(detectLocationWithoutRamal("Bom dia pessoal"), null);
+});
+
+// Caso Vaner, 23/08/2026: "Vaner Sombra SD" morreu em no_operational_match e a
+// chefia recebeu o balão genérico com dois exemplos completos. Das 47 mensagens com
+// "sombra" em 90 dias, 14 falharam — quase todas por falta do código.
+test("detectLocationWithoutRamal: sombra sem código vira pendência de código", () => {
+    assert.deepEqual(detectLocationWithoutRamal("Vaner Sombra SD"), { location: "SOMBRA" });
+    assert.deepEqual(detectLocationWithoutRamal("GIULIA SOMBRA COM TAIARA"), { location: "SOMBRA" });
+    assert.deepEqual(detectLocationWithoutRamal("POLLIANNA RORIZ SOMBRA SD"), { location: "SOMBRA" });
+    // Já tem o código: segue o fluxo normal de chegada.
+    assert.equal(detectLocationWithoutRamal("Vaner Sombra SD 2031"), null);
+    assert.equal(detectLocationWithoutRamal("Fulano sombra PM04 SN"), null);
+    // CRU/COI têm precedência: aquele fluxo troca a palavra pelo ramal e a palavra
+    // "sombra" sobrevive no texto reconstruído.
+    assert.deepEqual(detectLocationWithoutRamal("Fulano CRU sombra SD"), { location: "CRU" });
+});
+
+// A resposta curta com o código tem que preservar a palavra "sombra" — ela é o que
+// faz o parser marcar isShadow e a ocupação nascer fora do quadro. Substituir (como
+// CRU/COI faz) apagaria o marcador e o registro voltaria a nascer titular.
+test("buildRamalReconstructedText: sombra anexa o código, CRU/COI substituem", () => {
+    assert.equal(
+        buildRamalReconstructedText("SOMBRA", "Vaner Sombra SD", "2031"),
+        "Vaner Sombra SD 2031",
+    );
+    assert.equal(parseMessage("Vaner Sombra SD 2031").isShadow, true);
+    assert.equal(
+        buildRamalReconstructedText("CRU", "Ronaldo Acácio CRU SD", "1361"),
+        "Ronaldo Acácio 1361 SD",
+    );
+    assert.equal(
+        buildRamalReconstructedText("COI", "Sadja Costa COI SN 19:14", "1367"),
+        "Sadja Costa 1367 SN 19:14",
+    );
+});
+
+test("buildShadowWithoutTargetReply: uma linha, sem exemplos", () => {
+    const reply = buildShadowWithoutTargetReply();
+    assert.equal(reply.split("\n").length, 1);
+    assert.match(reply, /ramal ou base/);
 });
 
 test("buildLocationWithoutRamalReply includes sender name, ramal list, and copy-paste example", () => {
