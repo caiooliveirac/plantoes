@@ -32,9 +32,8 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
     const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
     // Colapsado, o rail vira só a faixa "Saídas a confirmar · N" e deixa de
     // disputar espaço com o restante da tela. Preferência do chefe persiste;
-    // sem preferência salva, começa colapsado: expandido ele cobre a coluna de
-    // intervenção inteira, e quem loga com a fila cheia não enxerga o quadro.
-    const [collapsed, setCollapsed] = useState(true);
+    // sem preferência salva, telas estreitas começam colapsadas.
+    const [collapsed, setCollapsed] = useState(false);
 
     useEffect(() => {
         try {
@@ -45,6 +44,10 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
             }
         } catch {
             // localStorage indisponível (modo privado etc.) — segue o padrão.
+        }
+
+        if (window.matchMedia("(max-width: 720px)").matches) {
+            setCollapsed(true);
         }
     }, []);
 

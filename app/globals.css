@@ -11938,7 +11938,8 @@ button.chief-payable-tag:focus-visible {
     z-index: 60;
 }
 
-.board-modal-panel {
+.board-modal-panel,
+.board-modal {
     position: fixed;
     top: 50%;
     left: 50%;
@@ -11962,6 +11963,58 @@ button.chief-payable-tag:focus-visible {
     display: flex;
     gap: 12px;
     align-items: flex-start;
+}
+
+/* Modais que dispensam o header com ícone (ChiefExitGate) escrevem título e
+   subtítulo direto no painel. Sem estas regras o Dialog.Content ficava sem
+   estilo nenhum — o painel caía no fluxo da página, no fim do documento, e a
+   tela só mostrava o backdrop escuro por cima do quadro. */
+.board-modal-title {
+    margin: 0;
+    font-family: var(--font-display), var(--font-sans);
+    font-size: 1.05rem;
+    letter-spacing: 0.01em;
+}
+
+.board-modal-subtitle {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.board-modal-button {
+    appearance: none;
+    border-radius: 10px;
+    padding: 9px 16px;
+    font-weight: 600;
+    font-size: 0.88rem;
+    cursor: pointer;
+    transition: background var(--dur-fast);
+    border: 1px solid var(--accent-confirm);
+    background: var(--accent-confirm-soft);
+    color: var(--accent-confirm);
+}
+
+.board-modal-button.confirm:hover:not(:disabled) {
+    background: var(--accent-confirm);
+    color: #07120f;
+}
+
+.board-modal-button.reject {
+    border-color: var(--accent-warn);
+    background: color-mix(in oklab, var(--accent-warn) 14%, transparent);
+    color: var(--accent-warn);
+}
+
+.board-modal-button.reject:hover:not(:disabled) {
+    background: var(--accent-warn);
+    color: #1a130a;
+}
+
+.board-modal-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .board-modal-icon {
