@@ -3,7 +3,7 @@ export const OPERATIONAL_ROLE_REMOVED_SENTINEL = "SEM_FUNCAO";
 
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
 
-const COI_REGULATION_CODES = new Set(["1367", "1368"]);
+const COI_REGULATION_CODES = new Set(["2262", "2263"]);
 const RMT_DEFAULT_REGULATION_CODES = new Set(["1366"]);
 const DAY_MRV_BASAL_REGULATION_CODES = new Set(["2032", "2151"]);
 const REMOTE_PRIORITY_REGULATION_CODES = new Set(["1321", "1322", "1323", "1325", "1361", "1362", "1363", "1364", "1365"]);
@@ -78,7 +78,7 @@ export function resolveFixedOperationalRole(params: {
 const REMOTE_MEAL_COVERAGE_ROLES = new Set(["COI", "RMT", "IES"]);
 
 // Descreve o impacto de remanejar um medico para um ramal de papel fixo
-// (ex.: 1367/1368 -> COI, 2031 -> CP). Retorna null quando o destino nao forca
+// (ex.: 2262/2263 -> COI, 2031 -> CP). Retorna null quando o destino nao forca
 // papel ou quando o papel forcado e o mesmo que o medico ja tem — nesses casos
 // nao ha surpresa a sinalizar. Helper puro para alimentar o aviso da UI e testes.
 export function describeFixedRoleTransferImpact(params: {
@@ -122,7 +122,7 @@ export function resolveOperationalRoleLabel(params: {
         return null;
     }
 
-    // Meio plantao precisa prevalecer mesmo em ramais com papel fixo (ex.: 1367/1368 COI).
+    // Meio plantao precisa prevalecer mesmo em ramais com papel fixo (ex.: 2262/2263 COI).
     if (explicitRole === "MEIO_PLANTAO") {
         return explicitRole;
     }

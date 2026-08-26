@@ -1030,7 +1030,7 @@ function buildStructuredTelegramDepartureHint(params: {
 
 const CRU_COI_LOCATION_PATTERN = /\b(CRU|COI)\b/i;
 
-const COI_EXAMPLE_RAMAIS = ["1367", "1368"];
+const COI_EXAMPLE_RAMAIS = ["2262", "2263"];
 const CRU_EXAMPLE_RAMAIS = ["1321", "1361", "2031"];
 
 // "Sombra" sem ramal/base é o jeito como a chefia realmente escreve: "Vaner Sombra
@@ -6068,9 +6068,9 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "",
             "▸ Ramais de regulação:",
             "  1321–1329 · 1361–1368 · 1476",
-            "  2031–2035 · 2151–2154 · 2377 · NUCLEO · PIAM",
+            "  2031–2035 · 2151–2154 · 2262 · 2263 · 2377 · NUCLEO · PIAM",
             "",
-            "ℹ️ 2031 entra como CP; 1367/1368 entram como COI (função automática).",
+            "ℹ️ 2031 entra como CP; 2262/2263 entram como COI (função automática).",
         );
 
         sections.push(
@@ -13193,7 +13193,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                             } satisfies PendingCruCoiRamalData
                             : buildTelegramReviewLogData({ reason: "location_without_ramal", trainingCandidate: true }),
                     });
-                    // COI = escolha binária (1367/1368): balão curto + botões que
+                    // COI = escolha binária (2262/2263): balão curto + botões que
                     // completam o pending_cru_coi_ramal via callback (auditoria
                     // §3.1#10). CRU tem muitos ramais e continua digitado.
                     const coiButtons = Boolean(message.from?.id) && locationHint.location === "COI";

@@ -70,8 +70,8 @@ test("piam shift callback data accepts only SD/SN", () => {
 });
 
 test("coi ramal callback data requires a 4-digit ramal", () => {
-    const data = buildCoiRamalCallbackData("1367", LOG_ID);
-    assert.deepEqual(parseCoiRamalCallbackData(data), { ramal: "1367", logId: LOG_ID });
+    const data = buildCoiRamalCallbackData("2262", LOG_ID);
+    assert.deepEqual(parseCoiRamalCallbackData(data), { ramal: "2262", logId: LOG_ID });
     assert.throws(() => buildCoiRamalCallbackData("136", LOG_ID));
     assert.throws(() => buildCoiRamalCallbackData("PM04", LOG_ID));
     assert.equal(parseCoiRamalCallbackData(`coi:136:${LOG_ID}`), null);
@@ -122,7 +122,7 @@ test("coi keyboard offers exactly the two COI ramais", () => {
     const keyboard = buildCoiRamalKeyboard(LOG_ID);
     const [row] = keyboard.inline_keyboard;
     assert.deepEqual(row.map((button) => button.text), [...COI_RAMAL_CHOICES]);
-    assert.deepEqual(parseCoiRamalCallbackData(row[0].callback_data), { ramal: "1367", logId: LOG_ID });
+    assert.deepEqual(parseCoiRamalCallbackData(row[0].callback_data), { ramal: "2262", logId: LOG_ID });
 });
 
 // ── Cópias ─────────────────────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ test("piam prompt keeps textual fallback and coi prompt stays under 200 chars", 
     assert.match(piam, /\*SD\*.+\*SN\*/);
     const coi = buildCoiRamalPromptText();
     assert.ok(coi.length <= 200, `coi prompt has ${coi.length} chars (max 200)`);
-    assert.match(coi, /`1367`/);
+    assert.match(coi, /`2262`/);
 });
 
 test("sanitizeTelegramCodeSpan removes backticks and newlines", () => {

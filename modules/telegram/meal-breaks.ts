@@ -500,10 +500,10 @@ export function resolveMealBreakPanelLabel() {
 // Glosas de jargão (1ª ocorrência por balão): o repo não define as expansões
 // das siglas, então traduzimos pelo EFEITO operacional, que é verificável no
 // código deste módulo (RECIP almoça 11:30/descansa 18:00; MRVs almoçam
-// 12:30/13:30; COI é a dupla 1367/1368 que não pode parar junta).
+// 12:30/13:30; COI é a dupla 2262/2263 que não pode parar junta).
 const RECIP_GLOSS = "RECIP (função fixa: almoço 11:30 e descanso 18:00)";
 const MRV_GLOSS = "MRV (função fixa de almoço 12:30/13:30)";
-const COI_GLOSS = "COI (dupla 1367/1368)";
+const COI_GLOSS = "COI (dupla 2262/2263)";
 
 function isMealBreakEligibilityOverrideRecord(value: unknown): value is MealBreakEligibilityOverrideRecord {
     if (!value || typeof value !== "object") {
@@ -4010,7 +4010,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: forcedSession,
-                    messages: [`⚠️ Trabalho alocado em *${otherSlot}* para garantir a separação dos COIs (dupla 1367/1368).`],
+                    messages: [`⚠️ Trabalho alocado em *${otherSlot}* para garantir a separação dos COIs (dupla 2262/2263).`],
                     status: "updated",
                 };
             }
@@ -4207,7 +4207,7 @@ export function applyMealBreakReply(params: {
                     return {
                         handled: true,
                         session: forcedSession,
-                        messages: [`⚠️ Jantar alocado em *${forcedSlot}* para garantir a separação dos COIs (dupla 1367/1368).`],
+                        messages: [`⚠️ Jantar alocado em *${forcedSlot}* para garantir a separação dos COIs (dupla 2262/2263).`],
                         status: forcedSession.stage === "completed" ? "completed" : "updated",
                     };
                 }
@@ -4605,7 +4605,7 @@ export function applyMealBreakReply(params: {
                 return {
                     handled: true,
                     session: updatedSession,
-                    messages: [`⚠️ Almoço alocado em *${forcedSlot}* para garantir a separação dos COIs (dupla 1367/1368).`],
+                    messages: [`⚠️ Almoço alocado em *${forcedSlot}* para garantir a separação dos COIs (dupla 2262/2263).`],
                     status: "updated",
                 };
             }
@@ -4782,7 +4782,7 @@ export function applyMealBreakReply(params: {
             return {
                 handled: true,
                 session: updatedSession.stage === "completed" ? completeSession(updatedSession, referenceAt, senderTelegramId) : updatedSession,
-                messages: [`⚠️ Descanso alocado em *${otherSlot}* para garantir a separação dos COIs (dupla 1367/1368).`, completedMsg],
+                messages: [`⚠️ Descanso alocado em *${otherSlot}* para garantir a separação dos COIs (dupla 2262/2263).`, completedMsg],
                 status: updatedSession.stage === "completed" ? "completed" : "updated",
             };
         }
