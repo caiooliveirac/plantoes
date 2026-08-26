@@ -21,10 +21,10 @@ import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, infer
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, buildRamalReconstructedText, buildShadowWithoutTargetReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
 
-test("describeFixedRoleTransferImpact: remanejar nao-COI para 1368 sinaliza COI remoto", () => {
+test("describeFixedRoleTransferImpact: remanejar nao-COI para 2263 sinaliza COI remoto", () => {
     const impact = describeFixedRoleTransferImpact({
         targetDomain: "regulation",
-        targetCode: "1368",
+        targetCode: "2263",
         shiftLabel: "SD",
         currentRole: "MRV",
     });
@@ -32,11 +32,11 @@ test("describeFixedRoleTransferImpact: remanejar nao-COI para 1368 sinaliza COI 
     assert.equal(impact?.leavesPresentialMealQueue, true);
 });
 
-test("describeFixedRoleTransferImpact: quem ja e COI movido entre 1367/1368 nao gera aviso", () => {
+test("describeFixedRoleTransferImpact: quem ja e COI movido entre 2262/2263 nao gera aviso", () => {
     assert.equal(
         describeFixedRoleTransferImpact({
             targetDomain: "regulation",
-            targetCode: "1368",
+            targetCode: "2263",
             shiftLabel: "SD",
             currentRole: "COI",
         }),
@@ -1755,8 +1755,8 @@ test("buildLocationWithoutRamalReply includes sender name, ramal list, and copy-
     });
     assert.ok(reply.includes("Sadja Costa"));
     assert.ok(reply.includes("COI"));
-    assert.ok(reply.includes("1367"));
-    assert.ok(reply.includes("1368"));
+    assert.ok(reply.includes("2262"));
+    assert.ok(reply.includes("2263"));
     assert.ok(reply.includes("SN"));
     assert.ok(reply.includes("19:14"));
     assert.ok(reply.includes("mais de um ramal"));

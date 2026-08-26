@@ -1,6 +1,6 @@
 // Botões inline das pendências de REGISTRO (Onda 2 da auditoria de comunicação §6):
 // F6 sem turno (pending_shift_selection), candidatos de nome (pending_name_selection),
-// PIAM SD/SN (pending_piam_shift) e COI 1367/1368 (pending_cru_coi_ramal).
+// PIAM SD/SN (pending_piam_shift) e COI 2262/2263 (pending_cru_coi_ramal).
 //
 // Aqui vivem apenas helpers PUROS (sem I/O), testáveis isoladamente — mesmo padrão
 // de continuity-revert.ts: codificação/decodificação de callback_data, montagem de
@@ -121,9 +121,9 @@ export function parsePiamShiftCallbackData(data: string | null | undefined): Par
 }
 
 /** Ramais do COI oferecidos como botão (escolha binária — CRU continua digitado). */
-export const COI_RAMAL_CHOICES = ["1367", "1368"] as const;
+export const COI_RAMAL_CHOICES = ["2262", "2263"] as const;
 
-/** `coi:1367:<logId>` — completa o pending_cru_coi_ramal existente. */
+/** `coi:2262:<logId>` — completa o pending_cru_coi_ramal existente. */
 export function buildCoiRamalCallbackData(ramal: string, logId: string) {
     const data = `${COI_RAMAL_CALLBACK_PREFIX}:${ramal}:${logId}`;
     if (!/^\d{4}$/.test(ramal) || !isValidCallbackLogId(logId) || !fitsCallbackDataLimit(data)) {
@@ -428,7 +428,7 @@ export function buildPiamShiftPromptText(doctorLabel: string) {
         + `\nToque abaixo — ou responda *SD* (dia) ou *SN* (noite).`;
 }
 
-/** COI sem ramal (auditoria §3.1#10): ≤200 chars + botões [1367] [1368]. */
+/** COI sem ramal (auditoria §3.1#10): ≤200 chars + botões [2262] [2263]. */
 export function buildCoiRamalPromptText() {
     return `⚠️ O *COI* tem dois ramais — em qual deles?`
         + `\nToque abaixo — ou responda só o número (ex.: \`${COI_RAMAL_CHOICES[0]}\`).`;
