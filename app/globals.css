@@ -10107,6 +10107,55 @@ button.chief-payable-tag:focus-visible {
     color: var(--accent-fraud);
 }
 
+/* CHEGOU -> SAIU: a informacao que o chefe procura primeiro no card. */
+.pending-departure-card__times {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.pending-departure-card__time {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.pending-departure-card__time em {
+    font-style: normal;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.pending-departure-card__time strong {
+    font-family: var(--font-display), var(--font-sans);
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+}
+
+.pending-departure-card__times-arrow {
+    font-size: 0.9rem;
+    color: var(--muted);
+}
+
+.pending-departure-card__times-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--muted-strong);
+    white-space: nowrap;
+}
+
 .pending-departure-card__meta {
     display: flex;
     align-items: center;
@@ -10173,6 +10222,14 @@ button.chief-payable-tag:focus-visible {
     color: var(--text);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    /* Duas linhas bastam para reconhecer a mensagem; o texto inteiro fica na
+       timeline do verificador. Um "saiu" de tres paragrafos empurrava os botoes
+       de decisao para fora da tela. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
 }
 
 .pending-departure-card__source--empty {
@@ -10556,6 +10613,78 @@ button.chief-payable-tag:focus-visible {
 }
 
 /* Triagem das saídas: frase-motivo, botões de desfecho e ajuste simples */
+
+/* CHEGOU -> SAIU no topo do verificador, antes da regua. */
+.departure-verifier-facts {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--surface-glass);
+    border: 1px solid var(--surface-elevated-border);
+}
+
+.departure-verifier-fact {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.departure-verifier-fact__label {
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.departure-verifier-fact__value {
+    font-family: var(--font-display), var(--font-sans);
+    font-size: 1.9rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1.05;
+    color: var(--text);
+}
+
+.departure-verifier-fact__delta {
+    font-size: 0.72rem;
+    color: var(--muted-strong);
+}
+
+.departure-verifier-fact__delta[data-off="true"] {
+    color: var(--accent-warn);
+    font-weight: 600;
+}
+
+.departure-verifier-fact__badge {
+    align-self: flex-start;
+    margin-top: 2px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--muted-strong);
+    white-space: nowrap;
+}
+
+.departure-verifier-facts__arrow {
+    font-size: 1.1rem;
+    color: var(--muted);
+    align-self: center;
+}
+
+.departure-verifier-facts__window {
+    margin-left: auto;
+    align-self: center;
+    font-size: 0.76rem;
+    color: var(--muted-strong);
+    white-space: nowrap;
+}
 
 .departure-verifier-headline {
     margin: 0;

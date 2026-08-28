@@ -6,7 +6,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { modalBackdrop, modalPanel, tapFeedback } from "@/lib/board/motion";
-import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import type { PendingChiefExit } from "@/services/board.service";
 
 export interface ChiefExitGateProps {
@@ -80,7 +80,7 @@ export function ChiefExitGate({ pendingChiefExits }: ChiefExitGateProps) {
         try {
             return {
                 end,
-                calc: calculateBankHours({
+                calc: calculateGuardedBankHours({
                     scheduledStartAt: target.bankScheduledStartAt,
                     scheduledEndAt: target.bankScheduledEndAt,
                     actualStartAt: target.startedAt,

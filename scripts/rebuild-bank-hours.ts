@@ -2,7 +2,7 @@ import { closeDb, getDb } from "@/db";
 import { bankHoursEntries } from "@/db/schema";
 import {
     BANK_HOURS_RULE_VERSION,
-    calculateBankHours,
+    calculateGuardedBankHours,
 } from "@/modules/bank-hours/calculator";
 import {
     syncInterventionBankHours,
@@ -12,7 +12,7 @@ import {
 type BankHoursEntry = typeof bankHoursEntries.$inferSelect;
 type ComparedEntry = {
     entry: BankHoursEntry;
-    desired: ReturnType<typeof calculateBankHours>;
+    desired: ReturnType<typeof calculateGuardedBankHours>;
     mismatchReasons: string[];
 };
 
@@ -21,7 +21,7 @@ function hasFlag(flag: string) {
 }
 
 function compareStoredCalculation(entry: BankHoursEntry) {
-    const desired = calculateBankHours({
+    const desired = calculateGuardedBankHours({
         scheduledStartAt: entry.scheduledStartAt,
         scheduledEndAt: entry.scheduledEndAt,
         actualStartAt: entry.actualStartAt,

@@ -17,7 +17,7 @@
 
 import { closeDb, getDb } from "@/db";
 import { bankHoursEntries } from "@/db/schema";
-import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 
@@ -62,7 +62,7 @@ async function main() {
             scheduledEndAt: entry.scheduledEndAt,
             actualEndAt: entry.actualEndAt,
         });
-        const desired = calculateBankHours({
+        const desired = calculateGuardedBankHours({
             scheduledStartAt: window.scheduledStartAt ?? entry.scheduledStartAt,
             scheduledEndAt: window.scheduledEndAt ?? entry.scheduledEndAt,
             actualStartAt: entry.actualStartAt,

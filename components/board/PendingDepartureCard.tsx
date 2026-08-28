@@ -86,12 +86,33 @@ export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, 
             >
                 <div className="pending-departure-card__id">
                     <strong>{pending.displayName ?? pending.doctorName}</strong>
-                    <span>{pending.targetCode} · {pending.shiftLabel ?? "—"} · saiu {formatHourMinute(pending.actualEndedAt)}</span>
+                    <span>{pending.targetCode} · {pending.shiftLabel ?? "—"}</span>
                 </div>
                 {delay && (
                     <span className={`pending-departure-card__delay ${delay.className}`}>{delay.label}</span>
                 )}
             </button>
+
+            {/* As duas horas que o chefe precisa julgar, antes de qualquer frase. */}
+            <div className="pending-departure-card__times">
+                <span className="pending-departure-card__time">
+                    <em>chegou</em>
+                    <strong>{formatHourMinute(pending.startedAt)}</strong>
+                </span>
+                <span className="pending-departure-card__times-arrow" aria-hidden="true">→</span>
+                <span className="pending-departure-card__time">
+                    <em>saiu</em>
+                    <strong>{formatHourMinute(pending.actualEndedAt)}</strong>
+                </span>
+                {pending.arrivalCorrectedInTelegram && (
+                    <span
+                        className="pending-departure-card__times-badge"
+                        title="A chegada já foi corrigida no Telegram (/corrigir). É a hora que vale."
+                    >
+                        /corrigir
+                    </span>
+                )}
+            </div>
 
             <div className="pending-departure-card__meta">
                 {pending.reasonCode && (

@@ -3077,6 +3077,53 @@ async function findOffBoardOccupancyOnTarget(params: {
     })) ?? null;
 }
 
+/** Até onde /corrigir procura um plantão já encerrado do médico naquele alvo. */
+const RECENTLY_CLOSED_CORRECTION_WINDOW_HOURS = 24;
+
+/**
+ * Plantão do médico NAQUELE alvo que já fechou há pouco.
+ *
+ * findActiveOccupancyByTarget só enxerga o titular de agora. Quando o chefe
+ * corrige a chegada de alguém que já saiu — o caso normal de quem está na fila
+ * de "saídas a confirmar" —, o comando caía no titular atual e reescrevia o
+ * doctor_id DELE para o nome digitado: o plantonista de agora sumia do quadro e
+ * era substituído por quem já tinha ido embora. Aqui a correção encontra a
+ * ocupação certa, que é o que o chefe quis dizer.
+ */
+async function findRecentlyClosedOccupancyOnTarget(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    targetId: number;
+    doctorId: string;
+    referenceAt: Date;
+}) {
+    const db = getDb();
+    const cutoffAt = new Date(
+        params.referenceAt.getTime() - (RECENTLY_CLOSED_CORRECTION_WINDOW_HOURS * 60 * 60 * 1000),
+    );
+
+    if (params.sector === "REGULATION") {
+        return (await db.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, params.targetId),
+                eq(regulationOccupancies.doctorId, params.doctorId),
+                isNotNull(regulationOccupancies.endedAt),
+                gte(regulationOccupancies.endedAt, cutoffAt),
+            ),
+            orderBy: [desc(regulationOccupancies.endedAt)],
+        })) ?? null;
+    }
+
+    return (await db.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.baseId, params.targetId),
+            eq(interventionOccupancies.doctorId, params.doctorId),
+            isNotNull(interventionOccupancies.endedAt),
+            gte(interventionOccupancies.endedAt, cutoffAt),
+        ),
+        orderBy: [desc(interventionOccupancies.endedAt)],
+    })) ?? null;
+}
+
 async function listOffBoardOccupanciesOnTarget(params: {
     sector: "REGULATION" | "INTERVENTION";
     targetId: number;
@@ -6846,14 +6893,29 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             // findActiveOccupancyByTarget só enxerga o titular do quadro. Se o nome dado é de
             // alguém que divide o ramal/base fora do quadro (sombra ou deslocado), a correção
             // é dele — sem isso, /corrigir trocava o médico do titular pela sombra.
-            const offBoardOccupancy = doctor.id !== active.occupancy!.doctorId
+            //
+            // Mesma ideia para quem JÁ SAIU do alvo nas últimas 24h: a correção é do plantão
+            // dele, não do titular de agora. Sem isso o comando reescrevia o doctor_id do
+            // plantonista atual para o nome digitado e derrubava um plantão vivo — a origem
+            // dos casos em que o /corrigir "confundia o robô".
+            const namedAnotherDoctor = doctor.id !== active.occupancy!.doctorId;
+            const targetId = command.sector === "REGULATION" ? active.post!.id : active.base!.id;
+            const offBoardOccupancy = namedAnotherDoctor
                 ? await findOffBoardOccupancyOnTarget({
                     sector: command.sector,
-                    targetId: command.sector === "REGULATION" ? active.post!.id : active.base!.id,
+                    targetId,
                     doctorId: doctor.id,
                 })
                 : null;
-            const targetOccupancy = offBoardOccupancy ?? active.occupancy!;
+            const recentlyClosedOccupancy = namedAnotherDoctor && !offBoardOccupancy
+                ? await findRecentlyClosedOccupancyOnTarget({
+                    sector: command.sector,
+                    targetId,
+                    doctorId: doctor.id,
+                    referenceAt: eventAt,
+                })
+                : null;
+            const targetOccupancy = offBoardOccupancy ?? recentlyClosedOccupancy ?? active.occupancy!;
 
             // Só espelha boardStartedAt quando ele hoje coincide com startedAt. Continuidade
             // (board < started) e sombra (board nulo) mantêm o valor que já têm.
@@ -6887,11 +6949,21 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
+            // Diz em qual plantão a correção caiu quando não é o titular de agora —
+            // sem isso o chefe não distingue "corrigi o plantão dele" de "reescrevi
+            // o médico que está no quadro".
+            const correctedShiftHint = recentlyClosedOccupancy
+                ? `\nPlantão já encerrado (saída ${formatTelegramReplyTime(
+                    recentlyClosedOccupancy.actualEndedAt ?? recentlyClosedOccupancy.endedAt!,
+                )}). O titular atual de ${command.targetCode} não foi tocado.`
+                : offBoardOccupancy
+                    ? `\nOcupação fora do quadro. O titular atual de ${command.targetCode} não foi tocado.`
+                    : "";
             await sendMessage(message.chat.id, pickTelegramReply("command_corrected", message.message_id, {
                 target: command.targetCode,
                 name: doctor.fullName,
                 time: formatTelegramReplyTime(eventAt),
-            }) + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode)), message.message_id);
+            }) + correctedShiftHint + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode)), message.message_id);
 
             if (message.chat.type === "private") {
                 await announcePrivateCorrectionToGroups(message.message_id, {

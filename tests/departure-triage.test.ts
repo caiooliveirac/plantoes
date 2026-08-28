@@ -25,7 +25,7 @@ test("saída antes de 6h de janela pede decisão (early_bank_only)", () => {
     assert.equal(result.kind, "early_bank_only");
     assert.equal(result.attention, true);
     assert.equal(result.classification?.outcome, "bank_only");
-    assert.match(result.headline, /banco de horas/);
+    assert.match(result.headline, /6h/);
 });
 
 test("saída na faixa 6h–10h pede decisão de MEIO plantão (early_half)", () => {
@@ -184,4 +184,85 @@ test("nota de override: 8+ caracteres, espaços internos contam, bordas aparadas
     assert.equal(isValidOverrideNote("ok razao"), true);
     assert.equal(isValidOverrideNote("  a b c d  "), false);
     assert.equal(isValidOverrideNote("liberado por mim"), true);
+});
+
+// ─── Permanência longa: o caso Felipe Carneiro ──────────────────────────────
+//
+// Ficar 6h ou mais além da janela é emendar o turno seguinte — um "P". A folha
+// assina o plantão pelo slot ocupado; o banco de horas fica com o resto abaixo
+// de 6h (applyAnomalyGuard). Antes disto a fila mandava o caso para late_credit
+// e oferecia ao chefe "confirmar Nh de banco de horas", número que a gravação
+// nunca produzia, e o P não aparecia em lugar nenhum da tela.
+
+test("permanência de 6h+ além da janela é P a assinar, não crédito de banco", () => {
+    const result = triagePendingDeparture({
+        ...SD,
+        startedAt: iso("2026-08-03T07:00:00-03:00"),
+        actualEndedAt: iso("2026-08-04T02:00:00-03:00"),
+        delayMinutes: 7 * 60,
+    });
+    assert.equal(result.kind, "extended_stay");
+    assert.equal(result.attention, true);
+    assert.equal(result.extendedStay?.halfShifts, 1);
+    assert.equal(result.extendedStay?.fullShifts, 0);
+    assert.equal(result.extendedStay?.bankMinutes, 0);
+    assert.match(result.headline, /P\)/);
+    assert.match(result.headline, /MEIO plantão/);
+    assert.doesNotMatch(result.headline, /crédito/i);
+});
+
+test("turno inteiro emendado propõe plantão INTEIRO e não fala em banco", () => {
+    // Carneiro: entrou no SD e só saiu no fim do SN seguinte — 12h de sobra.
+    const result = triagePendingDeparture({
+        ...SD,
+        startedAt: iso("2026-08-03T07:00:00-03:00"),
+        actualEndedAt: iso("2026-08-04T07:00:00-03:00"),
+        delayMinutes: 12 * 60,
+    });
+    assert.equal(result.kind, "extended_stay");
+    assert.equal(result.extendedStay?.fullShifts, 1);
+    assert.match(result.headline, /1 plantão INTEIRO a assinar/);
+    // A frase precisa NEGAR o banco, não oferecê-lo.
+    assert.match(result.headline, /não banco de horas/);
+});
+
+test("sobra de 14h assina um inteiro e deixa só o resto (<6h) no banco", () => {
+    const result = triagePendingDeparture({
+        ...SD,
+        startedAt: iso("2026-08-03T07:00:00-03:00"),
+        actualEndedAt: iso("2026-08-04T09:00:00-03:00"),
+        delayMinutes: 14 * 60,
+    });
+    assert.equal(result.kind, "extended_stay");
+    assert.equal(result.extendedStay?.fullShifts, 1);
+    assert.equal(result.extendedStay?.bankMinutes, 120);
+    assert.match(result.headline, /Sobram 2h para o banco/);
+});
+
+test("permanência de 5h59 continua sendo crédito de banco (late_credit)", () => {
+    // O limite é o mesmo dos 6h da régua de saída antecipada: um minuto abaixo
+    // ainda é bônus, não plantão.
+    const result = triagePendingDeparture({
+        ...SD,
+        startedAt: iso("2026-08-03T07:00:00-03:00"),
+        actualEndedAt: iso("2026-08-04T00:59:00-03:00"),
+        delayMinutes: (5 * 60) + 59,
+    });
+    assert.equal(result.kind, "late_credit");
+    assert.equal(result.extendedStay, null);
+    assert.match(result.headline, /banco de horas/);
+});
+
+test("permanência longa sobrevive à rendição — quem ficou o turno prestou o plantão", () => {
+    // reasonCode handoff desliga a régua de saída ANTECIPADA; não tem nada a
+    // dizer sobre quem ficou tempo demais.
+    const result = triagePendingDeparture({
+        ...SD,
+        startedAt: iso("2026-08-03T07:00:00-03:00"),
+        actualEndedAt: iso("2026-08-04T07:00:00-03:00"),
+        delayMinutes: 12 * 60,
+        reasonCode: "handoff",
+    });
+    assert.equal(result.kind, "extended_stay");
+    assert.equal(result.attention, true);
 });

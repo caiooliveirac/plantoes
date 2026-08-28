@@ -39,3 +39,33 @@ test("toda classe board-modal* usada no JSX tem regra no globals.css", () => {
 
     assert.deepEqual(missing, [], `classes de modal sem CSS: ${missing.join(", ")}`);
 });
+
+/**
+ * Mesmo alarme para a fila de saídas a confirmar. A tela foi reescrita para
+ * abrir com CHEGOU -> SAIU (as duas horas que o chefe julga) em vez do
+ * parágrafo de triagem, e classe nova sem CSS ali significa card sem hora
+ * legível — exatamente o que a reescrita veio consertar.
+ */
+test("toda classe da fila de saídas usada no JSX tem regra no globals.css", () => {
+    const prefixes = ["departure-verifier", "pending-departure-card"];
+    const used = new Map<string, string>();
+
+    for (const file of [...collectTsx(join(root, "components")), ...collectTsx(join(root, "app"))]) {
+        const source = readFileSync(file, "utf8");
+        for (const match of source.matchAll(/className=\{?["`]([^"`]+)["`]/g)) {
+            for (const token of match[1].split(/\s+/)) {
+                // Interpolações (`${button.className}`) resolvem em runtime.
+                if (token.includes("$")) continue;
+                if (prefixes.some((prefix) => token.startsWith(prefix))) used.set(token, file.slice(root.length + 1));
+            }
+        }
+    }
+
+    assert.ok(used.size > 10, "esperava encontrar classes da fila de saídas no JSX");
+
+    const missing = [...used]
+        .filter(([token]) => !new RegExp(`^\\.${token}[\\s,{:.\\[]`, "m").test(css))
+        .map(([token, file]) => `${token} (${file})`);
+
+    assert.deepEqual(missing, [], `classes da fila de saídas sem CSS: ${missing.join(", ")}`);
+});
