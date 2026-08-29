@@ -9,6 +9,7 @@ import { EventTimeline } from "@/components/board/EventTimeline";
 import { modalBackdrop, modalPanel, tapFeedback } from "@/lib/board/motion";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
 import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
+import { resolveDayOffsetLabel } from "@/lib/board/day-offset";
 import type { ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
 import {
     isValidOverrideNote,
@@ -159,6 +160,12 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
 
     // Atraso da CHEGADA contra a janela do quadro — o número que o chefe procura
     // primeiro e que o modal só mostrava indiretamente, dentro da frase de triagem.
+    // "chegou 07:00 → saiu 07:00" em dias diferentes não se lê sem esta marca.
+    const dayOffset = useMemo(
+        () => (target ? resolveDayOffsetLabel(target.startedAt, target.actualEndedAt) : null),
+        [target],
+    );
+
     const arrivalDeltaMinutes = useMemo(() => {
         if (!target?.scheduledStartAt) return null;
         const scheduled = new Date(target.scheduledStartAt).getTime();
@@ -486,6 +493,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                     <span className="departure-verifier-fact__label">Saiu</span>
                                                     <strong className="departure-verifier-fact__value">
                                                         {formatLocalHourMinute(verbalizedMs)}
+                                                        {dayOffset && <i className="departure-verifier-fact__day">{dayOffset}</i>}
                                                     </strong>
                                                     {typeof target.delayMinutes === "number" && (
                                                         <span className="departure-verifier-fact__delta" data-off={Math.abs(target.delayMinutes) > 15}>

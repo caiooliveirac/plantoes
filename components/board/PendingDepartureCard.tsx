@@ -5,6 +5,7 @@ import { Check, PencilLine, Scale } from "lucide-react";
 import { PatternBadge } from "@/components/board/PatternBadge";
 import { staggerChild, pulseAttention, tapFeedback } from "@/lib/board/motion";
 import { triagePendingDeparture } from "@/modules/operational/departure-triage";
+import { resolveDayOffsetLabel } from "@/lib/board/day-offset";
 import type { PendingDepartureConfirmation, TelegramLateDepartureReasonCode } from "@/services/board.service";
 
 const REASON_SHORT: Record<TelegramLateDepartureReasonCode, string> = {
@@ -54,6 +55,8 @@ export interface PendingDepartureCardProps {
 
 export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, isFresh, busy }: PendingDepartureCardProps) {
     const delay = formatDelay(pending.delayMinutes);
+    // "chegou 07:00 → saiu 07:00" em dias diferentes não se lê sem esta marca.
+    const dayOffset = resolveDayOffsetLabel(pending.startedAt, pending.actualEndedAt);
     const suspect = (pending.delayMinutes ?? 0) >= 60 || pending.reasonOccurrenceCount30d >= 3;
     const triage = triagePendingDeparture({
         actualEndedAt: pending.actualEndedAt,
@@ -103,6 +106,7 @@ export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, 
                 <span className="pending-departure-card__time">
                     <em>saiu</em>
                     <strong>{formatHourMinute(pending.actualEndedAt)}</strong>
+                    {dayOffset && <i className="pending-departure-card__time-day">{dayOffset}</i>}
                 </span>
                 {pending.arrivalCorrectedInTelegram && (
                     <span
