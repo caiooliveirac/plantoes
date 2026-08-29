@@ -147,6 +147,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             actualEndedAt: nextActualEndedAt,
             ...(parsed.data.startedAt ? { startedAt: nextStartedAt } : {}),
             chiefConfirmed: true,
+            auditSource: "chefia confirmou a saida no quadro",
         }, session.user.id);
 
         if (parsed.data.note) {

@@ -133,6 +133,12 @@ export async function checkUndoEligibility(
         where: and(
             eq(auditLogs.entityType, entry.entityType),
             eq(auditLogs.entityId, entry.entityId),
+            // ne(id) é obrigatório: created_at tem microssegundos no Postgres e
+            // chega ao JS truncado no milissegundo, então gt(created_at, própria
+            // data) casa com a PRÓPRIA linha. Sem isto, toda entrada era
+            // considerada "superada por uma ação mais nova" — por si mesma — e o
+            // /desfazer nunca listava nada.
+            ne(auditLogs.id, entry.id),
             gt(auditLogs.createdAt, entry.createdAt),
         ),
         orderBy: [desc(auditLogs.createdAt)],
@@ -189,6 +195,9 @@ export async function getUndoableActions(userId: string, options?: AdminUndoOpti
             where: and(
                 eq(auditLogs.entityType, entry.entityType),
                 eq(auditLogs.entityId, entry.entityId),
+                // Ver a nota em checkUndoEligibility: sem ne(id) a linha supera
+                // a si mesma por causa dos microssegundos do Postgres.
+                ne(auditLogs.id, entry.id),
                 gt(auditLogs.createdAt, entry.createdAt),
             ),
         });

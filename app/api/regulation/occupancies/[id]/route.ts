@@ -259,38 +259,9 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "ramalLabel") ? { ramalLabel: parsed.data.ramalLabel ?? null } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "notes") ? { notes: parsed.data.notes ?? null } : {}),
             chiefConfirmed: true,
+            auditSource: "correcao pela tela de admin",
         }, session.user.id);
 
-        await getDb().insert(auditLogs).values({
-            actorUserId: session.user.id,
-            action: "regulation_occupancy.corrected",
-            entityType: "regulation_occupancy",
-            entityId: updated.id,
-            details: {
-                ...parsed.data,
-                previousPostId: existing.postId,
-                nextPostId: updated.postId,
-                previousDoctorId: existing.doctorId,
-                nextDoctorId: updated.doctorId,
-                previousStartedAt: existing.startedAt.toISOString(),
-                nextStartedAt: updated.startedAt.toISOString(),
-                beforeSnapshot: {
-                    doctorId: existing.doctorId,
-                    postId: existing.postId,
-                    startedAt: existing.startedAt.toISOString(),
-                    boardStartedAt: existing.boardStartedAt?.toISOString() ?? null,
-                    endedAt: existing.endedAt?.toISOString() ?? null,
-                    actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
-                    scheduledStartAt: existing.scheduledStartAt?.toISOString() ?? null,
-                    scheduledEndAt: existing.scheduledEndAt?.toISOString() ?? null,
-                    shiftLabel: existing.shiftLabel,
-                    roleLabel: existing.roleLabel,
-                    ramalLabel: existing.ramalLabel,
-                    notes: existing.notes,
-                    continuityGroupId: existing.continuityGroupId,
-                },
-            },
-        });
 
         return NextResponse.json({ occupancy: updated });
     } catch (error) {
