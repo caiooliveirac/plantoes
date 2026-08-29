@@ -2190,6 +2190,16 @@ const LATE_DEPARTURE_REASON_PATTERNS: Array<{ code: TelegramLateDepartureReasonC
 const ARRIVAL_CORRECTION_NOTE_MARKERS = ["[telegram /corrigir]", "[telegram /hoje]", "[telegram /ontem]"];
 
 /**
+ * Mensagens buscadas por ocupação. Maior que o que a timeline mostra de
+ * propósito: a fala do médico sobre a saída pode estar atrás de uma pilha de
+ * comandos (/corrigir, /ramal, refeição), e é ela que vira o motivo e a citação.
+ */
+const MESSAGES_PER_PENDING_OCCUPANCY = 12;
+
+/** Quantas a timeline do card exibe. */
+const MESSAGES_SHOWN_PER_CARD = 5;
+
+/**
  * Ações correlacionadas que NÃO são a fala do médico sobre a saída.
  *
  * Todo comando aceito grava `related_occupancy_id`, então um /corrigir entra na
@@ -2490,6 +2500,11 @@ export async function listPendingDepartureConfirmations(
   const occupancyIds = items.map((row) => row.occupancyId);
   const doctorIds = Array.from(new Set(items.map((row) => row.doctorId)));
   const occupancyIdList = sql.join(occupancyIds.map((id) => sql`${id}::uuid`), sql`, `);
+  // Mesma lista da varredura em TS — uma fonte só, para não divergirem.
+  const nonEvidenceActionList = sql.join(
+    [...NON_DEPARTURE_EVIDENCE_ACTIONS].map((action) => sql`${action}`),
+    sql`, `,
+  );
   const doctorIdList = sql.join(doctorIds.map((id) => sql`${id}::uuid`), sql`, `);
 
   const [messageRows, patternRows] = await Promise.all([
@@ -2500,10 +2515,42 @@ export async function listPendingDepartureConfirmations(
         created_at as "createdAt",
         parsed_action as "parsedAction",
         raw_text as "rawText"
-      from operations_v2.telegram_ingested_messages
-      where related_occupancy_id in (${occupancyIdList})
-      order by created_at desc
-      limit 600
+      from (
+        select
+          related_occupancy_id,
+          id,
+          created_at,
+          parsed_action,
+          raw_text,
+          row_number() over (
+            partition by related_occupancy_id
+            order by created_at desc
+          ) as rn,
+          case when coalesce(parsed_action, '') not in (${nonEvidenceActionList})
+            then row_number() over (
+              partition by
+                related_occupancy_id,
+                (case when coalesce(parsed_action, '') not in (${nonEvidenceActionList}) then 1 else 0 end)
+              order by created_at desc
+            )
+          end as rn_evidencia
+        from operations_v2.telegram_ingested_messages
+        where related_occupancy_id in (${occupancyIdList})
+      ) m
+      -- Duas fatias, e as duas são necessárias.
+      --
+      -- rn é o corte POR OCUPAÇÃO: o "limit 600" global antigo pegava as 600
+      -- mensagens mais recentes de TODAS as pendências juntas, e num dia cheio
+      -- (a fila vai a 200 ocupações) as mais antigas ficavam sem nenhuma — o card
+      -- dizia "Sem mensagem de Telegram vinculada a esta saída" havendo.
+      --
+      -- rn_evidencia garante a fala da SAÍDA mesmo soterrada: uma pilha de
+      -- comandos posteriores (/corrigir, /ramal, refeição) empurra o "saindo"
+      -- para fora das mais recentes, e sem ele o card volta a ficar mudo — agora
+      -- por soterramento em vez de fome.
+      where m.rn <= ${MESSAGES_PER_PENDING_OCCUPANCY}
+         or m.rn_evidencia <= ${MESSAGES_SHOWN_PER_CARD}
+      order by m.created_at desc
     `),
     db.execute<{ doctorId: string; reasonText: string | null; actualEndedAt: string; occupancyId: string; domain: string }>(sql`
       select
@@ -2536,15 +2583,13 @@ export async function listPendingDepartureConfirmations(
   const messageItems = (messageRows as unknown as { rows: any[] }).rows ?? (messageRows as any);
   for (const row of messageItems as any[]) {
     const list = messagesByOccupancy.get(row.occupancyId) ?? [];
-    if (list.length < 5) {
-      list.push({
-        ingestedMessageId: row.ingestedMessageId,
-        createdAt: row.createdAt,
-        parsedAction: row.parsedAction ?? null,
-        rawText: row.rawText,
-      });
-      messagesByOccupancy.set(row.occupancyId, list);
-    }
+    list.push({
+      ingestedMessageId: row.ingestedMessageId,
+      createdAt: row.createdAt,
+      parsedAction: row.parsedAction ?? null,
+      rawText: row.rawText,
+    });
+    messagesByOccupancy.set(row.occupancyId, list);
   }
 
   const reasonCountsByDoctor = new Map<string, Map<TelegramLateDepartureReasonCode, number>>();
@@ -2558,10 +2603,13 @@ export async function listPendingDepartureConfirmations(
   }
 
   return items.map((row: any): PendingDepartureConfirmation => {
-    const recentMessages = messagesByOccupancy.get(row.occupancyId) ?? [];
-    // A timeline mostra tudo; o motivo e a citação saem só do que o médico disse
-    // sobre a SAÍDA — ver NON_DEPARTURE_EVIDENCE_ACTIONS.
-    const departureEvidence = recentMessages.filter(isDepartureEvidenceMessage);
+    const correlatedMessages = messagesByOccupancy.get(row.occupancyId) ?? [];
+    const recentMessages = correlatedMessages.slice(0, MESSAGES_SHOWN_PER_CARD);
+    // A busca por evidência olha a lista INTEIRA, não só o que a timeline mostra:
+    // a fala da saída costuma ficar atrás dos comandos mais recentes.
+    // O motivo e a citação saem só do que o médico disse sobre a SAÍDA —
+    // ver NON_DEPARTURE_EVIDENCE_ACTIONS.
+    const departureEvidence = correlatedMessages.filter(isDepartureEvidenceMessage);
     const reasonFromMessages = departureEvidence
       .map((message) => detectLateDepartureReasonCode(message.rawText))
       .find((code) => code !== null) ?? null;

@@ -3011,13 +3011,20 @@ async function isTelegramMessageAllowed(message: TelegramUpdate["message"]) {
     return Boolean(actor && actor.roles.some((role) => role === "admin" || role === "chief"));
 }
 
-async function announcePrivateCorrectionToGroups(seed: number, params: { name: string; target: string; time: string }) {
+async function announcePrivateCorrectionToGroups(
+    seed: number,
+    params: { name: string; target: string; time: string },
+    // Em qual plantão a correção caiu, quando não é o titular de agora. Sem isto
+    // quem lê no grupo tem MENOS contexto do que quem mandou o comando, e pode
+    // achar que o plantonista atual foi trocado.
+    shiftHint?: string,
+) {
     const groupChatIds = getTelegramAnnouncementChatIds();
     if (groupChatIds.length === 0) {
         return;
     }
 
-    const text = buildGroupCorrectionAnnouncement(seed, params);
+    const text = buildGroupCorrectionAnnouncement(seed, params) + (shiftHint ?? "");
     const results = await Promise.allSettled(groupChatIds.map((chatId) => sendMessage(chatId, text)));
     for (const result of results) {
         if (result.status === "rejected") {
@@ -7007,7 +7014,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     target: command.targetCode,
                     name: doctor.fullName,
                     time: formatTelegramReplyTime(eventAt),
-                });
+                }, correctedShiftHint);
             }
 
             return { ok: true, occupancyId: updated.id };
