@@ -1,3 +1,9 @@
+// A régua é o dia de calendário DO LEITOR: o navegador do chefe está em São
+// Paulo, e é o fuso dele que decide se "23:00 → 03:00" virou o dia. Fixar aqui
+// é obrigatório — sem isto o teste passa na minha máquina e quebra no CI, que
+// roda em UTC (foi o que aconteceu).
+process.env.TZ = "America/Sao_Paulo";
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveDayOffsetLabel } from "@/lib/board/day-offset";
