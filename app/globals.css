@@ -10137,6 +10137,16 @@ button.chief-payable-tag:focus-visible {
     color: var(--text);
 }
 
+.pending-departure-card__time-day {
+    font-style: normal;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--accent-warn);
+    margin-left: 3px;
+    vertical-align: 0.35em;
+}
+
 .pending-departure-card__times-arrow {
     font-size: 0.9rem;
     color: var(--muted);
@@ -10646,6 +10656,16 @@ button.chief-payable-tag:focus-visible {
     letter-spacing: 0.02em;
     line-height: 1.05;
     color: var(--text);
+}
+
+.departure-verifier-fact__day {
+    font-style: normal;
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--accent-warn);
+    margin-left: 4px;
+    vertical-align: 0.75em;
 }
 
 .departure-verifier-fact__delta {
