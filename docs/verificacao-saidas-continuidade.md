@@ -122,10 +122,12 @@ where created_at >= now() - interval '48 hours';
 **`acima_do_teto` tem de ser 0.** Nenhum plantão credita mais que 6h brutas (12h em
 dobro). Qualquer número aí é regressão da guarda.
 
-## 5. O bug conhecido apareceu? (fase 1, ainda em aberto)
+## 5. A janela do P sobreviveu ao /corrigir?
 
-Corrigir a chegada de um P encolhe a janela agendada e faz a fila propor um plantão
-que não existe. Ainda **não** está consertado.
+Corrigir a chegada de um P **encolhia** a janela agendada e fazia a fila propor um
+plantão que não existe. Consertado em
+[#237](https://github.com/caiooliveirac/plantoes/pull/237) — esta consulta virou
+teste de regressão, não mais busca por um defeito esperado.
 
 ```sql
 select d.full_name, p.code, o.shift_label,
@@ -140,10 +142,29 @@ where o.shift_label = 'P'
   and o.actual_ended_at > o.scheduled_end_at + interval '6 hours';
 ```
 
-Linha aqui = plantão fantasma na fila. **Não é plantão real** — não lance na folha.
-É o sinal de que a fase 1 precisa subir.
+Linha aqui = plantão fantasma na fila. **Não é plantão real** — não lance na folha, e
+avise: é regressão do #237.
 
-## 6. Erros novos
+## 6. Toda correção deixou rastro?
+
+```sql
+select details->>'source' as origem, count(*)
+from operations_v2.audit_logs
+where action in ('regulation_occupancy.corrected', 'intervention_occupancy.corrected')
+  and created_at >= now() - interval '48 hours'
+group by 1 order by 2 desc;
+```
+
+**Esperado:** toda correção do período aparece, com a origem preenchida
+(`telegram /corrigir`, `chefia confirmou a saida no quadro`, `correcao pela tela de
+admin`…). Antes só as telas web gravavam — o bot não deixava before/after nenhum.
+
+E confirme que o `/desfazer` volta a listar: no privado do bot, um admin manda
+`/desfazer` e precisa ver ações recentes. **Lista vazia com correções no período é
+falha** — era o estado anterior, causado por um `gt(created_at)` que fazia cada linha
+superar a si mesma.
+
+## 7. Erros novos
 
 ```bash
 ssh plantoes-prod 'pm2 logs plantoes --lines 200 --nostream' | grep -iE "error|exception|unhandled" | tail -30
@@ -153,7 +174,7 @@ ssh plantoes-prod 'pm2 logs plantoes-telegram-worker --lines 200 --nostream' | g
 Procure especificamente por falhas em `correctRegulationOccupancy`,
 `resolveUndeclaredContinuationScheduledEndAt` e `findTelegramContinuityContext`.
 
-## 7. A tela
+## 8. A tela
 
 Abrir `https://plantoes.mnrs.com.br`, expandir **Saídas a confirmar** e conferir:
 

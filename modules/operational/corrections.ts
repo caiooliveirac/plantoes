@@ -21,6 +21,7 @@
 import { and, asc, desc, eq, isNotNull, isNull, ne, notInArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
+    auditLogs,
     bankHoursEntries,
     interventionBaseDeactivations,
     interventionBases,
@@ -115,6 +116,8 @@ export interface RegulationOccupancyCorrectionInput {
     ramalLabel?: string | null;
     notes?: string | null;
     chiefConfirmed?: boolean;
+    /** De onde veio a correção, para a auditoria. Ver journalOccupancyCorrection. */
+    auditSource?: string;
 }
 
 export interface InterventionOccupancyCorrectionInput {
@@ -125,6 +128,8 @@ export interface InterventionOccupancyCorrectionInput {
     actualEndedAt?: OptionalDate;
     /** Mesmo contrato da coluna homônima em RegulationOccupancyCorrectionInput. */
     scheduledEndAt?: OptionalDate;
+    /** De onde veio a correção, para a auditoria. Ver journalOccupancyCorrection. */
+    auditSource?: string;
     shiftLabel?: string | null;
     roleLabel?: string | null;
     notes?: string | null;
@@ -692,6 +697,81 @@ interface CorrectedHalfShiftState extends CorrectedScheduledWindow {
  * O pagamento não precisa de nada além da função: payment-closing deriva a unidade
  * (0,5 ou 1) do próprio role_label em tempo de leitura.
  */
+/**
+ * Rastro da correção — gravado SEMPRE, por dentro da transação.
+ *
+ * Antes, quem escrevia `*_occupancy.corrected` eram só as rotas web. Uma
+ * correção pelo Telegram não deixava before/after em lugar nenhum: só a linha
+ * `[telegram /corrigir]` colada nas notas, que diz o comando mas não diz o que
+ * ele mudou. Foi por isso que os quatro casos de agosto não se reconstruíram —
+ * e por isso `/desfazer` não alcançava o `/corrigir`.
+ *
+ * Agora o log nasce aqui dentro, então todo caminho — bot, modal de saída, tela
+ * de admin, script de reparo — é auditável e desfazível pelo mesmo mecanismo.
+ * `beforeSnapshot` tem exatamente os campos que modules/operational/undo.ts
+ * restaura.
+ */
+export interface OccupancySnapshotForAudit {
+    doctorId: string;
+    startedAt: Date;
+    boardStartedAt: Date | null;
+    endedAt: Date | null;
+    actualEndedAt: Date | null;
+    scheduledStartAt: Date | null;
+    scheduledEndAt: Date | null;
+    shiftLabel: string | null;
+    roleLabel: string | null;
+    notes: string | null;
+    continuityGroupId: string;
+}
+
+export function toAuditSnapshot(row: OccupancySnapshotForAudit & { postId?: number; baseId?: number; ramalLabel?: string | null }) {
+    return {
+        doctorId: row.doctorId,
+        ...(row.postId !== undefined ? { postId: row.postId } : {}),
+        ...(row.baseId !== undefined ? { baseId: row.baseId } : {}),
+        startedAt: row.startedAt.toISOString(),
+        boardStartedAt: row.boardStartedAt?.toISOString() ?? null,
+        endedAt: row.endedAt?.toISOString() ?? null,
+        actualEndedAt: row.actualEndedAt?.toISOString() ?? null,
+        scheduledStartAt: row.scheduledStartAt?.toISOString() ?? null,
+        scheduledEndAt: row.scheduledEndAt?.toISOString() ?? null,
+        shiftLabel: row.shiftLabel,
+        roleLabel: row.roleLabel,
+        ...(row.ramalLabel !== undefined ? { ramalLabel: row.ramalLabel } : {}),
+        notes: row.notes,
+        continuityGroupId: row.continuityGroupId,
+    };
+}
+
+async function journalOccupancyCorrection(tx: Executor, params: {
+    domain: "regulation" | "intervention";
+    occupancyId: string;
+    actorUserId: string | null;
+    /** De onde veio a correção, em português, para quem lê a auditoria depois. */
+    source: string;
+    before: ReturnType<typeof toAuditSnapshot>;
+    after: ReturnType<typeof toAuditSnapshot>;
+}) {
+    await tx.insert(auditLogs).values({
+        actorUserId: params.actorUserId,
+        action: `${params.domain}_occupancy.corrected`,
+        entityType: `${params.domain}_occupancy`,
+        entityId: params.occupancyId,
+        details: {
+            source: params.source,
+            // Campos que o undo lê no caminho parcial, mantidos por compatibilidade
+            // com os registros já gravados pelas rotas web.
+            previousDoctorId: params.before.doctorId,
+            nextDoctorId: params.after.doctorId,
+            previousStartedAt: params.before.startedAt,
+            nextStartedAt: params.after.startedAt,
+            beforeSnapshot: params.before,
+            afterSnapshot: params.after,
+        },
+    });
+}
+
 export function resolveCorrectedHalfShiftState(params: {
     existingRoleLabel: string | null;
     nextRoleLabel: string | null;
@@ -924,6 +1004,15 @@ export async function correctRegulationOccupancy(
             .where(eq(regulationOccupancies.id, id))
             .returning();
 
+        await journalOccupancyCorrection(tx, {
+            domain: "regulation",
+            occupancyId: id,
+            actorUserId: updatedByUserId ?? null,
+            source: input.auditSource ?? "correcao de ocupacao",
+            before: toAuditSnapshot({ ...existing, postId: existing.postId }),
+            after: toAuditSnapshot({ ...updated, postId: updated.postId }),
+        });
+
         await syncRegulationBankHours(tx, id);
         return updated;
     });
@@ -1041,6 +1130,15 @@ export async function correctInterventionOccupancy(
             })
             .where(eq(interventionOccupancies.id, id))
             .returning();
+
+        await journalOccupancyCorrection(tx, {
+            domain: "intervention",
+            occupancyId: id,
+            actorUserId: updatedByUserId ?? null,
+            source: input.auditSource ?? "correcao de ocupacao",
+            before: toAuditSnapshot({ ...existing, baseId: existing.baseId }),
+            after: toAuditSnapshot({ ...updated, baseId: updated.baseId }),
+        });
 
         await reconcileInterventionBoardState(tx, existing.baseId, updatedByUserId);
         await syncInterventionBankHours(tx, id);

@@ -6964,6 +6964,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             const correctionBase = {
                 doctorId: doctor.id,
                 startedAt: eventAt,
+                auditSource: "telegram /corrigir",
                 notes: `${targetOccupancy.notes ?? ""}\n[telegram /corrigir] ${message.text}`.trim(),
                 ...(mirrorsBoardStartedAt ? { boardStartedAt: eventAt } : {}),
             };
@@ -7089,6 +7090,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             const correctionBase = {
                 doctorId: doctor.id,
                 startedAt: eventAt,
+                auditSource: `telegram /${command.name}`,
                 notes: `${active.occupancy!.notes ?? ""}\n[telegram /${command.name}] ${message.text}`.trim(),
                 ...(isContinuityRecord ? {} : { boardStartedAt: eventAt }),
             };
@@ -9168,6 +9170,9 @@ async function applyParsedEntry(params: {
                     ...(undeclaredContinuationEndAt
                         ? { shiftLabel: "P" as const, scheduledEndAt: undeclaredContinuationEndAt }
                         : {}),
+                    auditSource: undeclaredContinuationEndAt
+                        ? "telegram: continuacao reconhecida pela permanencia"
+                        : "telegram: saida ajustada",
                     notes: appendTelegramOperationalNote(
                         recentClosed.notes,
                         undeclaredContinuationEndAt
@@ -9528,6 +9533,9 @@ async function applyParsedEntry(params: {
                     ...(undeclaredContinuationEndAtIntv
                         ? { shiftLabel: "P" as const, scheduledEndAt: undeclaredContinuationEndAtIntv }
                         : {}),
+                    auditSource: undeclaredContinuationEndAtIntv
+                        ? "telegram: continuacao reconhecida pela permanencia"
+                        : "telegram: saida ajustada",
                     notes: appendTelegramOperationalNote(
                         recentClosed.notes,
                         undeclaredContinuationEndAtIntv

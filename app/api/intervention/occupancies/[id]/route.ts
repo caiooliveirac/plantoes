@@ -74,35 +74,9 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/in
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "roleLabel") ? { roleLabel: parsed.data.roleLabel ?? null } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "notes") ? { notes: parsed.data.notes ?? null } : {}),
             chiefConfirmed: true,
+            auditSource: "correcao pela tela de admin",
         }, session.user.id);
 
-        await getDb().insert(auditLogs).values({
-            actorUserId: session.user.id,
-            action: "intervention_occupancy.corrected",
-            entityType: "intervention_occupancy",
-            entityId: updated.id,
-            details: {
-                ...parsed.data,
-                previousDoctorId: existing.doctorId,
-                nextDoctorId: updated.doctorId,
-                previousStartedAt: existing.startedAt.toISOString(),
-                nextStartedAt: updated.startedAt.toISOString(),
-                beforeSnapshot: {
-                    doctorId: existing.doctorId,
-                    baseId: existing.baseId,
-                    startedAt: existing.startedAt.toISOString(),
-                    boardStartedAt: existing.boardStartedAt?.toISOString() ?? null,
-                    endedAt: existing.endedAt?.toISOString() ?? null,
-                    actualEndedAt: existing.actualEndedAt?.toISOString() ?? null,
-                    scheduledStartAt: existing.scheduledStartAt?.toISOString() ?? null,
-                    scheduledEndAt: existing.scheduledEndAt?.toISOString() ?? null,
-                    shiftLabel: existing.shiftLabel,
-                    roleLabel: existing.roleLabel,
-                    notes: existing.notes,
-                    continuityGroupId: existing.continuityGroupId,
-                },
-            },
-        });
 
         return NextResponse.json({ occupancy: updated });
     } catch (error) {
