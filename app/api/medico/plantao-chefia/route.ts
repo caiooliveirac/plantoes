@@ -33,6 +33,8 @@ const createSchema = z.object({
     medicoId: z.string().uuid(),
     operationalDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     shiftLabel: z.enum(["SD", "SN"]),
+    // Plantão inteiro (1 unidade) ou meio plantão (0,5 — metade do valor).
+    coverage: z.enum(["full", "half"]).optional(),
     t: z.string().optional(),
 });
 
@@ -41,8 +43,14 @@ const manageSchema = z.object({
     extraShiftId: z.string().uuid(),
     operationalDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     shiftLabel: z.enum(["SD", "SN"]).optional(),
+    coverage: z.enum(["full", "half"]).optional(),
     t: z.string().optional(),
 });
+
+/** Sufixo das mensagens/avisos: só o meio plantão precisa de destaque. */
+function coverageSuffix(coverage: "full" | "half"): string {
+    return coverage === "half" ? ", MEIO plantão — vale metade" : "";
+}
 
 function currentMonthKey(): string {
     const parts = getSaoPauloParts(new Date());
@@ -95,6 +103,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Dados inválidos." }, { status: 400 });
     }
     const { medicoId, operationalDate, shiftLabel } = parsed.data;
+    const coverage = parsed.data.coverage ?? "full";
     const { acesso, monthKey } = await autorizar(medicoId, parsed.data.t);
     if (!acesso.autorizado) {
         return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
@@ -119,6 +128,7 @@ export async function POST(request: NextRequest) {
             doctorId: medicoId,
             operationalDate,
             shiftLabel,
+            coverage,
             actorUserId: acesso.session?.user.id ?? null,
         });
 
@@ -132,6 +142,7 @@ export async function POST(request: NextRequest) {
                 monthKey,
                 operationalDate,
                 shiftLabel,
+                coverage,
                 viaToken: !acesso.isOwnSession && !acesso.isAdmin,
                 actedByAdmin: acesso.isAdmin && !acesso.isOwnSession,
             },
@@ -139,7 +150,7 @@ export async function POST(request: NextRequest) {
 
         await depois(medicoId, monthKey, acesso.session?.user.id ?? null);
         await avisarCoordenacao(medicoId, (nome) =>
-            `🟣 *${nome}* registrou um PLANTÃO DE CHEFIA em ${operationalDate} (${shiftLabel}).`
+            `🟣 *${nome}* registrou um PLANTÃO DE CHEFIA em ${operationalDate} (${shiftLabel}${coverageSuffix(coverage)}).`
             + ` Não é banco de horas: nenhum saldo foi movido. Revisar em /admin/payment-closing.`);
 
         return NextResponse.json({ chiefExtraShift: created });
@@ -180,12 +191,13 @@ export async function PATCH(request: NextRequest) {
             );
         }
 
-        await updateChiefExtraShift({
+        const updated = await updateChiefExtraShift({
             id: extraShiftId,
             doctorId: medicoId,
             monthKey,
             operationalDate,
             shiftLabel,
+            coverage: parsed.data.coverage,
         });
 
         await getDb().insert(auditLogs).values({
@@ -193,12 +205,12 @@ export async function PATCH(request: NextRequest) {
             action: "medico.chief_extra_shift.update",
             entityType: "admin_extra_shift",
             entityId: extraShiftId,
-            details: { doctorId: medicoId, monthKey, operationalDate, shiftLabel },
+            details: { doctorId: medicoId, monthKey, operationalDate, shiftLabel, coverage: updated.coverage },
         });
 
         await depois(medicoId, monthKey, acesso.session?.user.id ?? null);
         await avisarCoordenacao(medicoId, (nome) =>
-            `✏️ *${nome}* mudou o plantão de chefia para ${operationalDate} (${shiftLabel}).`);
+            `✏️ *${nome}* mudou o plantão de chefia para ${operationalDate} (${shiftLabel}${coverageSuffix(updated.coverage)}).`);
 
         return NextResponse.json({ ok: true });
     } catch (error) {
@@ -236,7 +248,7 @@ export async function DELETE(request: NextRequest) {
 
         await depois(medicoId, monthKey, acesso.session?.user.id ?? null);
         await avisarCoordenacao(medicoId, (nome) =>
-            `🗑️ *${nome}* tirou o plantão de chefia de ${removed.operationalDate} (${removed.shiftLabel}).`);
+            `🗑️ *${nome}* tirou o plantão de chefia de ${removed.operationalDate} (${removed.shiftLabel}${coverageSuffix(removed.coverage)}).`);
 
         return NextResponse.json({ ok: true });
     } catch (error) {

@@ -7,6 +7,14 @@ export interface ChiefExtraShift {
     id: string;
     operationalDate: string;
     shiftLabel: "SD" | "SN";
+    /** Inteiro paga 1 plantão; meio paga 0,5 (metade do valor). */
+    coverage: "full" | "half";
+}
+
+type Coverage = ChiefExtraShift["coverage"];
+
+function coverageLabel(coverage: Coverage) {
+    return coverage === "half" ? "meio plantão" : "plantão inteiro";
 }
 
 interface Props {
@@ -32,11 +40,13 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
     const router = useRouter();
     const [date, setDate] = useState("");
     const [shift, setShift] = useState<"SD" | "SN">("SD");
+    const [coverage, setCoverage] = useState<Coverage>("full");
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [editing, setEditing] = useState<string | null>(null);
     const [editDate, setEditDate] = useState("");
     const [editShift, setEditShift] = useState<"SD" | "SN">("SD");
+    const [editCoverage, setEditCoverage] = useState<Coverage>("full");
 
     const [ano, mes] = monthKey.split("-");
     const minDate = `${monthKey}-01`;
@@ -69,9 +79,12 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
 
     async function create() {
         if (!date) return;
-        if (!window.confirm(`Registrar PLANTÃO DE CHEFIA em ${formatDia(date)} (${shift})?`)) return;
-        const ok = await call("POST", { operationalDate: date, shiftLabel: shift }, "create");
-        if (ok) setDate("");
+        if (!window.confirm(`Registrar PLANTÃO DE CHEFIA em ${formatDia(date)} (${shift}, ${coverageLabel(coverage)})?`)) return;
+        const ok = await call("POST", { operationalDate: date, shiftLabel: shift, coverage }, "create");
+        if (ok) {
+            setDate("");
+            setCoverage("full");
+        }
     }
 
     async function saveEdit(id: string) {
@@ -80,12 +93,13 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
             extraShiftId: id,
             operationalDate: editDate,
             shiftLabel: editShift,
+            coverage: editCoverage,
         }, id);
         if (ok) setEditing(null);
     }
 
     async function remove(item: ChiefExtraShift) {
-        if (!window.confirm(`Tirar o plantão de chefia de ${formatDia(item.operationalDate)} (${item.shiftLabel})?`)) {
+        if (!window.confirm(`Tirar o plantão de chefia de ${formatDia(item.operationalDate)} (${item.shiftLabel}, ${coverageLabel(item.coverage)})?`)) {
             return;
         }
         await call("DELETE", { extraShiftId: item.id }, item.id);
@@ -100,7 +114,8 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
             <p className="panel-chief-extra-warning">
                 Isto <strong>não é banco de horas</strong>. Nenhuma hora do seu saldo é
                 usada, gasta ou descontada aqui — o turno de chefia entra na folha como
-                plantão extra e pronto. Para trocar saldo de banco de horas por plantão,
+                plantão extra e pronto. Meio plantão entra valendo <strong>metade</strong> do
+                valor de um plantão. Para trocar saldo de banco de horas por plantão,
                 use o bloco verde do banco de horas, mais abaixo.
             </p>
 
@@ -123,6 +138,16 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
                     >
                         <option value="SD">Diurno (SD)</option>
                         <option value="SN">Noturno (SN)</option>
+                    </select>
+                </label>
+                <label className="panel-field">
+                    <span className="panel-field-label">Inteiro ou meio?</span>
+                    <select
+                        value={coverage}
+                        onChange={(event) => setCoverage(event.target.value === "half" ? "half" : "full")}
+                    >
+                        <option value="full">Inteiro</option>
+                        <option value="half">Meio plantão (vale metade)</option>
                     </select>
                 </label>
                 <button
@@ -165,6 +190,16 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
                                                 <option value="SN">Noturno (SN)</option>
                                             </select>
                                         </label>
+                                        <label className="panel-field">
+                                            <span className="panel-field-label">Inteiro ou meio?</span>
+                                            <select
+                                                value={editCoverage}
+                                                onChange={(event) => setEditCoverage(event.target.value === "half" ? "half" : "full")}
+                                            >
+                                                <option value="full">Inteiro</option>
+                                                <option value="half">Meio plantão (vale metade)</option>
+                                            </select>
+                                        </label>
                                         <button
                                             type="button"
                                             className="panel-action-btn chief"
@@ -185,6 +220,7 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
                                     <>
                                         <span className="panel-declared-extra-when">
                                             {formatDia(item.operationalDate)} · {item.shiftLabel}
+                                            {item.coverage === "half" ? " · meio plantão" : ""}
                                         </span>
                                         <button
                                             type="button"
@@ -194,10 +230,11 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
                                                 setEditing(item.id);
                                                 setEditDate(item.operationalDate);
                                                 setEditShift(item.shiftLabel);
+                                                setEditCoverage(item.coverage);
                                                 setError(null);
                                             }}
                                         >
-                                            Trocar dia/turno
+                                            Editar
                                         </button>
                                         <button
                                             type="button"
