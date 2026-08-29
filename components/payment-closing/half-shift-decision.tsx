@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { classifyEarlyDeparture } from "@/modules/operational/early-departure";
 import { isValidOverrideNote, OVERRIDE_NOTE_MIN_LENGTH } from "@/modules/operational/departure-triage";
 import type { PayableShift } from "@/modules/reporting/payable-shifts";
@@ -68,9 +68,9 @@ export function HalfShiftDecision({ shift }: { shift: PayableShift }) {
         if (end.getTime() < start.getTime()) {
             end = new Date(end.getTime() + 24 * 3600000);
         }
-        let standard: ReturnType<typeof calculateBankHours>;
+        let standard: ReturnType<typeof calculateGuardedBankHours>;
         try {
-            standard = calculateBankHours({
+            standard = calculateGuardedBankHours({
                 scheduledStartAt: shift.scheduledStartAt,
                 scheduledEndAt: shift.scheduledEndAt,
                 actualStartAt: start,

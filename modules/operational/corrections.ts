@@ -103,6 +103,13 @@ export interface RegulationOccupancyCorrectionInput {
     boardStartedAt?: Date;
     endedAt?: OptionalDate;
     actualEndedAt?: OptionalDate;
+    /**
+     * Fim de janela ESCOLHIDO pelo chamador. Vence a inferência: quem passa isto
+     * já sabe qual janela quer e não pode ser sobrescrito por um cálculo que só
+     * enxerga um bloco (ex.: a continuação reconhecida pela permanência, que
+     * pode cobrir dois turnos). Sem o campo, o valor era descartado em silêncio.
+     */
+    scheduledEndAt?: OptionalDate;
     shiftLabel?: string | null;
     roleLabel?: string | null;
     ramalLabel?: string | null;
@@ -116,6 +123,8 @@ export interface InterventionOccupancyCorrectionInput {
     boardStartedAt?: OptionalDate;
     endedAt?: OptionalDate;
     actualEndedAt?: OptionalDate;
+    /** Mesmo contrato da coluna homônima em RegulationOccupancyCorrectionInput. */
+    scheduledEndAt?: OptionalDate;
     shiftLabel?: string | null;
     roleLabel?: string | null;
     notes?: string | null;
@@ -804,7 +813,7 @@ export async function correctRegulationOccupancy(
         const {
             roleLabel: nextRoleLabel,
             scheduledStartAt: newScheduledStart,
-            scheduledEndAt: newScheduledEnd,
+            scheduledEndAt: inferredScheduledEnd,
         } = resolveCorrectedHalfShiftState({
             existingRoleLabel: existing.roleLabel,
             nextRoleLabel: sanitizedRoleLabel,
@@ -820,6 +829,11 @@ export async function correctRegulationOccupancy(
                 explicitScheduledEndAt: null,
             }),
         });
+
+        // O fim explícito do chamador vence a inferência — ver o campo no input.
+        const newScheduledEnd = hasOwn(input, "scheduledEndAt")
+            ? input.scheduledEndAt ?? null
+            : inferredScheduledEnd;
 
         if (postId !== existing.postId) {
             if (!endedAt) {
@@ -938,7 +952,7 @@ export async function correctInterventionOccupancy(
         const {
             roleLabel: nextRoleLabel,
             scheduledStartAt: newScheduledStart,
-            scheduledEndAt: newScheduledEnd,
+            scheduledEndAt: inferredScheduledEnd,
         } = resolveCorrectedHalfShiftState({
             existingRoleLabel: existing.roleLabel,
             nextRoleLabel: sanitizedRoleLabel,
@@ -953,6 +967,11 @@ export async function correctInterventionOccupancy(
                 explicitScheduledEndAt: null,
             }),
         });
+
+        // O fim explícito do chamador vence a inferência — ver o campo no input.
+        const newScheduledEnd = hasOwn(input, "scheduledEndAt")
+            ? input.scheduledEndAt ?? null
+            : inferredScheduledEnd;
 
         const actualEndedAtTimeChanged = actualEndedAtChanged
             && (actualEndedAt?.getTime() ?? null) !== (existing.actualEndedAt?.getTime() ?? null);

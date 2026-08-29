@@ -36,7 +36,7 @@ import {
   inferRegulationScheduledEndAt,
 } from "@/modules/operational/rules";
 import { isNucleoRegulationPost, resolvePendingRegulationOccupantLabel } from "@/modules/operational/board-display";
-import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { buildContinuityBankHoursSpan } from "@/modules/bank-hours/continuity";
 import {
   buildBankHoursBalanceOverrideExplanation,
@@ -1384,7 +1384,7 @@ function calculateSyntheticBankHours(params: {
     };
   }
 
-  const calculation = calculateBankHours({
+  const calculation = calculateGuardedBankHours({
     scheduledStartAt: params.scheduledStartAt,
     scheduledEndAt: params.scheduledEndAt,
     actualStartAt: params.actualStartAt,
@@ -2163,6 +2163,12 @@ export interface PendingDepartureConfirmation {
   sourceMessage: PendingDepartureCorrelatedMessage | null;
   /** Same-reason departures by this doctor in the past 30 days (pattern signal). */
   reasonOccurrenceCount30d: number;
+  /**
+   * A chegada exibida já passou por uma correção no Telegram (/corrigir, /hoje,
+   * /ontem). O chefe precisa saber disso ao decidir: a hora corrigida é a que
+   * vale, e sem o selo ele não distingue o registro original do consertado.
+   */
+  arrivalCorrectedInTelegram: boolean;
   /** When the verbalized departure was recorded. */
   recordedAt: string;
 }
@@ -2175,6 +2181,57 @@ const LATE_DEPARTURE_REASON_PATTERNS: Array<{ code: TelegramLateDepartureReasonC
   { code: "chief_release", pattern: /\b(CHEFIA|CHEFE|LIBERAD|LIBEROU|AUTORIZ|DETERMIN)/i },
   { code: "handoff", pattern: /\b(RENDIDO|RENDIDA|RENDIC|REDIC|TROCA|SUBSTITUI)/i },
 ];
+
+/**
+ * Marcadores que os comandos de correção de CHEGADA deixam nas notas da
+ * ocupação (modules/telegram/service.ts). Não confundir com /corrigirsaida, que
+ * mexe na saída e escreve outro marcador.
+ */
+const ARRIVAL_CORRECTION_NOTE_MARKERS = ["[telegram /corrigir]", "[telegram /hoje]", "[telegram /ontem]"];
+
+/**
+ * Ações correlacionadas que NÃO são a fala do médico sobre a saída.
+ *
+ * Todo comando aceito grava `related_occupancy_id`, então um /corrigir entra na
+ * lista de eventos da ocupação — o que é correto para a timeline, e errado para
+ * duas coisas que liam a mesma lista: o card passou a CITAR o texto do comando
+ * como se fosse a justificativa da saída (era sempre a mensagem mais recente),
+ * e a varredura de motivo passou a ler o comando — um /corrigir que mencione
+ * troca/rendição classificava a saída como "handoff", e handoff desliga a régua
+ * de saída antecipada inteira, sem deixar rastro na tela.
+ */
+const NON_DEPARTURE_EVIDENCE_ACTIONS = new Set([
+  "arrival",
+  "batch_arrival",
+  "corrigir",
+  "hoje",
+  "ontem",
+  "ramal",
+]);
+
+function isDepartureEvidenceMessage(message: PendingDepartureCorrelatedMessage): boolean {
+  const action = message.parsedAction?.trim().toLowerCase();
+  return !action || !NON_DEPARTURE_EVIDENCE_ACTIONS.has(action);
+}
+
+/** Notas sem as linhas escritas pelos comandos de correção de chegada. */
+function stripArrivalCorrectionNotes(notes: string | null | undefined): string | null {
+  if (!notes) return null;
+  const kept = notes
+    .split("\n")
+    .filter((line) => {
+      const normalized = line.trim().toLowerCase();
+      return !ARRIVAL_CORRECTION_NOTE_MARKERS.some((marker) => normalized.startsWith(marker));
+    })
+    .join("\n");
+  return kept.trim().length > 0 ? kept : null;
+}
+
+function detectArrivalCorrectedInTelegram(notes: string | null | undefined): boolean {
+  if (!notes) return false;
+  const normalized = notes.toLowerCase();
+  return ARRIVAL_CORRECTION_NOTE_MARKERS.some((marker) => normalized.includes(marker));
+}
 
 function detectLateDepartureReasonCode(text: string | null | undefined): TelegramLateDepartureReasonCode | null {
   if (!text) return null;
@@ -2493,7 +2550,7 @@ export async function listPendingDepartureConfirmations(
   const reasonCountsByDoctor = new Map<string, Map<TelegramLateDepartureReasonCode, number>>();
   const patternItems = (patternRows as unknown as { rows: any[] }).rows ?? (patternRows as any);
   for (const row of patternItems as any[]) {
-    const code = detectLateDepartureReasonCode(row.reasonText);
+    const code = detectLateDepartureReasonCode(stripArrivalCorrectionNotes(row.reasonText));
     if (!code) continue;
     const inner = reasonCountsByDoctor.get(row.doctorId) ?? new Map<TelegramLateDepartureReasonCode, number>();
     inner.set(code, (inner.get(code) ?? 0) + 1);
@@ -2502,15 +2559,18 @@ export async function listPendingDepartureConfirmations(
 
   return items.map((row: any): PendingDepartureConfirmation => {
     const recentMessages = messagesByOccupancy.get(row.occupancyId) ?? [];
-    const reasonFromMessages = recentMessages
+    // A timeline mostra tudo; o motivo e a citação saem só do que o médico disse
+    // sobre a SAÍDA — ver NON_DEPARTURE_EVIDENCE_ACTIONS.
+    const departureEvidence = recentMessages.filter(isDepartureEvidenceMessage);
+    const reasonFromMessages = departureEvidence
       .map((message) => detectLateDepartureReasonCode(message.rawText))
       .find((code) => code !== null) ?? null;
-    const reasonFromNotes = detectLateDepartureReasonCode(row.notes);
+    const reasonFromNotes = detectLateDepartureReasonCode(stripArrivalCorrectionNotes(row.notes));
     const reasonCode = reasonFromMessages ?? reasonFromNotes;
     const sourceMessage =
       (reasonCode
-        ? recentMessages.find((message) => detectLateDepartureReasonCode(message.rawText) === reasonCode)
-        : undefined) ?? recentMessages[0] ?? null;
+        ? departureEvidence.find((message) => detectLateDepartureReasonCode(message.rawText) === reasonCode)
+        : undefined) ?? departureEvidence[0] ?? null;
     // Recover the 4-digit occurrence number from the doctor's message(s) / notes.
     // Pass the shift times as fragments so the verbalized departure time is never
     // mistaken for the occurrence number.
@@ -2522,8 +2582,11 @@ export async function listPendingDepartureConfirmations(
       });
     const occurrenceNumber = reasonCode === "occurrence"
       ? (extractTelegramOccurrenceNumber(sourceMessage?.rawText ?? "", timeFragments)
-        ?? extractTelegramOccurrenceNumber(row.notes ?? "", timeFragments)
-        ?? recentMessages
+        ?? extractTelegramOccurrenceNumber(stripArrivalCorrectionNotes(row.notes) ?? "", timeFragments)
+        // departureEvidence, não recentMessages: um "/corrigir 2262 Karen 19:00"
+        // carrega um código de ramal de 4 dígitos, que entrava aqui como se fosse
+        // o número da ocorrência e apagava o alerta de "SEM Nº DE OCORRÊNCIA".
+        ?? departureEvidence
           .map((message) => extractTelegramOccurrenceNumber(message.rawText, timeFragments))
           .find((value) => value !== null)
         ?? null)
@@ -2561,6 +2624,7 @@ export async function listPendingDepartureConfirmations(
       recentMessages,
       sourceMessage,
       reasonOccurrenceCount30d,
+      arrivalCorrectedInTelegram: detectArrivalCorrectedInTelegram(row.notes),
       recordedAt: row.recordedAt,
     };
   });

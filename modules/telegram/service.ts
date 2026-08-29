@@ -77,7 +77,7 @@ import { isChiefRegulationPostCode } from "@/modules/operational/roles";
 const ARRIVAL_EDIT_COMMANDS = new Set(["corrigir", "hoje", "ontem"]);
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveHandoffClosure } from "@/modules/operational/handoff-closure";
-import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
+import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime, resolveUndeclaredContinuationScheduledEndAt } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
@@ -1357,7 +1357,6 @@ async function listTelegramDoctorOperationalOccupancies(doctorId: string) {
 async function findTelegramContinuityContext(params: {
     doctorId: string;
     eventAt: Date;
-    explicitContinuation?: boolean;
 }) {
     const occupancies = await listTelegramDoctorOperationalOccupancies(params.doctorId);
     const eligible = occupancies.filter((occupancy) => occupancy.startedAt.getTime() <= params.eventAt.getTime() + 900000);
@@ -1376,19 +1375,31 @@ async function findTelegramContinuityContext(params: {
                 return false;
             }
 
-            // Continuidade explícita usa a regra da fronteira (independe da hora do
-            // aviso); a saída-e-volta-rápida implícita continua valendo em paralelo.
-            if (
-                params.explicitContinuation
-                && shouldLinkExplicitContinuationClosedSource({
-                    eventAt: params.eventAt,
-                    sourceStartedAt: occupancy.startedAt,
-                    sourceEndedAt: endedAt,
-                })
-            ) {
+            // A regra da fronteira NÃO depende mais do verbo "continua".
+            //
+            // Quem chegou num plantão e seguiu para o outro é o mesmo médico
+            // tenha ele dito a palavra ou não — e esquecer a palavra é a coisa
+            // mais comum do mundo às 7h da manhã. Enquanto o vínculo implícito
+            // valia só por 2h desde o fechamento, quem avisava tarde nascia
+            // órfão: perdia a âncora de chegada, ganhava atraso fantasma no
+            // banco de horas, caía na fila de prioridade de refeição como se
+            // tivesse acabado de chegar e jantava 30min em vez de 1h (casos
+            // João Victor Perrone e Thainara).
+            //
+            // A regra da fronteira já contém a prova de que ele ficou: a fonte
+            // começou ANTES da virada que a mensagem referencia e permaneceu até
+            // perto dela. Quem foi para casa no meio do plantão não passa.
+            if (shouldLinkExplicitContinuationClosedSource({
+                eventAt: params.eventAt,
+                sourceStartedAt: occupancy.startedAt,
+                sourceEndedAt: endedAt,
+            })) {
                 return true;
             }
 
+            // Saída-e-volta-rápida dentro do MESMO turno segue valendo em paralelo:
+            // cobre o reenvio logo depois de um fechamento acidental, que a régua
+            // da fronteira não enxerga por não atravessar virada nenhuma.
             return shouldLinkRecentClosedTelegramContinuity(params.eventAt, endedAt);
         })
         .sort(compareTelegramContinuitySource);
@@ -1464,6 +1475,32 @@ export function shouldLinkExplicitContinuationClosedSource(params: {
     }
 
     return params.sourceEndedAt.getTime() >= referenceBoundary.getTime() - TELEGRAM_CONTINUATION_SOURCE_CLOSURE_TOLERANCE_MS;
+}
+
+/**
+ * "Chegou num plantão e seguiu no outro" — a travessia de virada como prova de
+ * continuidade, sem depender de o médico ter escrito a palavra.
+ *
+ * Compara o turno da OCUPAÇÃO ANTERIOR com o turno em que a nova mensagem cai.
+ * Diferentes = ele atravessou a virada, e quem atravessa a virada continuou.
+ * Antes esta inferência também exigia que o médico NÃO tivesse escrito o rótulo
+ * do turno, e aí digitar "SN" ao voltar de um SD custava a âncora da cadeia —
+ * justamente quem tentou ser explícito saía pior do que quem não disse nada.
+ *
+ * A adjacência temporal (a fonte ter ficado até perto da virada) é garantida
+ * antes, por shouldLinkExplicitContinuationClosedSource, na escolha da fonte.
+ */
+export function shouldInferCrossShiftContinuation(params: {
+    sourceShiftLabel?: string | null;
+    eventAt: Date;
+    isExplicitContinuation: boolean;
+}) {
+    // Continuidade explícita já entra pelo caminho de shouldLinkTelegramArrivalToContinuitySource.
+    if (params.isExplicitContinuation || !params.sourceShiftLabel) {
+        return false;
+    }
+
+    return params.sourceShiftLabel !== resolveOperationalShiftWindow(params.eventAt).shiftLabel;
 }
 
 export function shouldLinkRecentClosedTelegramContinuity(eventAt: Date, endedAt: Date) {
@@ -2214,7 +2251,6 @@ async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageT
         const continuityContext = await findTelegramContinuityContext({
             doctorId: resolvedDoctor.id,
             eventAt,
-            explicitContinuation: true,
         });
         const source = continuityContext?.source;
         if (!source) {
@@ -3074,6 +3110,53 @@ async function findOffBoardOccupancyOnTarget(params: {
             isNull(interventionOccupancies.boardStartedAt),
         ),
         orderBy: [desc(interventionOccupancies.startedAt)],
+    })) ?? null;
+}
+
+/** Até onde /corrigir procura um plantão já encerrado do médico naquele alvo. */
+const RECENTLY_CLOSED_CORRECTION_WINDOW_HOURS = 24;
+
+/**
+ * Plantão do médico NAQUELE alvo que já fechou há pouco.
+ *
+ * findActiveOccupancyByTarget só enxerga o titular de agora. Quando o chefe
+ * corrige a chegada de alguém que já saiu — o caso normal de quem está na fila
+ * de "saídas a confirmar" —, o comando caía no titular atual e reescrevia o
+ * doctor_id DELE para o nome digitado: o plantonista de agora sumia do quadro e
+ * era substituído por quem já tinha ido embora. Aqui a correção encontra a
+ * ocupação certa, que é o que o chefe quis dizer.
+ */
+async function findRecentlyClosedOccupancyOnTarget(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    targetId: number;
+    doctorId: string;
+    referenceAt: Date;
+}) {
+    const db = getDb();
+    const cutoffAt = new Date(
+        params.referenceAt.getTime() - (RECENTLY_CLOSED_CORRECTION_WINDOW_HOURS * 60 * 60 * 1000),
+    );
+
+    if (params.sector === "REGULATION") {
+        return (await db.query.regulationOccupancies.findFirst({
+            where: and(
+                eq(regulationOccupancies.postId, params.targetId),
+                eq(regulationOccupancies.doctorId, params.doctorId),
+                isNotNull(regulationOccupancies.endedAt),
+                gte(regulationOccupancies.endedAt, cutoffAt),
+            ),
+            orderBy: [desc(regulationOccupancies.endedAt)],
+        })) ?? null;
+    }
+
+    return (await db.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.baseId, params.targetId),
+            eq(interventionOccupancies.doctorId, params.doctorId),
+            isNotNull(interventionOccupancies.endedAt),
+            gte(interventionOccupancies.endedAt, cutoffAt),
+        ),
+        orderBy: [desc(interventionOccupancies.endedAt)],
     })) ?? null;
 }
 
@@ -6846,14 +6929,29 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             // findActiveOccupancyByTarget só enxerga o titular do quadro. Se o nome dado é de
             // alguém que divide o ramal/base fora do quadro (sombra ou deslocado), a correção
             // é dele — sem isso, /corrigir trocava o médico do titular pela sombra.
-            const offBoardOccupancy = doctor.id !== active.occupancy!.doctorId
+            //
+            // Mesma ideia para quem JÁ SAIU do alvo nas últimas 24h: a correção é do plantão
+            // dele, não do titular de agora. Sem isso o comando reescrevia o doctor_id do
+            // plantonista atual para o nome digitado e derrubava um plantão vivo — a origem
+            // dos casos em que o /corrigir "confundia o robô".
+            const namedAnotherDoctor = doctor.id !== active.occupancy!.doctorId;
+            const targetId = command.sector === "REGULATION" ? active.post!.id : active.base!.id;
+            const offBoardOccupancy = namedAnotherDoctor
                 ? await findOffBoardOccupancyOnTarget({
                     sector: command.sector,
-                    targetId: command.sector === "REGULATION" ? active.post!.id : active.base!.id,
+                    targetId,
                     doctorId: doctor.id,
                 })
                 : null;
-            const targetOccupancy = offBoardOccupancy ?? active.occupancy!;
+            const recentlyClosedOccupancy = namedAnotherDoctor && !offBoardOccupancy
+                ? await findRecentlyClosedOccupancyOnTarget({
+                    sector: command.sector,
+                    targetId,
+                    doctorId: doctor.id,
+                    referenceAt: eventAt,
+                })
+                : null;
+            const targetOccupancy = offBoardOccupancy ?? recentlyClosedOccupancy ?? active.occupancy!;
 
             // Só espelha boardStartedAt quando ele hoje coincide com startedAt. Continuidade
             // (board < started) e sombra (board nulo) mantêm o valor que já têm.
@@ -6887,11 +6985,21 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                     usedActiveDoctorFallback,
                 },
             });
+            // Diz em qual plantão a correção caiu quando não é o titular de agora —
+            // sem isso o chefe não distingue "corrigi o plantão dele" de "reescrevi
+            // o médico que está no quadro".
+            const correctedShiftHint = recentlyClosedOccupancy
+                ? `\nPlantão já encerrado (saída ${formatTelegramReplyTime(
+                    recentlyClosedOccupancy.actualEndedAt ?? recentlyClosedOccupancy.endedAt!,
+                )}). O titular atual de ${command.targetCode} não foi tocado.`
+                : offBoardOccupancy
+                    ? `\nOcupação fora do quadro. O titular atual de ${command.targetCode} não foi tocado.`
+                    : "";
             await sendMessage(message.chat.id, pickTelegramReply("command_corrected", message.message_id, {
                 target: command.targetCode,
                 name: doctor.fullName,
                 time: formatTelegramReplyTime(eventAt),
-            }) + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode)), message.message_id);
+            }) + correctedShiftHint + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode)), message.message_id);
 
             if (message.chat.type === "private") {
                 await announcePrivateCorrectionToGroups(message.message_id, {
@@ -9042,9 +9150,31 @@ async function applyParsedEntry(params: {
                     throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
 
+                // Ficou 10h ou mais além do fim previsto e ninguém assumiu o ramal:
+                // isso é o "continua" que ele esqueceu de mandar. Escreve a janela que a
+                // continuação teria criado ANTES de gravar a saída — senão a sobra vira
+                // excedente e o plantão emendado some da folha. Ninguém é consultado: a
+                // permanência é a prova (caso Felipe Carneiro).
+                const undeclaredContinuationEndAt = !hasHandoff && recentClosed.scheduledEndAt
+                    ? resolveUndeclaredContinuationScheduledEndAt({
+                        domain: "REGULATION",
+                        scheduledEndAt: recentClosed.scheduledEndAt,
+                        departureAt: eventAt,
+                    })
+                    : null;
+
                 occupancyId = (await correctRegulationOccupancy(recentClosed.id, {
                     actualEndedAt: eventAt,
-                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida ajustada", messageText),
+                    ...(undeclaredContinuationEndAt
+                        ? { shiftLabel: "P" as const, scheduledEndAt: undeclaredContinuationEndAt }
+                        : {}),
+                    notes: appendTelegramOperationalNote(
+                        recentClosed.notes,
+                        undeclaredContinuationEndAt
+                            ? "telegram continuacao reconhecida pela permanencia"
+                            : "telegram saida ajustada",
+                        messageText,
+                    ),
                 }, null)).id;
                 successKind = "departure_adjusted";
             }
@@ -9116,19 +9246,17 @@ async function applyParsedEntry(params: {
                     : await findTelegramContinuityContext({
                         doctorId: resolvedDoctor.id,
                         eventAt,
-                        explicitContinuation: Boolean(parsed.isContinuation),
                     });
                 const sourceShiftLabelForLink = continuityContext?.source
                     ? (continuityContext.source.shiftLabel
                         ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
                     : undefined;
-                const inferredCrossShiftContinuation = Boolean(
-                    continuityContext?.source
-                    && !parsed.shiftType
-                    && !parsed.isContinuation
-                    && sourceShiftLabelForLink
-                    && sourceShiftLabelForLink !== resolveOperationalShiftWindow(eventAt).shiftLabel,
-                );
+                const inferredCrossShiftContinuation = Boolean(continuityContext?.source)
+                    && shouldInferCrossShiftContinuation({
+                        sourceShiftLabel: sourceShiftLabelForLink,
+                        eventAt,
+                        isExplicitContinuation: Boolean(parsed.isContinuation),
+                    });
                 const shouldUseContinuityContext = Boolean(
                     continuityContext?.source
                     && (
@@ -9361,6 +9489,16 @@ async function applyParsedEntry(params: {
                     throw new Error("No active intervention occupancy found for this doctor/base.");
                 }
 
+                const hasHandoffIntv = recentClosed.endedAt
+                    ? await hasInterventionDepartureHandoff({
+                        baseId: base.id,
+                        doctorId: resolvedDoctor.id,
+                        occupancyId: recentClosed.id,
+                        endedAt: recentClosed.endedAt,
+                        eventAt,
+                    })
+                    : false;
+
                 if (
                     requiresTelegramDepartureAdjustmentJustification({
                         domain: "INTERVENTION",
@@ -9368,24 +9506,35 @@ async function applyParsedEntry(params: {
                         scheduledEndAt: recentClosed.scheduledEndAt,
                         endedAt: recentClosed.endedAt,
                         eventAt,
-                        hasSuccessorOccupancy: recentClosed.endedAt
-                            ? await hasInterventionDepartureHandoff({
-                                baseId: base.id,
-                                doctorId: resolvedDoctor.id,
-                                occupancyId: recentClosed.id,
-                                endedAt: recentClosed.endedAt,
-                                eventAt,
-                            })
-                            : false,
+                        hasSuccessorOccupancy: hasHandoffIntv,
                     })
                     && !isTelegramCreditEligibleClaim(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
                 ) {
                     throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
 
+                // Espelho da regulação: 10h+ de permanência sem ninguém assumir a base é
+                // continuação, não excedente. Ver o comentário longo no ramo de REGULAÇÃO.
+                const undeclaredContinuationEndAtIntv = !hasHandoffIntv && recentClosed.scheduledEndAt
+                    ? resolveUndeclaredContinuationScheduledEndAt({
+                        domain: "INTERVENTION",
+                        scheduledEndAt: recentClosed.scheduledEndAt,
+                        departureAt: eventAt,
+                    })
+                    : null;
+
                 occupancyId = (await correctInterventionOccupancy(recentClosed.id, {
                     actualEndedAt: eventAt,
-                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida ajustada", messageText),
+                    ...(undeclaredContinuationEndAtIntv
+                        ? { shiftLabel: "P" as const, scheduledEndAt: undeclaredContinuationEndAtIntv }
+                        : {}),
+                    notes: appendTelegramOperationalNote(
+                        recentClosed.notes,
+                        undeclaredContinuationEndAtIntv
+                            ? "telegram continuacao reconhecida pela permanencia"
+                            : "telegram saida ajustada",
+                        messageText,
+                    ),
                 }, null)).id;
                 successKind = "departure_adjusted";
             }
@@ -9447,19 +9596,17 @@ async function applyParsedEntry(params: {
                     : await findTelegramContinuityContext({
                         doctorId: resolvedDoctor.id,
                         eventAt,
-                        explicitContinuation: Boolean(parsed.isContinuation),
                     });
                 const sourceShiftLabelForLink = continuityContext?.source
                     ? (continuityContext.source.shiftLabel
                         ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
                     : undefined;
-                const inferredCrossShiftContinuation = Boolean(
-                    continuityContext?.source
-                    && !parsed.shiftType
-                    && !parsed.isContinuation
-                    && sourceShiftLabelForLink
-                    && sourceShiftLabelForLink !== resolveOperationalShiftWindow(eventAt).shiftLabel,
-                );
+                const inferredCrossShiftContinuation = Boolean(continuityContext?.source)
+                    && shouldInferCrossShiftContinuation({
+                        sourceShiftLabel: sourceShiftLabelForLink,
+                        eventAt,
+                        isExplicitContinuation: Boolean(parsed.isContinuation),
+                    });
                 const shouldUseContinuityContext = Boolean(
                     continuityContext?.source
                     && (

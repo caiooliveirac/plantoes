@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { EventTimeline } from "@/components/board/EventTimeline";
 import { modalBackdrop, modalPanel, tapFeedback } from "@/lib/board/motion";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
-import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import type { ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
 import {
     isValidOverrideNote,
@@ -70,15 +70,27 @@ interface DecisionButton {
 }
 
 /**
- * O verificador de saídas. Mostra POR QUE o caso pede decisão (frase da
- * triagem) e oferece só os botões que fazem sentido para aquele caso:
+ * O verificador de saídas.
+ *
+ * A primeira coisa da tela são os dois horários que decidem tudo — CHEGOU e
+ * SAIU — porque é isso que o chefe precisa julgar; a régua vem depois, em uma
+ * linha. Antes o modal abria com um parágrafo de triagem e enterrava a chegada
+ * numa linha cinza de 0,82rem, e um chefe não conseguia responder "que horas
+ * ele chegou?" sem reler tudo.
+ *
+ * Botões, por caso:
  *
  *   - faixa MEIO (6h–10h de janela): pagar inteiro ou pagar MEIO;
  *   - saída <6h: lançar só no banco, ou pagar MEIO/INTEIRO com justificativa
  *     escrita (mínimo de 8 caracteres — espaços contam);
- *   - saída tardia: confirmar o crédito, recusar (com justificativa) ou
- *     ajustar chegada/saída num formulário simples de dois horários;
+ *   - permanência de 6h+ além da janela: emendou turno (P) — confirma e a folha
+ *     assina o plantão; NUNCA se oferece o crédito de banco aqui;
+ *   - saída tardia: confirmar o crédito ou recusar (com justificativa);
  *   - rotina: confirmar e pronto.
+ *
+ * "Ajustar horários" existe em TODOS os casos: quando o registro está errado, a
+ * hora certa tem de prevalecer antes de qualquer decisão de pagamento — era
+ * justamente nas faixas de pagamento que o botão faltava.
  */
 export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
     const router = useRouter();
@@ -145,10 +157,20 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
     const bankScheduledStartAt = target?.bankScheduledStartAt ?? target?.scheduledStartAt ?? null;
     const bankScheduledEndAt = target?.bankScheduledEndAt ?? target?.scheduledEndAt ?? null;
 
+    // Atraso da CHEGADA contra a janela do quadro — o número que o chefe procura
+    // primeiro e que o modal só mostrava indiretamente, dentro da frase de triagem.
+    const arrivalDeltaMinutes = useMemo(() => {
+        if (!target?.scheduledStartAt) return null;
+        const scheduled = new Date(target.scheduledStartAt).getTime();
+        const started = new Date(target.startedAt).getTime();
+        if (Number.isNaN(scheduled) || Number.isNaN(started)) return null;
+        return Math.round((started - scheduled) / 60000);
+    }, [target]);
+
     const standardBalance = useMemo(() => {
         if (!target || !bankScheduledStartAt || !bankScheduledEndAt) return null;
         try {
-            return calculateBankHours({
+            return calculateGuardedBankHours({
                 scheduledStartAt: bankScheduledStartAt,
                 scheduledEndAt: bankScheduledEndAt,
                 actualStartAt: target.startedAt,
@@ -172,7 +194,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             return {
                 start,
                 end,
-                calc: calculateBankHours({
+                calc: calculateGuardedBankHours({
                     scheduledStartAt: bankScheduledStartAt,
                     scheduledEndAt: bankScheduledEndAt,
                     actualStartAt: start,
@@ -346,6 +368,22 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             ];
         }
 
+        // Emendou o turno: a folha assina o plantão pelo slot ocupado e o banco
+        // fica com o resto (< 6h). Oferecer "confirmar N h de banco" aqui era
+        // prometer um número que applyAnomalyGuard já cortava na gravação.
+        if (triage.kind === "extended_stay") {
+            return [
+                {
+                    label: confirmLabel,
+                    hint: standardBalance
+                        ? standardBalance.explanation
+                        : "Confirma a saída verbalizada como está.",
+                    className: "confirm",
+                    action: { kind: "confirm" },
+                },
+            ];
+        }
+
         if (triage.kind === "late_credit") {
             const balance = standardBalance?.balanceMinutes ?? null;
             return [
@@ -411,9 +449,10 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                 <strong>{target.displayName ?? target.doctorName}</strong>
                                             </Dialog.Title>
                                             <Dialog.Description asChild>
+                                                {/* A hora da saída não se repete aqui: ela é o segundo
+                                                    número grande do bloco de fatos, logo abaixo. */}
                                                 <span>
                                                     {target.targetCode} · {target.shiftLabel ?? "—"}{target.roleLabel ? ` · ${target.roleLabel}` : ""}
-                                                    {" · saída verbalizada "}{formatLocalHourMinute(verbalizedMs)}
                                                 </span>
                                             </Dialog.Description>
                                         </div>
@@ -424,16 +463,44 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
 
                                     <div className="departure-verifier-body">
                                         <div className="departure-verifier-body__col">
-                                            <p className="departure-verifier-headline">{triage.headline}</p>
-                                            <div style={{ fontSize: "0.82rem", color: "var(--muted-strong)", display: "flex", flexDirection: "column", gap: 4 }}>
+                                            {/* Os dois horários que decidem tudo, antes de qualquer régua. */}
+                                            <div className="departure-verifier-facts">
+                                                <div className="departure-verifier-fact">
+                                                    <span className="departure-verifier-fact__label">Chegou</span>
+                                                    <strong className="departure-verifier-fact__value">
+                                                        {formatLocalHourMinute(new Date(target.startedAt).getTime())}
+                                                    </strong>
+                                                    {arrivalDeltaMinutes !== null && (
+                                                        <span className="departure-verifier-fact__delta" data-off={arrivalDeltaMinutes > 15}>
+                                                            {arrivalDeltaMinutes === 0 ? "no horário" : `${formatSignedMinutes(arrivalDeltaMinutes)} vs previsto`}
+                                                        </span>
+                                                    )}
+                                                    {target.arrivalCorrectedInTelegram && (
+                                                        <span className="departure-verifier-fact__badge" title="Esta chegada já foi corrigida no Telegram (/corrigir). É a hora que vale.">
+                                                            corrigida no /corrigir
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <span className="departure-verifier-facts__arrow" aria-hidden="true">→</span>
+                                                <div className="departure-verifier-fact">
+                                                    <span className="departure-verifier-fact__label">Saiu</span>
+                                                    <strong className="departure-verifier-fact__value">
+                                                        {formatLocalHourMinute(verbalizedMs)}
+                                                    </strong>
+                                                    {typeof target.delayMinutes === "number" && (
+                                                        <span className="departure-verifier-fact__delta" data-off={Math.abs(target.delayMinutes) > 15}>
+                                                            {target.delayMinutes === 0 ? "no horário" : `${formatSignedMinutes(target.delayMinutes)} vs previsto`}
+                                                        </span>
+                                                    )}
+                                                </div>
                                                 {target.scheduledStartAt && target.scheduledEndAt && (
-                                                    <span>Janela paga: {formatLocalHourMinute(new Date(target.scheduledStartAt).getTime())} — {formatLocalHourMinute(new Date(target.scheduledEndAt).getTime())}</span>
-                                                )}
-                                                <span>Chegada registrada: {formatLocalHourMinute(new Date(target.startedAt).getTime())}</span>
-                                                {typeof target.delayMinutes === "number" && (
-                                                    <span>Saída versus fim de janela: {target.delayMinutes > 0 ? "+" : ""}{target.delayMinutes}min</span>
+                                                    <span className="departure-verifier-facts__window">
+                                                        previsto {formatLocalHourMinute(new Date(target.scheduledStartAt).getTime())}
+                                                        {" — "}{formatLocalHourMinute(new Date(target.scheduledEndAt).getTime())}
+                                                    </span>
                                                 )}
                                             </div>
+                                            <p className="departure-verifier-headline">{triage.headline}</p>
 
                                             {view === "decide" && (
                                                 <div className="departure-verifier-decisions">
@@ -467,7 +534,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                             qualquer desfecho de pagamento já decidido sobre ela.
                                                         </span>
                                                     </div>
-                                                    {(triage.kind === "late_credit" || triage.kind === "routine" || triage.kind === "occurrence_missing" || triage.kind === "pattern" || triage.kind === "short_anomaly") && canAdjust && (
+                                                    {canAdjust && (
                                                         <div className="departure-verifier-decision">
                                                             <motion.button
                                                                 type="button"
@@ -476,10 +543,11 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                                 whileTap={tapFeedback}
                                                                 disabled={submitting || pendingAction !== null}
                                                             >
-                                                                Ajustar o crédito no banco de horas
+                                                                Corrigir os horários
                                                             </motion.button>
                                                             <span className="departure-verifier-decision__hint">
-                                                                Corrigir a hora de chegada e/ou de saída — o saldo é recalculado na tela.
+                                                                A hora registrada está errada. Corrija chegada e/ou saída antes de
+                                                                decidir — a régua e o saldo são recalculados na tela.
                                                             </span>
                                                         </div>
                                                     )}

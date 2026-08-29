@@ -1,5 +1,5 @@
 import { buildContinuityGroups } from "@/modules/bank-hours/continuity";
-import { applyAnomalyGuard, calculateBankHours } from "@/modules/bank-hours/calculator";
+import { applyAnomalyGuard, calculateBankHours, calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { buildBankHoursBalanceOverrideExplanation, MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE } from "@/modules/bank-hours/service";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
@@ -328,8 +328,11 @@ function resolveBankHoursMetrics(
     scheduledEndAt: string | null,
 ): ResolvedBankHoursMetrics | null {
     if (shift.manualBalanceMinutes !== null) {
+        // Guardado como o resto: este número aparece na explicação do override
+        // como "o que o automático teria dado" — tem de ser o que o automático
+        // daria de verdade.
         const automaticMetrics = scheduledStartAt && scheduledEndAt && countedStartAt && countedEndAt
-            ? calculateBankHours({
+            ? calculateGuardedBankHours({
                 scheduledStartAt,
                 scheduledEndAt,
                 actualStartAt: countedStartAt,

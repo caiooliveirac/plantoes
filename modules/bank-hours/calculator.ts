@@ -164,6 +164,20 @@ export const EXTENDED_STAY_RULE_CODE = "EXTENDED_STAY_PAYABLE_SHIFT";
  *
  * O teto é estrutural: nenhum plantão credita mais que 6h brutas (12h em dobro).
  */
+/**
+ * O ÚNICO cálculo de banco que a interface pode mostrar.
+ *
+ * `calculateBankHours` é a matemática crua; quem decide o que vira crédito é
+ * `applyAnomalyGuard`. Telas que chamavam a crua exibiam números que o servidor
+ * nunca gravou — o modal de saída chegou a oferecer "confirmar 23h30 de banco
+ * de horas" a quem tinha emendado o turno seguinte (caso Felipe Carneiro), e o
+ * histórico do turno anterior repetia o mesmo saldo fantasma. Preview e
+ * gravação passam por aqui.
+ */
+export function calculateGuardedBankHours(input: BankHoursCalculationInput): BankHoursCalculationResult {
+    return applyAnomalyGuard(calculateBankHours(input));
+}
+
 export function applyAnomalyGuard(calculation: BankHoursCalculationResult): BankHoursCalculationResult {
     const isAnomalousDelay = calculation.arrivalDelayMinutes > ANOMALY_THRESHOLD_MINUTES;
 

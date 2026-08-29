@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyAnomalyGuard, calculateBankHours } from "@/modules/bank-hours/calculator";
+import { applyAnomalyGuard, calculateBankHours, calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 
 function iso(value: string) {
@@ -365,4 +365,35 @@ test("atraso longo em SD inteiro debita de verdade (sem virar meio plantao)", ()
     assert.equal(result.balanceMinutes, -218);
     assert.equal(result.ruleCode, "LATE_NO_OVERTIME");
     assert.deepEqual(applyAnomalyGuard(result), result, "3h38 de atraso e cri\u00advel: nao pode virar ANOMALIA");
+});
+
+// A tela nunca pode mostrar um numero que a gravacao nao produz. O modal de
+// saida chegou a oferecer "confirmar 23h30 de banco de horas" a quem tinha
+// emendado o turno seguinte (caso Felipe Carneiro) porque chamava a matematica
+// crua; calculateGuardedBankHours e o unico caminho que preview e gravacao
+// compartilham.
+test("calculateGuardedBankHours e identico a applyAnomalyGuard(calculateBankHours)", () => {
+    const input = {
+        scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-05T19:15:00-03:00"),
+        actualStartAt: iso("2026-04-05T07:20:00-03:00"),
+        actualEndAt: iso("2026-04-06T06:55:00-03:00"),
+    };
+    assert.deepEqual(calculateGuardedBankHours(input), applyAnomalyGuard(calculateBankHours(input)));
+});
+
+test("preview guardado nao oferece o credito bruto de uma permanencia longa", () => {
+    const input = {
+        scheduledStartAt: iso("2026-04-05T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-04-05T19:15:00-03:00"),
+        actualStartAt: iso("2026-04-05T07:00:00-03:00"),
+        actualEndAt: iso("2026-04-06T06:55:00-03:00"),
+    };
+    const raw = calculateBankHours(input);
+    const guarded = calculateGuardedBankHours(input);
+
+    // A conta crua daria quase 24h de credito (excedente em dobro).
+    assert.equal(raw.balanceMinutes > 20 * 60, true);
+    assert.equal(guarded.balanceMinutes, 0);
+    assert.equal(guarded.ruleCode, "EXTENDED_STAY_PAYABLE_SHIFT");
 });

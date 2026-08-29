@@ -180,6 +180,56 @@ export function inferRegulationCoverageWindow(params: {
     };
 }
 
+/**
+ * Sobra a partir da qual a permanência é, sozinha, prova de continuação.
+ *
+ * É o mesmo 10h que a régua da sobra já usa para assinar plantão INTEIRO
+ * (EXTENDED_STAY_FULL_THRESHOLD_MINUTES): abaixo disso ainda cabe conversa,
+ * acima não cabe. Quem saiu 10h ou mais depois do fim previsto emendou o turno
+ * seguinte, e isso não é uma pergunta a fazer ao chefe — é uma conta a fazer.
+ */
+export const UNDECLARED_CONTINUATION_OVERTIME_MINUTES = 10 * 60;
+
+/**
+ * Janela que a continuação NÃO DECLARADA deveria ter tido.
+ *
+ * Estende o fim previsto bloco a bloco — a mesma aritmética de
+ * resolveRegulationContinuationScheduledEndAt — até cobrir a hora em que o
+ * médico de fato saiu. É o "continua" que ele esqueceu de mandar, escrito
+ * depois pela evidência de que ele ficou.
+ *
+ * Devolve null quando não há nada a estender (saiu dentro da janela, ou a sobra
+ * ainda não chega ao limite em que a permanência fala por si).
+ */
+export function resolveUndeclaredContinuationScheduledEndAt(params: {
+    domain: "REGULATION" | "INTERVENTION";
+    scheduledEndAt: Date;
+    departureAt: Date;
+}) {
+    const overtimeMinutes = Math.trunc(
+        (params.departureAt.getTime() - params.scheduledEndAt.getTime()) / 60000,
+    );
+    if (overtimeMinutes < UNDECLARED_CONTINUATION_OVERTIME_MINUTES) {
+        return null;
+    }
+
+    let endAt = params.scheduledEndAt;
+    // Um turno operacional por volta; o teto existe só para nunca girar à toa.
+    for (let block = 0; block < 8 && endAt.getTime() < params.departureAt.getTime(); block += 1) {
+        const reference = new Date(endAt.getTime() + 60000);
+        const shiftLabel = resolveOperationalShiftWindow(reference).shiftLabel;
+        const next = params.domain === "REGULATION"
+            ? inferRegulationScheduledEndAt(reference, shiftLabel, null)
+            : inferInterventionScheduledEndAt(reference, shiftLabel, null);
+        if (!next || next.getTime() <= endAt.getTime()) {
+            break;
+        }
+        endAt = next;
+    }
+
+    return endAt.getTime() > params.scheduledEndAt.getTime() ? endAt : null;
+}
+
 export function inferRegulationScheduledEndAt(startedAt: Date, shiftLabel?: string | null, explicitScheduledEndAt?: Date | null) {
     if (explicitScheduledEndAt) {
         return explicitScheduledEndAt;

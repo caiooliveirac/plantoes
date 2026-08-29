@@ -3,6 +3,12 @@ import {
     isEarlyDepartureEligible,
     type EarlyDepartureClassification,
 } from "@/modules/operational/early-departure";
+import {
+    classifyExtendedStay,
+    describeExtendedStay,
+    isPayableExtendedStay,
+    type ExtendedStayClassification,
+} from "@/modules/operational/extended-stay";
 import { DEPARTURE_GRACE_MINUTES } from "@/modules/bank-hours/calculator";
 
 /**
@@ -12,6 +18,10 @@ import { DEPARTURE_GRACE_MINUTES } from "@/modules/bank-hours/calculator";
  * Fonte única para o AuditRail e o DepartureVerifier — os dois precisam
  * concordar sobre qual caso é qual, senão o card promete um botão que o
  * modal não mostra.
+ *
+ * As frases (`headline`) são escritas para serem lidas de relance por um chefe
+ * às 7h da manhã: uma linha, o fato e o que está em jogo. O QUE fazer é o texto
+ * dos botões, não da frase — repetir a decisão aqui só produz parede de texto.
  */
 
 export type DepartureTriageKind =
@@ -23,6 +33,8 @@ export type DepartureTriageKind =
     | "early_half"
     /** Saiu antes do fim mas faltando 2h ou menos (10h–12h de janela): chefe decide inteiro ou MEIO. */
     | "early_full"
+    /** Ficou 6h ou mais além da janela: emendou turno (P) — plantão a assinar, não banco. */
+    | "extended_stay"
     /** Saiu depois da janela além da tolerância: crédito de banco em jogo. */
     | "late_credit"
     /** Alegou ocorrência sem o número de 4 dígitos. */
@@ -54,10 +66,15 @@ export interface DepartureTriageResult {
     kind: DepartureTriageKind;
     /** true = exige clique/decisão individual do chefe; false = rotina. */
     attention: boolean;
-    /** Frase em português explicando POR QUE o caso está na fila. */
+    /** Frase em português explicando POR QUE o caso está na fila. Uma linha. */
     headline: string;
     /** Régua de saída antecipada, quando a ocupação é elegível. */
     classification: EarlyDepartureClassification | null;
+    /**
+     * Régua da permanência longa (espelho da anterior), quando a sobra chega a
+     * 6h. É o que diz que a saída é P e quantos plantões ela vale.
+     */
+    extendedStay: ExtendedStayClassification | null;
 }
 
 /** Repetição da mesma justificativa que acende o sinal de padrão. */
@@ -111,6 +128,11 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
         })
         : null;
 
+    // Permanência longa: mesma régua do banco de horas (applyAnomalyGuard), para
+    // que a tela não prometa um crédito que o sistema não vai conceder.
+    const extendedStay = classifyExtendedStay(input.delayMinutes ?? 0);
+    const payableExtendedStay = isPayableExtendedStay(extendedStay) ? extendedStay : null;
+
     // Anomalia antes de qualquer régua: saída minutos depois da chegada não é
     // uma saída real — é rastro de conflito de posto ou erro de registro.
     const startedMs = toMs(input.startedAt);
@@ -122,10 +144,35 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
                 kind: "short_anomaly",
                 attention: true,
                 classification,
-                headline: `Saída registrada ${minutesOnDuty}min depois da chegada — quase certamente um conflito `
-                    + `de posto ou erro de registro, não uma saída real. Investigue antes de confirmar qualquer coisa.`,
+                extendedStay: payableExtendedStay,
+                headline: `Saída ${minutesOnDuty}min depois da chegada — provável conflito de posto `
+                    + `ou erro de registro, não saída real.`,
             };
         }
+    }
+
+    /**
+     * Emendou o turno seguinte. Vem ANTES de late_credit porque é o mesmo fato
+     * visto por duas réguas, e a de banco é a errada: 6h ou mais de sobra é
+     * plantão prestado na posição (um "P"), e plantão prestado se assina na
+     * folha. Enquanto isto não existia aqui, a fila oferecia ao chefe
+     * "confirmar 12h de banco de horas" para quem tinha ficado o turno inteiro
+     * — número que o servidor nunca gravou (applyAnomalyGuard corta o crédito
+     * em 6h) e que escondia o P. Caso Felipe Carneiro.
+     */
+    if (payableExtendedStay) {
+        const proposal = describeExtendedStay(payableExtendedStay);
+        return {
+            kind: "extended_stay",
+            attention: true,
+            classification,
+            extendedStay: payableExtendedStay,
+            headline: `Ficou ${formatHoursShort(payableExtendedStay.overtimeMinutes)} além da janela — `
+                + `emendou o turno seguinte (P): ${proposal} a assinar na posição, não banco de horas.`
+                + (payableExtendedStay.bankMinutes > 0
+                    ? ` Sobram ${formatHoursShort(payableExtendedStay.bankMinutes)} para o banco.`
+                    : ""),
+        };
     }
 
     // Rendição é padrão: a saída antecipada foi causada pela chegada de outro
@@ -139,8 +186,9 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
             kind: "early_bank_only",
             attention: true,
             classification,
-            headline: `Saiu com ${formatHoursShort(classification.workedMinutes)} trabalhadas — menos de 6h de janela: `
-                + `decidir entre lançar só no banco de horas ou pagar com justificativa.`,
+            extendedStay: null,
+            headline: `Cumpriu ${formatHoursShort(classification.workedMinutes)} da janela — `
+                + `menos das 6h que assinam MEIO plantão.`,
         };
     }
 
@@ -149,8 +197,8 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
             kind: "early_half",
             attention: true,
             classification,
-            headline: `Saiu com ${formatHoursShort(classification.workedMinutes)} trabalhadas — faixa de MEIO plantão: `
-                + `decidir entre pagar inteiro ou MEIO (excedente de 6h vira banco).`,
+            extendedStay: null,
+            headline: `Cumpriu ${formatHoursShort(classification.workedMinutes)} da janela — faixa de MEIO plantão.`,
         };
     }
 
@@ -163,8 +211,9 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
             kind: "early_full",
             attention: true,
             classification,
-            headline: `Saiu faltando ${formatHoursShort(classification.remainingMinutes)} para o fim, com `
-                + `${formatHoursShort(classification.workedMinutes)} trabalhadas — decidir entre pagar inteiro ou MEIO.`,
+            extendedStay: null,
+            headline: `Saiu faltando ${formatHoursShort(classification.remainingMinutes)} para o fim, `
+                + `com ${formatHoursShort(classification.workedMinutes)} de janela cumpridos.`,
         };
     }
 
@@ -173,8 +222,8 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
             kind: "late_credit",
             attention: true,
             classification,
-            headline: `Saiu ${formatHoursShort(input.delayMinutes!)} depois da janela — `
-                + `confirmar gera crédito no banco de horas.`,
+            extendedStay: null,
+            headline: `Ficou ${formatHoursShort(input.delayMinutes!)} além da janela — gera crédito no banco de horas.`,
         };
     }
 
@@ -183,7 +232,8 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
             kind: "occurrence_missing",
             attention: true,
             classification,
-            headline: "Alegou ocorrência sem informar o número de 4 dígitos — conferir antes de validar.",
+            extendedStay: null,
+            headline: "Alegou ocorrência sem informar o número de 4 dígitos.",
         };
     }
 
@@ -192,7 +242,8 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
             kind: "pattern",
             attention: true,
             classification,
-            headline: `${input.reasonOccurrenceCount30d}ª vez em 30 dias com a mesma justificativa — atenção ao padrão.`,
+            extendedStay: null,
+            headline: `${input.reasonOccurrenceCount30d}ª vez em 30 dias com a mesma justificativa.`,
         };
     }
 
@@ -200,6 +251,7 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
         kind: "routine",
         attention: false,
         classification,
+        extendedStay: null,
         headline: "Saída dentro do previsto — sem impacto em pagamento ou banco de horas.",
     };
 }
