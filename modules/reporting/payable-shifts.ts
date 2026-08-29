@@ -140,6 +140,13 @@ export const ADMIN_EXTRA_SHIFT_SOURCE = "admin_extra";
  */
 export const CHIEF_EXTRA_SHIFT_KIND = "chief";
 
+/**
+ * Meio plantão de chefia (kind 'chief_half'): mesma natureza do 'chief' — fora
+ * do banco de horas, marcado como chefia no board — pagando 0,5 unidade, igual
+ * à régua do meio plantão comum.
+ */
+export const CHIEF_EXTRA_HALF_SHIFT_KIND = "chief_half";
+
 /** Rótulo fixo do chip: quem olha o board sabe na hora que é chefia. */
 export const CHIEF_EXTRA_SHIFT_LABEL = "PLANTÃO DE CHEFIA";
 
@@ -151,7 +158,8 @@ export interface AdminExtraShiftInput {
     operationalDate: string;
     shiftLabel: "SD" | "SN";
     label: string | null;
-    /** 'extra' | 'bonus' | 'penalty'. Padrão 'extra' para registros antigos. */
+    /** 'extra' | 'half_extra' | 'bonus' | 'penalty' | 'chief' | 'chief_half'.
+     * Padrão 'extra' para registros antigos. */
     kind?: string;
     /** +1 (verde) ou -1 (vermelho, punição do banco de horas). Padrão +1. */
     unit?: number;
@@ -166,8 +174,11 @@ export interface AdminExtraShiftInput {
 export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): PayableShift {
     const tagCode = input.label?.trim() ? input.label.trim() : "EXTRA";
     const normalizedKind = String(input.kind ?? "extra").trim().toLowerCase();
-    const isHalfExtra = normalizedKind === "half_extra";
-    const isChiefExtra = normalizedKind === CHIEF_EXTRA_SHIFT_KIND;
+    const isChiefExtra = normalizedKind === CHIEF_EXTRA_SHIFT_KIND
+        || normalizedKind === CHIEF_EXTRA_HALF_SHIFT_KIND;
+    // Meio plantão (do admin ou de chefia) paga 0,5 unidade e leva a tag MEIO.
+    const isHalfExtra = normalizedKind === "half_extra"
+        || normalizedKind === CHIEF_EXTRA_HALF_SHIFT_KIND;
     // Slot local: SD = 06:00–18:00, SN = 18:00–06:00 (offset São Paulo -180min).
     const slotStartedAt = input.shiftLabel === "SD"
         ? `${input.operationalDate}T09:00:00.000Z`
