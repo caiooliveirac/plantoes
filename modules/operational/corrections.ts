@@ -696,6 +696,8 @@ export function resolveCorrectedHalfShiftState(params: {
     existingRoleLabel: string | null;
     nextRoleLabel: string | null;
     roleLabelProvided: boolean;
+    /** O chamador redefiniu o turno (SD/SN/P)? Só então a janela pode ENCOLHER. */
+    shiftLabelProvided?: boolean;
     temporalFieldsChanged: boolean;
     windowReferenceAt: Date;
     existingWindow: CorrectedScheduledWindow;
@@ -733,7 +735,38 @@ export function resolveCorrectedHalfShiftState(params: {
         return { roleLabel, ...params.existingWindow };
     }
 
-    return { roleLabel, ...params.inferFullShiftWindow() };
+    const inferred = params.inferFullShiftWindow();
+
+    /**
+     * Corrigir a CHEGADA não desmente as continuações.
+     *
+     * A inferência só sabe estender UM bloco além do turno-base. Uma cadeia de P
+     * construída por avisos sucessivos de "continua"
+     * (resolveRegulationContinuationScheduledEndAt soma um bloco por aviso) tem
+     * fim MUITO além disso — e qualquer correção de horário devolvia a janela
+     * curta, apagando a cobertura acumulada. O médico passava a "ficar 12h além
+     * da janela": a folha perdia o plantão emendado e a fila do chefe passou a
+     * propor um plantão que não existe.
+     *
+     * A hora de chegada não fala sobre o fim da cadeia. Então, quando a correção
+     * mexe SÓ em horário — sem redefinir turno nem função —, o início segue a
+     * chegada corrigida e o fim gravado é preservado se for mais tarde que o
+     * inferido. Encolher continua possível, mas exige que alguém diga qual é o
+     * turno.
+     */
+    const isTimeOnlyCorrection = !params.shiftLabelProvided
+        && !params.roleLabelProvided
+        && !halfShiftBoundaryCrossed;
+    const storedEndAt = params.existingWindow.scheduledEndAt;
+    const keepsStoredEnd = isTimeOnlyCorrection
+        && storedEndAt !== null
+        && (inferred.scheduledEndAt === null || storedEndAt.getTime() > inferred.scheduledEndAt.getTime());
+
+    return {
+        roleLabel,
+        scheduledStartAt: inferred.scheduledStartAt,
+        scheduledEndAt: keepsStoredEnd ? storedEndAt : inferred.scheduledEndAt,
+    };
 }
 
 export async function correctRegulationOccupancy(
@@ -818,6 +851,7 @@ export async function correctRegulationOccupancy(
             existingRoleLabel: existing.roleLabel,
             nextRoleLabel: sanitizedRoleLabel,
             roleLabelProvided: hasOwn(input, "roleLabel"),
+            shiftLabelProvided: hasOwn(input, "shiftLabel"),
             temporalFieldsChanged: hasOwn(input, "startedAt") || hasOwn(input, "shiftLabel") || hasOwn(input, "boardStartedAt"),
             windowReferenceAt,
             existingWindow: { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt },
@@ -957,6 +991,7 @@ export async function correctInterventionOccupancy(
             existingRoleLabel: existing.roleLabel,
             nextRoleLabel: sanitizedRoleLabel,
             roleLabelProvided: hasOwn(input, "roleLabel"),
+            shiftLabelProvided: hasOwn(input, "shiftLabel"),
             temporalFieldsChanged: startedAtChanged || boardStartedAtChanged || hasOwn(input, "shiftLabel"),
             windowReferenceAt,
             existingWindow: { scheduledStartAt: existing.scheduledStartAt, scheduledEndAt: existing.scheduledEndAt },
