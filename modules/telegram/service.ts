@@ -77,7 +77,7 @@ import { isChiefRegulationPostCode } from "@/modules/operational/roles";
 const ARRIVAL_EDIT_COMMANDS = new Set(["corrigir", "hoje", "ontem"]);
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveHandoffClosure } from "@/modules/operational/handoff-closure";
-import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime } from "@/modules/operational/rules";
+import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime, resolveUndeclaredContinuationScheduledEndAt } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
@@ -9114,9 +9114,31 @@ async function applyParsedEntry(params: {
                     throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
 
+                // Ficou 10h ou mais além do fim previsto e ninguém assumiu o ramal:
+                // isso é o "continua" que ele esqueceu de mandar. Escreve a janela que a
+                // continuação teria criado ANTES de gravar a saída — senão a sobra vira
+                // excedente e o plantão emendado some da folha. Ninguém é consultado: a
+                // permanência é a prova (caso Felipe Carneiro).
+                const undeclaredContinuationEndAt = !hasHandoff && recentClosed.scheduledEndAt
+                    ? resolveUndeclaredContinuationScheduledEndAt({
+                        domain: "REGULATION",
+                        scheduledEndAt: recentClosed.scheduledEndAt,
+                        departureAt: eventAt,
+                    })
+                    : null;
+
                 occupancyId = (await correctRegulationOccupancy(recentClosed.id, {
                     actualEndedAt: eventAt,
-                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida ajustada", messageText),
+                    ...(undeclaredContinuationEndAt
+                        ? { shiftLabel: "P" as const, scheduledEndAt: undeclaredContinuationEndAt }
+                        : {}),
+                    notes: appendTelegramOperationalNote(
+                        recentClosed.notes,
+                        undeclaredContinuationEndAt
+                            ? "telegram continuacao reconhecida pela permanencia"
+                            : "telegram saida ajustada",
+                        messageText,
+                    ),
                 }, null)).id;
                 successKind = "departure_adjusted";
             }
@@ -9433,6 +9455,16 @@ async function applyParsedEntry(params: {
                     throw new Error("No active intervention occupancy found for this doctor/base.");
                 }
 
+                const hasHandoffIntv = recentClosed.endedAt
+                    ? await hasInterventionDepartureHandoff({
+                        baseId: base.id,
+                        doctorId: resolvedDoctor.id,
+                        occupancyId: recentClosed.id,
+                        endedAt: recentClosed.endedAt,
+                        eventAt,
+                    })
+                    : false;
+
                 if (
                     requiresTelegramDepartureAdjustmentJustification({
                         domain: "INTERVENTION",
@@ -9440,24 +9472,35 @@ async function applyParsedEntry(params: {
                         scheduledEndAt: recentClosed.scheduledEndAt,
                         endedAt: recentClosed.endedAt,
                         eventAt,
-                        hasSuccessorOccupancy: recentClosed.endedAt
-                            ? await hasInterventionDepartureHandoff({
-                                baseId: base.id,
-                                doctorId: resolvedDoctor.id,
-                                occupancyId: recentClosed.id,
-                                endedAt: recentClosed.endedAt,
-                                eventAt,
-                            })
-                            : false,
+                        hasSuccessorOccupancy: hasHandoffIntv,
                     })
                     && !isTelegramCreditEligibleClaim(messageText, [parsed.baseCode, resolvedDoctor.fullName, parsed.arrivalTime])
                 ) {
                     throw new Error("Justificativa obrigatoria para ajustar saida apos 07:15/19:15. So aceito ocorrencia ou higienizacao para credito automatico.");
                 }
 
+                // Espelho da regulação: 10h+ de permanência sem ninguém assumir a base é
+                // continuação, não excedente. Ver o comentário longo no ramo de REGULAÇÃO.
+                const undeclaredContinuationEndAtIntv = !hasHandoffIntv && recentClosed.scheduledEndAt
+                    ? resolveUndeclaredContinuationScheduledEndAt({
+                        domain: "INTERVENTION",
+                        scheduledEndAt: recentClosed.scheduledEndAt,
+                        departureAt: eventAt,
+                    })
+                    : null;
+
                 occupancyId = (await correctInterventionOccupancy(recentClosed.id, {
                     actualEndedAt: eventAt,
-                    notes: appendTelegramOperationalNote(recentClosed.notes, "telegram saida ajustada", messageText),
+                    ...(undeclaredContinuationEndAtIntv
+                        ? { shiftLabel: "P" as const, scheduledEndAt: undeclaredContinuationEndAtIntv }
+                        : {}),
+                    notes: appendTelegramOperationalNote(
+                        recentClosed.notes,
+                        undeclaredContinuationEndAtIntv
+                            ? "telegram continuacao reconhecida pela permanencia"
+                            : "telegram saida ajustada",
+                        messageText,
+                    ),
                 }, null)).id;
                 successKind = "departure_adjusted";
             }
