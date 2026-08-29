@@ -1357,7 +1357,6 @@ async function listTelegramDoctorOperationalOccupancies(doctorId: string) {
 async function findTelegramContinuityContext(params: {
     doctorId: string;
     eventAt: Date;
-    explicitContinuation?: boolean;
 }) {
     const occupancies = await listTelegramDoctorOperationalOccupancies(params.doctorId);
     const eligible = occupancies.filter((occupancy) => occupancy.startedAt.getTime() <= params.eventAt.getTime() + 900000);
@@ -1376,19 +1375,31 @@ async function findTelegramContinuityContext(params: {
                 return false;
             }
 
-            // Continuidade explícita usa a regra da fronteira (independe da hora do
-            // aviso); a saída-e-volta-rápida implícita continua valendo em paralelo.
-            if (
-                params.explicitContinuation
-                && shouldLinkExplicitContinuationClosedSource({
-                    eventAt: params.eventAt,
-                    sourceStartedAt: occupancy.startedAt,
-                    sourceEndedAt: endedAt,
-                })
-            ) {
+            // A regra da fronteira NÃO depende mais do verbo "continua".
+            //
+            // Quem chegou num plantão e seguiu para o outro é o mesmo médico
+            // tenha ele dito a palavra ou não — e esquecer a palavra é a coisa
+            // mais comum do mundo às 7h da manhã. Enquanto o vínculo implícito
+            // valia só por 2h desde o fechamento, quem avisava tarde nascia
+            // órfão: perdia a âncora de chegada, ganhava atraso fantasma no
+            // banco de horas, caía na fila de prioridade de refeição como se
+            // tivesse acabado de chegar e jantava 30min em vez de 1h (casos
+            // João Victor Perrone e Thainara).
+            //
+            // A regra da fronteira já contém a prova de que ele ficou: a fonte
+            // começou ANTES da virada que a mensagem referencia e permaneceu até
+            // perto dela. Quem foi para casa no meio do plantão não passa.
+            if (shouldLinkExplicitContinuationClosedSource({
+                eventAt: params.eventAt,
+                sourceStartedAt: occupancy.startedAt,
+                sourceEndedAt: endedAt,
+            })) {
                 return true;
             }
 
+            // Saída-e-volta-rápida dentro do MESMO turno segue valendo em paralelo:
+            // cobre o reenvio logo depois de um fechamento acidental, que a régua
+            // da fronteira não enxerga por não atravessar virada nenhuma.
             return shouldLinkRecentClosedTelegramContinuity(params.eventAt, endedAt);
         })
         .sort(compareTelegramContinuitySource);
@@ -1464,6 +1475,32 @@ export function shouldLinkExplicitContinuationClosedSource(params: {
     }
 
     return params.sourceEndedAt.getTime() >= referenceBoundary.getTime() - TELEGRAM_CONTINUATION_SOURCE_CLOSURE_TOLERANCE_MS;
+}
+
+/**
+ * "Chegou num plantão e seguiu no outro" — a travessia de virada como prova de
+ * continuidade, sem depender de o médico ter escrito a palavra.
+ *
+ * Compara o turno da OCUPAÇÃO ANTERIOR com o turno em que a nova mensagem cai.
+ * Diferentes = ele atravessou a virada, e quem atravessa a virada continuou.
+ * Antes esta inferência também exigia que o médico NÃO tivesse escrito o rótulo
+ * do turno, e aí digitar "SN" ao voltar de um SD custava a âncora da cadeia —
+ * justamente quem tentou ser explícito saía pior do que quem não disse nada.
+ *
+ * A adjacência temporal (a fonte ter ficado até perto da virada) é garantida
+ * antes, por shouldLinkExplicitContinuationClosedSource, na escolha da fonte.
+ */
+export function shouldInferCrossShiftContinuation(params: {
+    sourceShiftLabel?: string | null;
+    eventAt: Date;
+    isExplicitContinuation: boolean;
+}) {
+    // Continuidade explícita já entra pelo caminho de shouldLinkTelegramArrivalToContinuitySource.
+    if (params.isExplicitContinuation || !params.sourceShiftLabel) {
+        return false;
+    }
+
+    return params.sourceShiftLabel !== resolveOperationalShiftWindow(params.eventAt).shiftLabel;
 }
 
 export function shouldLinkRecentClosedTelegramContinuity(eventAt: Date, endedAt: Date) {
@@ -2214,7 +2251,6 @@ async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageT
         const continuityContext = await findTelegramContinuityContext({
             doctorId: resolvedDoctor.id,
             eventAt,
-            explicitContinuation: true,
         });
         const source = continuityContext?.source;
         if (!source) {
@@ -9210,19 +9246,17 @@ async function applyParsedEntry(params: {
                     : await findTelegramContinuityContext({
                         doctorId: resolvedDoctor.id,
                         eventAt,
-                        explicitContinuation: Boolean(parsed.isContinuation),
                     });
                 const sourceShiftLabelForLink = continuityContext?.source
                     ? (continuityContext.source.shiftLabel
                         ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
                     : undefined;
-                const inferredCrossShiftContinuation = Boolean(
-                    continuityContext?.source
-                    && !parsed.shiftType
-                    && !parsed.isContinuation
-                    && sourceShiftLabelForLink
-                    && sourceShiftLabelForLink !== resolveOperationalShiftWindow(eventAt).shiftLabel,
-                );
+                const inferredCrossShiftContinuation = Boolean(continuityContext?.source)
+                    && shouldInferCrossShiftContinuation({
+                        sourceShiftLabel: sourceShiftLabelForLink,
+                        eventAt,
+                        isExplicitContinuation: Boolean(parsed.isContinuation),
+                    });
                 const shouldUseContinuityContext = Boolean(
                     continuityContext?.source
                     && (
@@ -9562,19 +9596,17 @@ async function applyParsedEntry(params: {
                     : await findTelegramContinuityContext({
                         doctorId: resolvedDoctor.id,
                         eventAt,
-                        explicitContinuation: Boolean(parsed.isContinuation),
                     });
                 const sourceShiftLabelForLink = continuityContext?.source
                     ? (continuityContext.source.shiftLabel
                         ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
                     : undefined;
-                const inferredCrossShiftContinuation = Boolean(
-                    continuityContext?.source
-                    && !parsed.shiftType
-                    && !parsed.isContinuation
-                    && sourceShiftLabelForLink
-                    && sourceShiftLabelForLink !== resolveOperationalShiftWindow(eventAt).shiftLabel,
-                );
+                const inferredCrossShiftContinuation = Boolean(continuityContext?.source)
+                    && shouldInferCrossShiftContinuation({
+                        sourceShiftLabel: sourceShiftLabelForLink,
+                        eventAt,
+                        isExplicitContinuation: Boolean(parsed.isContinuation),
+                    });
                 const shouldUseContinuityContext = Boolean(
                     continuityContext?.source
                     && (
