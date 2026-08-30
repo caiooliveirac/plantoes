@@ -4,6 +4,14 @@
 > `escalas-e-trocas-samu` e da configuração de produção documentada nos dois.
 > Responde à pergunta: "existe como migrar tudo para dentro de
 > escala.mnrs.com.br — um site só, uma conta só, um visual só?"
+>
+> ⚠️ **Leia o [Adendo (§8)](#8-adendo-o-kairós-responde-as-decisões-em-aberto)
+> antes de agir sobre as fases.** Após a escrita deste documento, a leitura do
+> repo `kairos` mostrou que três recomendações daqui já foram decididas —
+> melhor e por ADR — naquele projeto: o teto é `mnrs.com.br` (não
+> `escala.mnrs.com.br`), o provedor de identidade é o Kairós (não o escala) e
+> a URL única vem por absorção, não por `basePath`. O inventário (§1–§2) e os
+> alertas (§5–§6) continuam válidos.
 
 **Resposta curta: sim, existe — e boa parte das peças já está construída.**
 O caminho recomendado **não** é fundir os codebases num app único de uma vez,
@@ -189,10 +197,61 @@ vagas para o mesmo teto.
 
 1. **Nome definitivo do domínio-teto**: `escala.mnrs.com.br` (pedido atual) ou
    um neutro tipo `samu.mnrs.com.br` mais adiante — barato de mudar após a
-   Fase 1.
+   Fase 1. *(Superado — ver §8.)*
 2. **IdP**: recomendação é o escala (multicategoria); a alternativa plantões
-   só faria sentido se o produto voltasse a ser só-médicos.
+   só faria sentido se o produto voltasse a ser só-médicos. *(Superado — ver §8.)*
 3. **Bot único**: sim/não é decisão de produto; o plano funciona igual nos
    dois casos.
 4. **Tabela e checklist**: entram no teto na Fase 1 ou depois — nenhum passo
    depende deles.
+
+## 8. Adendo: o Kairós responde as decisões em aberto
+
+> Acrescentado no mesmo dia, após leitura do repo `kairos` (monorepo
+> `apps/shell` + `packages/core|modules|ui|indicadores`), que está **no ar** em
+> `kairos.mnrs.com.br` com login, tela-mãe, catálogo de módulos e indicadores.
+> Os ADRs de lá supersedem parte do plano acima.
+
+O Kairós já é a plataforma multi-tenant que este documento propunha construir
+por costura. O que muda em relação às fases acima:
+
+1. **O teto é `mnrs.com.br`, na raiz** (ADR 0004 do kairos), não
+   `escala.mnrs.com.br` nem `samu.mnrs.com.br`. A decisão em aberto nº 1 está
+   respondida. E o mesmo ADR **rejeita** mover os apps existentes para
+   subcaminho via `basePath` ("o basePath já mordeu neste parque antes") — a
+   Fase 1 acima não deve ser executada como escrita. Os subdomínios
+   (`plantoes.`, `escala.`) continuam vivos e morrem um a um quando cada
+   sistema for **absorvido como módulo** (ADR 0005: absorção por recriação); a
+   URL nova nasce em caminho da raiz no dia da absorção.
+2. **O provedor de identidade é o Kairós** (ADR 0002), não o escala. A decisão
+   em aberto nº 2 está respondida. O mecanismo: cookie `kairos_sessao` no
+   domínio pai `.mnrs.com.br` (chega sozinho em todos os subdomínios) +
+   `POST /api/sessao/introspeccao` com token de serviço — contrato para o lado
+   de cá em `kairos/docs/integracao-servicos.md`. A "Fase 2" acima vira:
+   plantões e escala **consomem a introspecção** (aceitando as duas
+   autenticações durante a transição, § 6 do contrato) em vez de eleger o
+   escala como IdP. O mapeamento persistente de IDs da Fase 0 é a tabela
+   `legacy_ref` do Kairós — mesmo conceito, casa canônica.
+3. **Sessão única sem esperar absorção.** Hoje **nenhum** serviço consome a
+   introspecção (medido no ESTADO.md do kairos: "os sistemas ainda pedem o
+   login deles"). Ligar isso no plantões e no escala é o passo de maior
+   impacto imediato para "uma conta só" — e é ponte sancionada com data de
+   morte (ADR 0005), não arquitetura permanente.
+4. **Há dois provedores de identidade em construção em paralelo** — a
+   introspecção do Kairós e a federação por handoff do escala
+   (`lib/servidor/federacao.ts`, escala↔UPA), além do login-com-senha-do-
+   plantões. São três pontes de identidade para o mesmo parque. Recomendação:
+   declarar o Kairós como destino único (já está em ADR aceito) e tratar as
+   pontes do escala como transitórias, para a bifurcação não crescer.
+5. **O levantamento do Kairós (2026-07-31) está desatualizado quanto ao
+   escala.** Ele registra "5 contas, domínio em `localStorage`"; desde então o
+   escala foi produtizado (estado em Postgres via `ESCALA_STORE=pg` em
+   12/08/2026, convites com senha temporária, RBAC, WhatsApp, federação). A
+   premissa de adoção-zero que embasou o ADR 0005 continua valendo para
+   checagem/giro/NEP, mas a absorção do módulo `escala` é hoje **maior** do
+   que o medido lá — vale re-medir antes de agendá-la.
+6. **O que continua valendo deste documento**: o inventário (§1–§2), o alerta
+   de não fundir codebases/bancos na marra (§3, §6 — coerente com a recriação
+   por módulo do ADR 0005, que é o oposto de um merge big-bang), a ponte
+   "senha do plantões" como transição desligável por env, e a discussão de
+   bots (§4 Fase 4), que o Kairós ainda não cobre.
