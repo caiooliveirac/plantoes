@@ -120,7 +120,23 @@ export function SelfServiceBankHours({
     }
 
     return (
-        <section className="panel-section">
+        <section className="panel-section panel-bank-extra">
+            <div className="panel-bank-extra-head">
+                <span className="panel-bank-extra-badge">BANCO DE HORAS</span>
+                <h2>Trocar saldo por plantão</h2>
+            </div>
+            <p className="panel-bank-extra-warning">
+                {canBonus
+                    ? <>Seu saldo passou de <strong>+12h</strong>: você pode registrar um plantão extra em dia livre — ele entra na folha valendo um plantão e <strong>desconta 12h do seu saldo</strong>. </>
+                    : null}
+                {canPenalty
+                    ? <>Seu saldo passou de <strong>−12h</strong>: um plantão do mês é retirado da folha e <strong>devolve 12h ao seu saldo</strong>. </>
+                    : null}
+                {!canBonus && !canPenalty
+                    ? <>Aqui ficam os plantões extra que você declarou trocando saldo do banco de horas. </>
+                    : null}
+                Plantão de chefia não passa por aqui — ele tem o bloco roxo próprio e não mexe em saldo.
+            </p>
             <div className="panel-self-service">
                 {canBonus ? (
                     <div className="panel-self-service-row bonus">
@@ -153,6 +169,16 @@ export function SelfServiceBankHours({
                             {busy === "bonus" ? "Registrando…" : "Registrar plantão extra (12h)"}
                         </button>
                     </div>
+                ) : null}
+
+                {canPenalty && shiftOptions.length === 0 ? (
+                    // Sem isto a seção renderizava como caixa vazia: elegível a
+                    // punição, mas nenhum plantão pagável no mês para retirar.
+                    <p className="panel-self-service-note">
+                        A retirada tira um plantão da folha deste mês — e você ainda não tem
+                        plantão pagável em {monthKey.split("-").reverse().join("/")}. Assim que
+                        um plantão seu entrar na folha, a opção de retirada aparece aqui.
+                    </p>
                 ) : null}
 
                 {canPenalty && shiftOptions.length > 0 ? (

@@ -5493,6 +5493,8 @@ button.ops-doctor-line.displaced.clickable:hover {
     padding: 0 7px;
     border-radius: 999px;
     border: 1px solid transparent;
+    /* Chips agora são códigos curtos (CHEFIA, BÔNUS...); uma linha sempre. */
+    white-space: nowrap;
     font-size: 0.66rem;
     font-weight: 800;
     letter-spacing: 0.06em;
@@ -5952,6 +5954,17 @@ button.chief-payable-tag:focus-visible {
     background: rgba(52, 211, 153, 0.07);
 }
 
+/* Tipo "chefia" no form: moldura acompanha o roxo do chip — o admin vê que não
+   está lançando um verde comum. */
+.chief-payable-extra-form.chief {
+    border-color: rgba(167, 139, 250, 0.55);
+    background: rgba(124, 58, 237, 0.1);
+}
+
+.chief-payable-extra-form.chief header h4 {
+    color: #e9d5ff;
+}
+
 .chief-payable-extra-form header {
     display: flex;
     flex-direction: column;
@@ -6168,16 +6181,35 @@ button.chief-payable-tag:focus-visible {
     font-size: 0.85rem;
 }
 
+/* Semeadura do contrato: campos COM rótulo em grade que quebra linha — a versão
+   em linha única estourava o card (o input de mês nem encolhe no Chromium). */
 .chief-payable-contract-seed {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 8px;
-    align-items: center;
+    align-items: end;
     margin-top: 6px;
 }
 
-.chief-payable-contract-seed input {
-    flex: 1;
+.chief-payable-contract-seed label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.55);
     min-width: 0;
+}
+
+.chief-payable-contract-seed input {
+    width: 100%;
+    min-width: 0;
+}
+
+.chief-payable-contract-seed-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .chief-payable-modal-card strong.negative {
@@ -6188,6 +6220,31 @@ button.chief-payable-tag:focus-visible {
 .chief-payable-bank-note strong {
     font-size: inherit;
     letter-spacing: normal;
+}
+
+/* Dia/turno do plantão verde/vermelho do acerto de 12h (vazio = dia útil sorteado). */
+.chief-payable-bank-settle {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+}
+
+.chief-payable-bank-settle label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 0.68rem;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.chief-payable-bank-settle select {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    padding: 5px 8px;
+    color: inherit;
+    font-size: 0.8rem;
 }
 
 /* Toggles Estatutário/ESP no cabeçalho do modal (migraram da linha da tabela). */
@@ -6358,6 +6415,21 @@ button.chief-payable-tag:focus-visible {
     border-radius: 4px;
     background: rgba(255, 196, 90, 0.18);
     color: #ffd58a;
+}
+
+/* Label livre do extra (motivo digitado / EXTRA DECLARADO) na lista: nota curta
+   truncada — o texto completo fica no title. */
+.chief-payable-modal-shift-label {
+    font-style: normal;
+    font-size: 0.64rem;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.62);
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .chief-payable-modal-shift-kind {
@@ -12978,6 +13050,58 @@ button.chief-payable-tag:focus-visible {
 .panel-link-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+}
+
+/* Bloco do banco de horas (verde): mesma anatomia do bloco roxo de chefia —
+   badge, título e aviso — para o médico saber exatamente o que está lançando.
+   Antes era um formulário sem nome flutuando abaixo do saldo. */
+.panel-bank-extra {
+    border: 2px solid rgba(52, 211, 153, 0.5);
+    border-left-width: 8px;
+    background: rgba(6, 78, 59, 0.24);
+}
+
+.panel-bank-extra-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.panel-bank-extra-head h2 {
+    margin: 0;
+    color: #d1fae5;
+}
+
+.panel-bank-extra-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: #34d399;
+    color: #052e1b;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+}
+
+.panel-bank-extra-warning {
+    margin: 10px 0 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px dashed rgba(52, 211, 153, 0.5);
+    background: rgba(52, 211, 153, 0.1);
+    color: #d1fae5;
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+
+/* Elegível a punição mas sem plantão pagável no mês: explica em vez de deixar
+   a seção vazia. */
+.panel-self-service-note {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: #cbd5e1;
 }
 
 /* Bloco do plantão de chefia — moldura roxa, faixa e aviso. Fica visualmente a

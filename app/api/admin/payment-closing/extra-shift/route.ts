@@ -5,6 +5,8 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { createAdminExtraShift, removeAdminExtraShift } from "@/services/admin-extra-shifts.service";
+import { createChiefExtraShift } from "@/services/chief-extra-shifts.service";
+import { CHIEF_EXTRA_SHIFT_LABEL } from "@/modules/reporting/payable-shifts";
 import { syncContractLedgerForMonth } from "@/services/contract-ledger.service";
 
 const payloadSchema = z.discriminatedUnion("action", [
@@ -14,7 +16,9 @@ const payloadSchema = z.discriminatedUnion("action", [
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         shift: z.enum(["SD", "SN"]),
         coverage: z.enum(["full", "half"]).optional(),
-        label: z.string().trim().min(2, "Descreva o plantão extra com pelo menos 2 caracteres.").max(40),
+        // 'extra' (verde, motivo obrigatório) ou 'chief' (roxo, label fixo).
+        type: z.enum(["extra", "chief"]).optional(),
+        label: z.string().trim().max(40).optional(),
     }),
     z.object({
         action: z.literal("remove"),
@@ -42,40 +46,65 @@ export async function POST(request: NextRequest) {
 
     try {
         if (parsed.data.action === "add") {
-            const extra = await createAdminExtraShift({
-                doctorId: parsed.data.doctorId,
-                operationalDate: parsed.data.date,
-                shiftLabel: parsed.data.shift,
-                coverage: parsed.data.coverage ?? "full",
-                label: parsed.data.label,
-                actorUserId: session.user.id,
-            });
+            const isChief = parsed.data.type === "chief";
+            let extraId: string;
+
+            if (isChief) {
+                // Chefia lançada pela coordenação: mesmo registro (kind chief/
+                // chief_half) que o autoatendimento do médico cria — roxo no
+                // quadro, fora do banco de horas, label fixo.
+                const chief = await createChiefExtraShift({
+                    doctorId: parsed.data.doctorId,
+                    operationalDate: parsed.data.date,
+                    shiftLabel: parsed.data.shift,
+                    coverage: parsed.data.coverage ?? "full",
+                    actorUserId: session.user.id,
+                });
+                extraId = chief.id;
+            } else {
+                const label = parsed.data.label?.trim() ?? "";
+                if (label.length < 2) {
+                    return NextResponse.json(
+                        { error: "Descreva o plantão extra com pelo menos 2 caracteres." },
+                        { status: 400 },
+                    );
+                }
+                const extra = await createAdminExtraShift({
+                    doctorId: parsed.data.doctorId,
+                    operationalDate: parsed.data.date,
+                    shiftLabel: parsed.data.shift,
+                    coverage: parsed.data.coverage ?? "full",
+                    label,
+                    actorUserId: session.user.id,
+                });
+                extraId = extra.id;
+            }
 
             await getDb().insert(auditLogs).values({
                 actorUserId: session.user.id,
-                action: "payment_closing.extra_shift.add",
+                action: isChief ? "payment_closing.chief_extra_shift.add" : "payment_closing.extra_shift.add",
                 entityType: "admin_extra_shift",
-                entityId: extra.id,
+                entityId: extraId,
                 details: {
-                    doctorId: extra.doctorId,
-                    doctorName: extra.doctorName,
-                    operationalDate: extra.operationalDate,
-                    shiftLabel: extra.shiftLabel,
+                    doctorId: parsed.data.doctorId,
+                    operationalDate: parsed.data.date,
+                    shiftLabel: parsed.data.shift,
                     coverage: parsed.data.coverage ?? "full",
-                    label: extra.label,
+                    label: isChief ? CHIEF_EXTRA_SHIFT_LABEL : parsed.data.label?.trim(),
+                    type: parsed.data.type ?? "extra",
                 },
             });
 
             // O extra muda o total do mês DEPOIS da atestação: o razão precisa
             // acompanhar, senão o saldo desencontra do fechamento.
             await syncContractLedgerForMonth({
-                doctorId: extra.doctorId,
-                monthKey: extra.operationalDate.slice(0, 7),
+                doctorId: parsed.data.doctorId,
+                monthKey: parsed.data.date.slice(0, 7),
                 actorUserId: session.user.id,
             });
 
             revalidatePath("/admin/payment-closing");
-            return NextResponse.json({ extra });
+            return NextResponse.json({ extraId });
         }
 
         const result = await removeAdminExtraShift({ id: parsed.data.id });
