@@ -16,7 +16,7 @@ import {
 } from "@/modules/operational/board-rules";
 import { resolveContinuationBoardStartedAt } from "@/modules/intervention/service";
 import { resolveRegulationContinuationExplicitScheduledEndAt, resolveRegulationContinuationScheduledEndAt } from "@/modules/regulation/service";
-import { dedupeOperationalIdentityLabels, describeFixedRoleTransferImpact, isOperationalRoleRemovalSentinel, resolveOperationalRoleLabel } from "@/modules/operational/roles";
+import { dedupeOperationalIdentityLabels, describeFixedRoleTransferImpact, isOperationalRoleRemovalSentinel, resolveOperationalRoleLabel, resolveRoleLabelForTargetChange } from "@/modules/operational/roles";
 import { inferInterventionCoverageWindow, inferInterventionScheduledEndAt, inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, normalizeArrivalEventTime, resolveContinuationReferenceBoundary, resolveForcedDayEventTime, resolveInterventionContinuationScheduledEndAt, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime } from "@/modules/operational/rules";
 import { isCasualTelegramMessage, looksLikeDepartureMessage, looksLikeOperationalMetaConversation, parseMessage, parseMessageMulti, parseTelegramBatchLines } from "@/modules/telegram/parser";
 import { buildLocationWithoutRamalReply, buildRamalReconstructedText, buildShadowWithoutTargetReply, detectLocationWithoutRamal } from "@/modules/telegram/service";
@@ -42,6 +42,91 @@ test("describeFixedRoleTransferImpact: quem ja e COI movido entre 2262/2263 nao 
         }),
         null,
     );
+});
+
+// resolveRoleLabelForTargetChange: o papel GRAVADO quando uma ocupação muda de
+// posto (transfer do painel/Telegram, deslocado em cascata, /corrigir de ramal).
+// Caso de 30/08: remanejo 1367 → 2263 chegou sem COI porque o clone só copiava
+// o papel da origem.
+
+test("resolveRoleLabelForTargetChange: remanejo 1367 -> 2263 sem papel carimba COI", () => {
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "2263" },
+        source: { domain: "regulation", code: "1367" },
+        shiftLabel: "SN",
+        carriedRoleLabel: null,
+    }), "COI");
+});
+
+test("resolveRoleLabelForTargetChange: destino fixo vence papel carregado, exceto meio plantao e excecao manual", () => {
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "2262" },
+        source: { domain: "regulation", code: "2032" },
+        shiftLabel: "SD",
+        carriedRoleLabel: "MRV",
+    }), "COI");
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "2262" },
+        shiftLabel: "SD",
+        carriedRoleLabel: "MEIO_PLANTAO",
+    }), "MEIO_PLANTAO");
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "2262" },
+        shiftLabel: "SD",
+        carriedRoleLabel: "MRV",
+        explicitRoleProvided: true,
+    }), "MRV");
+});
+
+test("resolveRoleLabelForTargetChange: sair de ramal COI solta o carimbo automatico, papel manual viaja", () => {
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "1361" },
+        source: { domain: "regulation", code: "2263" },
+        shiftLabel: "SN",
+        carriedRoleLabel: "COI",
+    }), null);
+    // Cross-domain: COI nao vaza para base de ambulancia.
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "intervention", code: "SM01" },
+        source: { domain: "regulation", code: "2262" },
+        shiftLabel: "SD",
+        carriedRoleLabel: "COI",
+    }), null);
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "1361" },
+        source: { domain: "regulation", code: "2263" },
+        shiftLabel: "SN",
+        carriedRoleLabel: "RECIP",
+    }), "RECIP");
+    // Excecao manual explicita sobrevive ate na saida de um ramal fixo.
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "1361" },
+        source: { domain: "regulation", code: "2263" },
+        shiftLabel: "SN",
+        carriedRoleLabel: "COI",
+        explicitRoleProvided: true,
+    }), "COI");
+});
+
+test("resolveRoleLabelForTargetChange: 2031 carimba CP; 1367/1368 nao carimbam mais nada", () => {
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "2031" },
+        source: { domain: "regulation", code: "1361" },
+        shiftLabel: "SD",
+        carriedRoleLabel: null,
+    }), "CP");
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "1367" },
+        source: { domain: "regulation", code: "1361" },
+        shiftLabel: "SD",
+        carriedRoleLabel: null,
+    }), null);
+    assert.equal(resolveRoleLabelForTargetChange({
+        destination: { domain: "regulation", code: "1361" },
+        source: { domain: "regulation", code: "2031" },
+        shiftLabel: "SD",
+        carriedRoleLabel: "CP",
+    }), null);
 });
 
 test("describeFixedRoleTransferImpact: destino sem papel fixo nao gera aviso", () => {

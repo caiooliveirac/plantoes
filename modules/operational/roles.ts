@@ -106,6 +106,53 @@ export function describeFixedRoleTransferImpact(params: {
     };
 }
 
+// A função fixa pertence ao RAMAL, não ao médico (2262/2263 → COI, 2031 → CP).
+// Todo caminho que muda o posto de uma ocupação (remanejamento pelo painel,
+// "mudando para" no Telegram, deslocamento em cascata do ocupante do destino,
+// /corrigir trocando ramal) decide aqui o papel GRAVADO no destino — o quadro e
+// vários leitores mostram o role_label cru do banco, então resolver só na
+// exibição não basta (caso de 30/08: remanejo 1367 → 2263 chegou sem COI).
+//   - destino com papel fixo → recebe o carimbo; MEIO_PLANTAO prevalece (rótulo
+//     de cobrança, mesma precedência de resolveOperationalRoleLabel) e a escolha
+//     explícita de quem corrige também (exceção manual pelos botões de função);
+//   - saiu de um ramal fixo carregando apenas o carimbo automático → o carimbo
+//     fica no ramal; papel manual (MRV, RECIP...) continua viajando com o médico.
+export function resolveRoleLabelForTargetChange(params: {
+    destination: { domain: "regulation" | "intervention"; code: string };
+    source?: { domain: "regulation" | "intervention"; code: string } | null;
+    shiftLabel: "SD" | "SN" | "P" | null;
+    carriedRoleLabel: string | null;
+    explicitRoleProvided?: boolean;
+}): string | null {
+    const carried = params.carriedRoleLabel ?? null;
+    const normalizedCarried = normalizeOperationalRoleLabel(carried);
+    const destinationFixedRole = resolveFixedOperationalRole({
+        domain: params.destination.domain,
+        code: params.destination.code,
+        shiftLabel: params.shiftLabel,
+    });
+
+    if (destinationFixedRole) {
+        if (normalizedCarried === "MEIO_PLANTAO" || params.explicitRoleProvided) {
+            return carried;
+        }
+        return destinationFixedRole;
+    }
+
+    const sourceFixedRole = params.source
+        ? resolveFixedOperationalRole({
+            domain: params.source.domain,
+            code: params.source.code,
+            shiftLabel: params.shiftLabel,
+        })
+        : null;
+    if (sourceFixedRole && normalizedCarried === sourceFixedRole && !params.explicitRoleProvided) {
+        return null;
+    }
+
+    return carried;
+}
+
 export function resolveOperationalRoleLabel(params: {
     domain: "regulation" | "intervention";
     code: string;

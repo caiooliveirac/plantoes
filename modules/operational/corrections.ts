@@ -34,7 +34,7 @@ import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
 import { isBeforeHalfShiftWindow, isHalfShiftRoleLabel, isHalfShiftScheduledWindow, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
-import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
+import { applyOperationalRoleShiftPolicy, resolveRoleLabelForTargetChange } from "@/modules/operational/roles";
 import { applyShadowMarkerToOccupancyNotes } from "@/modules/operational/shadow";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
@@ -574,6 +574,9 @@ async function deleteInterventionOccupancyTx(tx: Executor, occupancy: typeof int
 
 async function cloneOccupancyIntoTarget(tx: Executor, params: {
     source: OccupancySnapshot;
+    /** Posto/base de ORIGEM do movimento — necessário para o carimbo de função
+        fixa saber de onde o médico veio (sair de 2262/2263 solta o COI automático). */
+    sourceTarget?: TargetMetadata | null;
     destination: TargetMetadata;
     roleLabel?: string | null;
     notes?: string | null;
@@ -589,6 +592,19 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
     const resolvedBoardStartedAt = params.asShadow === true
         ? null
         : (params.source.boardStartedAt ?? params.source.startedAt);
+    const cloneShiftLabel = params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
+        ? params.source.shiftLabel
+        : null;
+    // Função fixa anda com o ramal: remanejar para 2262/2263 carimba COI (e para
+    // 2031, CP) mesmo que a origem não tivesse papel; sair de lá deixa o carimbo.
+    const transferredRoleLabel = resolveRoleLabelForTargetChange({
+        destination: { domain: params.destination.domain, code: params.destination.code },
+        source: params.sourceTarget
+            ? { domain: params.sourceTarget.domain, code: params.sourceTarget.code }
+            : null,
+        shiftLabel: cloneShiftLabel,
+        carriedRoleLabel: params.roleLabel ?? params.source.roleLabel,
+    });
     if (params.destination.domain === "regulation") {
         const [created] = await tx.insert(regulationOccupancies)
             .values({
@@ -601,10 +617,8 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
                 boardStartedAt: resolvedBoardStartedAt,
                 shiftLabel: params.source.shiftLabel,
                 roleLabel: applyOperationalRoleShiftPolicy({
-                    shiftLabel: params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
-                        ? params.source.shiftLabel
-                        : null,
-                    roleLabel: params.roleLabel ?? params.source.roleLabel,
+                    shiftLabel: cloneShiftLabel,
+                    roleLabel: transferredRoleLabel,
                 }),
                 ramalLabel: params.destination.code,
                 source: "admin_correction",
@@ -634,10 +648,8 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
             boardStartedAt: resolvedBoardStartedAt,
             shiftLabel: params.source.shiftLabel,
             roleLabel: applyOperationalRoleShiftPolicy({
-                shiftLabel: params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
-                    ? params.source.shiftLabel
-                    : null,
-                roleLabel: params.roleLabel ?? params.source.roleLabel,
+                shiftLabel: cloneShiftLabel,
+                roleLabel: transferredRoleLabel,
             }),
             source: "admin_correction",
             notes: resolvedNotes,
@@ -949,6 +961,32 @@ export async function correctRegulationOccupancy(
             ? input.scheduledEndAt ?? null
             : inferredScheduledEnd;
 
+        // Função fixa do ramal também vale aqui: trocar o postId para 2262/2263
+        // (ou 2031) carimba COI/CP, e uma ocupação já sentada num ramal fixo SEM
+        // papel gravado se corrige sozinha na próxima correção. A escolha
+        // explícita de papel na própria correção continua valendo (exceção
+        // manual), e papel manual já gravado não é revisitado por correções que
+        // só mexem em horário.
+        const roleProvidedInCorrection = hasOwn(input, "roleLabel");
+        const postChangedInCorrection = postId !== existing.postId;
+        const previousPost = postChangedInCorrection
+            ? await tx.query.regulationPosts.findFirst({
+                where: eq(regulationPosts.id, existing.postId),
+                columns: { code: true },
+            })
+            : null;
+        const reconciledRoleLabel = postChangedInCorrection || (!roleProvidedInCorrection && nextRoleLabel === null)
+            ? resolveRoleLabelForTargetChange({
+                destination: { domain: "regulation", code: targetPost.code },
+                source: previousPost ? { domain: "regulation", code: previousPost.code } : null,
+                shiftLabel: nextShiftLabel === "SD" || nextShiftLabel === "SN" || nextShiftLabel === "P"
+                    ? nextShiftLabel
+                    : null,
+                carriedRoleLabel: nextRoleLabel,
+                explicitRoleProvided: roleProvidedInCorrection,
+            })
+            : nextRoleLabel;
+
         if (postId !== existing.postId) {
             if (!endedAt) {
                 const conflicting = await tx.query.regulationOccupancies.findFirst({
@@ -990,7 +1028,7 @@ export async function correctRegulationOccupancy(
                 endedAt,
                 actualEndedAt,
                 shiftLabel: nextShiftLabel,
-                roleLabel: nextRoleLabel,
+                roleLabel: reconciledRoleLabel,
                 ramalLabel: normalizeRegulationRamalLabel({
                     actualPostCode: targetPost.code,
                     requestedRamalLabel: hasOwn(input, "ramalLabel") ? input.ramalLabel ?? null : existing.ramalLabel,
@@ -1295,6 +1333,8 @@ export async function transferOperationalOccupancy(
 
                 const relocated = await cloneOccupancyIntoTarget(tx, {
                     source: displacedSnapshot,
+                    // O deslocado estava sentado no DESTINO do remanejamento principal.
+                    sourceTarget: destinationTarget,
                     destination: relocationTarget!,
                     roleLabel: displacedSnapshot.roleLabel,
                     notes: mergeOperationalNotes(
@@ -1348,6 +1388,7 @@ export async function transferOperationalOccupancy(
 
         const created = await cloneOccupancyIntoTarget(tx, {
             source,
+            sourceTarget,
             destination: destinationTarget,
             roleLabel: input.roleLabel ?? source.roleLabel,
             asShadow: input.asShadow ?? undefined,
