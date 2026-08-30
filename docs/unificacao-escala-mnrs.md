@@ -421,3 +421,46 @@ módulo entra direto → módulo inicial do papel (override por pessoa) → home
 - O aviso de dado fictício de `demonstracao`/`previa` continua aparecendo
   **antes** de qualquer dado fictício — o atalho não pode custar a
   honestidade do catálogo.
+
+## 11. Implementado: shell "instantâneo por desenho" (patch para o kairos)
+
+> 30/08, na sequência do §10. O conserto foi **implementado e validado** num
+> clone do kairos (branch local `claude/shell-spa`, 11 arquivos,
+> +415/−72). O push direto ao repo kairos foi bloqueado pela permissão da
+> sessão (anexado somente-leitura), então a entrega é um patch `git am`
+> enviado na conversa. Conteúdo:
+
+1. **`concessoes()` deduplicada por requisição** (`packages/core/src/autorizacao.ts`)
+   — WeakMap pela identidade do `Contexto`; as ~10 consultas idênticas de
+   permissão por render da tela-mãe viram 1. Revogação entre requisições
+   intacta; falha não fica memoizada.
+2. **Fontes do plantões com validade de 45 s** (`packages/indicadores/src/fontes/plantoes.ts`)
+   — `lembrar()` sobre as três leituras; vazio/falha não são guardados
+   (fonte fora do ar volta sem esperar validade); limite fora do padrão lê
+   direto.
+3. **Tela-mãe pinta antes do banco** (`apps/shell/.../layout.tsx` + novo
+   `leituras.tsx`) — indicadores, barra e trilha descem como promessas para
+   blocos em `<Suspense>` com esqueletos pulsantes (esqueleto = "chegando",
+   distinto de `sem-fonte` e de número); novo `atualizador.tsx` renova a
+   árvore a cada 60 s com a aba visível e ao voltar do segundo plano.
+4. **Clique sem pedágio** (`cabecalho.tsx`, `modulo/[chave]/page.tsx`,
+   `permissoes.ts`) — o catálogo ganha `rota` (caminho interno; checagem =
+   `/checagem`, que antes nem era alcançável pela navegação): módulo com rota
+   navega client-side com prefetch e `loading.tsx`; módulo **em uso** com
+   `destino` vai direto na mesma aba (o badge já anuncia o estado); o painel
+   intermediário sobrevive só para demonstração/prévia, onde o aviso de dado
+   fictício precisa vir antes do dado. URL antiga `/modulo/x` vira redirect —
+   link salvo continua funcionando.
+
+**Validação executada aqui**: typecheck nos 6 pacotes; suíte completa contra
+Postgres 16 real (papéis → migrations → catálogo → seed; core 49/49 com os
+testes de sabotagem de RLS/auditoria); `next build` de produção limpo.
+
+**Aplicar**: no checkout do kairos, `git checkout -b claude/shell-spa` e
+`git am 0001-shell-*.patch`; canary primeiro, como sempre. Se preferir que eu
+mesmo empurre a branch numa próxima sessão, basta liberar o repo `kairos`
+para escrita nas configurações de repositórios do Claude.
+
+**Fora deste patch, por decisão** (seguem no §10 como próximos): introspecção
+nos satélites (sem ela o link direto ainda termina no login do destino),
+View Transitions (`experimental.viewTransition`) e o mapa/home por pessoa.
