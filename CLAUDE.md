@@ -204,6 +204,12 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   em produção. Token é JWT simplificado (`{ sub: userId, exp }`) assinado com HMAC-SHA256
   usando `AUTH_SECRET`, verificação timing-safe. Implementação em
   [lib/auth/token.ts](lib/auth/token.ts) e [lib/auth/server.ts](lib/auth/server.ts).
+- **Sessão via Kairós (opcional)**: com `KAIROS_URL` + `KAIROS_SERVICO_TOKEN` no
+  ambiente, quem já está logado no Kairós (cookie `kairos_sessao` do domínio pai
+  `.mnrs.com.br`) entra sem segunda senha — o servidor introspecciona o cookie no
+  Kairós e casa por e-mail com a conta local ([lib/auth/kairos.ts](lib/auth/kairos.ts),
+  wiring em `readAuthenticatedSession`). Fail-closed quando ligado; sem as envs,
+  desligado e nada muda. Roles continuam sendo as locais.
 - **Login**: `POST /api/auth/login` (email+senha, bcrypt) em
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em
   [services/auth.service.ts](services/auth.service.ts). Trata contas inativas, sem

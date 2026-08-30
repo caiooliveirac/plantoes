@@ -464,3 +464,33 @@ para escrita nas configurações de repositórios do Claude.
 **Fora deste patch, por decisão** (seguem no §10 como próximos): introspecção
 nos satélites (sem ela o link direto ainda termina no login do destino),
 View Transitions (`experimental.viewTransition`) e o mapa/home por pessoa.
+
+## 12. Implementado: o plantões aceita a sessão do Kairós
+
+> 30/08, na sequência do §11. É o item "ligar a introspecção no primeiro
+> satélite real" (§9.5.3) — implementado NESTE repo, na fase "aceitar as
+> duas" do contrato `kairos/docs/integracao-servicos.md` (§6 de lá).
+
+- **[lib/auth/kairos.ts](../lib/auth/kairos.ts)** — cliente da introspecção:
+  POST `{KAIROS_URL}/api/sessao/introspeccao` com token de serviço no
+  `Authorization` e o cookie no CORPO (nunca na URL). Nunca lança; as quatro
+  regras do contrato viram respostas: `ativa:false` recusa, troca de senha
+  pendente recusa, Kairós fora do ar recusa (fail-closed), e autorização
+  continua local.
+- **Wiring em `readAuthenticatedSession`** (lib/auth/server.ts): sem sessão
+  local válida, o cookie `kairos_sessao` (domínio pai, chega sozinho) é
+  introspeccionado e casa por **e-mail** com a conta local ativa — nenhuma
+  conta é criada, roles continuam as daqui, e a validade real é a sessão do
+  Kairós, reconferida a cada requisição (revogar lá corta cá no instante
+  seguinte). Pessoa sem e-mail (médico importado) segue pelo login local até
+  a `legacy_ref` do Kairós cobrir este sistema.
+- **Desligado por padrão**: sem `KAIROS_URL` + `KAIROS_SERVICO_TOKEN`
+  (.env.example documenta), nada muda. Ligar é gerar o token no kairos
+  (`pnpm servico:registrar -- --chave plantoes`) e definir as duas envs.
+- **Validação**: typecheck (strict, inclui tests/), 10 testes novos em
+  [tests/kairos-sso.test.ts](../tests/kairos-sso.test.ts) e a suíte de gate
+  completa (1400/1400).
+
+Com isto, o primeiro "logar duas vezes" do parque morre assim que as envs
+forem definidas em produção. O análogo no escala (mesmo contrato, outro repo)
+é o próximo satélite.
