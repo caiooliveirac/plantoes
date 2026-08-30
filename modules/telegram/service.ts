@@ -46,6 +46,7 @@ import { extractDoctorAliases, extractDoctorPreferredOperationalRole, formatDoct
 import { normalizeDoctorName } from "@/modules/doctors/importer";
 import { checklistHintForConfirmation, fetchChecklistKey, fetchChecklistKeyHint } from "@/modules/telegram/checklist-key";
 import { buildChecklistKeyAdminNotice, buildChecklistKeyAskBaseReply, buildChecklistKeyDeliveryReply, buildChecklistKeyMissingReply, buildChecklistKeyRegulationTargetReply, buildChecklistKeyServiceDownReply, buildChecklistKeyUnconfiguredReply, parseChecklistKeyRequest, type ChecklistKeyIdentification, type ChecklistKeyRequest, type ChecklistKeyRequestOutcome } from "@/modules/telegram/checklist-key-request";
+import { buildChecklistMaterialsKeyboard, buildChecklistMenuForbiddenReply, buildChecklistMenuKeyboard, buildChecklistMenuNotFoundReply, buildChecklistMenuText, buildChecklistMenuUnavailableReply, buildChecklistMenuUnconfiguredReply, buildChecklistSumidosKeyboard, buildChecklistUnitsKeyboard, encodeChecklistMenuCallback, fetchChecklistMenuMaterials, fetchChecklistMenuSumidos, fetchChecklistMenuText, fetchChecklistMenuUnits, parseChecklistMenuCallbackData, parseChecklistMenuCommand, type ChecklistMenuCallbackAction, type ChecklistMenuView } from "@/modules/telegram/checklist-menu";
 import { buildUpaRestrictionsCommandReply, fetchUpaRestrictions, upaRestrictionsHintForConfirmation } from "@/modules/telegram/upa-restrictions";
 import {
     createDoctorDirectoryEntry,
@@ -4156,7 +4157,7 @@ const KNOWN_TELEGRAM_COMMANDS = [
     "excluir", "incluir", "corrigir", "corrigirsaida", "retirar", "remover", "ramal",
     "ativar", "desativar", "ontem", "hoje", "pagamento", "resetcodinome", "rc",
     "desfazer", "slots", "medico", "piam", "banco", "alerta", "saiu", "saindo", "saida",
-    "deslocados", "deslocado", "chave", "upas",
+    "deslocados", "deslocado", "chave", "upas", "checklist",
 ];
 
 // Aliases/erros de digitação frequentes → comando real. Resolvidos ANTES do fuzzy
@@ -4616,6 +4617,166 @@ async function handleChecklistKeyRequest(params: {
     await sendMessage(message.chat.id, reply, message.message_id, undefined, { parseMode: "Markdown" });
     await finish(outcome, targetBase, resolvedDoctorName, identification.kind);
     return outcome === "delivered" ? { ok: true, checklistKey: true } : { ok: true, ignored: true };
+}
+
+// ── Menu do checklist (/checklist) — migração do @samu_checklists_bot ─────────
+// Consultas da coordenação sobre o app checklist: status, pendentes, faltas,
+// observações, por unidade, busca de material e faltas recentes. Os TEXTOS vêm
+// prontos (HTML) dos endpoints internos do app checklist — ver o contrato em
+// docs/checklist-bot-migration.md. Tudo fail-soft com resposta didática.
+
+const CHECKLIST_MENU_BACK_ROW = [[{ text: "« Menu", callback_data: encodeChecklistMenuCallback({ kind: "root" }) }]];
+
+function checklistMenuFallbackText(status: "not_found" | "unavailable" | "unconfigured") {
+    if (status === "not_found") return buildChecklistMenuNotFoundReply();
+    if (status === "unconfigured") return buildChecklistMenuUnconfiguredReply();
+    return buildChecklistMenuUnavailableReply();
+}
+
+async function isChecklistMenuCoordinator(message: TelegramUpdate["message"]) {
+    const actor = await resolveTelegramCommandActor(message);
+    return Boolean(actor?.roles.some((role) => role === "admin" || role === "chief"));
+}
+
+async function sendChecklistMenuRoot(chatId: number, replyToMessageId?: number, unknown?: string | null) {
+    await sendMessage(
+        chatId,
+        buildChecklistMenuText(unknown),
+        replyToMessageId,
+        buildInlineKeyboard(buildChecklistMenuKeyboard()),
+        { parseMode: "HTML" },
+    );
+}
+
+async function sendChecklistMenuView(chatId: number, replyToMessageId: number | undefined, path: string) {
+    const result = await fetchChecklistMenuText(path);
+    const text = result.status === "ok" ? result.text : checklistMenuFallbackText(result.status);
+    await sendMessage(chatId, text, replyToMessageId, buildInlineKeyboard(CHECKLIST_MENU_BACK_ROW), { parseMode: "HTML" });
+    return result.status;
+}
+
+async function sendChecklistUnitsPicker(chatId: number, replyToMessageId: number | undefined, flow: "unit" | "material" | "sumidos") {
+    const result = await fetchChecklistMenuUnits();
+    if (result.status !== "ok") {
+        await sendMessage(chatId, checklistMenuFallbackText(result.status), replyToMessageId, undefined, { parseMode: "HTML" });
+        return result.status;
+    }
+    const title = flow === "unit"
+        ? "🚑 Escolha a unidade (✅ fez · ⚠️ pendente):"
+        : flow === "material"
+            ? "🔎 <b>Buscar material</b> — primeiro, qual ambulância?"
+            : "📉 <b>Faltas recentes</b> — qual ambulância?";
+    await sendMessage(
+        chatId,
+        title,
+        replyToMessageId,
+        buildInlineKeyboard(buildChecklistUnitsKeyboard(result.units, flow)),
+        { parseMode: "HTML" },
+    );
+    return result.status;
+}
+
+async function handleChecklistMenuCommand(params: {
+    message: NonNullable<TelegramUpdate["message"]>;
+    logId: string;
+    command: ChecklistMenuView;
+}) {
+    const { message, logId, command } = params;
+
+    if (!(await isChecklistMenuCoordinator(message))) {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedAction: "checklist_menu_command",
+            errorMessage: "checklist_menu_forbidden",
+            resolutionData: { view: command.view },
+        });
+        // No grupo, silêncio (padrão dos comandos restritos do bot antigo); no
+        // privado, aponta o que o plantonista realmente precisa (/chave).
+        if (message.chat.type === "private") {
+            await sendMessage(message.chat.id, buildChecklistMenuForbiddenReply(), message.message_id, undefined, { parseMode: "HTML" });
+        }
+        return { ok: true, ignored: true };
+    }
+
+    let outcome: string = "ok";
+    if (command.view === "menu") {
+        await sendChecklistMenuRoot(message.chat.id, message.message_id, command.unknown ?? null);
+    } else if (command.view === "unit") {
+        outcome = await sendChecklistMenuView(message.chat.id, message.message_id, `unit/${encodeURIComponent(command.baseCode)}`);
+    } else if (command.view === "material" || command.view === "sumidos") {
+        outcome = await sendChecklistUnitsPicker(message.chat.id, message.message_id, command.view);
+    } else {
+        outcome = await sendChecklistMenuView(message.chat.id, message.message_id, command.view);
+    }
+
+    await markTelegramProcessed(logId, {
+        status: "accepted",
+        parsedAction: "checklist_menu_command",
+        resolutionData: {
+            view: command.view,
+            ...(command.view === "unit" ? { baseCode: command.baseCode } : {}),
+            outcome,
+        },
+    });
+    return { ok: true, checklistMenu: true };
+}
+
+async function handleChecklistMenuCallback(callbackQuery: TelegramCallbackQuery, action: ChecklistMenuCallbackAction) {
+    const chat = callbackQuery.message?.chat;
+    if (!chat) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+
+    const coordinator = await isChecklistMenuCoordinator({
+        message_id: callbackQuery.message?.message_id ?? 0,
+        chat,
+        from: callbackQuery.from,
+        date: 0,
+    } as TelegramUpdate["message"]);
+    if (!coordinator) {
+        await answerCallbackQuery(callbackQuery.id, "🔐 Menu da coordenação. Para a chave do dia, mande /chave.", true);
+        return { ok: true, ignored: true };
+    }
+
+    await answerCallbackQuery(callbackQuery.id);
+
+    if (action.kind === "root") {
+        await sendChecklistMenuRoot(chat.id);
+    } else if (action.kind === "view") {
+        await sendChecklistMenuView(chat.id, undefined, action.view);
+    } else if (action.kind === "units") {
+        await sendChecklistUnitsPicker(chat.id, undefined, action.flow);
+    } else if (action.kind === "unit") {
+        await sendChecklistMenuView(chat.id, undefined, `unit/${encodeURIComponent(action.code)}`);
+    } else if (action.kind === "materials") {
+        const result = await fetchChecklistMenuMaterials();
+        if (result.status !== "ok") {
+            await sendMessage(chat.id, checklistMenuFallbackText(result.status), undefined, undefined, { parseMode: "HTML" });
+        } else {
+            await sendMessage(
+                chat.id,
+                `🚑 <b>${action.code}</b> — qual material você procura?`,
+                undefined,
+                buildInlineKeyboard(buildChecklistMaterialsKeyboard(result.materials, action.code)),
+                { parseMode: "HTML" },
+            );
+        }
+    } else if (action.kind === "material") {
+        await sendChecklistMenuView(chat.id, undefined, `material/${encodeURIComponent(action.code)}/${encodeURIComponent(action.key)}`);
+    } else if (action.kind === "sumidos") {
+        const result = await fetchChecklistMenuSumidos(action.code);
+        if (result.status !== "ok") {
+            await sendMessage(chat.id, checklistMenuFallbackText(result.status), undefined, undefined, { parseMode: "HTML" });
+        } else {
+            const keyboard = result.missing.length > 0
+                ? buildChecklistSumidosKeyboard(result.missing, action.code)
+                : CHECKLIST_MENU_BACK_ROW;
+            await sendMessage(chat.id, result.text, undefined, buildInlineKeyboard(keyboard), { parseMode: "HTML" });
+        }
+    }
+
+    return { ok: true, checklistMenu: true };
 }
 
 async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
@@ -6208,7 +6369,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         if (helpIsChief) {
             helpLines.push(
                 "",
-                "🔑 *Chefia:* /deslocados · /retirar Nome PM04 19:00",
+                "🔑 *Chefia:* /deslocados · /retirar Nome PM04 19:00 · /checklist (status/faltas das USAs)",
                 "🔑 *Chefia (privado):* /pagamento · /pagamento conferir · /pagamento corrigir",
                 "   /rc <Nome ou codinome> — reseta o codinome de um médico",
             );
@@ -6246,6 +6407,13 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             }
         }
         return handleChecklistKeyRequest({ message, logId, request: checklistKeyRequest });
+    }
+
+    // /checklist — menu de gestão do checklist (coordenação): o que era o menu
+    // do bot do checklist agora vive aqui. Ver docs/checklist-bot-migration.md.
+    const checklistMenuCommand = parseChecklistMenuCommand(message.text);
+    if (checklistMenuCommand) {
+        return handleChecklistMenuCommand({ message, logId, command: checklistMenuCommand });
     }
 
     // /upas — UPAs restritas pela chefia (fonte: painel /tabela). Aberto a
@@ -6399,6 +6567,16 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
         );
 
         if (isChief) {
+            sections.push(
+                "",
+                "📋 *CHECKLIST DAS USAs (coordenação)*",
+                "",
+                "▸ /checklist — menu com botões (status, pendentes, faltas, observações)",
+                "▸ /checklist SM01 — detalhe de uma unidade",
+                "▸ /checklist material — histórico de um material (quem reportou)",
+                "▸ /checklist sumidos — faltas dos últimos dias por ambulância",
+            );
+
             sections.push(
                 "",
                 "🔐 *CHEFIA (grupo)*",
@@ -12979,6 +13157,13 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
     const fiscalConfirm = parseFiscalSuggestionCallbackData(callbackQuery.data);
     if (fiscalConfirm !== null) {
         return handleFiscalSuggestionCallback(callbackQuery, fiscalConfirm);
+    }
+
+    // clm: — menu do checklist (coordenação). Prefixo próprio, gating de papel
+    // dentro do handler (admin/chefia; demais recebem alerta e nada acontece).
+    const checklistMenuAction = parseChecklistMenuCallbackData(callbackQuery.data);
+    if (checklistMenuAction) {
+        return handleChecklistMenuCallback(callbackQuery, checklistMenuAction);
     }
 
     const shiftSelection = parseShiftSelectionCallbackData(callbackQuery.data);

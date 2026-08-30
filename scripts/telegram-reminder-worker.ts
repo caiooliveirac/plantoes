@@ -3,6 +3,7 @@ import { getTelegramReminderPollMs } from "@/modules/telegram/config";
 import { assertSingleRuntimeConfig, logRuntimeIdentity } from "@/lib/runtime-identity";
 import { sendTelegramMealBreakCycle, sendTelegramMealBreakTurnNudges } from "@/modules/telegram/meal-breaks";
 import { sendBankHoursPendingCycle } from "@/modules/telegram/bank-hours-pending-alerts";
+import { sendChecklistDigestCycle } from "@/modules/telegram/checklist-digest";
 import { sendContractBalanceCycle } from "@/modules/telegram/contract-balance-alerts";
 import { sendTelegramPaymentDigestCycle } from "@/modules/telegram/payment-digest";
 import { sendTelegramReminderCycle } from "@/modules/telegram/reminders";
@@ -29,6 +30,7 @@ async function runCycle() {
             contractBalance,
             bankHoursPending,
             selfDeclaredExtra,
+            checklistDigest,
         ] = await Promise.all([
             sendTelegramReminderCycle(referenceDate),
             sendTelegramMealBreakCycle(referenceDate),
@@ -41,13 +43,15 @@ async function runCycle() {
             sendBankHoursPendingCycle(referenceDate),
             // Extra declarado que caiu em turno depois trabalhado: remarca e avisa.
             sendSelfDeclaredExtraCycle(referenceDate),
+            // Digest 11h/13h do checklist das USAs (flag CHECKLIST_DIGEST_ENABLED).
+            sendChecklistDigestCycle(referenceDate),
         ]);
         const evaluated = reminders.evaluated + mealBreak.evaluated + mealBreakNudges.evaluated
             + paymentDigest.evaluated + contractBalance.evaluated + bankHoursPending.evaluated
-            + selfDeclaredExtra.evaluated;
+            + selfDeclaredExtra.evaluated + checklistDigest.evaluated;
         const sent = reminders.sent + mealBreak.sent + mealBreakNudges.sent
             + paymentDigest.sent + contractBalance.sent + bankHoursPending.sent
-            + selfDeclaredExtra.sent;
+            + selfDeclaredExtra.sent + checklistDigest.sent;
         if (evaluated > 0 || sent > 0) {
             console.log(`[telegram-reminder-worker] evaluated=${evaluated} sent=${sent}`);
         }

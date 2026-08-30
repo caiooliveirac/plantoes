@@ -7,6 +7,7 @@ const ADMIN_MENU_COMMANDS: TelegramBotCommand[] = [
     { command: "rc", description: "Reseta o codinome de UM médico (nome ou codinome)" },
     { command: "pagamento", description: "Folha do mês, conferir, corrigir, listar codinomes" },
     { command: "chave", description: "Chave do dia do checklist de uma USA" },
+    { command: "checklist", description: "Menu do checklist das USAs (status, faltas, histórico)" },
     { command: "desfazer", description: "Lista e desfaz ações recentes (12h)" },
     { command: "slots", description: "Auditoria de ocupação por turno" },
     { command: "medico", description: "Cadastro/edição de médico" },
