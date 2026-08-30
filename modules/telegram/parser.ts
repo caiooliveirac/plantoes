@@ -23,6 +23,15 @@ const BASES_INTERVENCAO = new Set([
 const BASES_INTERVENCAO_NOMEADAS = ["GOA"] as const;
 const NAMED_BASE_PATTERN = new RegExp(`\\b(${BASES_INTERVENCAO_NOMEADAS.join("|")})\\b`);
 
+/**
+ * Códigos de base de intervenção que o parser reconhece (XX99 + nomeadas), na
+ * ordem de exibição. Fonte única para listas didáticas (ex.: resposta do
+ * /chave) — em vez de uma cópia à mão que dessincroniza quando nasce base nova.
+ */
+export function listKnownInterventionBaseCodes(): string[] {
+    return [...BASES_INTERVENCAO, ...BASES_INTERVENCAO_NOMEADAS];
+}
+
 const ABBREVIATION_MAP: Record<string, string> = {
     "01": "SM01", "1": "SM01",
     "02": "CB02", "2": "CB02",
