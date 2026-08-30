@@ -4,6 +4,7 @@ import { z } from "zod";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
 import { conferirChegada } from "@/modules/operational/arrival-check";
+import { resolveFixedOperationalRole } from "@/modules/operational/roles";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import {
     describeConflicts,
@@ -89,8 +90,12 @@ async function familiaDoPosto(postId: number): Promise<string> {
         .where(eq(regulationPosts.id, postId))
         .limit(1);
     const cod = (linha?.cod ?? "").toUpperCase();
-    if (cod.startsWith("COI")) return "COI";
-    if (cod.startsWith("CH") || cod.startsWith("CP")) return "CH";
+    // Os ramais são numéricos ("2262", "2031"): a família COI/chefia vem do papel
+    // fixo do posto, não de prefixo textual — sem isto o COI e o CP eram sempre
+    // conferidos contra o pool CRU da escala e geravam "fora da escala" falso.
+    const papelFixo = resolveFixedOperationalRole({ domain: "regulation", code: cod, shiftLabel: null });
+    if (papelFixo === "COI") return "COI";
+    if (papelFixo === "CP" || cod.startsWith("CH") || cod.startsWith("CP")) return "CH";
     return "CRU";
 }
 
