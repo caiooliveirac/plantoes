@@ -4,6 +4,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { transferOperationalOccupancy } from "@/modules/operational/corrections";
+import { avisarRemanejamentoQuadro } from "@/modules/operational/reassignment-alert";
 
 function serializeOccupancySnapshot(snapshot: {
     id: string;
@@ -129,6 +130,27 @@ export async function POST(request: NextRequest) {
                 sourceContinuityGroupId: transfer.sourceContinuityGroupId,
             },
         });
+
+        // Remanejamento pelo quadro não passa pelo bot — sem estes avisos o
+        // médico muda de base sem receber a chave do checklist do destino.
+        // Fail-soft (nunca lança) e fire-and-forget: a resposta do drawer não
+        // espera o Telegram. Cobre o movimento principal e, quando a chefia
+        // escolheu "mover quem está lá", a realocação do deslocado também.
+        void avisarRemanejamentoQuadro({
+            doctorId: transfer.movedSnapshot.doctorId,
+            destination: { domain: transfer.destination.domain, code: transfer.destination.code },
+            sourceCode: transfer.sourceTarget.code,
+        });
+        if (transfer.displaced?.createdSnapshot && transfer.displaced.relocationTarget) {
+            void avisarRemanejamentoQuadro({
+                doctorId: transfer.displaced.createdSnapshot.doctorId,
+                destination: {
+                    domain: transfer.displaced.relocationTarget.domain,
+                    code: transfer.displaced.relocationTarget.code,
+                },
+                sourceCode: transfer.destination.code,
+            });
+        }
 
         return NextResponse.json({ transfer });
     } catch (error) {

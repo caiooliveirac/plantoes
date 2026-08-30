@@ -127,13 +127,16 @@ async function callApi<T>(method: string, body: Record<string, unknown>) {
 /**
  * Opções de formatação por callsite. `parseMode: "Markdown"` liga negrito/código
  * no balão — SÓ use em copies cujas interpolações passam por escapeTelegramMarkdown().
- * A env TELEGRAM_PARSE_MODE=off desliga globalmente (rollback sem deploy).
+ * `parseMode: "HTML"` é para textos já renderizados em HTML do Telegram (ex.: o
+ * menu do checklist, que chega pronto do app checklist) — interpolações precisam
+ * de escape de &<> na origem. A env TELEGRAM_PARSE_MODE=off desliga globalmente
+ * (rollback sem deploy).
  */
 export interface TelegramFormatOptions {
-    parseMode?: "Markdown";
+    parseMode?: "Markdown" | "HTML";
 }
 
-function resolveParseMode(options?: TelegramFormatOptions): "Markdown" | undefined {
+function resolveParseMode(options?: TelegramFormatOptions): "Markdown" | "HTML" | undefined {
     if (!options?.parseMode) {
         return undefined;
     }
