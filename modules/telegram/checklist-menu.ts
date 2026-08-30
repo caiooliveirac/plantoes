@@ -219,10 +219,28 @@ function escapeHtml(value: string): string {
     return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** Nunca deixa um texto do checklist estourar o teto de 4096 chars do Telegram. */
+/**
+ * Nunca deixa um texto do checklist estourar o teto de 4096 chars do Telegram.
+ * O corte respeita a última quebra de linha dentro do limite: os textos do
+ * checklist são orientados a linha e cada linha carrega markup HTML fechado —
+ * cortar no meio de uma linha poderia partir uma tag/entidade e derrubar o
+ * parse (aí o fallback sem parse_mode mostraria markup cru).
+ */
 export function clampChecklistMenuText(text: string): string {
     if (text.length <= MAX_TEXT_CHARS) return text;
-    return `${text.slice(0, MAX_TEXT_CHARS)}\n…`;
+    const slice = text.slice(0, MAX_TEXT_CHARS);
+    const lastBreak = slice.lastIndexOf("\n");
+    if (lastBreak > 0) {
+        return `${slice.slice(0, lastBreak)}\n…`;
+    }
+    // Linha única gigante (nenhum gerador atual produz): sem fronteira segura,
+    // remove o markup — tag partida no fim, tags inteiras e entidade partida —
+    // e entrega texto puro truncado.
+    const plain = slice
+        .replace(/<[^>]*$/, "")
+        .replace(/<[^>]*>/g, "")
+        .replace(/&[a-zA-Z#0-9]{0,8}$/, "");
+    return `${plain}\n…`;
 }
 
 /* ------------------------------------------------------------------ */

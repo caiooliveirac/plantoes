@@ -164,7 +164,7 @@ test("fetchChecklistKeyHint: resposta ok monta o hint com a chave (e propaga a v
     });
 });
 
-test("fetchChecklistKey: 404 e ok:false são resposta deliberada (no_key, sem ruído); 5xx é unavailable", async () => {
+test("fetchChecklistKey: só 404/ok:false são no_key; 401 (token errado) e 5xx são unavailable", async () => {
     await withChecklistServer((req, res) => {
         if (req.url?.endsWith("/SEM01")) {
             res.statusCode = 404;
@@ -174,6 +174,11 @@ test("fetchChecklistKey: 404 e ok:false são resposta deliberada (no_key, sem ru
         if (req.url?.endsWith("/SB02")) {
             res.setHeader("content-type", "application/json");
             res.end(JSON.stringify({ ok: false }));
+            return;
+        }
+        if (req.url?.endsWith("/PM04")) {
+            res.statusCode = 401;
+            res.end(JSON.stringify({ ok: false, error: "não autorizado" }));
             return;
         }
         res.statusCode = 500;
@@ -188,6 +193,9 @@ test("fetchChecklistKey: 404 e ok:false são resposta deliberada (no_key, sem ru
             assert.deepEqual(await fetchChecklistKey("SEM01"), { status: "no_key" });
             assert.equal(await fetchChecklistKeyHint("SEM01"), "", "404 = base sem checklist, sem ruído na confirmação");
             assert.deepEqual(await fetchChecklistKey("SB02"), { status: "no_key" });
+            // Token vencido/errado NÃO pode virar "não há chave hoje" (achado do
+            // review do PR #245): é falha operacional, não resposta deliberada.
+            assert.deepEqual(await fetchChecklistKey("PM04"), { status: "unavailable" });
             assert.deepEqual(await fetchChecklistKey("SM01"), { status: "unavailable" });
             assert.match(await fetchChecklistKeyHint("SM01"), /não consegui buscar a chave/, "5xx = serviço tropeçou");
         } finally {

@@ -172,7 +172,10 @@ export async function fetchChecklistKey(baseCode: string | null | undefined): Pr
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!res.ok) {
-            return res.status >= 500 ? { status: "unavailable" } : { status: "no_key" };
+            // Só 404 é resposta deliberada ("base sem checklist"). Qualquer outro
+            // status — 401/403 de token errado incluído — é falha operacional e
+            // não pode virar um falso "não há chave hoje" para o médico.
+            return res.status === 404 ? { status: "no_key" } : { status: "unavailable" };
         }
         const data = (await res.json()) as ChecklistKeyResponse;
         if (!data.ok || !data.key || !data.baseCode) return { status: "no_key" };

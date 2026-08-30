@@ -115,11 +115,31 @@ test("teclados: menu raiz completo, grades com volta ao menu", () => {
 test("replies didáticas e clamp de tamanho", () => {
     assert.match(buildChecklistMenuUnavailableReply(), /endpoints desta migração ainda não publicados/);
     assert.match(buildChecklistMenuForbiddenReply(), /\/chave/, "médico comum é apontado para o que é dele");
-    const long = "x".repeat(5000);
+    assert.equal(clampChecklistMenuText("curto"), "curto");
+});
+
+test("clampChecklistMenuText: corta em quebra de linha e nunca parte o HTML", () => {
+    // Texto orientado a linha como os do checklist: cada linha com markup fechado.
+    const line = "• <b>SM01</b> — item &amp; obs <i>faltando</i>";
+    const long = Array.from({ length: 200 }, () => line).join("\n");
+    assert.ok(long.length > 4096, "cenário realmente estoura o teto");
+
     const clamped = clampChecklistMenuText(long);
     assert.ok(clamped.length < 4096, "nunca estoura o teto do Telegram");
     assert.ok(clamped.endsWith("…"));
-    assert.equal(clampChecklistMenuText("curto"), "curto");
+    const opensB = (clamped.match(/<b>/g) ?? []).length;
+    const closesB = (clamped.match(/<\/b>/g) ?? []).length;
+    const opensI = (clamped.match(/<i>/g) ?? []).length;
+    const closesI = (clamped.match(/<\/i>/g) ?? []).length;
+    assert.equal(opensB, closesB, "nenhuma tag <b> partida pelo corte");
+    assert.equal(opensI, closesI, "nenhuma tag <i> partida pelo corte");
+    assert.ok(!/&[a-zA-Z#0-9]*…$/.test(clamped), "nenhuma entidade partida no fim");
+
+    // Linha única gigante (patológico): sem fronteira segura, sai texto puro.
+    const singleLine = `<b>${"x".repeat(5000)}</b>`;
+    const plain = clampChecklistMenuText(singleLine);
+    assert.ok(!plain.includes("<"), "fallback remove o markup em vez de arriscar tag partida");
+    assert.ok(plain.length < 4096);
 });
 
 test("cliente: sem configuração devolve unconfigured (fail-soft)", async () => {
