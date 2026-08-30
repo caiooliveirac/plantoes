@@ -8,7 +8,7 @@ import { ContractBalanceCard } from "@/components/payment-closing/contract-balan
 import { ContractTermsCard } from "@/components/payment-closing/contract-terms-card";
 // Nenhuma ação desta tela pode ficar pendurada esperando o servidor.
 import { fetchComLimite } from "@/lib/fetch-com-limite";
-import type { ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
+import { resolveExtraShiftChipCode, type ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
 import { HalfShiftDecision } from "@/components/payment-closing/half-shift-decision";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
@@ -367,6 +367,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     const [extraDay, setExtraDay] = useState("");
     const [extraShift, setExtraShift] = useState<"SD" | "SN">("SD");
     const [extraCoverage, setExtraCoverage] = useState<"full" | "half">("full");
+    // 'extra' = verde comum (motivo obrigatório); 'chief' = plantão de chefia
+    // (roxo, label fixo, fora do banco de horas).
+    const [extraType, setExtraType] = useState<"extra" | "chief">("extra");
     const [extraLabel, setExtraLabel] = useState("");
     const [extraBusy, setExtraBusy] = useState(false);
     const [extraError, setExtraError] = useState<string | null>(null);
@@ -386,11 +389,16 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     const [contractError, setContractError] = useState<string | null>(null);
     const [bankBusy, setBankBusy] = useState(false);
     const [bankError, setBankError] = useState<string | null>(null);
+    // Dia/turno do plantão verde/vermelho do acerto de 12h. Dia vazio = o
+    // servidor sorteia um dia útil (comportamento antigo).
+    const [bankDay, setBankDay] = useState("");
+    const [bankShift, setBankShift] = useState<"SD" | "SN">("SD");
     // Limpa o formulário de plantão extra ao trocar de médico / fechar o modal.
     useEffect(() => {
         setExtraDay("");
         setExtraShift("SD");
         setExtraCoverage("full");
+        setExtraType("extra");
         setExtraLabel("");
         setExtraError(null);
         setExtraFeedback(null);
@@ -410,6 +418,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setMetaFeedback(null);
         setContractError(null);
         setBankError(null);
+        setBankDay("");
+        setBankShift("SD");
         // O bloqueio por estouro é do médico anterior: quem não mostra card de
         // saldo (estatutário, psiquiatra, sem contrato) nunca o desligaria.
         setOverrunBlocked(false);
@@ -1182,12 +1192,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     async function submitAddExtraShift(doctorId: string, doctorName: string) {
         const day = extraDay.trim();
         if (!/^\d{2}$/.test(day)) {
-            setExtraError("Selecione o dia do plantão extra.");
+            setExtraError(extraType === "chief" ? "Selecione o dia do plantão de chefia." : "Selecione o dia do plantão extra.");
             return;
         }
 
         const label = extraLabel.trim();
-        if (label.length < 2) {
+        if (extraType === "extra" && label.length < 2) {
             setExtraError("Descreva o plantão extra com pelo menos 2 caracteres (assim você não perde o controle).");
             return;
         }
@@ -1206,7 +1216,8 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                     date: `${board.monthKey}-${day}`,
                     shift: extraShift,
                     coverage: extraCoverage,
-                    label,
+                    type: extraType,
+                    ...(extraType === "extra" ? { label } : {}),
                 }),
             });
             const body = await response.json().catch(() => null) as { error?: string } | null;
@@ -1215,7 +1226,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
             }
 
             const coverageLabel = extraCoverage === "half" ? "meio plantão" : "plantão inteiro";
-            setExtraFeedback(`Plantão extra adicionado: dia ${day} ${extraShift} (${coverageLabel}) → ${doctorName}.`);
+            setExtraFeedback(extraType === "chief"
+                ? `Plantão de chefia adicionado: dia ${day} ${extraShift} (${coverageLabel}) → ${doctorName}. Entra roxo no quadro, fora do banco de horas.`
+                : `Plantão extra adicionado: dia ${day} ${extraShift} (${coverageLabel}) → ${doctorName}.`);
             setExtraLabel("");
             // Se o filtro de status esconderia a linha, garante visibilidade.
             if (status === "needs_review") {
@@ -1341,7 +1354,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
             const response = await fetchComLimite("/api/admin/payment-closing/bank-hours-settlement", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ doctorId, monthKey: board.monthKey, kind }),
+                body: JSON.stringify({
+                    doctorId,
+                    monthKey: board.monthKey,
+                    kind,
+                    // Dia vazio = servidor sorteia um dia útil do mês (como antes).
+                    ...(bankDay ? { operationalDate: `${board.monthKey}-${bankDay}`, shiftLabel: bankShift } : {}),
+                }),
             });
             const body = await response.json().catch(() => null) as { error?: string } | null;
             if (!response.ok) {
@@ -2315,7 +2334,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             data-flash-key={`assign|${shift.domain}|${shift.targetCode}|${cell.day}|${shift.shiftLabel}`}
                                                             className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.isChiefExtra ? "admin-chief" : shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
                                                             title={shift.source === "admin_extra"
-                                                                ? `${shift.isChiefExtra ? "Plantão de chefia (não mexe no banco de horas)" : shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.shiftLabel} · ${shift.doctorName}`
+                                                                ? `${shift.isChiefExtra ? "Plantão de chefia (não mexe no banco de horas)" : shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.tagCode} · ${shift.shiftLabel} · ${shift.doctorName}`
                                                                 : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
                                                             initial={{ opacity: 0, scale: 0.92 }}
                                                             animate={{ opacity: 1, scale: 1 }}
@@ -2336,7 +2355,15 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                                 });
                                                             }}
                                                         >
-                                                            {shift.paymentTag ? `${shift.paymentTag} ${shift.tagCode}` : shift.tagCode}
+                                                            {(() => {
+                                                                // Extra: código curto por kind (o label livre fica no tooltip
+                                                                // e na lista plantão-a-plantão) — chips compridos esticavam a
+                                                                // coluna do dia. Plantão real: código do posto, como sempre.
+                                                                const code = shift.source === "admin_extra"
+                                                                    ? resolveExtraShiftChipCode(shift.extraKind)
+                                                                    : shift.tagCode;
+                                                                return shift.paymentTag ? `${shift.paymentTag} ${code}` : code;
+                                                            })()}
                                                         </motion.button>
                                                         );
                                                     })}
@@ -2764,49 +2791,58 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                             {canManageClosing ? (
                                                 <>
                                                     <div className="chief-payable-contract-seed">
-                                                        <input
-                                                            type="number"
-                                                            min="0"
-                                                            step="0.01"
-                                                            value={contractDraft}
-                                                            onChange={(event) => setContractDraft(event.target.value)}
-                                                            placeholder="teto, ex.: 120000.00"
-                                                            disabled={contractBusy}
-                                                        />
-                                                        <input
-                                                            type="month"
-                                                            value={contractMonthDraft || board.monthKey}
-                                                            onChange={(event) => setContractMonthDraft(event.target.value)}
-                                                            disabled={contractBusy}
-                                                            aria-label="Mês inicial do contrato"
-                                                        />
-                                                        <input
-                                                            type="number"
-                                                            step="0.01"
-                                                            value={contractOpeningDraft}
-                                                            onChange={(event) => setContractOpeningDraft(event.target.value)}
-                                                            placeholder="saldo inicial (vazio = teto)"
-                                                            disabled={contractBusy}
-                                                            aria-label="Saldo no início do mês inicial"
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            className="payment-button"
-                                                            onClick={() => void submitContractSeed(selectedDoctor.doctorId)}
-                                                            disabled={contractBusy}
-                                                        >
-                                                            {contractBusy ? "Salvando..." : "Salvar contrato"}
-                                                        </button>
-                                                        {contractEditing ? (
+                                                        <label>
+                                                            <span>Teto (R$)</span>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="0.01"
+                                                                value={contractDraft}
+                                                                onChange={(event) => setContractDraft(event.target.value)}
+                                                                placeholder="ex.: 120000.00"
+                                                                disabled={contractBusy}
+                                                            />
+                                                        </label>
+                                                        <label>
+                                                            <span>Mês inicial</span>
+                                                            <input
+                                                                type="month"
+                                                                value={contractMonthDraft || board.monthKey}
+                                                                onChange={(event) => setContractMonthDraft(event.target.value)}
+                                                                disabled={contractBusy}
+                                                            />
+                                                        </label>
+                                                        <label>
+                                                            <span>Saldo inicial (vazio = teto)</span>
+                                                            <input
+                                                                type="number"
+                                                                step="0.01"
+                                                                value={contractOpeningDraft}
+                                                                onChange={(event) => setContractOpeningDraft(event.target.value)}
+                                                                placeholder="ex.: 87500.00"
+                                                                disabled={contractBusy}
+                                                            />
+                                                        </label>
+                                                        <div className="chief-payable-contract-seed-actions">
                                                             <button
                                                                 type="button"
-                                                                className="payment-button secondary"
-                                                                onClick={() => setContractEditing(false)}
+                                                                className="payment-button"
+                                                                onClick={() => void submitContractSeed(selectedDoctor.doctorId)}
                                                                 disabled={contractBusy}
                                                             >
-                                                                Cancelar
+                                                                {contractBusy ? "Salvando..." : "Salvar contrato"}
                                                             </button>
-                                                        ) : null}
+                                                            {contractEditing ? (
+                                                                <button
+                                                                    type="button"
+                                                                    className="payment-button secondary"
+                                                                    onClick={() => setContractEditing(false)}
+                                                                    disabled={contractBusy}
+                                                                >
+                                                                    Cancelar
+                                                                </button>
+                                                            ) : null}
+                                                        </div>
                                                     </div>
                                                     {contractError ? <p className="chief-payable-extra-feedback danger">{contractError}</p> : null}
                                                 </>
@@ -2859,6 +2895,31 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     const bonusReady = bank.bonusEligibleMinutes >= BANK_HOURS_THRESHOLD_MINUTES;
                                     const penaltyReady = bank.penaltyEligibleMinutes <= -BANK_HOURS_THRESHOLD_MINUTES;
                                     const amortizing = !bonusReady && bank.oldMinutes < 0 && bank.recentMinutes > 0;
+                                    // Dia/turno do plantão do acerto: escolhível; vazio sorteia dia útil.
+                                    const settleControls = canManageClosing ? (
+                                        <div className="chief-payable-bank-settle">
+                                            <label>
+                                                <span>Dia</span>
+                                                <select value={bankDay} onChange={(event) => setBankDay(event.target.value)} disabled={bankBusy}>
+                                                    <option value="">automático (dia útil)</option>
+                                                    {board.days.map((day) => (
+                                                        <option key={day} value={day}>{day}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                            <label>
+                                                <span>Turno</span>
+                                                <select
+                                                    value={bankShift}
+                                                    onChange={(event) => setBankShift(event.target.value === "SN" ? "SN" : "SD")}
+                                                    disabled={bankBusy || !bankDay}
+                                                >
+                                                    <option value="SD">SD (diurno)</option>
+                                                    <option value="SN">SN (noturno)</option>
+                                                </select>
+                                            </label>
+                                        </div>
+                                    ) : null;
                                     return (
                                         <article className="chief-payable-modal-card">
                                             <span>Banco de horas · desde mai/2025</span>
@@ -2885,6 +2946,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                         Elegível para bônus: {formatSignedMinutesAsHours(bank.bonusEligibleMinutes)}
                                                         {bank.oldMinutes < 0 ? " (dívida antiga já descontada)" : ""} — bonifique com 1 plantão verde (dia útil) e abata 12h.
                                                     </small>
+                                                    {settleControls}
                                                     {canManageClosing ? (
                                                         <button
                                                             type="button"
@@ -2899,6 +2961,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                             ) : penaltyReady ? (
                                                 <>
                                                     <small>-12h ou menos desde mai/2025 — debite 1 plantão vermelho e devolva 12h ao saldo.</small>
+                                                    {settleControls}
                                                     {canManageClosing ? (
                                                         <button
                                                             type="button"
@@ -2927,12 +2990,30 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                         </section>
 
                         {canManageClosing ? (
-                            <section className="chief-payable-extra-form">
+                            <section className={`chief-payable-extra-form ${extraType === "chief" ? "chief" : ""}`.trim()}>
                                 <header>
-                                    <h4>Adicionar plantão extra</h4>
-                                    <small>Entra em verde no quadro e conta no valor a pagar. Use para plantões que o bot não registrou.</small>
+                                    <h4>{extraType === "chief" ? "Adicionar plantão de chefia" : "Adicionar plantão extra"}</h4>
+                                    <small>
+                                        {extraType === "chief"
+                                            ? "Entra roxo no quadro e conta no valor a pagar — fora do banco de horas, sem mexer em saldo."
+                                            : "Entra em verde no quadro e conta no valor a pagar. Use para plantões que o bot não registrou."}
+                                    </small>
                                 </header>
                                 <div className="chief-payable-extra-fields">
+                                    <label>
+                                        <span>Tipo</span>
+                                        <select
+                                            value={extraType}
+                                            onChange={(event) => {
+                                                setExtraType(event.target.value === "chief" ? "chief" : "extra");
+                                                setExtraError(null);
+                                            }}
+                                            disabled={extraBusy}
+                                        >
+                                            <option value="extra">Extra (verde)</option>
+                                            <option value="chief">Chefia (roxo)</option>
+                                        </select>
+                                    </label>
                                     <label>
                                         <span>Dia</span>
                                         <select
@@ -2968,26 +3049,28 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                             <option value="half">Meio plantão (0.5)</option>
                                         </select>
                                     </label>
-                                    <label>
-                                        <span>Motivo (obrigatório, ≥2 caracteres)</span>
-                                        <input
-                                            type="text"
-                                            value={extraLabel}
-                                            onChange={(event) => setExtraLabel(event.target.value)}
-                                            placeholder="ex.: plantão trocado"
-                                            minLength={2}
-                                            maxLength={40}
-                                            required
-                                            disabled={extraBusy}
-                                        />
-                                    </label>
+                                    {extraType === "extra" ? (
+                                        <label>
+                                            <span>Motivo (obrigatório, ≥2 caracteres)</span>
+                                            <input
+                                                type="text"
+                                                value={extraLabel}
+                                                onChange={(event) => setExtraLabel(event.target.value)}
+                                                placeholder="ex.: plantão trocado"
+                                                minLength={2}
+                                                maxLength={40}
+                                                required
+                                                disabled={extraBusy}
+                                            />
+                                        </label>
+                                    ) : null}
                                     <button
                                         type="button"
                                         className="payment-button"
                                         onClick={() => void submitAddExtraShift(selectedDoctor.doctorId, selectedDoctor.doctorName)}
                                         disabled={extraBusy}
                                     >
-                                        {extraBusy ? "Adicionando..." : "Adicionar plantão"}
+                                        {extraBusy ? "Adicionando..." : (extraType === "chief" ? "Adicionar chefia" : "Adicionar plantão")}
                                     </button>
                                 </div>
                                 {extraError ? <p className="chief-payable-extra-feedback danger">{extraError}</p> : null}
@@ -3074,8 +3157,28 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             {shift.shiftLabel}
                                                         </span>
                                                         <span className="chief-payable-modal-shift-target">
-                                                            {shift.source === "admin_extra" ? (shift.tagCode || "EXTRA") : shift.targetCode}
-                                                            {shift.source === "admin_extra" ? <em className="chief-payable-modal-shift-half">{shift.isChiefExtra ? "chefia" : shift.paymentUnit < 0 ? "punição" : "extra"}</em> : null}
+                                                            {(() => {
+                                                                if (shift.source !== "admin_extra") {
+                                                                    return shift.targetCode;
+                                                                }
+                                                                // Código curto na frente; o label livre ("plantão trocado",
+                                                                // "EXTRA DECLARADO") vira nota ao lado quando acrescenta algo.
+                                                                // Labels fixos do sistema (chefia, acerto de 12h) só repetiriam o código.
+                                                                const code = resolveExtraShiftChipCode(shift.extraKind);
+                                                                const label = (shift.tagCode || "").trim();
+                                                                const labelAddsInfo = label.length > 0
+                                                                    && label !== "PLANTÃO DE CHEFIA"
+                                                                    && !label.startsWith("Banco de horas")
+                                                                    && label.toLocaleLowerCase("pt-BR") !== code.toLocaleLowerCase("pt-BR");
+                                                                return (
+                                                                    <>
+                                                                        {code}
+                                                                        {labelAddsInfo ? (
+                                                                            <em className="chief-payable-modal-shift-label" title={label}>{label}</em>
+                                                                        ) : null}
+                                                                    </>
+                                                                );
+                                                            })()}
                                                             {shift.paymentTag ? <em className="chief-payable-modal-shift-half">{shift.paymentTag}</em> : null}
                                                         </span>
                                                         <span className={`chief-payable-modal-shift-kind ${kindClass}`}>{kindLabel}</span>

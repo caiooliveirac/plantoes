@@ -18,6 +18,10 @@ const payloadSchema = z.object({
     monthKey: z.string().regex(/^\d{4}-\d{2}$/),
     kind: z.enum(["bonus", "penalty"]),
     note: z.string().trim().max(120).nullish(),
+    // Dia/turno do plantão verde/vermelho. Sem dia, mantém o comportamento
+    // antigo (dia útil sorteado no mês, turno SD).
+    operationalDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    shiftLabel: z.enum(["SD", "SN"]).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -63,12 +67,21 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        if (parsed.data.operationalDate && !parsed.data.operationalDate.startsWith(`${parsed.data.monthKey}-`)) {
+            return NextResponse.json(
+                { error: "O dia do acerto precisa estar dentro do mês do fechamento." },
+                { status: 400 },
+            );
+        }
+
         const result = await settleBankHours({
             doctorId: parsed.data.doctorId,
             monthKey: parsed.data.monthKey,
             kind: parsed.data.kind,
             note: parsed.data.note ?? null,
             actorUserId: session.user.id,
+            operationalDate: parsed.data.operationalDate,
+            shiftLabel: parsed.data.shiftLabel,
         });
 
         await getDb().insert(auditLogs).values({

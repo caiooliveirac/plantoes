@@ -151,7 +151,9 @@ export function HalfShiftDecision({ shift }: { shift: PayableShift }) {
                 title={mode === "to_half" ? "Pagar só MEIO plantão" : "Pagar plantão inteiro"}
                 aria-label={mode === "to_half" ? "Pagar só MEIO plantão" : "Pagar plantão inteiro"}
             >
-                {mode === "to_half" ? "½ MEIO" : "INTEIRO"}
+                {/* Verbo na frente: sem ele o botão parecia um badge de estado
+                    ("½ MEIO") dizendo que o plantão JÁ era meio. */}
+                {mode === "to_half" ? "pagar ½" : "pagar inteiro"}
             </button>
 
             {open ? (

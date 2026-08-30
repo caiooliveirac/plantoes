@@ -122,6 +122,11 @@ export interface PayableShift {
      * com o banco de horas. O board pinta diferente para não confundir com o
      * extra que sai do acerto de ±12h. */
     isChiefExtra?: boolean;
+    /** kind normalizado do admin_extra_shift ('extra' | 'half_extra' | 'bonus' |
+     * 'penalty' | 'chief' | 'chief_half'). Só presente em extras; a UI deriva
+     * daqui o código curto do chip (o `tagCode` continua sendo o label livre,
+     * que exportações e folha usam por extenso). */
+    extraKind?: string | null;
     /** Desfecho da régua de retirada antecipada aplicado a ESTE slot (ou null). */
     earlyDepartureOutcome: "bank_only" | "half_shift" | null;
 }
@@ -149,6 +154,26 @@ export const CHIEF_EXTRA_HALF_SHIFT_KIND = "chief_half";
 
 /** Rótulo fixo do chip: quem olha o board sabe na hora que é chefia. */
 export const CHIEF_EXTRA_SHIFT_LABEL = "PLANTÃO DE CHEFIA";
+
+/**
+ * Código curto do chip de um extra no quadro/lista, por kind. O label livre
+ * ("plantão trocado", "EXTRA DECLARADO") continua guardado e aparece no
+ * tooltip e na lista plantão-a-plantão — mas o chip usa um código de largura
+ * fixa para não esticar a coluna do dia (chips de plantão real têm 3-4 letras).
+ */
+export function resolveExtraShiftChipCode(kind: string | null | undefined): string {
+    const normalized = String(kind ?? "extra").trim().toLowerCase();
+    if (normalized === CHIEF_EXTRA_SHIFT_KIND || normalized === CHIEF_EXTRA_HALF_SHIFT_KIND) {
+        return "CHEFIA";
+    }
+    if (normalized === "bonus") {
+        return "BÔNUS";
+    }
+    if (normalized === "penalty") {
+        return "PUNIÇÃO";
+    }
+    return "EXTRA";
+}
 
 export interface AdminExtraShiftInput {
     id: string;
@@ -219,6 +244,7 @@ export function buildAdminExtraPayableShift(input: AdminExtraShiftInput): Payabl
         paymentUnit,
         paymentTag: isHalfExtra ? HALF_SHIFT_TAG_LABEL : null,
         isChiefExtra,
+        extraKind: normalizedKind,
         earlyDepartureOutcome: null,
     } satisfies PayableShift;
 }
