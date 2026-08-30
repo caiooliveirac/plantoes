@@ -255,3 +255,100 @@ por costura. O que muda em relação às fases acima:
    por módulo do ADR 0005, que é o oposto de um merge big-bang), a ponte
    "senha do plantões" como transição desligável por env, e a discussão de
    bots (§4 Fase 4), que o Kairós ainda não cobre.
+
+## 9. Plataforma de venda multi-SAMU: módulos à la carte, um login, uma home
+
+> Registro da direção definida pelo dono do produto em 30/08: o Kairós será
+> vendido a outros SAMUs, módulo a módulo ("cidade que compra só escala, só
+> trocas, só checagem, só almoxarifado"), mantendo repos/módulos separados no
+> desenvolvimento — mas com o usuário final entrando por **uma** tela de login
+> e caindo na **sua** vida: admin vê tudo, coordenador menos, médico menos
+> ainda, sempre o que precisa.
+
+### 9.1 A costura que precisa ser única não é o repo — é o contrato
+
+O que TEM de ser um só, para a experiência ser uma: **identidade/sessão**
+(cookie no domínio + introspecção), **tenant** (`cliente`), **entitlements**
+(o que o cliente comprou), **permissões** (o que a pessoa pode), **tokens de
+design** (Kairós) e **cadastro canônico** (pessoa, unidade). O que PODE
+continuar separado: repositório e runtime de cada módulo.
+
+Dois tipos de módulo convivem no mesmo catálogo, invisíveis para quem compra:
+
+- **Módulo nativo** — roda no core (in-process), tabelas próprias com RLS
+  `FORCE` por `cliente_id` e auditoria append-only. É o destino de todo módulo
+  **vendido** com dado de cliente: o isolamento entre cidades é provado uma
+  vez, no core (teste de vazamento no CI), e não N vezes em N apps. O desejo
+  de "repos separados" continua atendível aqui: módulo nativo pode ser
+  desenvolvido em repo próprio e entrar no monorepo como pacote versionado —
+  separação de desenvolvimento, runtime unificado.
+- **Módulo satélite** — app próprio (qualquer stack; o manual é Django),
+  montado sob um caminho da raiz via nginx, autenticando pela introspecção,
+  presente no catálogo com `destino`. É o estado de **incubação** e o estado
+  permanente do que não é vendido. Regra de bolso: **satélite incuba, nativo
+  vende.**
+
+Vender um módulo satélite antes da recriação tem um custo escondido: cada
+satélite teria de virar multi-tenant por conta própria (o plantões, p.ex., é
+single-tenant por construção). O caminho interino para uma venda antecipada é
+instância dedicada por cidade — nunca remendar tenancy em N apps.
+
+### 9.2 Mecânica da venda
+
+- `cliente` = a cidade/SAMU. Nova tabela `cliente_modulo` = o que ela comprou
+  (é o gap atual: `MODULOS` é global no código e papéis são do produto — sem
+  esse filtro, o admin da cidade X veria módulos que não comprou).
+- Visibilidade = **catálogo ∩ módulos do cliente ∩ permissões da pessoa**,
+  três portões, todos no servidor. "Admin vê tudo" = tudo *do que o cliente
+  comprou*.
+- **SKU ≠ módulo técnico.** Escala e trocas são um app só (levantamento do
+  kairos); comercialmente podem ser dois produtos — a venda liga grupos de
+  permissões (`trocas.*`), não repos.
+- Modos de entrega: SaaS multi-tenant (uma instalação, RLS — o default para o
+  qual o core foi construído) ou instância dedicada para quem exigir dado em
+  casa. Catálogo e entitlements idênticos nos dois.
+
+### 9.3 nginx é encanamento; a experiência vem do contrato
+
+Roteamento por caminho na raiz `mnrs.com.br` (ADR 0004, Etapa 0) é a resposta
+certa de transporte — mas sozinho ele só produz links bonitos para logins
+diferentes, que é o estado atual. O que faz parecer UM produto é a pilha:
+cookie no domínio pai + introspecção (uma sessão) → catálogo+entitlements (o
+que aparece) → tokens Kairós (uma cara) → regra de destino pós-login (cair
+onde se vive).
+
+### 9.4 "Ver a própria vida": a home por pessoa
+
+Além do portão por módulo, a home compõe **ações rápidas e cartões que cada
+módulo contribui**, filtrados por permissão: médico vê "avisar chegada"
+(plantões), "próximo plantão / pedir troca" (escala), "checklist da viatura",
+"manual do serviço"; coordenador vê pendências de aprovação e carências; admin
+vê tudo mais indicadores. Mecanismo em duas fases:
+
+1. **Estática** (barata, já dá a sensação): cada entrada do catálogo declara
+   ações rápidas (rótulo, permissão exigida, rota/URL). Satélite entra por
+   declaração, sem API nova.
+2. **Com estado** ("você está escalado hoje às 19h"): contrato explícito de
+   resumo por módulo — separado da introspecção, para não violar a regra do
+   ADR 0003 (nenhuma regra de negócio atravessa a introspecção). Módulo nativo
+   entrega isso in-process de graça; satélite só se valer a pena.
+
+Destino pós-login (ordem): deep-link `?de=` seguro → pessoa com um único
+módulo entra direto → módulo inicial do papel (override por pessoa) → home.
+
+### 9.5 Próximos passos concretos, em ordem
+
+1. **Etapa 0 do kairos** (raiz `mnrs.com.br`) — já planejada, independente de
+   tudo.
+2. **`cliente_modulo`** + filtro em `modulosPermitidos`/tela-mãe (pequeno, e
+   destrava a conversa comercial).
+3. **Ligar a introspecção no primeiro satélite real** — plantões (maior dor),
+   depois escala. Mata o "logar duas vezes" sem esperar absorção.
+4. **Home "minha vida" v1** — ações rápidas estáticas + regra de destino
+   pós-login.
+5. **ADR novo no kairos** registrando: fronteira vira portfólio por cliente;
+   "satélite incuba, nativo vende"; SKU ≠ módulo técnico. (As ações citadas já
+   têm casa: chegada/saída → plantões; troca → escala; defeito de equipamento
+   → almoxarifado/frota; manual → samu-normas como satélite Django; checklist
+   → checklist; presença de interno → capacitação, que o ADR 0008 já trouxe
+   para dentro.)
