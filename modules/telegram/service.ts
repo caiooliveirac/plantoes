@@ -7007,7 +7007,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 target: command.targetCode,
                 name: doctor.fullName,
                 time: formatTelegramReplyTime(eventAt),
-            }) + correctedShiftHint + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode)), message.message_id);
+            }) + correctedShiftHint + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode, { format: "plain" })), message.message_id);
 
             if (message.chat.type === "private") {
                 await announcePrivateCorrectionToGroups(message.message_id, {
@@ -7124,7 +7124,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
                 target: command.targetCode,
                 name: doctor.fullName,
                 time: formatTelegramReplyTime(eventAt),
-            }) + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode)), message.message_id);
+            }) + (command.sector === "REGULATION" ? "" : await fetchChecklistKeyHint(command.targetCode, { format: "plain" })), message.message_id);
 
             if (message.chat.type === "private") {
                 await announcePrivateCorrectionToGroups(message.message_id, {
