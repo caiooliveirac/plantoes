@@ -23,6 +23,7 @@ import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
 import type { BankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
 import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
+import { KairosTopo } from "@/components/kairos-topo";
 import { ApprovalBadge } from "@/components/doctor-panel/approval-badge";
 import { SelfServiceBankHours, type SelfServiceShiftOption } from "@/components/doctor-panel/self-service-bank-hours";
 import { ChiefExtraShifts } from "@/components/doctor-panel/chief-extra-shifts";
@@ -181,13 +182,16 @@ export default async function PainelDoMedicoPage({
 
     if (!doctor && !paymentRow) {
         return (
-            <main className="panel-shell">
-                {mesNav}
-                <section className="hours-empty-state standalone">
-                    <strong>Ainda não há nada por aqui.</strong>
-                    <span>Assim que seus plantões forem consolidados, tudo aparece nesta página.</span>
-                </section>
-            </main>
+            <div className="pagina-kairos">
+                <KairosTopo titulo="Seu painel" />
+                <main className="panel-shell">
+                    {mesNav}
+                    <section className="hours-empty-state standalone">
+                        <strong>Ainda não há nada por aqui.</strong>
+                        <span>Assim que seus plantões forem consolidados, tudo aparece nesta página.</span>
+                    </section>
+                </main>
+            </div>
         );
     }
 
@@ -245,6 +249,9 @@ export default async function PainelDoMedicoPage({
         shift.approval.state === "aguardando_chefia" || shift.approval.state === "ocorrencia_nao_informada");
 
     return (
+        // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Seu painel" />
         <main className="panel-shell">
             <header className="panel-hero">
                 <p className="reports-kicker">Seu painel</p>
@@ -454,5 +461,6 @@ export default async function PainelDoMedicoPage({
                 Para corrigir qualquer coisa, fale com a chefia de plantão.
             </footer>
         </main>
+        </div>
     );
 }

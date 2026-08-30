@@ -1,3 +1,11 @@
+/* Sistema Kairós (compartilhado com o app escalas-e-trocas-samu): tokens,
+   ponte de tokens legados e overrides das telas migradas. O :root abaixo é a
+   paleta dark glass LEGADA — telas não migradas dependem dela; ao migrar a
+   última, o bloco morre (mesmo plano do escalas). */
+@import "./kairos.css";
+@import "./kairos-ponte.css";
+@import "./kairos-plantoes.css";
+
 :root {
     color-scheme: dark;
     --bg: #0e1118;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 export interface SelfServiceShiftOption {
@@ -57,6 +57,23 @@ export function SelfServiceBankHours({
     const [editing, setEditing] = useState<string | null>(null);
     const [editDate, setEditDate] = useState("");
     const [editShift, setEditShift] = useState<"SD" | "SN">("SD");
+    // Confirmação em dois toques no próprio botão (Kairós): o primeiro toque
+    // arma ("Confirmar?"), o segundo executa. Substitui o window.confirm
+    // nativo, que destoava da interface. Desarma sozinho em 4s.
+    const [confirming, setConfirming] = useState<string | null>(null);
+    useEffect(() => {
+        if (!confirming) return;
+        const timer = setTimeout(() => setConfirming(null), 4000);
+        return () => clearTimeout(timer);
+    }, [confirming]);
+    function confirmaEmDoisToques(key: string): boolean {
+        if (confirming === key) {
+            setConfirming(null);
+            return true;
+        }
+        setConfirming(key);
+        return false;
+    }
 
     if (!canBonus && !canPenalty && declaredExtras.length === 0) return null;
 
@@ -93,7 +110,7 @@ export function SelfServiceBankHours({
         const operationalDate = action === "bonus" ? bonusDate : penaltyPick.split("|")[0];
         const shiftLabel = action === "bonus" ? bonusShift : penaltyPick.split("|")[1];
         if (!operationalDate) return;
-        if (!window.confirm(`Confirmar dia ${formatDia(operationalDate)} (${shiftLabel})?`)) return;
+        if (!confirmaEmDoisToques(action)) return;
 
         const ok = await call("POST", { monthKey, action, operationalDate, shiftLabel }, action);
         if (ok) {
@@ -113,9 +130,7 @@ export function SelfServiceBankHours({
     }
 
     async function remove(extra: SelfDeclaredExtra) {
-        if (!window.confirm(`Tirar o plantão extra de ${formatDia(extra.operationalDate)} (${extra.shiftLabel})?`)) {
-            return;
-        }
+        if (!confirmaEmDoisToques(`rm:${extra.settlementId}`)) return;
         await call("DELETE", { settlementId: extra.settlementId }, extra.settlementId);
     }
 
@@ -166,7 +181,11 @@ export function SelfServiceBankHours({
                             disabled={!bonusDate || busy !== null}
                             onClick={() => void submit("bonus")}
                         >
-                            {busy === "bonus" ? "Registrando…" : "Registrar plantão extra (12h)"}
+                            {busy === "bonus"
+                                ? "Registrando…"
+                                : confirming === "bonus" && bonusDate
+                                    ? `Confirmar ${formatDia(bonusDate)} (${bonusShift})? Desconta 12h`
+                                    : "Registrar plantão extra (12h)"}
                         </button>
                     </div>
                 ) : null}
@@ -206,7 +225,11 @@ export function SelfServiceBankHours({
                             disabled={!penaltyPick || busy !== null}
                             onClick={() => void submit("penalty")}
                         >
-                            {busy === "penalty" ? "Retirando…" : "Retirar este plantão (12h)"}
+                            {busy === "penalty"
+                                ? "Retirando…"
+                                : confirming === "penalty" && penaltyPick
+                                    ? `Confirmar retirada de ${formatDia(penaltyPick.split("|")[0])}? Devolve 12h`
+                                    : "Retirar este plantão (12h)"}
                         </button>
                     </div>
                 ) : null}
@@ -281,7 +304,7 @@ export function SelfServiceBankHours({
                                                 disabled={busy !== null}
                                                 onClick={() => void remove(extra)}
                                             >
-                                                Tirar
+                                                {confirming === `rm:${extra.settlementId}` ? "Confirmar remoção?" : "Tirar"}
                                             </button>
                                         </>
                                     )}

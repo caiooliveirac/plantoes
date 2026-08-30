@@ -1,0 +1,86 @@
+/* ==========================================================================
+   PONTE dark glass → Kairós (plantões)
+   --------------------------------------------------------------------------
+   As telas legadas pintam com os tokens do :root de globals.css (--panel,
+   --text, --accent-*), fixos no escuro. Dentro de .pagina-kairos esses
+   mesmos nomes reapontam para os semânticos do Kairós, que já invertem
+   sozinhos em [data-tema="escuro"] (app/kairos.css).
+
+   Efeito: todo bloco legado que pinta com token passa a responder ao toggle
+   sem ser reescrito. O que pinta com cor LITERAL é tratado tela a tela em
+   app/kairos-plantoes.css — e só para as telas migradas.
+
+   Mesmo mecanismo do app escalas-e-trocas-samu (app/kairos-ponte.css de lá);
+   é andaime de migração, não destino.
+   ========================================================================== */
+
+.pagina-kairos {
+    /* Superfícies e estrutura */
+    --bg: var(--fundo-app);
+    --bg-deep: var(--superficie-recuada);
+    --panel: var(--superficie);
+    --panel-border: var(--borda);
+    --line: var(--divisor);
+
+    /* Texto — --muted é prosa no legado, não decoração: precisa passar AA
+       sobre a superfície clara, por isso o degrau MÉDIO (ver escalas). */
+    --text: var(--texto);
+    --muted: var(--texto-medio);
+    --muted-strong: var(--texto);
+
+    /* Cores nomeadas do legado → degrau equivalente da rampa Kairós. */
+    --ice: var(--azul-dado);
+    --ice-soft: var(--azul-50);
+    --gold: var(--ambar-700);
+    --gold-soft: var(--ambar-50);
+    --green: var(--verde-600);
+    --green-soft: var(--verde-50);
+    --amber: var(--ambar-600);
+    --amber-soft: var(--ambar-50);
+    --red: var(--vermelho-600);
+    --red-soft: var(--vermelho-50);
+
+    /* O "glass" não existe no Kairós: superfícies opacas. */
+    --surface-glass: var(--superficie);
+    --surface-glass-strong: var(--superficie);
+    --surface-elevated: var(--superficie);
+    --surface-elevated-border: var(--borda);
+    --blur-glass: none;
+
+    /* Acentos */
+    --accent-confirm: var(--verde-600);
+    --accent-confirm-soft: var(--verde-50);
+    --accent-confirm-glow: var(--verde-300);
+    --accent-warn: var(--ambar-600);
+    --accent-warn-soft: var(--ambar-50);
+    --accent-warn-glow: var(--ambar-200);
+    --accent-fraud: var(--vermelho-600);
+    --accent-fraud-soft: var(--vermelho-50);
+    --accent-fraud-glow: var(--vermelho-300);
+    --accent-info: var(--azul-acao);
+    --accent-info-soft: var(--azul-50);
+
+    /* Sombras e tipografia */
+    --shadow: var(--sombra-topo);
+    --shadow-soft: var(--sombra-painel);
+    --shadow-elevated: var(--sombra-modal);
+    --font-sans: var(--fonte-sans);
+    --font-display: var(--fonte-sans);
+
+    /* Dia e noite: SD claro (âmbar lavado), SN escuro (roxo cheio) — a mesma
+       leitura de relance do escalas, nos dois temas. */
+    --turno-sd-bg: var(--ambar-50);
+    --turno-sd-fg: var(--ambar-700);
+    --turno-sd-bd: var(--ambar-200);
+    --turno-sn-bg: var(--roxo-800);
+    --turno-sn-fg: var(--roxo-50);
+    --turno-sn-bd: var(--roxo-950);
+}
+
+/* No escuro o roxo-800/950 do claro não existe na rampa reescrita; o chip SN
+   vira roxo de superfície com texto claro do próprio tema. */
+[data-tema="escuro"] .pagina-kairos {
+    --turno-sn-bg: var(--roxo-50);
+    --turno-sn-fg: var(--roxo-600);
+    --turno-sn-bd: var(--roxo-200);
+}

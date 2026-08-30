@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
 import { ContractTermsCard } from "@/components/payment-closing/contract-terms-card";
 // Nenhuma ação desta tela pode ficar pendurada esperando o servidor.
@@ -1608,6 +1609,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     const selectedDoctorConflictCount = selectedDoctorDisplacedConflictSegments.length;
 
     return (
+        // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Fechamento de pagamento" abas={ABAS_ADMIN} />
         <main className="chief-payable-shell">
             {/* Design 2A: faixa de comando única + gaveta de filtros + tabela num só container. */}
             <section className="admin-bar-frame">
@@ -2944,7 +2948,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                 <>
                                                     <small>
                                                         Elegível para bônus: {formatSignedMinutesAsHours(bank.bonusEligibleMinutes)}
-                                                        {bank.oldMinutes < 0 ? " (dívida antiga já descontada)" : ""} — bonifique com 1 plantão verde (dia útil) e abata 12h.
+                                                        {bank.oldMinutes < 0 ? " (dívida antiga já descontada)" : ""} — bonifique com 1 plantão extra — chip BÔNUS, dia útil — e abata 12h.
                                                     </small>
                                                     {settleControls}
                                                     {canManageClosing ? (
@@ -2954,13 +2958,13 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "bonus")}
                                                             disabled={bankBusy}
                                                         >
-                                                            {bankBusy ? "Lançando..." : "Bonificar +1 plantão (verde) e abater 12h"}
+                                                            {bankBusy ? "Lançando..." : "Bonificar +1 plantão (BÔNUS) e abater 12h"}
                                                         </button>
                                                     ) : null}
                                                 </>
                                             ) : penaltyReady ? (
                                                 <>
-                                                    <small>-12h ou menos desde mai/2025 — debite 1 plantão vermelho e devolva 12h ao saldo.</small>
+                                                    <small>-12h ou menos desde mai/2025 — debite 1 plantão — chip PUNIÇÃO — e devolva 12h ao saldo.</small>
                                                     {settleControls}
                                                     {canManageClosing ? (
                                                         <button
@@ -2969,7 +2973,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                             onClick={() => void submitBankHoursSettlement(selectedDoctor.doctorId, "penalty")}
                                                             disabled={bankBusy}
                                                         >
-                                                            {bankBusy ? "Lançando..." : "Debitar 1 plantão (vermelho) e devolver 12h"}
+                                                            {bankBusy ? "Lançando..." : "Debitar 1 plantão (PUNIÇÃO) e devolver 12h"}
                                                         </button>
                                                     ) : null}
                                                 </>
@@ -3205,5 +3209,6 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                 </div>
             ) : null}
         </main>
+        </div>
     );
 }
