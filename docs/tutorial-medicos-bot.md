@@ -47,7 +47,7 @@ PP20  IT30  PM40  CZ50  BR60  CC70
 
 ```
 1321–1329   1361–1368   1476
-2031–2035   2151–2154   2377   (e NUCLEO / PIAM pelo nome)
+2031–2035   2151–2154   2262   2263   2377   (e NUCLEO / PIAM pelo nome)
 ```
 
 > ⚠️ Nos exemplos do `/ajuda` aparece "USB-01" — isso é **só um modelo de
@@ -102,8 +102,8 @@ tentar usar "informo" como se fosse o nome do médico.) Escreva:
 → Cada mensagem é lida sozinha. A primeira não tem ação nem local; a segunda
 não tem nome. Junte tudo numa mensagem só.
 
-### ❌ Usar "1367 12:30" para avisar almoço/jantar
-`1367 ALMOÇO 12:30`
+### ❌ Usar "2262 12:30" para avisar almoço/jantar
+`2262 ALMOÇO 12:30`
 → Esse formato "ramal + horário" é o **botão da divisão de almoço**, não uma
 chegada. Para refeição use os comandos **`/almoco`** (diurno) ou **`/jantar`**
 (noturno) e clique no horário que o robô oferecer.
@@ -130,7 +130,8 @@ extra só entra se a chefia lançar.
 Alguns ramais **definem a função sozinhos** — não adianta escrever outra:
 
 - **2031** → sempre **CP** (chefia)
-- **1367 e 1368** → sempre **COI**
+- **2262 e 2263** → sempre **COI** (desde 26/08/2026; o 1367 e o 1368 viraram
+  ramais comuns — quem lançar lá não recebe COI)
 
 Se você lançar nesses ramais, o robô já grava a função certa automaticamente.
 A única exceção é **meio plantão**: se você avisar "meio plantão" / "MP" / "MT",
