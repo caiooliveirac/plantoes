@@ -8,13 +8,15 @@ export const dynamic = "force-dynamic";
 
 function PaymentClosingUnavailable({ title, copy }: { title: string; copy: string }) {
     return (
-        <main className="chief-payable-shell">
-            <section className="payment-empty-state standalone large">
-                <strong>{title}</strong>
-                <span>{copy}</span>
-                <AdminGlobalNavigationLinks current="payment-closing" containerClassName="payment-actions split" />
-            </section>
-        </main>
+        <div className="pagina-kairos">
+            <main className="chief-payable-shell">
+                <section className="payment-empty-state standalone large">
+                    <strong>{title}</strong>
+                    <span>{copy}</span>
+                    <AdminGlobalNavigationLinks current="payment-closing" containerClassName="payment-actions split" />
+                </section>
+            </main>
+        </div>
     );
 }
 

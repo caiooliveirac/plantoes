@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 export interface ChiefExtraShift {
@@ -47,6 +47,23 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
     const [editDate, setEditDate] = useState("");
     const [editShift, setEditShift] = useState<"SD" | "SN">("SD");
     const [editCoverage, setEditCoverage] = useState<Coverage>("full");
+    // Confirmação em dois toques no próprio botão (Kairós): o primeiro toque
+    // arma ("Confirmar?"), o segundo executa. Substitui o window.confirm
+    // nativo, que destoava da interface. Desarma sozinho em 4s.
+    const [confirming, setConfirming] = useState<string | null>(null);
+    useEffect(() => {
+        if (!confirming) return;
+        const timer = setTimeout(() => setConfirming(null), 4000);
+        return () => clearTimeout(timer);
+    }, [confirming]);
+    function confirmaEmDoisToques(key: string): boolean {
+        if (confirming === key) {
+            setConfirming(null);
+            return true;
+        }
+        setConfirming(key);
+        return false;
+    }
 
     const [ano, mes] = monthKey.split("-");
     const minDate = `${monthKey}-01`;
@@ -79,7 +96,7 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
 
     async function create() {
         if (!date) return;
-        if (!window.confirm(`Registrar PLANTÃO DE CHEFIA em ${formatDia(date)} (${shift}, ${coverageLabel(coverage)})?`)) return;
+        if (!confirmaEmDoisToques("create")) return;
         const ok = await call("POST", { operationalDate: date, shiftLabel: shift, coverage }, "create");
         if (ok) {
             setDate("");
@@ -99,9 +116,7 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
     }
 
     async function remove(item: ChiefExtraShift) {
-        if (!window.confirm(`Tirar o plantão de chefia de ${formatDia(item.operationalDate)} (${item.shiftLabel}, ${coverageLabel(item.coverage)})?`)) {
-            return;
-        }
+        if (!confirmaEmDoisToques(`rm:${item.id}`)) return;
         await call("DELETE", { extraShiftId: item.id }, item.id);
     }
 
@@ -156,7 +171,11 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
                     disabled={!date || busy !== null}
                     onClick={() => void create()}
                 >
-                    {busy === "create" ? "Registrando…" : "Registrar plantão de chefia"}
+                    {busy === "create"
+                        ? "Registrando…"
+                        : confirming === "create" && date
+                            ? `Confirmar ${formatDia(date)} ${shift} (${coverageLabel(coverage)})?`
+                            : "Registrar plantão de chefia"}
                 </button>
             </div>
 
@@ -242,7 +261,7 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
                                             disabled={busy !== null}
                                             onClick={() => void remove(item)}
                                         >
-                                            Tirar
+                                            {confirming === `rm:${item.id}` ? "Confirmar remoção?" : "Tirar"}
                                         </button>
                                     </>
                                 )}

@@ -3,6 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import type { BankHoursDoctorHistory, BankHoursHistoryModel, BankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
 import {
     describeLateDepartureReason,
@@ -632,6 +633,9 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     }
 
     return (
+        // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Banco de horas" abas={ABAS_ADMIN} />
         <main className="hours-shell">
             {/* Faixa de comando compacta: busca + KPIs + gaveta "Como ler" + navegação ••• */}
             <section className="admin-bar-frame standalone">
@@ -1281,5 +1285,6 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 </aside>
             </section>
         </main>
+        </div>
     );
 }

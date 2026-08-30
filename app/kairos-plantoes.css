@@ -1,0 +1,2017 @@
+/* ==========================================================================
+   Kairós · plantões — telas migradas (payment-closing, bank-hours, painel
+   do médico). Três camadas neste arquivo:
+
+   1. Barra de topo Kairós (.k-topo) — espelho da .topnav do escalas.
+   2. Baseline gerada: cada regra legada com COR LITERAL das telas migradas,
+      reescrita para o token Kairós equivalente sob .pagina-kairos (as regras
+      com token o kairos-ponte.css já cobre). Gerada por varredura e depois
+      lapidada — tratar como código, não como saída de máquina.
+   3. Lapidação manual: os padrões de assinatura do sistema (raios 5/7/10/14/16,
+      chips de turno, faixa lateral 5px, semáforo, DM Mono em número) e os
+      gradientes/sombras do dark glass que não têm tradução mecânica.
+
+   Regra de ouro: SÓ tokens de app/kairos.css / kairos-ponte.css. Uma cor
+   literal aqui é bug (o tema escuro deixaria de inverter).
+   ========================================================================== */
+
+/* ── 1 · Barra de topo ────────────────────────────────────────────────── */
+
+.pagina-kairos .k-topo {
+    position: sticky;
+    top: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px clamp(14px, 3vw, 40px);
+    background: var(--barra-topo);
+    border-bottom: 1px solid var(--divisor);
+    flex-wrap: wrap;
+    font-family: var(--fonte-sans);
+    color: var(--texto-sobre-escuro);
+}
+
+.pagina-kairos .k-topo-brand {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-right: 8px;
+    white-space: nowrap;
+}
+
+.pagina-kairos .k-topo-eyebrow {
+    color: var(--texto-sobre-escuro-medio);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.pagina-kairos .k-topo-titulo {
+    color: var(--branco);
+    font-size: 17px;
+    font-weight: 900;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+}
+
+.pagina-kairos .k-topo-abas {
+    display: flex;
+    gap: 2px;
+    flex-wrap: wrap;
+    padding: 3px;
+    border-radius: 10px;
+    background: var(--sobre-escuro-fraco);
+}
+
+.pagina-kairos .k-topo-abas a {
+    text-decoration: none;
+    color: var(--texto-sobre-escuro-medio);
+    padding: 7px 14px;
+    border-radius: 7px;
+    font: 800 12.5px/1 var(--fonte-sans);
+    letter-spacing: 0.02em;
+    transition: all var(--dur-fast) var(--ease-out-soft);
+}
+
+.pagina-kairos .k-topo-abas a:hover {
+    color: var(--texto-sobre-escuro);
+    background: var(--sobre-escuro);
+}
+
+.pagina-kairos .k-topo-abas a.on {
+    background: var(--branco);
+    color: var(--navy-900);
+}
+
+.pagina-kairos .k-topo-vao { flex: 1; }
+
+.pagina-kairos .chave-tema {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--sobre-escuro-fraco);
+    border: 1px solid var(--borda-sobre-escuro);
+}
+
+.pagina-kairos .chave-tema button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--texto-sobre-escuro-medio);
+    font: 800 11px/1 var(--fonte-sans);
+    cursor: pointer;
+    transition: all var(--dur-fast) var(--ease-out-soft);
+}
+
+.pagina-kairos .chave-tema button[aria-pressed="true"] {
+    background: var(--branco);
+    color: var(--navy-900);
+}
+
+/* ── 2 · Baseline gerada (cor literal → token) ────────────────────────── */
+.pagina-kairos .ops-panel-table-wrap {
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .ops-history-trigger.payment-allocation {
+    border-color: var(--azul-200);
+    background: var(--superficie);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .ops-history-trigger.payment-allocation:hover, .pagina-kairos .ops-history-trigger.payment-allocation:focus-visible {
+    border-color: var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-access-panel-badge, .pagina-kairos .chief-access-state-pill {
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-access-panel-badge {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-hero, .pagina-kairos .hours-summary-card, .pagina-kairos .hours-filter-bar, .pagina-kairos .hours-doctor-card, .pagina-kairos .hours-detail-panel, .pagina-kairos .hours-empty-state, .pagina-kairos .hours-plan-box, .pagina-kairos .hours-shift-card, .pagina-kairos .hours-proof-box, .pagina-kairos .hours-audit-box, .pagina-kairos .hours-kpi-card {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .hours-summary-card.warn {
+    border-color: var(--ambar-200);
+}
+
+.pagina-kairos .hours-summary-card.danger {
+    border-color: var(--vermelho-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-filter-field input {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-principle-card, .pagina-kairos .hours-directory-header, .pagina-kairos .hours-mini-note, .pagina-kairos .hours-reading-lead {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .hours-principle-card.accent {
+    border-color: var(--ambar-600);
+}
+
+.pagina-kairos .hours-doctor-card {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .hours-story-box {
+    border-left: 3px solid var(--ambar-600);
+}
+
+.pagina-kairos .hours-story-text {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-detail-toggle > summary {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-detail-toggle[open] > summary {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-doctor-card.selected {
+    border-color: var(--ambar-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-doctor-footer {
+    border-top: 1px solid var(--borda);
+}
+
+.pagina-kairos .hours-balance-pill.positive {
+    background: var(--verde-50);
+    border: 1px solid var(--verde-600);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .hours-balance-pill.negative {
+    background: var(--vermelho-50);
+    border: 1px solid var(--vermelho-200);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .hours-balance-pill.neutral {
+    background: var(--superficie-recuada);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .hours-evidence-grid>div {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step::before {
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-start::before {
+    background: var(--azul-50);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-end::before {
+    background: var(--verde-50);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-end.counted::before, .pagina-kairos .hours-evidence-grid .timeline-step.emphasis-handoff::before {
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.meta::before {
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-handoff {
+    border-color: var(--ambar-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-end.counted {
+    border-color: var(--ambar-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-override-box {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-override-field input, .pagina-kairos .hours-override-field textarea {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-override-error {
+    border: 1px solid var(--vermelho-200);
+    background: var(--superficie);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .hours-proof-box.ok {
+    border: 1px solid var(--verde-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-proof-box.info {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-proof-box.warn {
+    border: 1px solid var(--ambar-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-proof-box.danger {
+    border: 1px solid var(--vermelho-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-proof-box.neutral {
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-audit-dot {
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .hours-detail-header.sticky {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .hours-close-button {
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-close-button:hover, .pagina-kairos .hours-close-button:focus-visible {
+    background: var(--vermelho-50);
+    border-color: var(--vermelho-200);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .hours-close-footer {
+    border: 1px dashed var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-close-footer:hover, .pagina-kairos .hours-close-footer:focus-visible {
+    background: var(--superficie-recuada);
+    border-color: var(--borda);
+}
+
+.pagina-kairos .hours-events-panel {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-chip {
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-chip.credit {
+    border-color: var(--verde-600);
+    background: var(--verde-50);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .hours-chip.debit {
+    border-color: var(--vermelho-200);
+    background: var(--vermelho-50);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .hours-chip.warn {
+    border-color: var(--ambar-200);
+    background: var(--ambar-50);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .hours-event-row {
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-event-row:not(:disabled):hover {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-event-row.credit {
+    border-left-color: var(--verde-600);
+}
+
+.pagina-kairos .hours-event-row.debit {
+    border-left-color: var(--vermelho-600);
+}
+
+.pagina-kairos .hours-event-row.warn {
+    border-left-color: var(--ambar-600);
+}
+
+.pagina-kairos .hours-event-row.neutral {
+    border-left-color: var(--borda);
+}
+
+.pagina-kairos .hours-corrections-box {
+    border: 1px solid var(--ambar-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-correction-item {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .payment-hero, .pagina-kairos .payment-summary-card, .pagina-kairos .payment-filter-bar, .pagina-kairos .payment-directory-header, .pagina-kairos .payment-target-card, .pagina-kairos .payment-detail-panel, .pagina-kairos .payment-detail-card, .pagina-kairos .payment-empty-state, .pagina-kairos .payment-inline-banner, .pagina-kairos .payment-kpi-card {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .payment-summary-card.ready {
+    border-color: var(--verde-600);
+}
+
+.pagina-kairos .payment-summary-card.review {
+    border-color: var(--ambar-200);
+}
+
+.pagina-kairos .payment-summary-card.empty {
+    border-color: var(--vermelho-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-filter-field input, .pagina-kairos .payment-filter-field select, .pagina-kairos .payment-field select, .pagina-kairos .payment-field textarea {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-button {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-button.primary {
+    border-color: var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-button.danger {
+    border-color: var(--vermelho-200);
+    background: var(--vermelho-50);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .payment-inline-banner.ok {
+    border-color: var(--verde-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-inline-banner.danger, .pagina-kairos .payment-inline-note.danger {
+    border-color: var(--vermelho-200);
+    background: var(--superficie);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .payment-correction-note {
+    color: var(--ambar-700);
+    background: var(--superficie);
+    border: 1px solid var(--ambar-200);
+}
+
+.pagina-kairos .payment-correction-tab {
+    border: 1px solid var(--azul-200);
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .payment-correction-tab:hover {
+    background: var(--azul-50);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .payment-correction-tab.active {
+    background: var(--azul-50);
+    color: var(--texto-forte);
+    border-color: var(--azul-200);
+}
+
+.pagina-kairos .payment-button.warning {
+    border-color: var(--ambar-200);
+    background: var(--superficie);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .payment-button.warning:hover {
+    background: var(--ambar-50);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .payment-target-card {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-target-card.selected {
+    border-color: var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-target-meta {
+    border-top: 1px solid var(--borda);
+}
+
+.pagina-kairos .payment-status-pill.ready {
+    background: var(--verde-50);
+    border: 1px solid var(--verde-600);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .payment-status-pill.review {
+    background: var(--ambar-50);
+    border: 1px solid var(--ambar-200);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .payment-status-pill.empty {
+    background: var(--vermelho-50);
+    border: 1px solid var(--vermelho-200);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .payment-status-pill.disabled {
+    background: var(--azul-50);
+    border: 1px solid var(--azul-acao);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .payment-domain-pill.regulation {
+    background: var(--azul-50);
+    border: 1px solid var(--azul-200);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .payment-domain-pill.intervention {
+    background: var(--verde-50);
+    border: 1px solid var(--verde-600);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .payment-detail-card.emphasis {
+    border-color: var(--azul-200);
+}
+
+.pagina-kairos .payment-detail-card.issues.review {
+    border-color: var(--ambar-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-detail-card.issues.ready {
+    border-color: var(--verde-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-detail-card.correction.enabled {
+    border-color: var(--azul-200);
+}
+
+.pagina-kairos .payment-detail-card.correction.disabled {
+    border-color: var(--vermelho-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .slot-audit-panel-header {
+    border-bottom: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-filter-bar {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .admin-bar-frame {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .admin-bar {
+    border-bottom: 1px solid var(--borda);
+}
+
+.pagina-kairos .admin-bar-month {
+    border: 1px solid var(--ambar-600);
+    background: var(--ambar-50);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .admin-bar-month option {
+    background: var(--superficie);
+}
+
+.pagina-kairos .admin-bar-search {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .admin-bar-divider {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .admin-bar-kpi-button.pending {
+    border: 1px solid var(--ambar-200);
+    background: var(--ambar-50);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .admin-bar-kpi-button.pending.active, .pagina-kairos .admin-bar-kpi-button.pending:hover {
+    border-color: var(--ambar-600);
+}
+
+.pagina-kairos .admin-bar-kpi-button.uncovered {
+    border: 1px solid var(--vermelho-200);
+    background: var(--superficie);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .admin-bar-restricted {
+    border: 1px solid var(--ambar-600);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .admin-bar-filters-toggle {
+    border: 1px solid var(--azul-200);
+    background: var(--azul-50);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .admin-bar-filters-toggle.open, .pagina-kairos .admin-bar-filters-toggle:hover, .pagina-kairos .admin-bar-filters-toggle:focus-visible {
+    border-color: var(--azul-acao);
+    background: var(--azul-50);
+}
+
+.pagina-kairos .admin-bar-filter-count {
+    background: var(--azul-50);
+}
+
+.pagina-kairos .admin-bar-menu-toggle {
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .admin-bar-menu-toggle:hover, .pagina-kairos .admin-bar-menu-toggle:focus-visible {
+    border-color: var(--azul-200);
+}
+
+.pagina-kairos .admin-bar-menu-panel {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .admin-bar-drawer {
+    background: var(--superficie);
+    border-bottom: 1px solid var(--borda);
+}
+
+.pagina-kairos .admin-bar-drawer-group input, .pagina-kairos .admin-bar-drawer-group select {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .admin-bar-kicker {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .admin-bar-kpi.ok strong {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .admin-bar-kpi.warn strong {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .admin-bar-kpi.danger strong {
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .admin-bar-field {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-order-legend {
+    border: 1px dashed var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-order-legend strong {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-target-sector {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-target-sector.usa {
+    border-color: var(--ambar-200);
+}
+
+.pagina-kairos .chief-payable-target-sector.regulation {
+    border-color: var(--azul-200);
+}
+
+.pagina-kairos .chief-payable-target-sector.intervention {
+    border-color: var(--verde-600);
+}
+
+.pagina-kairos .chief-payable-chip {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-chip:hover, .pagina-kairos .chief-payable-chip:focus-visible {
+    border-color: var(--azul-200);
+}
+
+.pagina-kairos .chief-payable-chip.active {
+    border-color: var(--azul-acao);
+    color: var(--texto-forte);
+    background: var(--azul-50);
+}
+
+.pagina-kairos .chief-payable-chip.warning.active {
+    border-color: var(--ambar-600);
+    color: var(--ambar-700);
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .chief-payable-chip.day.active {
+    border-color: var(--ambar-600);
+    color: var(--ambar-700);
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .chief-payable-chip.night.active {
+    border-color: var(--azul-acao);
+    color: var(--texto-forte);
+    background: var(--azul-50);
+}
+
+.pagina-kairos .chief-payable-filter-field input, .pagina-kairos .chief-payable-filter-field select {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-table thead th {
+    background: var(--superficie);
+    border-bottom: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-table th.sticky-col, .pagina-kairos .chief-payable-table td.sticky-col {
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-table td {
+    border-bottom: 1px solid var(--borda);
+    border-right: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-profile-badge {
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-profile-badge.specialist {
+    border-color: var(--azul-acao);
+    color: var(--texto-forte);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-profile-badge.psychiatry {
+    border-color: var(--verde-600);
+    color: var(--verde-700);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-profile-badge.pj {
+    border-color: var(--borda);
+    color: var(--texto-forte);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .chief-payable-profile-badge.estatutario {
+    border-color: var(--ambar-600);
+    color: var(--ambar-700);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-specialist-toggle {
+    border: 1px solid var(--verde-200);
+    background: var(--superficie);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-attest-toggle {
+    border: 1px solid var(--verde-600);
+    background: var(--superficie);
+    color: var(--muted, var(--texto));
+}
+
+.pagina-kairos .chief-payable-attest-toggle.on {
+    border-color: var(--verde-600);
+    background: var(--verde-50);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .chief-payable-row-single-function td.sticky-col.doctor {
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .chief-payable-idle-badge {
+    border: 1px dashed var(--azul-200);
+}
+
+.pagina-kairos .chief-payable-single-function-badge {
+    color: var(--ambar-700);
+    background: var(--ambar-50);
+    border: 1px solid var(--ambar-600);
+}
+
+.pagina-kairos .chief-payable-bank-chip:hover, .pagina-kairos .chief-payable-bank-chip:focus-visible {
+    border-color: var(--azul-200);
+}
+
+.pagina-kairos .chief-payable-bank-chip em {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .chief-payable-bank-chip.threshold-positive {
+    color: var(--verde-700);
+    border-color: var(--verde-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-bank-chip.threshold-positive:hover, .pagina-kairos .chief-payable-bank-chip.threshold-positive:focus-visible {
+    border-color: var(--verde-600);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .chief-payable-bank-chip.threshold-negative {
+    color: var(--vermelho-700);
+    border-color: var(--vermelho-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-bank-chip.threshold-negative:hover, .pagina-kairos .chief-payable-bank-chip.threshold-negative:focus-visible {
+    border-color: var(--vermelho-600);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .chief-payable-bank-chip.debt {
+    color: var(--ambar-700);
+    border-color: var(--ambar-200);
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .chief-payable-bank-chip.debt:hover, .pagina-kairos .chief-payable-bank-chip.debt:focus-visible {
+    border-color: var(--ambar-600);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .chief-payable-bank-chip.contract-warn {
+    color: var(--ambar-700);
+    border-color: var(--ambar-200);
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .chief-payable-bank-chip.contract-danger {
+    color: var(--vermelho-700);
+    border-color: var(--vermelho-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-bank-chip.contract-warn:hover, .pagina-kairos .chief-payable-bank-chip.contract-warn:focus-visible {
+    border-color: var(--ambar-600);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .chief-payable-bank-chip.contract-danger:hover, .pagina-kairos .chief-payable-bank-chip.contract-danger:focus-visible {
+    border-color: var(--vermelho-600);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .admin-bar-pending-strip {
+    background: var(--superficie);
+    border-bottom: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-chip.good.active {
+    border-color: var(--verde-600);
+    color: var(--verde-700);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-chip.danger.active {
+    border-color: var(--vermelho-600);
+    color: var(--vermelho-700);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-attest-card {
+    border: 1px solid var(--surface-elevated-border, var(--borda));
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .chief-payable-attest-card.on {
+    border-color: var(--verde-600);
+    background: var(--verde-50);
+}
+
+.pagina-kairos .chief-payable-attest-main small {
+    color: var(--muted, var(--texto));
+}
+
+.pagina-kairos .chief-payable-attest-hint {
+    color: var(--muted, var(--texto));
+}
+
+.pagina-kairos button.chief-payable-tag:focus-visible {
+    outline: 2px solid var(--verde-600);
+}
+
+.pagina-kairos .chief-payable-tag.sd {
+    background: var(--ambar-50);
+    border-color: var(--ambar-200);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .chief-payable-tag.sn {
+    background: var(--azul-50);
+    border-color: var(--azul-200);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-tag.half {
+    background: var(--ambar-50);
+    border-color: var(--ambar-600);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .chief-payable-tag.disabled {
+    background: var(--vermelho-50);
+    border-color: var(--vermelho-200);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .chief-payable-tag.uncovered {
+    background: var(--vermelho-50);
+    border-color: var(--vermelho-600);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .chief-payable-tag.admin-extra {
+    background: var(--verde-50);
+    border-color: var(--verde-600);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .chief-payable-tag.admin-chief {
+    border-color: var(--azul-acao);
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .chief-payable-tag.admin-penalty {
+    background: var(--vermelho-50);
+    border-color: var(--vermelho-600);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .chief-payable-tag.flash {
+    outline: 2px solid var(--verde-600);
+}
+
+.pagina-kairos .payment-flash-banner {
+    border: 1px solid var(--verde-600);
+}
+
+.pagina-kairos .payment-flash-banner-icon {
+    background: var(--verde-50);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .payment-flash-banner-text strong {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .payment-flash-banner-text span {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .chief-payable-action-popover {
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-day-count.disabled {
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .chief-payable-day-count.disabled:hover, .pagina-kairos .chief-payable-day-count.disabled:focus-visible {
+    border-color: var(--borda);
+}
+
+.pagina-kairos .chief-payable-day-count.uncovered {
+    border: 1px solid var(--vermelho-200);
+    background: var(--superficie);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .chief-payable-day-count.uncovered:hover, .pagina-kairos .chief-payable-day-count.uncovered:focus-visible {
+    border-color: var(--vermelho-600);
+}
+
+.pagina-kairos .chief-payable-action-header strong {
+    color: var(--foreground, var(--texto-forte));
+}
+
+.pagina-kairos .chief-payable-action-header small {
+    color: var(--muted-strong, var(--azul-dado));
+}
+
+.pagina-kairos .chief-payable-action-hint {
+    color: var(--muted-strong, var(--azul-dado));
+}
+
+.pagina-kairos .chief-payable-disabled-row td {
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-disabled-row td.sticky-col {
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-uncovered-row td {
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-uncovered-row td.sticky-col {
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-empty {
+    background: var(--superficie);
+    border-bottom: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-final-value {
+    color: var(--verde-700);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-modal-backdrop {
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-modal {
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-modal-header {
+    background: var(--superficie);
+    border-bottom: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-modal-card {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-modal-card.emphasis {
+    background: var(--superficie);
+    border-color: var(--verde-200);
+}
+
+.pagina-kairos .chief-payable-functions.alert {
+    border: 1px solid var(--ambar-600);
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .chief-payable-function-card {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .chief-payable-function-card.zero {
+    border-color: var(--ambar-200);
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .chief-payable-function-card.zero strong {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .chief-payable-functions-warning {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .chief-payable-extra-form {
+    border: 1px solid var(--verde-600);
+    background: var(--verde-50);
+}
+
+.pagina-kairos .chief-payable-extra-form.chief {
+    border-color: var(--azul-acao);
+    background: var(--roxo-50);
+}
+
+.pagina-kairos .chief-payable-extra-form.chief header h4 {
+    color: var(--roxo-600);
+}
+
+.pagina-kairos .chief-payable-extra-form header h4 {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .chief-payable-extra-form header small {
+    color: var(--muted, var(--texto));
+}
+
+.pagina-kairos .chief-payable-extra-fields label {
+    color: var(--muted, var(--texto));
+}
+
+.pagina-kairos .chief-payable-extra-fields select, .pagina-kairos .chief-payable-extra-fields input {
+    border: 1px solid var(--surface-elevated-border, var(--borda));
+    background: var(--surface-elevated, var(--superficie-recuada));
+}
+
+.pagina-kairos .chief-payable-extra-feedback.ok {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .chief-payable-extra-feedback.danger {
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .chief-payable-modal-shifts {
+    border-top: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-modal-shift-row {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-modal-shift-turn.sd {
+    background: var(--ambar-50);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .chief-payable-modal-shift-turn.sn {
+    background: var(--azul-50);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-modal-shift-turn.admin-extra {
+    background: var(--verde-50);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .chief-payable-modal-shift-turn.admin-chief {
+    background: var(--azul-50);
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .chief-payable-modal-shift-turn.admin-penalty {
+    background: var(--vermelho-50);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .chief-payable-financials {
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .chief-payable-financials header small {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-financials-meta label span {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-financials-meta input, .pagina-kairos .chief-payable-contract-seed input {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-contract-seed label {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-modal-card strong.negative {
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .chief-payable-bank-settle label {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-bank-settle select {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-bank-note {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-bank-note a {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .payment-button.bank-bonus {
+    border-color: var(--verde-600);
+    color: var(--verde-700);
+    background: var(--verde-50);
+}
+
+.pagina-kairos .payment-button.bank-penalty {
+    border-color: var(--vermelho-600);
+    color: var(--vermelho-700);
+    background: var(--vermelho-50);
+}
+
+.pagina-kairos .hours-settlements {
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-settlement-row.bonus {
+    background: var(--verde-50);
+}
+
+.pagina-kairos .hours-settlement-row.penalty {
+    background: var(--vermelho-50);
+}
+
+.pagina-kairos .hours-settlement-row.bonus .hours-settlement-tag {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .hours-settlement-row.penalty .hours-settlement-tag {
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .hours-settlement-notes {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-settlement-action {
+    border-color: var(--borda);
+}
+
+.pagina-kairos .hours-settlement-month-field > span {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-settlement-month-field select {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-composition-row {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-composition-row.total {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-composition-origin {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-settlement-hint {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-modal-shift-half {
+    background: var(--ambar-50);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .chief-payable-modal-shift-label {
+    background: var(--superficie-recuada);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .chief-payable-modal-shift-kind {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .chief-payable-modal-shift-kind.weekend {
+    color: var(--texto-forte);
+    background: var(--azul-50);
+}
+
+.pagina-kairos .chief-payable-modal-shift-kind.holiday {
+    color: var(--ambar-700);
+    background: var(--vermelho-50);
+}
+
+.pagina-kairos .ops-retro-panel-skeleton {
+    background: var(--superficie);
+}
+
+.pagina-kairos .half-shift-decision-backdrop {
+    background: var(--superficie);
+}
+
+.pagina-kairos .half-shift-decision-actions button.primary {
+    color: var(--texto-medio);
+}
+
+.pagina-kairos .panel-hero-sub {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-section {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .panel-section h2 {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-note {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-alert {
+    border: 1px solid var(--ambar-600);
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .panel-alert strong {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .panel-alert span {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .panel-kpi {
+    background: var(--azul-50);
+}
+
+.pagina-kairos .panel-kpi span {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-kpi strong {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-kpi small {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-kpi.highlight {
+    background: var(--verde-50);
+}
+
+.pagina-kairos .panel-kpi.highlight strong {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .panel-composition li {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-composition li.total {
+    border-top: 1px solid var(--azul-200);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-settlements li {
+    background: var(--azul-50);
+}
+
+.pagina-kairos .panel-settlements li.bonus {
+    border-left: 3px solid var(--verde-600);
+}
+
+.pagina-kairos .panel-settlements li.penalty {
+    border-left: 3px solid var(--vermelho-600);
+}
+
+.pagina-kairos .panel-settlement-tag {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-settlement-delta {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-settlement-note {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-older-shifts > summary {
+    border: 1px dashed var(--azul-200);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-shift {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+}
+
+.pagina-kairos .panel-shift-when {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-shift-metrics dt {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-shift-metrics dd {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-approval.tone-ok {
+    background: var(--superficie);
+    border-left-color: var(--verde-600);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .panel-approval.tone-pending {
+    background: var(--ambar-50);
+    border-left-color: var(--ambar-600);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .panel-approval.tone-warn {
+    background: var(--vermelho-50);
+    border-left-color: var(--vermelho-600);
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .panel-approval.tone-neutral {
+    background: var(--azul-50);
+    border-left-color: var(--azul-acao);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-corrections {
+    border-top: 1px dashed var(--azul-200);
+}
+
+.pagina-kairos .panel-corrections-head {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .panel-correction {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-correction-when {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-correction-note {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-proof summary {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .panel-proof strong {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-proof ul {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-month-nav a {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-action-btn {
+    border: 1px solid var(--azul-200);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-self-service-row input[type="date"], .pagina-kairos .panel-self-service-row select {
+    border: 1px solid var(--azul-200);
+    background: var(--superficie);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-self-service-row input[type="date"]:focus-visible, .pagina-kairos .panel-self-service-row select:focus-visible {
+    outline: 2px solid var(--azul-acao);
+}
+
+.pagina-kairos .panel-field-label {
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-self-service-error {
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .panel-declared-extras-head {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .panel-declared-extras li {
+    border: 1px solid var(--verde-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .panel-link-btn {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .panel-link-btn.chief {
+    color: var(--roxo-600);
+}
+
+.pagina-kairos .panel-link-btn.danger {
+    color: var(--vermelho-700);
+}
+
+.pagina-kairos .panel-bank-extra {
+    border: 2px solid var(--verde-600);
+    background: var(--superficie);
+}
+
+.pagina-kairos .panel-bank-extra-head h2 {
+    color: var(--verde-700);
+}
+
+.pagina-kairos .panel-bank-extra-badge {
+    background: var(--verde-50);
+    color: var(--texto-medio);
+}
+
+.pagina-kairos .panel-bank-extra-warning {
+    border: 1px dashed var(--verde-600);
+    background: var(--verde-50);
+    color: var(--verde-700);
+}
+
+.pagina-kairos .panel-self-service-note {
+    color: var(--texto);
+}
+
+.pagina-kairos .panel-chief-extra {
+    border: 2px solid var(--azul-acao);
+    background: var(--roxo-50);
+}
+
+.pagina-kairos .panel-chief-extra-head h2 {
+    color: var(--roxo-600);
+}
+
+.pagina-kairos .panel-chief-extra-badge {
+    background: var(--azul-50);
+    color: var(--texto-medio);
+}
+
+.pagina-kairos .panel-chief-extra-warning {
+    border: 1px dashed var(--azul-acao);
+    background: var(--azul-50);
+    color: var(--azul-dado);
+}
+
+.pagina-kairos .panel-declared-extras.chief li {
+    border-color: var(--azul-acao);
+    background: var(--roxo-50);
+}
+
+.pagina-kairos .panel-footer {
+    color: var(--azul-dado);
+}
+
+/* ── 3 · Lapidação manual — padrões de assinatura do sistema ──────────── */
+
+/* Fallbacks genéricos de formulário (perdem para regras específicas). */
+.pagina-kairos select,
+.pagina-kairos textarea,
+.pagina-kairos input:not([type="checkbox"]):not([type="radio"]) {
+    color-scheme: inherit;
+}
+
+.pagina-kairos :is(button, a, select, input, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--foco);
+    outline-offset: 1px;
+}
+
+/* Número é DM Mono tabular — o detalhe que separa instrumento de site. */
+.pagina-kairos .chief-payable-table thead th,
+.pagina-kairos .chief-payable-final-value,
+.pagina-kairos .chief-payable-modal-card strong,
+.pagina-kairos .chief-payable-modal-shift-date strong,
+.pagina-kairos .chief-payable-modal-shift-rate,
+.pagina-kairos .chief-payable-modal-shift-value,
+.pagina-kairos .hours-balance-pill,
+.pagina-kairos .panel-kpi strong,
+.pagina-kairos .panel-settlement-delta,
+.pagina-kairos .panel-shift-metrics dd {
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Selos compartilhados (reports-*) usados nas telas migradas ── */
+.pagina-kairos .reports-kicker {
+    color: var(--texto-medio);
+}
+
+.pagina-kairos .reports-badge.neutral {
+    background: var(--semaforo-neutro-fundo);
+    border: 1px solid var(--semaforo-neutro-borda);
+    color: var(--semaforo-neutro-texto);
+}
+
+.pagina-kairos .reports-badge.ok {
+    background: var(--semaforo-verde-fundo);
+    border: 1px solid var(--semaforo-verde-borda);
+    color: var(--semaforo-verde-texto);
+}
+
+.pagina-kairos .reports-badge.warn {
+    background: var(--semaforo-amarelo-fundo);
+    border: 1px solid var(--semaforo-amarelo-borda);
+    color: var(--semaforo-amarelo-texto);
+}
+
+.pagina-kairos .reports-badge.danger,
+.pagina-kairos .reports-inline-alert {
+    background: var(--semaforo-vermelho-fundo);
+    border: 1px solid var(--semaforo-vermelho-borda);
+    color: var(--semaforo-vermelho-texto);
+}
+
+/* ── Faixa de comando (admin-bar) ── */
+.pagina-kairos .admin-bar {
+    background: var(--superficie);
+    border-bottom: 1px solid var(--divisor);
+}
+
+.pagina-kairos .admin-bar-frame {
+    border-radius: 14px;
+    box-shadow: var(--sombra-painel);
+    backdrop-filter: none;
+}
+
+.pagina-kairos .admin-bar-menu-panel {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    box-shadow: var(--sombra-modal);
+}
+
+.pagina-kairos .admin-bar-rhythm i {
+    background: var(--acao-primaria);
+}
+
+/* ── Planilha do fechamento ── */
+.pagina-kairos .chief-payable-table-shell {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 14px;
+    box-shadow: var(--sombra-painel);
+}
+
+.pagina-kairos .chief-payable-table thead th {
+    background: var(--superficie);
+    color: var(--texto-medio);
+    border-bottom: 1px solid var(--borda);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.pagina-kairos .chief-payable-table td {
+    border-color: var(--divisor);
+}
+
+.pagina-kairos .chief-payable-table td.sticky-col.doctor {
+    background: var(--superficie);
+    border-right: 1px solid var(--borda);
+}
+
+.pagina-kairos .chief-payable-row-attested td.sticky-col.doctor {
+    box-shadow: inset 3px 0 0 0 var(--verde-600);
+    background: var(--verde-50);
+}
+
+.pagina-kairos .chief-payable-attest-main input,
+.pagina-kairos .chief-payable-attest-toggle input {
+    accent-color: var(--verde-600);
+}
+
+/* Setores da planilha (USA / regulação / intervenção): recuo neutro no lugar
+   dos gradientes escuros — o Kairós separa por luminância, não por véu. */
+.pagina-kairos .chief-payable-target-sector.usa,
+.pagina-kairos .chief-payable-target-sector.regulation,
+.pagina-kairos .chief-payable-target-sector.intervention {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .chief-payable-filter-bar {
+    box-shadow: var(--sombra-painel);
+}
+
+/* ── Chips de turno e extras (raio 7, semáforo) ── */
+.pagina-kairos .chief-payable-tag {
+    border-radius: 7px;
+    font-weight: 800;
+}
+
+.pagina-kairos .chief-payable-tag.sd {
+    background: var(--turno-sd-bg);
+    border-color: var(--turno-sd-bd);
+    color: var(--turno-sd-fg);
+}
+
+.pagina-kairos .chief-payable-tag.sn {
+    background: var(--turno-sn-bg);
+    border-color: var(--turno-sn-bd);
+    color: var(--turno-sn-fg);
+}
+
+.pagina-kairos .chief-payable-tag.half {
+    background: var(--ambar-50);
+    border-color: var(--ambar-600);
+    color: var(--ambar-700);
+    box-shadow: none;
+}
+
+.pagina-kairos .chief-payable-tag.admin-extra {
+    background: var(--semaforo-verde-fundo);
+    border-color: var(--semaforo-verde-borda);
+    color: var(--semaforo-verde-texto);
+    box-shadow: none;
+}
+
+.pagina-kairos .chief-payable-tag.admin-chief {
+    background: repeating-linear-gradient(
+        135deg,
+        var(--roxo-200) 0 6px,
+        var(--roxo-50) 6px 12px
+    );
+    border-color: var(--roxo-600);
+    color: var(--roxo-600);
+    box-shadow: none;
+}
+
+.pagina-kairos .chief-payable-tag.admin-penalty {
+    background: var(--semaforo-vermelho-fundo);
+    border-color: var(--semaforo-vermelho-borda);
+    color: var(--semaforo-vermelho-texto);
+    box-shadow: none;
+}
+
+.pagina-kairos .chief-payable-tag.uncovered {
+    background: var(--semaforo-vermelho-fundo);
+    border-color: var(--semaforo-vermelho-borda);
+    color: var(--semaforo-vermelho-texto);
+}
+
+.pagina-kairos .chief-payable-tag.disabled {
+    background: var(--semaforo-neutro-fundo);
+    border-color: var(--semaforo-neutro-borda);
+    color: var(--semaforo-neutro-texto);
+}
+
+/* ── Modal e popovers (raio 16, véu e sombra do sistema) ── */
+.pagina-kairos .chief-payable-modal-backdrop {
+    background: var(--veu-modal);
+}
+
+.pagina-kairos .chief-payable-modal {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 16px;
+    box-shadow: var(--sombra-modal);
+}
+
+.pagina-kairos .chief-payable-modal-header {
+    background: var(--superficie);
+    border-bottom: 1px solid var(--divisor);
+}
+
+.pagina-kairos .chief-payable-action-popover {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 16px;
+    box-shadow: var(--sombra-modal);
+}
+
+.pagina-kairos .chief-payable-modal-card {
+    border-radius: 14px;
+    border: 1px solid var(--borda);
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .chief-payable-modal-card.emphasis {
+    background: var(--semaforo-verde-fundo);
+    border-color: var(--verde-200);
+}
+
+/* Form de extra: verde-50 (extra) / roxo-50 (chefia), raio 14, faixa 5px. */
+.pagina-kairos .chief-payable-extra-form {
+    border-radius: 14px;
+    border: 1px solid var(--verde-200);
+    border-left: 5px solid var(--verde-600);
+    background: var(--verde-50);
+}
+
+.pagina-kairos .chief-payable-extra-form.chief {
+    border-color: var(--roxo-200);
+    border-left-color: var(--roxo-600);
+    background: var(--roxo-50);
+}
+
+.pagina-kairos .chief-payable-extra-form.chief header h4 {
+    color: var(--roxo-600);
+}
+
+/* ── Botões (raio 10; verbo; luminância) ── */
+.pagina-kairos .payment-button {
+    border-radius: 10px;
+    border: 1.5px solid var(--acao-neutra-borda);
+    background: var(--acao-neutra);
+    color: var(--texto-forte);
+    font-weight: 800;
+}
+
+.pagina-kairos .payment-button:hover:not(:disabled) {
+    border-color: var(--borda-forte);
+    background: var(--superficie);
+}
+
+.pagina-kairos .payment-button.danger {
+    background: var(--acao-critica);
+    border-color: var(--acao-critica);
+    color: var(--acao-critica-texto);
+}
+
+.pagina-kairos .payment-button.bank-bonus {
+    background: var(--verde-600);
+    border-color: var(--verde-600);
+    color: var(--slate-50);
+}
+
+.pagina-kairos .payment-button.bank-penalty {
+    background: var(--vermelho-600);
+    border-color: var(--vermelho-600);
+    color: var(--slate-50);
+}
+
+.pagina-kairos .half-shift-decision-trigger {
+    border-radius: 7px;
+    background: var(--acao-neutra);
+    border: 1px solid var(--ambar-600);
+    color: var(--ambar-700);
+}
+
+/* ── Fechamento: faixas e avisos ── */
+.pagina-kairos .payment-flash-banner {
+    background: var(--semaforo-verde-fundo);
+    border: 1px solid var(--verde-200);
+    box-shadow: var(--sombra-painel);
+}
+
+.pagina-kairos .payment-hero,
+.pagina-kairos .payment-summary-card,
+.pagina-kairos .payment-empty-state,
+.pagina-kairos .payment-inline-banner,
+.pagina-kairos .payment-detail-card.emphasis {
+    background: var(--superficie);
+    box-shadow: var(--sombra-painel);
+}
+
+/* ── Banco de horas (admin) ── */
+.pagina-kairos .hours-hero,
+.pagina-kairos .hours-principle-card,
+.pagina-kairos .hours-principle-card.accent,
+.pagina-kairos .hours-plan-box,
+.pagina-kairos .hours-reading-lead {
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-hero,
+.pagina-kairos .hours-summary-card,
+.pagina-kairos .hours-filter-bar,
+.pagina-kairos .hours-doctor-card,
+.pagina-kairos .hours-detail-panel,
+.pagina-kairos .hours-empty-state,
+.pagina-kairos .hours-plan-box,
+.pagina-kairos .hours-shift-card,
+.pagina-kairos .hours-proof-box,
+.pagina-kairos .hours-audit-box,
+.pagina-kairos .hours-kpi-card,
+.pagina-kairos .hours-principle-card,
+.pagina-kairos .hours-directory-header,
+.pagina-kairos .hours-mini-note,
+.pagina-kairos .hours-reading-lead {
+    border-radius: 14px;
+    box-shadow: var(--sombra-painel);
+}
+
+.pagina-kairos .hours-detail-header.sticky {
+    box-shadow: var(--sombra-topo);
+}
+
+.pagina-kairos .hours-evidence-grid.timeline::before {
+    background: var(--borda);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step::before {
+    box-shadow: 0 0 0 5px var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-start::before {
+    box-shadow: 0 0 0 5px var(--azul-50);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-end::before {
+    box-shadow: 0 0 0 5px var(--verde-50);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-end.counted::before,
+.pagina-kairos .hours-evidence-grid .timeline-step.emphasis-handoff::before {
+    box-shadow: 0 0 0 5px var(--ambar-50);
+}
+
+.pagina-kairos .hours-evidence-grid .timeline-step.meta::before {
+    box-shadow: 0 0 0 5px var(--ambar-50);
+}
+
+.pagina-kairos .hours-audit-dot {
+    box-shadow: 0 0 0 4px var(--ambar-50);
+}
+
+/* ── Painel do médico ── */
+.pagina-kairos .panel-section {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 14px;
+    box-shadow: var(--sombra-painel);
+}
+
+/* Cartões de status: a faixa lateral de 5px é a assinatura do sistema. */
+.pagina-kairos .panel-chief-extra {
+    border: 1px solid var(--roxo-200);
+    border-left: 5px solid var(--roxo-600);
+    background: var(--roxo-50);
+}
+
+.pagina-kairos .panel-chief-extra-head h2 { color: var(--roxo-600); }
+
+.pagina-kairos .panel-chief-extra-badge {
+    background: var(--roxo-600);
+    color: var(--roxo-50);
+}
+
+.pagina-kairos .panel-chief-extra-warning {
+    border: 1px dashed var(--roxo-200);
+    background: var(--superficie);
+    color: var(--texto);
+}
+
+.pagina-kairos .panel-bank-extra {
+    border: 1px solid var(--verde-200);
+    border-left: 5px solid var(--verde-600);
+    background: var(--semaforo-verde-fundo);
+}
+
+.pagina-kairos .panel-bank-extra-head h2 { color: var(--verde-700); }
+
+.pagina-kairos .panel-bank-extra-badge {
+    background: var(--verde-600);
+    color: var(--slate-50);
+}
+
+.pagina-kairos .panel-bank-extra-warning {
+    border: 1px dashed var(--verde-200);
+    background: var(--superficie);
+    color: var(--texto);
+}
+
+/* Botões do painel: flat, raio 10 (os gradientes eram do dark glass). */
+.pagina-kairos .panel-action-btn {
+    background: var(--acao-primaria);
+    border: 1px solid var(--acao-primaria);
+    color: var(--acao-primaria-texto);
+    border-radius: 10px;
+    font-weight: 800;
+}
+
+.pagina-kairos .panel-action-btn:hover { background: var(--azul-acao); filter: brightness(1.08); }
+
+.pagina-kairos .panel-action-btn.bonus,
+.pagina-kairos .panel-action-btn.bonus:hover {
+    background: var(--verde-600);
+    border-color: var(--verde-600);
+    color: var(--slate-50);
+}
+
+.pagina-kairos .panel-action-btn.chief,
+.pagina-kairos .panel-action-btn.chief:hover {
+    background: var(--roxo-600);
+    border-color: var(--roxo-600);
+    color: var(--roxo-50);
+}
+
+.pagina-kairos .panel-action-btn.penalty,
+.pagina-kairos .panel-action-btn.penalty:hover {
+    background: var(--vermelho-600);
+    border-color: var(--vermelho-600);
+    color: var(--slate-50);
+}
+
+.pagina-kairos .hours-balance-pill.positive {
+    background: var(--semaforo-verde-fundo);
+    border-color: var(--semaforo-verde-borda);
+    color: var(--semaforo-verde-texto);
+}
+
+.pagina-kairos .hours-balance-pill.negative {
+    background: var(--semaforo-vermelho-fundo);
+    border-color: var(--semaforo-vermelho-borda);
+    color: var(--semaforo-vermelho-texto);
+}
+
+.pagina-kairos .hours-balance-pill.neutral {
+    background: var(--semaforo-neutro-fundo);
+    border-color: var(--semaforo-neutro-borda);
+    color: var(--semaforo-neutro-texto);
+}

@@ -1,0 +1,371 @@
+/* ==========================================================================
+   Sistema de Design Kairós — tokens (claro + escuro)
+   Fonte: app/kairos.css do app escalas-e-trocas-samu (copiado na íntegra —
+   os dois apps compartilham o MESMO sistema; divergiu lá, atualiza aqui).
+   O bloco escuro reescreve a rampa inteira — o número do degrau nomeia o
+   PAPEL, não a luminância.
+
+   Convivência com o dark glass legado: os nomes NÃO colidem — o legado usa
+   inglês (--bg, --panel, --text, --muted, --accent-*), o Kairós usa
+   português (--fundo-app, --superficie, --texto, --slate-*). Por isso não
+   há prefixo. Nenhuma regra aqui pinta elemento legado: só variáveis e o
+   escopo .pagina-kairos.
+
+   Como uma tela migra: envolver o conteúdo da página em
+   <div class="pagina-kairos"> — ver docs/kairos.md.
+   ========================================================================== */
+
+:root {
+  /* ── Neutros ─────────────────────────────────────────────── */
+  --slate-50: #f8fafc;
+  --slate-100: #f1f5f9;
+  --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1;
+  --slate-400: #94a3b8;
+  --slate-500: #64748b;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1e293b;
+  --slate-900: #0f172a;
+  --branco: #ffffff;
+
+  /* ── Marca ───────────────────────────────────────────────── */
+  --navy-700: #1e3a5f;
+  --navy-900: #0f172a;
+  --azul-acao: #1d4ed8;
+  --azul-dado: #1a56db;
+  --azul-50: #eff6ff;
+  --azul-200: #bfdbfe;
+  --azul-300: #93c5fd;
+
+  /* ── Verdes — aceite ─────────────────────────────────────── */
+  --verde-50: #f0fdf4;
+  --verde-100: #dcfce7;
+  --verde-200: #bbf7d0;
+  --verde-300: #86efac;
+  --verde-500: #22c55e;
+  --verde-600: #16a34a;
+  --verde-700: #15803d;
+  --verde-800: #166534;
+
+  /* ── Âmbar / amarelo — atenção ───────────────────────────── */
+  --ambar-50: #fffbeb;
+  --ambar-200: #fde68a;
+  --ambar-500: #f59e0b;
+  --ambar-600: #d97706;
+  --ambar-700: #b45309;
+  --ambar-900: #78350f;
+  --amarelo-600: #ca8a04;
+  --amarelo-100: #fef9c3;
+
+  /* ── Laranja — recurso indisponível ──────────────────────── */
+  --laranja-50: #fff7ed;
+  --laranja-200: #fed7aa;
+  --laranja-600: #ea580c;
+
+  /* ── Vermelhos — vaga zero, negativa, chefia ─────────────── */
+  --vermelho-50: #fef2f2;
+  --vermelho-100: #fee2e2;
+  --vermelho-200: #fecaca;
+  --vermelho-300: #fca5a5;
+  --vermelho-600: #dc2626;
+  --vermelho-700: #b91c1c;
+  --vermelho-800: #991b1b;
+
+  /* ── Roxo — envio planejado e modo tutorial ──────────────── */
+  --roxo-50: #f5f3ff;
+  --roxo-200: #ddd6fe;
+  --roxo-300: #c4b5fd;
+  --roxo-600: #7c3aed;
+  --roxo-800: #5b21b6;
+  --roxo-950: #3b0764;
+
+  /* ══ SEMÂNTICOS ═══════════════════════════════════════════ */
+  /* Superfícies */
+  --fundo-app: var(--slate-50);
+  --superficie: var(--branco);
+  --superficie-alt: var(--slate-100);
+  --superficie-recuada: var(--slate-50);
+  --superficie-linha: var(--slate-100);
+  --borda: var(--slate-200);
+  --borda-forte: var(--slate-300);
+  --divisor: var(--slate-100);
+
+  /* Sobre a barra de topo — SEMPRE navy, nos dois temas.
+   * Estes três não são reescritos no escuro de propósito: a barra não muda. */
+  --texto-sobre-escuro: #f1f5f9;
+  --texto-sobre-escuro-medio: #94a3b8;
+  --texto-sobre-escuro-fraco: #7c8798;
+
+  /* Texto */
+  --texto-forte: var(--slate-900);
+  --texto: var(--slate-700);
+  --texto-medio: var(--slate-500);
+  /* No tema claro o degrau "fraco" NÃO sobrevive ao piso de contraste, e isso
+     é um fato do sistema, não um arredondamento. slate-400 media 2,56:1 sobre
+     branco e reprovava AA em 39 usos — legenda de dado, apoio de cartão,
+     unidade de número; escala lida em plantão de madrugada, não decoração. O
+     tom mais claro do mesmo matiz que passa nas DUAS superfícies claras
+     (branco e a recuada #f8fafc) é justamente o slate-500: 4,76:1 e 4,55:1.
+     Ou seja, "fraco" e "médio" coincidem aqui — a hierarquia de texto no claro
+     tem três degraus, não quatro. No escuro slate-400 já media 4,61:1 sobre a
+     superfície e ficou como estava. tests/contraste.test.ts trava os dois. */
+  --texto-fraco: var(--slate-500);
+  --texto-invertido: var(--branco);
+  --texto-invertido-medio: var(--texto-sobre-escuro-medio);
+
+  /* Faixa de aviso translúcida */
+  --faixa-alerta-fundo: rgba(220, 38, 38, 0.07);
+  --faixa-alerta-borda: var(--vermelho-200);
+
+  /* Barra de topo — o único gradiente do sistema */
+  --barra-topo: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
+  --barra-topo-tutorial: linear-gradient(135deg, #5b21b6 0%, #3b0764 100%);
+  --sobre-escuro-fraco: rgba(255, 255, 255, 0.1);
+  --sobre-escuro: rgba(255, 255, 255, 0.15);
+  --sobre-escuro-forte: rgba(255, 255, 255, 0.3);
+  --borda-sobre-escuro: rgba(255, 255, 255, 0.2);
+
+  /* Ações */
+  --acao-primaria: var(--azul-acao);
+  --acao-primaria-texto: var(--branco);
+  --acao-atencao: var(--ambar-500);
+  --acao-atencao-texto: var(--ambar-900);
+  --acao-critica: var(--vermelho-600);
+  --acao-critica-texto: var(--branco);
+  --acao-neutra: var(--branco);
+  --acao-neutra-texto: var(--slate-500);
+  --acao-neutra-borda: var(--slate-200);
+  --foco: var(--azul-acao);
+
+  /* Semáforo — estado do destino */
+  --semaforo-verde-fundo: var(--verde-50);
+  --semaforo-verde-borda: var(--verde-600);
+  --semaforo-verde-texto: var(--verde-700);
+  --semaforo-amarelo-fundo: var(--ambar-50);
+  --semaforo-amarelo-borda: var(--ambar-600);
+  --semaforo-amarelo-texto: var(--ambar-700);
+  --semaforo-vermelho-fundo: var(--vermelho-50);
+  --semaforo-vermelho-borda: var(--vermelho-600);
+  --semaforo-vermelho-texto: var(--vermelho-700);
+  --semaforo-neutro-fundo: var(--slate-50);
+  --semaforo-neutro-borda: var(--slate-300);
+  --semaforo-neutro-texto: var(--slate-500);
+
+  /* Alertas qualitativos */
+  --alerta-lotado: var(--vermelho-600);
+  --alerta-lotado-fundo: var(--vermelho-50);
+  --alerta-lotado-borda: var(--vermelho-200);
+  --alerta-sem-especialista: var(--amarelo-600);
+  --alerta-sem-especialista-fundo: var(--ambar-50);
+  --alerta-sem-especialista-borda: var(--ambar-200);
+  --alerta-sem-recurso: var(--laranja-600);
+  --alerta-sem-recurso-fundo: var(--laranja-50);
+  --alerta-sem-recurso-borda: var(--laranja-200);
+  --alerta-envio: var(--roxo-600);
+  --alerta-envio-fundo: var(--roxo-50);
+  --alerta-envio-borda: var(--roxo-200);
+  --alerta-aceitando: var(--verde-600);
+  --alerta-aceitando-fundo: var(--verde-50);
+  --alerta-aceitando-borda: var(--verde-200);
+  --alerta-normalizou: var(--azul-dado);
+  --alerta-normalizou-fundo: var(--azul-50);
+  --alerta-normalizou-borda: var(--azul-200);
+
+  /* Resultado */
+  --aceito-fundo: var(--verde-100);
+  --aceito-texto: var(--verde-800);
+  --aceito-borda: var(--verde-300);
+  --zero-fundo: var(--vermelho-100);
+  --zero-texto: var(--vermelho-800);
+  --zero-borda: var(--vermelho-300);
+
+  /* Acuidade */
+  --acuidade-vermelho: var(--vermelho-600);
+  --acuidade-laranja: var(--laranja-600);
+  --acuidade-amarelo: var(--amarelo-600);
+  --acuidade-verde: var(--verde-600);
+  --acuidade-azul: var(--azul-dado);
+
+  /* Gradiente de score 0→100 */
+  --gradiente-score: linear-gradient(to right, hsl(0,85%,33%), hsl(12,80%,38%), hsl(30,72%,40%), hsl(45,68%,42%), hsl(55,65%,40%), hsl(75,62%,40%), hsl(110,70%,40%), hsl(140,75%,38%));
+
+  /* Sombras, véus e anel — o bloco escuro reescreve; estes são os do claro.
+   * (O tokens-cores.css só os declara no escuro; os valores claros vêm do
+   * protótipo: sombras discretas sobre slate.) */
+  --sombra-topo: 0 10px 15px -3px rgba(15, 23, 42, 0.1), 0 4px 6px -4px rgba(15, 23, 42, 0.08);
+  --sombra-painel: 0 1px 2px 0 rgba(15, 23, 42, 0.06);
+  --sombra-modal: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
+  --brilho-verde: 0 0 12px rgba(34, 197, 94, 0.18);
+  --brilho-alerta: 0 0 18px rgba(220, 38, 38, 0.25);
+  --anel-selecao: 0 0 0 4px rgba(37, 99, 235, 0.15);
+  --veu-modal: rgba(15, 23, 42, 0.45);
+  --veu-critico: rgba(15, 23, 42, 0.6);
+
+  /* Tipografia Kairós — --fonte-dm-* vêm do next/font em app/layout.tsx */
+  --fonte-sans: var(--fonte-dm-sans, "DM Sans"), ui-sans-serif, system-ui, sans-serif;
+  --fonte-mono: var(--fonte-dm-mono, "DM Mono"), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ * TEMA ESCURO — plantão de madrugada, sala com a luz apagada.
+ * Rampa inteira reescrita; o número do degrau nomeia o PAPEL.
+ * Copiado na íntegra de docs/handoff-kairos/tokens-cores.css.
+ * ═══════════════════════════════════════════════════════════ */
+[data-tema="escuro"] {
+  color-scheme: dark;
+
+  --slate-50: #0b1220;
+  --slate-100: #101a2b;
+  --slate-200: #26324a;
+  --slate-300: #3a4864;
+  --slate-400: #7b8798;
+  --slate-500: #97a3b6;
+  --slate-600: #b3bdcc;
+  --slate-700: #cfd7e2;
+  --slate-800: #e4e9f0;
+  --slate-900: #f2f5f9;
+
+  --verde-50: #0f2a1c;
+  --verde-100: #123524;
+  --verde-200: #1f5c3a;
+  --verde-300: #2f7d4f;
+  --verde-500: #22c55e;
+  --verde-600: #4ade80;
+  --verde-700: #86efac;
+  --verde-800: #bbf7d0;
+
+  --vermelho-50: #2a1414;
+  --vermelho-100: #3a1717;
+  --vermelho-200: #7f2323;
+  --vermelho-300: #9b3232;
+  --vermelho-600: #f87171;
+  --vermelho-700: #fca5a5;
+  --vermelho-800: #fecaca;
+
+  --ambar-50: #2a2110;
+  --ambar-200: #6b4a12;
+  --ambar-600: #fbbf24;
+  --ambar-700: #fcd34d;
+  --amarelo-600: #fbbf24;
+  --amarelo-100: #3a3212;
+
+  --laranja-50: #2b1a0e;
+  --laranja-200: #7c3f18;
+  --laranja-600: #fb923c;
+
+  --roxo-50: #211a3d;
+  --roxo-200: #4c3f8a;
+  --roxo-600: #8b5cf6;
+
+  --azul-50: #0f1f3d;
+  --azul-200: #1e40af;
+  --azul-acao: #2563eb;
+  --azul-dado: #60a5fa;
+
+  /* Superfícies — três níveis, como no claro */
+  --superficie: #141d31;
+  --superficie-recuada: #101a2b;
+  --superficie-linha: #18223a;
+  --divisor: #1e2941;
+
+  --barra-topo: linear-gradient(135deg, #16283f 0%, #070c16 100%);
+  --barra-topo-tutorial: linear-gradient(135deg, #3b2a7a 0%, #1a0b33 100%);
+
+  --acao-neutra: transparent;
+  --acao-neutra-texto: var(--slate-700);
+  --acao-neutra-borda: var(--slate-300);
+
+  --faixa-alerta-fundo: rgba(248, 113, 113, 0.12);
+  --faixa-alerta-borda: #7f2323;
+
+  --sombra-topo: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+  --sombra-painel: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+  --sombra-modal: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+  --brilho-verde: 0 0 12px rgba(34, 197, 94, 0.28);
+  --brilho-alerta: 0 0 18px rgba(220, 38, 38, 0.4);
+  --anel-selecao: 0 0 0 4px rgba(37, 99, 235, 0.25);
+
+  --veu-modal: rgba(0, 0, 0, 0.55);
+  --veu-critico: rgba(0, 0, 0, 0.72);
+
+  --gradiente-score: linear-gradient(to right, hsl(0,80%,45%), hsl(12,78%,48%), hsl(30,72%,48%), hsl(45,70%,50%), hsl(55,68%,48%), hsl(75,62%,46%), hsl(110,65%,45%), hsl(140,70%,45%));
+
+  /* Aliases semânticos redeclarados no escopo — o tema funciona também em
+   * ilha (painel escuro dentro de página clara), não só no <html>. */
+  --fundo-app: var(--slate-50);
+  --superficie-alt: var(--slate-100);
+  --borda: var(--slate-200);
+  --borda-forte: var(--slate-300);
+  --texto-forte: var(--slate-900);
+  --texto: var(--slate-700);
+  --texto-medio: var(--slate-500);
+  --texto-fraco: var(--slate-400);
+
+  --semaforo-verde-fundo: var(--verde-50);
+  --semaforo-verde-borda: var(--verde-600);
+  --semaforo-verde-texto: var(--verde-700);
+  --semaforo-amarelo-fundo: var(--ambar-50);
+  --semaforo-amarelo-borda: var(--ambar-600);
+  --semaforo-amarelo-texto: var(--ambar-700);
+  --semaforo-vermelho-fundo: var(--vermelho-50);
+  --semaforo-vermelho-borda: var(--vermelho-600);
+  --semaforo-vermelho-texto: var(--vermelho-700);
+  --semaforo-neutro-fundo: var(--slate-100);
+  --semaforo-neutro-borda: var(--slate-300);
+  --semaforo-neutro-texto: var(--slate-500);
+
+  --alerta-lotado: var(--vermelho-600);
+  --alerta-lotado-fundo: var(--vermelho-50);
+  --alerta-lotado-borda: var(--vermelho-200);
+  --alerta-sem-especialista: var(--amarelo-600);
+  --alerta-sem-especialista-fundo: var(--ambar-50);
+  --alerta-sem-especialista-borda: var(--ambar-200);
+  --alerta-sem-recurso: var(--laranja-600);
+  --alerta-sem-recurso-fundo: var(--laranja-50);
+  --alerta-sem-recurso-borda: var(--laranja-200);
+  --alerta-envio: var(--roxo-600);
+  --alerta-envio-fundo: var(--roxo-50);
+  --alerta-envio-borda: var(--roxo-200);
+  --alerta-aceitando: var(--verde-600);
+  --alerta-aceitando-fundo: var(--verde-50);
+  --alerta-aceitando-borda: var(--verde-200);
+  --alerta-normalizou: var(--azul-dado);
+  --alerta-normalizou-fundo: var(--azul-50);
+  --alerta-normalizou-borda: var(--azul-200);
+
+  --aceito-fundo: var(--verde-100);
+  --aceito-texto: var(--verde-800);
+  --aceito-borda: var(--verde-300);
+  --zero-fundo: var(--vermelho-100);
+  --zero-texto: var(--vermelho-800);
+  --zero-borda: var(--vermelho-300);
+
+  --acuidade-vermelho: var(--vermelho-600);
+  --acuidade-laranja: var(--laranja-600);
+  --acuidade-amarelo: var(--amarelo-600);
+  --acuidade-verde: var(--verde-600);
+  --acuidade-azul: var(--azul-dado);
+
+  --acao-primaria: var(--azul-acao);
+  --foco: var(--azul-acao);
+}
+
+/* ═══════════════════════════════════════════════════════════
+ * ESCOPO DE MIGRAÇÃO — .pagina-kairos
+ * O <body> continua dark glass para as telas legadas. Uma tela migrada
+ * envolve TODO o seu conteúdo neste wrapper, que assume o fundo claro
+ * (ou escuro, via [data-tema]) do Kairós. Ver INTEGRACAO.md.
+ * ═══════════════════════════════════════════════════════════ */
+.pagina-kairos {
+  background: var(--fundo-app);
+  color: var(--texto);
+  color-scheme: light; /* o :root legado declara dark; formulários seguem o tema Kairós */
+  font-family: var(--fonte-sans);
+  font-size: 13.5px;
+  /* No plantões a barra Kairós vive DENTRO do wrapper (não há topnav global),
+     então o escopo cobre a viewport inteira para o body escuro não vazar. */
+  min-height: 100dvh;
+}
+
+[data-tema="escuro"] .pagina-kairos { color-scheme: dark; }

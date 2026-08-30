@@ -9,13 +9,15 @@ export const dynamic = "force-dynamic";
 
 function BankHoursUnavailable({ title, copy }: { title: string; copy: string }) {
     return (
-        <main className="hours-shell">
-            <section className="hours-empty-state standalone">
-                <strong>{title}</strong>
-                <span>{copy}</span>
-                <AdminGlobalNavigationLinks current="bank-hours" containerClassName="hours-empty-actions" />
-            </section>
-        </main>
+        <div className="pagina-kairos">
+            <main className="hours-shell">
+                <section className="hours-empty-state standalone">
+                    <strong>{title}</strong>
+                    <span>{copy}</span>
+                    <AdminGlobalNavigationLinks current="bank-hours" containerClassName="hours-empty-actions" />
+                </section>
+            </main>
+        </div>
     );
 }
 
