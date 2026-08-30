@@ -336,7 +336,7 @@ vê tudo mais indicadores. Mecanismo em duas fases:
 Destino pós-login (ordem): deep-link `?de=` seguro → pessoa com um único
 módulo entra direto → módulo inicial do papel (override por pessoa) → home.
 
-### 9.5 Próximos passos concretos, em ordem
+### 9.5 Próximos passos concretos, em ordem (ver também §10)
 
 1. **Etapa 0 do kairos** (raiz `mnrs.com.br`) — já planejada, independente de
    tudo.
@@ -352,3 +352,72 @@ módulo entra direto → módulo inicial do papel (override por pessoa) → home
    → almoxarifado/frota; manual → samu-normas como satélite Django; checklist
    → checklist; presença de interno → capacitação, que o ADR 0008 já trouxe
    para dentro.)
+
+## 10. Polimento do shell: do clique ao destino sem atrito
+
+> Sintomas relatados em 30/08 no Kairós em produção: cada link abre uma
+> "janela" intermediária, encaminha ao destino depois de segundos, a transição
+> de view é lenta e os módulos parecem sites separados. Diagnóstico feito no
+> código de `apps/shell` (main); cada item abaixo aponta causa → conserto.
+
+### 10.1 Diagnóstico
+
+1. **O clique num módulo externo tem cinco passos hoje.** `Link` do cabeçalho
+   → roundtrip de servidor para `/modulo/[chave]` → painel intermediário
+   (`modulo/[chave]/page.tsx`) → clique em "Abrir …" (`target="_blank"`) →
+   login próprio do satélite. A "janela horrível" é esse painel — desenhado
+   para anunciar o estado do módulo, mas cobrando o preço de uma navegação
+   inteira para dizer o que o badge "demo/prévia" do cabeçalho já diz antes
+   do clique.
+2. **Não existe `loading.tsx` nem `Suspense` em `(tela-mae)`.** Toda
+   navegação espera a resposta RSC completa sem nenhum feedback — o clique
+   parece morto até o servidor voltar. É a "transição lenta" percebida.
+3. **`concessoes()` roda uma consulta por chamada, sem dedupe**
+   (`packages/core/src/autorizacao.ts`). O layout da tela-mãe chama
+   `modulosPermitidos` + um `pode()` por indicador e por trilha — N consultas
+   idênticas por render. O comentário do próprio arquivo já aponta o lugar de
+   cachear.
+4. **Os indicadores leem o banco de produção do plantões a cada render, sem
+   revalidate** (`packages/indicadores/src/fontes/plantoes.ts`). O primeiro
+   paint da tela-mãe espera todas essas consultas em série com o resto.
+5. **"Encaminha a outra URL mesmo"** — estrutural: satélite em outra origem
+   com login próprio. Já tratado nos §8–§9 (introspecção → Etapa 0 raiz →
+   absorção). Nenhum polish de shell elimina isso sozinho; iframe NÃO é
+   atalho aceitável (cookie de terceiros, CSP, scroll duplo) — o painel
+   "60% sobre a tela-mãe" é modelo para módulo nativo, não para satélite.
+
+### 10.2 Conserto, em ordem de custo-benefício
+
+1. **Link direto, mesma aba, para módulo `em-uso` com `destino`** — cabeçalho
+   e tiles apontam `href={destino}`; o painel intermediário sobrevive apenas
+   para `demonstracao`/`previa` (aviso de dado fictício continua obrigatório)
+   e para módulo sem destino. Um condicional em `cabecalho.tsx`.
+2. **`loading.tsx` no grupo `(tela-mae)`** e skeleton do painel de módulo
+   nativo: o clique muda a tela no mesmo frame.
+3. **Dedupe de `concessoes` por requisição** com `cache()` do React — mesma
+   técnica já usada em `sessaoAtual` (`apps/shell/src/lib/sessao.ts`). N
+   consultas viram 1 por requisição, sem mudar semântica de revogação.
+4. **`Suspense` + streaming na grade de indicadores e na trilha de decurso**:
+   a tela-mãe pinta imediatamente; indicadores preenchem quando chegarem
+   (estado "carregando" é coerente com a decisão "indicador sem fonte mostra
+   sem-fonte, nunca número plausível").
+5. **Revalidate curto (30–60 s) nos adaptadores de indicadores**
+   (`unstable_cache`): são leituras de painel, não comandos; o banco do
+   plantões deixa de ser tocado por requisição. (Os adaptadores morrem na
+   absorção — ADR 0005 — mas até lá não precisam custar o primeiro paint.)
+6. **Introspecção no satélite antes de qualquer polish do salto**: sem ela,
+   até o link direto termina num formulário de login alheio. É o item 3 do
+   §9.5.
+7. **Acabamento**: View Transitions do Next 16 (`experimental.viewTransition`)
+   para suavizar a troca de view; `prefetch` nos painéis nativos.
+
+### 10.3 Critério de aceite
+
+- Clicar em qualquer módulo muda algo na tela **no mesmo frame**.
+- Módulo externo `em-uso` abre com **uma** navegação (zero telas
+  intermediárias) e, com introspecção ligada, **zero logins**.
+- A tela-mãe pinta sem esperar o banco do plantões; indicadores chegam por
+  streaming.
+- O aviso de dado fictício de `demonstracao`/`previa` continua aparecendo
+  **antes** de qualquer dado fictício — o atalho não pode custar a
+  honestidade do catálogo.
