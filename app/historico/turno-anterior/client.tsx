@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowLeft, ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
@@ -82,6 +83,8 @@ export function PreviousShiftGanttPage({
     }), [board.totalEntries, pending]);
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Turno anterior" abas={ABAS_ADMIN} />
         <main className="historico-gantt-shell">
             <motion.header
                 className="historico-gantt-hero"
@@ -215,6 +218,7 @@ export function PreviousShiftGanttPage({
                 onClose={() => setVerifierTarget(null)}
             />
         </main>
+        </div>
     );
 }
 

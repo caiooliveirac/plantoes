@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { KairosTopo } from "@/components/kairos-topo";
 import { motion } from "framer-motion";
 import "@/app/auth-pages.css";
 
@@ -33,6 +34,8 @@ export default function EsqueciSenhaPage() {
     }
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Recuperar acesso" />
         <main className="et-shell" style={{ alignItems: "center", justifyContent: "center" }}>
             <motion.section
                 className="et-panel"
@@ -75,5 +78,6 @@ export default function EsqueciSenhaPage() {
                 )}
             </motion.section>
         </main>
+        </div>
     );
 }

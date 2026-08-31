@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type {
     PaymentAttestationEntrySnapshot,
@@ -346,6 +347,8 @@ export function PaymentAttestationClient({ initialView }: Props) {
     const isApproved = view.slot.status === "approved";
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Atestação de presença" abas={ABAS_ADMIN} />
         <main className="payment-shell">
             {/* Faixa de comando compacta: slot + busca + KPIs + ações + gaveta de recentes. */}
             <section className="admin-bar-frame standalone">
@@ -608,5 +611,6 @@ export function PaymentAttestationClient({ initialView }: Props) {
                 </aside>
             </section>
         </main>
+        </div>
     );
 }

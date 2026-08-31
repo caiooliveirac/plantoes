@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 
 function EmptyState() {
     return (
+        <div className="pagina-kairos">
         <main className="ops-shell">
             <section className="ops-hero-panel offline">
                 <div>
@@ -23,6 +24,7 @@ function EmptyState() {
                 <div className="ops-inline-status danger">:/ Sem fonte de dados operacional</div>
             </section>
         </main>
+        </div>
     );
 }
 

@@ -18,11 +18,17 @@ export interface KairosAba {
 
 /** Abas padrão das telas de coordenação (as "abas plantões"). */
 export const ABAS_ADMIN: KairosAba[] = [
+    { href: "/", nome: "Mesa" },
     { href: "/admin/payment-closing", nome: "Fechamento" },
     { href: "/admin/bank-hours", nome: "Banco de horas" },
     { href: "/admin/payment-attestation", nome: "Atestação" },
     { href: "/admin/reports", nome: "Relatórios" },
 ];
+
+function abaAtiva(pathname: string, href: string): boolean {
+    // "/" casaria com tudo por prefixo — a Mesa só acende na raiz.
+    return href === "/" ? pathname === "/" : pathname.startsWith(href);
+}
 
 /* Chave de tema Kairós: grava localStorage["kairos:tema"] e seta data-tema
    no <html>. Estado inicial vem do DOM (o script anti-FOUC do layout já
@@ -73,7 +79,7 @@ export function KairosTopo({
             {abas && abas.length > 0 ? (
                 <div className="k-topo-abas">
                     {abas.map((aba) => (
-                        <Link key={aba.href} href={aba.href} className={pathname.startsWith(aba.href) ? "on" : ""}>
+                        <Link key={aba.href} href={aba.href} className={abaAtiva(pathname, aba.href) ? "on" : ""}>
                             {aba.nome}
                         </Link>
                     ))}

@@ -1,4 +1,5 @@
 import { hasDatabaseUrl } from "@/db";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { PaymentAllocationClient } from "@/app/admin/payment-allocation/payment-allocation-client";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
@@ -9,6 +10,8 @@ export const dynamic = "force-dynamic";
 
 function PaymentAllocationUnavailable({ title, copy }: { title: string; copy: string }) {
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Alocação de pagamento" abas={ABAS_ADMIN} />
         <main className="payment-shell">
             <section className="payment-empty-state standalone large">
                 <strong>{title}</strong>
@@ -16,6 +19,7 @@ function PaymentAllocationUnavailable({ title, copy }: { title: string; copy: st
                 <AdminGlobalNavigationLinks current="payment-allocation" containerClassName="payment-actions split" />
             </section>
         </main>
+        </div>
     );
 }
 

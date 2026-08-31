@@ -66,7 +66,7 @@ export function DoctorAdminClient({ initialDoctors, bases }: { initialDoctors: D
     }
 
     return (
-        <main className="et-shell">
+        <main className="et-shell et-gestao">
             <header className="et-hero">
                 <div>
                     <h1>Gestão de médicos</h1>

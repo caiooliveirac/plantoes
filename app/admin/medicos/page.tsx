@@ -1,4 +1,6 @@
 import { asc, eq } from "drizzle-orm";
+import "@/app/auth-pages.css";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { interventionBases } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
@@ -9,12 +11,15 @@ export const dynamic = "force-dynamic";
 
 function Unavailable({ title, copy }: { title: string; copy: string }) {
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Médicos" abas={ABAS_ADMIN} />
         <main className="et-shell">
             <div className="et-empty-state">
                 <strong>{title}</strong>
                 <p>{copy}</p>
             </div>
         </main>
+        </div>
     );
 }
 
@@ -44,9 +49,12 @@ export default async function AdminMedicosPage() {
     ]);
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Médicos" abas={ABAS_ADMIN} />
         <DoctorAdminClient
             initialDoctors={doctors}
             bases={bases.map((base) => ({ id: base.id, code: base.code, label: base.label }))}
         />
+        </div>
     );
 }

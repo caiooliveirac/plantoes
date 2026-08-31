@@ -1,4 +1,5 @@
 import { hasDatabaseUrl } from "@/db";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 
 function SlotAuditUnavailable({ title, copy }: { title: string; copy: string }) {
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Auditoria de turnos" abas={ABAS_ADMIN} />
         <main className="payment-shell">
             <section className="payment-empty-state standalone large">
                 <strong>{title}</strong>
@@ -15,6 +18,7 @@ function SlotAuditUnavailable({ title, copy }: { title: string; copy: string }) 
                 <AdminGlobalNavigationLinks current="slot-audit" containerClassName="payment-actions split" />
             </section>
         </main>
+        </div>
     );
 }
 
@@ -167,6 +171,8 @@ export default async function AdminSlotAuditPage({
     }
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Auditoria de turnos" abas={ABAS_ADMIN} />
         <main className="payment-shell slot-audit-shell">
             {/* Faixa de comando compacta: slot + KPIs + navegação; a tabela de posições vem logo abaixo. */}
             <section className="admin-bar-frame standalone">
@@ -229,5 +235,6 @@ export default async function AdminSlotAuditPage({
                 <PositionPanel panel={report.intervention} />
             </section>
         </main>
+        </div>
     );
 }
