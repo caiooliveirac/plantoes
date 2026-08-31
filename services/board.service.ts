@@ -1058,17 +1058,28 @@ function isPlausibleSuccessorStart(row: PreviousOperationalRawRow) {
   return true;
 }
 
-// A telegram-sourced record whose started_at sits more than this many minutes
-// before its created_at was almost certainly produced by the continuation bug
-// (cross-target arrival anchored to the previous post's startedAt). Such a
-// record cannot truncate other doctors' coverage as a "successor" — the doctor
-// did not actually arrive at this target when started_at claims.
+// A record whose started_at sits more than this many minutes before its
+// created_at was almost certainly produced by the continuation bug
+// (cross-target arrival anchored to the previous post's startedAt/chain
+// origin, not to when the doctor actually showed up at THIS target). Such a
+// record cannot truncate other doctors' coverage as a "successor" — the
+// doctor did not actually arrive at this target when started_at claims.
 // Threshold matches the D1 criterion used in the May/2026 victims audit
 // (CONTINUATION_BUG_VICTIMS.md): created_at - started_at > 6h.
+// Applies to telegram AND admin_correction/manual: a chief's manual
+// correction filed at the end of a shift inherits the same continuity-chain
+// startedAt anchor and is just as capable of ghost-closing another doctor's
+// real presence on a different target (caso Ana Luiza Alves, ramal 2154,
+// 18/08/2026 — Gerardson's admin_correction "Continua do SD" carried
+// started_at=07:11 from the 1367 leg of his chain while only actually
+// reaching 2154 at 19:00, truncating Ana Luiza's SD to 12 minutes).
+// Excludes "import": its created_at is migration time, not arrival time, and
+// is always far from started_at by design — flagging it would disable every
+// imported record as a successor.
 const BACKDATED_SUCCESSOR_THRESHOLD_MINUTES = 6 * 60;
 
 function isBackdatedTelegramSuccessor(row: PreviousOperationalRawRow): boolean {
-  if (row.source !== "telegram") {
+  if (row.source !== "telegram" && row.source !== "admin_correction" && row.source !== "manual") {
     return false;
   }
   if (!row.createdAt) {
@@ -3671,10 +3682,25 @@ function buildAdditionalShadowPaymentAllocationRows(params: {
     // Sombra declarada OU presença sem titularidade: as duas pagam. Quem já foi
     // escolhido para a posição não entra de novo, e o dedup da folha
     // (médico+slot+posição, buildPayableShiftsFromBoards) fecha o resto.
+    //
+    // Um terceiro caso: titular real (board_started_at setado, não sombra) que
+    // perdeu a escolha do alvo pra OUTRO titular real — ex.: uma correção manual
+    // retrodatada que reivindica o mesmo alvo/turno onde alguém já registrou
+    // presença real via Telegram. Sem isto o perdedor simplesmente some do
+    // pagamento sem deixar rastro nenhum, mesmo a linha vencedora já sinalizando
+    // "Conflito entre medicos titulares no mesmo alvo/turno" — o algoritmo não
+    // decide sozinho quem estava certo (isso é do chefe), só garante que os dois
+    // lados do conflito fiquem visíveis pra revisão (caso Sadja Costa vs Murilo
+    // Damasceno, CZ50, 14/08/2026).
+    const hasCompetingTitular = choice.candidates.some((other) => !other.isShadow && !other.isLikelyNoise);
     const shadowCandidates = choice.candidates.filter((candidate) => (
-      (candidate.isShadow || (candidate.isBoardlessPresence && !candidate.isLikelyNoise))
-      && candidate.occupancyId !== chosenOccupancyId
+      candidate.occupancyId !== chosenOccupancyId
       && !doctorsWithChosenRow.has(candidate.doctorId)
+      && (
+        candidate.isShadow
+        || (candidate.isBoardlessPresence && !candidate.isLikelyNoise)
+        || (!candidate.isShadow && !candidate.isBoardlessPresence && !candidate.isLikelyNoise && hasCompetingTitular)
+      )
     ));
 
     for (const shadowCandidate of shadowCandidates) {
@@ -3691,7 +3717,11 @@ function buildAdditionalShadowPaymentAllocationRows(params: {
 
       rows.push(buildChosenPaymentAllocationRow({
         target: choice.target,
-        candidates: [shadowCandidate],
+        // Lista completa (não só [shadowCandidate]): é o que faz
+        // hasDoctorOverlapConflict/detectPaymentAllocationIssues enxergar o
+        // outro titular e marcar "Conflito entre medicos titulares no mesmo
+        // alvo/turno" também deste lado, em vez de pagar como linha limpa.
+        candidates: choice.candidates,
         chosenCandidate: shadowCandidate,
         slotStartIso: params.slotStartIso,
         shiftLabel: params.shiftLabel,
