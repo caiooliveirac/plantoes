@@ -555,6 +555,22 @@ function displayDoctorName(card: BoardCard) {
     return card.displayName || card.doctorName || "Aguardando confirmação";
 }
 
+/** Motivo digitado por quem desativou, sem o ruído do comando do Telegram:
+    remove "/desativar", a palavra desativar/desativada e o código/nome da
+    unidade — a cor da linha já diz que está desativada. */
+function disabledReasonText(reason: string | null | undefined, ...unitNames: (string | null | undefined)[]) {
+    let text = (reason ?? "")
+        .replace(/\/?\bdesativar\b/gi, " ")
+        .replace(/\bdesativad[ao]s?\b/gi, " ");
+    for (const name of unitNames) {
+        if (name) {
+            text = text.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+        }
+    }
+    text = text.replace(/\s+/g, " ").trim().replace(/^[-–—:,.]+\s*/, "");
+    return text || null;
+}
+
 /* --- "Aguardando fulano…" (escala externa) --------------------------------
    A escala sabe quem é o esperado do turno; o quadro mostra isso discreto:
    desde 1 h antes da fronteira como sub-linha do ocupante atual e, num posto
@@ -2947,7 +2963,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             {({ value }) => <span className="ops-time-pill"><strong>{value}</strong></span>}
                         </InlineTimeEditor>
                     ) : (
-                        <span className={`ops-time-pill ${isDisabledRegulation ? "disabled" : ""}`.trim()}><strong>{isDisabledRegulation ? formatBoardTime(card.disabledAt ?? null) : formatBoardTime(resolveOperationalArrival(card))}</strong></span>
+                        <span className={`ops-time-pill ${isDisabledRegulation ? "disabled" : ""}`.trim()}><strong>{isDisabledRegulation ? "--:--" : formatBoardTime(resolveOperationalArrival(card))}</strong></span>
                     )}
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
@@ -2958,9 +2974,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <div role="cell" className="ops-grid-cell column-name">
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
-                            {renderPrimaryDoctorLabel(card)}
-                            {renderCardIdentityTags(card)}
-                            {isDisabledRegulation && <span className="ops-inline-flag disabled">Desativado</span>}
+                            {isDisabledRegulation ? (
+                                <strong>{disabledReasonText(card.disabledReason, card.postCode, card.postLabel) ?? "Ramal desativado"}</strong>
+                            ) : (
+                                <>
+                                    {renderPrimaryDoctorLabel(card)}
+                                    {renderCardIdentityTags(card)}
+                                </>
+                            )}
                         </div>
                         {renderShadowOccupantLines(card.shadowOccupants, session?.canManage
                             ? (shadow) => openProfessionalDrawer(overlayOffBoardOccupant(card, shadow, "shadow"))
@@ -2972,12 +2993,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             }
                             : undefined)}
                         {renderExpectedHintLine(card, isLeaving)}
-                        {isDisabledRegulation ? (
-                            <div className="ops-inline-flags subtle">
-                                {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
-                                {card.disabledReason && <span className="ops-doctor-note continuation">{card.disabledReason}</span>}
-                            </div>
-                        ) : showKickButton ? (
+                        {isDisabledRegulation ? null : showKickButton ? (
                             <div className="ops-inline-flags subtle">
                                 <button
                                     type="button"
@@ -3112,7 +3128,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         </InlineTimeEditor>
                     ) : (
                         <span className={`ops-time-pill ${isDisabledIntervention ? "disabled" : ""} ${isWaitingIntervention ? "waiting" : ""} ${isAwaitingNews ? "verification" : ""}`.trim()}>
-                            <strong>{isDisabledIntervention ? formatBoardTime(card.disabledAt ?? null) : isWaitingIntervention ? "Livre" : formatBoardTime(resolveOperationalArrival(card))}</strong>
+                            <strong>{isDisabledIntervention ? "--:--" : isWaitingIntervention ? "Livre" : formatBoardTime(resolveOperationalArrival(card))}</strong>
                         </span>
                     )}
                 </div>
@@ -3124,9 +3140,14 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 <div role="cell" className="ops-grid-cell column-name">
                     <div className="ops-doctor-stack compact">
                         <div className="ops-doctor-line primary">
-                            {renderPrimaryDoctorLabel(card)}
-                            {renderCardIdentityTags(card)}
-                            {isDisabledIntervention && <span className="ops-inline-flag disabled">Desativada</span>}
+                            {isDisabledIntervention ? (
+                                <strong>{disabledReasonText(card.disabledReason, card.baseCode, card.baseLabel) ?? "Base desativada"}</strong>
+                            ) : (
+                                <>
+                                    {renderPrimaryDoctorLabel(card)}
+                                    {renderCardIdentityTags(card)}
+                                </>
+                            )}
                         </div>
                         {renderShadowOccupantLines(card.shadowOccupants, session?.canManage
                             ? (shadow) => openProfessionalDrawer(overlayOffBoardOccupant(card, shadow, "shadow"))
@@ -3138,12 +3159,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             }
                             : undefined)}
                         {renderExpectedHintLine(card, isLeaving)}
-                        {isDisabledIntervention ? (
-                            <div className="ops-inline-flags subtle">
-                                {card.disabledAt && <span className="ops-doctor-note continuation">Desde {formatBoardTime(card.disabledAt)}</span>}
-                                {card.disabledReason && <span className="ops-doctor-note continuation">{card.disabledReason}</span>}
-                            </div>
-                        ) : showKickButton ? (
+                        {isDisabledIntervention ? null : showKickButton ? (
                             <div className="ops-inline-flags subtle">
                                 {isAwaitingNews && <span className="ops-inline-flag waiting">Verificar</span>}
                                 <button
