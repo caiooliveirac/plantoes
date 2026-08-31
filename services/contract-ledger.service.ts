@@ -436,32 +436,53 @@ export async function recordManualAdjustment(params: {
 
 
 /**
- * Âncora de saldo: o admin informa "no início de <data> o saldo era R$ X" e o
+ * Quanto falta (ou sobra) para o razão fechar no saldo informado para o dia 1º
+ * de um mês. O saldo do dia inclui o que está lançado NAQUELE dia: a abertura
+ * do contrato tem a data do primeiro dia do ciclo, e excluí-la fazia a correção
+ * SOMAR ao valor errado em vez de substituí-lo — o admin informava 152.465,92
+ * para 01/05 e o saldo virava 78.288,13 + 152.465,92 (caso Alexandre Curi,
+ * 31/08/2026). Consumo de fechamento cai sempre no último dia do mês, então
+ * incluir o próprio dia 1º não engole mês nenhum; uma âncora anterior no mesmo
+ * dia entra na conta e a correção seguinte substitui de novo, não acumula.
+ */
+export function planBalanceAnchor(params: {
+    entries: Array<{ entryDate: string; amountCents: number }>;
+    /** AAAA-MM-01. */
+    anchorDate: string;
+    targetBalanceCents: number;
+}): { deltaCents: number; balanceBeforeCents: number } {
+    const balanceBeforeCents = params.entries
+        .filter((entry) => entry.entryDate <= params.anchorDate)
+        .reduce((total, entry) => total + entry.amountCents, 0);
+    return { deltaCents: params.targetBalanceCents - balanceBeforeCents, balanceBeforeCents };
+}
+
+/**
+ * Âncora de saldo: o admin informa "no dia 1º de <mês> o saldo era R$ X" e o
  * serviço converte isso no ajuste manual que faz a soma do razão bater — sem
  * tocar teto, ciclo ou histórico (append-only: correção vira lançamento).
- *
- * "Início da data" = lançamentos com entry_date < anchorDate. Os invoices
- * mensais são datados no último dia do mês, então âncora em 01/05 pega tudo
- * até abril e deixa o consumo de maio em diante descontar do valor informado.
  */
 export async function recordBalanceAnchor(params: {
     contractId: string;
     targetBalanceCents: number;
-    /** AAAA-MM-DD; o saldo informado vale no início deste dia. */
+    /** AAAA-MM-01; o saldo informado é o do dia 1º do mês. */
     anchorDate: string;
     description: string;
     actorUserId: string;
 }): Promise<{ deltaCents: number; balanceBeforeCents: number }> {
     const db = getDb();
-    const [row] = await db
-        .select({ total: sql<string>`coalesce(sum(${contractLedger.amount}), 0)` })
+    const rows = await db
+        .select({ entryDate: contractLedger.entryDate, amount: contractLedger.amount })
         .from(contractLedger)
-        .where(and(
-            eq(contractLedger.contractId, params.contractId),
-            sql`${contractLedger.entryDate} < ${params.anchorDate}`,
-        ));
-    const balanceBeforeCents = Math.round(Number(row?.total ?? 0) * 100);
-    const deltaCents = params.targetBalanceCents - balanceBeforeCents;
+        .where(eq(contractLedger.contractId, params.contractId));
+    const { deltaCents, balanceBeforeCents } = planBalanceAnchor({
+        entries: rows.map((row) => ({
+            entryDate: row.entryDate,
+            amountCents: Math.round(Number(row.amount) * 100),
+        })),
+        anchorDate: params.anchorDate,
+        targetBalanceCents: params.targetBalanceCents,
+    });
     if (deltaCents === 0) {
         throw new Error(
             "O saldo calculado nessa data já é exatamente esse — nenhum ajuste necessário.",

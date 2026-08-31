@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
     closingSourceKey,
+    planBalanceAnchor,
     planLedgerSync,
     syncContractLedgerForMonth,
     type LiveLedgerState,
@@ -179,5 +180,42 @@ describe("syncContractLedgerForMonth — guarda contra deadlock", () => {
             }),
             /exige `precomputed`/,
         );
+    });
+});
+
+describe("planBalanceAnchor — correção de saldo no dia 1º", () => {
+    // Razão do Alexandre Curi em 31/08/2026: abertura errada de 78.288,13 datada
+    // no mesmo 01/05 que o admin quer corrigir.
+    const RAZAO = [
+        { entryDate: "2026-05-01", amountCents: 7828813 },
+        { entryDate: "2026-05-31", amountCents: -1077634 },
+    ];
+
+    it("substitui o saldo do dia, não soma ao que já estava lançado nele", () => {
+        const plan = planBalanceAnchor({
+            entries: RAZAO,
+            anchorDate: "2026-05-01",
+            targetBalanceCents: 15246592,
+        });
+        assert.equal(plan.balanceBeforeCents, 7828813);
+        assert.equal(plan.deltaCents, 15246592 - 7828813);
+    });
+
+    it("aplicada a âncora, uma segunda correção no mesmo dia parte do valor corrigido", () => {
+        const plan = planBalanceAnchor({
+            entries: [...RAZAO, { entryDate: "2026-05-01", amountCents: 15246592 - 7828813 }],
+            anchorDate: "2026-05-01",
+            targetBalanceCents: 15246592,
+        });
+        assert.equal(plan.deltaCents, 0);
+    });
+
+    it("não engole o consumo dos meses seguintes", () => {
+        const plan = planBalanceAnchor({
+            entries: RAZAO,
+            anchorDate: "2026-06-01",
+            targetBalanceCents: 15246592,
+        });
+        assert.equal(plan.balanceBeforeCents, 7828813 - 1077634);
     });
 });

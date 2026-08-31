@@ -118,12 +118,13 @@ export function ContractBalanceCard({
     const [renewalDraft, setRenewalDraft] = useState<string | null>(null);
     const [renewalBusy, setRenewalBusy] = useState(false);
     const [renewalError, setRenewalError] = useState<string | null>(null);
-    // Âncora de saldo: "no início de <data> o saldo era R$ X". Corrige o saldo
+    // Âncora de saldo: "no dia 1º de <mês> o saldo era R$ X". Corrige o saldo
     // dali em diante SEM redefinir o contrato — teto e ciclo (e o alerta de
     // renovação no aniversário) ficam como estão. Para trocar teto/mês do
     // padrão, o botão é outro: "Corrigir valor/mês" no card de termos.
     const [anchorOpen, setAnchorOpen] = useState(false);
-    const [anchorDate, setAnchorDate] = useState("");
+    // Mês (AAAA-MM): a âncora só vale para o dia 1º — ver a rota de ajustes.
+    const [anchorMonth, setAnchorMonth] = useState("");
     const [anchorValue, setAnchorValue] = useState("");
     const [anchorReason, setAnchorReason] = useState("");
     const [anchorBusy, setAnchorBusy] = useState(false);
@@ -230,8 +231,8 @@ export function ContractBalanceCard({
             setAnchorError("Informe o saldo em reais que valia na data.");
             return;
         }
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(anchorDate)) {
-            setAnchorError("Informe a data da âncora.");
+        if (!/^\d{4}-\d{2}$/.test(anchorMonth)) {
+            setAnchorError("Informe o mês da âncora.");
             return;
         }
         if (anchorReason.trim().length < 5) {
@@ -247,7 +248,7 @@ export function ContractBalanceCard({
                 body: JSON.stringify({
                     mode: "anchor",
                     targetBalanceBrl: value,
-                    anchorDate,
+                    anchorDate: `${anchorMonth}-01`,
                     description: anchorReason.trim(),
                 }),
             });
@@ -438,9 +439,9 @@ export function ContractBalanceCard({
                         onClick={() => {
                             setAnchorOpen((open) => !open);
                             setAnchorError(null);
-                            // Default: início do mês em edição — o caso típico é
+                            // Default: mês em edição — o caso típico é
                             // "o saldo no início de maio era X".
-                            if (!anchorDate) setAnchorDate(monthKey ? `${monthKey}-01` : new Date().toISOString().slice(0, 10));
+                            if (!anchorMonth) setAnchorMonth(monthKey ?? new Date().toISOString().slice(0, 7));
                         }}
                     >
                         {anchorOpen ? "Cancelar correção de saldo" : "Corrigir saldo em uma data"}
@@ -448,27 +449,27 @@ export function ContractBalanceCard({
                     {anchorOpen ? (
                         <div className="contract-balance-anchor-form">
                             <p className="contract-balance-anchor-note">
-                                Informe o saldo que valia no <strong>início do dia</strong> escolhido.
-                                O sistema lança o ajuste que faz a conta bater e os meses seguintes
-                                passam a descontar desse valor. Teto, ciclo e alerta de renovação
-                                não mudam — para isso use &quot;Corrigir valor/mês&quot;.
+                                Informe o saldo que valia no <strong>dia 1º do mês</strong> escolhido.
+                                O valor <strong>substitui</strong> o saldo daquela data (não soma) e os
+                                meses seguintes passam a descontar dele. Teto, ciclo e alerta de
+                                renovação não mudam — para isso use &quot;Corrigir valor/mês&quot;.
                             </p>
                             <div className="contract-balance-opening">
                                 <input
-                                    type="date"
-                                    value={anchorDate}
-                                    onChange={(event) => setAnchorDate(event.target.value)}
+                                    type="month"
+                                    value={anchorMonth}
+                                    onChange={(event) => setAnchorMonth(event.target.value)}
                                     disabled={anchorBusy}
-                                    aria-label="Data da âncora"
+                                    aria-label="Mês da âncora (vale o dia 1º)"
                                 />
                                 <input
                                     type="number"
                                     step="0.01"
                                     value={anchorValue}
                                     onChange={(event) => setAnchorValue(event.target.value)}
-                                    placeholder="saldo na data, ex.: 120000.00"
+                                    placeholder="saldo no dia 1º, ex.: 120000.00"
                                     disabled={anchorBusy}
-                                    aria-label="Saldo em reais no início da data"
+                                    aria-label="Saldo em reais no dia 1º do mês"
                                 />
                             </div>
                             <div className="contract-balance-opening">
