@@ -19,8 +19,12 @@ const payloadSchema = z.union([
     z.object({
         mode: z.literal("anchor"),
         targetBalanceBrl: z.number().finite(),
-        /** O saldo informado vale no início deste dia. */
-        anchorDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        /**
+         * Só dia 1º: o saldo do contrato é conferido por mês (planilha, extrato,
+         * fechamento) e âncora no meio do mês pegava um mês partido pela metade —
+         * o consumo do mês inteiro está lançado no último dia.
+         */
+        anchorDate: z.string().regex(/^\d{4}-\d{2}-01$/, "A correção de saldo só vale para o dia 1º de um mês."),
         description: z.string().trim().min(5, "Descreva o motivo da correção."),
     }),
     z.object({
