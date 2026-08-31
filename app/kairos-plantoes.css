@@ -2148,22 +2148,6 @@
     color: var(--azul-dado);
 }
 
-.pagina-kairos .ops-expected-toggle {
-    border: 1px solid var(--azul-200);
-    color: var(--azul-dado);
-}
-
-.pagina-kairos .ops-expected-toggle:hover {
-    color: var(--texto-forte);
-    border-color: var(--azul-acao);
-}
-
-.pagina-kairos .ops-expected-toggle.is-on {
-    color: var(--texto-forte);
-    border-color: var(--azul-200);
-    background: var(--azul-50);
-}
-
 .pagina-kairos .ops-time-pill {
     border: 1px solid var(--borda);
     background: rgba(255, 255, 255, 0.03);

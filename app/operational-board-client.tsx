@@ -1164,13 +1164,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         const timer = window.setInterval(() => setExpectedHintsNowMs(Date.now()), 30_000);
         return () => window.clearInterval(timer);
     }, []);
-    function toggleExpectedHints() {
-        setExpectedHintsOn((on) => {
-            const next = !on;
-            window.localStorage.setItem(EXPECTED_HINTS_STORAGE_KEY, next ? "on" : "off");
-            return next;
-        });
-    }
     const quickConfirmDeparture = useQuickConfirmDeparture();
     const [priorityDrawerOpen, setPriorityDrawerOpen] = useState(false);
     const [authEmail, setAuthEmail] = useState("");
@@ -3827,7 +3820,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             interventionActive={interventionActiveCount}
                             interventionWaiting={interventionWaitingCount}
                             criticalCount={criticalCards.length}
-                            pendingDeparturesCount={pendingDepartures.length}
                             canManage={Boolean(session?.canManage)}
                             onOpenCriticalQueue={session?.canManage ? () => openDrawer() : undefined}
                         />
@@ -3843,20 +3835,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 matchedCount={filteredMatchedCount}
                                 totalCount={totalBoardCount}
                             />
-                        )}
-
-                        {expectedSchedule && (
-                            <div className="ops-expected-toggle-row">
-                                <button
-                                    type="button"
-                                    className={`ops-expected-toggle ${expectedHintsOn ? "is-on" : ""}`.trim()}
-                                    onClick={toggleExpectedHints}
-                                    aria-pressed={expectedHintsOn}
-                                    title="Desde 1 h antes do turno, mostra em letras discretas o médico esperado pela escala (aguardando fulano…). Na regulação a distribuição entre ramais é ilustrativa."
-                                >
-                                    Previsão da escala · {expectedHintsOn ? "visível" : "oculta"}
-                                </button>
-                            </div>
                         )}
 
                         <section className="ops-main-grid">
