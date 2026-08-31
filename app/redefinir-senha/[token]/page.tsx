@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import { KairosTopo } from "@/components/kairos-topo";
 import { motion } from "framer-motion";
 import "@/app/auth-pages.css";
 
@@ -59,6 +60,8 @@ export default function RedefinirSenhaPage({ params }: { params: Promise<{ token
     }
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Redefinir senha" />
         <main className="et-shell" style={{ alignItems: "center", justifyContent: "center" }}>
             <motion.section
                 className="et-panel"
@@ -109,5 +112,6 @@ export default function RedefinirSenhaPage({ params }: { params: Promise<{ token
                 )}
             </motion.section>
         </main>
+        </div>
     );
 }

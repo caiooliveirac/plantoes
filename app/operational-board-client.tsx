@@ -3,6 +3,7 @@
 import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { OperationalHistoryPanel } from "@/components/operational-history-panel";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { buildOperationalRoleChoices, describeFixedRoleTransferImpact, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
@@ -3262,7 +3263,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     }
 
     return (
-        <>
+        // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
+        // As abas só aparecem para quem gerencia — visitante sem sessão vê marca + tema.
+        <div className="pagina-kairos">
+            <KairosTopo titulo="Mesa operacional" abas={session?.canManage ? ABAS_ADMIN : undefined} />
             {viewMode === "live" && session?.roles.includes("admin") && (
                 <ChiefArrivalRequestsRail />
             )}
@@ -5131,6 +5135,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     )}
                 </>
             )}
-        </>
+        </div>
     );
 }

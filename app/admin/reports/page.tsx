@@ -1,4 +1,5 @@
 import { hasDatabaseUrl } from "@/db";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { MonthlyReportClient } from "@/app/admin/reports/monthly-report-client";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 
 function ReportsUnavailable({ title, copy }: { title: string; copy: string }) {
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Relatórios" abas={ABAS_ADMIN} />
         <main className="reports-shell">
             <section className="reports-empty-state standalone">
                 <strong>{title}</strong>
@@ -15,6 +18,7 @@ function ReportsUnavailable({ title, copy }: { title: string; copy: string }) {
                 <AdminGlobalNavigationLinks current="reports" />
             </section>
         </main>
+        </div>
     );
 }
 

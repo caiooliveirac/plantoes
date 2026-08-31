@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState, useTransition } from "react";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import { resolvePendingRegulationOccupantLabel } from "@/modules/operational/board-display";
 import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/board.service";
@@ -412,6 +413,8 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
     const canSubmitRemoval = Boolean(selectedRow?.occupancyId && removalNote.trim().length >= 8);
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Alocação de pagamento" abas={ABAS_ADMIN} />
         <main className="payment-shell">
             {/* Faixa de comando compacta: turno + busca + KPIs + navegação •••. */}
             <section className="admin-bar-frame standalone">
@@ -737,5 +740,6 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                 </aside>
             </section>
         </main>
+        </div>
     );
 }

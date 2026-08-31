@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { useRouter } from "next/navigation";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import type { MonthlyReportDoctorGroup, MonthlyReportModel, MonthlyReportPaymentStatus, MonthlyReportShift } from "@/modules/reporting/monthly-report";
@@ -154,6 +155,8 @@ export function MonthlyReportClient({ report }: Props) {
     }
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Relatórios" abas={ABAS_ADMIN} />
         <main className="reports-shell">
             {/* Faixa de comando compacta: mês + busca + KPIs + filtros na gaveta. */}
             <section className="admin-bar-frame standalone">
@@ -463,5 +466,6 @@ export function MonthlyReportClient({ report }: Props) {
                 </aside>
             </section>
         </main>
+        </div>
     );
 }

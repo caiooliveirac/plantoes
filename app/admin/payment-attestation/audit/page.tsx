@@ -1,4 +1,5 @@
 import { hasDatabaseUrl } from "@/db";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { PaymentAttestationClient } from "@/app/admin/payment-attestation/payment-attestation-client";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 
 function PaymentAttestationUnavailable({ title, copy }: { title: string; copy: string }) {
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Auditoria da atestação" abas={ABAS_ADMIN} />
         <main className="payment-shell">
             <section className="payment-empty-state standalone large">
                 <strong>{title}</strong>
@@ -15,6 +18,7 @@ function PaymentAttestationUnavailable({ title, copy }: { title: string; copy: s
                 <AdminGlobalNavigationLinks current="payment-attestation" containerClassName="payment-actions split" />
             </section>
         </main>
+        </div>
     );
 }
 

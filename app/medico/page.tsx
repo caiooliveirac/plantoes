@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { KairosTopo } from "@/components/kairos-topo";
 import { readAuthenticatedSession } from "@/lib/auth/server";
 import "@/app/auth-pages.css";
 
@@ -16,6 +17,8 @@ export default async function MedicoHomePage() {
     }
     if (!session.user.doctorId) {
         return (
+            <div className="pagina-kairos">
+            <KairosTopo titulo="Área do médico" />
             <main className="et-shell" style={{ alignItems: "center", justifyContent: "center" }}>
                 <section className="et-panel" style={{ width: "min(480px, 100%)" }}>
                     <div className="et-panel-head"><h2>Painel do médico</h2></div>
@@ -29,6 +32,7 @@ export default async function MedicoHomePage() {
                     </div>
                 </section>
             </main>
+            </div>
         );
     }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffectEvent, useState } from "react";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 
 interface DoctorOption {
@@ -173,6 +174,8 @@ export function ChiefAccessClient({ doctors, assignments: initialAssignments }: 
     }
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Acesso da chefia" abas={ABAS_ADMIN} />
         <main className="chief-access-shell">
             <section className="chief-access-hero">
                 <div>
@@ -342,5 +345,6 @@ export function ChiefAccessClient({ doctors, assignments: initialAssignments }: 
                 </section>
             </section>
         </main>
+        </div>
     );
 }

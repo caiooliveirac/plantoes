@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { KairosTopo } from "@/components/kairos-topo";
 import { motion } from "framer-motion";
 import "@/app/auth-pages.css";
 
@@ -61,6 +62,8 @@ export default function CadastroMedicoPage() {
     }
 
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Cadastro do médico" />
         <main className="et-shell" style={{ alignItems: "center", justifyContent: "center" }}>
             <motion.section
                 className="et-panel"
@@ -165,5 +168,6 @@ export default function CadastroMedicoPage() {
                 )}
             </motion.section>
         </main>
+        </div>
     );
 }

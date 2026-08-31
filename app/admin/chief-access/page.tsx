@@ -1,4 +1,5 @@
 import { hasDatabaseUrl } from "@/db";
+import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { ChiefAccessClient } from "@/app/admin/chief-access/chief-access-client";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 
 function ChiefAccessUnavailable({ title, copy }: { title: string; copy: string }) {
     return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Acesso da chefia" abas={ABAS_ADMIN} />
         <main className="chief-access-shell">
             <section className="chief-access-empty-state standalone large">
                 <strong>{title}</strong>
@@ -15,6 +18,7 @@ function ChiefAccessUnavailable({ title, copy }: { title: string; copy: string }
                 <AdminGlobalNavigationLinks current="chief-access" containerClassName="chief-access-hero-actions" />
             </section>
         </main>
+        </div>
     );
 }
 
