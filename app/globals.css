@@ -7475,36 +7475,6 @@ button.chief-payable-tag:focus-visible {
     overflow-wrap: anywhere;
 }
 
-.ops-expected-toggle-row {
-    display: flex;
-    /* à esquerda: o carril "saídas a confirmar" flutua à direita e cobriria o botão */
-    justify-content: flex-start;
-    margin-top: 4px;
-}
-
-.ops-expected-toggle {
-    border: 1px solid rgba(151, 168, 194, 0.26);
-    background: transparent;
-    color: rgba(151, 168, 194, 0.85);
-    border-radius: 999px;
-    padding: 4px 12px;
-    font-size: 0.68rem;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-
-.ops-expected-toggle:hover {
-    color: #d9e4f5;
-    border-color: rgba(151, 168, 194, 0.5);
-}
-
-.ops-expected-toggle.is-on {
-    color: #cde0fb;
-    border-color: rgba(125, 170, 255, 0.4);
-    background: rgba(125, 170, 255, 0.08);
-}
-
 .ops-time-pill {
     display: inline-flex;
     align-items: center;
@@ -11790,12 +11760,6 @@ button.chief-payable-tag:focus-visible {
 }
 .board-hero__stat.is-critical strong { color: var(--accent-fraud, var(--accent-warn)); }
 
-.board-hero__stat--countdown {
-    background: color-mix(in oklab, var(--accent-confirm-soft) 60%, var(--surface-elevated));
-    border-color: color-mix(in oklab, var(--accent-confirm) 50%, var(--surface-elevated-border));
-}
-.board-hero__stat--countdown strong { color: var(--accent-confirm); }
-
 .board-hero__actions {
     display: flex;
     flex-direction: column;
@@ -11810,13 +11774,13 @@ button.chief-payable-tag:focus-visible {
     justify-content: center;
     appearance: none;
     text-decoration: none;
-    padding: 9px 14px;
-    border-radius: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
     background: var(--surface-elevated);
     border: 1px solid var(--surface-elevated-border);
     color: var(--muted-strong);
     font-weight: 600;
-    font-size: 0.82rem;
+    font-size: 0.72rem;
     cursor: pointer;
     transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
 }
