@@ -11,6 +11,8 @@ interface MealBreakSessionBarProps {
     generatedAt: string;
 }
 
+/** Pill discreto abaixo das tabelas: emoji + estado + botões pequenos.
+    Os textos longos de deriva/fechamento viram title/toast. */
 export function MealBreakSessionBar({ session, evaluation, generatedAt }: MealBreakSessionBarProps) {
     const router = useRouter();
     const [confirmRestart, setConfirmRestart] = useState(false);
@@ -51,63 +53,58 @@ export function MealBreakSessionBar({ session, evaluation, generatedAt }: MealBr
         }
     };
 
+    const statusEmoji = stale ? "⏸️" : drifted ? "⚠️" : "🍽️";
+    const statusTitle = stale
+        ? (evaluation?.staleHint ?? `A divisão do ${mealLabel} já fechou.`)
+        : drifted
+            ? "O quadro mudou depois que a divisão começou. Atualizar recalcula vagas e só devolve a escolha a quem ficou sem as opções de agora. Reiniciar descarta tudo."
+            : undefined;
+
     return (
-        <div className={`meal-break-session-bar ${stale ? "is-stale" : drifted ? "is-drifted" : ""}`.trim()}>
-            <div className="meal-break-session-bar__copy">
-                <strong>{session.mode === "night" ? "Jantar em curso" : "Almoço em curso"}</strong>
-                <span>
-                    {session.stage === "completed"
-                        ? `Divisão fechada · ${session.roster.length} plantonistas`
-                        : `Em andamento · ${session.roster.length} plantonistas`}
-                </span>
-                {stale && evaluation?.staleHint ? <p>{evaluation.staleHint}</p> : null}
-                {drifted && !stale ? (
-                    <p>
-                        O quadro mudou depois que a divisão começou. Atualizar recalcula vagas e só devolve a escolha a quem ficou sem as opções de agora. Reiniciar descarta tudo.
-                    </p>
-                ) : null}
-            </div>
-            <div className="meal-break-session-bar__actions">
-                {drifted && (
+        <div className="meal-break-mini" title={statusTitle}>
+            <span aria-hidden="true">{statusEmoji}</span>
+            <span>
+                {session.mode === "night" ? "Jantar" : "Almoço"}
+                {session.stage === "completed" ? " · divisão fechada" : " em curso"}
+                {` · ${session.roster.length}`}
+            </span>
+            {drifted && (
+                <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => void run("reconcile")}
+                >
+                    {busy === "reconcile" ? "Atualizando..." : "Atualizar"}
+                </button>
+            )}
+            {confirmRestart ? (
+                <>
                     <button
                         type="button"
-                        className="chief-secondary-button"
+                        className="danger"
                         disabled={busy !== null}
-                        onClick={() => void run("reconcile")}
+                        onClick={() => void run("restart")}
                     >
-                        {busy === "reconcile" ? "Atualizando..." : "Atualizar divisão"}
+                        {busy === "restart" ? "Reiniciando..." : "Confirmar reinício"}
                     </button>
-                )}
-                {confirmRestart ? (
-                    <>
-                        <button
-                            type="button"
-                            className="chief-danger-button"
-                            disabled={busy !== null}
-                            onClick={() => void run("restart")}
-                        >
-                            {busy === "restart" ? "Reiniciando..." : "Confirmar reinício"}
-                        </button>
-                        <button
-                            type="button"
-                            className="chief-secondary-button"
-                            disabled={busy !== null}
-                            onClick={() => setConfirmRestart(false)}
-                        >
-                            Cancelar
-                        </button>
-                    </>
-                ) : (
                     <button
                         type="button"
-                        className="chief-danger-button"
                         disabled={busy !== null}
-                        onClick={() => setConfirmRestart(true)}
+                        onClick={() => setConfirmRestart(false)}
                     >
-                        Reiniciar divisão
+                        Cancelar
                     </button>
-                )}
-            </div>
+                </>
+            ) : (
+                <button
+                    type="button"
+                    className="danger"
+                    disabled={busy !== null}
+                    onClick={() => setConfirmRestart(true)}
+                >
+                    Reiniciar
+                </button>
+            )}
         </div>
     );
 }

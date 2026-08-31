@@ -2403,20 +2403,8 @@
     color: var(--texto-forte);
 }
 
-.pagina-kairos .meal-break-session-bar {
+.pagina-kairos .meal-break-mini {
     border: 1px solid var(--azul-200);
-}
-
-.pagina-kairos .meal-break-session-bar.is-stale {
-    border-color: var(--ambar-200);
-}
-
-.pagina-kairos .meal-break-session-bar.is-drifted {
-    border-color: var(--verde-200);
-}
-
-.pagina-kairos .meal-break-session-bar__copy strong {
-    color: var(--texto-forte);
 }
 
 .pagina-kairos .chief-verification-strip {

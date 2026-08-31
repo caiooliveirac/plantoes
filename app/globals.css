@@ -1276,6 +1276,27 @@ button.ops-doctor-line.displaced.clickable:hover {
     background: rgba(7, 18, 16, 0.46);
 }
 
+/* Deslogado: pill com rótulo "Entrar", bem visível no topo. */
+.ops-auth-trigger.login {
+    width: auto;
+    min-width: 0;
+    padding: 0 18px 0 14px;
+    gap: 8px;
+    opacity: 0.95;
+    border-color: rgba(123, 210, 166, 0.45);
+}
+
+.ops-auth-trigger.login .ops-auth-trigger-icon {
+    width: auto;
+    height: auto;
+}
+
+.ops-auth-trigger-label {
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
 .ops-auth-trigger:hover,
 .ops-auth-dock.open .ops-auth-trigger {
     opacity: 0.92;
@@ -8273,46 +8294,39 @@ button.chief-payable-tag:focus-visible {
     color: #eef5ff;
 }
 
-.meal-break-session-bar {
-    display: grid;
-    gap: 12px;
-    padding: 14px 16px;
-    border-radius: 18px;
-    border: 1px solid rgba(103, 145, 206, 0.28);
-    background: linear-gradient(180deg, rgba(10, 24, 40, 0.55), rgba(19, 19, 21, 0.92));
-}
-
-.meal-break-session-bar.is-stale {
-    border-color: rgba(255, 184, 77, 0.4);
-    background: linear-gradient(180deg, rgba(59, 34, 8, 0.48), rgba(19, 19, 21, 0.92));
-}
-
-.meal-break-session-bar.is-drifted {
-    border-color: rgba(103, 176, 206, 0.42);
-}
-
-.meal-break-session-bar__copy {
-    display: grid;
-    gap: 4px;
-}
-
-.meal-break-session-bar__copy strong {
-    color: #eef5ff;
-    font-size: 0.95rem;
-}
-
-.meal-break-session-bar__copy span,
-.meal-break-session-bar__copy p {
-    margin: 0;
-    color: var(--muted-strong);
-    font-size: 0.82rem;
-    line-height: 1.45;
-}
-
-.meal-break-session-bar__actions {
+/* Pill discreto do meal break, abaixo das tabelas. */
+.meal-break-mini {
     display: flex;
+    align-items: center;
     flex-wrap: wrap;
     gap: 8px;
+    width: fit-content;
+    margin-top: 8px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--surface-elevated-border);
+    background: var(--surface-elevated);
+    color: var(--muted-strong);
+    font-size: 0.76rem;
+}
+
+.meal-break-mini button {
+    appearance: none;
+    border: 1px solid var(--surface-elevated-border);
+    background: transparent;
+    color: var(--muted-strong);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.meal-break-mini button:hover { color: var(--text); }
+
+.meal-break-mini button.danger {
+    color: var(--accent-warn);
+    border-color: color-mix(in oklab, var(--accent-warn) 45%, var(--surface-elevated-border));
 }
 
 @media (max-width: 720px) {
@@ -11681,11 +11695,11 @@ button.chief-payable-tag:focus-visible {
 
 .board-hero {
     display: grid;
-    grid-template-columns: minmax(220px, auto) 1fr auto;
-    gap: 20px;
+    grid-template-columns: minmax(160px, auto) 1fr auto;
+    gap: 12px;
     align-items: center;
-    padding: 18px 22px;
-    margin-bottom: 14px;
+    padding: 8px 14px;
+    margin-bottom: 8px;
     border-radius: 20px;
     background: var(--surface-glass-strong);
     border: 1px solid var(--surface-elevated-border);
@@ -11701,11 +11715,11 @@ button.chief-payable-tag:focus-visible {
 
 .board-hero__chip {
     font-family: var(--font-display), var(--font-sans);
-    font-size: 1.4rem;
+    font-size: 0.95rem;
     font-weight: 600;
     letter-spacing: 0.04em;
-    padding: 10px 16px;
-    border-radius: 14px;
+    padding: 5px 10px;
+    border-radius: 10px;
     border: 1px solid var(--surface-elevated-border);
     background: var(--surface-elevated);
     color: var(--text);
@@ -11721,14 +11735,14 @@ button.chief-payable-tag:focus-visible {
 .board-hero__shift h1 {
     margin: 0;
     font-family: var(--font-display), var(--font-sans);
-    font-size: 1.15rem;
+    font-size: 0.95rem;
     letter-spacing: 0.01em;
 }
 
 .board-hero__shift p {
-    margin: 2px 0 0;
+    margin: 1px 0 0;
     color: var(--muted);
-    font-size: 0.8rem;
+    font-size: 0.7rem;
     text-transform: capitalize;
 }
 
@@ -11742,20 +11756,19 @@ button.chief-payable-tag:focus-visible {
 .board-hero__stat {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-    border-radius: 12px;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 9px;
     background: var(--surface-elevated);
     border: 1px solid var(--surface-elevated-border);
     color: var(--muted-strong);
-    font-size: 0.8rem;
-    min-width: 130px;
+    font-size: 0.74rem;
     transition: border-color var(--dur-fast);
 }
 
 .board-hero__stat strong {
     font-family: var(--font-display), var(--font-sans);
-    font-size: 1.3rem;
+    font-size: 0.95rem;
     color: var(--text);
     line-height: 1;
 }
@@ -11763,8 +11776,9 @@ button.chief-payable-tag:focus-visible {
 .board-hero__stat span {
     flex: 1;
     color: var(--muted);
-    font-size: 0.74rem;
+    font-size: 0.68rem;
     line-height: 1.15;
+    white-space: nowrap;
 }
 
 .board-hero__stat.is-warn { border-color: color-mix(in oklab, var(--accent-warn) 60%, var(--surface-elevated-border)); }
@@ -11835,10 +11849,10 @@ button.chief-payable-tag:focus-visible {
 .board-filters {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 12px 16px;
-    margin-bottom: 14px;
-    border-radius: 16px;
+    gap: 6px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    border-radius: 12px;
     background: var(--surface-glass);
     border: 1px solid var(--surface-elevated-border);
 }
@@ -11862,26 +11876,27 @@ button.chief-payable-tag:focus-visible {
 }
 
 .board-filters__search {
-    flex: 1 1 280px;
+    flex: 0 1 230px;
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 10px;
-    border-radius: 10px;
+    padding: 3px 9px;
+    border-radius: 999px;
     background: var(--surface-elevated);
     border: 1px solid var(--surface-elevated-border);
-    color: var(--muted-strong);
+    color: var(--muted);
 }
 
 .board-filters__search input {
     flex: 1;
+    min-width: 0;
     appearance: none;
     background: transparent;
     border: none;
     outline: none;
     color: var(--text);
     font-family: inherit;
-    font-size: 0.9rem;
+    font-size: 0.78rem;
 }
 
 .board-filters__search input::placeholder { color: var(--muted); }
@@ -11901,7 +11916,8 @@ button.chief-payable-tag:focus-visible {
 .board-filters__clear:hover { color: var(--text); background: var(--surface-elevated-border); }
 
 .board-filters__match {
-    font-size: 0.74rem;
+    margin-left: auto;
+    font-size: 0.7rem;
     color: var(--muted);
     letter-spacing: 0.04em;
     text-transform: uppercase;
