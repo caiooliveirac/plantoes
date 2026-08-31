@@ -43,3 +43,4 @@ tsconfig.tsbuildinfo
 scripts/data/*.csv
 docs/audits/*.csv
 *.tsbuildinfo
+.impeccable/

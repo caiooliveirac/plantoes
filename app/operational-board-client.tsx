@@ -1543,16 +1543,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             const haystack = `${displayDoctorName(card)} ${cardCode(card)} ${cardLabel(card)} ${card.roleLabel ?? ""}`.toLowerCase();
             if (!haystack.includes(needle)) return false;
         }
-        if (boardRoleFilter !== "all") {
-            const role = resolveCardRoleLabel(card);
-            if (role !== boardRoleFilter) return false;
-        }
-        if (boardStatusFilter !== "all") {
-            const priority = resolvePriority(card, generatedAt);
-            if (boardStatusFilter === "critical" && priority !== "critical") return false;
-            if (boardStatusFilter === "watch" && priority !== "high") return false;
-            if (boardStatusFilter === "waiting" && card.status !== "waiting") return false;
-        }
+        if (boardRoleFilter !== "all" && card.domain !== boardRoleFilter) return false;
+        if (boardStatusFilter === "waiting" && card.status !== "waiting") return false;
         return true;
     };
     const filteredRegulationCards = visibleRegulationCards.filter(cardMatchesFilters);
@@ -3562,7 +3554,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
                     <button
                         type="button"
-                        className={`ops-auth-trigger ${session ? "connected" : ""}`.trim()}
+                        className={`ops-auth-trigger ${session ? "connected" : "login"}`.trim()}
                         aria-label={session ? `Sessao ativa: ${summarizeRoles(session.roles)}. Abrir acesso operacional.` : "Abrir acesso operacional"}
                         title={session ? `${summarizeRoles(session.roles)} • ${session.email}` : "Acesso operacional"}
                         onClick={() => {
@@ -3577,6 +3569,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 <path d="M12 2.75a5 5 0 0 0-5 5v1.5H6.5A2.75 2.75 0 0 0 3.75 12v6.25A2.75 2.75 0 0 0 6.5 21h11a2.75 2.75 0 0 0 2.75-2.75V12a2.75 2.75 0 0 0-2.75-2.75H17V7.75a5 5 0 0 0-5-5Zm-3.5 6.5v-1.5a3.5 3.5 0 1 1 7 0v1.5h-7Zm3.5 3.25a1.75 1.75 0 0 1 .75 3.33V18a.75.75 0 0 1-1.5 0v-2.17a1.75 1.75 0 0 1 .75-3.33Z" />
                             </svg>
                         </span>
+                        {!session && <span className="ops-auth-trigger-label">Entrar</span>}
                         <span className="ops-auth-sr">{session ? `${summarizeRoles(session.roles)} ${session.email}` : "Abrir acesso operacional"}</span>
                     </button>
 
@@ -3839,14 +3832,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             onOpenCriticalQueue={session?.canManage ? () => openDrawer() : undefined}
                         />
 
-                        {session?.canManage && mealBreakSession && (
-                            <MealBreakSessionBar
-                                session={mealBreakSession}
-                                evaluation={mealBreakEvaluation}
-                                generatedAt={generatedAt}
-                            />
-                        )}
-
                         {session?.canManage && (
                             <BoardQuickFilters
                                 roleFilter={boardRoleFilter}
@@ -3959,6 +3944,16 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 </div>
                             </section>
                         </section>
+
+                        {session?.canManage && mealBreakSession
+                            && !(mealBreakSession.stage === "completed"
+                                && new Date(generatedAt).getTime() - new Date(mealBreakSession.updatedAt).getTime() > 2 * 60 * 60 * 1000) && (
+                            <MealBreakSessionBar
+                                session={mealBreakSession}
+                                evaluation={mealBreakEvaluation}
+                                generatedAt={generatedAt}
+                            />
+                        )}
                     </section>
                 )}
             </main>
