@@ -7,7 +7,8 @@
  * como plantão extra e ponto.
  *
  * Quem pode: quem já deu plantão na 2031 ou está na allowlist nominal.
- * Competência: só o mês corrente (SP), igual ao resto do autoatendimento.
+ * Competência: mês corrente ou mês anterior ainda não atestado, igual ao resto
+ * do autoatendimento (ver lib/medico/competencia.ts).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
@@ -17,7 +18,7 @@ import { auditLogs, doctors } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { avisarSecretario } from "@/lib/avisos/secretario";
 import { autorizarPainelDoMedico } from "@/lib/medico/painel-acesso";
-import { getSaoPauloParts } from "@/modules/operational/board-rules";
+import { competenciaDoAutoatendimento, mesCorrenteSP } from "@/lib/medico/competencia";
 import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import {
@@ -41,6 +42,8 @@ const createSchema = z.object({
 const manageSchema = z.object({
     medicoId: z.string().uuid(),
     extraShiftId: z.string().uuid(),
+    /** Competência do lançamento. Ausente (cliente antigo) = mês corrente. */
+    monthKey: z.string().regex(/^\d{4}-\d{2}$/).optional(),
     operationalDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     shiftLabel: z.enum(["SD", "SN"]).optional(),
     coverage: z.enum(["full", "half"]).optional(),
@@ -52,16 +55,18 @@ function coverageSuffix(coverage: "full" | "half"): string {
     return coverage === "half" ? ", MEIO plantão — vale metade" : "";
 }
 
-function currentMonthKey(): string {
-    const parts = getSaoPauloParts(new Date());
-    return `${parts.year}-${String(parts.month).padStart(2, "0")}`;
-}
-
-async function autorizar(medicoId: string, token: string | undefined) {
-    const monthKey = currentMonthKey();
+/**
+ * Identidade + competência numa chamada só. `monthKey` é o mês do lançamento —
+ * o token da folha vale para UM médico/mês, então ele é validado contra esse
+ * mês, não contra o mês de hoje.
+ */
+async function autorizar(medicoId: string, token: string | undefined, monthKey: string) {
     const [ano, mes] = monthKey.split("-").map(Number);
     const acesso = await autorizarPainelDoMedico({ medicoId, ano, mes, token });
-    return { acesso, monthKey };
+    const competencia = acesso.autorizado
+        ? await competenciaDoAutoatendimento({ doctorId: medicoId, monthKey, isAdmin: acesso.isAdmin })
+        : { aberta: false, erro: null };
+    return { acesso, competencia, monthKey };
 }
 
 /** Aviso best-effort à coordenação — Telegram do admin + WhatsApp do secretário. */
@@ -104,12 +109,12 @@ export async function POST(request: NextRequest) {
     }
     const { medicoId, operationalDate, shiftLabel } = parsed.data;
     const coverage = parsed.data.coverage ?? "full";
-    const { acesso, monthKey } = await autorizar(medicoId, parsed.data.t);
+    const { acesso, competencia, monthKey } = await autorizar(medicoId, parsed.data.t, operationalDate.slice(0, 7));
     if (!acesso.autorizado) {
         return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
     }
-    if (!operationalDate.startsWith(monthKey)) {
-        return NextResponse.json({ error: "A data precisa estar dentro do mês corrente." }, { status: 400 });
+    if (!competencia.aberta) {
+        return NextResponse.json({ error: competencia.erro }, { status: 409 });
     }
     if (!(await canDeclareChiefExtraShift(medicoId))) {
         return NextResponse.json({ error: "Você não está liberado a declarar plantão de chefia." }, { status: 403 });
@@ -172,15 +177,17 @@ export async function PATCH(request: NextRequest) {
     }
     const { medicoId, extraShiftId, operationalDate } = parsed.data;
     const shiftLabel = parsed.data.shiftLabel ?? "SD";
-    const { acesso, monthKey } = await autorizar(medicoId, parsed.data.t);
-    if (!acesso.autorizado) {
-        return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
-    }
     if (!operationalDate) {
         return NextResponse.json({ error: "Informe a nova data." }, { status: 400 });
     }
-    if (!operationalDate.startsWith(monthKey)) {
-        return NextResponse.json({ error: "A data precisa estar dentro do mês corrente." }, { status: 400 });
+    // O plantão só se move dentro do próprio mês: o guard de `updateChiefExtraShift`
+    // procura a linha na janela deste monthKey, então mudar de mês não acha nada.
+    const { acesso, competencia, monthKey } = await autorizar(medicoId, parsed.data.t, operationalDate.slice(0, 7));
+    if (!acesso.autorizado) {
+        return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
+    }
+    if (!competencia.aberta) {
+        return NextResponse.json({ error: competencia.erro }, { status: 409 });
     }
 
     try {
@@ -230,9 +237,16 @@ export async function DELETE(request: NextRequest) {
         return NextResponse.json({ error: "Dados inválidos." }, { status: 400 });
     }
     const { medicoId, extraShiftId } = parsed.data;
-    const { acesso, monthKey } = await autorizar(medicoId, parsed.data.t);
+    const { acesso, competencia, monthKey } = await autorizar(
+        medicoId,
+        parsed.data.t,
+        parsed.data.monthKey ?? mesCorrenteSP(),
+    );
     if (!acesso.autorizado) {
         return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
+    }
+    if (!competencia.aberta) {
+        return NextResponse.json({ error: competencia.erro }, { status: 409 });
     }
 
     try {

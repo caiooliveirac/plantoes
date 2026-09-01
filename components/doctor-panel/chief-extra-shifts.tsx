@@ -80,7 +80,7 @@ export function ChiefExtraShifts({ medicoId, monthKey, token, shifts }: Props) {
             const response = await fetch("/api/medico/plantao-chefia", {
                 method,
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ medicoId, ...payload, ...(token ? { t: token } : {}) }),
+                body: JSON.stringify({ medicoId, monthKey, ...payload, ...(token ? { t: token } : {}) }),
             });
             const body = await response.json().catch(() => null) as { error?: string } | null;
             if (!response.ok) {

@@ -9,7 +9,7 @@ import { formatSignedHours } from "@/modules/bank-hours/pending-actions";
 import { loadDoctorBankHoursStoryLines } from "@/services/bank-hours-story.service";
 import { readAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
-import { getSaoPauloParts } from "@/modules/operational/board-rules";
+import { competenciaDoAutoatendimento, mesCorrenteSP } from "@/lib/medico/competencia";
 import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
@@ -46,8 +46,8 @@ const payloadSchema = z.object({
  * ele é pago como plantão extra sem tocar no banco de horas, e tem rota própria
  * (/api/medico/plantao-chefia).
  *
- * PATCH e DELETE (abaixo) só alcançam o extra que o PRÓPRIO médico declarou no
- * mês corrente: trocar dia/turno ou desistir dele.
+ * PATCH e DELETE (abaixo) só alcançam o extra que o PRÓPRIO médico declarou na
+ * competência aberta: trocar dia/turno ou desistir dele.
  */
 export async function POST(request: NextRequest) {
     if (!hasDatabaseUrl()) {
@@ -71,14 +71,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Acesso negado." }, { status: 403 });
     }
 
-    // Competência: só o mês corrente (SP) aceita autoatendimento.
-    const nowParts = getSaoPauloParts(new Date());
-    const currentMonthKey = `${nowParts.year}-${String(nowParts.month).padStart(2, "0")}`;
-    if (monthKey !== currentMonthKey) {
-        return NextResponse.json({ error: "Só o mês corrente aceita este registro." }, { status: 409 });
+    // Competência: mês corrente ou mês anterior ainda não atestado (a nota do
+    // mês passado é emitida agora — ver lib/medico/competencia.ts).
+    const competencia = await competenciaDoAutoatendimento({ doctorId: medicoId, monthKey, isAdmin });
+    if (!competencia.aberta) {
+        return NextResponse.json({ error: competencia.erro }, { status: 409 });
     }
     if (!operationalDate.startsWith(monthKey)) {
-        return NextResponse.json({ error: "A data precisa estar dentro do mês corrente." }, { status: 400 });
+        return NextResponse.json({ error: "A data precisa estar dentro do mês da competência." }, { status: 400 });
     }
 
     try {
@@ -197,22 +197,23 @@ export async function POST(request: NextRequest) {
 const managePayloadSchema = z.object({
     medicoId: z.string().uuid(),
     settlementId: z.string().uuid(),
+    /** Competência do lançamento. Ausente (cliente antigo) = mês corrente. */
+    monthKey: z.string().regex(/^\d{4}-\d{2}$/).optional(),
     /** Só no PATCH: o novo dia/turno do extra. */
     operationalDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     shiftLabel: z.enum(["SD", "SN"]).optional(),
     t: z.string().optional(),
 });
 
-/** Mesma porta de identidade do POST, mais a competência (só o mês corrente). */
+/** Mesma porta de identidade do POST, mais a competência (corrente ou anterior). */
 async function authorizeManage(request: NextRequest) {
     const parsed = managePayloadSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
         return { error: NextResponse.json({ error: "Dados inválidos." }, { status: 400 }) } as const;
     }
     const { medicoId } = parsed.data;
-    const nowParts = getSaoPauloParts(new Date());
-    const currentMonthKey = `${nowParts.year}-${String(nowParts.month).padStart(2, "0")}`;
-    const [ano, mes] = currentMonthKey.split("-").map(Number);
+    const monthKey = parsed.data.monthKey ?? mesCorrenteSP();
+    const [ano, mes] = monthKey.split("-").map(Number);
 
     const session = await readAuthenticatedSession();
     const isOwnSession = Boolean(session?.user.doctorId && session.user.doctorId === medicoId);
@@ -221,7 +222,11 @@ async function authorizeManage(request: NextRequest) {
     if (!isOwnSession && !tokenValido && !isAdmin) {
         return { error: NextResponse.json({ error: "Acesso negado." }, { status: 403 }) } as const;
     }
-    return { data: parsed.data, session, currentMonthKey, isOwnSession, isAdmin } as const;
+    const competencia = await competenciaDoAutoatendimento({ doctorId: medicoId, monthKey, isAdmin });
+    if (!competencia.aberta) {
+        return { error: NextResponse.json({ error: competencia.erro }, { status: 409 }) } as const;
+    }
+    return { data: parsed.data, session, monthKey, isOwnSession, isAdmin } as const;
 }
 
 /**
@@ -266,27 +271,27 @@ async function afterManage(medicoId: string, monthKey: string, actorUserId: stri
     await syncContractLedgerForMonth({ doctorId: medicoId, monthKey, actorUserId });
 }
 
-/** Troca o dia/turno de um extra que o próprio médico declarou no mês corrente. */
+/** Troca o dia/turno de um extra que o próprio médico declarou na competência. */
 export async function PATCH(request: NextRequest) {
     if (!hasDatabaseUrl()) {
         return NextResponse.json({ error: "DATABASE_URL is not configured." }, { status: 503 });
     }
     const auth = await authorizeManage(request);
     if ("error" in auth) return auth.error;
-    const { data, session, currentMonthKey } = auth;
+    const { data, session, monthKey } = auth;
 
     const operationalDate = data.operationalDate;
     const shiftLabel = data.shiftLabel ?? "SD";
     if (!operationalDate) {
         return NextResponse.json({ error: "Informe a nova data." }, { status: 400 });
     }
-    if (!operationalDate.startsWith(currentMonthKey)) {
-        return NextResponse.json({ error: "A data precisa estar dentro do mês corrente." }, { status: 400 });
+    if (!operationalDate.startsWith(monthKey)) {
+        return NextResponse.json({ error: "A data precisa estar dentro do mês da competência." }, { status: 400 });
     }
 
     try {
         const jaTrabalhou = await hasWorkedSlot({
-            monthKey: currentMonthKey,
+            monthKey,
             doctorId: data.medicoId,
             operationalDate,
             shiftLabel,
@@ -301,7 +306,7 @@ export async function PATCH(request: NextRequest) {
         await updateSelfDeclaredExtra({
             settlementId: data.settlementId,
             doctorId: data.medicoId,
-            currentMonthKey,
+            monthKey,
             operationalDate,
             shiftLabel,
         });
@@ -311,10 +316,10 @@ export async function PATCH(request: NextRequest) {
             action: "medico.bank_hours_settlement.self_update",
             entityType: "bank_hours_settlement",
             entityId: data.settlementId,
-            details: { doctorId: data.medicoId, monthKey: currentMonthKey, operationalDate, shiftLabel },
+            details: { doctorId: data.medicoId, monthKey, operationalDate, shiftLabel },
         });
 
-        await afterManage(data.medicoId, currentMonthKey, session?.user.id ?? null);
+        await afterManage(data.medicoId, monthKey, session?.user.id ?? null);
         await notifyAdmins(data.medicoId, (nome) =>
             `✏️ *${nome}* mudou o plantão extra declarado para ${operationalDate} (${shiftLabel}). Revisar em /admin/bank-hours.`);
 
@@ -327,20 +332,20 @@ export async function PATCH(request: NextRequest) {
     }
 }
 
-/** Desiste de um extra que o próprio médico declarou no mês corrente. */
+/** Desiste de um extra que o próprio médico declarou na competência. */
 export async function DELETE(request: NextRequest) {
     if (!hasDatabaseUrl()) {
         return NextResponse.json({ error: "DATABASE_URL is not configured." }, { status: 503 });
     }
     const auth = await authorizeManage(request);
     if ("error" in auth) return auth.error;
-    const { data, session, currentMonthKey } = auth;
+    const { data, session, monthKey } = auth;
 
     try {
         const removed = await deleteSelfDeclaredExtra({
             settlementId: data.settlementId,
             doctorId: data.medicoId,
-            currentMonthKey,
+            monthKey,
         });
 
         await getDb().insert(auditLogs).values({
@@ -348,10 +353,10 @@ export async function DELETE(request: NextRequest) {
             action: "medico.bank_hours_settlement.self_delete",
             entityType: "bank_hours_settlement",
             entityId: data.settlementId,
-            details: { doctorId: data.medicoId, monthKey: currentMonthKey, ...removed },
+            details: { doctorId: data.medicoId, monthKey, ...removed },
         });
 
-        await afterManage(data.medicoId, currentMonthKey, session?.user.id ?? null);
+        await afterManage(data.medicoId, monthKey, session?.user.id ?? null);
         await notifyAdmins(data.medicoId, (nome) =>
             `🗑️ *${nome}* retirou o plantão extra declarado de ${removed.operationalDate} (${removed.shiftLabel}). Revisar em /admin/bank-hours.`);
 

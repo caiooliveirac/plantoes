@@ -336,15 +336,16 @@ export async function moveSelfDeclaredExtra(params: {
 }
 
 /**
- * Guard do que o médico pode mexer sozinho: só o extra que ELE declarou, no mês
- * corrente. Estorno de qualquer outro acerto continua sendo do coordenador.
+ * Guard do que o médico pode mexer sozinho: só o extra que ELE declarou, na
+ * competência que a rota abriu (mês corrente ou mês anterior ainda não
+ * atestado). Estorno de qualquer outro acerto continua sendo do coordenador.
  */
 export function canDoctorManageSettlement(
     settlement: { doctorId: string; monthKey: string; kind: string; notes: string },
-    context: { doctorId: string; currentMonthKey: string },
+    context: { doctorId: string; monthKey: string },
 ): boolean {
     return settlement.doctorId === context.doctorId
-        && settlement.monthKey === context.currentMonthKey
+        && settlement.monthKey === context.monthKey
         && normalizeKind(settlement.kind) === "bonus"
         && isSelfServiceSettlementNote(settlement.notes)
         && !isReversalSettlementNote(settlement.notes);
@@ -355,7 +356,7 @@ type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
 async function loadManageableSettlement(tx: Tx, params: {
     settlementId: string;
     doctorId: string;
-    currentMonthKey: string;
+    monthKey: string;
 }) {
     const [row] = await tx
         .select()
@@ -372,7 +373,7 @@ async function loadManageableSettlement(tx: Tx, params: {
 export async function updateSelfDeclaredExtra(params: {
     settlementId: string;
     doctorId: string;
-    currentMonthKey: string;
+    monthKey: string;
     operationalDate: string;
     shiftLabel: "SD" | "SN";
 }): Promise<void> {
@@ -394,7 +395,7 @@ export async function updateSelfDeclaredExtra(params: {
 export async function deleteSelfDeclaredExtra(params: {
     settlementId: string;
     doctorId: string;
-    currentMonthKey: string;
+    monthKey: string;
 }): Promise<{ operationalDate: string; shiftLabel: string }> {
     return getDb().transaction(async (tx) => {
         const settlement = await loadManageableSettlement(tx, params);
