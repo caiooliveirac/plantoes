@@ -8,7 +8,7 @@ const base = {
     kind: "bonus",
     notes: "Banco de horas +12h — plantão extra declarado (autoatendimento, 2026-08-10 SD)",
 };
-const context = { doctorId: "doc-1", currentMonthKey: "2026-08" };
+const context = { doctorId: "doc-1", monthKey: "2026-08" };
 
 test("o médico gerencia o extra que ele mesmo declarou no mês corrente", () => {
     assert.equal(canDoctorManageSettlement(base, context), true);

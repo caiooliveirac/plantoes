@@ -32,7 +32,7 @@ import {
     loadChiefExtraShifts,
 } from "@/services/chief-extra-shifts.service";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
-import { getSaoPauloParts } from "@/modules/operational/board-rules";
+import { competenciaDoAutoatendimento } from "@/lib/medico/competencia";
 import {
     BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES,
     loadSelfDeclaredExtras,
@@ -147,13 +147,14 @@ export default async function PainelDoMedicoPage({
     if (!Number.isInteger(mes) || mes < 1 || mes > 12) notFound();
 
     const tokenValido = isValidFolhaToken(t, { medicoId, ano, mes });
-    if (!tokenValido) {
+    // A sessão é lida sempre: além do acesso, é dela que sai o `isAdmin` que
+    // libera o coordenador a mexer no mês já atestado.
+    const session = await readAuthenticatedSession();
+    const isAdmin = Boolean(session?.user.roles.includes("admin"));
+    if (!tokenValido && session?.user.doctorId !== medicoId) {
         // Sessão do PRÓPRIO médico (cadastro por codinome+email) também entra;
         // qualquer outra sessão continua exigindo admin.
-        const session = await readAuthenticatedSession();
-        if (!session || session.user.doctorId !== medicoId) {
-            await requireAuthenticatedSession(["admin"]);
-        }
+        await requireAuthenticatedSession(["admin"]);
     }
     if (!hasDatabaseUrl()) notFound();
 
@@ -203,19 +204,21 @@ export default async function PainelDoMedicoPage({
     const dataMinimaFolha = dataMinimaEmissao(ano, mes);
     const folhaAindaNaoEmissivel = hojeEmSaoPaulo() <= dataMinimaFolha;
 
-    // Autoatendimento: só no mês corrente (SP). Verde = data livre para o extra
-    // (exige saldo elegível ≥ +12h); vermelho = escolher um plantão real do mês
-    // para retirar (saldo elegível ≤ -12h). Turno de chefia NÃO entra aqui — tem
+    // Autoatendimento: mês corrente OU mês anterior ainda não atestado — a nota
+    // do mês passado é emitida agora, e é agora que o médico lembra do extra
+    // (ver lib/medico/competencia.ts). Verde = data livre para o extra (exige
+    // saldo elegível ≥ +12h); vermelho = escolher um plantão real do mês para
+    // retirar (saldo elegível ≤ -12h). Turno de chefia NÃO entra aqui — tem
     // bloco próprio, sem relação com saldo.
-    const nowParts = getSaoPauloParts(new Date());
-    const isCurrentMonth = monthKey === `${nowParts.year}-${String(nowParts.month).padStart(2, "0")}`;
+    const competencia = await competenciaDoAutoatendimento({ doctorId: medicoId, monthKey, isAdmin });
+    const competenciaAberta = competencia.aberta;
     const settleBalance = resolveBankHoursSettlementBalance({
         oldMinutes: doctor?.legacy?.preMay2025Minutes ?? 0,
         recentMinutes: (doctor?.legacy?.spreadsheetPeriodMinutes ?? 0) + (doctor?.applicationBalanceMinutes ?? 0),
     });
-    const canBonus = isCurrentMonth
+    const canBonus = competenciaAberta
         && settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES;
-    const canPenalty = isCurrentMonth
+    const canPenalty = competenciaAberta
         && settleBalance.penaltyEligibleMinutes <= -BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES;
     const selfServiceShiftOptions: SelfServiceShiftOption[] = canPenalty
         ? board.payableShifts
@@ -229,11 +232,11 @@ export default async function PainelDoMedicoPage({
         : [];
 
     // Plantão de chefia: bloco separado, sem nenhuma relação com o banco de horas.
-    const podeDeclararChefia = isCurrentMonth ? await canDeclareChiefExtraShift(medicoId) : false;
+    const podeDeclararChefia = competenciaAberta ? await canDeclareChiefExtraShift(medicoId) : false;
     const plantoesDeChefia = podeDeclararChefia ? await loadChiefExtraShifts(medicoId, monthKey) : [];
 
     // O que ele mesmo declarou no mês — é o que ele pode trocar de dia/turno ou tirar.
-    const extrasDeclarados = isCurrentMonth ? await loadSelfDeclaredExtras(medicoId, monthKey) : [];
+    const extrasDeclarados = competenciaAberta ? await loadSelfDeclaredExtras(medicoId, monthKey) : [];
 
     // Crédito anterior a mai/2025 não paga nada (fora da régua do acerto), mas
     // segue no cálculo interno — só sai da VISÃO do médico para não inflar
@@ -259,6 +262,13 @@ export default async function PainelDoMedicoPage({
                 <p className="panel-hero-sub">{board.monthLabel}</p>
                 {mesNav}
             </header>
+
+            {competencia.erro ? (
+                <section className="panel-alert">
+                    <strong>Este mês não aceita mais lançamento seu.</strong>
+                    <span>{competencia.erro}</span>
+                </section>
+            ) : null}
 
             {pendencias.length > 0 ? (
                 <section className="panel-alert">
