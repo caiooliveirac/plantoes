@@ -1,6 +1,6 @@
 import { and, asc, between, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { adminExtraShifts, doctors } from "@/db/schema";
+import { adminExtraShifts, bankHoursSettlements, doctors } from "@/db/schema";
 
 export interface AdminExtraShiftRow {
     id: string;
@@ -101,28 +101,55 @@ export async function createAdminExtraShift(params: {
     };
 }
 
-/** Remove um plantão extra criado pelo admin. */
+/** Mensagem única do guard — a rota devolve isto ao admin, e o teste a fixa. */
+export const EXTRA_COM_ACERTO_ERROR =
+    "Este plantão nasceu de um acerto de banco de horas. Apagar só o plantão deixaria as 12h debitadas no saldo:"
+    + " para desfazer, estorne o acerto em /admin/bank-hours.";
+
+/**
+ * Remove um plantão extra criado pelo admin.
+ *
+ * RECUSA o extra que tem acerto de banco de horas casado. A FK
+ * `bank_hours_settlements.admin_extra_shift_id` é ON DELETE SET NULL: apagar
+ * só o plantão órfã o settlement e o débito de 12h fica de pé — o médico perde
+ * o plantão pago E continua devendo as horas. Desfazer esse par é ESTORNO
+ * (`reverseBankHoursSettlement`, exposto em /admin/bank-hours), que exige
+ * justificativa e deixa rastro.
+ *
+ * O autoatendimento do médico não passa por aqui: `deleteSelfDeclaredExtra`
+ * apaga o par inteiro na mesma transação.
+ */
 export async function removeAdminExtraShift(params: { id: string }): Promise<{
     removed: boolean;
     /** Quem e quando — o razão do saldo contratual precisa saber qual mês reconciliar. */
     doctorId: string | null;
     operationalDate: string | null;
 }> {
-    const db = getDb();
-    const deleted = await db
-        .delete(adminExtraShifts)
-        .where(eq(adminExtraShifts.id, params.id))
-        .returning({
-            id: adminExtraShifts.id,
-            doctorId: adminExtraShifts.doctorId,
-            operationalDate: adminExtraShifts.operationalDate,
-        });
+    return getDb().transaction(async (tx) => {
+        const [acerto] = await tx
+            .select({ id: bankHoursSettlements.id })
+            .from(bankHoursSettlements)
+            .where(eq(bankHoursSettlements.adminExtraShiftId, params.id))
+            .limit(1);
+        if (acerto) {
+            throw new Error(EXTRA_COM_ACERTO_ERROR);
+        }
 
-    return {
-        removed: deleted.length > 0,
-        doctorId: deleted[0]?.doctorId ?? null,
-        operationalDate: deleted[0]?.operationalDate ?? null,
-    };
+        const deleted = await tx
+            .delete(adminExtraShifts)
+            .where(eq(adminExtraShifts.id, params.id))
+            .returning({
+                id: adminExtraShifts.id,
+                doctorId: adminExtraShifts.doctorId,
+                operationalDate: adminExtraShifts.operationalDate,
+            });
+
+        return {
+            removed: deleted.length > 0,
+            doctorId: deleted[0]?.doctorId ?? null,
+            operationalDate: deleted[0]?.operationalDate ?? null,
+        };
+    });
 }
 
 /**
