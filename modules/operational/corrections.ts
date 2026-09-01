@@ -572,6 +572,55 @@ async function deleteInterventionOccupancyTx(tx: Executor, occupancy: typeof int
     return deleted;
 }
 
+/**
+ * Fecha (em vez de deletar) a ocupação de ORIGEM de um remanejamento: quem já
+ * estava fisicamente ali de fato esteve — apagar o registro reescreve o
+ * passado assim que a nova perna, no destino, nasce com started_at herdado do
+ * antigo (ver cloneOccupancyIntoTarget). O bank_hours_entries antigo não
+ * precisa ser deletado aqui: syncBankHoursByContinuityGroup já apaga e
+ * recalcula tudo do grupo (as duas pernas) logo em seguida.
+ *
+ * Também marca departure_confirmed_at: sem isso, isDepartureClosureAuthoritative
+ * (modules/bank-hours/continuity.ts) nunca fecha o span da cadeia — actual_ended_at
+ * setado sem confirmação de saída trava o cálculo de banco de horas pra sempre.
+ * A própria chefia executando o remanejamento já é, no mesmo ato, quem confirma
+ * que o médico saiu daquele posto — equivalente ao fluxo dedicado da rota de
+ * confirmação de saída (confirm-departure).
+ */
+async function closeOccupancyForTransferTx(tx: Executor, params: {
+    domain: OperationalDomain;
+    occupancyId: string;
+    closedAt: Date;
+    updatedByUserId?: string | null;
+}) {
+    if (params.domain === "regulation") {
+        await tx.update(regulationOccupancies)
+            .set({
+                endedAt: params.closedAt,
+                actualEndedAt: params.closedAt,
+                departureConfirmedAt: params.closedAt,
+                departureConfirmedByUserId: params.updatedByUserId ?? null,
+                departureConfirmedNote: "Saida por remanejamento administrativo.",
+                updatedAt: new Date(),
+                updatedByUserId: params.updatedByUserId ?? null,
+            })
+            .where(eq(regulationOccupancies.id, params.occupancyId));
+        return;
+    }
+
+    await tx.update(interventionOccupancies)
+        .set({
+            endedAt: params.closedAt,
+            actualEndedAt: params.closedAt,
+            departureConfirmedAt: params.closedAt,
+            departureConfirmedByUserId: params.updatedByUserId ?? null,
+            departureConfirmedNote: "Saida por remanejamento administrativo.",
+            updatedAt: new Date(),
+            updatedByUserId: params.updatedByUserId ?? null,
+        })
+        .where(eq(interventionOccupancies.id, params.occupancyId));
+}
+
 async function cloneOccupancyIntoTarget(tx: Executor, params: {
     source: OccupancySnapshot;
     /** Posto/base de ORIGEM do movimento — necessário para o carimbo de função
@@ -582,16 +631,28 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
     notes?: string | null;
     asShadow?: boolean | null;
     updatedByUserId?: string | null;
+    /**
+     * Momento em que o remanejamento de fato aconteceu — vira o started_at/
+     * board_started_at da nova ocupação no destino. NUNCA herdar
+     * params.source.startedAt aqui: source já estava fisicamente presente na
+     * ORIGEM desde aquele horário (é isso que o registro de origem, agora
+     * fechado em vez de deletado, preserva) — usar o started_at antigo pro
+     * destino reescreveria o passado, como se o médico sempre tivesse estado
+     * lá (caso Murilo Damasceno, IT30→CZ50, 14/08/2026: a correção "remanejado
+     * por furo na área" apagou a IT30 e fez CZ50 valer desde as 07:22,
+     * colidindo com o plantão real da Sadja Costa que já estava lá).
+     */
+    effectiveStartedAt: Date;
 }) {
     // Resolve notas e board conforme o status de sombra desejado no destino.
     const resolvedNotes = (params.asShadow === true || params.asShadow === false)
         ? applyShadowMarkerToOccupancyNotes(params.notes, params.asShadow)
         : (params.notes ?? null);
     // Sombra coexiste com board nulo (fica fora do índice one-active-board-per-target);
-    // titular/neutro recebe o board (setado a partir da origem ou da chegada).
+    // titular/neutro recebe o board a partir do momento real do remanejamento.
     const resolvedBoardStartedAt = params.asShadow === true
         ? null
-        : (params.source.boardStartedAt ?? params.source.startedAt);
+        : params.effectiveStartedAt;
     const cloneShiftLabel = params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
         ? params.source.shiftLabel
         : null;
@@ -613,7 +674,7 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
                 postId: params.destination.targetId,
                 scheduledStartAt: params.source.scheduledStartAt,
                 scheduledEndAt: params.source.scheduledEndAt,
-                startedAt: params.source.startedAt,
+                startedAt: params.effectiveStartedAt,
                 boardStartedAt: resolvedBoardStartedAt,
                 shiftLabel: params.source.shiftLabel,
                 roleLabel: applyOperationalRoleShiftPolicy({
@@ -644,7 +705,7 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
             baseId: params.destination.targetId,
             scheduledStartAt: params.source.scheduledStartAt,
             scheduledEndAt: params.source.scheduledEndAt,
-            startedAt: params.source.startedAt,
+            startedAt: params.effectiveStartedAt,
             boardStartedAt: resolvedBoardStartedAt,
             shiftLabel: params.source.shiftLabel,
             roleLabel: applyOperationalRoleShiftPolicy({
@@ -1238,6 +1299,10 @@ export async function transferOperationalOccupancy(
     updatedByUserId?: string | null,
 ) {
     await expireStaleRegulationOccupancies(new Date());
+    // Momento real do remanejamento — vira o fechamento de toda ocupação de
+    // origem e o started_at de toda ocupação nova criada nesta chamada. Nunca
+    // herdar o started_at antigo pro destino: ver cloneOccupancyIntoTarget.
+    const transferredAt = new Date();
 
     const db = getDb();
     const result = await db.transaction(async (tx) => {
@@ -1291,18 +1356,13 @@ export async function transferOperationalOccupancy(
         const touchedContinuityGroups = new Set<string>([source.continuityGroupId]);
         const affectedInterventionBases = new Set<number>();
 
-        if (source.domain === "regulation") {
-            const sourceRecord = await tx.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, source.id) });
-            if (!sourceRecord) {
-                throw new Error("Regulation occupancy not found.");
-            }
-            await deleteRegulationOccupancyTx(tx, sourceRecord);
-        } else {
-            const sourceRecord = await tx.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, source.id) });
-            if (!sourceRecord) {
-                throw new Error("Intervention occupancy not found.");
-            }
-            await deleteInterventionOccupancyTx(tx, sourceRecord);
+        await closeOccupancyForTransferTx(tx, {
+            domain: source.domain,
+            occupancyId: source.id,
+            closedAt: transferredAt,
+            updatedByUserId,
+        });
+        if (source.domain === "intervention") {
             affectedInterventionBases.add(source.targetId);
         }
 
@@ -1346,6 +1406,7 @@ export async function transferOperationalOccupancy(
                         }),
                     ),
                     updatedByUserId,
+                    effectiveStartedAt: transferredAt,
                 });
 
                 if (relocated.domain === "intervention") {
@@ -1370,18 +1431,17 @@ export async function transferOperationalOccupancy(
                 };
             }
 
-            if (displacedSnapshot.domain === "regulation") {
-                const displacedRecord = await tx.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, displacedSnapshot.id) });
-                if (!displacedRecord) {
-                    throw new Error("Regulation occupancy not found.");
-                }
-                await deleteRegulationOccupancyTx(tx, displacedRecord);
-            } else {
-                const displacedRecord = await tx.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, displacedSnapshot.id) });
-                if (!displacedRecord) {
-                    throw new Error("Intervention occupancy not found.");
-                }
-                await deleteInterventionOccupancyTx(tx, displacedRecord);
+            // Fecha (não deleta) a ocupação do deslocado no destino original —
+            // ele esteve lá de fato até agora, seja "retirado" (remove_destination)
+            // ou realocado pra um terceiro alvo acima (move_destination). Mesmo
+            // motivo do source principal: apagar o registro apaga o passado.
+            await closeOccupancyForTransferTx(tx, {
+                domain: displacedSnapshot.domain,
+                occupancyId: displacedSnapshot.id,
+                closedAt: transferredAt,
+                updatedByUserId,
+            });
+            if (displacedSnapshot.domain === "intervention") {
                 affectedInterventionBases.add(displacedSnapshot.targetId);
             }
         }
@@ -1401,6 +1461,7 @@ export async function transferOperationalOccupancy(
                 }),
             ),
             updatedByUserId,
+            effectiveStartedAt: transferredAt,
         });
 
         if (created.domain === "intervention") {

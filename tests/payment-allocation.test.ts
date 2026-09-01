@@ -78,11 +78,22 @@ test("buildPaymentAllocationBoardModel chooses a primary candidate and flags tar
         generatedAt: "2026-03-28T23:00:00.000Z",
     });
 
-    assert.equal(board.summary.totalTargets, 1);
+    // O vencedor (Bruno, admin_correction, prioridade de lock-in) fica na linha
+    // principal do alvo — mas Ana (titular real, telegram) não pode desaparecer
+    // sem rastro: ela ganha uma linha própria, também flagada needs_review pelo
+    // mesmo conflito, pro chefe decidir quem de fato cobriu o alvo (caso Sadja
+    // Costa vs Murilo Damasceno, CZ50, 14/08/2026 — ver board.service.ts,
+    // buildAdditionalShadowPaymentAllocationRows).
+    assert.equal(board.summary.totalTargets, 2);
     assert.equal(board.intervention[0]?.doctorName, "Bruno Lima");
     assert.equal(board.intervention[0]?.candidateCount, 2);
     assert.equal(board.intervention[0]?.paymentStatus, "needs_review");
     assert.match(board.intervention[0]?.issues.join(" ") ?? "", /Conflito entre medicos titulares/i);
+
+    const anaRow = board.intervention.find((row) => row.doctorName === "Ana Souza");
+    assert.ok(anaRow, "Ana nao pode desaparecer do pagamento so por ter perdido o conflito de alvo");
+    assert.equal(anaRow?.paymentStatus, "needs_review");
+    assert.match(anaRow?.issues.join(" ") ?? "", /Conflito entre medicos titulares/i);
 });
 
 test("buildPaymentAllocationBoardModel inclui titular e sombra como linhas pagaveis no mesmo alvo", () => {
@@ -930,6 +941,138 @@ test("buildPaymentAllocationBoardModel does not let a backdated telegram ghost t
     const taianeRow = board.intervention.find((row) => row.doctorName === "Taiane Pinto")
         ?? board.regulation.find((row) => row.doctorName === "Taiane Pinto");
     assert.ok(taianeRow, "Taiane deveria continuar na alocação de pagamento do PR03 SD");
+});
+
+test("uma correção manual (admin_correction) retrodatada não pode ghost-fechar o titular real de OUTRO alvo (caso Ana Luiza Alves, ramal 2154, 18/08/2026)", () => {
+    // Gerardson tem uma cadeia de continuidade que começa no ramal 1367 (SD) e
+    // segue pro 2154 (SN, "Continua do SD"). O registro de continuidade herda o
+    // started_at de ORIGEM da cadeia (07:11, quando ele chegou no 1367), mesmo o
+    // 2154 sendo, na prática, só ocupado por ele às 19:00. Sem a defesa (Frente 2
+    // estendida a admin_correction/manual), resolveSuccessorStartMap usava esse
+    // started_at herdado pra tratar Gerardson como "sucessor" de Ana Luiza no
+    // 2154 às 07:11 — encolhendo a presença real dela (chegou 06:59) a 12 minutos
+    // e derrubando-a como ruído (isLikelyNoise), mesmo o SD dela não tendo nada a
+    // ver com o SN do Gerardson.
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({ domain: "regulation", targetCode: "2154", targetLabel: "Ramal 2154", sortOrder: 22 })],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-ana-luiza",
+                domain: "regulation",
+                targetCode: "2154",
+                targetLabel: "Ramal 2154",
+                doctorId: "doc-ana-luiza",
+                doctorName: "Ana Luiza Andrade Alves",
+                displayName: "Ana Luiza Alves",
+                startedAt: "2026-08-18T09:59:00.000Z", // 06:59 SP
+                boardStartedAt: "2026-08-18T09:59:39.000Z",
+                endedAt: "2026-08-18T22:00:00.000Z",     // 19:00 SP
+                actualEndedAt: "2026-08-18T22:00:00.000Z",
+                scheduledStartAt: "2026-08-18T10:00:00.000Z",
+                scheduledEndAt: "2026-08-18T22:15:00.000Z",
+                continuityGroupId: "cg-ana-luiza",
+                shiftLabel: "SD",
+                source: "telegram",
+                notes: "Ana Luiza na 2154 SD",
+                createdAt: "2026-08-18T09:59:39.000Z",
+            }),
+            makeRow({
+                occupancyId: "occ-gerardson-2154",
+                domain: "regulation",
+                targetCode: "2154",
+                targetLabel: "Ramal 2154",
+                doctorId: "doc-gerardson",
+                doctorName: "Gerardson Macedo e Silva Souza",
+                displayName: "Gerardson Macedo",
+                // started_at herdado da origem da cadeia (1367, 07:11 SP) — não de
+                // quando ele de fato assumiu o 2154 (19:00 SP).
+                startedAt: "2026-08-18T10:11:00.000Z",
+                boardStartedAt: "2026-08-18T10:11:00.000Z",
+                endedAt: "2026-08-19T10:15:00.000Z",
+                actualEndedAt: "2026-08-19T10:15:00.000Z",
+                scheduledStartAt: "2026-08-18T22:00:00.000Z", // 19:00 SP — SN de fato
+                scheduledEndAt: "2026-08-19T10:15:00.000Z",
+                continuityGroupId: "cg-gerardson",
+                shiftLabel: "SN",
+                source: "admin_correction",
+                notes: "Continua do SD",
+                // Criado bem depois (20:26 SP) do started_at herdado (07:11 SP).
+                createdAt: "2026-08-18T23:26:00.000Z",
+            }),
+        ],
+        operationalDate: "2026-08-18T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-08-18T10:00:00.000Z",
+        endedAt: "2026-08-18T22:00:00.000Z",
+        generatedAt: "2026-08-19T00:00:00.000Z",
+    });
+
+    const anaLuizaRow = board.regulation.find((row) => row.doctorName === "Ana Luiza Andrade Alves");
+    assert.ok(anaLuizaRow, "Ana Luiza nao pode sumir do SD do ramal 2154 por causa do SN retrodatado do Gerardson");
+    assert.equal(anaLuizaRow?.paymentStatus, "ready_for_payment");
+    assert.deepEqual(anaLuizaRow?.issues, []);
+});
+
+test("titular real que perde um conflito de alvo pra outro titular fica visivel como needs_review, nao desaparece (caso Sadja Costa vs Murilo Damasceno, CZ50, 14/08/2026)", () => {
+    // Sadja fez o plantao real via Telegram (chegada 07:28, saida 20:40). Murilo
+    // tem uma correcao manual do chefe remanejando-o pro MESMO alvo (CZ50) o dia
+    // inteiro, criada as 20:52 — ja depois da Sadja ter saido. O motor da
+    // prioridade de lock-in pro admin_correction e Murilo vence o alvo, mas Sadja
+    // nao pode desaparecer do pagamento sem deixar rastro algum: ela precisa
+    // aparecer como needs_review, com o mesmo conflito flagado, pro chefe decidir.
+    const board = buildPaymentAllocationBoardModel({
+        targets: [makeTarget({ targetCode: "CZ50", targetLabel: "CZ50", sortOrder: 50 })],
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-sadja",
+                targetCode: "CZ50",
+                targetLabel: "CZ50",
+                doctorId: "doc-sadja",
+                doctorName: "Sadja Carolina Santos Costa",
+                displayName: "Sadja Costa",
+                startedAt: "2026-08-14T10:28:47.000Z", // 07:28 SP
+                boardStartedAt: "2026-08-14T10:28:47.000Z",
+                endedAt: "2026-08-14T23:40:09.000Z",    // 20:40 SP
+                actualEndedAt: "2026-08-14T23:40:09.000Z",
+                scheduledStartAt: "2026-08-14T10:00:00.000Z",
+                scheduledEndAt: "2026-08-14T22:00:00.000Z",
+                continuityGroupId: "cg-sadja",
+                source: "telegram",
+                notes: "Sadja Costa CZ50 SD",
+                createdAt: "2026-08-14T10:28:48.000Z",
+            }),
+            makeRow({
+                occupancyId: "occ-murilo",
+                targetCode: "CZ50",
+                targetLabel: "CZ50",
+                doctorId: "doc-murilo",
+                doctorName: "Murilo Candido do Monte Damasceno",
+                displayName: "Murilo Damasceno",
+                startedAt: "2026-08-14T10:22:10.000Z", // 07:22 SP
+                boardStartedAt: "2026-08-14T10:22:10.000Z",
+                endedAt: "2026-08-15T23:00:19.000Z",
+                actualEndedAt: "2026-08-15T23:00:19.000Z",
+                scheduledStartAt: "2026-08-14T10:00:00.000Z",
+                scheduledEndAt: "2026-08-15T10:00:00.000Z",
+                continuityGroupId: "cg-murilo",
+                source: "admin_correction",
+                notes: "Murilo Damasceno na IT30 P\nRemanejado de IT30 para CZ50. Motivo: FURO NA ÁREA",
+                createdAt: "2026-08-14T23:52:36.000Z", // 20:52 SP
+            }),
+        ],
+        operationalDate: "2026-08-14T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-08-14T10:00:00.000Z",
+        endedAt: "2026-08-14T22:00:00.000Z",
+        generatedAt: "2026-08-15T00:00:00.000Z",
+    });
+
+    const muriloRow = board.intervention.find((row) => row.doctorName === "Murilo Candido do Monte Damasceno");
+    const sadjaRow = board.intervention.find((row) => row.doctorName === "Sadja Carolina Santos Costa");
+    assert.ok(muriloRow, "Murilo deveria vencer o lock-in do admin_correction");
+    assert.ok(sadjaRow, "Sadja nao pode desaparecer do pagamento so por ter perdido o conflito de alvo");
+    assert.equal(sadjaRow?.paymentStatus, "needs_review");
+    assert.match(sadjaRow?.issues.join(" ") ?? "", /Conflito entre medicos titulares/i);
 });
 // ---------------------------------------------------------------------------
 // P noturno (continuidade) NÃO pode virar SD fantasma no dia seguinte quando o
