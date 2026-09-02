@@ -251,6 +251,10 @@ function collapseDuplicateMonthlyReportShifts(shifts: RawMonthlyReportShift[]) {
     });
 }
 
+// Abril/2026: primeiro mês fechado por este app (regulation_occupancies começa em 2026-04-01).
+const FIRST_REPORT_YEAR = 2026;
+const FIRST_REPORT_MONTH_INDEX = 3;
+
 export function resolveMonthlyReportRange(monthKey?: string | null, reference = new Date()) {
     const fallback = startOfUtcMonth(reference.getUTCFullYear(), reference.getUTCMonth());
     const parsed = monthKey?.match(/^(\d{4})-(\d{2})$/);
@@ -261,13 +265,20 @@ export function resolveMonthlyReportRange(monthKey?: string | null, reference = 
     const nextMonthAnchor = startOfUtcMonth(monthAnchor.getUTCFullYear(), monthAnchor.getUTCMonth() + 1);
     const monthEnd = fromSaoPauloClockParts(nextMonthAnchor.getUTCFullYear(), nextMonthAnchor.getUTCMonth() + 1, 1, 7, 0);
 
-    const presetMonths = Array.from({ length: 3 }, (_, index) => {
+    // Do mês corrente até o primeiro mês com fechamento neste app (mínimo 3),
+    // para que maio/junho não sumam do seletor conforme o ano avança.
+    const monthsSinceFirst = (fallback.getUTCFullYear() - FIRST_REPORT_YEAR) * 12
+        + (fallback.getUTCMonth() - FIRST_REPORT_MONTH_INDEX) + 1;
+    const presetMonths = Array.from({ length: Math.max(3, monthsSinceFirst) }, (_, index) => {
         const date = startOfUtcMonth(fallback.getUTCFullYear(), fallback.getUTCMonth() - index);
         return {
             key: toMonthKey(date),
             label: formatMonthLabel(date),
         };
     });
+    if (!presetMonths.some((preset) => preset.key === toMonthKey(monthAnchor))) {
+        presetMonths.push({ key: toMonthKey(monthAnchor), label: formatMonthLabel(monthAnchor) });
+    }
 
     return {
         monthKey: toMonthKey(monthAnchor),
