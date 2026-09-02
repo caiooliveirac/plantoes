@@ -69,6 +69,17 @@ test("resolveMonthlyReportRange normalizes month keys and presets", () => {
     assert.equal(result.presetMonths[0]?.key, "2026-03");
 });
 
+test("resolveMonthlyReportRange lists every month back to abril/2026 and keeps the selected one", () => {
+    const september = resolveMonthlyReportRange(null, new Date("2026-09-02T12:00:00.000Z"));
+    assert.deepEqual(
+        september.presetMonths.map((preset) => preset.key),
+        ["2026-09", "2026-08", "2026-07", "2026-06", "2026-05", "2026-04"],
+    );
+
+    const older = resolveMonthlyReportRange("2026-02", new Date("2026-09-02T12:00:00.000Z"));
+    assert.equal(older.presetMonths.at(-1)?.key, "2026-02");
+});
+
 test("resolveMonthlyReportRange includes the last night shift of the month", () => {
     const result = resolveMonthlyReportRange("2026-03", new Date("2026-04-01T02:30:00.000Z"));
 

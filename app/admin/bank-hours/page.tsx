@@ -44,7 +44,7 @@ export default async function AdminBankHoursPage() {
 
     const history = await getBankHoursHistory();
     // Meses de fechamento onde o acerto (plantão verde/vermelho) pode ser lançado:
-    // mês corrente + 2 anteriores, igual ao seletor do payment-closing.
+    // do mês corrente até abril/2026, igual ao seletor do payment-closing.
     const settlementMonths = resolveMonthlyReportRange(null).presetMonths;
     return (
         <BankHoursHistoryClient
