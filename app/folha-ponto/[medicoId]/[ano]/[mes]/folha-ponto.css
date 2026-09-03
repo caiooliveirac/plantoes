@@ -134,12 +134,15 @@
     }
 }
 
+/* Cabeçalho compacto: título e logos menores para a folha de frequência caber
+   numa página só. Antes (22pt + logo de 22mm) o título quebrava em duas linhas
+   nos meses longos (FEVEREIRO, SETEMBRO) e empurrava o rodapé para a 2ª folha. */
 .fp-cabecalho {
     display: grid;
     grid-template-columns: auto 1fr auto;
     align-items: center;
-    gap: 6mm;
-    margin-bottom: 4mm;
+    gap: 5mm;
+    margin-bottom: 3mm;
 }
 
 .fp-cabecalho-esq {
@@ -150,21 +153,21 @@
 }
 
 .fp-cabecalho-secretaria {
-    font-size: 9pt;
+    font-size: 8pt;
     font-weight: 700;
     text-align: left;
 }
 
 .fp-cabecalho-logo-salvador {
-    width: 42mm;
-    max-height: 14mm;
+    width: 30mm;
+    max-height: 10mm;
     object-fit: contain;
     display: block;
 }
 
 .fp-cabecalho-logo-samu {
-    width: 22mm;
-    max-height: 22mm;
+    width: 14mm;
+    max-height: 14mm;
     object-fit: contain;
     display: block;
     margin-left: auto;
@@ -172,9 +175,10 @@
 
 .fp-titulo {
     text-align: center;
-    font-size: 22pt;
+    font-size: 14pt;
     font-weight: 400;
     margin: 0;
+    white-space: nowrap;
 }
 
 .fp-titulo strong {
@@ -189,7 +193,7 @@
 
 .fp-meta-pg1 {
     padding: 0;
-    margin-bottom: 4mm;
+    margin-bottom: 3mm;
 }
 
 .fp-meta-grid {
@@ -248,18 +252,18 @@
 }
 
 .fp-tabela-freq thead th {
-    height: 7mm;
+    height: 6mm;
     background: #fff;
     text-align: center;
     font-weight: 700;
     padding: 0 2mm;
-    font-size: 10pt;
+    font-size: 9pt;
 }
 
 .fp-tabela-freq tbody td {
-    height: 5.5mm;
+    height: 5.2mm;
     padding: 0 2mm;
-    font-size: 9.5pt;
+    font-size: 9pt;
     vertical-align: middle;
 }
 
@@ -303,7 +307,7 @@
 }
 
 .fp-tabela-relatorio tbody tr {
-    height: 6mm;
+    height: 5.5mm;
 }
 
 .fp-tabela-relatorio .fp-dia {
@@ -321,7 +325,7 @@
     /* min-height, não height: com altura fixa a data transbordava a caixa e a
        borda inferior cortava o texto ao meio. */
     min-height: 11mm;
-    margin-top: 5mm;
+    margin-top: 4mm;
     padding: 2mm 3mm;
     display: flex;
     flex-direction: column;
@@ -331,7 +335,7 @@
 .fp-linha-assinatura-pg1 {
     border-bottom: 1px solid #000;
     width: 100%;
-    margin-top: 8mm;
+    margin-top: 7mm;
     height: 0;
 }
 
@@ -365,8 +369,8 @@
 }
 
 .fp-cabecalho-logo-relatorio {
-    width: 58mm;
-    max-height: 18mm;
+    width: 44mm;
+    max-height: 13mm;
     object-fit: contain;
     display: block;
 }
@@ -383,7 +387,7 @@
 
 .fp-titulo-bar h2 {
     margin: 0;
-    font-size: 12pt;
+    font-size: 11pt;
     text-transform: uppercase;
 }
 
