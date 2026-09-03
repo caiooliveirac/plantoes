@@ -290,11 +290,34 @@ function PayrollWaterfall({ payroll }: { payroll: PayrollDeductionForMonth }) {
                 </div>
             )}
 
-            {payroll.steps.length > 0 ? (
+            {isEmpty ? null : (
                 <ol className="hours-payroll-steps">
+                    <li className="opening">
+                        <span className="hours-payroll-step-when">Prévio</span>
+                        <span className="hours-payroll-step-text">saldo que veio dos meses anteriores</span>
+                        <span className={`hours-balance-pill ${openingClass}`}>{formatSignedMinutes(payroll.openingBalanceMinutes)}</span>
+                    </li>
+                    {payroll.creditSteps.map((step, index) => (
+                        <li key={`c-${step.startedAt ?? index}`} className="credit">
+                            <span className="hours-payroll-step-when">{step.startedAt ? formatShortDate(step.startedAt) : `crédito ${index + 1}`}</span>
+                            <span className="hours-payroll-step-bank">banco {formatSignedMinutes(step.bankBeforeMinutes)}</span>
+                            <span className="hours-balance-pill positive">{formatSignedMinutes(step.balanceMinutes)}</span>
+                            <span className="hours-payroll-step-split"><em className="credit">entra no banco</em></span>
+                            <span className="hours-payroll-step-after">→ banco {formatSignedMinutes(step.bankAfterMinutes)}</span>
+                        </li>
+                    ))}
+                    <li className="available">
+                        <span className="hours-payroll-step-when">Disponível</span>
+                        <span className="hours-payroll-step-text">
+                            {payroll.creditSteps.length > 0
+                                ? `prévio + ${formatPayrollMinutes(payroll.creditMinutes)} de crédito, antes de qualquer débito`
+                                : "sem crédito neste mês — o banco entra nos débitos como estava"}
+                        </span>
+                        <span className={`hours-balance-pill ${availableClass}`}>{formatSignedMinutes(payroll.availableMinutes)}</span>
+                    </li>
                     {payroll.steps.map((step, index) => (
-                        <li key={`${step.startedAt ?? "s"}-${index}`} className={step.crossedZero ? "crossed" : ""}>
-                            <span className="hours-payroll-step-when">{step.startedAt ? formatShortDate(step.startedAt) : `#${index + 1}`}</span>
+                        <li key={`d-${step.startedAt ?? index}`} className={`debit ${step.crossedZero ? "crossed" : ""}`.trim()}>
+                            <span className="hours-payroll-step-when">{step.startedAt ? formatShortDate(step.startedAt) : `débito ${index + 1}`}</span>
                             <span className="hours-payroll-step-bank">banco {formatSignedMinutes(step.bankBeforeMinutes)}</span>
                             <span className="hours-balance-pill negative">{formatSignedMinutes(step.balanceMinutes)}</span>
                             <span className="hours-payroll-step-split">
@@ -305,8 +328,17 @@ function PayrollWaterfall({ payroll }: { payroll: PayrollDeductionForMonth }) {
                             <span className="hours-payroll-step-after">→ banco {formatSignedMinutes(step.bankAfterMinutes)}</span>
                         </li>
                     ))}
+                    <li className="closing">
+                        <span className="hours-payroll-step-when">Depois</span>
+                        <span className="hours-payroll-step-text">
+                            {payroll.payrollMinutes > 0
+                                ? `banco fecha o mês assim; ${formatPayrollMinutes(payroll.payrollMinutes)} vão à folha`
+                                : "banco fecha o mês assim; nada vai à folha"}
+                        </span>
+                        <span className={`hours-balance-pill ${closingClass}`}>{formatSignedMinutes(payroll.closingBankMinutes)}</span>
+                    </li>
                 </ol>
-            ) : null}
+            )}
         </section>
     );
 }
@@ -1359,9 +1391,9 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                 </div>
                             </header>
 
-                            <section className="hours-events-panel">
-                                <div className="hours-events-header">
-                                    <span className="hours-proof-label">O que mexeu no saldo</span>
+                            <details className="hours-events-panel">
+                                <summary className="hours-events-header">
+                                    <span className="hours-proof-label">O que mexeu no saldo <small>· clique para expandir</small></span>
                                     {selectedDoctorTotals ? (
                                         <div className="hours-events-chips">
                                             {selectedDoctorTotals.delayCount > 0 && (
@@ -1381,7 +1413,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                             )}
                                         </div>
                                     ) : null}
-                                </div>
+                                </summary>
 
                                 {selectedDoctorEvents.length === 0 ? (
                                     <p className="hours-events-empty">
@@ -1413,7 +1445,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                         ))}
                                     </ul>
                                 )}
-                            </section>
+                            </details>
 
                             {selectedDoctor.legacy ? (
                                 <section className="hours-settlements">
