@@ -3418,6 +3418,36 @@ button.ops-doctor-line.displaced.clickable:hover {
 .hours-payroll-step-split em.payroll { background: rgba(255, 184, 77, 0.18); color: #ffd98a; }
 .hours-payroll-step-split small { color: #ffb84d; }
 
+/* Painel "O que mexeu no saldo" recolhido por padrão. */
+details.hours-events-panel > summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+details.hours-events-panel > summary::-webkit-details-marker { display: none; }
+
+details.hours-events-panel > summary .hours-proof-label small {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    opacity: 0.6;
+}
+
+details.hours-events-panel[open] > summary .hours-proof-label small { opacity: 0.35; }
+
+.hours-payroll-steps li.opening,
+.hours-payroll-steps li.available,
+.hours-payroll-steps li.closing {
+    background: rgba(255, 255, 255, 0.06);
+    font-weight: 700;
+}
+
+.hours-payroll-steps li.credit { border-left: 3px solid #23c986; }
+.hours-payroll-steps li.debit { border-left: 3px solid #ff5d6c; }
+.hours-payroll-steps li.available { border-left: 3px solid rgba(255, 255, 255, 0.35); }
+.hours-payroll-step-text { flex: 1; color: var(--muted-strong); font-weight: 400; }
+.hours-payroll-step-split em.credit { background: rgba(35, 201, 134, 0.18); color: #d8ffeb; }
+
 /* Seletor de mês na faixa de comando: ‹ mês › */
 .hours-month-picker {
     display: inline-flex;

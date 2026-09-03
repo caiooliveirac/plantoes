@@ -59,6 +59,15 @@ export interface PayrollSettlementInput {
     deltaMinutes: number;
 }
 
+/** Um crédito do mês e o banco antes/depois dele (entra ANTES de qualquer débito). */
+export interface PayrollCreditStep {
+    startedAt: string | null;
+    /** Saldo do plantão (> 0). */
+    balanceMinutes: number;
+    bankBeforeMinutes: number;
+    bankAfterMinutes: number;
+}
+
 /** Um débito do mês e como ele foi repartido entre banco e folha. */
 export interface PayrollDebitStep {
     startedAt: string | null;
@@ -99,6 +108,8 @@ export interface PayrollDeductionForMonth {
     remainingMinutes: number;
     /** Ainda há parcela do mês devida à folha sem abatimento registrado. */
     pending: boolean;
+    /** Créditos em ordem cronológica, com o banco antes/depois (para o diagrama). */
+    creditSteps: PayrollCreditStep[];
     /** Débitos em ordem cronológica, com a repartição de cada um (para o diagrama). */
     steps: PayrollDebitStep[];
 }
@@ -140,22 +151,32 @@ export function resolvePayrollDeductionForMonth(params: {
     let negativeShiftCount = 0;
     let negativeMinutes = 0;
     const debits: PayrollShiftInput[] = [];
+    const credits: PayrollShiftInput[] = [];
     for (const shift of params.shifts) {
         if (shift.monthKey !== params.monthKey) continue;
         const balance = shift.balanceMinutes ?? 0;
         if (balance > 0) {
             creditShiftCount += 1;
             creditMinutes += balance;
+            credits.push(shift);
         } else if (balance < 0) {
             negativeShiftCount += 1;
             negativeMinutes += balance;
             debits.push(shift);
         }
     }
-    debits.sort((left, right) => (left.startedAt ?? "").localeCompare(right.startedAt ?? ""));
+    const byStart = (left: PayrollShiftInput, right: PayrollShiftInput) => (left.startedAt ?? "").localeCompare(right.startedAt ?? "");
+    debits.sort(byStart);
+    credits.sort(byStart);
 
-    const availableMinutes = params.openingBalanceMinutes + creditMinutes;
-    let bank = availableMinutes;
+    const creditSteps: PayrollCreditStep[] = [];
+    let bank = params.openingBalanceMinutes;
+    for (const shift of credits) {
+        const balance = shift.balanceMinutes ?? 0;
+        creditSteps.push({ startedAt: shift.startedAt ?? null, balanceMinutes: balance, bankBeforeMinutes: bank, bankAfterMinutes: bank + balance });
+        bank += balance;
+    }
+    const availableMinutes = bank;
     let absorbedMinutes = 0;
     let payrollMinutes = 0;
     const steps: PayrollDebitStep[] = [];
@@ -214,6 +235,7 @@ export function resolvePayrollDeductionForMonth(params: {
         abatedMinutes,
         remainingMinutes,
         pending: remainingMinutes < 0,
+        creditSteps,
         steps,
     };
 }

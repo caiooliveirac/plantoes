@@ -48,6 +48,9 @@ test("exemplo da regra: prévio -2h, créditos +6h, débito -5h → 4h do banco,
         settlements: [],
     });
     assert.equal(result.availableMinutes, 240);
+    assert.deepEqual(result.creditSteps, [
+        { startedAt: shift(360, 2).startedAt, balanceMinutes: 360, bankBeforeMinutes: -120, bankAfterMinutes: 240 },
+    ]);
     assert.equal(result.absorbedMinutes, 240);
     assert.equal(result.payrollMinutes, 60);
     assert.equal(result.closingBankMinutes, 0);
