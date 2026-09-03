@@ -1372,3 +1372,152 @@ test("registro sem titularidade não paga de novo quem já é titular em outra p
     const doGerardson = board.regulation.filter((row) => row.doctorName === "Gerardson Macedo");
     assert.equal(doGerardson.length, 1, "um plantão por turno, não dois");
 });
+
+test("mesmo medico em dois ramais no mesmo turno: paga so o que chegou primeiro e marca o outro como duplicado", () => {
+    const targets = [
+        makeTarget({ domain: "regulation", targetCode: "2154", targetLabel: "Ramal 2154", sortOrder: 1 }),
+        makeTarget({ domain: "regulation", targetCode: "2032", targetLabel: "Ramal 2032", sortOrder: 2 }),
+    ];
+    // Caso Matheus Libório 26/08/2026, ocupações reais: sombra SD no 2154 (titular Kêmylla);
+    // noturna do 2032 retroagida para 07:00 pela chefia (titular do SD lá era Ana Luiza).
+    const rawRows = [
+        makeRow({
+            occupancyId: "occ-ana-2032",
+            domain: "regulation",
+            targetCode: "2032",
+            targetLabel: "Ramal 2032",
+            doctorId: "doc-ana",
+            doctorName: "Ana Luiza",
+            displayName: "Ana Luiza",
+            continuityGroupId: "cg-ana",
+            startedAt: "2026-08-26T09:49:15.000Z",
+            boardStartedAt: "2026-08-26T09:49:15.000Z",
+            endedAt: "2026-08-26T21:30:40.000Z",
+            actualEndedAt: "2026-08-26T21:30:40.000Z",
+            scheduledStartAt: "2026-08-26T10:00:00.000Z",
+            scheduledEndAt: "2026-08-26T22:15:00.000Z",
+            notes: "Ana Luiza na 2032 SD",
+            createdAt: "2026-08-26T09:49:16.000Z",
+        }),
+        makeRow({
+            occupancyId: "occ-2032",
+            domain: "regulation",
+            targetCode: "2032",
+            targetLabel: "Ramal 2032",
+            startedAt: "2026-08-26T10:00:00.000Z",
+            boardStartedAt: "2026-08-26T10:00:00.000Z",
+            endedAt: "2026-08-27T10:15:00.000Z",
+            actualEndedAt: "2026-08-27T10:15:00.000Z",
+            scheduledStartAt: "2026-08-26T10:00:00.000Z",
+            scheduledEndAt: "2026-08-27T10:15:00.000Z",
+            shiftLabel: "P",
+            notes: "ESTAVANOPLANTAO",
+            createdAt: "2026-08-26T21:31:01.000Z",
+        }),
+        makeRow({
+            occupancyId: "occ-2154",
+            domain: "regulation",
+            targetCode: "2154",
+            targetLabel: "Ramal 2154",
+            startedAt: "2026-08-26T09:53:57.000Z",
+            boardStartedAt: null,
+            endedAt: "2026-08-26T21:30:40.000Z",
+            actualEndedAt: "2026-08-26T21:30:40.000Z",
+            scheduledStartAt: "2026-08-26T10:00:00.000Z",
+            scheduledEndAt: "2026-08-26T22:15:00.000Z",
+            notes: "[telegram sombra] Matheus Libório sombra SD  2154",
+            createdAt: "2026-08-26T09:53:58.000Z",
+        }),
+        makeRow({
+            occupancyId: "occ-kemylla-2154",
+            domain: "regulation",
+            targetCode: "2154",
+            targetLabel: "Ramal 2154",
+            doctorId: "doc-kemylla",
+            doctorName: "Kêmylla",
+            displayName: "Kêmylla",
+            continuityGroupId: "cg-kemylla",
+            startedAt: "2026-08-26T10:31:00.000Z",
+            boardStartedAt: "2026-08-26T10:31:00.000Z",
+            endedAt: "2026-08-26T22:15:00.000Z",
+            actualEndedAt: "2026-08-26T22:15:00.000Z",
+            scheduledStartAt: "2026-08-26T10:00:00.000Z",
+            scheduledEndAt: "2026-08-26T22:15:00.000Z",
+            notes: "Kemylla na 2154 SD",
+            createdAt: "2026-08-26T10:31:07.000Z",
+        }),
+    ];
+
+    const sd = buildPaymentAllocationBoardModel({
+        targets,
+        rawRows,
+        operationalDate: "2026-08-26T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-08-26T10:00:00.000Z",
+        endedAt: "2026-08-26T22:00:00.000Z",
+        generatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    const matheusSd = sd.regulation.filter((row) => row.doctorId === "doc-1" && row.occupancyId);
+    assert.equal(matheusSd.length, 1, "um SD so, nao dois");
+    assert.equal(matheusSd[0]!.paymentStatus, "needs_review");
+    assert.ok(matheusSd[0]!.issues.some((issue) => issue.startsWith("Tambem consta em")));
+    // Titulares reais dos dois ramais seguem pagos.
+    assert.ok(sd.regulation.some((row) => row.occupancyId === "occ-ana-2032"));
+    assert.ok(sd.regulation.some((row) => row.occupancyId === "occ-kemylla-2154"));
+
+    // A noturna do 2032 continua pagando normalmente: nao ha duplicata no SN.
+    const sn = buildPaymentAllocationBoardModel({
+        targets,
+        rawRows,
+        operationalDate: "2026-08-26T15:00:00.000Z",
+        shiftLabel: "SN",
+        startedAt: "2026-08-26T22:00:00.000Z",
+        endedAt: "2026-08-27T10:00:00.000Z",
+        generatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    const sn2032 = sn.regulation.find((row) => row.targetCode === "2032")!;
+    assert.equal(sn2032.occupancyId, "occ-2032");
+    assert.ok(!sn2032.issues.some((issue) => issue.includes("Tambem consta")));
+});
+
+test("remanejo real no meio do turno (janelas sem sobreposicao) nao e tratado como duplicado", () => {
+    const targets = [
+        makeTarget({ domain: "regulation", targetCode: "2151", targetLabel: "Ramal 2151", sortOrder: 1 }),
+        makeTarget({ domain: "regulation", targetCode: "2154", targetLabel: "Ramal 2154", sortOrder: 2 }),
+    ];
+    const board = buildPaymentAllocationBoardModel({
+        targets,
+        rawRows: [
+            makeRow({
+                occupancyId: "occ-a",
+                domain: "regulation",
+                targetCode: "2151",
+                targetLabel: "Ramal 2151",
+                startedAt: "2026-08-26T10:00:00.000Z",
+                boardStartedAt: "2026-08-26T10:00:00.000Z",
+                endedAt: "2026-08-26T16:00:00.000Z",
+                actualEndedAt: "2026-08-26T16:00:00.000Z",
+                scheduledStartAt: "2026-08-26T10:00:00.000Z",
+                scheduledEndAt: "2026-08-26T22:15:00.000Z",
+            }),
+            makeRow({
+                occupancyId: "occ-b",
+                domain: "regulation",
+                targetCode: "2154",
+                targetLabel: "Ramal 2154",
+                startedAt: "2026-08-26T16:00:00.000Z",
+                boardStartedAt: "2026-08-26T16:00:00.000Z",
+                endedAt: "2026-08-26T22:15:00.000Z",
+                actualEndedAt: "2026-08-26T22:15:00.000Z",
+                scheduledStartAt: "2026-08-26T10:00:00.000Z",
+                scheduledEndAt: "2026-08-26T22:15:00.000Z",
+            }),
+        ],
+        operationalDate: "2026-08-26T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-08-26T10:00:00.000Z",
+        endedAt: "2026-08-26T22:00:00.000Z",
+        generatedAt: "2026-08-28T00:00:00.000Z",
+    });
+    assert.ok(board.regulation.every((row) => !row.issues.some((issue) => issue.startsWith("Duplicado:"))));
+});

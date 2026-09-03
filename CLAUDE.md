@@ -91,6 +91,11 @@ telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
   documentadas — ver [docs/saldo-contrato/README.md](docs/saldo-contrato/README.md).
 - `modules/reporting/` — turnos pagáveis, histórico de banco de horas, relatório mensal
   (inclui exportação XLSX)
+  > ⚠️ **Risco financeiro.** Um médico recebe no máximo um plantão por slot de 12h,
+  > mesmo registrado em dois alvos (`suppressSameDoctorDuplicateRows` em
+  > `services/board.service.ts`). Regra e cenários em
+  > [docs/adr/006-one-payment-per-doctor-slot.md](docs/adr/006-one-payment-per-doctor-slot.md);
+  > `tests/payment-duplicate-guard.test.ts` é o guarda no CI — não relaxe sem ler o ADR.
 - `modules/telegram/` — o maior módulo do repo; `service.ts` é um "god module" de
   ~12k linhas que roteia toda a lógica do bot (parsing, comandos, meal breaks,
   lembretes, pagamento). Está fragmentado em vários arquivos auxiliares
