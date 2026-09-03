@@ -20,6 +20,7 @@ import {
     type BankHoursPendingRow,
 } from "@/modules/bank-hours/pending-actions";
 import { getSaoPauloParts } from "@/modules/operational/board-rules";
+import { resolveDoctorEmploymentType } from "@/modules/reporting/payable-shifts";
 import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
@@ -66,12 +67,20 @@ export async function loadBankHoursPendingRows(): Promise<BankHoursPendingRow[]>
     if (pending.length === 0) return [];
 
     const nameRows = await getDb()
-        .select({ id: doctors.id, fullName: doctors.fullName, displayName: doctors.displayName })
+        .select({ id: doctors.id, fullName: doctors.fullName, displayName: doctors.displayName, metadata: doctors.metadata })
         .from(doctors)
         .where(inArray(doctors.id, pending.map((row) => row.doctorId)));
     const nameById = new Map(nameRows.map((row) => [row.id, row.displayName?.trim() || row.fullName]));
+    // Estatutário não recebe plantão vermelho: o atraso dele é abatido em folha,
+    // mês a mês, na tela do banco de horas (modules/bank-hours/payroll.ts). Pedir
+    // "retirar plantão" no resumo seria orientar o admin a fazer o acerto errado.
+    const estatutarios = new Set(
+        nameRows.filter((row) => resolveDoctorEmploymentType(row.metadata) === "estatutario").map((row) => row.id),
+    );
 
-    const ordered = pending.sort((left, right) => Math.abs(right.eligibleMinutes) - Math.abs(left.eligibleMinutes));
+    const ordered = pending
+        .filter((row) => !(row.direction === "penalty" && estatutarios.has(row.doctorId)))
+        .sort((left, right) => Math.abs(right.eligibleMinutes) - Math.abs(left.eligibleMinutes));
 
     // Os plantões que sustentam cada pendência, contados em português. Sem eles o
     // aviso trazia só o total, e não dava para farejar um bônus nascido de

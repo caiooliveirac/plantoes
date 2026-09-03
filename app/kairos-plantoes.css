@@ -1890,6 +1890,94 @@
     color: var(--vermelho-700);
 }
 
+.pagina-kairos .hours-settlement-row.payroll {
+    background: var(--ambar-50);
+}
+
+.pagina-kairos .hours-settlement-row.payroll .hours-settlement-tag {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .hours-payroll-action {
+    border-color: var(--ambar-200);
+}
+
+.pagina-kairos .payment-button.bank-payroll {
+    border-color: var(--ambar-600);
+    color: var(--ambar-700);
+    background: var(--ambar-50);
+}
+
+/* Card do médico (cabeçalho clicável + plantões do mês) e grupos de mês. */
+.pagina-kairos .hours-doctor-card-head > div > span,
+.pagina-kairos .hours-month-strip-header,
+.pagina-kairos .hours-month-shift-turn,
+.pagina-kairos .hours-month-shift-place small,
+.pagina-kairos .hours-directory-month,
+.pagina-kairos .hours-filter-label,
+.pagina-kairos .hours-month-group-header > div > span {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-month-strip {
+    border-top: 1px dashed var(--borda);
+}
+
+.pagina-kairos .hours-month-strip-title {
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .hours-month-strip-empty,
+.pagina-kairos .hours-month-divider {
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-month-shift-row,
+.pagina-kairos .hours-payroll-row {
+    border: 1px solid var(--borda);
+    border-left-width: 3px;
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-month-shift-row:hover,
+.pagina-kairos .hours-month-shift-row:focus-visible,
+.pagina-kairos .hours-payroll-row:hover,
+.pagina-kairos .hours-payroll-row:focus-visible {
+    background: var(--superficie-recuada);
+}
+
+.pagina-kairos .hours-month-shift-row.positive {
+    border-left-color: var(--verde-600);
+}
+
+.pagina-kairos .hours-month-shift-row.negative,
+.pagina-kairos .hours-payroll-row {
+    border-left-color: var(--vermelho-600);
+}
+
+.pagina-kairos .hours-month-shift-row.neutral {
+    border-left-color: var(--borda);
+}
+
+.pagina-kairos .hours-month-step {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .hours-month-group-header {
+    border: 1px solid var(--borda);
+    background: var(--superficie);
+}
+
+.pagina-kairos .hours-month-group.current .hours-month-group-header {
+    border-color: var(--ambar-600);
+}
+
+.pagina-kairos .hours-doctor-card-open:focus-visible {
+    outline-color: var(--ambar-600);
+}
+
 .pagina-kairos .hours-settlement-notes {
     color: var(--texto-forte);
 }

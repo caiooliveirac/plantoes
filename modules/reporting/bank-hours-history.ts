@@ -96,6 +96,12 @@ export interface BankHoursHistoryShift extends RawBankHoursHistoryShift {
     workedMinutes: number | null;
     countedStartAt: string | null;
     countedEndAt: string | null;
+    /**
+     * Mês operacional do plantão (AAAA-MM, fuso de São Paulo), pela janela
+     * programada do banco: o SN que começou à 1h da manhã do dia 1º pertence ao
+     * mês anterior, como no fechamento. É a chave do seletor de mês da tela.
+     */
+    monthKey: string;
     proof: BankHoursProof;
     /** Quem assumiu o posto/base na rendição, quando identificável. */
     successorDoctorName: string | null;
@@ -127,10 +133,18 @@ export interface BankHoursLegacyDoctorRecord extends BankHoursLegacySummary {
     displayName: string | null;
 }
 
+/**
+ * Vínculo do médico. "estatutario" é pago pela folha da prefeitura: saldo
+ * negativo do banco é abatido em folha (modules/bank-hours/payroll.ts), não
+ * vira plantão vermelho. Default "pj" — ver resolveDoctorEmploymentType.
+ */
+export type BankHoursEmploymentType = "pj" | "estatutario";
+
 export interface BankHoursDoctorHistory {
     doctorId: string;
     doctorName: string;
     displayName: string | null;
+    employmentType: BankHoursEmploymentType;
     shiftCount: number;
     workedMinutes: number;
     /** Saldo EFETIVO: apurado pela aplicação + acertos + saldo legado da planilha. */
@@ -158,7 +172,8 @@ export { resolveBankHoursSettlementBalance, type BankHoursSettlementBalance } fr
 export interface BankHoursSettlementSummary {
     id: string;
     monthKey: string;
-    kind: "bonus" | "penalty";
+    /** "payroll" = abatimento em folha do estatutário (sem plantão verde/vermelho). */
+    kind: "bonus" | "penalty" | "payroll";
     deltaMinutes: number;
     operationalDate: string | null;
     notes: string;
@@ -252,6 +267,28 @@ function formatLocalTime(value: string | null) {
     }
 
     return LOCAL_TIME_FORMAT.format(new Date(value));
+}
+
+const MONTH_KEY_FORMAT = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    timeZone: SAO_PAULO_TIME_ZONE,
+});
+
+/**
+ * Mês operacional (AAAA-MM em São Paulo) do plantão. Usa a janela programada
+ * do banco quando existe (um SN que começou atrasado, à 1h do dia 1º, tem
+ * janela às 19h do dia anterior); sem janela, cai na janela operacional do
+ * início real — a mesma régua de resolveOperationalShiftWindow.
+ */
+export function resolveBankHoursMonthKey(params: { scheduledStartAt: string | null; startedAt: string }): string {
+    const anchor = params.scheduledStartAt
+        ? new Date(params.scheduledStartAt)
+        : resolveOperationalShiftWindow(params.startedAt).startedAt;
+    const parts = MONTH_KEY_FORMAT.formatToParts(anchor);
+    const year = parts.find((part) => part.type === "year")?.value ?? "0000";
+    const month = parts.find((part) => part.type === "month")?.value ?? "00";
+    return `${year}-${month}`;
 }
 
 function formatLocalDateTime(value: string | null) {
@@ -763,16 +800,10 @@ export function buildBankHoursProof(
     };
 }
 
+// Ordem alfabética pura: a tela do admin é uma lista de consulta, e quem
+// procura um médico procura pelo nome — não pela quantidade de rendições.
 function compareDoctors(left: BankHoursDoctorHistory, right: BankHoursDoctorHistory) {
-    if (right.handoffOverrideCount !== left.handoffOverrideCount) {
-        return right.handoffOverrideCount - left.handoffOverrideCount;
-    }
-
-    if (right.correctionCount !== left.correctionCount) {
-        return right.correctionCount - left.correctionCount;
-    }
-
-    return left.doctorName.localeCompare(right.doctorName, "pt-BR");
+    return left.doctorName.localeCompare(right.doctorName, "pt-BR", { sensitivity: "base" });
 }
 
 // Proof neutro para o modo balances-only: as provas textuais são caras de
@@ -788,9 +819,15 @@ export function buildBankHoursHistoryModel(
     shifts: RawBankHoursHistoryShift[],
     settlementsByDoctor: Map<string, BankHoursSettlementSummary[]> = new Map(),
     legacyByDoctor: Map<string, BankHoursLegacyDoctorRecord> = new Map(),
-    options?: { includeProofs?: boolean },
+    options?: {
+        includeProofs?: boolean;
+        /** Vínculo por médico (doctors.metadata.employmentType); ausente = "pj". */
+        employmentTypeByDoctor?: Map<string, BankHoursEmploymentType>;
+    },
 ): BankHoursHistoryModel {
     const includeProofs = options?.includeProofs !== false;
+    const employmentTypeOf = (doctorId: string): BankHoursEmploymentType =>
+        options?.employmentTypeByDoctor?.get(doctorId) ?? "pj";
     // Sucessor da rendição e chefia na 2031 alimentam só texto de exibição —
     // no modo balances-only nem os índices precisam ser montados.
     const findSuccessor = includeProofs ? buildSuccessorLookup(shifts) : null;
@@ -827,6 +864,7 @@ export function buildBankHoursHistoryModel(
                 workedMinutes: computeWorkedMinutes(shift.startedAt, shift.effectiveEndedAt),
                 countedStartAt,
                 countedEndAt,
+                monthKey: resolveBankHoursMonthKey({ scheduledStartAt, startedAt: shift.startedAt }),
                 proof: includeProofs
                     ? buildBankHoursProof(resolvedShift, { successorDoctorName: successor ? (successor.displayName ?? successor.doctorName) : null })
                     : EMPTY_BANK_HOURS_PROOF,
@@ -869,6 +907,7 @@ export function buildBankHoursHistoryModel(
                 doctorId: shift.doctorId,
                 doctorName: shift.doctorName,
                 displayName: shift.displayName,
+                employmentType: employmentTypeOf(shift.doctorId),
                 shiftCount: 1,
                 workedMinutes: shift.workedMinutes ?? 0,
                 balanceMinutes: shift.balanceMinutes ?? 0,
@@ -922,6 +961,7 @@ export function buildBankHoursHistoryModel(
             doctorId,
             doctorName,
             displayName,
+            employmentType: employmentTypeOf(doctorId),
             shiftCount: 0,
             workedMinutes: 0,
             balanceMinutes: summary.totalMinutes,

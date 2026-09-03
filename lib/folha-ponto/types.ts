@@ -22,7 +22,8 @@ export interface LinhaRelatorio {
 
 /** Acerto de banco de horas do mês, para o aviso destacado na folha. */
 export interface AjusteBancoHoras {
-    kind: "bonus" | "penalty";
+    /** payroll = abatimento em folha do estatutário (só aviso; não mexe em plantão). */
+    kind: "bonus" | "penalty" | "payroll";
     /** ISO — quando o coordenador lançou. */
     lancadoEm: string;
     lancadoPor: string | null;

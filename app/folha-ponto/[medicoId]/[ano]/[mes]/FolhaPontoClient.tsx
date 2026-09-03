@@ -161,8 +161,11 @@ export function FolhaPontoClient({ data }: { data: DadosFolhaPonto }) {
                                     : ajuste.kind === "bonus"
                                         ? `Foi acrescentado 1 plantão de 12h à sua folha de ${mesLabel.toLowerCase()}/${data.ano}`
                                             + `${ajuste.dataPlantao ? ` (dia ${ajuste.dataPlantao.slice(8, 10)})` : ""} pelo saldo positivo de banco de horas.`
-                                        : `Foi descontado 1 plantão de 12h do pagamento de ${mesLabel.toLowerCase()}/${data.ano} pelo saldo negativo de banco de horas`
-                                            + ` (os dias trabalhados continuam registrados abaixo).`}
+                                        : ajuste.kind === "payroll"
+                                            ? `Os atrasos do banco de horas de ${mesLabel.toLowerCase()}/${data.ano} foram abatidos em folha`
+                                                + ` (desconto na folha de pagamento/ponto; os dias trabalhados continuam registrados abaixo).`
+                                            : `Foi descontado 1 plantão de 12h do pagamento de ${mesLabel.toLowerCase()}/${data.ano} pelo saldo negativo de banco de horas`
+                                                + ` (os dias trabalhados continuam registrados abaixo).`}
                                 <small>
                                     {ajuste.lancadoPor ? `Lançado por ${ajuste.lancadoPor} · ` : ""}
                                     {formatarDataHora(ajuste.lancadoEm)}

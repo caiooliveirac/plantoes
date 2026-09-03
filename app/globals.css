@@ -3077,6 +3077,333 @@ button.ops-doctor-line.displaced.clickable:hover {
     background: rgba(24, 18, 11, 0.9);
 }
 
+/* ---- Card do médico: cabeçalho clicável + plantões do mês em foco ---- */
+
+/* O card virou <article>: só o cabeçalho (botão) e as linhas de plantão clicam. */
+.hours-doctor-card {
+    cursor: default;
+}
+
+.hours-doctor-card-open {
+    display: grid;
+    gap: 12px;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.hours-doctor-card-open:focus-visible {
+    outline: 2px solid rgba(197, 161, 106, 0.6);
+    outline-offset: 6px;
+    border-radius: 12px;
+}
+
+.hours-doctor-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.hours-doctor-card-head strong {
+    display: block;
+    font-size: 1.02rem;
+}
+
+.hours-doctor-card-head > div > span {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.82rem;
+    color: var(--muted-strong);
+}
+
+.hours-month-strip {
+    display: grid;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px dashed rgba(216, 225, 236, 0.16);
+}
+
+.hours-month-strip-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.8rem;
+    color: var(--muted-strong);
+}
+
+.hours-month-strip-title {
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    color: #d1b07a;
+}
+
+.hours-month-strip-meta {
+    flex: 1;
+    min-width: 0;
+}
+
+.hours-month-strip-empty {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--muted-strong);
+}
+
+.hours-month-shifts,
+.hours-payroll-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+}
+
+.hours-month-block + .hours-month-block {
+    margin-top: 6px;
+}
+
+/* Tag do mês entre os blocos de linhas: mês · n plantões · saldo do mês. */
+.hours-month-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 4px 4px;
+    font-size: 0.74rem;
+    color: var(--muted-strong);
+}
+
+.hours-month-divider .hours-balance-pill {
+    min-height: 20px;
+    padding: 0 7px;
+    font-size: 0.68rem;
+}
+
+/* Linhas curtas: data · turno · base · saldo. Cabem muitas na tela. */
+.hours-month-shift-row,
+.hours-payroll-row {
+    display: grid;
+    grid-template-columns: 72px 28px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 26px;
+    padding: 2px 6px 2px 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-left-width: 3px;
+    background: rgba(255, 255, 255, 0.025);
+    color: inherit;
+    font: inherit;
+    font-size: 0.78rem;
+    line-height: 1.2;
+    text-align: left;
+    cursor: pointer;
+}
+
+.hours-payroll-row {
+    min-height: 34px;
+    padding: 4px 8px;
+}
+
+.hours-inline-link {
+    padding: 0 4px;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-weight: 700;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.hours-month-shift-row:hover,
+.hours-month-shift-row:focus-visible,
+.hours-payroll-row:hover,
+.hours-payroll-row:focus-visible {
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.hours-month-shift-row.positive {
+    border-left-color: rgba(35, 201, 134, 0.85);
+}
+
+.hours-month-shift-row.negative,
+.hours-payroll-row {
+    border-left-color: rgba(255, 93, 108, 0.85);
+}
+
+.hours-month-shift-row.neutral {
+    border-left-color: rgba(216, 225, 236, 0.3);
+}
+
+.hours-month-shift-date {
+    font-weight: 700;
+    text-transform: capitalize;
+    white-space: nowrap;
+}
+
+.hours-month-shift-turn {
+    font-weight: 800;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    color: var(--muted-strong);
+}
+
+.hours-month-shift-place {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+    font-weight: 700;
+}
+
+.hours-month-shift-place small {
+    font-weight: 500;
+    font-size: 0.74rem;
+    color: var(--muted-strong);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hours-month-shift-row .hours-balance-pill,
+.hours-payroll-row .hours-balance-pill {
+    min-height: 20px;
+    padding: 0 7px;
+    font-size: 0.7rem;
+}
+
+.hours-payroll-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 8px 0;
+    font-size: 0.84rem;
+    font-weight: 700;
+}
+
+/* Seletor de mês na faixa de comando: ‹ mês › */
+.hours-month-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.hours-month-step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    min-height: 36px;
+    border-radius: 10px;
+    border: 1px solid rgba(216, 225, 236, 0.18);
+    background: rgba(255, 255, 255, 0.05);
+    color: inherit;
+    font: inherit;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.hours-month-step:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.hours-directory-month {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.86rem;
+    font-weight: 700;
+    text-transform: capitalize;
+    color: var(--muted-strong);
+}
+
+/* Linhas de filtro (vínculo / pendência) da faixa de pendências. */
+.hours-filter-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 8px;
+}
+
+.hours-filter-label {
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted-strong);
+    min-width: 76px;
+}
+
+/* Grupo de mês no histórico completo (vida inteira, ordem crescente). */
+.hours-month-group {
+    display: grid;
+    gap: 14px;
+    padding-top: 6px;
+}
+
+.hours-month-group + .hours-month-group {
+    margin-top: 10px;
+}
+
+.hours-month-group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(216, 225, 236, 0.12);
+    background: rgba(10, 16, 24, 0.88);
+}
+
+.hours-month-group.current .hours-month-group-header {
+    border-color: rgba(197, 161, 106, 0.4);
+}
+
+.hours-month-group-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    letter-spacing: -0.02em;
+    text-transform: capitalize;
+}
+
+.hours-month-group-header > div > span {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.8rem;
+    color: var(--muted-strong);
+}
+
+.hours-month-group-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hours-payroll-action {
+    border-color: rgba(255, 184, 77, 0.3);
+}
+
+.payment-button.bank-payroll {
+    border-color: rgba(255, 184, 77, 0.45);
+    background: rgba(60, 40, 8, 0.85);
+    color: #ffd98a;
+}
+
+.payment-button.bank-payroll:hover:not(:disabled) {
+    background: rgba(255, 184, 77, 0.2);
+}
+
 .hours-doctor-card strong,
 .hours-shift-title strong,
 .hours-proof-box strong,
@@ -6353,6 +6680,14 @@ button.chief-payable-tag:focus-visible {
 
 .hours-settlement-row.penalty .hours-settlement-tag {
     color: #ffb3b3;
+}
+
+.hours-settlement-row.payroll {
+    background: rgba(255, 184, 77, 0.12);
+}
+
+.hours-settlement-row.payroll .hours-settlement-tag {
+    color: #ffd98a;
 }
 
 .hours-settlement-notes {

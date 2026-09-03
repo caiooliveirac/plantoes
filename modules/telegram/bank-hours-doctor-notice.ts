@@ -48,9 +48,12 @@ export interface DoctorSettlementNoticeParams {
     doctorId: string;
     doctorFirstName: string;
     monthKey: string;
-    kind: "bonus" | "penalty";
+    /** payroll = abatimento em folha do estatutário (sem plantão verde/vermelho). */
+    kind: "bonus" | "penalty" | "payroll";
     /** Saldo elegível restante depois do lançamento, em minutos (com sinal). */
     residualMinutes: number | null;
+    /** Minutos abatidos em folha (só kind payroll). */
+    payrollMinutes?: number | null;
     reversal?: boolean;
 }
 
@@ -59,6 +62,17 @@ export function buildDoctorSettlementNotice(params: DoctorSettlementNoticeParams
     const sobra = params.residualMinutes === null
         ? null
         : `Saldo restante no banco de horas: ${formatSignedHours(params.residualMinutes)}.`;
+    if (params.kind === "payroll") {
+        const horas = params.payrollMinutes ? formatSignedHours(-Math.abs(params.payrollMinutes)) : null;
+        return [
+            `Olá, ${params.doctorFirstName}.`,
+            params.reversal
+                ? `O abatimento em folha do seu banco de horas de ${mes} foi *estornado* pela coordenação — os atrasos daquele mês voltam a contar no saldo.`
+                : `Os atrasos do seu banco de horas de ${mes}${horas ? ` (${horas})` : ""} foram *abatidos em folha* pela coordenação: o desconto sai na folha de pagamento/ponto, e essas horas deixam de pesar no saldo do banco.`,
+            sobra,
+            "O lançamento já aparece quando você consulta seu painel de banco de horas.",
+        ].filter((line): line is string => line !== null).join("\n");
+    }
     if (params.reversal) {
         return [
             `Olá, ${params.doctorFirstName}.`,

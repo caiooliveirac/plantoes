@@ -2939,7 +2939,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                             ) : null}
                                             {selectedDoctor.bankHoursSettlement ? (
                                                 <small className="chief-payable-bank-note">
-                                                    {selectedDoctor.bankHoursSettlement.kind === "bonus" ? "Bônus" : "Punição"} de 12h lançado neste mês
+                                                    {selectedDoctor.bankHoursSettlement.kind === "payroll"
+                                                        ? "Atrasos do mês abatidos em folha (estatutário)"
+                                                        : `${selectedDoctor.bankHoursSettlement.kind === "bonus" ? "Bônus" : "Punição"} de 12h lançado neste mês`}
                                                     {selectedDoctor.bankHoursSettlement.operationalDate ? ` (dia ${selectedDoctor.bankHoursSettlement.operationalDate.slice(8, 10)})` : ""}.{" "}
                                                     <a href="/admin/bank-hours" target="_blank" rel="noopener">ver no banco de horas</a>
                                                 </small>
@@ -2962,6 +2964,11 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                         </button>
                                                     ) : null}
                                                 </>
+                                            ) : penaltyReady && selectedDoctor.employmentType === "estatutario" ? (
+                                                <small>
+                                                    Estatutário não recebe plantão vermelho: o atraso é <strong>abatido em folha</strong>, mês a mês, na aba{" "}
+                                                    <a href={`/admin/bank-hours?month=${encodeURIComponent(board.monthKey)}`} target="_blank" rel="noopener">banco de horas</a>.
+                                                </small>
                                             ) : penaltyReady ? (
                                                 <>
                                                     <small>-12h ou menos desde mai/2025 — debite 1 plantão — chip PUNIÇÃO — e devolva 12h ao saldo.</small>
