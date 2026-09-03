@@ -3286,6 +3286,138 @@ button.ops-doctor-line.displaced.clickable:hover {
     font-weight: 700;
 }
 
+/* ---- Banco × folha (estatutário): cascata prévio → créditos → débitos ---- */
+
+.hours-payroll-flow {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.hours-payroll-cells {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 6px;
+}
+
+.hours-payroll-cell {
+    display: grid;
+    gap: 4px;
+    padding: 8px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 0.72rem;
+    color: var(--muted-strong);
+}
+
+.hours-payroll-cell.credit { background: rgba(35, 201, 134, 0.08); }
+.hours-payroll-cell.debit { background: rgba(255, 93, 108, 0.08); }
+.hours-payroll-cell.absorbed { background: rgba(84, 160, 255, 0.1); }
+.hours-payroll-cell.payroll { background: rgba(255, 184, 77, 0.12); }
+
+.hours-payroll-cell .hours-balance-pill {
+    justify-self: start;
+    min-height: 26px;
+    padding: 0 10px;
+}
+
+.hours-balance-pill.absorbed {
+    background: rgba(84, 160, 255, 0.16);
+    border: 1px solid rgba(84, 160, 255, 0.3);
+    color: #d9e8ff;
+}
+
+.hours-balance-pill.payroll {
+    background: rgba(255, 184, 77, 0.16);
+    border: 1px solid rgba(255, 184, 77, 0.35);
+    color: #ffd98a;
+}
+
+.hours-payroll-bars {
+    display: grid;
+    gap: 6px;
+}
+
+.hours-payroll-bar-row {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--muted-strong);
+}
+
+.hours-payroll-bar {
+    display: flex;
+    height: 14px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.hours-payroll-seg { display: block; height: 100%; }
+.hours-payroll-seg.opening.positive, .hours-payroll-legend i.opening.positive { background: #3ddc97; opacity: 0.55; }
+.hours-payroll-seg.opening.negative, .hours-payroll-legend i.opening.negative { background: #a83a48; }
+.hours-payroll-seg.credit, .hours-payroll-legend i.credit { background: #23c986; }
+.hours-payroll-seg.absorbed, .hours-payroll-legend i.absorbed { background: #54a0ff; }
+.hours-payroll-seg.payroll, .hours-payroll-legend i.payroll { background: #ffb84d; }
+
+.hours-payroll-legend {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    font-size: 0.7rem;
+    color: var(--muted-strong);
+}
+
+.hours-payroll-legend i {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    margin-right: 5px;
+    vertical-align: -1px;
+}
+
+.hours-payroll-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 4px;
+    font-size: 0.74rem;
+}
+
+.hours-payroll-steps li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.hours-payroll-steps li.crossed {
+    border: 1px dashed rgba(255, 184, 77, 0.5);
+}
+
+.hours-payroll-steps .hours-balance-pill { min-height: 22px; padding: 0 8px; font-size: 0.72rem; }
+.hours-payroll-step-when { font-weight: 700; min-width: 48px; }
+.hours-payroll-step-bank, .hours-payroll-step-after { color: var(--muted-strong); }
+.hours-payroll-step-split { display: inline-flex; gap: 6px; align-items: center; }
+.hours-payroll-step-split em { font-style: normal; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
+.hours-payroll-step-split em.absorbed { background: rgba(84, 160, 255, 0.18); color: #d9e8ff; }
+.hours-payroll-step-split em.payroll { background: rgba(255, 184, 77, 0.18); color: #ffd98a; }
+.hours-payroll-step-split small { color: #ffb84d; }
+
 /* Seletor de mês na faixa de comando: ‹ mês › */
 .hours-month-picker {
     display: inline-flex;

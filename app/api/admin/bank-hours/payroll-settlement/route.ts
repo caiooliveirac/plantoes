@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { resolvePayrollDeductionForMonth } from "@/modules/bank-hours/payroll";
+import { resolvePayrollDeductionForDoctorMonth } from "@/modules/bank-hours/payroll";
 import { notifyDoctorBankHoursSettlement } from "@/modules/telegram/bank-hours-doctor-notice";
 import { getBankHoursHistory } from "@/services/bank-hours-history.service";
 import { settleBankHoursPayroll } from "@/services/bank-hours-settlements.service";
@@ -50,14 +50,15 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const deduction = resolvePayrollDeductionForMonth({
+        const deduction = resolvePayrollDeductionForDoctorMonth({
             monthKey: parsed.data.monthKey,
+            legacyMinutes: doctor.legacy?.totalMinutes ?? 0,
             shifts: doctor.shifts,
             settlements: doctor.settlements,
         });
         if (!deduction.pending) {
             return NextResponse.json(
-                { error: "Nenhum atraso pendente neste mês — nada a abater em folha." },
+                { error: "Nada a abater em folha neste mês — sem atraso, ou o banco positivo absorveu tudo." },
                 { status: 409 },
             );
         }
@@ -67,6 +68,7 @@ export async function POST(request: NextRequest) {
             monthKey: parsed.data.monthKey,
             deltaMinutes: -deduction.remainingMinutes,
             negativeShiftCount: deduction.negativeShiftCount,
+            absorbedMinutes: deduction.absorbedMinutes,
             actorUserId: session.user.id,
         });
 
@@ -81,6 +83,10 @@ export async function POST(request: NextRequest) {
                 deltaMinutes: result.deltaMinutes,
                 negativeShiftCount: deduction.negativeShiftCount,
                 negativeMinutes: deduction.negativeMinutes,
+                openingBalanceMinutes: deduction.openingBalanceMinutes,
+                creditMinutes: deduction.creditMinutes,
+                absorbedMinutes: deduction.absorbedMinutes,
+                payrollMinutes: deduction.payrollMinutes,
                 abatedBeforeMinutes: deduction.abatedMinutes,
                 balanceBeforeMinutes: doctor.balanceMinutes,
             },

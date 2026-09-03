@@ -25,7 +25,7 @@ import {
 } from "@/modules/bank-hours/pending-actions";
 import {
     formatPayrollMinutes,
-    resolvePayrollDeductionForMonth,
+    resolvePayrollDeductionForDoctorMonth,
     type PayrollDeductionForMonth,
 } from "@/modules/bank-hours/payroll";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
@@ -210,6 +210,105 @@ function monthAnchorId(doctorId: string, monthKey: string) {
 
 function countBonusShifts(doctor: BankHoursDoctorHistory) {
     return doctor.shifts.filter((shift) => (shift.creditedOvertimeMinutes ?? 0) > 0).length;
+}
+
+/**
+ * Diagrama do abatimento em folha do estatutário: cascata prévio → créditos →
+ * débitos (absorvido pelo banco vs. folha). Regra e decisão do "débito que
+ * cruza o zero" em modules/bank-hours/payroll.ts (PAYROLL_SPLIT_CROSSING_DEBIT).
+ */
+function PayrollWaterfall({ payroll }: { payroll: PayrollDeductionForMonth }) {
+    const scale = Math.max(
+        Math.abs(payroll.openingBalanceMinutes),
+        Math.abs(payroll.availableMinutes),
+        payroll.creditMinutes,
+        -payroll.negativeMinutes,
+        1,
+    );
+    const pct = (minutes: number) => `${Math.max(0, Math.min(100, (Math.abs(minutes) / scale) * 100))}%`;
+    const openingClass = payroll.openingBalanceMinutes < 0 ? "negative" : "positive";
+    const availableClass = payroll.availableMinutes < 0 ? "negative" : "positive";
+    const closingClass = payroll.closingBankMinutes < 0 ? "negative" : payroll.closingBankMinutes > 0 ? "positive" : "neutral";
+    const isEmpty = payroll.creditMinutes === 0 && payroll.negativeMinutes === 0;
+    return (
+        <section className="hours-payroll-flow" aria-label="Como o mês foi acertado entre banco e folha">
+            <p className="reports-summary-label">Banco × folha neste mês</p>
+            <div className="hours-payroll-cells">
+                <div className="hours-payroll-cell">
+                    <span>Saldo prévio</span>
+                    <strong className={`hours-balance-pill ${openingClass}`}>{formatSignedMinutes(payroll.openingBalanceMinutes)}</strong>
+                </div>
+                <div className="hours-payroll-cell credit">
+                    <span>Créditos do mês · {payroll.creditShiftCount}</span>
+                    <strong className="hours-balance-pill positive">{formatSignedMinutes(payroll.creditMinutes)}</strong>
+                </div>
+                <div className="hours-payroll-cell">
+                    <span>Disponível no banco</span>
+                    <strong className={`hours-balance-pill ${availableClass}`}>{formatSignedMinutes(payroll.availableMinutes)}</strong>
+                </div>
+                <div className="hours-payroll-cell debit">
+                    <span>Débitos do mês · {payroll.negativeShiftCount}</span>
+                    <strong className="hours-balance-pill negative">{formatSignedMinutes(payroll.negativeMinutes)}</strong>
+                </div>
+                <div className="hours-payroll-cell absorbed">
+                    <span>Absorvido pelo banco</span>
+                    <strong className="hours-balance-pill absorbed">{formatSignedMinutes(-payroll.absorbedMinutes)}</strong>
+                </div>
+                <div className="hours-payroll-cell payroll">
+                    <span>Vai à folha</span>
+                    <strong className="hours-balance-pill payroll">{formatPayrollMinutes(payroll.payrollMinutes)}</strong>
+                </div>
+                <div className="hours-payroll-cell">
+                    <span>Banco depois</span>
+                    <strong className={`hours-balance-pill ${closingClass}`}>{formatSignedMinutes(payroll.closingBankMinutes)}</strong>
+                </div>
+            </div>
+
+            {isEmpty ? null : (
+                <div className="hours-payroll-bars">
+                    <div className="hours-payroll-bar-row">
+                        <span className="hours-payroll-bar-label">Banco</span>
+                        <div className="hours-payroll-bar">
+                            <span className={`hours-payroll-seg opening ${openingClass}`} style={{ width: pct(payroll.openingBalanceMinutes) }} title={`Saldo prévio ${formatSignedMinutes(payroll.openingBalanceMinutes)}`} />
+                            <span className="hours-payroll-seg credit" style={{ width: pct(payroll.creditMinutes) }} title={`Créditos do mês ${formatSignedMinutes(payroll.creditMinutes)}`} />
+                        </div>
+                    </div>
+                    <div className="hours-payroll-bar-row">
+                        <span className="hours-payroll-bar-label">Débitos</span>
+                        <div className="hours-payroll-bar">
+                            <span className="hours-payroll-seg absorbed" style={{ width: pct(payroll.absorbedMinutes) }} title={`Absorvido pelo banco ${formatPayrollMinutes(payroll.absorbedMinutes)}`} />
+                            <span className="hours-payroll-seg payroll" style={{ width: pct(payroll.payrollMinutes) }} title={`Vai à folha ${formatPayrollMinutes(payroll.payrollMinutes)}`} />
+                        </div>
+                    </div>
+                    <ul className="hours-payroll-legend">
+                        <li><i className="opening positive" /> prévio positivo</li>
+                        <li><i className="opening negative" /> prévio negativo (fica no banco, nunca vai à folha)</li>
+                        <li><i className="credit" /> créditos do mês</li>
+                        <li><i className="absorbed" /> débito absorvido pelo banco</li>
+                        <li><i className="payroll" /> débito que vai à folha</li>
+                    </ul>
+                </div>
+            )}
+
+            {payroll.steps.length > 0 ? (
+                <ol className="hours-payroll-steps">
+                    {payroll.steps.map((step, index) => (
+                        <li key={`${step.startedAt ?? "s"}-${index}`} className={step.crossedZero ? "crossed" : ""}>
+                            <span className="hours-payroll-step-when">{step.startedAt ? formatShortDate(step.startedAt) : `#${index + 1}`}</span>
+                            <span className="hours-payroll-step-bank">banco {formatSignedMinutes(step.bankBeforeMinutes)}</span>
+                            <span className="hours-balance-pill negative">{formatSignedMinutes(step.balanceMinutes)}</span>
+                            <span className="hours-payroll-step-split">
+                                {step.bankMinutes > 0 ? <em className="absorbed">{formatPayrollMinutes(step.bankMinutes)} do banco</em> : null}
+                                {step.payrollMinutes > 0 ? <em className="payroll">{formatPayrollMinutes(step.payrollMinutes)} na folha</em> : null}
+                                {step.crossedZero ? <small>cruzou o zero</small> : null}
+                            </span>
+                            <span className="hours-payroll-step-after">→ banco {formatSignedMinutes(step.bankAfterMinutes)}</span>
+                        </li>
+                    ))}
+                </ol>
+            ) : null}
+        </section>
+    );
 }
 
 function compareShiftsAsc(left: BankHoursHistoryShift, right: BankHoursHistoryShift) {
@@ -683,7 +782,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
             if (doctor.employmentType === "estatutario") {
                 const months = focusedMonth ? [focusedMonth] : payrollMonthsOf(doctor);
                 for (const month of months) {
-                    const payroll = resolvePayrollDeductionForMonth({ monthKey: month, shifts: doctor.shifts, settlements: doctor.settlements });
+                    const payroll = resolvePayrollDeductionForDoctorMonth({ monthKey: month, legacyMinutes: doctor.legacy?.totalMinutes ?? 0, shifts: doctor.shifts, settlements: doctor.settlements });
                     if (payroll.pending) {
                         view.payrollPendingMinutes += -payroll.remainingMinutes;
                         view.payrollPendingMonths.push(month);
@@ -1405,8 +1504,9 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
 
                             {canManageOverrides && selectedDoctor.employmentType === "estatutario" ? (() => {
                                 // Estatutário: atraso do mês vai para a folha, não para plantão vermelho.
-                                const payroll = resolvePayrollDeductionForMonth({
+                                const payroll = resolvePayrollDeductionForDoctorMonth({
                                     monthKey: payrollMonth,
+                                    legacyMinutes: selectedDoctor.legacy?.totalMinutes ?? 0,
                                     shifts: selectedDoctor.shifts,
                                     settlements: selectedDoctor.settlements,
                                 });
@@ -1424,7 +1524,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     <section className="hours-settlements hours-settlement-action hours-payroll-action">
                                         <p className="reports-summary-label">Abater em folha · estatutário</p>
                                         <p className="hours-settlement-hint">
-                                            O estatutário é pago pela folha da prefeitura: cada atraso do mês é descontado na folha de pagamento/ponto, plantão a plantão. Ao abater, o banco devolve exatamente esses minutos — a hora não é cobrada duas vezes. O crédito (hora extra) continua acumulando e vira plantão extra pela régua de +12h.
+                                            O estatutário é pago pela folha da prefeitura. O banco positivo é o primeiro colchão do atraso: entram primeiro os créditos do mês, depois cada débito consome o banco enquanto ele está acima de zero. Só o que passa do zero vai à folha de pagamento/ponto. Saldo prévio negativo nunca vai à folha — os créditos só o atenuam. Ao abater, o banco devolve exatamente os minutos levados à folha.
                                         </p>
 
                                         <label className="hours-settlement-month-field">
@@ -1464,13 +1564,15 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                     </li>
                                                 ))}
                                                 <li className="hours-payroll-total">
-                                                    <span>Atraso de {formatMonthLabel(payrollMonth)}</span>
+                                                    <span>Débitos de {formatMonthLabel(payrollMonth)}</span>
                                                     <span className="hours-balance-pill negative">{formatSignedMinutes(payroll.negativeMinutes)}</span>
                                                 </li>
                                             </ul>
                                         ) : (
                                             <p className="hours-settlement-hint">Sem atraso em {formatMonthLabel(payrollMonth)} — nada a abater em folha.</p>
                                         )}
+
+                                        <PayrollWaterfall payroll={payroll} />
 
                                         {payroll.abatedMinutes !== 0 ? (
                                             <p className="hours-settlement-hint">
