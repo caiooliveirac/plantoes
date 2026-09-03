@@ -3917,8 +3917,11 @@ export function buildPaymentAllocationBoardModel(params: {
     bankHoursBalanceOverridesByContinuityGroupId: params.bankHoursBalanceOverridesByContinuityGroupId ?? new Map(),
   });
 
-  const mergedRows = [...rows, ...additionalShadowRows]
-    .sort(comparePaymentAllocationRows);
+  const mergedRows = suppressSameDoctorDuplicateRows([...rows, ...additionalShadowRows], {
+    slotStartIso: params.startedAt,
+    slotEndIso: params.endedAt,
+    shiftLabel: params.shiftLabel,
+  }).sort(comparePaymentAllocationRows);
 
   const regulation = mergedRows.filter((row) => row.domain === "regulation");
   const intervention = mergedRows.filter((row) => row.domain === "intervention");
@@ -3946,6 +3949,86 @@ export function buildPaymentAllocationBoardModel(params: {
     regulation,
     intervention,
   } satisfies PaymentAllocationBoard;
+}
+
+const SAME_DOCTOR_DUPLICATE_OVERLAP_MS = 60 * 60 * 1000;
+
+/**
+ * Mesmo médico pago em dois alvos do MESMO slot com presença sobreposta é
+ * fisicamente impossível: quase sempre é a chefia retroagindo a chegada da
+ * continuação noturna para 07:00 em outro ramal (caso Matheus Libório, 26/08/2026).
+ * A correção de horário continua livre; o corte é aqui, no pagamento: fica a
+ * presença que começou primeiro, com aviso; a outra vira alvo vazio com o motivo.
+ * Remanejo real no meio do turno (janelas que não se sobrepõem) não é tocado.
+ */
+function suppressSameDoctorDuplicateRows(
+  rows: PaymentAllocationRow[],
+  params: { slotStartIso: string; slotEndIso: string; shiftLabel: "SD" | "SN" },
+): PaymentAllocationRow[] {
+  const slotStart = new Date(params.slotStartIso).getTime();
+  const slotEnd = new Date(params.slotEndIso).getTime();
+  const windowOf = (row: PaymentAllocationRow) => ({
+    start: Math.max(slotStart, row.startedAt ? new Date(row.startedAt).getTime() : slotStart),
+    end: Math.min(slotEnd, row.actualEndedAt || row.endedAt ? new Date((row.actualEndedAt || row.endedAt) as string).getTime() : slotEnd),
+  });
+
+  const byDoctor = new Map<string, PaymentAllocationRow[]>();
+  for (const row of rows) {
+    if (!row.occupancyId || !row.doctorId) continue;
+    byDoctor.set(row.doctorId, [...(byDoctor.get(row.doctorId) ?? []), row]);
+  }
+
+  const replacements = new Map<PaymentAllocationRow, PaymentAllocationRow | null>();
+  for (const group of byDoctor.values()) {
+    if (group.length < 2) continue;
+    // ponytail: vence quem chegou primeiro; empate por ordem do alvo. Sem heurística de "qual foi corrigido".
+    const [winner, ...rest] = [...group].sort((left, right) =>
+      windowOf(left).start - windowOf(right).start || left.sortOrder - right.sortOrder);
+    const winnerWindow = windowOf(winner!);
+    const losers = rest.filter((row) => {
+      const window = windowOf(row);
+      return Math.min(window.end, winnerWindow.end) - Math.max(window.start, winnerWindow.start) >= SAME_DOCTOR_DUPLICATE_OVERLAP_MS;
+    });
+    if (losers.length === 0) continue;
+
+    const doctorLabel = winner!.displayName?.trim() || winner!.doctorName?.trim() || "Medico";
+    for (const loser of losers) {
+      // Linha extra (sombra/visibilidade) num alvo que já tem titular: some, o
+      // aviso fica na linha vencedora. Alvo só com o duplicado: vira vazio com motivo.
+      const targetStillCovered = rows.some((row) => row !== loser
+        && row.domain === loser.domain && row.targetCode === loser.targetCode && Boolean(row.occupancyId));
+      if (targetStillCovered) {
+        replacements.set(loser, null);
+        continue;
+      }
+      replacements.set(loser, buildEmptyPaymentAllocationRow({
+        target: {
+          domain: loser.domain,
+          targetId: loser.targetId,
+          targetCode: loser.targetCode,
+          targetLabel: loser.targetLabel,
+          sortOrder: loser.sortOrder,
+          defaultRole: loser.defaultRole,
+          disabledAt: loser.disabledAt,
+          disabledReason: loser.disabledReason,
+          disabledDuringShift: loser.disabledDuringShift,
+          disabledEntireShift: loser.disabledEntireShift,
+        },
+        shiftLabel: params.shiftLabel,
+        candidateCount: loser.candidateCount,
+        issues: [`Duplicado: ${doctorLabel} ja e pago em ${winner!.targetCode} neste turno. Nao pago aqui.`],
+      }));
+    }
+    const winnerIssues = [
+      ...winner!.issues,
+      `Tambem consta em ${losers.map((row) => row.targetCode).join(", ")} neste turno; pago so aqui.`,
+    ];
+    replacements.set(winner!, { ...winner!, issues: winnerIssues, paymentStatus: resolvePaymentAllocationStatus(winnerIssues) });
+  }
+
+  return replacements.size === 0
+    ? rows
+    : rows.map((row) => (replacements.has(row) ? replacements.get(row) ?? null : row)).filter((row): row is PaymentAllocationRow => row !== null);
 }
 
 function resolveSlotPresenceCandidateLabel(candidate: LogicalShiftCandidate) {
