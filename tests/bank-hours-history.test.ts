@@ -417,3 +417,28 @@ test("abatimento em folha (payroll) entra no saldo efetivo como qualquer acerto"
     assert.equal(doctor.settlements[0]?.kind, "payroll");
     assert.equal(doctor.balanceMinutes, 0);
 });
+
+test("estatutário: saldo é a cascata da folha (parcela de folha fora do banco; payroll antigo ignorado)", () => {
+    const model = buildBankHoursHistoryModel(
+        [
+            makeShift({ occupancyId: "o-1", continuityGroupId: "cg-o1", startedAt: "2026-03-02T10:00:00.000Z", balanceMinutes: 360, overtimeMinutes: 360, ruleCode: "OVERTIME", bankActualStartAt: "2026-03-02T10:00:00.000Z" }),
+            makeShift({ occupancyId: "o-2", continuityGroupId: "cg-o2", startedAt: "2026-03-10T10:40:00.000Z", arrivalDelayMinutes: 300, balanceMinutes: -300, ruleCode: "LATE_NO_OVERTIME", bankActualStartAt: "2026-03-10T15:00:00.000Z" }),
+        ],
+        new Map([["doc-1", [{
+            id: "s-1",
+            monthKey: "2026-03",
+            kind: "payroll" as const,
+            deltaMinutes: 300,
+            operationalDate: null,
+            notes: "Abatido em folha — 2026-03 (regra antiga)",
+            createdAt: "2026-04-02T12:00:00.000Z",
+        }]]]),
+        new Map([["doc-1", { doctorId: "doc-1", doctorName: "Dr. Um", displayName: null, spreadsheetName: "Um", preMay2025Minutes: -120, spreadsheetPeriodMinutes: 0, totalMinutes: -120, source: "planilha", notes: null }]]),
+        { employmentTypeByDoctor: new Map([["doc-1", "estatutario"]]) },
+    );
+    const doctor = model.doctors[0]!;
+    // prévio −2h, +6h de crédito → +4h; débito −5h: 4h do banco, 1h na folha; banco 0.
+    assert.equal(doctor.balanceMinutes, 0);
+    assert.equal(doctor.applicationBalanceMinutes, 120);
+    assert.equal(model.summary.balanceMinutes, 0);
+});

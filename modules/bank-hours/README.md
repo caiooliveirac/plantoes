@@ -51,19 +51,21 @@ default `pj`) e chega ao histórico como `BankHoursDoctorHistory.employmentType`
   **vermelho** (punição, `+720`). Cada acerto fica casado a um `adminExtraShifts`.
 - **Estatutário** é pago pela folha da prefeitura, então saldo negativo não vira
   plantão vermelho — mas o **banco positivo é o primeiro colchão**. `payroll.ts`
-  (`resolvePayrollDeductionForDoctorMonth`) faz a cascata do mês: saldo prévio
-  (legado + meses anteriores) **+ créditos do mês primeiro**, depois cada débito
-  em ordem cronológica consome o banco enquanto ele está acima de zero; só o que
-  passa do zero vai à folha. Saldo prévio negativo **nunca vai à folha** — os
-  créditos só o atenuam e, com o banco ≤ 0, cada débito vai inteiro à folha.
-  Débito que cruza o zero é **dividido** (parte zera o banco, resto na folha):
-  decisão reversível na constante `PAYROLL_SPLIT_CROSSING_DEBIT`. O admin clica
-  "Abater em folha" em `/admin/bank-hours` (a tela mostra células de crédito,
-  débito, absorvido e folha, mais o diagrama da cascata): nasce um
-  `bankHoursSettlements` com `kind = "payroll"`, `deltaMinutes = +minutos que
-  foram à folha`, **sem** plantão extra (`adminExtraShiftId = null`). Saldo
-  depois = prévio + créditos − absorvido. Estorno cria o settlement oposto,
-  mesmo `kind`, mesmo mês.
+  (`resolvePayrollLedger`) roda a cascata mês a mês desde o legado: saldo prévio
+  **+ créditos do mês primeiro**, depois cada débito em ordem cronológica consome
+  o banco enquanto ele está acima de zero; só o que passa do zero vai à folha.
+  Saldo prévio negativo **nunca vai à folha** — os créditos só o atenuam e, com
+  o banco ≤ 0, cada débito vai inteiro à folha. Débito que cruza o zero é
+  **dividido** (parte zera o banco, resto na folha): decisão reversível na
+  constante `PAYROLL_SPLIT_CROSSING_DEBIT`.
+  **A folha é automática (desde set/2026):** `BankHoursDoctorHistory.balanceMinutes`
+  do estatutário É o resultado do razão — a parcela de folha nunca entra no
+  banco, não há botão nem settlement a gravar. `/admin/bank-hours` mostra as
+  células (prévio, créditos, disponível, débitos, absorvido, folha, banco
+  depois) e a linha do tempo; cabe à coordenação lançar o previsto na folha de
+  pagamento/ponto. Settlements `kind = "payroll"` anteriores (regra manual)
+  são registro histórico e ficam fora do cálculo. Bônus de +12h continua
+  valendo para o estatutário e entra no banco ao fim do mês do acerto.
 - O mês do plantão (`BankHoursHistoryShift.monthKey`) segue a janela programada
   do banco em São Paulo — um SN que começou à 1h do dia 1º pertence ao mês
   anterior, como no fechamento.
