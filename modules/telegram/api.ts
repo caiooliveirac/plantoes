@@ -164,6 +164,43 @@ export function escapeTelegramMarkdown(value: string): string {
     return value.replace(/([_*`\[])/g, "\\$1");
 }
 
+// Telegram corta em 4096 chars e devolve "Bad Request: text is too long" — a
+// mensagem inteira se perde. Parte por linhas, com margem, e numera as partes.
+const MAX_TELEGRAM_MESSAGE_CHARS = 3500;
+
+export function splitTelegramMessage(text: string, maxChars = MAX_TELEGRAM_MESSAGE_CHARS) {
+    if (text.length <= maxChars) {
+        return [text];
+    }
+
+    const chunks: string[] = [];
+    let current = "";
+    for (const line of text.split("\n")) {
+        const candidate = current ? `${current}\n${line}` : line;
+        if (candidate.length <= maxChars) {
+            current = candidate;
+            continue;
+        }
+        if (current) {
+            chunks.push(current);
+            current = "";
+        }
+        // Linha única maior que o limite: corta no braço, senão volta o mesmo erro.
+        let rest = line;
+        while (rest.length > maxChars) {
+            chunks.push(rest.slice(0, maxChars));
+            rest = rest.slice(maxChars);
+        }
+        current = rest;
+    }
+    if (current) {
+        chunks.push(current);
+    }
+
+    const total = chunks.length;
+    return chunks.map((chunk, index) => `(${index + 1}/${total})\n${chunk}`);
+}
+
 export async function sendMessage(
     chatId: string | number,
     text: string,
