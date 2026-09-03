@@ -1,6 +1,7 @@
 import { and, eq, like, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { adminExtraShifts, bankHoursSettlements, users } from "@/db/schema";
+import { BANK_HOURS_PAYROLL_SETTLEMENT_KIND, buildPayrollSettlementNote } from "@/modules/bank-hours/payroll";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 
 /** Cada acerto move o saldo do banco de horas em exatamente 12h (720 min). */
@@ -8,7 +9,12 @@ export const BANK_HOURS_SETTLEMENT_MINUTES = 12 * 60;
 /** Gatilho: o botão só aparece quando o saldo chega a ±12h. */
 export const BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES = BANK_HOURS_SETTLEMENT_MINUTES;
 
-export type BankHoursSettlementKind = "bonus" | "penalty";
+/**
+ * bonus/penalty = acerto de ±12h casado a um plantão verde/vermelho.
+ * payroll = abatimento em folha do estatutário: só o settlement, sem plantão
+ * extra (modules/bank-hours/payroll.ts).
+ */
+export type BankHoursSettlementKind = "bonus" | "penalty" | "payroll";
 
 export interface BankHoursSettlementRow {
     id: string;
@@ -41,7 +47,9 @@ export function isSelfServiceSettlementNote(notes: string) {
 }
 
 function normalizeKind(value: string): BankHoursSettlementKind {
-    return value === "penalty" ? "penalty" : "bonus";
+    if (value === "penalty") return "penalty";
+    if (value === BANK_HOURS_PAYROLL_SETTLEMENT_KIND) return "payroll";
+    return "bonus";
 }
 
 /** Acertos lançados num mês, agrupados por médico (para mostrar "feito neste mês"). */
@@ -182,14 +190,70 @@ function pickRandomWeekday(monthKey: string): string {
 
 export interface SettleBankHoursResult {
     settlementId: string;
-    adminExtraShiftId: string;
+    /** null no abatimento em folha (payroll): não existe plantão verde/vermelho. */
+    adminExtraShiftId: string | null;
     doctorId: string;
     monthKey: string;
     kind: BankHoursSettlementKind;
     deltaMinutes: number;
-    operationalDate: string;
+    operationalDate: string | null;
     shiftUnit: number;
     label: string;
+}
+
+export interface PayrollSettlementResult {
+    settlementId: string;
+    doctorId: string;
+    monthKey: string;
+    kind: "payroll";
+    deltaMinutes: number;
+    notes: string;
+}
+
+/**
+ * Abatimento em folha (estatutário): registra que os atrasos do mês foram
+ * levados à folha de pagamento/ponto. Devolve ao banco exatamente os minutos
+ * abatidos (delta positivo), sem criar plantão extra — o estatutário não é
+ * pago por plantão aqui. A validação de quanto abater fica na rota, sobre o
+ * histórico (modules/bank-hours/payroll.ts).
+ */
+export async function settleBankHoursPayroll(params: {
+    doctorId: string;
+    monthKey: string;
+    /** Minutos abatidos (> 0): o módulo da folha devolve o que os atrasos do mês tiraram. */
+    deltaMinutes: number;
+    negativeShiftCount: number;
+    actorUserId: string;
+}): Promise<PayrollSettlementResult> {
+    if (!Number.isInteger(params.deltaMinutes) || params.deltaMinutes <= 0) {
+        throw new Error("O abatimento em folha precisa de minutos positivos.");
+    }
+    const notes = buildPayrollSettlementNote({
+        monthKey: params.monthKey,
+        negativeShiftCount: params.negativeShiftCount,
+        deltaMinutes: params.deltaMinutes,
+    });
+    const [settlement] = await getDb()
+        .insert(bankHoursSettlements)
+        .values({
+            doctorId: params.doctorId,
+            monthKey: params.monthKey,
+            deltaMinutes: params.deltaMinutes,
+            kind: BANK_HOURS_PAYROLL_SETTLEMENT_KIND,
+            adminExtraShiftId: null,
+            notes,
+            createdByUserId: params.actorUserId,
+        })
+        .returning({ id: bankHoursSettlements.id });
+
+    return {
+        settlementId: settlement.id,
+        doctorId: params.doctorId,
+        monthKey: params.monthKey,
+        kind: "payroll",
+        deltaMinutes: params.deltaMinutes,
+        notes,
+    };
 }
 
 /**
@@ -461,6 +525,36 @@ export async function reverseBankHoursSettlement(params: {
         }
 
         const originalKind = normalizeKind(original.kind);
+
+        // Abatimento em folha não tem plantão casado: o estorno é só o settlement
+        // oposto, com o mesmo kind — o par se anula no razão do banco.
+        if (originalKind === "payroll") {
+            const [settlement] = await tx
+                .insert(bankHoursSettlements)
+                .values({
+                    doctorId: original.doctorId,
+                    monthKey: original.monthKey,
+                    deltaMinutes: -original.deltaMinutes,
+                    kind: BANK_HOURS_PAYROLL_SETTLEMENT_KIND,
+                    adminExtraShiftId: null,
+                    notes: `${BANK_HOURS_REVERSAL_NOTE_PREFIX}${original.id} — ${reason}`,
+                    createdByUserId: params.actorUserId,
+                })
+                .returning({ id: bankHoursSettlements.id });
+            return {
+                settlementId: settlement.id,
+                reversedSettlementId: original.id,
+                adminExtraShiftId: null,
+                doctorId: original.doctorId,
+                monthKey: original.monthKey,
+                kind: "payroll",
+                deltaMinutes: -original.deltaMinutes,
+                operationalDate: null,
+                shiftUnit: 0,
+                label: "Estorno abatimento em folha",
+            };
+        }
+
         const reversalKind: BankHoursSettlementKind = originalKind === "bonus" ? "penalty" : "bonus";
         const unit = reversalKind === "bonus" ? 1 : -1;
         // Mesmo dia do plantão original: o par verde/vermelho se anula no dia.

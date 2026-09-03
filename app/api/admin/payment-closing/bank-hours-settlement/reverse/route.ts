@@ -59,11 +59,14 @@ export async function POST(request: NextRequest) {
 
         revalidatePath("/admin/payment-closing");
         revalidatePath("/admin/bank-hours");
-        await syncContractLedgerForMonth({
-            doctorId: result.doctorId,
-            monthKey: result.monthKey,
-            actorUserId: session.user.id,
-        });
+        // Abatimento em folha não tem plantão casado: nada muda no total do mês.
+        if (result.kind !== "payroll") {
+            await syncContractLedgerForMonth({
+                doctorId: result.doctorId,
+                monthKey: result.monthKey,
+                actorUserId: session.user.id,
+            });
+        }
 
         const [doctorRow] = await getDb()
             .select({ fullName: doctors.fullName, displayName: doctors.displayName })
@@ -77,8 +80,9 @@ export async function POST(request: NextRequest) {
             doctorFirstName: firstName,
             monthKey: result.monthKey,
             // O aviso fala do acerto ORIGINAL que foi estornado.
-            kind: result.kind === "bonus" ? "penalty" : "bonus",
+            kind: result.kind === "payroll" ? "payroll" : result.kind === "bonus" ? "penalty" : "bonus",
             residualMinutes: null,
+            payrollMinutes: result.kind === "payroll" ? Math.abs(result.deltaMinutes) : null,
             reversal: true,
         });
 

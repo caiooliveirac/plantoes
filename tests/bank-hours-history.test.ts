@@ -332,3 +332,88 @@ test("correções da chefia viram entradas legíveis com o chefe da 2031 no mome
     assert.match(correction.changes.join(" "), /Chegada: .*07:00.* → .*07:40/);
     assert.match(correction.notes ?? "", /pedido da coordenacao/);
 });
+
+test("médicos saem em ordem alfabética, sem priorizar rendições ou correções", () => {
+    const model = buildBankHoursHistoryModel([
+        makeShift({ occupancyId: "occ-z", continuityGroupId: "cg-z", doctorId: "doc-z", doctorName: "Zélia Prado", displayName: null }),
+        // Este tem rendição prevalecendo (saída física depois do handoff), que antes o jogava para o topo.
+        makeShift({ occupancyId: "occ-m", continuityGroupId: "cg-m", doctorId: "doc-m", doctorName: "Marcos Lima", displayName: null }),
+        makeShift({
+            occupancyId: "occ-a",
+            continuityGroupId: "cg-a",
+            doctorId: "doc-a",
+            doctorName: "ana beatriz",
+            displayName: null,
+            handoffEndedAt: "2026-03-25T22:20:00.000Z",
+            actualEndedAt: "2026-03-25T22:20:00.000Z",
+            effectiveEndedAt: "2026-03-25T22:20:00.000Z",
+        }),
+    ]);
+
+    assert.deepEqual(model.doctors.map((doctor) => doctor.doctorName), ["ana beatriz", "Marcos Lima", "Zélia Prado"]);
+});
+
+test("mês operacional do plantão segue a janela do banco em São Paulo", () => {
+    const model = buildBankHoursHistoryModel([
+        // SD normal de 25/03 (10:00Z = 07:00 SP).
+        makeShift(),
+        // SN que começou atrasado à 1h de 1º/07 SP (04:00Z): a janela é 19h de
+        // 30/06, então o plantão pertence a junho — como no fechamento.
+        makeShift({
+            occupancyId: "occ-sn",
+            continuityGroupId: "cg-sn",
+            shiftLabel: "SN",
+            startedAt: "2026-07-01T04:00:00.000Z",
+            boardStartedAt: "2026-07-01T04:00:00.000Z",
+            handoffEndedAt: "2026-07-01T10:00:00.000Z",
+            actualEndedAt: "2026-07-01T10:00:00.000Z",
+            effectiveEndedAt: "2026-07-01T10:00:00.000Z",
+            occupancyScheduledStartAt: "2026-06-30T22:00:00.000Z",
+            occupancyScheduledEndAt: "2026-07-01T10:00:00.000Z",
+            bankScheduledStartAt: "2026-06-30T22:00:00.000Z",
+            bankScheduledEndAt: "2026-07-01T10:00:00.000Z",
+            bankActualStartAt: "2026-07-01T04:00:00.000Z",
+            bankActualEndAt: "2026-07-01T10:00:00.000Z",
+        }),
+    ]);
+
+    const shifts = model.doctors[0]!.shifts;
+    const byId = new Map(shifts.map((shift) => [shift.occupancyId, shift.monthKey]));
+    assert.equal(byId.get("occ-1"), "2026-03");
+    assert.equal(byId.get("occ-sn"), "2026-06");
+});
+
+test("vínculo do médico entra no modelo; sem cadastro cai em PJ", () => {
+    const model = buildBankHoursHistoryModel(
+        [
+            makeShift(),
+            makeShift({ occupancyId: "occ-2", continuityGroupId: "cg-2", doctorId: "doc-2", doctorName: "Bruno Estatutário" }),
+        ],
+        new Map(),
+        new Map(),
+        { employmentTypeByDoctor: new Map([["doc-2", "estatutario"]]) },
+    );
+
+    const byId = new Map(model.doctors.map((doctor) => [doctor.doctorId, doctor.employmentType]));
+    assert.equal(byId.get("doc-1"), "pj");
+    assert.equal(byId.get("doc-2"), "estatutario");
+});
+
+test("abatimento em folha (payroll) entra no saldo efetivo como qualquer acerto", () => {
+    const model = buildBankHoursHistoryModel(
+        [makeShift({ arrivalDelayMinutes: 40, balanceMinutes: -40, ruleCode: "LATE_NO_OVERTIME", bankActualStartAt: "2026-03-25T10:40:00.000Z" })],
+        new Map([["doc-1", [{
+            id: "s-1",
+            monthKey: "2026-03",
+            kind: "payroll" as const,
+            deltaMinutes: 40,
+            operationalDate: null,
+            notes: "Abatido em folha — 2026-03",
+            createdAt: "2026-04-02T12:00:00.000Z",
+        }]]]),
+    );
+
+    const doctor = model.doctors[0]!;
+    assert.equal(doctor.settlements[0]?.kind, "payroll");
+    assert.equal(doctor.balanceMinutes, 0);
+});

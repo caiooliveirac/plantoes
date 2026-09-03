@@ -21,7 +21,11 @@ function BankHoursUnavailable({ title, copy }: { title: string; copy: string }) 
     );
 }
 
-export default async function AdminBankHoursPage() {
+export default async function AdminBankHoursPage({
+    searchParams,
+}: {
+    searchParams: Promise<{ month?: string }>;
+}) {
     if (!hasDatabaseUrl()) {
         return <BankHoursUnavailable title="Banco indisponível" copy="Sem DATABASE_URL não existe histórico de banco de horas para consulta gerencial." />;
     }
@@ -42,15 +46,18 @@ export default async function AdminBankHoursPage() {
         throw error;
     }
 
+    const { month } = await searchParams;
     const history = await getBankHoursHistory();
     // Meses de fechamento onde o acerto (plantão verde/vermelho) pode ser lançado:
     // do mês corrente até abril/2026, igual ao seletor do payment-closing.
-    const settlementMonths = resolveMonthlyReportRange(null).presetMonths;
+    const range = resolveMonthlyReportRange(month ?? null);
     return (
         <BankHoursHistoryClient
             history={history}
             canManageOverrides={Boolean(session?.user.roles.includes("admin"))}
-            settlementMonths={settlementMonths}
+            settlementMonths={range.presetMonths}
+            // Mês aberto de cara: o corrente (ou ?month=AAAA-MM vindo de um link).
+            initialMonthKey={range.monthKey}
         />
     );
 }

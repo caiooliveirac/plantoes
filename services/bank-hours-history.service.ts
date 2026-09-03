@@ -1,9 +1,11 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bankHoursBalanceOverrides, bankHoursLegacyBalances, doctors, users } from "@/db/schema";
+import { resolveDoctorEmploymentType } from "@/modules/reporting/payable-shifts";
 import {
     buildBankHoursHistoryModel,
     resolveBankHoursSettlementBalance,
+    type BankHoursEmploymentType,
     type BankHoursHistoryModel,
     type BankHoursLateDeparture,
     type BankHoursLegacyDoctorRecord,
@@ -117,6 +119,17 @@ async function loadLegacyBalancesByDoctor(): Promise<Map<string, BankHoursLegacy
         .map((row) => [row.doctorId, row]));
 }
 
+// Vínculo (PJ × estatutário) por médico: mora em doctors.metadata.employmentType,
+// a mesma leitura do fechamento (resolveDoctorEmploymentType). A tabela é
+// pequena; carregar inteira custa menos que filtrar pelos ids do histórico.
+async function loadEmploymentTypesByDoctor(): Promise<Map<string, BankHoursEmploymentType>> {
+    const db = getDb();
+    const rows = await db
+        .select({ id: doctors.id, metadata: doctors.metadata })
+        .from(doctors);
+    return new Map(rows.map((row) => [row.id, resolveDoctorEmploymentType(row.metadata)]));
+}
+
 // Justificativas de saída tardia registradas no bot (ocorrência com número,
 // higienização, liberação da chefia, rendição). Vivem no resolution_data das
 // mensagens ingeridas; são poucas linhas no total, então carregamos todas.
@@ -224,12 +237,13 @@ export async function getBankHoursHistory(options?: { balancesOnly?: boolean; do
     `);
 
     const rows = (result as unknown as Record<string, unknown>[]).map(mapRow);
-    const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor, lateDeparturesByOccupancy, manualOverridesByGroup] = await Promise.all([
+    const [auditTrailByOccupancy, settlementsByDoctor, legacyByDoctor, lateDeparturesByOccupancy, manualOverridesByGroup, employmentTypeByDoctor] = await Promise.all([
         balancesOnly ? new Map<string, MonthlyReportAuditEntry[]>() : loadAuditTrailByOccupancy(options?.doctorId),
         loadAllBankHoursSettlements(),
         loadLegacyBalancesByDoctor(),
         balancesOnly ? new Map<string, BankHoursLateDeparture>() : loadLateDeparturesByOccupancy(),
         loadManualBalanceOverrides(),
+        loadEmploymentTypesByDoctor(),
     ]);
     const enrichedRows = rows.map((row) => ({
         ...row,
@@ -243,6 +257,7 @@ export async function getBankHoursHistory(options?: { balancesOnly?: boolean; do
 
     const model = buildBankHoursHistoryModel(enrichedRows, settlementsByDoctor, legacyByDoctor, {
         includeProofs: !balancesOnly,
+        employmentTypeByDoctor,
     });
     if (!options?.doctorId) return model;
     // Os plantões da chefia entraram só para alimentar o lookup: não são deste médico.

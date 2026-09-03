@@ -422,9 +422,9 @@ export default async function PainelDoMedicoPage({
                             <h2>Acertos lançados no fechamento</h2>
                             <ul className="panel-settlements">
                                 {doctor.settlements.map((settlement) => (
-                                    <li key={settlement.id} className={settlement.kind === "bonus" ? "bonus" : "penalty"}>
+                                    <li key={settlement.id} className={settlement.kind === "bonus" ? "bonus" : settlement.kind === "payroll" ? "payroll" : "penalty"}>
                                         <span className="panel-settlement-tag">
-                                            {settlement.kind === "bonus" ? "Bônus" : "Punição"}
+                                            {settlement.kind === "bonus" ? "Bônus" : settlement.kind === "payroll" ? "Folha" : "Punição"}
                                         </span>
                                         <span>{settlement.monthKey}</span>
                                         <span className="panel-settlement-delta">{formatSignedMinutes(settlement.deltaMinutes)}</span>

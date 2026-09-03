@@ -343,7 +343,8 @@ export interface ChiefPayableContractRenewal {
 }
 
 export interface ChiefPayableBankHoursSettlement {
-    kind: "bonus" | "penalty";
+    /** payroll = abatimento em folha do estatutário (sem plantão verde/vermelho). */
+    kind: "bonus" | "penalty" | "payroll";
     deltaMinutes: number;
     operationalDate: string | null;
     notes: string;
