@@ -223,6 +223,8 @@ export async function settleBankHoursPayroll(params: {
     /** Minutos abatidos (> 0): o módulo da folha devolve o que os atrasos do mês tiraram. */
     deltaMinutes: number;
     negativeShiftCount: number;
+    /** Parcela dos débitos do mês que o banco absorveu (fica na nota). */
+    absorbedMinutes?: number;
     actorUserId: string;
 }): Promise<PayrollSettlementResult> {
     if (!Number.isInteger(params.deltaMinutes) || params.deltaMinutes <= 0) {
@@ -232,6 +234,7 @@ export async function settleBankHoursPayroll(params: {
         monthKey: params.monthKey,
         negativeShiftCount: params.negativeShiftCount,
         deltaMinutes: params.deltaMinutes,
+        absorbedMinutes: params.absorbedMinutes,
     });
     const [settlement] = await getDb()
         .insert(bankHoursSettlements)
