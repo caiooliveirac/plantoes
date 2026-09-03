@@ -2998,7 +2998,7 @@ button.ops-doctor-line.displaced.clickable:hover {
    faixa de comando — o detalhe do médico fica sempre visível ao lado, sem
    precisar arrastar a página toda. */
 @media (min-width: 1181px) {
-    .hours-directory-column {
+    .hours-grid.detail-open .hours-directory-column {
         position: sticky;
         top: 84px;
         max-height: calc(100vh - 100px);
@@ -3020,9 +3020,6 @@ button.ops-doctor-line.displaced.clickable:hover {
     align-items: flex-end;
     padding: 18px;
     border-radius: 24px;
-    position: sticky;
-    top: 14px;
-    z-index: 2;
 }
 
 .hours-directory-header h2 {
@@ -6930,10 +6927,6 @@ button.chief-payable-tag:focus-visible {
 
     .hours-evidence-grid.timeline::before {
         display: none;
-    }
-
-    .hours-directory-header {
-        position: static;
     }
 
     /* Empilhado com um médico aberto: só o detalhe na tela. A lista volta ao
