@@ -56,8 +56,9 @@ export default async function AdminBankHoursPage({
             history={history}
             canManageOverrides={Boolean(session?.user.roles.includes("admin"))}
             settlementMonths={range.presetMonths}
-            // Mês aberto de cara: o corrente (ou ?month=AAAA-MM vindo de um link).
-            initialMonthKey={range.monthKey}
+            // De cara a vida inteira; ?month=AAAA-MM (vindo de um link) foca um mês.
+            initialMonthKey={month ? range.monthKey : "all"}
+            currentMonthKey={resolveMonthlyReportRange(null).monthKey}
         />
     );
 }

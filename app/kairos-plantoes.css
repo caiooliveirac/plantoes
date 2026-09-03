@@ -1927,8 +1927,9 @@
     color: var(--ambar-700);
 }
 
-.pagina-kairos .hours-month-strip-note {
-    color: var(--ambar-700);
+.pagina-kairos .hours-month-strip-empty,
+.pagina-kairos .hours-month-divider {
+    color: var(--texto-forte);
 }
 
 .pagina-kairos .hours-month-shift-row,

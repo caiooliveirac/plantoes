@@ -244,10 +244,6 @@ function groupShiftsByMonth(shifts: BankHoursHistoryShift[]): MonthGroup[] {
     return Array.from(groups.values()).sort((left, right) => left.monthKey.localeCompare(right.monthKey));
 }
 
-function emptyMonthGroup(monthKey: string): MonthGroup {
-    return { monthKey, shifts: [], balanceMinutes: 0, delayCount: 0, bonusCount: 0 };
-}
-
 type SaldoEventTone = "credit" | "debit" | "warn" | "neutral";
 
 interface SaldoEvent {
@@ -475,27 +471,51 @@ interface SettlementMonthOption {
     label: string;
 }
 
+/** Valor do seletor de mês que mostra a vida inteira (padrão). */
+const ALL_MONTHS = "all";
+
 interface Props {
     history: BankHoursHistoryModel;
     canManageOverrides: boolean;
     settlementMonths: SettlementMonthOption[];
-    /** Mês aberto de cara no seletor do topo (AAAA-MM). */
+    /** Foco inicial do seletor do topo: "all" (vida inteira) ou AAAA-MM vindo de ?month=. */
     initialMonthKey: string;
+    /** Mês corrente (AAAA-MM): padrão do abatimento em folha. */
+    currentMonthKey: string;
 }
 
-interface DoctorMonthView {
-    group: MonthGroup;
-    /** Abatimento em folha do mês — só para estatutário; null para PJ. */
-    payroll: PayrollDeductionForMonth | null;
+interface DoctorRowsView {
+    /** Meses visíveis no card (todos, ou só o mês em foco), em ordem crescente. */
+    groups: MonthGroup[];
+    shiftCount: number;
+    delayCount: number;
+    bonusCount: number;
+    balanceMinutes: number;
+    /** Abatimento em folha pendente (estatutário), somado nos meses visíveis. */
+    payrollPendingMinutes: number;
+    payrollPendingMonths: string[];
 }
 
-export function BankHoursHistoryClient({ history, canManageOverrides, settlementMonths, initialMonthKey }: Props) {
+/** Meses que podem ter atraso a abater: os com plantão + os com acerto de folha. */
+function payrollMonthsOf(doctor: BankHoursDoctorHistory) {
+    const months = new Set<string>();
+    for (const shift of doctor.shifts) months.add(shift.monthKey);
+    for (const settlement of doctor.settlements) {
+        if (settlement.kind === "payroll") months.add(settlement.monthKey);
+    }
+    return Array.from(months).sort();
+}
+
+export function BankHoursHistoryClient({ history, canManageOverrides, settlementMonths, initialMonthKey, currentMonthKey }: Props) {
     const router = useRouter();
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
-    // Mês em foco em toda a tela: lista (plantões do mês em cada médico), KPIs,
-    // filtro "abater em folha" e o mês do acerto no detalhe.
+    // Foco opcional de mês: "all" mostra a vida inteira (padrão); um AAAA-MM
+    // restringe as linhas dos cards, os KPIs e o filtro "abater em folha".
     const [monthKey, setMonthKey] = useState(initialMonthKey);
+    const focusedMonth = monthKey === ALL_MONTHS ? null : monthKey;
+    // Mês do abatimento em folha no detalhe do estatutário.
+    const [payrollMonth, setPayrollMonth] = useState(focusedMonth ?? currentMonthKey);
     const [employmentFilter, setEmploymentFilter] = useState<EmploymentFilter>("all");
     // Nenhum médico aberto por padrão: o histórico dilata muito a página, então
     // ele só abre por clique e pode ser fechado em vários pontos (X, fim, Esc).
@@ -506,7 +526,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const [savingShiftKey, setSavingShiftKey] = useState<string | null>(null);
     const [isSaving, startSavingTransition] = useTransition();
     const [settlementMonth, setSettlementMonth] = useState(
-        settlementMonths.some((month) => month.key === initialMonthKey) ? initialMonthKey : (settlementMonths[0]?.key ?? ""),
+        settlementMonths.some((month) => month.key === currentMonthKey) ? currentMonthKey : (settlementMonths[0]?.key ?? ""),
     );
     const [pendingFilter, setPendingFilter] = useState<PendingFilter>("all");
     const [reversingSettlementId, setReversingSettlementId] = useState<string | null>(null);
@@ -517,38 +537,45 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const detailPanelRef = useRef<HTMLElement | null>(null);
     const directoryRef = useRef<HTMLDivElement | null>(null);
 
-    // Meses do seletor: todo mês com plantão no histórico + os meses do
-    // fechamento + o mês em foco, do mais recente para o mais antigo.
-    const monthOptions = useMemo(() => {
-        const keys = new Set<string>([monthKey, initialMonthKey]);
+    // Meses com plantão no histórico + meses do fechamento + o corrente, do
+    // mais recente para o mais antigo (sem a opção "vida inteira").
+    const monthKeys = useMemo(() => {
+        const keys = new Set<string>([currentMonthKey]);
+        if (focusedMonth) keys.add(focusedMonth);
         for (const month of settlementMonths) keys.add(month.key);
         for (const doctor of history.doctors) {
             for (const shift of doctor.shifts) keys.add(shift.monthKey);
         }
         return Array.from(keys)
             .filter((key) => /^\d{4}-\d{2}$/.test(key))
-            .sort((left, right) => right.localeCompare(left))
-            .map((key) => ({ key, label: formatMonthLabel(key) }));
-    }, [history.doctors, initialMonthKey, monthKey, settlementMonths]);
+            .sort((left, right) => right.localeCompare(left));
+    }, [currentMonthKey, focusedMonth, history.doctors, settlementMonths]);
+
+    const monthOptions = useMemo(
+        () => [{ key: ALL_MONTHS, label: "Toda a vida" }, ...monthKeys.map((key) => ({ key, label: formatMonthLabel(key) }))],
+        [monthKeys],
+    );
 
     const monthIndex = monthOptions.findIndex((month) => month.key === monthKey);
     const newerMonth = monthIndex > 0 ? monthOptions[monthIndex - 1]?.key ?? null : null;
     const olderMonth = monthIndex >= 0 && monthIndex < monthOptions.length - 1 ? monthOptions[monthIndex + 1]?.key ?? null : null;
 
-    // O mês do acerto (plantão verde/vermelho do PJ) acompanha o mês em foco
-    // enquanto ele existir no fechamento; fora dele, fica no último escolhido.
+    // Focar um mês arrasta o mês do acerto (PJ) e o da folha (estatutário).
     useEffect(() => {
-        if (settlementMonths.some((month) => month.key === monthKey)) {
-            setSettlementMonth(monthKey);
+        if (!focusedMonth) return;
+        setPayrollMonth(focusedMonth);
+        if (settlementMonths.some((month) => month.key === focusedMonth)) {
+            setSettlementMonth(focusedMonth);
         }
-    }, [monthKey, settlementMonths]);
+    }, [focusedMonth, settlementMonths]);
 
     function selectMonth(nextMonthKey: string) {
         setMonthKey(nextMonthKey);
         setPayrollError(null);
         // Mantém o link compartilhável (?month=) sem recarregar a página.
         const url = new URL(window.location.href);
-        url.searchParams.set("month", nextMonthKey);
+        if (nextMonthKey === ALL_MONTHS) url.searchParams.delete("month");
+        else url.searchParams.set("month", nextMonthKey);
         window.history.replaceState(window.history.state, "", url.toString());
     }
 
@@ -631,20 +658,42 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         return map;
     }, [history.doctors]);
 
-    // Plantões do mês em foco por médico (ordem crescente) + abatimento em folha
-    // pendente (estatutário). É o que cada card mostra sem clique.
-    const monthByDoctor = useMemo(() => {
-        const map = new Map<string, DoctorMonthView>();
+    // As linhas de cada card: a vida inteira (ou só o mês em foco), mês a mês em
+    // ordem crescente, + o atraso ainda não abatido em folha (estatutário).
+    const rowsByDoctor = useMemo(() => {
+        const map = new Map<string, DoctorRowsView>();
         for (const doctor of history.doctors) {
-            const group = groupShiftsByMonth(doctor.shifts).find((candidate) => candidate.monthKey === monthKey)
-                ?? emptyMonthGroup(monthKey);
-            const payroll = doctor.employmentType === "estatutario"
-                ? resolvePayrollDeductionForMonth({ monthKey, shifts: doctor.shifts, settlements: doctor.settlements })
-                : null;
-            map.set(doctor.doctorId, { group, payroll });
+            const allGroups = groupShiftsByMonth(doctor.shifts);
+            const groups = focusedMonth ? allGroups.filter((group) => group.monthKey === focusedMonth) : allGroups;
+            const view: DoctorRowsView = {
+                groups,
+                shiftCount: 0,
+                delayCount: 0,
+                bonusCount: 0,
+                balanceMinutes: 0,
+                payrollPendingMinutes: 0,
+                payrollPendingMonths: [],
+            };
+            for (const group of groups) {
+                view.shiftCount += group.shifts.length;
+                view.delayCount += group.delayCount;
+                view.bonusCount += group.bonusCount;
+                view.balanceMinutes += group.balanceMinutes;
+            }
+            if (doctor.employmentType === "estatutario") {
+                const months = focusedMonth ? [focusedMonth] : payrollMonthsOf(doctor);
+                for (const month of months) {
+                    const payroll = resolvePayrollDeductionForMonth({ monthKey: month, shifts: doctor.shifts, settlements: doctor.settlements });
+                    if (payroll.pending) {
+                        view.payrollPendingMinutes += -payroll.remainingMinutes;
+                        view.payrollPendingMonths.push(month);
+                    }
+                }
+            }
+            map.set(doctor.doctorId, view);
         }
         return map;
-    }, [history.doctors, monthKey]);
+    }, [focusedMonth, history.doctors]);
 
     const pendingTotals = useMemo(() => {
         let bonusDoctors = 0;
@@ -664,14 +713,14 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 penaltyUnits += action.pendingUnits;
             }
             if (action?.inconsistency) inconsistencies += 1;
-            const payroll = monthByDoctor.get(doctor.doctorId)?.payroll;
-            if (payroll?.pending) {
+            const rows = rowsByDoctor.get(doctor.doctorId);
+            if (rows && rows.payrollPendingMinutes > 0) {
                 payrollDoctors += 1;
-                payrollMinutes += -payroll.remainingMinutes;
+                payrollMinutes += rows.payrollPendingMinutes;
             }
         }
         return { bonusDoctors, penaltyDoctors, bonusUnits, penaltyUnits, inconsistencies, payrollDoctors, payrollMinutes };
-    }, [history.doctors, monthByDoctor, pendingByDoctor]);
+    }, [history.doctors, pendingByDoctor, rowsByDoctor]);
 
     const employmentCounts = useMemo(() => {
         let pj = 0;
@@ -694,7 +743,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 const action = pendingByDoctor.get(doctor.doctorId);
                 if (pendingFilter === "settled") return doctor.settlements.length > 0;
                 if (pendingFilter === "inconsistency") return action?.inconsistency === true;
-                if (pendingFilter === "payroll") return monthByDoctor.get(doctor.doctorId)?.payroll?.pending === true;
+                if (pendingFilter === "payroll") return (rowsByDoctor.get(doctor.doctorId)?.payrollPendingMinutes ?? 0) > 0;
                 return action?.direction === pendingFilter;
             });
         }
@@ -703,24 +752,24 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         }
 
         return doctors.filter((doctor) => summarizeDoctorSearch(doctor).includes(normalized));
-    }, [deferredSearch, employmentFilter, history.doctors, monthByDoctor, pendingByDoctor, pendingFilter]);
+    }, [deferredSearch, employmentFilter, history.doctors, pendingByDoctor, pendingFilter, rowsByDoctor]);
 
-    // KPIs do mês em foco, sobre os médicos que passaram nos filtros.
+    // KPIs do que está visível (vida inteira ou mês em foco), sobre os médicos filtrados.
     const monthTotals = useMemo(() => {
         let shiftCount = 0;
         let delayCount = 0;
         let bonusCount = 0;
         let balanceMinutes = 0;
         for (const doctor of filteredDoctors) {
-            const view = monthByDoctor.get(doctor.doctorId);
+            const view = rowsByDoctor.get(doctor.doctorId);
             if (!view) continue;
-            shiftCount += view.group.shifts.length;
-            delayCount += view.group.delayCount;
-            bonusCount += view.group.bonusCount;
-            balanceMinutes += view.group.balanceMinutes;
+            shiftCount += view.shiftCount;
+            delayCount += view.delayCount;
+            bonusCount += view.bonusCount;
+            balanceMinutes += view.balanceMinutes;
         }
         return { shiftCount, delayCount, bonusCount, balanceMinutes };
-    }, [filteredDoctors, monthByDoctor]);
+    }, [filteredDoctors, rowsByDoctor]);
 
     // Sem fallback automático: null = fechado de propósito, e fica fechado.
     const selectedDoctor = selectedDoctorId
@@ -886,7 +935,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         }
     }
 
-    const monthLabel = formatMonthLabel(monthKey);
+    const monthLabel = focusedMonth ? formatMonthLabel(focusedMonth) : "toda a vida";
+    const scopeLabel = focusedMonth ? `em ${formatMonthShort(focusedMonth)}` : "na vida";
 
     return (
         // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
@@ -943,21 +993,21 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                             <strong>{filteredDoctors.length}</strong>
                             <span>de {history.summary.doctorCount} médicos</span>
                         </div>
-                        <div className="admin-bar-kpi" title={`Plantões em ${monthLabel} (médicos filtrados)`}>
+                        <div className="admin-bar-kpi" title={`Plantões ${scopeLabel} (médicos filtrados)`}>
                             <strong>{monthTotals.shiftCount}</strong>
-                            <span>plantões no mês</span>
+                            <span>plantões {scopeLabel}</span>
                         </div>
-                        <div className="admin-bar-kpi danger" title={`Plantões de ${monthLabel} com chegada fora da tolerância de 15 min`}>
+                        <div className="admin-bar-kpi danger" title={`Plantões ${scopeLabel} com chegada fora da tolerância de 15 min`}>
                             <strong>{monthTotals.delayCount}</strong>
                             <span>com desconto</span>
                         </div>
-                        <div className="admin-bar-kpi" title={`Plantões de ${monthLabel} com permanência além do previsto creditada`}>
+                        <div className="admin-bar-kpi" title={`Plantões ${scopeLabel} com permanência além do previsto creditada`}>
                             <strong>{monthTotals.bonusCount}</strong>
                             <span>com bônus</span>
                         </div>
-                        <div className={`admin-bar-kpi ${monthTotals.balanceMinutes < 0 ? "danger" : monthTotals.balanceMinutes > 0 ? "ok" : ""}`.trim()} title={`Soma do saldo dos plantões de ${monthLabel} (médicos filtrados)`}>
+                        <div className={`admin-bar-kpi ${monthTotals.balanceMinutes < 0 ? "danger" : monthTotals.balanceMinutes > 0 ? "ok" : ""}`.trim()} title={`Soma do saldo dos plantões ${scopeLabel} (médicos filtrados, sem planilha e acertos)`}>
                             <strong>{formatSignedMinutes(monthTotals.balanceMinutes)}</strong>
-                            <span>saldo do mês</span>
+                            <span>saldo dos plantões</span>
                         </div>
                     </div>
                     <div className="admin-bar-actions">
@@ -980,7 +1030,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                             <div className="admin-bar-drawer-grid">
                                 <div className="admin-bar-drawer-group">
                                     <span>O que a tela mostra</span>
-                                    <p>Cada médico já traz, sem clique, os plantões do mês escolhido no topo — em ordem crescente, com o saldo de cada um. Clique no nome para abrir a vida inteira (mês a mês), ou numa linha para cair direto naquele plantão.</p>
+                                    <p>Cada médico já traz, sem clique, todos os plantões em linhas curtas — data, turno, base e o saldo de cada um — com uma tag por mês. O seletor do topo é só um foco opcional (um mês por vez). Clique no nome para abrir a prova completa, ou numa linha para cair direto naquele plantão.</p>
                                 </div>
                                 <div className="admin-bar-drawer-group">
                                     <span>PJ × estatutário</span>
@@ -1029,7 +1079,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                             ["all", "Todas"],
                             ["bonus", `Pagar plantão · ${pendingTotals.bonusDoctors}`],
                             ["penalty", `Descontar plantão (PJ) · ${pendingTotals.penaltyDoctors}`],
-                            ["payroll", `Abater em folha (${formatMonthShort(monthKey)}) · ${pendingTotals.payrollDoctors}`],
+                            ["payroll", `Abater em folha · ${pendingTotals.payrollDoctors}`],
                             ["inconsistency", `Revisão necessária · ${pendingTotals.inconsistencies}`],
                             ["settled", "Já ajustados"],
                         ] as Array<[PendingFilter, string]>).map(([value, label]) => (
@@ -1052,8 +1102,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                     <span className="reports-badge danger" title="PJ com saldo elegível ≤ -12h">
                         {pendingTotals.penaltyDoctors} a descontar · {pendingTotals.penaltyUnits} plantões vermelhos
                     </span>
-                    <span className="reports-badge warn" title={`Estatutários com atraso de ${monthLabel} ainda não abatido em folha`}>
-                        {pendingTotals.payrollDoctors} a abater em folha · {formatPayrollMinutes(pendingTotals.payrollMinutes)} em {formatMonthShort(monthKey)}
+                    <span className="reports-badge warn" title={`Estatutários com atraso ${scopeLabel} ainda não abatido em folha`}>
+                        {pendingTotals.payrollDoctors} a abater em folha · {formatPayrollMinutes(pendingTotals.payrollMinutes)} {scopeLabel}
                     </span>
                     {pendingTotals.inconsistencies > 0 && (
                         <span className="reports-badge warn" title="Saldo mudou na direção contrária a acertos já lançados">
@@ -1081,9 +1131,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                     ) : filteredDoctors.map((doctor) => {
                         const bonusShifts = countBonusShifts(doctor);
                         const pending = pendingByDoctor.get(doctor.doctorId);
-                        const monthView = monthByDoctor.get(doctor.doctorId);
-                        const group = monthView?.group ?? emptyMonthGroup(monthKey);
-                        const payroll = monthView?.payroll ?? null;
+                        const rows = rowsByDoctor.get(doctor.doctorId);
                         const isSelected = selectedDoctor?.doctorId === doctor.doctorId;
                         return (
                             <article
@@ -1129,8 +1177,10 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                         {pending?.direction === "penalty" && (
                                             <span className="reports-badge danger">descontar {pending.pendingUnits}×12h</span>
                                         )}
-                                        {payroll?.pending && (
-                                            <span className="reports-badge warn">abater em folha {formatPayrollMinutes(-payroll.remainingMinutes)}</span>
+                                        {rows && rows.payrollPendingMinutes > 0 && (
+                                            <span className="reports-badge warn" title={`Meses com atraso a abater: ${rows.payrollPendingMonths.map(formatMonthShort).join(", ")}`}>
+                                                abater em folha {formatPayrollMinutes(rows.payrollPendingMinutes)}
+                                            </span>
                                         )}
                                         {pending?.inconsistency && (
                                             <span className="reports-badge warn">revisar</span>
@@ -1138,53 +1188,47 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     </div>
                                 </button>
 
-                                {/* Os plantões do mês em foco, plantão a plantão, sem precisar abrir o médico. */}
+                                {/* Plantão a plantão, sem abrir o médico: data · turno · base · saldo,
+                                    em linhas curtas, com uma tag por mês (crescente). */}
                                 <div className="hours-month-strip">
-                                    <div className="hours-month-strip-header">
-                                        <span className="hours-month-strip-title">{formatMonthShort(monthKey)}</span>
-                                        <span className="hours-month-strip-meta">
-                                            {group.shifts.length === 0
-                                                ? "sem plantão"
-                                                : `${group.shifts.length} ${group.shifts.length === 1 ? "plantão" : "plantões"}`}
-                                            {group.delayCount > 0 ? ` · ${group.delayCount} ${group.delayCount === 1 ? "atraso" : "atrasos"}` : ""}
-                                            {group.bonusCount > 0 ? ` · ${group.bonusCount} bônus` : ""}
-                                        </span>
-                                        <span className={`hours-balance-pill ${shiftBalanceClass(group.balanceMinutes)}`} title={`Saldo dos plantões de ${monthLabel}`}>
-                                            {formatSignedMinutes(group.balanceMinutes)}
-                                        </span>
-                                    </div>
-                                    {group.shifts.length > 0 ? (
+                                    {!rows || rows.groups.length === 0 ? (
+                                        <p className="hours-month-strip-empty">
+                                            {focusedMonth ? `Sem plantão em ${monthLabel}.` : "Sem plantão apurado pela aplicação."}
+                                        </p>
+                                    ) : (
                                         <ul className="hours-month-shifts">
-                                            {group.shifts.map((shift) => (
-                                                <li key={shiftKey(shift)}>
-                                                    <button
-                                                        type="button"
-                                                        className={`hours-month-shift-row ${shiftBalanceClass(shift.balanceMinutes)}`}
-                                                        onClick={() => openDoctorAtShift(doctor.doctorId, shiftAnchorId(shift))}
-                                                        title="Abrir este plantão no histórico"
-                                                    >
-                                                        <span className="hours-month-shift-date">{formatShortDate(shift.startedAt)}</span>
-                                                        <span className="hours-month-shift-turn">{shift.shiftLabel ?? "—"}</span>
-                                                        <span className="hours-month-shift-place">
-                                                            {shift.targetCode}
-                                                            <small>
-                                                                {formatTime(shift.countedStartAt)}–{formatTime(shift.countedEndAt)}
-                                                                {(shift.arrivalDelayMinutes ?? 0) > 0 ? ` · atraso ${formatMinutesForHumans(shift.arrivalDelayMinutes ?? 0)}` : ""}
-                                                                {(shift.creditedOvertimeMinutes ?? 0) > 0 ? ` · crédito ${formatMinutesForHumans(shift.creditedOvertimeMinutes ?? 0)}` : ""}
-                                                                {shift.flags.hasOpenShift ? " · em aberto" : ""}
-                                                            </small>
+                                            {rows.groups.map((group) => (
+                                                <li key={group.monthKey} className="hours-month-block">
+                                                    <div className="hours-month-divider" title={`${group.shifts.length} ${group.shifts.length === 1 ? "plantão" : "plantões"}${group.delayCount > 0 ? ` · ${group.delayCount} ${group.delayCount === 1 ? "atraso" : "atrasos"}` : ""}${group.bonusCount > 0 ? ` · ${group.bonusCount} bônus` : ""}`}>
+                                                        <span className="hours-month-strip-title">{formatMonthShort(group.monthKey)}</span>
+                                                        <span className="hours-month-strip-meta">{group.shifts.length} {group.shifts.length === 1 ? "plantão" : "plantões"}</span>
+                                                        <span className={`hours-balance-pill ${shiftBalanceClass(group.balanceMinutes)}`} title="Saldo dos plantões do mês">
+                                                            {formatSignedMinutes(group.balanceMinutes)}
                                                         </span>
-                                                        <span className={`hours-balance-pill ${shiftBalanceClass(shift.balanceMinutes)}`}>
-                                                            {shift.balanceMinutes === null ? "--" : formatSignedMinutes(shift.balanceMinutes)}
-                                                        </span>
-                                                    </button>
+                                                    </div>
+                                                    <ul className="hours-month-shifts">
+                                                        {group.shifts.map((shift) => (
+                                                            <li key={shiftKey(shift)}>
+                                                                <button
+                                                                    type="button"
+                                                                    className={`hours-month-shift-row ${shiftBalanceClass(shift.balanceMinutes)}`}
+                                                                    onClick={() => openDoctorAtShift(doctor.doctorId, shiftAnchorId(shift))}
+                                                                    title={`${formatTime(shift.countedStartAt)}–${formatTime(shift.countedEndAt)}${(shift.arrivalDelayMinutes ?? 0) > 0 ? ` · atraso ${formatMinutesForHumans(shift.arrivalDelayMinutes ?? 0)}` : ""}${(shift.creditedOvertimeMinutes ?? 0) > 0 ? ` · crédito ${formatMinutesForHumans(shift.creditedOvertimeMinutes ?? 0)}` : ""}${shift.flags.hasOpenShift ? " · em aberto" : ""} — abrir no histórico`}
+                                                                >
+                                                                    <span className="hours-month-shift-date">{formatShortDate(shift.startedAt)}</span>
+                                                                    <span className="hours-month-shift-turn">{shift.shiftLabel ?? "—"}</span>
+                                                                    <span className="hours-month-shift-place">{shift.targetCode}</span>
+                                                                    <span className={`hours-balance-pill ${shiftBalanceClass(shift.balanceMinutes)}`}>
+                                                                        {shift.balanceMinutes === null ? "--" : formatSignedMinutes(shift.balanceMinutes)}
+                                                                    </span>
+                                                                </button>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
                                                 </li>
                                             ))}
                                         </ul>
-                                    ) : null}
-                                    {payroll && payroll.abatedMinutes > 0 && !payroll.pending ? (
-                                        <p className="hours-month-strip-note">Atraso do mês já abatido em folha ({formatPayrollMinutes(payroll.abatedMinutes)}).</p>
-                                    ) : null}
+                                    )}
                                 </div>
                             </article>
                         );
@@ -1362,13 +1406,14 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                             {canManageOverrides && selectedDoctor.employmentType === "estatutario" ? (() => {
                                 // Estatutário: atraso do mês vai para a folha, não para plantão vermelho.
                                 const payroll = resolvePayrollDeductionForMonth({
-                                    monthKey,
+                                    monthKey: payrollMonth,
                                     shifts: selectedDoctor.shifts,
                                     settlements: selectedDoctor.settlements,
                                 });
                                 const negativeShifts = selectedDoctor.shifts
-                                    .filter((shift) => shift.monthKey === monthKey && (shift.balanceMinutes ?? 0) < 0)
+                                    .filter((shift) => shift.monthKey === payrollMonth && (shift.balanceMinutes ?? 0) < 0)
                                     .sort(compareShiftsAsc);
+                                const pendingMonths = rowsByDoctor.get(selectedDoctor.doctorId)?.payrollPendingMonths ?? [];
                                 const settleBalance = resolveBankHoursSettlementBalance({
                                     oldMinutes: selectedDoctor.legacy?.preMay2025Minutes ?? 0,
                                     recentMinutes: (selectedDoctor.legacy?.spreadsheetPeriodMinutes ?? 0) + selectedDoctor.applicationBalanceMinutes,
@@ -1383,16 +1428,25 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                         </p>
 
                                         <label className="hours-settlement-month-field">
-                                            <span>Mês da folha (o mesmo do seletor do topo)</span>
+                                            <span>Mês da folha</span>
                                             <select
-                                                value={monthKey}
-                                                onChange={(event) => selectMonth(event.target.value)}
+                                                value={payrollMonth}
+                                                onChange={(event) => { setPayrollMonth(event.target.value); setPayrollError(null); }}
                                             >
-                                                {monthOptions.map((month) => (
-                                                    <option key={month.key} value={month.key}>{month.label}</option>
+                                                {monthKeys.map((key) => (
+                                                    <option key={key} value={key}>
+                                                        {formatMonthLabel(key)}{pendingMonths.includes(key) ? " · atraso a abater" : ""}
+                                                    </option>
                                                 ))}
                                             </select>
                                         </label>
+                                        {pendingMonths.length > 0 && !pendingMonths.includes(payrollMonth) ? (
+                                            <p className="hours-settlement-hint">
+                                                Atraso a abater em: {pendingMonths.map((key) => (
+                                                    <button key={key} type="button" className="hours-inline-link" onClick={() => setPayrollMonth(key)}>{formatMonthShort(key)}</button>
+                                                ))}
+                                            </p>
+                                        ) : null}
 
                                         {negativeShifts.length > 0 ? (
                                             <ul className="hours-payroll-list">
@@ -1410,12 +1464,12 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                     </li>
                                                 ))}
                                                 <li className="hours-payroll-total">
-                                                    <span>Atraso de {formatMonthLabel(monthKey)}</span>
+                                                    <span>Atraso de {formatMonthLabel(payrollMonth)}</span>
                                                     <span className="hours-balance-pill negative">{formatSignedMinutes(payroll.negativeMinutes)}</span>
                                                 </li>
                                             </ul>
                                         ) : (
-                                            <p className="hours-settlement-hint">Sem atraso em {formatMonthLabel(monthKey)} — nada a abater em folha.</p>
+                                            <p className="hours-settlement-hint">Sem atraso em {formatMonthLabel(payrollMonth)} — nada a abater em folha.</p>
                                         )}
 
                                         {payroll.abatedMinutes !== 0 ? (
@@ -1434,7 +1488,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                 disabled={busy}
                                                 onClick={() => void submitPayrollSettlement(selectedDoctor, payroll)}
                                             >
-                                                {busy ? "Abatendo…" : `Abater em folha ${formatPayrollMinutes(-payroll.remainingMinutes)} de ${formatMonthShort(monthKey)}`}
+                                                {busy ? "Abatendo…" : `Abater em folha ${formatPayrollMinutes(-payroll.remainingMinutes)} de ${formatMonthShort(payrollMonth)}`}
                                             </button>
                                         ) : negativeShifts.length > 0 ? (
                                             <p className="hours-settlement-hint">Atraso deste mês já abatido em folha. Para desfazer, estorne o lançamento na lista de acertos.</p>
@@ -1551,7 +1605,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     <section
                                         key={group.monthKey}
                                         id={monthAnchorId(selectedDoctor.doctorId, group.monthKey)}
-                                        className={`hours-month-group ${group.monthKey === monthKey ? "current" : ""}`.trim()}
+                                        className={`hours-month-group ${group.monthKey === focusedMonth ? "current" : ""}`.trim()}
                                     >
                                         <header className="hours-month-group-header">
                                             <div>
@@ -1563,12 +1617,14 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                 </span>
                                             </div>
                                             <div className="hours-month-group-actions">
-                                                {group.monthKey !== monthKey ? (
+                                                {group.monthKey !== focusedMonth ? (
                                                     <button type="button" className="admin-bar-filters-toggle" onClick={() => selectMonth(group.monthKey)} title="Focar este mês na tela toda">
                                                         focar mês
                                                     </button>
                                                 ) : (
-                                                    <span className="reports-badge warn">mês em foco</span>
+                                                    <button type="button" className="admin-bar-filters-toggle open" onClick={() => selectMonth(ALL_MONTHS)} title="Voltar a ver toda a vida">
+                                                        mês em foco ✕
+                                                    </button>
                                                 )}
                                                 <span className={`hours-balance-pill ${shiftBalanceClass(group.balanceMinutes)}`}>{formatSignedMinutes(group.balanceMinutes)}</span>
                                             </div>
@@ -1800,8 +1856,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                         </>
                     ) : (
                         <article className="hours-empty-state">
-                            <strong>Clique em um médico para abrir a vida inteira.</strong>
-                            <span>A lista ao lado já mostra os plantões de {monthLabel}; o detalhe traz todos os meses em ordem, o que mexeu no saldo e a prova plantão a plantão. Feche pelo ✕, pelo botão no fim ou com Esc.</span>
+                            <strong>Clique em um médico para abrir a prova completa.</strong>
+                            <span>A lista ao lado já mostra os plantões ({monthLabel}) linha a linha; o detalhe traz todos os meses em ordem, o que mexeu no saldo e a prova plantão a plantão. Feche pelo ✕, pelo botão no fim ou com Esc.</span>
                         </article>
                     )}
                 </aside>

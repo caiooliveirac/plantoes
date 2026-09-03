@@ -3150,10 +3150,10 @@ button.ops-doctor-line.displaced.clickable:hover {
     min-width: 0;
 }
 
-.hours-month-strip-note {
+.hours-month-strip-empty {
     margin: 0;
     font-size: 0.78rem;
-    color: #ffe9c4;
+    color: var(--muted-strong);
 }
 
 .hours-month-shifts,
@@ -3162,25 +3162,64 @@ button.ops-doctor-line.displaced.clickable:hover {
     margin: 0;
     padding: 0;
     display: grid;
-    gap: 4px;
+    gap: 2px;
 }
 
+.hours-month-block + .hours-month-block {
+    margin-top: 6px;
+}
+
+/* Tag do mês entre os blocos de linhas: mês · n plantões · saldo do mês. */
+.hours-month-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 4px 4px;
+    font-size: 0.74rem;
+    color: var(--muted-strong);
+}
+
+.hours-month-divider .hours-balance-pill {
+    min-height: 20px;
+    padding: 0 7px;
+    font-size: 0.68rem;
+}
+
+/* Linhas curtas: data · turno · base · saldo. Cabem muitas na tela. */
 .hours-month-shift-row,
 .hours-payroll-row {
     display: grid;
-    grid-template-columns: 76px 30px minmax(0, 1fr) auto;
+    grid-template-columns: 72px 28px minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
     width: 100%;
-    padding: 6px 8px;
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    min-height: 26px;
+    padding: 2px 6px 2px 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-left-width: 3px;
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(255, 255, 255, 0.025);
     color: inherit;
     font: inherit;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
+    line-height: 1.2;
     text-align: left;
+    cursor: pointer;
+}
+
+.hours-payroll-row {
+    min-height: 34px;
+    padding: 4px 8px;
+}
+
+.hours-inline-link {
+    padding: 0 4px;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-weight: 700;
+    text-decoration: underline;
     cursor: pointer;
 }
 
@@ -3235,9 +3274,9 @@ button.ops-doctor-line.displaced.clickable:hover {
 
 .hours-month-shift-row .hours-balance-pill,
 .hours-payroll-row .hours-balance-pill {
-    min-height: 26px;
-    padding: 0 9px;
-    font-size: 0.74rem;
+    min-height: 20px;
+    padding: 0 7px;
+    font-size: 0.7rem;
 }
 
 .hours-payroll-total {
