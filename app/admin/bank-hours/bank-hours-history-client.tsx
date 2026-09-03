@@ -1235,8 +1235,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                     })}
                 </div>
 
+                {selectedDoctor ? (
                 <aside className="hours-detail-panel" ref={detailPanelRef}>
-                    {selectedDoctor ? (
                         <>
                             <header className="hours-detail-header sticky">
                                 <div>
@@ -1854,13 +1854,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                 Fechar histórico de {selectedDoctor.doctorName} ✕
                             </button>
                         </>
-                    ) : (
-                        <article className="hours-empty-state">
-                            <strong>Clique em um médico para abrir a prova completa.</strong>
-                            <span>A lista ao lado já mostra os plantões ({monthLabel}) linha a linha; o detalhe traz todos os meses em ordem, o que mexeu no saldo e a prova plantão a plantão. Feche pelo ✕, pelo botão no fim ou com Esc.</span>
-                        </article>
-                    )}
                 </aside>
+                ) : null}
             </section>
         </main>
         </div>
