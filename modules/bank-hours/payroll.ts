@@ -22,8 +22,12 @@
  *          mais negativo por causa de um débito — saldo prévio negativo é
  *          coisa do passado, só os créditos o corroem, e ele NUNCA vai à folha.
  *
- * O settlement "payroll" grava só a parcela que foi à folha (payrollMinutes),
- * devolvendo esses minutos ao banco: saldo depois = prévio + créditos − absorvido.
+ * A folha é AUTOMÁTICA: o saldo do estatutário É a cascata rodada mês a mês
+ * desde o legado (resolvePayrollLedger) — a parcela "vai à folha" nunca entra
+ * no banco. Não há botão nem settlement a gravar; a coordenação lê o previsto
+ * na tela e lança na folha de pagamento/ponto por fora. Settlements de kind
+ * "payroll" gravados antes de 2026-09 (regra antiga, manual) são registro
+ * histórico e ficam FORA do cálculo.
  */
 
 export const BANK_HOURS_PAYROLL_SETTLEMENT_KIND = "payroll";
@@ -102,45 +106,69 @@ export interface PayrollDeductionForMonth {
     payrollMinutes: number;
     /** Banco depois de aplicar créditos e débitos absorvidos (o que sobra com o payroll lançado). */
     closingBankMinutes: number;
-    /** O que já foi abatido em folha neste mês (líquido de estornos, ≥ 0 normalmente). */
-    abatedMinutes: number;
-    /** −payrollMinutes + abatedMinutes: o que ainda falta levar à folha (≤ 0 quando pendente). */
-    remainingMinutes: number;
-    /** Ainda há parcela do mês devida à folha sem abatimento registrado. */
-    pending: boolean;
     /** Créditos em ordem cronológica, com o banco antes/depois (para o diagrama). */
     creditSteps: PayrollCreditStep[];
     /** Débitos em ordem cronológica, com a repartição de cada um (para o diagrama). */
     steps: PayrollDebitStep[];
 }
 
+/** Razão do estatutário: a cascata rodada mês a mês desde o legado. */
+export interface PayrollLedger {
+    /** Meses em ordem crescente (os com plantão ou acerto, + throughMonthKey). */
+    months: PayrollDeductionForMonth[];
+    /** Saldo efetivo do banco ao fim do último mês. */
+    balanceMinutes: number;
+    /** Tudo que foi à folha, somado. */
+    payrollTotalMinutes: number;
+}
+
 /**
- * Saldo prévio do mês: tudo que tem monthKey < mês (plantões e acertos de
- * qualquer kind) + o legado da planilha, que é anterior a qualquer plantão da
- * aplicação. Acertos do PRÓPRIO mês ficam fora — o payroll do mês é tratado
- * em abatedMinutes; bônus/penalidade do mesmo mês não existem para estatutário.
+ * Roda a cascata mês a mês a partir do legado da planilha (anterior a qualquer
+ * plantão da aplicação). Acertos que NÃO são payroll (bônus de +12h) entram no
+ * banco ao fim do mês deles; settlements "payroll" são ignorados — a cascata
+ * já mantém a parcela de folha fora do banco.
  */
-export function resolvePayrollOpeningBalance(params: {
-    monthKey: string;
+export function resolvePayrollLedger(params: {
     legacyMinutes: number;
     shifts: PayrollShiftInput[];
     settlements: PayrollSettlementInput[];
-}): number {
-    let total = params.legacyMinutes;
-    for (const shift of params.shifts) {
-        if (shift.monthKey < params.monthKey) total += shift.balanceMinutes ?? 0;
-    }
+    /** Garante este mês na lista mesmo sem plantão/acerto (mês em foco na tela). */
+    throughMonthKey?: string;
+    splitCrossingDebit?: boolean;
+}): PayrollLedger {
+    const monthKeys = new Set<string>();
+    for (const shift of params.shifts) monthKeys.add(shift.monthKey);
     for (const settlement of params.settlements) {
-        if (settlement.monthKey < params.monthKey) total += settlement.deltaMinutes;
+        if (settlement.kind !== BANK_HOURS_PAYROLL_SETTLEMENT_KIND) monthKeys.add(settlement.monthKey);
     }
-    return total;
+    if (params.throughMonthKey) monthKeys.add(params.throughMonthKey);
+
+    let running = params.legacyMinutes;
+    let payrollTotalMinutes = 0;
+    const months: PayrollDeductionForMonth[] = [];
+    for (const monthKey of Array.from(monthKeys).sort()) {
+        const month = resolvePayrollDeductionForMonth({
+            monthKey,
+            openingBalanceMinutes: running,
+            shifts: params.shifts,
+            splitCrossingDebit: params.splitCrossingDebit,
+        });
+        running = month.closingBankMinutes;
+        for (const settlement of params.settlements) {
+            if (settlement.monthKey === monthKey && settlement.kind !== BANK_HOURS_PAYROLL_SETTLEMENT_KIND) {
+                running += settlement.deltaMinutes;
+            }
+        }
+        payrollTotalMinutes += month.payrollMinutes;
+        months.push(month);
+    }
+    return { months, balanceMinutes: running, payrollTotalMinutes };
 }
 
 export function resolvePayrollDeductionForMonth(params: {
     monthKey: string;
     openingBalanceMinutes: number;
     shifts: PayrollShiftInput[];
-    settlements: PayrollSettlementInput[];
     /** Override para testes; produção usa PAYROLL_SPLIT_CROSSING_DEBIT. */
     splitCrossingDebit?: boolean;
 }): PayrollDeductionForMonth {
@@ -213,14 +241,6 @@ export function resolvePayrollDeductionForMonth(params: {
         });
     }
 
-    let abatedMinutes = 0;
-    for (const settlement of params.settlements) {
-        if (settlement.monthKey !== params.monthKey) continue;
-        if (settlement.kind !== BANK_HOURS_PAYROLL_SETTLEMENT_KIND) continue;
-        abatedMinutes += settlement.deltaMinutes;
-    }
-
-    const remainingMinutes = -payrollMinutes + abatedMinutes;
     return {
         monthKey: params.monthKey,
         openingBalanceMinutes: params.openingBalanceMinutes,
@@ -232,40 +252,20 @@ export function resolvePayrollDeductionForMonth(params: {
         absorbedMinutes,
         payrollMinutes,
         closingBankMinutes: bank,
-        abatedMinutes,
-        remainingMinutes,
-        pending: remainingMinutes < 0,
         creditSteps,
         steps,
     };
 }
 
-/** Atalho usado pelo client e pela rota: saldo prévio + cascata do mês. */
+/** Cascata de UM mês, com o prévio vindo do razão (coerente com o saldo da tela). */
 export function resolvePayrollDeductionForDoctorMonth(params: {
     monthKey: string;
     legacyMinutes: number;
     shifts: PayrollShiftInput[];
     settlements: PayrollSettlementInput[];
 }): PayrollDeductionForMonth {
-    return resolvePayrollDeductionForMonth({
-        monthKey: params.monthKey,
-        openingBalanceMinutes: resolvePayrollOpeningBalance(params),
-        shifts: params.shifts,
-        settlements: params.settlements,
-    });
-}
-
-/** Texto padrão gravado em notes do acerto de folha — legível na folha e no histórico. */
-export function buildPayrollSettlementNote(params: {
-    monthKey: string;
-    negativeShiftCount: number;
-    deltaMinutes: number;
-    /** Quanto dos débitos do mês o banco absorveu antes de a folha entrar. */
-    absorbedMinutes?: number;
-}): string {
-    const plantoes = params.negativeShiftCount === 1 ? "1 plantão com atraso" : `${params.negativeShiftCount} plantões com atraso`;
-    const absorbed = params.absorbedMinutes ? `, ${formatPayrollMinutes(params.absorbedMinutes)} absorvidos pelo banco` : "";
-    return `Abatido em folha — ${params.monthKey}: ${plantoes}${absorbed}, ${formatPayrollMinutes(params.deltaMinutes)} descontados na folha de pagamento/ponto`;
+    const ledger = resolvePayrollLedger({ ...params, throughMonthKey: params.monthKey });
+    return ledger.months.find((month) => month.monthKey === params.monthKey)!;
 }
 
 export function formatPayrollMinutes(minutes: number): string {

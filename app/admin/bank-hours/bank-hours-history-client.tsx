@@ -516,8 +516,8 @@ function buildShiftEvents(shift: BankHoursHistoryShift): SaldoEvent[] {
 function describeSettlementEvent(settlement: BankHoursSettlementSummary) {
     if (settlement.kind === "payroll") {
         return settlement.deltaMinutes < 0
-            ? `Estorno do abatimento em folha de ${settlement.monthKey}: os atrasos daquele mês voltam a contar no banco.`
-            : `Abatido em folha (${settlement.monthKey}): ${formatPayrollMinutes(settlement.deltaMinutes)} de atraso do mês descontados na folha de pagamento/ponto; o banco devolve essas horas.`;
+            ? `Estorno de abatimento manual em folha de ${settlement.monthKey} (registro histórico; desde set/2026 a folha é automática e este lançamento não entra no saldo).`
+            : `Abatimento manual em folha (${settlement.monthKey}): ${formatPayrollMinutes(settlement.deltaMinutes)} — registro histórico da regra antiga; desde set/2026 a folha é automática e este lançamento não entra no saldo.`;
     }
     if (settlement.kind === "bonus") {
         return `Acerto do fechamento ${settlement.monthKey}: crédito pago como plantão verde; o saldo devolve 12 h.`;
@@ -622,12 +622,12 @@ interface DoctorRowsView {
     delayCount: number;
     bonusCount: number;
     balanceMinutes: number;
-    /** Abatimento em folha pendente (estatutário), somado nos meses visíveis. */
+    /** Previsto para a folha (estatutário), somado nos meses visíveis — automático, sem botão. */
     payrollPendingMinutes: number;
     payrollPendingMonths: string[];
 }
 
-/** Meses que podem ter atraso a abater: os com plantão + os com acerto de folha. */
+/** Meses que podem ter desconto em folha: os com plantão + os com acerto antigo de folha. */
 function payrollMonthsOf(doctor: BankHoursDoctorHistory) {
     const months = new Set<string>();
     for (const shift of doctor.shifts) months.add(shift.monthKey);
@@ -642,7 +642,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const [search, setSearch] = useState("");
     const deferredSearch = useDeferredValue(search);
     // Foco opcional de mês: "all" mostra a vida inteira (padrão); um AAAA-MM
-    // restringe as linhas dos cards, os KPIs e o filtro "abater em folha".
+    // restringe as linhas dos cards, os KPIs e o filtro "folha".
     const [monthKey, setMonthKey] = useState(initialMonthKey);
     const focusedMonth = monthKey === ALL_MONTHS ? null : monthKey;
     // Mês do abatimento em folha no detalhe do estatutário.
@@ -661,8 +661,6 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     );
     const [pendingFilter, setPendingFilter] = useState<PendingFilter>("all");
     const [reversingSettlementId, setReversingSettlementId] = useState<string | null>(null);
-    const [payrollBusyDoctorId, setPayrollBusyDoctorId] = useState<string | null>(null);
-    const [payrollError, setPayrollError] = useState<string | null>(null);
     // Gaveta "Como ler" da faixa de comando (absorveu o herói e os princípios).
     const [guideOpen, setGuideOpen] = useState(false);
     const detailPanelRef = useRef<HTMLElement | null>(null);
@@ -702,7 +700,6 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
 
     function selectMonth(nextMonthKey: string) {
         setMonthKey(nextMonthKey);
-        setPayrollError(null);
         // Mantém o link compartilhável (?month=) sem recarregar a página.
         const url = new URL(window.location.href);
         if (nextMonthKey === ALL_MONTHS) url.searchParams.delete("month");
@@ -720,7 +717,6 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         }
 
         setSelectedDoctorId(doctorId);
-        setPayrollError(null);
         if (window.matchMedia("(max-width: 1180px)").matches) {
             // Timeout curto: espera o React commitar o novo detalhe antes de rolar.
             // behavior "auto" (salto): o smooth era abortado pelo re-render do painel.
@@ -734,8 +730,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     function openDoctorAtShift(doctorId: string, anchorId: string) {
         if (doctorId !== selectedDoctorId) {
             setSelectedDoctorId(doctorId);
-            setPayrollError(null);
-        }
+            }
         window.setTimeout(() => {
             document.getElementById(anchorId)?.scrollIntoView({ behavior: "auto", block: "start" });
         }, 120);
@@ -815,8 +810,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 const months = focusedMonth ? [focusedMonth] : payrollMonthsOf(doctor);
                 for (const month of months) {
                     const payroll = resolvePayrollDeductionForDoctorMonth({ monthKey: month, legacyMinutes: doctor.legacy?.totalMinutes ?? 0, shifts: doctor.shifts, settlements: doctor.settlements });
-                    if (payroll.pending) {
-                        view.payrollPendingMinutes += -payroll.remainingMinutes;
+                    if (payroll.payrollMinutes > 0) {
+                        view.payrollPendingMinutes += payroll.payrollMinutes;
                         view.payrollPendingMonths.push(month);
                     }
                 }
@@ -1038,34 +1033,6 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         }
     }
 
-    /**
-     * Abater em folha (estatutário): o servidor recalcula quanto o mês deve; o
-     * cliente só diz QUAL médico e QUAL mês.
-     */
-    async function submitPayrollSettlement(doctor: BankHoursDoctorHistory, payroll: PayrollDeductionForMonth) {
-        const amount = formatPayrollMinutes(-payroll.remainingMinutes);
-        if (!window.confirm(`Abater em folha ${amount} de atraso de ${doctor.doctorName} em ${formatMonthLabel(payroll.monthKey)}?\n\nO desconto é lançado na folha de pagamento/ponto por fora; aqui fica registrado que o banco não cobra mais essas horas. O médico será avisado.`)) {
-            return;
-        }
-        setPayrollBusyDoctorId(doctor.doctorId);
-        setPayrollError(null);
-        try {
-            const response = await fetch("/api/admin/bank-hours/payroll-settlement", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ doctorId: doctor.doctorId, monthKey: payroll.monthKey }),
-            });
-            const body = await response.json().catch(() => null) as { error?: string } | null;
-            if (!response.ok) {
-                setPayrollError(body?.error || "Não foi possível abater em folha.");
-                return;
-            }
-            router.refresh();
-        } finally {
-            setPayrollBusyDoctorId(null);
-        }
-    }
-
     const monthLabel = focusedMonth ? formatMonthLabel(focusedMonth) : "toda a vida";
     const scopeLabel = focusedMonth ? `em ${formatMonthShort(focusedMonth)}` : "na vida";
 
@@ -1181,7 +1148,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 ) : null}
             </section>
 
-            {/* Filtros de cara: vínculo + pendência. Quem já formou múltiplos de ±12h, quem tem atraso a abater no mês. */}
+            {/* Filtros de cara: vínculo + pendência. Quem já formou múltiplos de ±12h, quem tem desconto em folha no mês. */}
             <section className="hours-settlements hours-pending-strip">
                 <div className="hours-filter-row">
                     <span className="hours-filter-label">Vínculo</span>
@@ -1210,7 +1177,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                             ["all", "Todas"],
                             ["bonus", `Pagar plantão · ${pendingTotals.bonusDoctors}`],
                             ["penalty", `Descontar plantão (PJ) · ${pendingTotals.penaltyDoctors}`],
-                            ["payroll", `Abater em folha · ${pendingTotals.payrollDoctors}`],
+                            ["payroll", `Folha (estatutário) · ${pendingTotals.payrollDoctors}`],
                             ["inconsistency", `Revisão necessária · ${pendingTotals.inconsistencies}`],
                             ["settled", "Já ajustados"],
                         ] as Array<[PendingFilter, string]>).map(([value, label]) => (
@@ -1233,8 +1200,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                     <span className="reports-badge danger" title="PJ com saldo elegível ≤ -12h">
                         {pendingTotals.penaltyDoctors} a descontar · {pendingTotals.penaltyUnits} plantões vermelhos
                     </span>
-                    <span className="reports-badge warn" title={`Estatutários com atraso ${scopeLabel} ainda não abatido em folha`}>
-                        {pendingTotals.payrollDoctors} a abater em folha · {formatPayrollMinutes(pendingTotals.payrollMinutes)} {scopeLabel}
+                    <span className="reports-badge warn" title={`Estatutários com desconto previsto na folha ${scopeLabel} (automático: só o atraso que passou do zero do banco)`}>
+                        {pendingTotals.payrollDoctors} com desconto em folha · {formatPayrollMinutes(pendingTotals.payrollMinutes)} {scopeLabel}
                     </span>
                     {pendingTotals.inconsistencies > 0 && (
                         <span className="reports-badge warn" title="Saldo mudou na direção contrária a acertos já lançados">
@@ -1309,8 +1276,8 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                             <span className="reports-badge danger">descontar {pending.pendingUnits}×12h</span>
                                         )}
                                         {rows && rows.payrollPendingMinutes > 0 && (
-                                            <span className="reports-badge warn" title={`Meses com atraso a abater: ${rows.payrollPendingMonths.map(formatMonthShort).join(", ")}`}>
-                                                abater em folha {formatPayrollMinutes(rows.payrollPendingMinutes)}
+                                            <span className="reports-badge warn" title={`Meses com desconto em folha: ${rows.payrollPendingMonths.map(formatMonthShort).join(", ")}`}>
+                                                folha {formatPayrollMinutes(rows.payrollPendingMinutes)}
                                             </span>
                                         )}
                                         {pending?.inconsistency && (
@@ -1551,30 +1518,29 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     recentMinutes: (selectedDoctor.legacy?.spreadsheetPeriodMinutes ?? 0) + selectedDoctor.applicationBalanceMinutes,
                                 });
                                 const pending = pendingByDoctor.get(selectedDoctor.doctorId);
-                                const busy = payrollBusyDoctorId === selectedDoctor.doctorId;
                                 return (
                                     <section className="hours-settlements hours-settlement-action hours-payroll-action">
-                                        <p className="reports-summary-label">Abater em folha · estatutário</p>
+                                        <p className="reports-summary-label">Folha · estatutário</p>
                                         <p className="hours-settlement-hint">
-                                            O estatutário é pago pela folha da prefeitura. O banco positivo é o primeiro colchão do atraso: entram primeiro os créditos do mês, depois cada débito consome o banco enquanto ele está acima de zero. Só o que passa do zero vai à folha de pagamento/ponto. Saldo prévio negativo nunca vai à folha — os créditos só o atenuam. Ao abater, o banco devolve exatamente os minutos levados à folha.
+                                            O estatutário é pago pela folha da prefeitura. O banco positivo é o primeiro colchão do atraso: entram primeiro os créditos do mês, depois cada débito consome o banco enquanto ele está acima de zero. Só o que passa do zero vai à folha de pagamento/ponto; saldo prévio negativo nunca vai à folha. <strong>O cálculo é automático e já está no saldo</strong> — nada a clicar. Cabe à coordenação conferir o valor previsto abaixo e lançar na folha de pagamento/ponto.
                                         </p>
 
                                         <label className="hours-settlement-month-field">
                                             <span>Mês da folha</span>
                                             <select
                                                 value={payrollMonth}
-                                                onChange={(event) => { setPayrollMonth(event.target.value); setPayrollError(null); }}
+                                                onChange={(event) => setPayrollMonth(event.target.value)}
                                             >
                                                 {monthKeys.map((key) => (
                                                     <option key={key} value={key}>
-                                                        {formatMonthLabel(key)}{pendingMonths.includes(key) ? " · atraso a abater" : ""}
+                                                        {formatMonthLabel(key)}{pendingMonths.includes(key) ? " · folha" : ""}
                                                     </option>
                                                 ))}
                                             </select>
                                         </label>
                                         {pendingMonths.length > 0 && !pendingMonths.includes(payrollMonth) ? (
                                             <p className="hours-settlement-hint">
-                                                Atraso a abater em: {pendingMonths.map((key) => (
+                                                Desconto em folha em: {pendingMonths.map((key) => (
                                                     <button key={key} type="button" className="hours-inline-link" onClick={() => setPayrollMonth(key)}>{formatMonthShort(key)}</button>
                                                 ))}
                                             </p>
@@ -1601,31 +1567,15 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                 </li>
                                             </ul>
                                         ) : (
-                                            <p className="hours-settlement-hint">Sem atraso em {formatMonthLabel(payrollMonth)} — nada a abater em folha.</p>
+                                            <p className="hours-settlement-hint">Sem atraso em {formatMonthLabel(payrollMonth)} — nada vai à folha.</p>
                                         )}
 
                                         <PayrollWaterfall payroll={payroll} />
 
-                                        {payroll.abatedMinutes !== 0 ? (
-                                            <p className="hours-settlement-hint">
-                                                Já abatido em folha neste mês: <strong>{formatPayrollMinutes(payroll.abatedMinutes)}</strong>
-                                                {payroll.pending ? ` — falta ${formatPayrollMinutes(-payroll.remainingMinutes)}.` : "."}
+                                        {payroll.payrollMinutes > 0 ? (
+                                            <p className="hours-payroll-forecast">
+                                                Lançar na folha de {formatMonthLabel(payrollMonth)}: <strong>{formatPayrollMinutes(payroll.payrollMinutes)}</strong> de atraso.
                                             </p>
-                                        ) : null}
-
-                                        {payrollError ? <div className="hours-override-error">{payrollError}</div> : null}
-
-                                        {payroll.pending ? (
-                                            <button
-                                                type="button"
-                                                className="payment-button bank-payroll"
-                                                disabled={busy}
-                                                onClick={() => void submitPayrollSettlement(selectedDoctor, payroll)}
-                                            >
-                                                {busy ? "Abatendo…" : `Abater em folha ${formatPayrollMinutes(-payroll.remainingMinutes)} de ${formatMonthShort(payrollMonth)}`}
-                                            </button>
-                                        ) : negativeShifts.length > 0 ? (
-                                            <p className="hours-settlement-hint">Atraso deste mês já abatido em folha. Para desfazer, estorne o lançamento na lista de acertos.</p>
                                         ) : null}
 
                                         {settleBalance.bonusEligibleMinutes >= BANK_HOURS_SETTLEMENT_MINUTES ? (

@@ -2,6 +2,7 @@ import { buildContinuityGroups } from "@/modules/bank-hours/continuity";
 import { applyAnomalyGuard, calculateBankHours, calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { buildBankHoursBalanceOverrideExplanation, MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE } from "@/modules/bank-hours/service";
+import { resolvePayrollLedger } from "@/modules/bank-hours/payroll";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import {
     describeLateDepartureReason,
@@ -945,10 +946,8 @@ export function buildBankHoursHistoryModel(
     // misturar as parcelas: applicationBalanceMinutes preserva o que a aplicação
     // apurou e legacy carrega a composição da planilha para a view. Plantonista
     // com legado mas sem plantão na aplicação ainda precisa aparecer.
-    let legacyTotalMinutes = 0;
     for (const record of legacyByDoctor.values()) {
         const { doctorId, doctorName, displayName, ...summary } = record;
-        legacyTotalMinutes += summary.totalMinutes;
         const current = doctorsMap.get(doctorId);
         if (current) {
             current.applicationBalanceMinutes = current.balanceMinutes;
@@ -988,7 +987,6 @@ export function buildBankHoursHistoryModel(
     // ser o EFETIVO (bruto + acertos), igual ao que o modal do payment-closing usa.
     // Roda DEPOIS do merge do legado: médico só-planilha (sem plantão apurado)
     // também precisa ver o acerto descontado — senão o gate de ±12h nunca fecha.
-    let settlementTotalMinutes = 0;
     for (const doctor of doctorsMap.values()) {
         const entries = (settlementsByDoctor.get(doctor.doctorId) ?? [])
             .slice()
@@ -997,7 +995,17 @@ export function buildBankHoursHistoryModel(
         const delta = entries.reduce((sum, entry) => sum + entry.deltaMinutes, 0);
         doctor.balanceMinutes += delta;
         doctor.applicationBalanceMinutes += delta;
-        settlementTotalMinutes += delta;
+    }
+
+    // Estatutário: o saldo É a cascata da folha mês a mês (modules/bank-hours/
+    // payroll.ts) — a parcela que vai à folha nunca entra no banco, e settlements
+    // "payroll" antigos ficam fora. Sobrescreve a soma bruta acima.
+    for (const doctor of doctorsMap.values()) {
+        if (doctor.employmentType !== "estatutario") continue;
+        const legacyMinutes = doctor.legacy?.totalMinutes ?? 0;
+        const ledger = resolvePayrollLedger({ legacyMinutes, shifts: doctor.shifts, settlements: doctor.settlements });
+        doctor.balanceMinutes = ledger.balanceMinutes;
+        doctor.applicationBalanceMinutes = ledger.balanceMinutes - legacyMinutes;
     }
 
     const doctors = Array.from(doctorsMap.values()).sort(compareDoctors);
@@ -1008,7 +1016,7 @@ export function buildBankHoursHistoryModel(
             doctorCount: doctors.length,
             shiftCount: normalizedShifts.length,
             workedMinutes: normalizedShifts.reduce((total, shift) => total + (shift.workedMinutes ?? 0), 0),
-            balanceMinutes: normalizedShifts.reduce((total, shift) => total + (shift.balanceMinutes ?? 0), 0) + settlementTotalMinutes + legacyTotalMinutes,
+            balanceMinutes: doctors.reduce((total, doctor) => total + doctor.balanceMinutes, 0),
             lateArrivalCount: normalizedShifts.filter((shift) => shift.flags.hasLateArrival).length,
             handoffOverrideCount: normalizedShifts.filter((shift) => shift.flags.hasHandoffOverride).length,
             correctionCount: normalizedShifts.filter((shift) => shift.flags.hasCorrectionHistory).length,

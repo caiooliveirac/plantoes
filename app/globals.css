@@ -3418,6 +3418,16 @@ button.ops-doctor-line.displaced.clickable:hover {
 .hours-payroll-step-split em.payroll { background: rgba(255, 184, 77, 0.18); color: #ffd98a; }
 .hours-payroll-step-split small { color: #ffb84d; }
 
+.hours-payroll-forecast {
+    margin: 10px 0 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 184, 77, 0.45);
+    background: rgba(255, 184, 77, 0.12);
+    color: #ffd98a;
+    font-size: 0.86rem;
+}
+
 /* Painel "O que mexeu no saldo" recolhido por padrão. */
 details.hours-events-panel > summary {
     cursor: pointer;

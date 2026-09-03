@@ -1,7 +1,7 @@
 import { and, eq, like, sql } from "drizzle-orm";
+import { BANK_HOURS_PAYROLL_SETTLEMENT_KIND } from "@/modules/bank-hours/payroll";
 import { getDb } from "@/db";
 import { adminExtraShifts, bankHoursSettlements, users } from "@/db/schema";
-import { BANK_HOURS_PAYROLL_SETTLEMENT_KIND, buildPayrollSettlementNote } from "@/modules/bank-hours/payroll";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 
 /** Cada acerto move o saldo do banco de horas em exatamente 12h (720 min). */
@@ -199,64 +199,6 @@ export interface SettleBankHoursResult {
     operationalDate: string | null;
     shiftUnit: number;
     label: string;
-}
-
-export interface PayrollSettlementResult {
-    settlementId: string;
-    doctorId: string;
-    monthKey: string;
-    kind: "payroll";
-    deltaMinutes: number;
-    notes: string;
-}
-
-/**
- * Abatimento em folha (estatutário): registra que os atrasos do mês foram
- * levados à folha de pagamento/ponto. Devolve ao banco exatamente os minutos
- * abatidos (delta positivo), sem criar plantão extra — o estatutário não é
- * pago por plantão aqui. A validação de quanto abater fica na rota, sobre o
- * histórico (modules/bank-hours/payroll.ts).
- */
-export async function settleBankHoursPayroll(params: {
-    doctorId: string;
-    monthKey: string;
-    /** Minutos abatidos (> 0): o módulo da folha devolve o que os atrasos do mês tiraram. */
-    deltaMinutes: number;
-    negativeShiftCount: number;
-    /** Parcela dos débitos do mês que o banco absorveu (fica na nota). */
-    absorbedMinutes?: number;
-    actorUserId: string;
-}): Promise<PayrollSettlementResult> {
-    if (!Number.isInteger(params.deltaMinutes) || params.deltaMinutes <= 0) {
-        throw new Error("O abatimento em folha precisa de minutos positivos.");
-    }
-    const notes = buildPayrollSettlementNote({
-        monthKey: params.monthKey,
-        negativeShiftCount: params.negativeShiftCount,
-        deltaMinutes: params.deltaMinutes,
-        absorbedMinutes: params.absorbedMinutes,
-    });
-    const [settlement] = await getDb()
-        .insert(bankHoursSettlements)
-        .values({
-            doctorId: params.doctorId,
-            monthKey: params.monthKey,
-            deltaMinutes: params.deltaMinutes,
-            kind: BANK_HOURS_PAYROLL_SETTLEMENT_KIND,
-            adminExtraShiftId: null,
-            notes,
-            createdByUserId: params.actorUserId,
-        })
-        .returning({ id: bankHoursSettlements.id });
-
-    return {
-        settlementId: settlement.id,
-        doctorId: params.doctorId,
-        monthKey: params.monthKey,
-        kind: "payroll",
-        deltaMinutes: params.deltaMinutes,
-        notes,
-    };
 }
 
 /**
