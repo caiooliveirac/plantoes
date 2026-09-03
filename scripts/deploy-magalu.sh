@@ -101,6 +101,11 @@ fi
 # restart, e o build novo nasce limpo.
 echo "=== next build limpo em .next.build (produção segue no ar) ==="
 rm -rf .next.build
+# tsconfig.json inclui .next/types/** — os tipos GERADOS pelo build anterior.
+# Quando o deploy apaga uma rota, o validador antigo ainda a referencia e o
+# typecheck do build novo quebra ("Cannot find module .../route.js"). São só
+# tipos (nada que o processo no ar leia): apagar antes de buildar.
+rm -rf .next/types .next/dev/types
 if ! NEXT_DIST_DIR=.next.build nice -n 10 npm run build; then
   echo "ERRO: build falhou. Nada foi trocado — a produção segue com o build anterior."
   rm -rf .next.build
