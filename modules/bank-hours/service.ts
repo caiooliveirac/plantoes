@@ -219,6 +219,12 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
                 scheduledEndAt: tailOccupancy.scheduledEndAt,
                 startedAt: span.actualStartAt,
             });
+            // Desfecho gravado que já não corresponde à saída (janela recortada
+            // depois da decisão): a régua diz "não antecipada" — vale a
+            // matemática padrão, não um crédito de 0 min por um turno cumprido.
+            if (classification.outcome === "full_shift" && classification.remainingMinutes === 0) {
+                return null;
+            }
             const outcome = tailOccupancy.earlyDepartureOutcome as "bank_only" | "half_shift";
             return buildEarlyDepartureBankHours({
                 outcome,

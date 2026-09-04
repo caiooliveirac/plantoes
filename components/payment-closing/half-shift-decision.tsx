@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
-import { classifyEarlyDeparture } from "@/modules/operational/early-departure";
+import { classifyEarlyDeparture, isPaymentAffectingEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { isValidOverrideNote, OVERRIDE_NOTE_MIN_LENGTH } from "@/modules/operational/departure-triage";
 import type { PayableShift } from "@/modules/reporting/payable-shifts";
 
@@ -53,7 +53,7 @@ export function HalfShiftDecision({ shift }: { shift: PayableShift }) {
 
     // Modo: plantão inteiro ganha "PAGAR SÓ MEIO PLANTÃO"; plantão já convertido
     // (MEIO ou só-banco) ganha o caminho de volta para INTEIRO.
-    const mode: "to_half" | "to_full" = shift.earlyDepartureOutcome ? "to_full" : "to_half";
+    const mode: "to_half" | "to_full" = isPaymentAffectingEarlyDepartureOutcome(shift.earlyDepartureOutcome) ? "to_full" : "to_half";
 
     const baseStartIso = shift.startedAt;
     const baseEndIso = shift.actualEndedAt ?? shift.endedAt ?? shift.slotEndedAt;
@@ -92,7 +92,9 @@ export function HalfShiftDecision({ shift }: { shift: PayableShift }) {
         const noteRequired = targetOutcome !== classification.outcome
             && !(classification.outcome === "half_shift" && targetOutcome === "full_shift");
         // Saída no fim da janela (ou depois) não tem régua — nada a converter.
-        const notEarly = classification.outcome === "full_shift" && classification.remainingMinutes === 0;
+        // Exceto para voltar a INTEIRO: um desfecho gravado que já não bate com
+        // a saída (janela recortada depois) precisa de um botão para ser limpo.
+        const notEarly = classification.outcome === "full_shift" && classification.remainingMinutes === 0 && mode !== "to_full";
         return { start, end, standard, classification, halfCredit, noteRequired, notEarly };
     }, [shift, baseStartIso, baseEndIso, startTime, endTime, mode]);
 

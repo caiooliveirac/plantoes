@@ -26,6 +26,12 @@ export type EarlyDepartureOutcome = "bank_only" | "half_shift" | "full_shift";
 
 export const EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES = 6 * 60;
 export const EARLY_DEPARTURE_FULL_REMAINING_MINUTES = 2 * 60;
+/**
+ * Tolerância de saída (mesma do banco de horas, que a reexporta): sair até
+ * isto depois da virada ainda é o fim do turno cumprido, não o começo do
+ * seguinte.
+ */
+export const DEPARTURE_GRACE_MINUTES = 15;
 
 export interface EarlyDepartureClassification {
     outcome: EarlyDepartureOutcome;
@@ -107,7 +113,17 @@ export function classifyEarlyDeparture(params: {
 
     // Saída fora (depois) da janela agendada da ocupação: encerramento normal,
     // sem faixa — inclui a retirada de sobra do turno anterior após a virada.
-    if (scheduledEndAt && departureAt.getTime() >= scheduledEndAt.getTime()) {
+    //
+    // Mesma coisa para quem sai MINUTOS depois da virada numa ocupação que já
+    // cobria o turno anterior (um "P" que cumpriu o SD e saiu 19:07): é o fim
+    // do turno cumprido com a tolerância de saída do banco, não uma retirada
+    // do turno seguinte. Sem isto a régua media 7 min do SN e mandava o
+    // plantão inteiro para "só banco de horas" (caso Gabriel Divino, 2033,
+    // 27/08/2026).
+    const closedPreviousSegment = scheduledStartAt !== null
+        && scheduledStartAt.getTime() < operationalWindow.startedAt.getTime()
+        && elapsedMinutes <= DEPARTURE_GRACE_MINUTES;
+    if ((scheduledEndAt && departureAt.getTime() >= scheduledEndAt.getTime()) || closedPreviousSegment) {
         return {
             outcome: "full_shift",
             windowStartAt,

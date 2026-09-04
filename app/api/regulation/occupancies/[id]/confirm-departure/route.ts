@@ -6,7 +6,7 @@ import { auditLogs, regulationOccupancies } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { correctRegulationOccupancy } from "@/modules/operational/corrections";
 import { reopenContestedRegulationDeparture } from "@/modules/regulation/service";
-import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { classifyEarlyDeparture, isEarlyDepartureEligible, isPaymentAffectingEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { isValidOverrideNote, OVERRIDE_NOTE_MIN_LENGTH } from "@/modules/operational/departure-triage";
 
 const schema = z.object({
@@ -121,8 +121,12 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             startedAt: nextStartedAt,
         });
         // Desfecho só existe para saída ANTES do fim da janela — saída no fim ou
-        // depois dele é encerramento normal, sem régua.
-        if (classification.outcome === "full_shift" && classification.remainingMinutes === 0) {
+        // depois dele é encerramento normal, sem régua. Exceção: se a ocupação
+        // carrega um bank_only/half_shift que já não corresponde à saída (janela
+        // recortada depois da decisão), "pagar inteiro" é o caminho de limpar.
+        const clearsStaleOutcome = requestedOutcome === "full_shift"
+            && isPaymentAffectingEarlyDepartureOutcome(existing.earlyDepartureOutcome);
+        if (classification.outcome === "full_shift" && classification.remainingMinutes === 0 && !clearsStaleOutcome) {
             return NextResponse.json({ error: "Essa saida nao e antecipada — nao ha desfecho de pagamento a decidir." }, { status: 400 });
         }
         // Desviar da régua (para mais OU para menos) exige justificativa escrita.
