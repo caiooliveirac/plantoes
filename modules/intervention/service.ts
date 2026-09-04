@@ -10,6 +10,7 @@ import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
 import {
     describeContestedDeparture,
@@ -1176,6 +1177,15 @@ export async function endInterventionOccupancy(
             throw new Error("Actual end cannot be before the recorded arrival.");
         }
 
+        // P que saiu antes de 6h do turno seguinte volta a ser o turno cumprido
+        // (modules/operational/multi-segment-departure.ts).
+        const departureTrim = resolveMultiSegmentDepartureTrim({
+            domain: "intervention",
+            scheduledStartAt: existing.scheduledStartAt,
+            scheduledEndAt: existing.scheduledEndAt,
+            departureAt: actualEndedAt ?? input.endedAt,
+        });
+
         const now = new Date();
         const departureConfirmedAt = input.chiefConfirmed ? now : existing.departureConfirmedAt;
         const departureConfirmedByUserId = input.chiefConfirmed
@@ -1187,7 +1197,7 @@ export async function endInterventionOccupancy(
             ? classifyEarlyDeparture({
                 departureAt: actualEndedAt ?? input.endedAt,
                 scheduledStartAt: existing.scheduledStartAt,
-                scheduledEndAt: existing.scheduledEndAt,
+                scheduledEndAt: departureTrim?.scheduledEndAt ?? existing.scheduledEndAt,
                 startedAt: existing.startedAt,
             }).outcome
             : existing.earlyDepartureOutcome;
@@ -1198,6 +1208,7 @@ export async function endInterventionOccupancy(
                 endedAt: input.endedAt,
                 actualEndedAt,
                 earlyDepartureOutcome,
+                ...(departureTrim ? { scheduledEndAt: departureTrim.scheduledEndAt, shiftLabel: departureTrim.shiftLabel } : {}),
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: now,
                 departureConfirmedAt,
