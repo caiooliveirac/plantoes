@@ -7,7 +7,8 @@ import {
 
 export const BANK_HOURS_RULE_VERSION = 10;
 export const ARRIVAL_GRACE_MINUTES = 15;
-export const DEPARTURE_GRACE_MINUTES = 15;
+export { DEPARTURE_GRACE_MINUTES } from "@/modules/operational/early-departure";
+import { DEPARTURE_GRACE_MINUTES } from "@/modules/operational/early-departure";
 
 /**
  * Atraso máximo crível. Acima disso a janela agendada é que está errada (P

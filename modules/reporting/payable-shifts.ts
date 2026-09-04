@@ -711,12 +711,14 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
 
     // Desfecho de retirada/saída antecipada (early-departure.ts): vale só no
     // slot em que a saída de fato caiu — um "P" retirado no segundo turno
-    // mantém o primeiro turno pagável por inteiro.
+    // mantém o primeiro turno pagável por inteiro. Saída exatamente no fim do
+    // slot não é antecipada: o desfecho ali é resíduo (ex.: SN removido no
+    // fechamento recortou a ocupação até as 19:00) e não pode zerar o slot.
     const rowEndedAtMs = row.endedAt ? new Date(row.endedAt).getTime() : null;
     const earlyOutcome = isPaymentAffectingEarlyDepartureOutcome(row.earlyDepartureOutcome)
         && rowEndedAtMs !== null
         && rowEndedAtMs > new Date(board.startedAt).getTime()
-        && rowEndedAtMs <= new Date(board.endedAt).getTime()
+        && rowEndedAtMs < new Date(board.endedAt).getTime()
         ? row.earlyDepartureOutcome
         : null;
     const earlyOutcomeLabel = earlyOutcome === "bank_only"

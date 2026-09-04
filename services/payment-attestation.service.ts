@@ -1136,6 +1136,12 @@ export async function applyManualRemoveAssignment(params: {
                         endedAt: removal.endedAt,
                         actualEndedAt: removal.actualEndedAt,
                         scheduledEndAt: removal.clearedWholeOccupancy ? existing.scheduledEndAt : slotStart,
+                        // O desfecho de saída antecipada pertencia ao slot removido;
+                        // recortada até o início dele, a ocupação termina no fim do
+                        // slot anterior — plantão cumprido, sem régua. Manter o
+                        // bank_only aqui zerava o SD trabalhado (Gabriel Divino,
+                        // 2033, 27/08/2026).
+                        earlyDepartureOutcome: removal.clearedWholeOccupancy ? existing.earlyDepartureOutcome : null,
                         notes: `${existing.notes ?? ""}\n[chefia] Remocao via fechamento de pagamento (${slotStart.toISOString()})`.trim(),
                         updatedByUserId: params.actorUserId,
                         updatedAt: new Date(),
@@ -1162,6 +1168,12 @@ export async function applyManualRemoveAssignment(params: {
                         endedAt: removal.endedAt,
                         actualEndedAt: removal.actualEndedAt,
                         scheduledEndAt: removal.clearedWholeOccupancy ? existing.scheduledEndAt : slotStart,
+                        // O desfecho de saída antecipada pertencia ao slot removido;
+                        // recortada até o início dele, a ocupação termina no fim do
+                        // slot anterior — plantão cumprido, sem régua. Manter o
+                        // bank_only aqui zerava o SD trabalhado (Gabriel Divino,
+                        // 2033, 27/08/2026).
+                        earlyDepartureOutcome: removal.clearedWholeOccupancy ? existing.earlyDepartureOutcome : null,
                         notes: `${existing.notes ?? ""}\n[chefia] Remocao via fechamento de pagamento (${slotStart.toISOString()})`.trim(),
                         updatedByUserId: params.actorUserId,
                         updatedAt: new Date(),

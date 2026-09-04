@@ -1104,26 +1104,12 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         setShiftActionBusy(true);
         setShiftActionError(null);
 
-        // Optimistic: hide the cell immediately
-        const relatedPayableShiftIds = new Set<string>([draft.payableShiftId]);
-        if (!draft.occupancyId.startsWith("extra:")) {
-            for (const doctor of board.doctors) {
-                for (const cell of doctor.cells) {
-                    for (const shift of cell.shifts) {
-                        if (shift.occupancyId === draft.occupancyId) {
-                            relatedPayableShiftIds.add(shift.payableShiftId);
-                        }
-                    }
-                }
-            }
-        }
-        setPendingRemovals((prev) => {
-            const next = new Set(prev);
-            for (const id of relatedPayableShiftIds) {
-                next.add(id);
-            }
-            return next;
-        });
+        // Optimistic: hide only the clicked slot. Esconder todos os slots da
+        // mesma ocupação (um P cobre SD e SN) sumia com o SD trabalhado ao
+        // remover o SN — e a reconciliação abaixo mantinha escondido o que o
+        // servidor ainda devolvia. Se a remoção também derrubar outro slot, o
+        // refresh do board o tira sozinho.
+        setPendingRemovals((prev) => new Set(prev).add(draft.payableShiftId));
 
         const isExtra = draft.source === "admin_extra";
 
@@ -1179,9 +1165,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
             // Rollback optimistic
             setPendingRemovals((prev) => {
                 const next = new Set(prev);
-                for (const id of relatedPayableShiftIds) {
-                    next.delete(id);
-                }
+                next.delete(draft.payableShiftId);
                 return next;
             });
             setShiftActionError(error instanceof Error ? error.message : "Falha ao remover plantão.");

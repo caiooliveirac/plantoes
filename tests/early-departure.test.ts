@@ -214,3 +214,45 @@ test("half_shift credita o excedente de 6h", () => {
     assert.equal(result.balanceMinutes, 120);
     assert.equal(result.ruleCode, "EARLY_DEPARTURE_HALF_CREDIT");
 });
+
+// ── Saída logo depois da virada num P que cumpriu o turno anterior ──────────
+
+test("P que cumpriu o SD e saiu 19:07 não é retirada do SN — é fim do turno cumprido", () => {
+    // Gabriel Divino, 2033, 27/08/2026: chegou 07:15 declarando P (janela até
+    // 28/08 07:15), saiu 19:07. A régua media 7 min do SN e mandava o plantão
+    // inteiro para "só banco de horas".
+    const result = classifyEarlyDeparture({
+        departureAt: iso("2026-08-27T19:07:00-03:00"),
+        scheduledStartAt: iso("2026-08-27T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-08-28T07:15:00-03:00"),
+        startedAt: iso("2026-08-27T07:15:00-03:00"),
+    });
+
+    assert.equal(result.outcome, "full_shift");
+    assert.equal(result.remainingMinutes, 0);
+    assert.equal(result.bankCreditMinutes, 0);
+});
+
+test("P que saiu bem depois da virada continua na régua do segundo turno", () => {
+    const result = classifyEarlyDeparture({
+        departureAt: iso("2026-08-27T19:20:00-03:00"),
+        scheduledStartAt: iso("2026-08-27T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-08-28T07:15:00-03:00"),
+        startedAt: iso("2026-08-27T07:15:00-03:00"),
+    });
+
+    assert.equal(result.outcome, "bank_only");
+    assert.equal(result.elapsedMinutes, 20);
+});
+
+test("ocupação de um turno só que sai 7 min depois do previsto segue sem régua", () => {
+    const result = classifyEarlyDeparture({
+        departureAt: iso("2026-08-27T19:07:00-03:00"),
+        scheduledStartAt: iso("2026-08-27T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-08-27T19:00:00-03:00"),
+        startedAt: iso("2026-08-27T07:15:00-03:00"),
+    });
+
+    assert.equal(result.outcome, "full_shift");
+    assert.equal(result.remainingMinutes, 0);
+});

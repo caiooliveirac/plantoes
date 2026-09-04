@@ -1151,3 +1151,26 @@ test("médico sem plantão no mês entra como linha vazia, fora de todo o resumo
     // E ela nunca duplica quem já apareceu pelos plantões.
     assert.equal(board.doctors.filter((entry) => entry.doctorId === "doc-1").length, 1);
 });
+
+test("desfecho bank_only só zera o slot quando a saída caiu DENTRO dele", () => {
+    const withOutcome = (endedAt: string) => makeBoard({
+        intervention: [{
+            ...makeBoard().intervention[0],
+            endedAt,
+            actualEndedAt: endedAt,
+            earlyDepartureOutcome: "bank_only",
+        }],
+    });
+
+    // Saída exatamente no fim do slot: resíduo de um SN removido no fechamento
+    // (a ocupação foi recortada até as 19:00) — o SD trabalhado segue inteiro.
+    const [atSlotEnd] = buildPayableShiftsFromBoards([withOutcome("2026-04-10T22:00:00.000Z")]);
+    assert.equal(atSlotEnd.paymentUnit, 1);
+    assert.equal(atSlotEnd.paymentTag, null);
+    assert.equal(atSlotEnd.earlyDepartureOutcome, null);
+
+    // Saída dentro do slot: retirada real, plantão não assinado.
+    const [inside] = buildPayableShiftsFromBoards([withOutcome("2026-04-10T14:00:00.000Z")]);
+    assert.equal(inside.paymentUnit, 0);
+    assert.equal(inside.paymentTag, "BANCO");
+});
