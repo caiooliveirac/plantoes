@@ -38,6 +38,7 @@ import { applyOperationalRoleShiftPolicy, resolveRoleLabelForTargetChange } from
 import { applyShadowMarkerToOccupancyNotes } from "@/modules/operational/shadow";
 import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
+import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 import { expireStaleRegulationOccupancies, isRegulationPostDeactivationActive } from "@/modules/regulation/service";
 import { hookMealBreakAfterBoardChange } from "@/modules/telegram/meal-break-board-hook";
@@ -1078,6 +1079,17 @@ export async function correctRegulationOccupancy(
             updatedByUserId: updatedByUserId ?? null,
         });
 
+        // Saída gravada antes de 6h do turno seguinte de um P: a ocupação volta
+        // ao turno cumprido — salvo quando o chamador fixou janela/rótulo à mão.
+        const departureTrim = actualEndedAt && !hasOwn(input, "scheduledEndAt") && !hasOwn(input, "shiftLabel")
+            ? resolveMultiSegmentDepartureTrim({
+                domain: "regulation",
+                scheduledStartAt: newScheduledStart,
+                scheduledEndAt: newScheduledEnd,
+                departureAt: actualEndedAt,
+            })
+            : null;
+
         const [updated] = await tx.update(regulationOccupancies)
             .set({
                 postId,
@@ -1085,10 +1097,10 @@ export async function correctRegulationOccupancy(
                 startedAt,
                 boardStartedAt,
                 scheduledStartAt: newScheduledStart,
-                scheduledEndAt: newScheduledEnd,
+                scheduledEndAt: departureTrim?.scheduledEndAt ?? newScheduledEnd,
                 endedAt,
                 actualEndedAt,
-                shiftLabel: nextShiftLabel,
+                shiftLabel: departureTrim?.shiftLabel ?? nextShiftLabel,
                 roleLabel: reconciledRoleLabel,
                 ramalLabel: normalizeRegulationRamalLabel({
                     actualPostCode: targetPost.code,
@@ -1210,16 +1222,27 @@ export async function correctInterventionOccupancy(
             updatedByUserId: updatedByUserId ?? null,
         });
 
+        // Saída gravada antes de 6h do turno seguinte de um P: a ocupação volta
+        // ao turno cumprido — salvo quando o chamador fixou janela/rótulo à mão.
+        const departureTrim = actualEndedAt && !hasOwn(input, "scheduledEndAt") && !hasOwn(input, "shiftLabel")
+            ? resolveMultiSegmentDepartureTrim({
+                domain: "intervention",
+                scheduledStartAt: newScheduledStart,
+                scheduledEndAt: newScheduledEnd,
+                departureAt: actualEndedAt,
+            })
+            : null;
+
         const [updated] = await tx.update(interventionOccupancies)
             .set({
                 doctorId: hasOwn(input, "doctorId") ? input.doctorId ?? existing.doctorId : existing.doctorId,
                 startedAt,
                 boardStartedAt,
                 scheduledStartAt: newScheduledStart,
-                scheduledEndAt: newScheduledEnd,
+                scheduledEndAt: departureTrim?.scheduledEndAt ?? newScheduledEnd,
                 endedAt,
                 actualEndedAt,
-                shiftLabel: nextShiftLabel,
+                shiftLabel: departureTrim?.shiftLabel ?? nextShiftLabel,
                 roleLabel: nextRoleLabel,
                 notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,

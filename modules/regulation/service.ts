@@ -8,6 +8,7 @@ import { avisarDeslocamento } from "@/modules/operational/displacement-alert";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
 import {
     describeContestedDeparture,
@@ -1365,7 +1366,6 @@ export async function endRegulationOccupancy(
             throw new Error("Regulation occupancy not found.");
         }
 
-        const boardEndedAt = resolveRegulationBoardEndAt(input.endedAt, existing.scheduledEndAt);
         // Fechamento por rendição: grava só endedAt e deixa actualEndedAt nulo, para que o banco
         // feche autoritativamente no horário do handoff sem cair na fila de confirmação do chefe.
         // Um aviso de saída tardia posterior (ocorrência) preenche actualEndedAt e aí sim exige confirmação.
@@ -1375,6 +1375,17 @@ export async function endRegulationOccupancy(
         if (actualEndedAt && actualEndedAt.getTime() < existing.startedAt.getTime()) {
             throw new Error("Actual end cannot be before the recorded arrival.");
         }
+
+        // P que saiu antes de 6h do turno seguinte volta a ser o turno cumprido
+        // (modules/operational/multi-segment-departure.ts).
+        const departureTrim = resolveMultiSegmentDepartureTrim({
+            domain: "regulation",
+            scheduledStartAt: existing.scheduledStartAt,
+            scheduledEndAt: existing.scheduledEndAt,
+            departureAt: actualEndedAt ?? input.endedAt,
+        });
+        const scheduledEndAt = departureTrim?.scheduledEndAt ?? existing.scheduledEndAt;
+        const boardEndedAt = resolveRegulationBoardEndAt(input.endedAt, scheduledEndAt);
 
         const now = new Date();
         const departureConfirmedAt = input.chiefConfirmed ? now : existing.departureConfirmedAt;
@@ -1387,7 +1398,7 @@ export async function endRegulationOccupancy(
             ? classifyEarlyDeparture({
                 departureAt: actualEndedAt ?? input.endedAt,
                 scheduledStartAt: existing.scheduledStartAt,
-                scheduledEndAt: existing.scheduledEndAt,
+                scheduledEndAt,
                 startedAt: existing.startedAt,
             }).outcome
             : existing.earlyDepartureOutcome;
@@ -1398,6 +1409,7 @@ export async function endRegulationOccupancy(
                 endedAt: boardEndedAt,
                 actualEndedAt,
                 earlyDepartureOutcome,
+                ...(departureTrim ? { scheduledEndAt: departureTrim.scheduledEndAt, shiftLabel: departureTrim.shiftLabel } : {}),
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: now,
                 departureConfirmedAt,
