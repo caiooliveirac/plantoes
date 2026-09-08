@@ -153,7 +153,52 @@ antes de aplicar `npm run db:migrate`.
 
 ---
 
-## 6. Incidente de memória (contexto)
+## 6. Disco cheio no servidor
+
+O magalu hospeda ~10 projetos + bancos + containers no mesmo filesystem, então
+"disco cheio" quase nunca é o `plantoes` sozinho. Antes de apagar qualquer coisa,
+rode a triagem **a partir do Mac** (read-only, um único SSH):
+
+```bash
+bash scripts/diagnose-disk-magalu.sh
+```
+
+Ele mostra `df`/`df -i`, os maiores diretórios, logs do PM2, os builds do Next
+(`.next`, `.next.prev`, `.next.build`), backups pré-deploy, cache do npm,
+journald, docker e o healthcheck do app.
+
+Duas armadilhas que o script cobre de propósito:
+
+- **inodes esgotados** — `df -h` mostra espaço livre e a escrita mesmo assim falha;
+  quem responde é `df -i`.
+- **arquivo apagado ainda aberto** — um log removido com `rm` enquanto o processo
+  o mantém aberto some do `du` mas continua ocupando no `df`. Só um restart do
+  processo dono libera. O script lista esses casos via `lsof | grep deleted`.
+
+Para recuperar espaço:
+
+```bash
+bash scripts/diagnose-disk-magalu.sh --limpar
+```
+
+A faxina pede confirmação e toca só o que é reconstruível: `pm2 flush`, logs
+rotacionados com mais de 7 dias, `.next.build` (resto de build interrompido),
+`node_modules/.cache`, cache do npm, backups pré-deploy além dos 5 mais recentes
+e `journalctl --vacuum-size=200M`. Ela **não** toca em `/var/lib/postgresql`, nos
+dados dos outros projetos do host, nem no `.next` que o processo no ar está
+servindo.
+
+O `.next.prev` (build anterior, usado no rollback instantâneo) fica de fora por
+padrão — só sai com `--incluir-next-prev`, e aí o rollback do último deploy passa
+a exigir rebuild.
+
+Se o espaço não voltar depois da faxina, o consumo é de outro projeto do host:
+olhe a seção "maiores diretórios em /" e `docker system df` da saída do
+diagnóstico antes de mexer em qualquer coisa fora de `~/plantoes`.
+
+---
+
+## 7. Incidente de memória (contexto)
 
 Em 31/05/2026 um deploy derrubou o EC2 por build local (`next build`) sob pressão de
 memória. O modelo atual remove essa classe de incidente ao eliminar build/test/install
