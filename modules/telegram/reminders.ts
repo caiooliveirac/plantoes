@@ -77,6 +77,9 @@ interface ReminderPlanningParams {
 }
 
 const TEN_MINUTES = 10 * 60 * 1000;
+const FIFTEEN_MINUTES = 15 * 60 * 1000;
+/** Snapshots de cobertura só aos 15 e 30 min após a virada (07:15/07:30, 19:15/19:30). */
+const COVERAGE_SNAPSHOT_OFFSETS_MS = [15 * 60 * 1000, 30 * 60 * 1000];
 const THIRTY_MINUTES = 30 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
 const PAYMENT_CONFLICT_ALERT_BUCKET = 2 * ONE_HOUR;
@@ -680,8 +683,8 @@ export function buildSecretaryCoverageNotice(params: {
 
 function buildCoverageSnapshotPlan(params: ReminderPlanningParams): ReminderPlan | null {
     const shiftWindow = resolveOperationalShiftWindow(params.now);
-    const bucket = floorToBucket(params.now, TEN_MINUTES);
-    if (bucket.getTime() < shiftWindow.startedAt.getTime() || bucket.getTime() >= shiftWindow.startedAt.getTime() + ONE_HOUR) {
+    const bucket = floorToBucket(params.now, FIFTEEN_MINUTES);
+    if (!COVERAGE_SNAPSHOT_OFFSETS_MS.includes(bucket.getTime() - shiftWindow.startedAt.getTime())) {
         return null;
     }
 
