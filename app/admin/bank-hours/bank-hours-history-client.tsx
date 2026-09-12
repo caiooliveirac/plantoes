@@ -144,6 +144,7 @@ function resolveDoctorPendingAction(doctor: BankHoursDoctorHistory): BankHoursPe
     const balance = resolveBankHoursSettlementBalance({
         oldMinutes: doctor.legacy?.preMay2025Minutes ?? 0,
         recentMinutes: (doctor.legacy?.spreadsheetPeriodMinutes ?? 0) + doctor.applicationBalanceMinutes,
+        employmentType: doctor.employmentType,
     });
     const action = resolveBankHoursPendingAction({
         bonusEligibleMinutes: balance.bonusEligibleMinutes,
@@ -1516,6 +1517,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                 const settleBalance = resolveBankHoursSettlementBalance({
                                     oldMinutes: selectedDoctor.legacy?.preMay2025Minutes ?? 0,
                                     recentMinutes: (selectedDoctor.legacy?.spreadsheetPeriodMinutes ?? 0) + selectedDoctor.applicationBalanceMinutes,
+                                    employmentType: selectedDoctor.employmentType,
                                 });
                                 const pending = pendingByDoctor.get(selectedDoctor.doctorId);
                                 return (
@@ -1624,6 +1626,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                         const settleBalance = resolveBankHoursSettlementBalance({
                                             oldMinutes: selectedDoctor.legacy?.preMay2025Minutes ?? 0,
                                             recentMinutes: (selectedDoctor.legacy?.spreadsheetPeriodMinutes ?? 0) + selectedDoctor.applicationBalanceMinutes,
+                                            employmentType: selectedDoctor.employmentType,
                                         });
                                         const pending = pendingByDoctor.get(selectedDoctor.doctorId);
                                         const pendingSummary = pending?.direction ? (

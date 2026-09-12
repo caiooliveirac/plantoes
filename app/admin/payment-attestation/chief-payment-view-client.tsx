@@ -2224,14 +2224,18 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                     const bank = resolveBankHoursSettlementBalance({
                                                         oldMinutes: doctor.bankHoursOldMinutes ?? 0,
                                                         recentMinutes: doctor.bankHoursRecentMinutes ?? (doctor.bankHoursMinutes ?? 0),
+                                                        employmentType: doctor.employmentType,
                                                     });
                                                     const atPositive = bank.bonusEligibleMinutes >= BANK_HOURS_THRESHOLD_MINUTES;
                                                     const atNegative = bank.penaltyEligibleMinutes <= -BANK_HOURS_THRESHOLD_MINUTES;
                                                     const amortizing = !atPositive && bank.oldMinutes < 0 && bank.recentMinutes > 0;
                                                     const tone = atPositive ? "threshold-positive" : atNegative ? "threshold-negative" : amortizing ? "debt" : "";
                                                     const composition = `Desde mai/2025: ${formatSignedMinutesAsHours(bank.recentMinutes)} · antes de mai/2025: ${formatSignedMinutesAsHours(bank.oldMinutes)} · bruto: ${formatSignedMinutesAsHours(bank.totalMinutes)}`;
+                                                    const statutory = doctor.employmentType === "estatutario";
                                                     const title = atPositive
-                                                        ? `Elegível para bônus: ${formatSignedMinutesAsHours(bank.bonusEligibleMinutes)} (horas desde mai/2025, dívida antiga já descontada). Bonifique com 1 plantão verde antes de ele assinar. ${composition}`
+                                                        ? statutory
+                                                            ? `Elegível para bônus: ${formatSignedMinutesAsHours(bank.bonusEligibleMinutes)} (estatutário: saldo inteiro, inclusive antes de mai/2025). Bonifique com 1 plantão de controle (R$ 0) antes de ele assinar. ${composition}`
+                                                            : `Elegível para bônus: ${formatSignedMinutesAsHours(bank.bonusEligibleMinutes)} (horas desde mai/2025, dívida antiga já descontada). Bonifique com 1 plantão verde antes de ele assinar. ${composition}`
                                                         : atNegative
                                                             ? `Saldo desde mai/2025 atingiu -12h: debite 1 plantão vermelho antes de ele assinar. ${composition}`
                                                             : amortizing
@@ -2879,7 +2883,9 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     const bank = resolveBankHoursSettlementBalance({
                                         oldMinutes: selectedDoctor.bankHoursOldMinutes ?? 0,
                                         recentMinutes: selectedDoctor.bankHoursRecentMinutes ?? (selectedDoctor.bankHoursMinutes ?? 0),
+                                        employmentType: selectedDoctor.employmentType,
                                     });
+                                    const statutory = selectedDoctor.employmentType === "estatutario";
                                     const bonusReady = bank.bonusEligibleMinutes >= BANK_HOURS_THRESHOLD_MINUTES;
                                     const penaltyReady = bank.penaltyEligibleMinutes <= -BANK_HOURS_THRESHOLD_MINUTES;
                                     const amortizing = !bonusReady && bank.oldMinutes < 0 && bank.recentMinutes > 0;
@@ -2910,15 +2916,17 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                     ) : null;
                                     return (
                                         <article className="chief-payable-modal-card">
-                                            <span>Banco de horas · desde mai/2025</span>
-                                            <strong className={bank.recentMinutes < 0 ? "negative" : ""}>
-                                                {formatMinutesAsHours(bank.recentMinutes)}
+                                            <span>{statutory ? "Banco de horas · saldo total (estatutário)" : "Banco de horas · desde mai/2025"}</span>
+                                            <strong className={(statutory ? bank.totalMinutes : bank.recentMinutes) < 0 ? "negative" : ""}>
+                                                {formatMinutesAsHours(statutory ? bank.totalMinutes : bank.recentMinutes)}
                                             </strong>
                                             {bank.oldMinutes !== 0 ? (
                                                 <small className="chief-payable-bank-note">
                                                     Antes de mai/2025: <strong className={bank.oldMinutes < 0 ? "negative" : ""}>{formatSignedMinutesAsHours(bank.oldMinutes)}</strong>{" "}
-                                                    — fora da régua do acerto{bank.oldMinutes < 0 ? " (dívida: as horas novas amortizam primeiro)" : " (crédito antigo não remunera)"}.
-                                                    {" "}Bruto total: {formatSignedMinutesAsHours(bank.totalMinutes)}.
+                                                    {statutory
+                                                        ? "— entra inteiro na conta do bônus (estatutário)."
+                                                        : `— fora da régua do acerto${bank.oldMinutes < 0 ? " (dívida: as horas novas amortizam primeiro)" : " (crédito antigo não remunera)"}.`}
+                                                    {" "}Desde mai/2025: {formatSignedMinutesAsHours(bank.recentMinutes)}. Bruto total: {formatSignedMinutesAsHours(bank.totalMinutes)}.
                                                 </small>
                                             ) : null}
                                             {selectedDoctor.bankHoursSettlement ? (
@@ -2934,7 +2942,10 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                                                 <>
                                                     <small>
                                                         Elegível para bônus: {formatSignedMinutesAsHours(bank.bonusEligibleMinutes)}
-                                                        {bank.oldMinutes < 0 ? " (dívida antiga já descontada)" : ""} — bonifique com 1 plantão extra — chip BÔNUS, dia útil — e abata 12h.
+                                                        {bank.oldMinutes < 0 ? " (dívida antiga já descontada)" : ""}
+                                                        {statutory
+                                                            ? " — estatutário: o plantão sai a R$ 0, só marca o dia da folga bonificada — chip BÔNUS — e abate 12h."
+                                                            : " — bonifique com 1 plantão extra — chip BÔNUS, dia útil — e abata 12h."}
                                                     </small>
                                                     {settleControls}
                                                     {canManageClosing ? (
