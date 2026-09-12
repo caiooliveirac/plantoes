@@ -6,6 +6,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, doctors } from "@/db/schema";
 import { notifyDoctorBankHoursSettlement } from "@/modules/telegram/bank-hours-doctor-notice";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { resolveDoctorEmploymentType } from "@/modules/reporting/payable-shifts";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
 import {
     BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES,
@@ -46,17 +47,34 @@ export async function POST(request: NextRequest) {
         // Confirma o gatilho no servidor com a régua de elegibilidade: só horas
         // desde mai/2025 pagam/punem, e dívida anterior a mai/2025 precisa ser
         // amortizada antes de qualquer bônus.
+        // Estatutário: saldo anterior a mai/2025 entra inteiro no bônus. O vínculo
+        // sai de doctors.metadata (dentro de getDoctorBankHoursEffectiveBalances),
+        // nunca do payload — o cliente não escolhe a régua.
         const balances = await getDoctorBankHoursEffectiveBalances();
         const balance = balances.get(parsed.data.doctorId)
             ?? { totalMinutes: 0, oldMinutes: 0, recentMinutes: 0, bonusEligibleMinutes: 0, penaltyEligibleMinutes: 0 };
+        const [doctorMeta] = await getDb()
+            .select({ metadata: doctors.metadata })
+            .from(doctors)
+            .where(eq(doctors.id, parsed.data.doctorId))
+            .limit(1);
+        const employmentType = resolveDoctorEmploymentType(doctorMeta?.metadata);
         if (parsed.data.kind === "bonus" && balance.bonusEligibleMinutes < BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES) {
             const amortizing = balance.oldMinutes < 0 && balance.recentMinutes >= BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES;
             return NextResponse.json(
                 {
-                    error: amortizing
-                        ? "As horas formadas desde mai/2025 ainda amortizam a dívida anterior a mai/2025 — sem bônus até quitá-la."
-                        : "Saldo elegível (desde mai/2025, descontada dívida antiga) não chegou a +12h para bonificar.",
+                    error: employmentType === "estatutario"
+                        ? "Saldo total do banco (estatutário, inclusive antes de mai/2025) não chegou a +12h para bonificar."
+                        : amortizing
+                            ? "As horas formadas desde mai/2025 ainda amortizam a dívida anterior a mai/2025 — sem bônus até quitá-la."
+                            : "Saldo elegível (desde mai/2025, descontada dívida antiga) não chegou a +12h para bonificar.",
                 },
+                { status: 409 },
+            );
+        }
+        if (parsed.data.kind === "penalty" && employmentType === "estatutario") {
+            return NextResponse.json(
+                { error: "Estatutário não recebe plantão vermelho: o atraso é abatido em folha automaticamente." },
                 { status: 409 },
             );
         }
@@ -97,6 +115,8 @@ export async function POST(request: NextRequest) {
                 operationalDate: result.operationalDate,
                 adminExtraShiftId: result.adminExtraShiftId,
                 balanceBeforeMinutes: balance.totalMinutes,
+                employmentType,
+                eligibilityRule: employmentType === "estatutario" ? "statutory_full_balance" : "recent_only",
                 balanceCompositionBefore: {
                     oldMinutes: balance.oldMinutes,
                     recentMinutes: balance.recentMinutes,

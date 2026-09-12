@@ -287,6 +287,8 @@ export async function getDoctorBankHoursEffectiveBalances(): Promise<Map<string,
         balances.set(doctor.doctorId, resolveBankHoursSettlementBalance({
             oldMinutes,
             recentMinutes: (doctor.legacy?.spreadsheetPeriodMinutes ?? 0) + doctor.applicationBalanceMinutes,
+            // Vínculo lido do banco (doctors.metadata.employmentType), nunca do cliente.
+            employmentType: doctor.employmentType,
         }));
     }
     // Médicos que só têm acerto (sem histórico de plantão) ainda precisam aparecer.

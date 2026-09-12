@@ -122,6 +122,15 @@ describe("pendências do fechamento", () => {
             resolveDoctorPendencies({ contractBalances: [], employmentType: "estatutario", bankHoursRecentMinutes: 720 }),
             ["bank_bonus"],
         );
+        // Estatutário: crédito anterior a mai/2025 entra no bônus; PJ com o mesmo saldo não.
+        assert.deepEqual(
+            resolveDoctorPendencies({ contractBalances: [], employmentType: "estatutario", bankHoursOldMinutes: 600, bankHoursRecentMinutes: 180 }),
+            ["bank_bonus"],
+        );
+        assert.deepEqual(
+            resolveDoctorPendencies({ contractBalances: [], paymentProfile: "psychiatry", bankHoursOldMinutes: 600, bankHoursRecentMinutes: 180 }),
+            [],
+        );
         assert.deepEqual(
             resolveDoctorPendencies({ contractBalances: [], paymentProfile: "psychiatry", bankHoursRecentMinutes: -800 }),
             ["bank_penalty"],

@@ -70,6 +70,7 @@ export function resolveDoctorPendencies(doctor: PendencyDoctorInput): PaymentClo
     const bank = resolveBankHoursSettlementBalance({
         oldMinutes: doctor.bankHoursOldMinutes ?? 0,
         recentMinutes: doctor.bankHoursRecentMinutes ?? doctor.bankHoursMinutes ?? 0,
+        employmentType: doctor.employmentType,
     });
     const action = resolveBankHoursPendingAction(bank);
     if (action.direction === "bonus") {

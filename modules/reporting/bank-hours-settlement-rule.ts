@@ -10,6 +10,12 @@
  * A parcela anterior a mai/2025 nunca vira bônus nem punição: quando é
  * dívida, as horas recentes a amortizam ANTES de qualquer bônus; quando é
  * crédito, fica fora da régua (não remunera nem blinda punição).
+ *
+ * Exceção (decidida em 2026-09-12): ESTATUTÁRIO. O saldo dele é a cascata da
+ * folha rodada sobre o legado inteiro (modules/bank-hours/payroll.ts), então
+ * o crédito anterior a mai/2025 ENTRA na conta do bônus — vira plantão de
+ * R$ 0 lançado só para controle do dia. Punição de estatutário não existe
+ * (folha cuida), então penaltyEligibleMinutes segue só o recente.
  */
 export interface BankHoursSettlementBalance {
     /** Saldo bruto total (antigo + recente), como o histórico exibe. */
@@ -27,12 +33,17 @@ export interface BankHoursSettlementBalance {
 export function resolveBankHoursSettlementBalance(params: {
     oldMinutes: number;
     recentMinutes: number;
+    /** Ausente/"pj" = régua padrão; "estatutario" = saldo antigo inteiro conta no bônus. */
+    employmentType?: "pj" | "estatutario" | null;
 }): BankHoursSettlementBalance {
+    const statutory = params.employmentType === "estatutario";
     return {
         totalMinutes: params.oldMinutes + params.recentMinutes,
         oldMinutes: params.oldMinutes,
         recentMinutes: params.recentMinutes,
-        bonusEligibleMinutes: params.recentMinutes + Math.min(params.oldMinutes, 0),
+        bonusEligibleMinutes: statutory
+            ? params.oldMinutes + params.recentMinutes
+            : params.recentMinutes + Math.min(params.oldMinutes, 0),
         penaltyEligibleMinutes: params.recentMinutes,
     };
 }

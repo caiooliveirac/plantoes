@@ -42,6 +42,22 @@ test("régua do acerto: crédito anterior a mai/2025 não remunera nem blinda pu
     assert.equal(punished.penaltyEligibleMinutes <= -720, true);
 });
 
+test("régua do acerto: estatutário — crédito anterior a mai/2025 entra inteiro no bônus", () => {
+    // +10h antigas + 3h recentes: PJ não bonifica (3h), estatutário bonifica (13h).
+    const pj = resolveBankHoursSettlementBalance({ oldMinutes: 600, recentMinutes: 180, employmentType: "pj" });
+    assert.equal(pj.bonusEligibleMinutes, 180);
+    const statutory = resolveBankHoursSettlementBalance({ oldMinutes: 600, recentMinutes: 180, employmentType: "estatutario" });
+    assert.equal(statutory.bonusEligibleMinutes, 780);
+    assert.equal(statutory.bonusEligibleMinutes >= 720, true);
+
+    // Dívida antiga continua abatendo: -20h antigas + 15h recentes = -5h.
+    const debt = resolveBankHoursSettlementBalance({ oldMinutes: -1200, recentMinutes: 900, employmentType: "estatutario" });
+    assert.equal(debt.bonusEligibleMinutes, -300);
+
+    // Punição segue só o recente (estatutário não pune; a folha cuida).
+    assert.equal(statutory.penaltyEligibleMinutes, 180);
+});
+
 test("régua do acerto: dívida antiga não gera punição — só o saldo recente pune", () => {
     // -15h antigas com recente -5h: punição NÃO dispara (recente > -12h).
     const balance = resolveBankHoursSettlementBalance({ oldMinutes: -900, recentMinutes: -300 });
