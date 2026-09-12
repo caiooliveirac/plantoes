@@ -73,13 +73,6 @@ export function formatSignedHours(minutes: number): string {
 
 export interface BankHoursPendingRow {
     doctorName: string;
-    /**
-     * Os plantões que sustentam a pendência, já contados em português por
-     * buildBankHoursStory (o texto chega pronto para este módulo continuar sem
-     * imports). Sem isso o aviso dizia só o total — e um bônus nascido de um
-     * plantão registrado errado passava sem ninguém estranhar.
-     */
-    storyLines?: string[];
     direction: BankHoursPendingDirection;
     /** Saldo elegível (com sinal) que sustenta a pendência. */
     eligibleMinutes: number;
@@ -102,31 +95,18 @@ export function buildBankHoursPendingSummaryMessage(
     const penalties = rows.filter((row) => row.direction === "penalty");
     const inconsistent = rows.filter((row) => row.inconsistency);
 
-    const plural = (n: number, singular: string, pluralWord: string) => (n === 1 ? singular : pluralWord);
+    // Uma linha por médico: nome, saldo, quantos plantões, sobra.
     const line = (row: BankHoursPendingRow) => {
-        const acao = row.direction === "bonus"
-            ? `${row.pendingUnits} ${plural(row.pendingUnits, "plantão verde disponível", "plantões verdes disponíveis")}`
-            : `retirar ${row.pendingUnits} ${plural(row.pendingUnits, "plantão", "plantões")} (vermelho)`;
-        const sobra = row.residualMinutes === 0 ? "zera o saldo" : `sobra ${formatSignedHours(row.residualMinutes)}`;
-        const cabecalho = `• ${row.doctorName}: ${formatSignedHours(row.eligibleMinutes)} — ${acao} — ${sobra}`;
-        const historia = (row.storyLines ?? []).map((linha) => `   ${linha}`);
-        return [cabecalho, ...historia].join("\n");
+        const sobra = row.residualMinutes === 0 ? "zera" : `sobra ${formatSignedHours(row.residualMinutes)}`;
+        return `• ${row.doctorName} ${formatSignedHours(row.eligibleMinutes)} → ${row.pendingUnits} ${row.pendingUnits === 1 ? "plantão" : "plantões"}, ${sobra}`;
     };
 
-    const linhas: string[] = ["*Banco de horas — ações pendentes*"];
-    if (bonuses.length > 0) {
-        linhas.push("", "*Pagar (saldo positivo ≥ 12h)*", ...bonuses.map(line));
-    }
-    if (penalties.length > 0) {
-        linhas.push("", "*Descontar (saldo negativo ≤ -12h)*", ...penalties.map(line));
-    }
+    const linhas: string[] = ["*Banco de horas*"];
+    if (bonuses.length > 0) linhas.push("🟢 Pagar:", ...bonuses.map(line));
+    if (penalties.length > 0) linhas.push("🔴 Descontar:", ...penalties.map(line));
     if (inconsistent.length > 0) {
-        linhas.push("", "*Revisão necessária (saldo mudou após acerto)*",
-            ...inconsistent.map((row) => `• ${row.doctorName}: saldo elegível hoje ${formatSignedHours(row.eligibleMinutes)}, na direção contrária aos acertos já lançados.`));
+        linhas.push("⚠️ Revisar (saldo contrário aos acertos):", ...inconsistent.map((row) => `• ${row.doctorName} ${formatSignedHours(row.eligibleMinutes)}`));
     }
-    linhas.push("", `Total: ${rows.length} ${plural(rows.length, "médico aguardando ação", "médicos aguardando ação")}.`);
-    if (options.adminUrl) {
-        linhas.push(`Lançar em ${options.adminUrl}`);
-    }
+    if (options.adminUrl) linhas.push(options.adminUrl);
     return linhas.join("\n");
 }

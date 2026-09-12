@@ -43,14 +43,10 @@ export function buildSelfDeclaredExtraMessage(
     const linhas = moves.map((move) => {
         const de = `${formatDia(move.from.operationalDate)} (${move.from.shiftLabel})`;
         return move.to
-            ? `• *${move.doctorName}* — extra de ${de} virou ${formatDia(move.to.operationalDate)} (${move.to.shiftLabel}): trabalhou no turno declarado.`
-            : `• *${move.doctorName}* — extra de ${de} bateu com plantão trabalhado e o mês não tem slot livre. Precisa de decisão.`;
+            ? `• *${move.doctorName}*: extra ${de} → ${formatDia(move.to.operationalDate)} (${move.to.shiftLabel}), trabalhou no dia declarado.`
+            : `• *${move.doctorName}*: extra ${de} bateu com plantão real, sem slot livre no mês.`;
     });
-    return [
-        "🔁 *Plantão extra declarado remarcado*",
-        ...linhas,
-        `Conferir em ${options.adminUrl}`,
-    ].join("\n");
+    return ["🔁 *Extra remarcado*", ...linhas, options.adminUrl].join("\n");
 }
 
 export async function sendSelfDeclaredExtraCycle(referenceDate = new Date()) {

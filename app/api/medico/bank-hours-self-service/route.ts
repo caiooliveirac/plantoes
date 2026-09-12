@@ -6,7 +6,6 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, doctors } from "@/db/schema";
 import { avisarSecretario } from "@/lib/avisos/secretario";
 import { formatSignedHours } from "@/modules/bank-hours/pending-actions";
-import { loadDoctorBankHoursStoryLines } from "@/services/bank-hours-story.service";
 import { readAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
 import { competenciaDoAutoatendimento, mesCorrenteSP } from "@/lib/medico/competencia";
@@ -171,19 +170,11 @@ export async function POST(request: NextRequest) {
         revalidatePath("/admin/bank-hours");
         await syncContractLedgerForMonth({ doctorId: medicoId, monthKey, actorUserId: session?.user.id ?? null });
 
-        // Aviso imediato à coordenação (best-effort): o coordenador carimba depois.
-        // Vai junto a HISTÓRIA dos plantões que formaram o saldo — só o total não
-        // deixa ninguém desconfiar de um crédito nascido de registro errado.
-        const historia = await loadDoctorBankHoursStoryLines(medicoId, action).catch(() => [] as string[]);
-        const origem = historia.length > 0
-            ? `\n\nDe onde veio o saldo:\n${historia.map((linha) => `• ${linha}`).join("\n")}`
-            : "";
-
+        // Aviso imediato à coordenação (best-effort), uma linha.
+        const dia = operationalDate.split("-").reverse().slice(0, 2).join("/");
         await notifyAdmins(medicoId, (nome) => (action === "bonus"
-            ? `🟢 *${nome}* registrou um plantão extra de 12h em ${operationalDate} (${shiftLabel}) pelo banco de horas.`
-                + ` Saldo antes: ${formatSignedHours(balance.totalMinutes)}.${origem}\n\nRevisar em /admin/bank-hours.`
-            : `🔴 *${nome}* retirou o plantão de ${operationalDate} (${shiftLabel}) da própria folha para compensar saldo negativo.`
-                + ` Saldo antes: ${formatSignedHours(balance.totalMinutes)}.${origem}\n\nRevisar em /admin/bank-hours.`));
+            ? `🟢 *${nome}*: +1 plantão ${dia} ${shiftLabel} (banco de horas, saldo ${formatSignedHours(balance.totalMinutes)}).`
+            : `🔴 *${nome}*: −1 plantão ${dia} ${shiftLabel} (banco de horas, saldo ${formatSignedHours(balance.totalMinutes)}).`));
 
         return NextResponse.json({ settlement: result });
     } catch (error) {
@@ -321,7 +312,7 @@ export async function PATCH(request: NextRequest) {
 
         await afterManage(data.medicoId, monthKey, session?.user.id ?? null);
         await notifyAdmins(data.medicoId, (nome) =>
-            `✏️ *${nome}* mudou o plantão extra declarado para ${operationalDate} (${shiftLabel}). Revisar em /admin/bank-hours.`);
+            `✏️ *${nome}*: plantão extra movido para ${operationalDate.split("-").reverse().slice(0, 2).join("/")} ${shiftLabel}.`);
 
         return NextResponse.json({ ok: true });
     } catch (error) {
@@ -358,7 +349,7 @@ export async function DELETE(request: NextRequest) {
 
         await afterManage(data.medicoId, monthKey, session?.user.id ?? null);
         await notifyAdmins(data.medicoId, (nome) =>
-            `🗑️ *${nome}* retirou o plantão extra declarado de ${removed.operationalDate} (${removed.shiftLabel}). Revisar em /admin/bank-hours.`);
+            `🗑️ *${nome}*: plantão extra de ${removed.operationalDate.split("-").reverse().slice(0, 2).join("/")} ${removed.shiftLabel} desfeito.`);
 
         return NextResponse.json({ ok: true });
     } catch (error) {

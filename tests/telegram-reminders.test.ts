@@ -126,7 +126,7 @@ function makeBoard(): ReminderBoardSnapshot {
 function makeCoverageState(overrides: Partial<CoverageSnapshotPendingState> = {}): CoverageSnapshotPendingState {
     return {
         shiftStartedAt: "2026-03-25T22:00:00.000Z",
-        bucketAt: "2026-03-25T22:20:00.000Z",
+        bucketAt: "2026-03-25T22:15:00.000Z",
         awaitingInterventionCodes: ["BR05"],
         missingInterventionCodes: ["IT30"],
         disabledInterventionCodes: [],
@@ -243,7 +243,7 @@ test("buildReminderPlans publishes the full board on the first coverage snapshot
     const snapshot = plans.find((plan) => plan.stage === "coverage_snapshot");
     assert.ok(snapshot);
     assert.equal(snapshot?.parseMode, "Markdown");
-    assert.match(snapshot?.text ?? "", /📋 \*Quadro SN 19:20\*/);
+    assert.match(snapshot?.text ?? "", /📋 \*Quadro SN 19:15\*/);
     assert.match(snapshot?.text ?? "", /Intervenção \*1\/3\*/);
     assert.match(snapshot?.text ?? "", /✅ PM04 - Ana \| 19:00/);
     assert.match(snapshot?.text ?? "", /🟡 BR05 - Joao \(SD 07:18\) \| sem confirmação p\/ SN/);
@@ -262,6 +262,17 @@ test("buildReminderPlans publishes the full board on the first coverage snapshot
     assert.deepEqual(state.missingInterventionCodes, ["IT30"]);
     assert.deepEqual(state.missingRegulationCodes, ["2032"]);
     assert.equal(state.shiftStartedAt, "2026-03-25T22:00:00.000Z");
+});
+
+test("buildReminderPlans only emits coverage snapshots at +15 and +30 after the shift boundary", () => {
+    for (const now of ["2026-03-25T19:00:00-03:00", "2026-03-25T19:05:00-03:00", "2026-03-25T19:45:00-03:00", "2026-03-25T07:00:00-03:00"]) {
+        const plans = buildReminderPlans({ now: new Date(now), board: makeBoard() });
+        assert.equal(plans.find((plan) => plan.stage === "coverage_snapshot"), undefined, now);
+    }
+    for (const now of ["2026-03-25T19:15:00-03:00", "2026-03-25T19:34:00-03:00", "2026-03-25T07:15:00-03:00"]) {
+        const plans = buildReminderPlans({ now: new Date(now), board: makeBoard() });
+        assert.ok(plans.find((plan) => plan.stage === "coverage_snapshot"), now);
+    }
 });
 
 test("buildReminderPlans suppresses the coverage snapshot when pendências did not change", () => {
@@ -287,7 +298,7 @@ test("buildReminderPlans sends only the pendências delta from the second snapsh
     const snapshot = plans.find((plan) => plan.stage === "coverage_snapshot");
     assert.ok(snapshot);
     assert.equal(snapshot?.payload.mode, "delta");
-    assert.match(snapshot?.text ?? "", /📋 \*Quadro SN 19:30\* — o que mudou desde 19:20:/);
+    assert.match(snapshot?.text ?? "", /📋 \*Quadro SN 19:30\* — o que mudou desde 19:15:/);
     assert.match(snapshot?.text ?? "", /✅ Resolvidas: 2033/);
     assert.match(snapshot?.text ?? "", /⚠️ Novas pendências: BR05/);
     assert.match(snapshot?.text ?? "", /🔴 Intervenção sem confirmação \(1\): BR05/);
@@ -632,7 +643,7 @@ test("buildReminderPlans presents intervention and regulation in operational cha
     ];
 
     const plans = buildReminderPlans({
-        now: new Date("2026-03-25T19:45:00-03:00"),
+        now: new Date("2026-03-25T19:30:00-03:00"),
         board,
     });
 

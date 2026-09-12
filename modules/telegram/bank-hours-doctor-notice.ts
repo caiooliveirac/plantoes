@@ -59,38 +59,17 @@ export interface DoctorSettlementNoticeParams {
 
 export function buildDoctorSettlementNotice(params: DoctorSettlementNoticeParams): string {
     const mes = monthLabel(params.monthKey);
-    const sobra = params.residualMinutes === null
-        ? null
-        : `Saldo restante no banco de horas: ${formatSignedHours(params.residualMinutes)}.`;
+    const sobra = params.residualMinutes === null ? "" : ` Saldo: ${formatSignedHours(params.residualMinutes)}.`;
     if (params.kind === "payroll") {
-        const horas = params.payrollMinutes ? formatSignedHours(-Math.abs(params.payrollMinutes)) : null;
-        return [
-            `Olá, ${params.doctorFirstName}.`,
-            params.reversal
-                ? `O abatimento em folha do seu banco de horas de ${mes} foi *estornado* pela coordenação — os atrasos daquele mês voltam a contar no saldo.`
-                : `Os atrasos do seu banco de horas de ${mes}${horas ? ` (${horas})` : ""} foram *abatidos em folha* pela coordenação: o desconto sai na folha de pagamento/ponto, e essas horas deixam de pesar no saldo do banco.`,
-            sobra,
-            "O lançamento já aparece quando você consulta seu painel de banco de horas.",
-        ].filter((line): line is string => line !== null).join("\n");
+        const horas = params.payrollMinutes ? ` (${formatSignedHours(-Math.abs(params.payrollMinutes))})` : "";
+        return params.reversal
+            ? `${params.doctorFirstName}, o abatimento em folha do banco de horas de ${mes} foi *estornado*.${sobra}`
+            : `${params.doctorFirstName}, atrasos de ${mes}${horas} *abatidos em folha*.${sobra}`;
     }
-    if (params.reversal) {
-        return [
-            `Olá, ${params.doctorFirstName}.`,
-            params.kind === "bonus"
-                ? `O plantão de 12h acrescentado à sua folha de ${mes} pelo banco de horas foi *estornado* pela coordenação.`
-                : `O desconto de um plantão de 12h na sua folha de ${mes} pelo banco de horas foi *estornado* pela coordenação.`,
-            sobra,
-            "O estorno já aparece quando você gera ou consulta sua folha de ponto.",
-        ].filter((line): line is string => line !== null).join("\n");
-    }
-    return [
-        `Olá, ${params.doctorFirstName}.`,
-        params.kind === "bonus"
-            ? `Foi *acrescentado 1 plantão de 12h* à sua folha de ${mes} como compensação pelo seu saldo positivo de banco de horas.`
-            : `Foi *descontado 1 plantão de 12h* na sua folha de ${mes} para compensar o saldo negativo de banco de horas.`,
-        sobra,
-        "O ajuste já aparece quando você gera ou consulta sua folha de ponto.",
-    ].filter((line): line is string => line !== null).join("\n");
+    const acao = params.kind === "bonus" ? "+1 plantão de 12h" : "−1 plantão de 12h";
+    return params.reversal
+        ? `${params.doctorFirstName}, ${acao} na folha de ${mes} (banco de horas) foi *estornado*.${sobra}`
+        : `${params.doctorFirstName}, *${acao}* na folha de ${mes} pelo banco de horas.${sobra}`;
 }
 
 /**
