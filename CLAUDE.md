@@ -117,16 +117,18 @@ cuidam do fechamento mensal.
 ## Banco de dados
 
 **ORM:** Drizzle ORM sobre `postgres.js`. Conexão singleton em
-[db/index.ts](db/index.ts): `getDb()` cria um `postgres.Sql` com **pool `max: 1`** e
-`prepare: false`, cacheado no módulo. Requer `DATABASE_URL` (schema alvo:
+[db/index.ts](db/index.ts): `getDb()` cria um `postgres.Sql` com **pool `max: 5`**
+(`idle_timeout: 30`, `prepare: false`; era `max: 1` até o incidente de idle-in-transaction
+de 03/08/2026), cacheado no módulo. Dois processos PM2 → até 10 conexões do app. Requer `DATABASE_URL` (schema alvo:
 `operations_v2`, setado via `?options=-csearch_path%3Doperations_v2` na connection
 string — ver `.env.example`).
 
 **Schema** ([db/schema.ts](db/schema.ts)): schema Postgres dedicado `operations_v2`,
-18 tabelas. Nenhuma view SQL (materializada ou não) — leituras complexas são feitas
-com `db.execute(sql\`...\`)` (CTEs ad-hoc) direto em `services/*.service.ts`
-(destaque: `payable-shifts.service.ts`, `board.service.ts`,
-`bank-hours-history.service.ts`), não há camada de view no banco.
+~30 tabelas. Duas views SQL (não materializadas): `bank_hours_history_shifts`
+(migrations 0036/0039 — **sem `WHERE` ela lê todo o histórico**) e `contract_balance`
+(0038). O resto das leituras complexas é `db.execute(sql\`...\`)` (CTEs ad-hoc) direto em
+`services/*.service.ts` (destaque: `payable-shifts.service.ts`, `board.service.ts`,
+`bank-hours-history.service.ts`).
 
 Tabelas por domínio:
 
@@ -251,6 +253,20 @@ rode-o com `--test-isolation=none` (Node 23+; no Node 22 do CI a flag chama
 Sem ESLint/Prettier configurados no repo — a única verificação estática automatizada
 é `npm run typecheck` (`next typegen` + `tsc --noEmit -p tsconfig.json`, TypeScript
 `strict: true`, cobre produção **e** `tests/`), rodado no CI.
+
+## Telas com dados — regra obrigatória
+
+Antes de criar ou alterar qualquer tela/endpoint que lê dados, siga
+[docs/db/regras-dados-telas.md](docs/db/regras-dados-telas.md): analise o fluxo
+React → Next → service → SQL; busque só a janela e as colunas do estado visível;
+carga inicial pelo Server Component direto no service; crítico separado de
+secundário (`<Suspense>`/sob demanda); paralelize o independente respeitando o
+pool de 5; Postgres agrega, React exibe; períodos fechados vêm de agregação
+persistida, nunca de reconstrução ao abrir a tela. Antes de concluir, responda:
+**como o custo desta tela cresce quando o histórico dobra?** Se cresce junto, é
+defeito de arquitetura — redesenhe. Contexto: o fechamento de pagamento chegou a
+reapurar todos os meses desde 2025 a cada page view
+([auditoria](docs/db/auditoria-performance-2026-09.md)).
 
 ## Convenções de código observadas
 

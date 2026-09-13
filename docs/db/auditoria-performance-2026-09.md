@@ -32,7 +32,10 @@ ocupação (`bank_hours_entries_*_idx` únicos) e a trilha de auditoria
 (`audit_logs_entity_idx`). Criar mais índices **não** resolve um loop de 17 a 30
 iterações; o ganho está em (a) apurar o intervalo inteiro de uma vez, (b) somar
 saldos em SQL em vez de montar o modelo inteiro, (c) limitar janela e (d) cache
-por mês fechado. Só depois disso vale medir e decidir índices (§6).
+por mês fechado. Só depois disso vale medir e decidir índices (§6). A §5b confronta a
+arquitetura da tela (crítico vs. secundário, streaming, materialização em
+níveis, cache por chave) com o código; as regras gerais para agentes estão em
+[regras-dados-telas.md](regras-dados-telas.md).
 
 Fora da performance, há **três pontos de risco de dados/concorrência** (§4):
 acerto de banco de horas sem trava contra duplo clique (dinheiro), ausência de
@@ -266,6 +269,36 @@ contra um dump de produção restaurado localmente) e
 Ordem sugerida: 5.6 e 5.7 (segurança, uma tarde) → 5.1 + 5.2 + 5.8 (um PR,
 validado por snapshot) → 5.4 → 5.5 → 5.3.
 
+### 5b. Arquitetura da tela: camadas de necessidade, streaming e materialização
+
+Regras completas em [regras-dados-telas.md](regras-dados-telas.md). Aqui, o
+confronto de cada princípio com o código real destas duas telas:
+
+| Princípio | Situação hoje | Ação |
+|---|---|---|
+| Server Component lê o service direto, sem Route Handler interno | **Já é assim**: `page.tsx` chama `getChiefPayableShiftsBoard`/`getBankHoursHistory`. Nenhum `fetch("/api/...")` em Server Component. | Manter. |
+| Consultas independentes começam juntas | Parcial: os dois blocos usam `Promise.all`. O *waterfall* real é o loop `loadMonthlyApuracao` (17+ meses em série). | §5.1. |
+| Paralelismo limitado pelo pool | O bloco financeiro dispara 5 loaders de uma vez num pool de 5 → esgota o processo web. | §4.3 (serializar o financeiro ou limitar concorrência). |
+| Crítico vs. secundário | **Tudo vem junto** no `board`: grade do mês (crítico) **e** `contractBalances[].statement` + `metricsInput` por médico, saldo do banco de horas, `attestationSegments`, `payableShifts` completos (secundários — só o modal do médico usa). Não há `<Suspense>` no app. | Dividir o read model: `getChiefPayableBoardCore(mês)` (bloco 1) renderiza já; financeiros por médico viram `GET /api/admin/payment-closing/doctor/[id]/financials?month=` carregado ao abrir o modal, ou `<Suspense>` com streaming para o bloco agregado. |
+| Postgres agrega, React exibe | Saldo do banco de horas: carrega **todas** as ocupações e monta o modelo para somar minutos. Banco de horas: manda a vida inteira e filtra mês no cliente (7 filtros em `useState`). | §5.4 (soma em SQL) e §5.5 (janela no servidor). O filtro **dentro do mês** pode continuar no cliente: ~150 médicos × 31 dias é conjunto limitado por natureza. |
+| Paginação por cursor | Não se aplica à grade mensal (limitada). Aplica-se ao que cresce: histórico "vida inteira" do banco de horas, trilha de auditoria, mensagens do bot. | Cursor por `(startedAt, occupancyId)` quando a §5.5 tornar "vida inteira" uma opção. |
+| Materialização em 3 níveis | **Nível 1** existe (ocupações, extras, acertos, razão). **Nível 2 já existe em parte**: `bank_hours_entries` (1 linha por ocupação, recalculada em `syncBankHoursByContinuityGroup` a cada escrita — é exatamente "marca sujo e recalcula"), `payment_attestation_slots` (snapshot por turno, draft/approved), `contract_ledger` (meses fechados, append-only). **O que falta**: a apuração mensal do pagável por (médico, mês). **Nível 3** (read model da tela) não existe — é remontado a cada request. | §6.4 reescrita abaixo. |
+| Cascata "recalcula jun→set" | Neste domínio a apuração do pagável de um mês **não depende dos anteriores**. Só o saldo contratual (soma do razão + meses pendentes) e o banco de horas (soma de `bank_hours_entries` + acertos + legado) são acumulados — e ambos já são somas, não recomputações. Portanto: mudar 15/05 suja **só maio**; o saldo se corrige sozinho na soma. | Sem cascata. Simplifica a §6.4. |
+| Cache com invalidação por tag | Hoje `revalidatePath("/admin/payment-closing")` (página inteira). `use cache`/`cacheTag` exigem `cacheComponents` (não habilitado) e não alcançam o worker (processo separado, roda as 08:00 com os mesmos read models). | Cache durável = snapshot no Postgres (§6.4), invalidado pelas rotas de escrita do (médico, mês). Next cache é camada opcional depois. |
+| React Query para interação | Não é dependência do projeto; o cliente usa `fetch` + `useTransition` + `router.refresh()`. | Não é pré-requisito. Reavaliar só quando filtros/listas passarem a endpoints paginados (§5.5). |
+| Multi-tenant / RLS | Não se aplica: um serviço, uma operação, dois papéis. | — |
+
+Resultado que se busca para `/admin/payment-closing?month=2026-08`:
+
+```
+0 ms    shell + grade do mês (bloco 1: 6 queries com janela, ~60 quadros)      ← crítico
++       saldo do banco de horas por médico: 1 query agregada (§5.4)             ← streaming
++       saldo contratual: leitura do snapshot mensal + razão (§6.4), 2 queries  ← streaming
+abre modal do médico → 1 request: extrato do contrato + acerto + NF daquele médico
+atesta/salva NF     → grava; recalcula e invalida só (médico, mês); a grade não recarrega tudo
+custo × histórico   → constante: o mês corrente é apurado ao vivo, os fechados vêm do snapshot
+```
+
 ---
 
 ## 6. Propostas de mudança no PostgreSQL — só depois da §1, uma por migration
@@ -339,17 +372,38 @@ roda `db:migrate` num Postgres limpo.
   O script §1 traz a contagem. Se violar, fica só o advisory lock.
 - **Rollback**: `drop index concurrently …`.
 
-### 6.4 Snapshot persistido da apuração mensal (expand-only)
+### 6.4 Apuração mensal persistida — o "nível 2" que falta (expand-only)
 
-- **Problema**: a 5.3 em memória se perde no restart e não é compartilhada entre
-  web e worker. Uma tabela `payable_month_snapshots (month_key pk, computed_at,
-  source_max_updated_at, breakdown jsonb)` guarda a apuração de meses fechados;
-  invalidação por comparação de `max(updated_at)` das ocupações/extras/settlements
-  do mês.
-- **Lock**: `CREATE TABLE` novo — `ACCESS EXCLUSIVE` só na tabela nova, nada
-  existente é tocado. Backward compatible por construção (a versão antiga não
-  sabe que ela existe). Rollback: `drop table`.
-- **Só depois** da 5.1–5.4 — pode nem ser necessária.
+- **Problema**: a apuração do pagável por (médico, mês) é remontada a cada
+  request (§3), e o cache em memória (§5.3) não é compartilhado entre web e
+  worker nem sobrevive ao restart. Meses fechados são imutáveis até uma correção
+  explícita — o lugar natural deles é uma tabela.
+- **Modelo**: `payable_month_apuracao (month_key varchar(7), doctor_id uuid,
+  amount_cents int, weekday_shifts numeric(6,1), weekend_shifts numeric(6,1),
+  computed_at timestamptz, dirty boolean not null default false,
+  primary key (month_key, doctor_id))`. Mais uma tabela de controle por mês
+  (`payable_month_state (month_key pk, dirty, computed_at, source_max_updated_at)`)
+  para marcar o mês inteiro sujo com um `UPDATE` só.
+- **Fluxo**: leitura = `SELECT` do snapshot para meses fechados e limpos +
+  apuração ao vivo só do mês corrente e dos meses sujos (recalcular e gravar na
+  mesma passada). Escrita (correção de ocupação, undo, extra do admin, acerto,
+  troca de perfil/vínculo do médico) = `UPDATE payable_month_state SET dirty =
+  true WHERE month_key = <mês da data operacional tocada>`. Sem cascata: a
+  apuração de um mês não depende dos anteriores (§5b); saldo contratual e banco
+  de horas são somas e se corrigem sozinhos.
+- **Concorrência**: dois requests recalculando o mesmo mês sujo ao mesmo tempo
+  produzem o mesmo resultado (função pura sobre os mesmos dados) — gravar com
+  `INSERT ... ON CONFLICT (month_key, doctor_id) DO UPDATE` é idempotente. Para
+  não pagar o cálculo duas vezes, `pg_try_advisory_xact_lock(hashtext('apuracao:'||month_key))`:
+  quem não pegou o lock lê ao vivo sem gravar.
+- **Lock da migration**: `CREATE TABLE` nova → `ACCESS EXCLUSIVE` só na tabela
+  nova; nada existente é tocado. Backward compatible por construção: a versão
+  em produção não sabe que ela existe; a versão nova, sem linhas, cai no caminho
+  "ao vivo" e vai preenchendo. Rollback: parar de ler (flag) e `DROP TABLE`.
+- **Validação**: para cada mês fechado, `snapshot == apuração ao vivo` (o
+  `perf-baseline` já produz os dois lados); alerta se divergir.
+- **Ordem**: só depois da §5.1–5.4 — com elas o mês corrente já fica barato; o
+  snapshot é o que torna o custo **constante** em relação ao histórico.
 
 ### 6.5 O que **não** fazer agora
 
@@ -399,5 +453,8 @@ roda `db:migrate` num Postgres limpo.
 3. PR de performance (§5.1, §5.2, §5.8), validado por snapshot com
    `perf-baseline-payment-closing.ts` contra o dump restaurado.
 4. Reavaliar com `perf-measure`; então §5.4 e §5.5.
+4b. Dividir o read model do fechamento em crítico (grade) e secundário
+   (financeiros por médico sob demanda / `<Suspense>`), conforme §5b; depois
+   a apuração persistida da §6.4 para o custo ficar constante com o histórico.
 5. Só com números em mão, decidir os índices da §6 — cada um com a própria
    migration `-- migrate: no-transaction`, após o ajuste do runner (§6.0).
