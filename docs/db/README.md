@@ -13,6 +13,8 @@ PostgreSQL deste repositório. Comece aqui; não precisa reconstruir o raciocín
 | Entender por que o fechamento e o banco de horas estão lentos e o que já foi decidido | [auditoria-performance-2026-09.md](auditoria-performance-2026-09.md) — diagnóstico, riscos, plano em fases, propostas de schema com lock/rollback | 30 min |
 | Olhar o Postgres de produção | [`scripts/db-inspect-prod.sql`](../../scripts/db-inspect-prod.sql) (read-only) + [agent-operations.md §3](../agent-operations.md) para o túnel | 5 min para rodar |
 | Executar a investigação passo a passo | skill `/db-performance` ([.claude/skills/db-performance/SKILL.md](../../.claude/skills/db-performance/SKILL.md)) | — |
+| Implementar o plano (e não executá-lo cegamente) | [critica-do-plano-2026-09.md](critica-do-plano-2026-09.md) — onde o plano é tímido, orçamento numérico, ordem revisada com critério de pronto | 15 min |
+| Levar este raciocínio para outra aplicação | [prompt-reutilizavel-performance-dados.md](prompt-reutilizavel-performance-dados.md) — prompt pronto para `CLAUDE.md`/`AGENTS.md` de outro projeto | — |
 | Mexer em contrato/teto/saldo | [../saldo-contrato/README.md](../saldo-contrato/README.md) — armadilhas de dado | obrigatório |
 
 ## O método: como olhar o banco atrás de melhorias
