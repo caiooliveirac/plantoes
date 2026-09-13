@@ -32,8 +32,8 @@ rodar a suíte de testes, e até **consultar logs e banco de produção remotame
 
 - **Next.js 16.2** (App Router) + **React 19.2** + TypeScript 5.9 (`strict: true`).
 - **Drizzle ORM 0.45** sobre PostgreSQL, driver `postgres` (postgres.js). Conexão em
-  [db/index.ts](db/index.ts); schema único em [db/schema.ts](db/schema.ts) (~620 linhas,
-  18 tabelas no schema Postgres `operations_v2`).
+  [db/index.ts](db/index.ts); schema único em [db/schema.ts](db/schema.ts) (~850 linhas,
+  ~30 tabelas + 2 views no schema Postgres `operations_v2`).
 - Bot de Telegram para registro de plantões médicos (chegada/saída/continuação/meal
   breaks/pagamento). Worker de lembretes roda como processo PM2 separado.
 - Autenticação própria (JWT + cookie), sem NextAuth/Auth.js apesar da dependência
@@ -166,8 +166,8 @@ Tabelas por domínio:
 - **Saldo contratual** — `contracts` (um por vínculo: `ceilingAmount` nullable,
   janela `cycleStart`/`cycleEnd`, `supersededByContractId` para renovação) e
   `contractLedger` (razão append-only: `opening`, `invoice`, `invoice_reversal`,
-  `manual_adjustment`). **O saldo não é armazenado** — é a soma do razão, pela única
-  view SQL do repo, `operations_v2.contract_balance` (migration `0038`). A tabela
+  `manual_adjustment`). **O saldo não é armazenado** — é a soma do razão, pela view
+  `operations_v2.contract_balance` (migration `0038`). A tabela
   antiga `doctorContracts` (teto + mês semente) foi substituída por este modelo.
 
   > ⚠️ **Leia [docs/saldo-contrato/README.md](docs/saldo-contrato/README.md) antes de
@@ -195,9 +195,12 @@ Tabelas por domínio:
 - **Auditoria**: `shiftEvents` (event log com `domain` enum, `payload` jsonb) e
   `auditLogs` (log mais simples de ações administrativas).
 
-**Migrations**: SQL numerado manualmente em `db/migrations/` (27 arquivos,
-`0000_initial.sql` → `0026_payment_closing_financials.sql`), aplicado via
-`npm run db:migrate` ([scripts/apply-migrations.ts](scripts/apply-migrations.ts)).
+**Migrations**: SQL numerado manualmente em `db/migrations/` (43 arquivos,
+`0000_initial.sql` → `0042_doctor_contracts_opening_balance.sql`), aplicado via
+`npm run db:migrate` ([scripts/apply-migrations.ts](scripts/apply-migrations.ts)),
+que roda **cada arquivo dentro de uma transação** — por isso `CREATE INDEX
+CONCURRENTLY` ainda não é possível (proposta de marcador em
+`docs/db/auditoria-performance-2026-09.md` §6.0).
 **Não são gerados automaticamente por `drizzle-kit`** apesar de `drizzle-kit` estar
 nas devDependencies — o padrão observado é escrever a migration a mão e rodá-la
 manualmente no servidor **antes** do merge/deploy (zero-downtime). Veja
@@ -253,6 +256,19 @@ rode-o com `--test-isolation=none` (Node 23+; no Node 22 do CI a flag chama
 Sem ESLint/Prettier configurados no repo — a única verificação estática automatizada
 é `npm run typecheck` (`next typegen` + `tsc --noEmit -p tsconfig.json`, TypeScript
 `strict: true`, cobre produção **e** `tests/`), rodado no CI.
+
+## Banco de dados e performance — onde começar
+
+Tudo sobre investigar lentidão, escrever/refatorar queries, services e endpoints,
+paralelismo, transações e propostas de schema está indexado em
+[docs/db/README.md](docs/db/README.md) (método em 8 passos, ordem de leitura,
+estado das propostas). Há uma skill invocável, `/db-performance`
+([.claude/skills/db-performance/SKILL.md](.claude/skills/db-performance/SKILL.md)),
+que conduz o procedimento passo a passo. O catálogo de padrões antes/depois deste
+código está em [docs/db/padroes-queries-e-services.md](docs/db/padroes-queries-e-services.md).
+Trate o Postgres como infraestrutura crítica de produção: nada de schema/dado fora
+de migration versionada; `CREATE INDEX CONCURRENTLY` em tabela com escrita;
+inspeção read-only com `scripts/db-inspect-prod.sql`.
 
 ## Telas com dados — regra obrigatória
 
