@@ -6,10 +6,12 @@ import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import type {
     BankHoursDoctorHistory,
+    BankHoursDoctorSummary,
     BankHoursEmploymentType,
-    BankHoursHistoryModel,
     BankHoursHistoryShift,
+    BankHoursHistorySummaryModel,
     BankHoursSettlementSummary,
+    BankHoursShiftSummary,
 } from "@/modules/reporting/bank-hours-history";
 import {
     describeLateDepartureReason,
@@ -140,7 +142,7 @@ const BANK_HOURS_SETTLEMENT_MINUTES = 12 * 60;
  * folha, mês a mês (modules/bank-hours/payroll.ts). Então a direção "penalty"
  * não existe para ele — só o bônus (crédito ≥ +12h vira plantão extra).
  */
-function resolveDoctorPendingAction(doctor: BankHoursDoctorHistory): BankHoursPendingAction {
+function resolveDoctorPendingAction(doctor: BankHoursDoctorSummary): BankHoursPendingAction {
     const balance = resolveBankHoursSettlementBalance({
         oldMinutes: doctor.legacy?.preMay2025Minutes ?? 0,
         recentMinutes: (doctor.legacy?.spreadsheetPeriodMinutes ?? 0) + doctor.applicationBalanceMinutes,
@@ -188,7 +190,7 @@ function proofToneClass(mode: BankHoursHistoryShift["proof"]["mode"]) {
     return "neutral";
 }
 
-function summarizeDoctorSearch(doctor: BankHoursDoctorHistory) {
+function summarizeDoctorSearch(doctor: BankHoursDoctorSummary) {
     return normalizeSearch([
         doctor.doctorName,
         doctor.displayName ?? doctor.doctorName,
@@ -197,11 +199,11 @@ function summarizeDoctorSearch(doctor: BankHoursDoctorHistory) {
     ].join(" "));
 }
 
-function shiftKey(shift: BankHoursHistoryShift) {
+function shiftKey(shift: Pick<BankHoursShiftSummary, "domain" | "occupancyId">) {
     return `${shift.domain}:${shift.occupancyId}`;
 }
 
-function shiftAnchorId(shift: BankHoursHistoryShift) {
+function shiftAnchorId(shift: Pick<BankHoursShiftSummary, "domain" | "occupancyId">) {
     return `shift-${shift.domain}-${shift.occupancyId}`;
 }
 
@@ -209,7 +211,7 @@ function monthAnchorId(doctorId: string, monthKey: string) {
     return `month-${doctorId}-${monthKey}`;
 }
 
-function countBonusShifts(doctor: BankHoursDoctorHistory) {
+function countBonusShifts(doctor: BankHoursDoctorSummary) {
     return doctor.shifts.filter((shift) => (shift.creditedOvertimeMinutes ?? 0) > 0).length;
 }
 
@@ -344,21 +346,22 @@ function PayrollWaterfall({ payroll }: { payroll: PayrollDeductionForMonth }) {
     );
 }
 
-function compareShiftsAsc(left: BankHoursHistoryShift, right: BankHoursHistoryShift) {
+function compareShiftsAsc(left: Pick<BankHoursShiftSummary, "startedAt">, right: Pick<BankHoursShiftSummary, "startedAt">) {
     return new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime();
 }
 
-interface MonthGroup {
+/** Genérico: a lista agrupa plantões enxutos; o detalhe do médico, os completos. */
+interface MonthGroup<TShift extends BankHoursShiftSummary = BankHoursShiftSummary> {
     monthKey: string;
-    shifts: BankHoursHistoryShift[];
+    shifts: TShift[];
     balanceMinutes: number;
     delayCount: number;
     bonusCount: number;
 }
 
 /** Plantões do médico agrupados por mês operacional, meses e plantões em ordem crescente. */
-function groupShiftsByMonth(shifts: BankHoursHistoryShift[]): MonthGroup[] {
-    const groups = new Map<string, MonthGroup>();
+function groupShiftsByMonth<TShift extends BankHoursShiftSummary>(shifts: TShift[]): MonthGroup<TShift>[] {
+    const groups = new Map<string, MonthGroup<TShift>>();
     for (const shift of shifts.slice().sort(compareShiftsAsc)) {
         const group = groups.get(shift.monthKey) ?? {
             monthKey: shift.monthKey,
@@ -607,7 +610,8 @@ interface SettlementMonthOption {
 const ALL_MONTHS = "all";
 
 interface Props {
-    history: BankHoursHistoryModel;
+    /** Lista enxuta (sem prova/auditoria); o detalhe de cada médico vem da API ao abrir. */
+    history: BankHoursHistorySummaryModel;
     canManageOverrides: boolean;
     settlementMonths: SettlementMonthOption[];
     /** Foco inicial do seletor do topo: "all" (vida inteira) ou AAAA-MM vindo de ?month=. */
@@ -629,7 +633,7 @@ interface DoctorRowsView {
 }
 
 /** Meses que podem ter desconto em folha: os com plantão + os com acerto antigo de folha. */
-function payrollMonthsOf(doctor: BankHoursDoctorHistory) {
+function payrollMonthsOf(doctor: BankHoursDoctorSummary) {
     const months = new Set<string>();
     for (const shift of doctor.shifts) months.add(shift.monthKey);
     for (const settlement of doctor.settlements) {
@@ -652,6 +656,12 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     // Nenhum médico aberto por padrão: o histórico dilata muito a página, então
     // ele só abre por clique e pode ser fechado em vários pontos (X, fim, Esc).
     const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
+    // Histórico completo por médico, carregado da API ao abrir e esquecido quando
+    // a lista é recarregada (router.refresh após ajuste/estorno).
+    const [detailByDoctor, setDetailByDoctor] = useState<Record<string, BankHoursDoctorHistory>>({});
+    const [detailError, setDetailError] = useState<string | null>(null);
+    // Plantão para rolar até assim que o detalhe do médico chegar.
+    const pendingAnchorRef = useRef<string | null>(null);
     const [overrideMinutesByShift, setOverrideMinutesByShift] = useState<Record<string, string>>({});
     const [overrideNotesByShift, setOverrideNotesByShift] = useState<Record<string, string>>({});
     const [overrideErrorsByShift, setOverrideErrorsByShift] = useState<Record<string, string>>({});
@@ -731,7 +741,12 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     function openDoctorAtShift(doctorId: string, anchorId: string) {
         if (doctorId !== selectedDoctorId) {
             setSelectedDoctorId(doctorId);
-            }
+        }
+        if (!detailByDoctor[doctorId]) {
+            // Detalhe ainda não carregado: rola quando ele chegar (efeito abaixo).
+            pendingAnchorRef.current = anchorId;
+            return;
+        }
         window.setTimeout(() => {
             document.getElementById(anchorId)?.scrollIntoView({ behavior: "auto", block: "start" });
         }, 120);
@@ -760,22 +775,72 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         return () => window.removeEventListener("resize", updateStickyOffset);
     }, []);
 
+    // Sem fallback automático: null = fechado de propósito, e fica fechado.
+    const selectedDoctor = selectedDoctorId
+        ? detailByDoctor[selectedDoctorId] ?? null
+        : null;
+
+    // Lista recarregada (ajuste manual, estorno): o detalhe guardado envelheceu.
     useEffect(() => {
+        setDetailByDoctor((previous) => (Object.keys(previous).length > 0 ? {} : previous));
+    }, [history.generatedAt]);
+
+    // Carrega o histórico completo do médico aberto, uma vez por lista.
+    useEffect(() => {
+        if (!selectedDoctorId || detailByDoctor[selectedDoctorId]) {
+            return;
+        }
+        const doctorId = selectedDoctorId;
+        let cancelled = false;
+        setDetailError(null);
+        fetch(`/api/admin/bank-hours/doctors/${doctorId}`)
+            .then(async (response) => {
+                const payload = await response.json().catch(() => null) as { doctor?: BankHoursDoctorHistory | null; error?: string } | null;
+                if (!response.ok || !payload?.doctor) {
+                    throw new Error(payload?.error ?? "Não foi possível carregar o histórico do médico.");
+                }
+                return payload.doctor;
+            })
+            .then((doctor) => {
+                if (!cancelled) setDetailByDoctor((previous) => ({ ...previous, [doctorId]: doctor }));
+            })
+            .catch((error: unknown) => {
+                if (!cancelled) setDetailError(error instanceof Error ? error.message : "Não foi possível carregar o histórico do médico.");
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedDoctorId, detailByDoctor]);
+
+    // Clique numa linha do card antes do detalhe existir: rola quando ele chega.
+    useEffect(() => {
+        const anchorId = pendingAnchorRef.current;
+        if (!selectedDoctor || !anchorId) {
+            return;
+        }
+        pendingAnchorRef.current = null;
+        window.setTimeout(() => {
+            document.getElementById(anchorId)?.scrollIntoView({ behavior: "auto", block: "start" });
+        }, 120);
+    }, [selectedDoctor]);
+
+    // Campos do ajuste manual só existem no detalhe aberto.
+    useEffect(() => {
+        if (!selectedDoctor) {
+            return;
+        }
         const nextMinutes: Record<string, string> = {};
         const nextNotes: Record<string, string> = {};
-
-        for (const doctor of history.doctors) {
-            for (const shift of doctor.shifts) {
-                nextMinutes[shiftKey(shift)] = String(shift.manualBalanceMinutes ?? shift.balanceMinutes ?? 0);
-                nextNotes[shiftKey(shift)] = shift.manualBalanceNotes ?? "";
-            }
+        for (const shift of selectedDoctor.shifts) {
+            nextMinutes[shiftKey(shift)] = String(shift.manualBalanceMinutes ?? shift.balanceMinutes ?? 0);
+            nextNotes[shiftKey(shift)] = shift.manualBalanceNotes ?? "";
         }
 
-        setOverrideMinutesByShift(nextMinutes);
-        setOverrideNotesByShift(nextNotes);
+        setOverrideMinutesByShift((previous) => ({ ...previous, ...nextMinutes }));
+        setOverrideNotesByShift((previous) => ({ ...previous, ...nextNotes }));
         setOverrideErrorsByShift({});
         setSavingShiftKey(null);
-    }, [history.generatedAt, history.doctors]);
+    }, [selectedDoctor]);
 
     const pendingByDoctor = useMemo(() => {
         const map = new Map<string, BankHoursPendingAction>();
@@ -897,11 +962,6 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         }
         return { shiftCount, delayCount, bonusCount, balanceMinutes };
     }, [filteredDoctors, rowsByDoctor]);
-
-    // Sem fallback automático: null = fechado de propósito, e fica fechado.
-    const selectedDoctor = selectedDoctorId
-        ? history.doctors.find((doctor) => doctor.doctorId === selectedDoctorId) ?? null
-        : null;
 
     // Busca vai direto ao médico: sobrou UM resultado -> abre na hora; com
     // vários resultados num layout empilhado, fecha o detalhe aberto para a
@@ -1212,7 +1272,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 </div>
             </section>
 
-            <section className={`hours-grid ${selectedDoctor ? "detail-open" : "list-only"}`.trim()}>
+            <section className={`hours-grid ${selectedDoctorId ? "detail-open" : "list-only"}`.trim()}>
                 <div className="hours-directory-column" ref={directoryRef}>
                     <header className="hours-directory-header">
                         <div>
@@ -1231,7 +1291,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                         const bonusShifts = countBonusShifts(doctor);
                         const pending = pendingByDoctor.get(doctor.doctorId);
                         const rows = rowsByDoctor.get(doctor.doctorId);
-                        const isSelected = selectedDoctor?.doctorId === doctor.doctorId;
+                        const isSelected = selectedDoctorId === doctor.doctorId;
                         return (
                             <article
                                 key={doctor.doctorId}
@@ -1334,6 +1394,15 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                     })}
                 </div>
 
+                {selectedDoctorId && !selectedDoctor ? (
+                <aside className="hours-detail-panel" ref={detailPanelRef}>
+                    <section className="hours-empty-state">
+                        <strong>{detailError ? "Não foi possível abrir o histórico" : "Carregando histórico…"}</strong>
+                        {detailError ? <span>{detailError}</span> : <span>Prova, correções e auditoria de cada plantão.</span>}
+                        <button type="button" className="hours-close-footer" onClick={closeDoctor}>Fechar ✕</button>
+                    </section>
+                </aside>
+                ) : null}
                 {selectedDoctor ? (
                 <aside className="hours-detail-panel" ref={detailPanelRef}>
                         <>

@@ -31,8 +31,7 @@ import {
     type DoctorPaymentProfile,
 } from "@/modules/reporting/payable-shifts";
 import { extractDoctorIsNaoPlantonista } from "@/modules/doctors/directory";
-import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
-import { getDoctorMonthlyPayableBreakdown } from "@/services/payable-shifts.service";
+import { createMonthlyBreakdownLoader, type MonthlyBreakdownLoader } from "@/services/payable-shifts.service";
 
 /** Mesmas tarifas do fechamento, em centavos (modules/reporting/payable-shifts.ts). */
 const RATE_CENTS: Record<DoctorPaymentProfile, { weekday: number; weekend: number }> = {
@@ -116,7 +115,7 @@ async function loadLedgerBreakdown(contractIds: string[]): Promise<{
 }
 
 /** Meses AAAA-MM de `primeiro` até `ultimo`, inclusive. */
-function monthRange(primeiro: string, ultimo: string): string[] {
+export function monthRange(primeiro: string, ultimo: string): string[] {
     const meses: string[] = [];
     let [ano, mes] = primeiro.split("-").map(Number);
     const [anoFim, mesFim] = ultimo.split("-").map(Number);
@@ -131,19 +130,52 @@ function monthRange(primeiro: string, ultimo: string): string[] {
 /**
  * Apura o valor pagável de cada mês para todos os médicos, uma vez por mês —
  * a apuração monta o mês inteiro, então o custo é por mês, não por contrato.
+ * Em série de propósito: cada mês já dispara suas próprias queries em paralelo
+ * e o pool da aplicação é pequeno.
  */
-async function loadMonthlyApuracao(meses: string[]): Promise<Map<string, Map<string, MonthMovement>>> {
+async function loadMonthlyApuracao(
+    meses: string[],
+    breakdownByMonth: MonthlyBreakdownLoader,
+): Promise<Map<string, Map<string, MonthMovement>>> {
     const apuracao = new Map<string, Map<string, MonthMovement>>();
     for (const mesChave of meses) {
-        const range = resolveMonthlyReportRange(mesChave);
-        apuracao.set(mesChave, new Map());
-        const breakdown = await getDoctorMonthlyPayableBreakdown(range.start, range.end);
-        for (const [doctorId, porMes] of breakdown) {
-            const valor = porMes.get(mesChave);
-            if (valor) apuracao.get(mesChave)!.set(doctorId, valor);
-        }
+        apuracao.set(mesChave, await breakdownByMonth(mesChave));
     }
     return apuracao;
+}
+
+/**
+ * Meses que AINDA precisam ser apurados ao vivo: os que, para pelo menos um
+ * contrato, caem depois da abertura, dentro do ciclo e sem lançamento no razão
+ * (nem no do próprio contrato, nem consumo vivo de fechamento em outro contrato
+ * do mesmo médico). Mês fechado no razão é período imutável: vem do razão, não
+ * se reconstrói ao abrir a tela. Sem este filtro a tela remontava o board de
+ * TODOS os meses desde a abertura mais antiga — o custo crescia com a idade
+ * do contrato mais velho, a cada carregamento.
+ *
+ * Mesmas quatro condições de computePendingConsumption e do extrato (sem o
+ * excludeMonthKey, que só vale para o saldo projetado).
+ */
+export function resolveMonthsNeedingLiveApuracao(params: {
+    contratos: { contractId: string; doctorId: string; cycleStart: string; cycleEnd: string; openingAt: Date }[];
+    meses: string[];
+    settledKeys: Set<string>;
+    ledger: Map<string, ContractLedgerMonthly>;
+}): string[] {
+    const necessarios = new Set<string>();
+    for (const contrato of params.contratos) {
+        const settledByMonth = params.ledger.get(contrato.contractId)?.settledByMonth;
+        for (const mesChave of params.meses) {
+            if (necessarios.has(mesChave)) continue;
+            const ultimoDia = new Date(Date.UTC(Number(mesChave.slice(0, 4)), Number(mesChave.slice(5, 7)), 0));
+            if (ultimoDia <= contrato.openingAt) continue;
+            if (!isMonthWithinCycle(mesChave, contrato.cycleStart, contrato.cycleEnd)) continue;
+            if (params.settledKeys.has(`${contrato.doctorId}|${mesChave}`)) continue;
+            if (settledByMonth?.has(mesChave)) continue;
+            necessarios.add(mesChave);
+        }
+    }
+    return params.meses.filter((mesChave) => necessarios.has(mesChave));
 }
 
 /**
@@ -270,6 +302,12 @@ export async function loadContractBalances(params: {
      * do médico não passa nada, porque quer ver tudo que já gastou.
      */
     excludeMonthKey?: string;
+    /**
+     * Apuração mensal memoizada do request (createMonthlyBreakdownLoader):
+     * quem já montou meses para outro fim passa o mesmo loader e nenhum mês
+     * é montado duas vezes.
+     */
+    breakdownByMonth?: MonthlyBreakdownLoader;
 } = {}): Promise<{ rows: ContractBalanceRow[]; asOf: Date; computedAt: Date }> {
     const asOf = params.asOf ?? new Date();
     const db = getDb();
@@ -318,7 +356,10 @@ export async function loadContractBalances(params: {
         .map((c) => mesDe(c.openingAt))
         .reduce((menor, atual) => (atual < menor ? atual : menor), mesAtual);
     const meses = contratos.length > 0 ? monthRange(primeiroMes, mesAtual) : [];
-    const apuracao = await loadMonthlyApuracao(meses);
+    const apuracao = await loadMonthlyApuracao(
+        resolveMonthsNeedingLiveApuracao({ contratos, meses, settledKeys, ledger }),
+        params.breakdownByMonth ?? createMonthlyBreakdownLoader(),
+    );
 
     // O que o médico já gastou e o fechamento ainda não carimbou.
     const pendente = computePendingConsumption({
