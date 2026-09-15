@@ -2,7 +2,7 @@ import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { ChiefPaymentViewClient } from "@/app/admin/payment-attestation/chief-payment-view-client";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
-import type { DoctorFinancialExtras } from "@/modules/reporting/payable-shifts";
+import { toChiefPayableClientBoard, type DoctorFinancialExtras } from "@/modules/reporting/payable-shifts";
 import { loadChiefPayableBoardCore, loadChiefPayableFinancials } from "@/services/payable-shifts.service";
 
 export const dynamic = "force-dynamic";
@@ -68,7 +68,7 @@ export default async function AdminPaymentClosingPage({
 
     return (
         <ChiefPaymentViewClient
-            board={board}
+            board={toChiefPayableClientBoard(board)}
             financials={financials}
             canManageClosing={canManageClosing}
             initialDoctorId={initialDoctorId}

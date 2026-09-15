@@ -9,7 +9,7 @@ import { ContractBalanceCard } from "@/components/payment-closing/contract-balan
 import { ContractTermsCard } from "@/components/payment-closing/contract-terms-card";
 // Nenhuma ação desta tela pode ficar pendurada esperando o servidor.
 import { fetchComLimite } from "@/lib/fetch-com-limite";
-import { applyDoctorFinancials, resolveExtraShiftChipCode, type ChiefPayableBoardModel, type DoctorFinancialExtras } from "@/modules/reporting/payable-shifts";
+import { applyDoctorFinancials, rebuildPayableShifts, resolveExtraShiftChipCode, type ChiefPayableClientBoard, type DoctorFinancialExtras, type PayableShift } from "@/modules/reporting/payable-shifts";
 import { HalfShiftDecision } from "@/components/payment-closing/half-shift-decision";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
@@ -23,8 +23,8 @@ export interface ChiefPayableFinancialsPayload {
 }
 
 interface Props {
-    /** Grade sem financeiro (loadChiefPayableBoardCore). Sem `financials`, é o board completo. */
-    board: ChiefPayableBoardModel;
+    /** Grade sem financeiro (loadChiefPayableBoardCore) e sem a lista plana (toChiefPayableClientBoard). */
+    board: ChiefPayableClientBoard;
     financials?: Promise<ChiefPayableFinancialsPayload>;
     canManageClosing?: boolean;
     /** Encaminhamento da aba banco de horas: abre o modal deste médico no load. */
@@ -296,6 +296,8 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
         () => (financialsPromise && financials ? applyDoctorFinancials(baseBoard, financials.byDoctor) : baseBoard),
         [baseBoard, financials, financialsPromise],
     );
+    // Lista plana refeita das células, na ordem do servidor (não viaja duplicada).
+    const payableShifts = useMemo(() => rebuildPayableShifts(baseBoard), [baseBoard]);
     const router = useRouter();
     const [, startRefreshTransition] = useTransition();
     const requestRouterRefresh = useCallback(() => {
@@ -545,7 +547,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
     }, [targetPills]);
 
     const filterSummary = useMemo(() => {
-        const visiblePayableShifts = board.payableShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
+        const visiblePayableShifts = payableShifts.filter((shift) => !pendingRemovals.has(shift.payableShiftId));
         // Só quem deu plantão no mês: as linhas vazias do quadro não são
         // "prontas para pagamento", são atalho para o modal.
         const monthDoctors = board.doctors.filter(hasMonthShifts);
@@ -572,11 +574,11 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
             halfCount,
             fullCount,
         };
-    }, [board.doctors, board.payableShifts, pendingRemovals]);
+    }, [board.doctors, payableShifts, pendingRemovals]);
 
     const dayLoad = useMemo(() => {
         const counts = new Map<string, number>();
-        for (const shift of board.payableShifts) {
+        for (const shift of payableShifts) {
             if (pendingRemovals.has(shift.payableShiftId)) {
                 continue;
             }
@@ -585,7 +587,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
         }
 
         return board.days.map((day) => ({ day, count: counts.get(day) ?? 0 }));
-    }, [board.days, board.payableShifts, pendingRemovals]);
+    }, [board.days, payableShifts, pendingRemovals]);
 
     const dueAmountByEmploymentType = useMemo(() => {
         const totalsCents: Record<DoctorEmploymentType, number> = { pj: 0, estatutario: 0 };
@@ -1537,9 +1539,9 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
     );
 
     const allocationConflictShifts = useMemo(() => {
-        const uniqueBySlot = new Map<string, typeof board.payableShifts[number]>();
+        const uniqueBySlot = new Map<string, PayableShift>();
 
-        for (const shift of board.payableShifts
+        for (const shift of payableShifts
             .filter((shift) => shift.issues.some((issue) => issue === "Mais de um medico candidato no mesmo alvo/turno"))
             .slice()) {
             const key = [shift.operationalDate, shift.shiftLabel, shift.domain, shift.targetCode].join("|");
@@ -1555,7 +1557,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                 if (left.shiftLabel !== right.shiftLabel) return left.shiftLabel === "SD" ? -1 : 1;
                 return left.targetCode.localeCompare(right.targetCode, "pt-BR");
             });
-    }, [board.payableShifts]);
+    }, [payableShifts]);
 
     const selectedDoctorDisplacedConflictSegments = useMemo(() => {
         if (!selectedDoctor) {

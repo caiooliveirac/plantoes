@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    rebuildPayableShifts,
+    toChiefPayableClientBoard,
     applyDoctorFinancials,
     buildAdminExtraPayableShift,
     buildAttestationSegments,
@@ -1203,4 +1205,26 @@ test("applyDoctorFinancials produz exatamente o board que buildChiefPayableBoard
     // Byte a byte, inclusive a ordem das chaves: é o que o snapshot do fechamento compara.
     assert.equal(JSON.stringify(streamed), JSON.stringify(inline));
     assert.equal(streamed.doctors.find((row) => row.doctorId === "doc-1")?.invoiceNumber, "NF-1");
+});
+
+test("toChiefPayableClientBoard tira a lista plana e rebuildPayableShifts a refaz na mesma ordem", () => {
+    const payableShifts = buildPayableShiftsFromBoards([makeBoard()]);
+    const board = buildChiefPayableBoard({
+        monthKey: "2026-04",
+        monthLabel: "abril de 2026",
+        presetMonths: [{ key: "2026-04", label: "abril de 2026" }],
+        rangeStartIso: "2026-04-01T10:00:00.000Z",
+        rangeEndIso: "2026-05-01T10:00:00.000Z",
+        payableShifts,
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: buildPayableTargetOptions({ payableShifts, disabledTargets: [], uncoveredTargets: [] }),
+        attestationSegments: [],
+        allDoctorNames: [],
+    });
+
+    const client = toChiefPayableClientBoard(board);
+    assert.equal("payableShifts" in client, false);
+    assert.deepEqual(rebuildPayableShifts(client), board.payableShifts);
+    assert.equal(JSON.stringify(rebuildPayableShifts(client)), JSON.stringify(board.payableShifts));
 });
