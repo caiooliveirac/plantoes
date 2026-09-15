@@ -10,7 +10,7 @@ import { modalBackdrop, modalPanel, tapFeedback } from "@/lib/board/motion";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
 import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { resolveDayOffsetLabel } from "@/lib/board/day-offset";
-import type { ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
+import { describeDepartureOrigin } from "@/modules/operational/departure-origin";
 import {
     isValidOverrideNote,
     OVERRIDE_NOTE_MIN_LENGTH,
@@ -73,25 +73,24 @@ interface DecisionButton {
 /**
  * O verificador de saídas.
  *
- * A primeira coisa da tela são os dois horários que decidem tudo — CHEGOU e
- * SAIU — porque é isso que o chefe precisa julgar; a régua vem depois, em uma
- * linha. Antes o modal abria com um parágrafo de triagem e enterrava a chegada
- * numa linha cinza de 0,82rem, e um chefe não conseguia responder "que horas
- * ele chegou?" sem reler tudo.
+ * Uma pergunta e três respostas, sempre as mesmas:
  *
- * Botões, por caso:
+ *   "Fulano saiu do 2152 às 07:16?"
+ *     1. Saiu às 07:16        — confirma; a régua (inteiro/meio/banco) aplica
+ *                               sozinha e aparece numa linha. Desvio fica atrás
+ *                               do link "pagar diferente", com justificativa.
+ *     2. Saiu em outra hora   — corrige chegada/saída e confirma.
+ *     3. Não saiu, ainda está — reabre o mesmo registro. Só aparece quando é
+ *                               possível: sem chegada posterior em outro alvo.
  *
- *   - faixa MEIO (6h–10h de janela): pagar inteiro ou pagar MEIO;
- *   - saída <6h: lançar só no banco, ou pagar MEIO/INTEIRO com justificativa
- *     escrita (mínimo de 8 caracteres — espaços contam);
- *   - permanência de 6h+ além da janela: emendou turno (P) — confirma e a folha
- *     assina o plantão; NUNCA se oferece o crédito de banco aqui;
- *   - saída tardia: confirmar o crédito ou recusar (com justificativa);
- *   - rotina: confirmar e pronto.
+ * Antes da pergunta, a tela diz DE ONDE veio a saída (avisou / outro assumiu /
+ * janela venceu / sistema), porque a maioria das saídas da fila ninguém
+ * declarou: outro médico chegou e o registro foi encerrado naquela hora. O
+ * chefe julgava "07:05→07:16" como se o médico tivesse dito isso.
  *
- * "Ajustar horários" existe em TODOS os casos: quando o registro está errado, a
- * hora certa tem de prevalecer antes de qualquer decisão de pagamento — era
- * justamente nas faixas de pagamento que o botão faltava.
+ * O que saiu daqui de propósito: "foi para outro posto" (é remanejamento, feito
+ * no quadro; com chegada registrada lá a saída aconteceu e o botão 3 some),
+ * "não sei dizer" (não é resposta) e os cinco botões de pagamento por faixa.
  */
 export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
     const router = useRouter();
@@ -108,11 +107,12 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
     );
 
     const [submitting, setSubmitting] = useState(false);
-    const [view, setView] = useState<"decide" | "adjust" | "contest">("decide");
-    // "NÃO SAIU": onde o médico ficou depois da saída que o chefe está desmentindo.
-    const [contestContinuation, setContestContinuation] = useState<ContestedDepartureContinuation>("same_target");
-    const [contestLabel, setContestLabel] = useState("");
-    // Ação escolhida que exige justificativa — o textarea aparece e o envio
+    // decide  = a pergunta e as três respostas
+    // adjust  = "hora errada": corrigir chegada/saída
+    // contest = "ainda está aqui": confirmar a reabertura
+    // other   = "pagar diferente": desvios da régua, com justificativa
+    const [view, setView] = useState<"decide" | "adjust" | "contest" | "other">("decide");
+    // Desvio escolhido que exige justificativa — o textarea aparece e o envio
     // fica travado até a nota ter 8+ caracteres.
     const [pendingAction, setPendingAction] = useState<DecisionAction | null>(null);
     const [noteText, setNoteText] = useState("");
@@ -124,8 +124,6 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             setView("decide");
             setPendingAction(null);
             setNoteText("");
-            setContestContinuation("same_target");
-            setContestLabel("");
             setAdjustStart(toTimeInputValue(target.startedAt));
             setAdjustEnd(toTimeInputValue(target.actualEndedAt));
         }
@@ -218,7 +216,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
         startedAt?: string;
         note?: string | null;
         outcome?: "bank_only" | "half_shift" | "full_shift";
-        contestDeparture?: { continuation: ContestedDepartureContinuation; continuedAtLabel?: string | null };
+        contestDeparture?: { continuation: "same_target" };
     }, successLabel: string) => {
         if (!target) return;
         setSubmitting(true);
@@ -286,140 +284,97 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
         void runAction(button.action, null);
     };
 
-    const buttons = useMemo<DecisionButton[]>(() => {
-        if (!target || !triage) return [];
-        const confirmLabel = `Confirmar saída ${formatLocalHourMinute(verbalizedMs)}`;
-
-        if (triage.kind === "early_half") {
-            return [
-                {
-                    label: "Pagar plantão inteiro",
-                    hint: "Assina inteiro; atraso e saída contam no banco.",
-                    className: "confirm",
-                    action: { kind: "outcome", outcome: "full_shift", requiresNote: false },
-                },
-                {
-                    label: "Pagar MEIO plantão",
-                    hint: `Assina 0,5x; acima de 6h vira crédito`
-                        + `${triage.classification && triage.classification.bankCreditMinutes > 0
-                            ? ` (${formatMinutesShort(triage.classification.bankCreditMinutes)})`
-                            : ""}, sem punição pelo atraso.`,
-                    className: "edit",
-                    action: { kind: "outcome", outcome: "half_shift", requiresNote: false },
-                },
-            ];
+    /**
+     * A resposta "saiu às HH:MM" aplica a régua sozinha. O chefe não escolhe
+     * inteiro/meio/banco na primeira tela: vê a consequência numa linha e, se
+     * discordar, abre "pagar diferente".
+     */
+    const decision = useMemo<{ action: DecisionAction; consequence: string; alternatives: DecisionButton[] }>(() => {
+        if (!target || !triage) {
+            return { action: { kind: "confirm" }, consequence: "", alternatives: [] };
         }
-
-        if (triage.kind === "short_anomaly") {
-            // Anomalia: nada de botão de pagamento. Confirmar aqui seria validar
-            // um registro provavelmente errado — o caminho é ajustar os horários
-            // (ou tratar no /corrigir), e só confirmar se a saída for real mesmo.
-            return [
-                {
-                    label: confirmLabel,
-                    hint: "Só se essa saída de poucos minutos foi real; se foi erro, corrija os horários.",
-                    className: "reject",
-                    action: { kind: "confirm" },
-                },
-            ];
-        }
-
-        if (triage.kind === "early_full") {
-            const worked = triage.classification?.workedMinutes ?? 0;
-            return [
-                {
-                    label: "Pagar plantão inteiro",
-                    hint: "Assina inteiro; atraso e saída contam no banco.",
-                    className: "confirm",
-                    action: { kind: "outcome", outcome: "full_shift", requiresNote: false },
-                },
-                {
-                    label: "Pagar MEIO plantão",
-                    hint: `Assina 0,5x; acima de 6h vira crédito`
-                        + `${worked > 360 ? ` (${formatMinutesShort(worked - 360)})` : ""}. Abaixo da régua: pede justificativa.`,
-                    className: "edit",
-                    action: { kind: "outcome", outcome: "half_shift", requiresNote: true },
-                },
-                {
-                    label: "Lançar só para o banco de horas",
-                    hint: `Não assina; horas viram crédito${worked > 0 ? ` (${formatMinutesShort(worked)})` : ""}. Pede justificativa.`,
-                    className: "reject",
-                    action: { kind: "outcome", outcome: "bank_only", requiresNote: true },
-                },
-            ];
-        }
+        const worked = triage.classification?.workedMinutes ?? 0;
+        const credit = triage.classification?.bankCreditMinutes ?? 0;
+        const balance = standardBalance?.balanceMinutes ?? null;
 
         if (triage.kind === "early_bank_only") {
-            const credit = triage.classification?.bankCreditMinutes ?? 0;
-            return [
-                {
-                    label: `Lançar só para o banco de horas (${formatMinutesShort(credit)})`,
-                    hint: "Não assina; as horas viram crédito.",
-                    className: "confirm",
-                    action: { kind: "outcome", outcome: "bank_only", requiresNote: false },
-                },
-                {
-                    label: "Pagar MEIO plantão",
-                    hint: "Acima da régua (fez menos de 6h): pede justificativa.",
-                    className: "edit",
-                    action: { kind: "outcome", outcome: "half_shift", requiresNote: true },
-                },
-                {
-                    label: "Pagar plantão INTEIRO",
-                    hint: "Acima da régua: pede justificativa.",
-                    className: "reject",
-                    action: { kind: "outcome", outcome: "full_shift", requiresNote: true },
-                },
-            ];
+            return {
+                action: { kind: "outcome", outcome: "bank_only", requiresNote: false },
+                consequence: `Fez ${formatMinutesShort(worked)} da janela: não assina o plantão; as horas viram banco (${formatMinutesShort(credit)}).`,
+                alternatives: [
+                    { label: "Pagar MEIO plantão", hint: "Acima da régua: pede justificativa.", className: "edit", action: { kind: "outcome", outcome: "half_shift", requiresNote: true } },
+                    { label: "Pagar plantão INTEIRO", hint: "Acima da régua: pede justificativa.", className: "edit", action: { kind: "outcome", outcome: "full_shift", requiresNote: true } },
+                ],
+            };
         }
-
-        // Emendou o turno: a folha assina o plantão pelo slot ocupado e o banco
-        // fica com o resto (< 6h). Oferecer "confirmar N h de banco" aqui era
-        // prometer um número que applyAnomalyGuard já cortava na gravação.
-        if (triage.kind === "extended_stay") {
-            return [
-                {
-                    label: confirmLabel,
-                    hint: standardBalance
-                        ? standardBalance.explanation
-                        : "Confirma a saída verbalizada como está.",
-                    className: "confirm",
-                    action: { kind: "confirm" },
-                },
-            ];
+        if (triage.kind === "early_half") {
+            return {
+                action: { kind: "outcome", outcome: "half_shift", requiresNote: false },
+                consequence: `Fez ${formatMinutesShort(worked)} da janela: assina MEIO plantão`
+                    + `${credit > 0 ? `; ${formatMinutesShort(credit)} viram banco` : ""}.`,
+                alternatives: [
+                    { label: "Pagar plantão inteiro", hint: "Decisão corriqueira nesta faixa; sem justificativa.", className: "edit", action: { kind: "outcome", outcome: "full_shift", requiresNote: false } },
+                    { label: "Lançar só para o banco de horas", hint: "Abaixo da régua: pede justificativa.", className: "edit", action: { kind: "outcome", outcome: "bank_only", requiresNote: true } },
+                ],
+            };
         }
-
+        if (triage.kind === "early_full") {
+            return {
+                action: { kind: "outcome", outcome: "full_shift", requiresNote: false },
+                consequence: `Saiu faltando ${formatMinutesShort(triage.classification?.remainingMinutes ?? 0)}: assina o plantão inteiro; atraso e saída contam no banco.`,
+                alternatives: [
+                    { label: "Pagar MEIO plantão", hint: "Abaixo da régua: pede justificativa.", className: "edit", action: { kind: "outcome", outcome: "half_shift", requiresNote: true } },
+                    { label: "Lançar só para o banco de horas", hint: "Abaixo da régua: pede justificativa.", className: "edit", action: { kind: "outcome", outcome: "bank_only", requiresNote: true } },
+                ],
+            };
+        }
         if (triage.kind === "late_credit") {
-            const balance = standardBalance?.balanceMinutes ?? null;
-            return [
-                {
-                    label: balance !== null && balance > 0
-                        ? `Confirmar os ${formatMinutesShort(balance)} de banco de horas`
-                        : confirmLabel,
-                    hint: standardBalance
-                        ? standardBalance.explanation
-                        : "Confirma a saída verbalizada como está.",
-                    className: "confirm",
-                    action: { kind: "confirm" },
-                },
-                {
-                    label: "Recusar crédito para o banco de horas",
-                    hint: "Paga até o fim da janela, sem crédito. Pede justificativa.",
-                    className: "reject",
-                    action: { kind: "reject_credit" },
-                },
-            ];
-        }
-
-        return [
-            {
-                label: confirmLabel,
-                hint: triage.headline,
-                className: "confirm",
+            return {
                 action: { kind: "confirm" },
-            },
-        ];
-    }, [target, triage, verbalizedMs, standardBalance]);
+                consequence: balance !== null && balance > 0
+                    ? `Paga o plantão e credita ${formatMinutesShort(balance)} no banco de horas.`
+                    : (standardBalance?.explanation ?? "Paga o plantão."),
+                alternatives: [
+                    { label: "Recusar o crédito no banco", hint: "Paga até o fim da janela, sem crédito. Pede justificativa.", className: "edit", action: { kind: "reject_credit" } },
+                ],
+            };
+        }
+        if (triage.kind === "extended_stay") {
+            return { action: { kind: "confirm" }, consequence: standardBalance?.explanation ?? "Emendou turno: a folha assina o plantão.", alternatives: [] };
+        }
+        if (triage.kind === "short_anomaly") {
+            return {
+                action: { kind: "confirm" },
+                consequence: "Saída minutos depois da chegada. Se foi real, confirme; se foi erro, corrija a hora.",
+                alternatives: [],
+            };
+        }
+        return {
+            action: { kind: "confirm" },
+            consequence: balance !== null && balance !== 0
+                ? `Paga o plantão. Banco: ${formatSignedMinutes(balance)}.`
+                : "Paga o plantão. Nada muda no banco de horas.",
+            alternatives: [],
+        };
+    }, [target, triage, standardBalance]);
+
+    const originLine = useMemo(() => (target
+        ? describeDepartureOrigin({
+            origin: target.origin,
+            doctorName: target.displayName ?? target.doctorName,
+            targetCode: target.targetCode,
+            actualEndedAt: target.actualEndedAt,
+            successorName: target.successorName,
+        })
+        : ""), [target]);
+
+    // "Ainda está aqui" só existe quando é possível: sem chegada posterior do
+    // médico em outro alvo. Com chegada, a saída aconteceu e o botão some — o
+    // servidor recusa de qualquer forma (describeContestBlockedByLaterArrival).
+    const canContest = Boolean(target && !target.laterArrivalCode);
+    const confirmLabel = target?.origin === "successor" && target.successorName
+        ? `Saiu às ${formatLocalHourMinute(verbalizedMs)}, rendido por ${target.successorName.split(" ")[0]}`
+        : `Saiu às ${formatLocalHourMinute(verbalizedMs)}`;
 
     const canAdjust = Boolean(target?.scheduledStartAt && target?.scheduledEndAt);
     const noteValid = isValidOverrideNote(noteText);
@@ -506,11 +461,74 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                     </span>
                                                 )}
                                             </div>
-                                            <p className="departure-verifier-headline">{triage.headline}</p>
+                                            <p className="departure-verifier-headline">{originLine}</p>
 
                                             {view === "decide" && (
                                                 <div className="departure-verifier-decisions">
-                                                    {buttons.map((button) => (
+                                                    <p className="departure-verifier-question">
+                                                        {target.displayName ?? target.doctorName} saiu do {target.targetCode} às {formatLocalHourMinute(verbalizedMs)}?
+                                                    </p>
+                                                    <div className="departure-verifier-decision">
+                                                        <motion.button
+                                                            type="button"
+                                                            className={`departure-verifier-action ${triage.kind === "short_anomaly" ? "reject" : "confirm"}`}
+                                                            onClick={() => { void runAction(decision.action, null); }}
+                                                            whileTap={tapFeedback}
+                                                            disabled={submitting}
+                                                        >
+                                                            {confirmLabel}
+                                                        </motion.button>
+                                                        <span className="departure-verifier-decision__hint">
+                                                            {decision.consequence}
+                                                            {decision.alternatives.length > 0 && (
+                                                                <>
+                                                                    {" "}
+                                                                    <button type="button" className="departure-verifier-link" onClick={() => setView("other")} disabled={submitting}>
+                                                                        pagar diferente
+                                                                    </button>
+                                                                </>
+                                                            )}
+                                                        </span>
+                                                    </div>
+                                                    {canAdjust && (
+                                                        <div className="departure-verifier-decision">
+                                                            <motion.button
+                                                                type="button"
+                                                                className="departure-verifier-action edit"
+                                                                onClick={() => setView("adjust")}
+                                                                whileTap={tapFeedback}
+                                                                disabled={submitting}
+                                                            >
+                                                                Saiu em outra hora
+                                                            </motion.button>
+                                                            <span className="departure-verifier-decision__hint">
+                                                                Corrige chegada e saída; a régua recalcula na tela.
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                    {canContest && (
+                                                        <div className="departure-verifier-decision">
+                                                            <motion.button
+                                                                type="button"
+                                                                className="departure-verifier-action reject"
+                                                                onClick={() => { setView("contest"); setNoteText(""); }}
+                                                                whileTap={tapFeedback}
+                                                                disabled={submitting}
+                                                            >
+                                                                Não saiu, ainda está no {target.targetCode}
+                                                            </motion.button>
+                                                            <span className="departure-verifier-decision__hint">
+                                                                O plantão continua aberto neste mesmo registro.
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {view === "other" && (
+                                                <div className="departure-verifier-decisions">
+                                                    <p className="departure-verifier-question">Pagar diferente da régua</p>
+                                                    {decision.alternatives.map((button) => (
                                                         <div key={button.label} className="departure-verifier-decision">
                                                             <motion.button
                                                                 type="button"
@@ -524,101 +542,53 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                             <span className="departure-verifier-decision__hint">{button.hint}</span>
                                                         </div>
                                                     ))}
-                                                    {/* Correções do REGISTRO ficam separadas das decisões de
-                                                        pagamento: são a exceção, não a escolha do dia a dia. */}
-                                                    <div className="departure-verifier-secondary">
-                                                        <span className="departure-verifier-secondary__label">O registro está errado?</span>
-                                                        {canAdjust && (
+                                                    {pendingAction !== null && (
+                                                        <div className="departure-verifier-note">
+                                                            <label htmlFor="departure-verifier-note-input" style={{ fontSize: "0.82rem", fontWeight: 600 }}>
+                                                                Justificativa (mínimo {OVERRIDE_NOTE_MIN_LENGTH} caracteres)
+                                                            </label>
+                                                            <textarea
+                                                                id="departure-verifier-note-input"
+                                                                value={noteText}
+                                                                onChange={(event) => setNoteText(event.target.value)}
+                                                                rows={3}
+                                                                autoFocus
+                                                                placeholder="Explique a decisão — vai para a folha do médico e para a auditoria."
+                                                                style={{ width: "100%", resize: "vertical", fontSize: "0.85rem", padding: 8 }}
+                                                            />
                                                             <motion.button
                                                                 type="button"
-                                                                className="departure-verifier-action edit"
-                                                                onClick={() => setView("adjust")}
+                                                                className="departure-verifier-action confirm"
+                                                                onClick={() => { void runAction(pendingAction, noteText.trim()); }}
                                                                 whileTap={tapFeedback}
-                                                                disabled={submitting || pendingAction !== null}
-                                                                title="A hora de chegada ou de saída está errada."
+                                                                disabled={submitting || !noteValid}
                                                             >
-                                                                Corrigir horários
+                                                                Confirmar decisão
                                                             </motion.button>
-                                                        )}
-                                                        <motion.button
-                                                            type="button"
-                                                            className="departure-verifier-action reject"
-                                                            onClick={() => setView("contest")}
-                                                            whileTap={tapFeedback}
-                                                            disabled={submitting || pendingAction !== null}
-                                                            title={`${target.displayName ?? target.doctorName} não saiu do ${target.targetCode}: a saída registrada não aconteceu.`}
-                                                        >
-                                                            Não saiu do {target.targetCode}
-                                                        </motion.button>
-                                                    </div>
+                                                        </div>
+                                                    )}
+                                                    <motion.button
+                                                        type="button"
+                                                        className="departure-verifier-action edit"
+                                                        onClick={() => { setView("decide"); setPendingAction(null); setNoteText(""); }}
+                                                        whileTap={tapFeedback}
+                                                        disabled={submitting}
+                                                    >
+                                                        Voltar
+                                                    </motion.button>
                                                 </div>
                                             )}
 
                                             {view === "contest" && (
                                                 <div className="departure-verifier-note">
-                                                    <p style={{ fontSize: "0.85rem", fontWeight: 600 }}>
-                                                        A saída das {formatLocalHourMinute(verbalizedMs)} não aconteceu: o plantão no {target.targetCode} continua aberto.
+                                                    <p style={{ fontSize: "0.85rem", fontWeight: 600, margin: 0 }}>
+                                                        {target.displayName ?? target.doctorName} ainda está no {target.targetCode}: a saída das {formatLocalHourMinute(verbalizedMs)} não aconteceu.
                                                     </p>
                                                     <span className="departure-verifier-decision__hint">
-                                                        Se {target.displayName ?? target.doctorName} apenas passou para outro posto/base e
-                                                        registrou chegada lá, a saída aconteceu — volte e confirme, ou corrija o horário.
+                                                        Reabre este mesmo plantão. Se outro médico assumiu o {target.targetCode}, ele fica no quadro
+                                                        e a tela diz de quem é a chegada a corrigir. Fora do quadro, fecha sozinho no fim da janela
+                                                        {scheduledEndMs !== null ? ` (${formatLocalHourMinute(scheduledEndMs)})` : ""}.
                                                     </span>
-                                                    <p style={{ fontSize: "0.85rem", fontWeight: 600, margin: 0 }}>
-                                                        Onde ficou depois das {formatLocalHourMinute(verbalizedMs)}?
-                                                    </p>
-                                                    <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.85rem" }}>
-                                                        {([
-                                                            ["same_target", `Continuou no ${target.targetCode}`],
-                                                            ["other_target", "Foi para outro posto/base, sem chegada registrada lá"],
-                                                            ["unknown", "Não sei dizer"],
-                                                        ] as [ContestedDepartureContinuation, string][]).map(([value, label]) => (
-                                                            <label key={value} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                                                <input
-                                                                    type="radio"
-                                                                    name="departure-verifier-contest"
-                                                                    value={value}
-                                                                    checked={contestContinuation === value}
-                                                                    onChange={() => setContestContinuation(value)}
-                                                                />
-                                                                {label}
-                                                            </label>
-                                                        ))}
-                                                    </div>
-                                                    {contestContinuation === "other_target" && (
-                                                        <input
-                                                            type="text"
-                                                            value={contestLabel}
-                                                            onChange={(event) => setContestLabel(event.target.value)}
-                                                            placeholder="Qual posto/base (ex.: CB02, 2032)"
-                                                            style={{ width: "100%", fontSize: "0.85rem", padding: 8 }}
-                                                        />
-                                                    )}
-                                                    {contestContinuation === "unknown" && (
-                                                        <div
-                                                            role="alert"
-                                                            style={{
-                                                                border: "3px solid #b91c1c",
-                                                                background: "#b91c1c",
-                                                                color: "#fff",
-                                                                borderRadius: 10,
-                                                                padding: "18px 16px",
-                                                                textAlign: "center",
-                                                                display: "flex",
-                                                                flexDirection: "column",
-                                                                gap: 8,
-                                                            }}
-                                                        >
-                                                            <strong style={{ fontSize: "1.6rem", letterSpacing: "0.04em", lineHeight: 1.1 }}>
-                                                                LIGUE PARA {(target.displayName ?? target.doctorName).toUpperCase()}
-                                                            </strong>
-                                                            <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>
-                                                                Chefe logado não pode não saber onde está o plantonista dele.
-                                                            </span>
-                                                            <span style={{ fontSize: "0.82rem", opacity: 0.9 }}>
-                                                                Descubra e escolha uma das duas primeiras opções. Este aviso não sai daqui.
-                                                            </span>
-                                                        </div>
-                                                    )}
                                                     <textarea
                                                         value={noteText}
                                                         onChange={(event) => setNoteText(event.target.value)}
@@ -626,32 +596,20 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                         placeholder="O que aconteceu (opcional) — vai para a auditoria."
                                                         style={{ width: "100%", resize: "vertical", fontSize: "0.85rem", padding: 8 }}
                                                     />
-                                                    <span className="departure-verifier-decision__hint">
-                                                        Ninguém sai do quadro aqui: se outro médico assumiu o {target.targetCode}, este plantão
-                                                        volta fora do quadro e a tela diz de quem é a chegada a corrigir. Fora do quadro,
-                                                        fecha sozinho no fim da janela{scheduledEndMs !== null ? ` (${formatLocalHourMinute(scheduledEndMs)})` : ""}.
-                                                    </span>
                                                     <div style={{ display: "flex", gap: 8 }}>
                                                         <motion.button
                                                             type="button"
                                                             className="departure-verifier-action reject"
                                                             whileTap={tapFeedback}
-                                                            disabled={submitting
-                                                                || contestContinuation === "unknown"
-                                                                || (contestContinuation === "other_target" && contestLabel.trim().length === 0)}
+                                                            disabled={submitting}
                                                             onClick={() => {
                                                                 void submit({
-                                                                    contestDeparture: {
-                                                                        continuation: contestContinuation,
-                                                                        continuedAtLabel: contestContinuation === "other_target"
-                                                                            ? contestLabel.trim()
-                                                                            : null,
-                                                                    },
+                                                                    contestDeparture: { continuation: "same_target" },
                                                                     note: noteText.trim().length > 0 ? noteText.trim() : null,
-                                                                }, "saída desmentida — plantão reaberto, sem ocupação nova.");
+                                                                }, "plantão reaberto — ainda está no alvo.");
                                                             }}
                                                         >
-                                                            Registrar que não saiu
+                                                            Confirmar: ainda está no {target.targetCode}
                                                         </motion.button>
                                                         <motion.button
                                                             type="button"
@@ -659,43 +617,6 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                             whileTap={tapFeedback}
                                                             disabled={submitting}
                                                             onClick={() => { setView("decide"); setNoteText(""); }}
-                                                        >
-                                                            Voltar
-                                                        </motion.button>
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {view === "decide" && pendingAction !== null && (
-                                                <div className="departure-verifier-note">
-                                                    <label htmlFor="departure-verifier-note-input" style={{ fontSize: "0.82rem", fontWeight: 600 }}>
-                                                        Justificativa (mínimo {OVERRIDE_NOTE_MIN_LENGTH} caracteres)
-                                                    </label>
-                                                    <textarea
-                                                        id="departure-verifier-note-input"
-                                                        value={noteText}
-                                                        onChange={(event) => setNoteText(event.target.value)}
-                                                        rows={3}
-                                                        autoFocus
-                                                        placeholder="Explique a decisão — vai para a folha do médico e para a auditoria."
-                                                        style={{ width: "100%", resize: "vertical", fontSize: "0.85rem", padding: 8 }}
-                                                    />
-                                                    <div style={{ display: "flex", gap: 8 }}>
-                                                        <motion.button
-                                                            type="button"
-                                                            className="departure-verifier-action confirm"
-                                                            onClick={() => { void runAction(pendingAction, noteText.trim()); }}
-                                                            whileTap={tapFeedback}
-                                                            disabled={submitting || !noteValid}
-                                                        >
-                                                            Confirmar decisão
-                                                        </motion.button>
-                                                        <motion.button
-                                                            type="button"
-                                                            className="departure-verifier-action edit"
-                                                            onClick={() => { setPendingAction(null); setNoteText(""); }}
-                                                            whileTap={tapFeedback}
-                                                            disabled={submitting}
                                                         >
                                                             Voltar
                                                         </motion.button>

@@ -11304,28 +11304,27 @@ button.chief-payable-tag:focus-visible {
     padding: 0 2px;
 }
 
-/* Correções do registro (horário errado / não saiu): linha compacta, abaixo
-   das decisões de pagamento, para não competir com elas. */
-.departure-verifier-secondary {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin-top: 6px;
-    padding-top: 12px;
-    border-top: 1px dashed var(--surface-elevated-border);
+/* A pergunta do verificador e o link "pagar diferente". */
+.departure-verifier-question {
+    margin: 0 0 2px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
 }
 
-.departure-verifier-secondary__label {
-    font-size: 0.76rem;
-    color: var(--muted-strong);
-    margin-right: 4px;
+.departure-verifier-link {
+    appearance: none;
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--accent-warn);
+    text-decoration: underline;
+    cursor: pointer;
 }
-
-.departure-verifier-secondary .departure-verifier-action {
-    padding: 8px 12px;
-    font-size: 0.82rem;
-    background: transparent;
+.departure-verifier-link:disabled {
+    opacity: 0.55;
+    cursor: progress;
 }
 
 .departure-verifier-note,
@@ -11356,6 +11355,13 @@ button.chief-payable-tag:focus-visible {
     border-radius: 10px;
     background: var(--surface-elevated);
     border: 1px solid var(--surface-elevated-border);
+}
+
+.pending-departure-card__origin {
+    margin: 0;
+    font-size: 0.76rem;
+    color: var(--accent-warn);
+    line-height: 1.4;
 }
 
 .pending-departure-card__headline {

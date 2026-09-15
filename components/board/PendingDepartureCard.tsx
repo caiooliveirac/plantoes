@@ -5,6 +5,7 @@ import { Check, PencilLine, Scale } from "lucide-react";
 import { PatternBadge } from "@/components/board/PatternBadge";
 import { staggerChild, pulseAttention, tapFeedback } from "@/lib/board/motion";
 import { triagePendingDeparture } from "@/modules/operational/departure-triage";
+import { describeDepartureOrigin } from "@/modules/operational/departure-origin";
 import { resolveDayOffsetLabel } from "@/lib/board/day-offset";
 import type { PendingDepartureConfirmation, TelegramLateDepartureReasonCode } from "@/services/board.service";
 
@@ -151,6 +152,17 @@ export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, 
             <p className="pending-departure-card__headline" data-attention={triage.attention} data-kind={triage.kind}>
                 {triage.kind === "short_anomaly" ? "⚠︎ Provável erro de registro — " : ""}{triage.headline}
             </p>
+            {pending.origin !== "verbalized" && (
+                <p className="pending-departure-card__origin">
+                    {describeDepartureOrigin({
+                        origin: pending.origin,
+                        doctorName: pending.displayName ?? pending.doctorName,
+                        targetCode: pending.targetCode,
+                        actualEndedAt: pending.actualEndedAt,
+                        successorName: pending.successorName,
+                    })}
+                </p>
+            )}
 
             <div className="pending-departure-card__actions">
                 {triage.attention ? (
