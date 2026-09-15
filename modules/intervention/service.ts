@@ -1217,14 +1217,21 @@ export async function endInterventionOccupancy(
             .where(eq(interventionOccupancies.id, id))
             .returning();
 
-        const replacement = await tx.query.interventionOccupancies.findFirst({
-            where: and(
-                eq(interventionOccupancies.baseId, existing.baseId),
-                isNull(interventionOccupancies.boardStartedAt),
-                isNull(interventionOccupancies.endedAt),
-            ),
-            orderBy: [asc(interventionOccupancies.startedAt)],
-        });
+        // Só quem tinha o board libera vaga no quadro. Fechar sombra/deslocado
+        // não pode promover outro aberto sem board: a base pode já ter titular
+        // e a promoção estoura o índice de um titular por base (incidente
+        // 2026-09-15: registro reaberto por "NÃO SAIU" promovido em cima do
+        // titular da noite, derrubando todo carregamento do quadro e o bot).
+        const replacement = existing.boardStartedAt
+            ? await tx.query.interventionOccupancies.findFirst({
+                where: and(
+                    eq(interventionOccupancies.baseId, existing.baseId),
+                    isNull(interventionOccupancies.boardStartedAt),
+                    isNull(interventionOccupancies.endedAt),
+                ),
+                orderBy: [asc(interventionOccupancies.startedAt)],
+            })
+            : null;
 
         if (replacement && replacement.startedAt.getTime() <= input.endedAt.getTime()) {
             await tx.update(interventionOccupancies)
