@@ -10,8 +10,8 @@ import type {
     BankHoursEmploymentType,
     BankHoursHistoryShift,
     BankHoursHistorySummaryModel,
+    BankHoursMonthSummary,
     BankHoursSettlementSummary,
-    BankHoursShiftSummary,
 } from "@/modules/reporting/bank-hours-history";
 import {
     describeLateDepartureReason,
@@ -195,15 +195,15 @@ function summarizeDoctorSearch(doctor: BankHoursDoctorSummary) {
         doctor.doctorName,
         doctor.displayName ?? doctor.doctorName,
         formatEmploymentType(doctor.employmentType),
-        ...doctor.shifts.flatMap((shift) => [shift.targetCode, shift.targetLabel]),
+        ...doctor.searchTerms,
     ].join(" "));
 }
 
-function shiftKey(shift: Pick<BankHoursShiftSummary, "domain" | "occupancyId">) {
+function shiftKey(shift: Pick<BankHoursHistoryShift, "domain" | "occupancyId">) {
     return `${shift.domain}:${shift.occupancyId}`;
 }
 
-function shiftAnchorId(shift: Pick<BankHoursShiftSummary, "domain" | "occupancyId">) {
+function shiftAnchorId(shift: Pick<BankHoursHistoryShift, "domain" | "occupancyId">) {
     return `shift-${shift.domain}-${shift.occupancyId}`;
 }
 
@@ -212,7 +212,7 @@ function monthAnchorId(doctorId: string, monthKey: string) {
 }
 
 function countBonusShifts(doctor: BankHoursDoctorSummary) {
-    return doctor.shifts.filter((shift) => (shift.creditedOvertimeMinutes ?? 0) > 0).length;
+    return doctor.months.reduce((total, month) => total + month.bonusCount, 0);
 }
 
 /**
@@ -346,22 +346,22 @@ function PayrollWaterfall({ payroll }: { payroll: PayrollDeductionForMonth }) {
     );
 }
 
-function compareShiftsAsc(left: Pick<BankHoursShiftSummary, "startedAt">, right: Pick<BankHoursShiftSummary, "startedAt">) {
+function compareShiftsAsc(left: BankHoursHistoryShift, right: BankHoursHistoryShift) {
     return new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime();
 }
 
-/** Genérico: a lista agrupa plantões enxutos; o detalhe do médico, os completos. */
-interface MonthGroup<TShift extends BankHoursShiftSummary = BankHoursShiftSummary> {
+/** Só o detalhe do médico agrupa plantão a plantão; a lista recebe agregados prontos. */
+interface MonthGroup {
     monthKey: string;
-    shifts: TShift[];
+    shifts: BankHoursHistoryShift[];
     balanceMinutes: number;
     delayCount: number;
     bonusCount: number;
 }
 
 /** Plantões do médico agrupados por mês operacional, meses e plantões em ordem crescente. */
-function groupShiftsByMonth<TShift extends BankHoursShiftSummary>(shifts: TShift[]): MonthGroup<TShift>[] {
-    const groups = new Map<string, MonthGroup<TShift>>();
+function groupShiftsByMonth(shifts: BankHoursHistoryShift[]): MonthGroup[] {
+    const groups = new Map<string, MonthGroup>();
     for (const shift of shifts.slice().sort(compareShiftsAsc)) {
         const group = groups.get(shift.monthKey) ?? {
             monthKey: shift.monthKey,
@@ -622,7 +622,7 @@ interface Props {
 
 interface DoctorRowsView {
     /** Meses visíveis no card (todos, ou só o mês em foco), em ordem crescente. */
-    groups: MonthGroup[];
+    groups: BankHoursMonthSummary[];
     shiftCount: number;
     delayCount: number;
     bonusCount: number;
@@ -630,16 +630,6 @@ interface DoctorRowsView {
     /** Previsto para a folha (estatutário), somado nos meses visíveis — automático, sem botão. */
     payrollPendingMinutes: number;
     payrollPendingMonths: string[];
-}
-
-/** Meses que podem ter desconto em folha: os com plantão + os com acerto antigo de folha. */
-function payrollMonthsOf(doctor: BankHoursDoctorSummary) {
-    const months = new Set<string>();
-    for (const shift of doctor.shifts) months.add(shift.monthKey);
-    for (const settlement of doctor.settlements) {
-        if (settlement.kind === "payroll") months.add(settlement.monthKey);
-    }
-    return Array.from(months).sort();
 }
 
 export function BankHoursHistoryClient({ history, canManageOverrides, settlementMonths, initialMonthKey, currentMonthKey }: Props) {
@@ -684,7 +674,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         if (focusedMonth) keys.add(focusedMonth);
         for (const month of settlementMonths) keys.add(month.key);
         for (const doctor of history.doctors) {
-            for (const shift of doctor.shifts) keys.add(shift.monthKey);
+            for (const month of doctor.months) keys.add(month.monthKey);
         }
         return Array.from(keys)
             .filter((key) => /^\d{4}-\d{2}$/.test(key))
@@ -855,8 +845,9 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const rowsByDoctor = useMemo(() => {
         const map = new Map<string, DoctorRowsView>();
         for (const doctor of history.doctors) {
-            const allGroups = groupShiftsByMonth(doctor.shifts);
-            const groups = focusedMonth ? allGroups.filter((group) => group.monthKey === focusedMonth) : allGroups;
+            // Agregados por mês já vêm do servidor (summarizeBankHoursDoctor),
+            // inclusive o previsto para a folha do estatutário.
+            const groups = focusedMonth ? doctor.months.filter((group) => group.monthKey === focusedMonth) : doctor.months;
             const view: DoctorRowsView = {
                 groups,
                 shiftCount: 0,
@@ -867,19 +858,13 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                 payrollPendingMonths: [],
             };
             for (const group of groups) {
-                view.shiftCount += group.shifts.length;
+                view.shiftCount += group.shiftCount;
                 view.delayCount += group.delayCount;
                 view.bonusCount += group.bonusCount;
                 view.balanceMinutes += group.balanceMinutes;
-            }
-            if (doctor.employmentType === "estatutario") {
-                const months = focusedMonth ? [focusedMonth] : payrollMonthsOf(doctor);
-                for (const month of months) {
-                    const payroll = resolvePayrollDeductionForDoctorMonth({ monthKey: month, legacyMinutes: doctor.legacy?.totalMinutes ?? 0, shifts: doctor.shifts, settlements: doctor.settlements });
-                    if (payroll.payrollMinutes > 0) {
-                        view.payrollPendingMinutes += payroll.payrollMinutes;
-                        view.payrollPendingMonths.push(month);
-                    }
+                if (group.payrollMinutes > 0) {
+                    view.payrollPendingMinutes += group.payrollMinutes;
+                    view.payrollPendingMonths.push(group.monthKey);
                 }
             }
             map.set(doctor.doctorId, view);
@@ -1347,8 +1332,10 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     </div>
                                 </button>
 
-                                {/* Plantão a plantão, sem abrir o médico: data · turno · base · saldo,
-                                    em linhas curtas, com uma tag por mês (crescente). */}
+                                {/* Um resumo por mês (crescente): plantões · atrasos · bônus · saldo.
+                                    O plantão a plantão fica no histórico do médico — clicar no mês
+                                    abre o detalhe já naquele mês. Renderizar as milhares de linhas
+                                    de plantão aqui era o que pesava a página. */}
                                 <div className="hours-month-strip">
                                     {!rows || rows.groups.length === 0 ? (
                                         <p className="hours-month-strip-empty">
@@ -1357,33 +1344,22 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     ) : (
                                         <ul className="hours-month-shifts">
                                             {rows.groups.map((group) => (
-                                                <li key={group.monthKey} className="hours-month-block">
-                                                    <div className="hours-month-divider" title={`${group.shifts.length} ${group.shifts.length === 1 ? "plantão" : "plantões"}${group.delayCount > 0 ? ` · ${group.delayCount} ${group.delayCount === 1 ? "atraso" : "atrasos"}` : ""}${group.bonusCount > 0 ? ` · ${group.bonusCount} bônus` : ""}`}>
-                                                        <span className="hours-month-strip-title">{formatMonthShort(group.monthKey)}</span>
-                                                        <span className="hours-month-strip-meta">{group.shifts.length} {group.shifts.length === 1 ? "plantão" : "plantões"}</span>
+                                                <li key={group.monthKey}>
+                                                    <button
+                                                        type="button"
+                                                        className={`hours-month-shift-row ${shiftBalanceClass(group.balanceMinutes)}`}
+                                                        onClick={() => openDoctorAtShift(doctor.doctorId, monthAnchorId(doctor.doctorId, group.monthKey))}
+                                                        title={`${group.shiftCount} ${group.shiftCount === 1 ? "plantão" : "plantões"}${group.delayCount > 0 ? ` · ${group.delayCount} ${group.delayCount === 1 ? "atraso" : "atrasos"}` : ""}${group.bonusCount > 0 ? ` · ${group.bonusCount} bônus` : ""}${group.payrollMinutes > 0 ? ` · folha ${formatPayrollMinutes(group.payrollMinutes)}` : ""} — abrir no histórico`}
+                                                    >
+                                                        <span className="hours-month-shift-date">{formatMonthShort(group.monthKey)}</span>
+                                                        <span className="hours-month-shift-turn">{group.shiftCount} {group.shiftCount === 1 ? "plantão" : "plantões"}</span>
+                                                        <span className="hours-month-shift-place">
+                                                            {group.delayCount > 0 ? `${group.delayCount} atr.` : ""}{group.delayCount > 0 && group.bonusCount > 0 ? " · " : ""}{group.bonusCount > 0 ? `${group.bonusCount} bônus` : ""}
+                                                        </span>
                                                         <span className={`hours-balance-pill ${shiftBalanceClass(group.balanceMinutes)}`} title="Saldo dos plantões do mês">
                                                             {formatSignedMinutes(group.balanceMinutes)}
                                                         </span>
-                                                    </div>
-                                                    <ul className="hours-month-shifts">
-                                                        {group.shifts.map((shift) => (
-                                                            <li key={shiftKey(shift)}>
-                                                                <button
-                                                                    type="button"
-                                                                    className={`hours-month-shift-row ${shiftBalanceClass(shift.balanceMinutes)}`}
-                                                                    onClick={() => openDoctorAtShift(doctor.doctorId, shiftAnchorId(shift))}
-                                                                    title={`${formatTime(shift.countedStartAt)}–${formatTime(shift.countedEndAt)}${(shift.arrivalDelayMinutes ?? 0) > 0 ? ` · atraso ${formatMinutesForHumans(shift.arrivalDelayMinutes ?? 0)}` : ""}${(shift.creditedOvertimeMinutes ?? 0) > 0 ? ` · crédito ${formatMinutesForHumans(shift.creditedOvertimeMinutes ?? 0)}` : ""}${shift.flags.hasOpenShift ? " · em aberto" : ""} — abrir no histórico`}
-                                                                >
-                                                                    <span className="hours-month-shift-date">{formatShortDate(shift.startedAt)}</span>
-                                                                    <span className="hours-month-shift-turn">{shift.shiftLabel ?? "—"}</span>
-                                                                    <span className="hours-month-shift-place">{shift.targetCode}</span>
-                                                                    <span className={`hours-balance-pill ${shiftBalanceClass(shift.balanceMinutes)}`}>
-                                                                        {shift.balanceMinutes === null ? "--" : formatSignedMinutes(shift.balanceMinutes)}
-                                                                    </span>
-                                                                </button>
-                                                            </li>
-                                                        ))}
-                                                    </ul>
+                                                    </button>
                                                 </li>
                                             ))}
                                         </ul>

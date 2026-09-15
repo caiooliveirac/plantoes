@@ -62,7 +62,7 @@ async function main() {
     const history = await measure("bank-hours history (full)", () => getBankHoursHistory());
     const history2 = await measure("bank-hours history (full, 2ª)", () => getBankHoursHistory());
     const summary = await measure("bank-hours summary (lista da tela)", () => getBankHoursHistorySummary());
-    const firstDoctorId = summary.doctors.find((doctor) => doctor.shifts.length > 0)?.doctorId ?? null;
+    const firstDoctorId = summary.doctors.find((doctor) => doctor.months.length > 0)?.doctorId ?? null;
     if (firstDoctorId) {
         await measure(`bank-hours detail (1 médico ${firstDoctorId.slice(0, 8)})`, () => getBankHoursHistory({ doctorId: firstDoctorId }));
     }
