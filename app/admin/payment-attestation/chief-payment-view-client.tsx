@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Suspense, use, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
@@ -9,15 +9,23 @@ import { ContractBalanceCard } from "@/components/payment-closing/contract-balan
 import { ContractTermsCard } from "@/components/payment-closing/contract-terms-card";
 // Nenhuma ação desta tela pode ficar pendurada esperando o servidor.
 import { fetchComLimite } from "@/lib/fetch-com-limite";
-import { resolveExtraShiftChipCode, type ChiefPayableBoardModel } from "@/modules/reporting/payable-shifts";
+import { applyDoctorFinancials, resolveExtraShiftChipCode, type ChiefPayableBoardModel, type DoctorFinancialExtras } from "@/modules/reporting/payable-shifts";
 import { HalfShiftDecision } from "@/components/payment-closing/half-shift-decision";
 import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { resolveBankHoursSettlementBalance } from "@/modules/reporting/bank-hours-settlement-rule";
 import { resolveDoctorPendencies, tracksContractBalance, type PaymentClosingPendency } from "@/modules/reporting/payment-closing-pendencies";
 import { isPremiumRateDate, isSamuHolidayDate, isWeekendDate as isStrictWeekendDate } from "@/modules/operational/holidays";
 
+/** Camada financeira, resolvida depois da grade (streaming do Server Component). */
+export interface ChiefPayableFinancialsPayload {
+    byDoctor: Record<string, DoctorFinancialExtras>;
+    error: string | null;
+}
+
 interface Props {
+    /** Grade sem financeiro (loadChiefPayableBoardCore). Sem `financials`, é o board completo. */
     board: ChiefPayableBoardModel;
+    financials?: Promise<ChiefPayableFinancialsPayload>;
     canManageClosing?: boolean;
     /** Encaminhamento da aba banco de horas: abre o modal deste médico no load. */
     initialDoctorId?: string | null;
@@ -269,7 +277,25 @@ function dayKindClassName(operationalDate: string) {
     return "weekday";
 }
 
-export function ChiefPaymentViewClient({ board, canManageClosing = true, initialDoctorId = null }: Props) {
+/** Resolve a Promise do financeiro dentro de um Suspense e entrega ao componente pai. */
+function FinancialsBridge({ promise, onResolved }: { promise: Promise<ChiefPayableFinancialsPayload>; onResolved: (payload: ChiefPayableFinancialsPayload) => void }) {
+    const payload = use(promise);
+    useEffect(() => {
+        onResolved(payload);
+    }, [payload, onResolved]);
+    return null;
+}
+
+export function ChiefPaymentViewClient({ board: baseBoard, financials: financialsPromise, canManageClosing = true, initialDoctorId = null }: Props) {
+    // Financeiro chega depois da grade; até lá as linhas ficam sem contrato/banco
+    // e as pendências financeiras não são avaliadas (evita "falta contrato" em
+    // todo mundo por meio segundo).
+    const [financials, setFinancials] = useState<ChiefPayableFinancialsPayload | null>(financialsPromise ? null : { byDoctor: {}, error: null });
+    const financialsReady = financials !== null;
+    const board = useMemo(
+        () => (financialsPromise && financials ? applyDoctorFinancials(baseBoard, financials.byDoctor) : baseBoard),
+        [baseBoard, financials, financialsPromise],
+    );
     const router = useRouter();
     const [, startRefreshTransition] = useTransition();
     const requestRouterRefresh = useCallback(() => {
@@ -458,6 +484,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
     // filtrados) — os contadores dos chips precisam do universo inteiro.
     const pendenciesByDoctor = useMemo(() => {
         const map = new Map<string, Set<PaymentClosingPendency>>();
+        if (!financialsReady) return map;
         for (const doctor of board.doctors) {
             // Perfil e vínculo saem dos overrides otimistas: marcar PSIQ ou
             // estatutário tira o médico do acompanhamento de contrato na hora,
@@ -469,7 +496,7 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
             })));
         }
         return map;
-    }, [board.doctors, doctorProfileOverrides, doctorEmploymentTypeOverrides]);
+    }, [board.doctors, doctorProfileOverrides, doctorEmploymentTypeOverrides, financialsReady]);
 
     const pendencyTotals = useMemo(() => {
         const counts = new Map<PaymentClosingPendency, number>();
@@ -1596,6 +1623,11 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
         // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
         <div className="pagina-kairos">
         <KairosTopo titulo="Fechamento de pagamento" abas={ABAS_ADMIN} />
+        {financialsPromise ? (
+            <Suspense fallback={null}>
+                <FinancialsBridge promise={financialsPromise} onResolved={setFinancials} />
+            </Suspense>
+        ) : null}
         <main className="chief-payable-shell">
             {/* Design 2A: faixa de comando única + gaveta de filtros + tabela num só container. */}
             <section className="admin-bar-frame">
@@ -1610,6 +1642,15 @@ export function ChiefPaymentViewClient({ board, canManageClosing = true, initial
                         <option key={preset.key} value={preset.key}>{preset.label}</option>
                     ))}
                 </select>
+                {!financialsReady ? (
+                    <span className="reports-badge neutral" title="Saldo contratual, banco de horas e NF chegam logo após a grade.">
+                        financeiro carregando…
+                    </span>
+                ) : financials?.error ? (
+                    <span className="reports-badge danger" title={financials.error}>
+                        financeiro indisponível
+                    </span>
+                ) : null}
 
                 <input
                     type="search"

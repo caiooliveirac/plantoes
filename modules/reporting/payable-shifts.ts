@@ -421,6 +421,39 @@ export interface DoctorFinancialExtras {
     contractPendingRenewal?: ChiefPayableContractRenewal | null;
 }
 
+/**
+ * Aplica a camada financeira sobre as linhas do board (mesmos campos e
+ * defaults que buildChiefPayableBoard usa quando recebe doctorFinancials).
+ * Serve ao servidor (board completo) e ao cliente (financeiro chega por
+ * streaming depois da grade).
+ */
+export function applyDoctorFinancials(
+    board: ChiefPayableBoardModel,
+    financialsByDoctor: Record<string, DoctorFinancialExtras>,
+): ChiefPayableBoardModel {
+    return {
+        ...board,
+        doctors: board.doctors.map((doctor) => {
+            const financials = financialsByDoctor[doctor.doctorId];
+            return {
+                ...doctor,
+                invoiceNumber: financials?.invoiceNumber ?? null,
+                paymentProcessNumber: financials?.paymentProcessNumber ?? null,
+                contractCeilingBrl: financials?.contractCeilingBrl ?? null,
+                contractOpeningBalanceBrl: financials?.contractOpeningBalanceBrl ?? null,
+                contractSeedMonth: financials?.contractSeedMonth ?? null,
+                contractBalanceBrl: financials?.contractBalanceBrl ?? null,
+                contractBalances: financials?.contractBalances ?? [],
+                contractPendingRenewal: financials?.contractPendingRenewal ?? null,
+                bankHoursMinutes: financials?.bankHoursMinutes ?? null,
+                bankHoursOldMinutes: financials?.bankHoursOldMinutes ?? null,
+                bankHoursRecentMinutes: financials?.bankHoursRecentMinutes ?? null,
+                bankHoursSettlement: financials?.bankHoursSettlement ?? null,
+            };
+        }),
+    };
+}
+
 export interface ChiefPayableBoardModel {
     allDoctorNames: string[];
     monthKey: string;

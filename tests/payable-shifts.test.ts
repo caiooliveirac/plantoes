@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    applyDoctorFinancials,
     buildAdminExtraPayableShift,
     buildAttestationSegments,
     buildChiefPayableBoard,
@@ -1173,4 +1174,33 @@ test("desfecho bank_only só zera o slot quando a saída caiu DENTRO dele", () =
     const [inside] = buildPayableShiftsFromBoards([withOutcome("2026-04-10T14:00:00.000Z")]);
     assert.equal(inside.paymentUnit, 0);
     assert.equal(inside.paymentTag, "BANCO");
+});
+
+test("applyDoctorFinancials produz exatamente o board que buildChiefPayableBoard monta com doctorFinancials", () => {
+    const payableShifts = buildPayableShiftsFromBoards([makeBoard()]);
+    const base = {
+        monthKey: "2026-04",
+        monthLabel: "abril de 2026",
+        presetMonths: [{ key: "2026-04", label: "abril de 2026" }],
+        rangeStartIso: "2026-04-01T10:00:00.000Z",
+        rangeEndIso: "2026-05-01T10:00:00.000Z",
+        payableShifts,
+        disabledTargets: [],
+        uncoveredTargets: [],
+        targetOptions: buildPayableTargetOptions({ payableShifts, disabledTargets: [], uncoveredTargets: [] }),
+        attestationSegments: [],
+        allDoctorNames: [],
+        rosterDoctors: [{ doctorId: "doc-ausente", doctorName: "Quem Nao Deu" }],
+    };
+    const financials = {
+        "doc-1": { invoiceNumber: "NF-1", contractBalanceBrl: 1234.5, bankHoursMinutes: -90, bankHoursOldMinutes: -30, bankHoursRecentMinutes: -60 },
+        "doc-ausente": { contractCeilingBrl: 1000, bankHoursMinutes: 720, contractBalances: [] },
+    };
+
+    const inline = buildChiefPayableBoard({ ...base, doctorFinancials: financials });
+    const streamed = applyDoctorFinancials(buildChiefPayableBoard(base), financials);
+
+    // Byte a byte, inclusive a ordem das chaves: é o que o snapshot do fechamento compara.
+    assert.equal(JSON.stringify(streamed), JSON.stringify(inline));
+    assert.equal(streamed.doctors.find((row) => row.doctorId === "doc-1")?.invoiceNumber, "NF-1");
 });

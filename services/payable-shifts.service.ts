@@ -4,6 +4,7 @@ import { doctors } from "@/db/schema";
 import { extractDoctorIsNaoPlantonista, extractDoctorIsResidente } from "@/modules/doctors/directory";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
 import {
+    applyDoctorFinancials,
     buildAdminExtraPayableShift,
     buildAttestationSegments,
     buildChiefPayableBoard,
@@ -576,7 +577,19 @@ export async function getDoctorMonthlyPayableBreakdown(
     return breakdown;
 }
 
-export async function getChiefPayableShiftsBoard(monthKey?: string | null): Promise<ChiefPayableBoardModel> {
+async function timed<T>(label: string, promise: Promise<T>): Promise<T> {
+    const t = perfStart();
+    const value = await promise;
+    perfEnd(label, t, Array.isArray(value) ? `${value.length} rows` : undefined);
+    return value;
+}
+
+/**
+ * Grade do fechamento (quem deu plantão, quanto, pendências de presença) SEM a
+ * camada financeira. É o que a página precisa para o primeiro render; o
+ * financeiro (loadChiefPayableFinancials) chega depois, por streaming.
+ */
+export async function loadChiefPayableBoardCore(monthKey?: string | null): Promise<ChiefPayableBoardModel> {
     const range = resolveMonthlyReportRange(monthKey);
     const rawStartIso = new Date(range.start.getTime() - 86400000).toISOString();
     const rawEndIso = new Date(range.end.getTime() + 86400000).toISOString();
@@ -585,12 +598,6 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     const extraStartDate = new Date(range.start.getTime() - (180 * 60000)).toISOString().slice(0, 10);
     const extraEndDate = new Date(range.end.getTime() - (180 * 60000) - 1).toISOString().slice(0, 10);
     const tQueries = perfStart();
-    const timed = async <T>(label: string, promise: Promise<T>): Promise<T> => {
-        const t = perfStart();
-        const value = await promise;
-        perfEnd(label, t, Array.isArray(value) ? `${value.length} rows` : undefined);
-        return value;
-    };
     const [targets, targetDeactivationIntervals, rawResultRows, adminExtraRows, doctorAttestations, allDoctorRows] = await Promise.all([
         timed("q:loadTargets", loadTargets(rawStartIso, rawEndIso)),
         timed("q:loadTargetDeactivationIntervals", loadTargetDeactivationIntervals(rawStartIso, rawEndIso)),
@@ -668,6 +675,42 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         visibleDoctorRows.map((row) => [row.id, resolveDoctorEmploymentType(row.metadata)])
     );
 
+    const tBoard = perfStart();
+    return buildChiefPayableBoard({
+        monthKey: range.monthKey,
+        monthLabel: range.monthLabel,
+        presetMonths: range.presetMonths,
+        rangeStartIso: range.start.toISOString(),
+        rangeEndIso: range.end.toISOString(),
+        payableShifts: payableShiftsWithExtras,
+        disabledTargets,
+        uncoveredTargets,
+        targetOptions,
+        attestationSegments,
+        allDoctorNames: visibleDoctorRows.map((row) => row.fullName),
+        // Quadro inteiro de médicos ativos: quem não deu plantão no mês aparece
+        // como linha vazia, só para o modal ficar a um clique em qualquer mês.
+        // Fora o não plantonista (conta de sistema, coordenação, contratado que
+        // não escala): ele nunca fecha mês, só poluiria a lista e os filtros.
+        rosterDoctors: visibleDoctorRows.filter((row) => !extractDoctorIsNaoPlantonista(row.metadata)).map((row) => ({
+            doctorId: row.id,
+            doctorName: row.fullName,
+            displayName: row.displayName,
+        })),
+        doctorPaymentProfiles,
+        doctorEmploymentTypes,
+        doctorAttestations,
+    });
+}
+
+/**
+ * Camada financeira do modal e dos chips: nota fiscal/processo, teto legado,
+ * saldo do banco de horas, acerto do mês e saldo contratual do razão. Só
+ * depende do mês, não da grade — roda em paralelo com loadChiefPayableBoardCore
+ * e é aplicada por applyDoctorFinancials.
+ */
+export async function loadChiefPayableFinancials(monthKey?: string | null): Promise<Record<string, DoctorFinancialExtras>> {
+    const range = resolveMonthlyReportRange(monthKey);
     // Camada financeira do modal: nota fiscal/processo, semente do contrato,
     // saldo do banco de horas e acerto do mês. Carregada à parte do cálculo de
     // plantões para não interferir no board.
@@ -798,37 +841,18 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
                 : null,
         };
     }
-
-    const tBoard = perfStart();
-    const board = buildChiefPayableBoard({
-        monthKey: range.monthKey,
-        monthLabel: range.monthLabel,
-        presetMonths: range.presetMonths,
-        rangeStartIso: range.start.toISOString(),
-        rangeEndIso: range.end.toISOString(),
-        payableShifts: payableShiftsWithExtras,
-        disabledTargets,
-        uncoveredTargets,
-        targetOptions,
-        attestationSegments,
-        allDoctorNames: visibleDoctorRows.map((row) => row.fullName),
-        // Quadro inteiro de médicos ativos: quem não deu plantão no mês aparece
-        // como linha vazia, só para o modal ficar a um clique em qualquer mês.
-        // Fora o não plantonista (conta de sistema, coordenação, contratado que
-        // não escala): ele nunca fecha mês, só poluiria a lista e os filtros.
-        rosterDoctors: visibleDoctorRows.filter((row) => !extractDoctorIsNaoPlantonista(row.metadata)).map((row) => ({
-            doctorId: row.id,
-            doctorName: row.fullName,
-            displayName: row.displayName,
-        })),
-        doctorPaymentProfiles,
-        doctorEmploymentTypes,
-        doctorAttestations,
-        doctorFinancials,
-    });
-    perfEnd("cpu:buildChiefPayableBoard", tBoard, `${board.doctors.length} doctors`);
-    return board;
+    return doctorFinancials;
 }
+
+/** Grade + financeiro, como o modal, a folha e o bot sempre receberam. */
+export async function getChiefPayableShiftsBoard(monthKey?: string | null): Promise<ChiefPayableBoardModel> {
+    const [board, financials] = await Promise.all([
+        loadChiefPayableBoardCore(monthKey),
+        loadChiefPayableFinancials(monthKey),
+    ]);
+    return applyDoctorFinancials(board, financials);
+}
+
 
 export async function exportChiefPayableShiftsXlsx(monthKey?: string | null) {
     const board = await getChiefPayableShiftsBoard(monthKey);
