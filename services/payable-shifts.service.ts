@@ -29,7 +29,7 @@ import { loadPaymentClosingMetaForMonth } from "@/services/payment-closing-meta.
 import { loadDoctorContracts } from "@/services/doctor-contracts.service";
 import { loadBankHoursSettlementsForMonth } from "@/services/bank-hours-settlements.service";
 import { getDoctorBankHoursEffectiveBalances } from "@/services/bank-hours-history.service";
-import { loadContractBalances } from "@/services/contract-balance.service";
+import { loadContractBalances, monthRange } from "@/services/contract-balance.service";
 import { findPendingRenewals } from "@/lib/contracts/renewal";
 import {
     buildPaymentAllocationBoardModel,
@@ -488,22 +488,34 @@ async function loadDoctorPaymentSettings(): Promise<{
     };
 }
 
+/** Apuração de UM mês (AAAA-MM), por médico. */
+export type MonthlyBreakdownLoader = (monthKey: string) => Promise<Map<string, MonthlyPayableBreakdown>>;
+
 /**
- * Soma do valor a pagar por (médico, mês) num intervalo arbitrário, reusando os
- * mesmos boards/extra-shifts do fechamento. Base do saldo contratual: consumo do
- * teto = soma dos meses pagos desde a semente. Pesado (vários meses) — só é
- * chamado quando há contratos cadastrados.
+ * Apuração mensal memoizada por mês dentro de UM request. O saldo contratual
+ * (loadContractBalances) e o teto legado (doctor_contracts) pedem os mesmos
+ * meses, e cada mês custa o board inteiro (60 slots × linhas do mês): montar
+ * duas vezes era o que dobrava o tempo do fechamento. Memo por request, nunca
+ * por processo — o resultado muda a cada chegada registrada.
  */
-export async function getDoctorMonthlyPayableTotals(
-    rangeStart: Date,
-    rangeEnd: Date,
-): Promise<Map<string, Map<string, number>>> {
-    const breakdown = await getDoctorMonthlyPayableBreakdown(rangeStart, rangeEnd);
-    const totals = new Map<string, Map<string, number>>();
-    for (const [doctorId, byMonth] of breakdown) {
-        totals.set(doctorId, new Map([...byMonth].map(([month, entry]) => [month, entry.amountCents / 100])));
-    }
-    return totals;
+export function createMonthlyBreakdownLoader(): MonthlyBreakdownLoader {
+    const cache = new Map<string, Promise<Map<string, MonthlyPayableBreakdown>>>();
+    return (monthKey) => {
+        let pending = cache.get(monthKey);
+        if (!pending) {
+            const range = resolveMonthlyReportRange(monthKey);
+            pending = getDoctorMonthlyPayableBreakdown(range.start, range.end).then((breakdown) => {
+                const byDoctor = new Map<string, MonthlyPayableBreakdown>();
+                for (const [doctorId, byMonth] of breakdown) {
+                    const value = byMonth.get(monthKey);
+                    if (value) byDoctor.set(doctorId, value);
+                }
+                return byDoctor;
+            });
+            cache.set(monthKey, pending);
+        }
+        return pending;
+    };
 }
 
 /** Consumo de um mês, do jeito que o razão do saldo contratual precisa. */
@@ -660,6 +672,9 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     // saldo do banco de horas e acerto do mês. Carregada à parte do cálculo de
     // plantões para não interferir no board.
     const tFin = perfStart();
+    // Um só memo de apuração mensal para o saldo do razão E para o teto legado:
+    // os meses coincidem e cada um custa um board inteiro.
+    const breakdownByMonth = createMonthlyBreakdownLoader();
     const [paymentMeta, contracts, settlementsByDoctor, bankBalances, contractBalances] = await Promise.all([
         loadPaymentClosingMetaForMonth(range.monthKey),
         loadDoctorContracts(),
@@ -669,7 +684,7 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
         // 0026 até a virada; quem tem contrato novo mostra o bloco novo.
         // O mês em edição fica de fora do saldo em aberto: a tela já o subtrai
         // como "este fechamento", e contar dos dois lados dobraria o desconto.
-        timed("q:loadContractBalances", loadContractBalances({ excludeMonthKey: range.monthKey })),
+        timed("q:loadContractBalances", loadContractBalances({ excludeMonthKey: range.monthKey, breakdownByMonth })),
     ]);
     perfEnd("phase:queries-block-2-financials", tFin);
 
@@ -719,26 +734,28 @@ export async function getChiefPayableShiftsBoard(monthKey?: string | null): Prom
     // Saldo contratual = teto - pagamentos acumulados desde a semente até o mês.
     const contractBalanceByDoctor = new Map<string, number>();
     if (contracts.size > 0) {
+        const tLegacy = perfStart();
         const earliestSeed = Array.from(contracts.values())
             .map((contract) => contract.seedMonth)
-            .sort()[0];
-        const consumptionStart = resolveMonthlyReportRange(earliestSeed).start;
-        const totals = await getDoctorMonthlyPayableTotals(consumptionStart, range.end);
+            .sort()[0]!;
+        // Mês a mês pelo memo do request: os meses recentes já foram montados
+        // para o saldo do razão, então isto normalmente não custa query nenhuma.
+        const consumptionByMonth = new Map<string, Map<string, MonthlyPayableBreakdown>>();
+        for (const month of monthRange(earliestSeed, range.monthKey)) {
+            consumptionByMonth.set(month, await breakdownByMonth(month));
+        }
         for (const [doctorId, contract] of contracts) {
-            const byMonth = totals.get(doctorId);
             let consumed = 0;
-            if (byMonth) {
-                for (const [month, due] of byMonth) {
-                    if (month >= contract.seedMonth && month <= range.monthKey) {
-                        consumed += due;
-                    }
-                }
+            for (const [month, byDoctor] of consumptionByMonth) {
+                const entry = month >= contract.seedMonth ? byDoctor.get(doctorId) : undefined;
+                if (entry) consumed += entry.amountCents / 100;
             }
             // Saldo inicial informado vence o teto: médico que entrou no sistema
             // com parte do teto já consumida parte do saldo real, não do cheio.
             const startingBalance = contract.openingBalanceBrl ?? contract.ceilingBrl;
             contractBalanceByDoctor.set(doctorId, Number((startingBalance - consumed).toFixed(2)));
         }
+        perfEnd("q:legacy-doctor-contracts", tLegacy, `${consumptionByMonth.size} meses`);
     }
 
     const doctorFinancials: Record<string, DoctorFinancialExtras> = {};

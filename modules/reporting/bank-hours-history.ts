@@ -816,6 +816,66 @@ const EMPTY_BANK_HOURS_PROOF: BankHoursProof = {
     mode: "pending",
 };
 
+/**
+ * Plantão enxuto para a LISTA de médicos (/admin/bank-hours): só o que o card
+ * mostra e agrega — data, turno, alvo, saldo e contadores. Prova, auditoria,
+ * correções e explicação ficam no detalhe, carregado por médico ao abrir.
+ * O modelo completo serializava ~22 MB de props para a tela inteira.
+ */
+export type BankHoursShiftSummary = Pick<
+    BankHoursHistoryShift,
+    | "occupancyId"
+    | "domain"
+    | "startedAt"
+    | "shiftLabel"
+    | "targetCode"
+    | "targetLabel"
+    | "monthKey"
+    | "balanceMinutes"
+    | "arrivalDelayMinutes"
+    | "creditedOvertimeMinutes"
+    | "countedStartAt"
+    | "countedEndAt"
+    | "flags"
+>;
+
+export interface BankHoursDoctorSummary extends Omit<BankHoursDoctorHistory, "shifts"> {
+    shifts: BankHoursShiftSummary[];
+}
+
+export interface BankHoursHistorySummaryModel extends Omit<BankHoursHistoryModel, "doctors"> {
+    doctors: BankHoursDoctorSummary[];
+}
+
+export function summarizeBankHoursShift(shift: BankHoursHistoryShift): BankHoursShiftSummary {
+    return {
+        occupancyId: shift.occupancyId,
+        domain: shift.domain,
+        startedAt: shift.startedAt,
+        shiftLabel: shift.shiftLabel,
+        targetCode: shift.targetCode,
+        targetLabel: shift.targetLabel,
+        monthKey: shift.monthKey,
+        balanceMinutes: shift.balanceMinutes,
+        arrivalDelayMinutes: shift.arrivalDelayMinutes,
+        creditedOvertimeMinutes: shift.creditedOvertimeMinutes,
+        countedStartAt: shift.countedStartAt,
+        countedEndAt: shift.countedEndAt,
+        flags: shift.flags,
+    };
+}
+
+/** Mesmos médicos, mesmos saldos e contadores; só os plantões ficam enxutos. */
+export function summarizeBankHoursHistory(model: BankHoursHistoryModel): BankHoursHistorySummaryModel {
+    return {
+        ...model,
+        doctors: model.doctors.map((doctor) => ({
+            ...doctor,
+            shifts: doctor.shifts.map(summarizeBankHoursShift),
+        })),
+    };
+}
+
 export function buildBankHoursHistoryModel(
     shifts: RawBankHoursHistoryShift[],
     settlementsByDoctor: Map<string, BankHoursSettlementSummary[]> = new Map(),

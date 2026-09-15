@@ -2,7 +2,7 @@ import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { BankHoursHistoryClient } from "@/app/admin/bank-hours/bank-hours-history-client";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
-import { getBankHoursHistory } from "@/services/bank-hours-history.service";
+import { getBankHoursHistorySummary } from "@/services/bank-hours-history.service";
 import { resolveMonthlyReportRange } from "@/modules/reporting/monthly-report";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +47,8 @@ export default async function AdminBankHoursPage({
     }
 
     const { month } = await searchParams;
-    const history = await getBankHoursHistory();
+    // Lista enxuta: o detalhe de cada médico é carregado ao abrir (API por médico).
+    const history = await getBankHoursHistorySummary();
     // Meses de fechamento onde o acerto (plantão verde/vermelho) pode ser lançado:
     // do mês corrente até abril/2026, igual ao seletor do payment-closing.
     const range = resolveMonthlyReportRange(month ?? null);

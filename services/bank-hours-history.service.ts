@@ -5,8 +5,10 @@ import { resolveDoctorEmploymentType } from "@/modules/reporting/payable-shifts"
 import {
     buildBankHoursHistoryModel,
     resolveBankHoursSettlementBalance,
+    summarizeBankHoursHistory,
     type BankHoursEmploymentType,
     type BankHoursHistoryModel,
+    type BankHoursHistorySummaryModel,
     type BankHoursLateDeparture,
     type BankHoursLegacyDoctorRecord,
     type BankHoursSettlementBalance,
@@ -228,11 +230,18 @@ export async function getBankHoursHistory(options?: { balancesOnly?: boolean; do
     // Filtrando por médico, os plantões do ramal 2031 de OUTROS médicos precisam
     // vir junto: é deles que sai a identificação de quem estava na chefia em cada
     // momento. Sem isso o lookup nasce vazio e nenhuma validação tem dono — que é
-    // exatamente o que acontecia na página do médico.
+    // exatamente o que acontecia na página do médico. Pelo mesmo motivo entram
+    // os plantões de outros médicos nos MESMOS alvos: é neles que se acha quem
+    // rendeu o médico (successorDoctorName). Com os dois, o detalhe de um médico
+    // sai idêntico à fatia dele no histórico completo.
     const result = await db.execute(sql`
         select * from operations_v2.bank_hours_history_shifts
         ${options?.doctorId
-            ? sql`where "doctorId" = ${options.doctorId} or ("domain" = 'regulation' and "targetCode" = '2031')`
+            ? sql`where "doctorId" = ${options.doctorId}
+                or ("domain" = 'regulation' and "targetCode" = '2031')
+                or ("domain", "targetCode") in (
+                    select "domain", "targetCode" from operations_v2.bank_hours_history_shifts where "doctorId" = ${options.doctorId}
+                )`
             : sql``}
     `);
 
@@ -262,6 +271,15 @@ export async function getBankHoursHistory(options?: { balancesOnly?: boolean; do
     if (!options?.doctorId) return model;
     // Os plantões da chefia entraram só para alimentar o lookup: não são deste médico.
     return { ...model, doctors: model.doctors.filter((row) => row.doctorId === options.doctorId) };
+}
+
+/**
+ * Lista da tela gerencial: todos os médicos com saldos e contadores, plantões
+ * enxutos. O detalhe de um médico (prova, auditoria, correções) vem por
+ * getBankHoursHistory({ doctorId }) quando ele é aberto.
+ */
+export async function getBankHoursHistorySummary(): Promise<BankHoursHistorySummaryModel> {
+    return summarizeBankHoursHistory(await getBankHoursHistory());
 }
 
 /**

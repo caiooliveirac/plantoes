@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildBankHoursProof, buildBankHoursHistoryModel, type RawBankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
+import { buildBankHoursProof, buildBankHoursHistoryModel, summarizeBankHoursHistory, type RawBankHoursHistoryShift } from "@/modules/reporting/bank-hours-history";
 
 function makeShift(overrides: Partial<RawBankHoursHistoryShift> = {}): RawBankHoursHistoryShift {
     return {
@@ -441,4 +441,33 @@ test("estatutário: saldo é a cascata da folha (parcela de folha fora do banco;
     assert.equal(doctor.balanceMinutes, 0);
     assert.equal(doctor.applicationBalanceMinutes, 120);
     assert.equal(model.summary.balanceMinutes, 0);
+});
+
+test("summarizeBankHoursHistory keeps balances and counters and drops the per-shift proof/audit payload", () => {
+    const model = buildBankHoursHistoryModel([
+        makeShift({ occupancyId: "s-1", continuityGroupId: "cg-s1", balanceMinutes: 30, creditedOvertimeMinutes: 30, overtimeMinutes: 30 }),
+        makeShift({ occupancyId: "s-2", continuityGroupId: "cg-s2", startedAt: "2026-04-02T10:20:00.000Z", arrivalDelayMinutes: 20, balanceMinutes: -20 }),
+    ]);
+    const summary = summarizeBankHoursHistory(model);
+
+    assert.deepEqual(summary.summary, model.summary);
+    assert.equal(summary.doctors.length, 1);
+    const doctor = summary.doctors[0]!;
+    const full = model.doctors[0]!;
+    assert.equal(doctor.balanceMinutes, full.balanceMinutes);
+    assert.equal(doctor.applicationBalanceMinutes, full.applicationBalanceMinutes);
+    assert.equal(doctor.shiftCount, full.shiftCount);
+    assert.equal(doctor.lateArrivalCount, full.lateArrivalCount);
+    assert.equal(doctor.shifts.length, full.shifts.length);
+    for (const [index, shift] of doctor.shifts.entries()) {
+        const source = full.shifts[index]!;
+        assert.equal(shift.occupancyId, source.occupancyId);
+        assert.equal(shift.monthKey, source.monthKey);
+        assert.equal(shift.balanceMinutes, source.balanceMinutes);
+        assert.deepEqual(shift.flags, source.flags);
+        assert.equal("proof" in shift, false);
+        assert.equal("auditTrail" in shift, false);
+        assert.equal("corrections" in shift, false);
+        assert.equal("bankHoursExplanation" in shift, false);
+    }
 });
