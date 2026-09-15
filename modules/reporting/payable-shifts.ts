@@ -427,10 +427,10 @@ export interface DoctorFinancialExtras {
  * Serve ao servidor (board completo) e ao cliente (financeiro chega por
  * streaming depois da grade).
  */
-export function applyDoctorFinancials(
-    board: ChiefPayableBoardModel,
+export function applyDoctorFinancials<TBoard extends { doctors: ChiefPayableDoctorRow[] }>(
+    board: TBoard,
     financialsByDoctor: Record<string, DoctorFinancialExtras>,
-): ChiefPayableBoardModel {
+): TBoard {
     return {
         ...board,
         doctors: board.doctors.map((doctor) => {
@@ -452,6 +452,37 @@ export function applyDoctorFinancials(
             };
         }),
     };
+}
+
+/**
+ * Board como vai ao client component do fechamento: sem a lista plana
+ * `payableShifts`, que repete cada plantão já presente nas células (1,4 MB
+ * num mês cheio). Só a ORDEM dos ids viaja; o client refaz a lista a partir
+ * das células, na mesma ordem — a lista de conflitos de alocação depende dela.
+ */
+export interface ChiefPayableClientBoard extends Omit<ChiefPayableBoardModel, "payableShifts"> {
+    payableShiftIds: string[];
+}
+
+export function toChiefPayableClientBoard(board: ChiefPayableBoardModel): ChiefPayableClientBoard {
+    const { payableShifts, ...rest } = board;
+    return { ...rest, payableShiftIds: payableShifts.map((shift) => shift.payableShiftId) };
+}
+
+/** Inverso de toChiefPayableClientBoard: a lista plana, na ordem original. */
+export function rebuildPayableShifts(board: ChiefPayableClientBoard): PayableShift[] {
+    const byId = new Map<string, PayableShift>();
+    for (const doctor of board.doctors) {
+        for (const cell of doctor.cells) {
+            for (const shift of cell.shifts) byId.set(shift.payableShiftId, shift);
+        }
+    }
+    const shifts: PayableShift[] = [];
+    for (const id of board.payableShiftIds) {
+        const shift = byId.get(id);
+        if (shift) shifts.push(shift);
+    }
+    return shifts;
 }
 
 export interface ChiefPayableBoardModel {
