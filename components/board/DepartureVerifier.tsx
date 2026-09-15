@@ -294,16 +294,16 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             return [
                 {
                     label: "Pagar plantão inteiro",
-                    hint: "Atraso e saída antecipada contam no banco de horas como sempre.",
+                    hint: "Assina inteiro; atraso e saída contam no banco.",
                     className: "confirm",
                     action: { kind: "outcome", outcome: "full_shift", requiresNote: false },
                 },
                 {
                     label: "Pagar MEIO plantão",
-                    hint: `Assina MEIO (0,5x). O que passar de 6h trabalhadas vira crédito`
+                    hint: `Assina 0,5x; acima de 6h vira crédito`
                         + `${triage.classification && triage.classification.bankCreditMinutes > 0
                             ? ` (${formatMinutesShort(triage.classification.bankCreditMinutes)})`
-                            : ""} — sem punição pelo atraso.`,
+                            : ""}, sem punição pelo atraso.`,
                     className: "edit",
                     action: { kind: "outcome", outcome: "half_shift", requiresNote: false },
                 },
@@ -317,7 +317,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             return [
                 {
                     label: confirmLabel,
-                    hint: "Só confirme se essa saída de poucos minutos foi real. Se foi conflito de posto ou erro, use o ajuste de horários ou o /corrigir.",
+                    hint: "Só se essa saída de poucos minutos foi real; se foi erro, corrija os horários.",
                     className: "reject",
                     action: { kind: "confirm" },
                 },
@@ -329,22 +329,20 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             return [
                 {
                     label: "Pagar plantão inteiro",
-                    hint: "Assina inteiro; atraso e saída antecipada contam no banco de horas como sempre.",
+                    hint: "Assina inteiro; atraso e saída contam no banco.",
                     className: "confirm",
                     action: { kind: "outcome", outcome: "full_shift", requiresNote: false },
                 },
                 {
                     label: "Pagar MEIO plantão",
-                    hint: `Assina MEIO (0,5x); o que passar de 6h trabalhadas vira crédito`
-                        + `${worked > 360 ? ` (${formatMinutesShort(worked - 360)})` : ""}.`
-                        + ` Paga menos que a régua — exige justificativa de ${OVERRIDE_NOTE_MIN_LENGTH}+ caracteres.`,
+                    hint: `Assina 0,5x; acima de 6h vira crédito`
+                        + `${worked > 360 ? ` (${formatMinutesShort(worked - 360)})` : ""}. Abaixo da régua: pede justificativa.`,
                     className: "edit",
                     action: { kind: "outcome", outcome: "half_shift", requiresNote: true },
                 },
                 {
                     label: "Lançar só para o banco de horas",
-                    hint: `Não assina; as horas trabalhadas viram crédito${worked > 0 ? ` (${formatMinutesShort(worked)})` : ""}.`
-                        + ` Exige justificativa de ${OVERRIDE_NOTE_MIN_LENGTH}+ caracteres.`,
+                    hint: `Não assina; horas viram crédito${worked > 0 ? ` (${formatMinutesShort(worked)})` : ""}. Pede justificativa.`,
                     className: "reject",
                     action: { kind: "outcome", outcome: "bank_only", requiresNote: true },
                 },
@@ -356,19 +354,19 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
             return [
                 {
                     label: `Lançar só para o banco de horas (${formatMinutesShort(credit)})`,
-                    hint: "Plantão não é assinado; as horas trabalhadas viram crédito.",
+                    hint: "Não assina; as horas viram crédito.",
                     className: "confirm",
                     action: { kind: "outcome", outcome: "bank_only", requiresNote: false },
                 },
                 {
                     label: "Pagar MEIO plantão",
-                    hint: `Acima da régua (fez menos de 6h) — exige justificativa de ${OVERRIDE_NOTE_MIN_LENGTH}+ caracteres.`,
+                    hint: "Acima da régua (fez menos de 6h): pede justificativa.",
                     className: "edit",
                     action: { kind: "outcome", outcome: "half_shift", requiresNote: true },
                 },
                 {
                     label: "Pagar plantão INTEIRO",
-                    hint: `Acima da régua — exige justificativa de ${OVERRIDE_NOTE_MIN_LENGTH}+ caracteres.`,
+                    hint: "Acima da régua: pede justificativa.",
                     className: "reject",
                     action: { kind: "outcome", outcome: "full_shift", requiresNote: true },
                 },
@@ -406,7 +404,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                 },
                 {
                     label: "Recusar crédito para o banco de horas",
-                    hint: `Paga até o fim da janela, sem crédito — exige justificativa de ${OVERRIDE_NOTE_MIN_LENGTH}+ caracteres.`,
+                    hint: "Paga até o fim da janela, sem crédito. Pede justificativa.",
                     className: "reject",
                     action: { kind: "reject_credit" },
                 },
@@ -526,51 +524,52 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                             <span className="departure-verifier-decision__hint">{button.hint}</span>
                                                         </div>
                                                     ))}
-                                                    <div className="departure-verifier-decision">
-                                                        <motion.button
-                                                            type="button"
-                                                            className="departure-verifier-action reject"
-                                                            onClick={() => setView("contest")}
-                                                            whileTap={tapFeedback}
-                                                            disabled={submitting || pendingAction !== null}
-                                                        >
-                                                            {`${target.displayName ?? target.doctorName} NÃO SAIU`}
-                                                        </motion.button>
-                                                        <span className="departure-verifier-decision__hint">
-                                                            A saída registrada não aconteceu (rendição por engano, erro de registro).
-                                                            Reabre este mesmo plantão — nenhuma ocupação nova é criada — e cancela
-                                                            qualquer desfecho de pagamento já decidido sobre ela.
-                                                        </span>
-                                                    </div>
-                                                    {canAdjust && (
-                                                        <div className="departure-verifier-decision">
+                                                    {/* Correções do REGISTRO ficam separadas das decisões de
+                                                        pagamento: são a exceção, não a escolha do dia a dia. */}
+                                                    <div className="departure-verifier-secondary">
+                                                        <span className="departure-verifier-secondary__label">O registro está errado?</span>
+                                                        {canAdjust && (
                                                             <motion.button
                                                                 type="button"
                                                                 className="departure-verifier-action edit"
                                                                 onClick={() => setView("adjust")}
                                                                 whileTap={tapFeedback}
                                                                 disabled={submitting || pendingAction !== null}
+                                                                title="A hora de chegada ou de saída está errada."
                                                             >
-                                                                Corrigir os horários
+                                                                Corrigir horários
                                                             </motion.button>
-                                                            <span className="departure-verifier-decision__hint">
-                                                                A hora registrada está errada. Corrija chegada e/ou saída antes de
-                                                                decidir — a régua e o saldo são recalculados na tela.
-                                                            </span>
-                                                        </div>
-                                                    )}
+                                                        )}
+                                                        <motion.button
+                                                            type="button"
+                                                            className="departure-verifier-action reject"
+                                                            onClick={() => setView("contest")}
+                                                            whileTap={tapFeedback}
+                                                            disabled={submitting || pendingAction !== null}
+                                                            title={`${target.displayName ?? target.doctorName} não saiu do ${target.targetCode}: a saída registrada não aconteceu.`}
+                                                        >
+                                                            Não saiu do {target.targetCode}
+                                                        </motion.button>
+                                                    </div>
                                                 </div>
                                             )}
 
                                             {view === "contest" && (
                                                 <div className="departure-verifier-note">
                                                     <p style={{ fontSize: "0.85rem", fontWeight: 600 }}>
-                                                        Onde {target.displayName ?? target.doctorName} ficou depois das {formatLocalHourMinute(verbalizedMs)}?
+                                                        A saída das {formatLocalHourMinute(verbalizedMs)} não aconteceu: o plantão no {target.targetCode} continua aberto.
+                                                    </p>
+                                                    <span className="departure-verifier-decision__hint">
+                                                        Se {target.displayName ?? target.doctorName} apenas passou para outro posto/base e
+                                                        registrou chegada lá, a saída aconteceu — volte e confirme, ou corrija o horário.
+                                                    </span>
+                                                    <p style={{ fontSize: "0.85rem", fontWeight: 600, margin: 0 }}>
+                                                        Onde ficou depois das {formatLocalHourMinute(verbalizedMs)}?
                                                     </p>
                                                     <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.85rem" }}>
                                                         {([
                                                             ["same_target", `Continuou no ${target.targetCode}`],
-                                                            ["other_target", "Foi para outro posto/base"],
+                                                            ["other_target", "Foi para outro posto/base, sem chegada registrada lá"],
                                                             ["unknown", "Não sei dizer"],
                                                         ] as [ContestedDepartureContinuation, string][]).map(([value, label]) => (
                                                             <label key={value} style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -628,9 +627,9 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                         style={{ width: "100%", resize: "vertical", fontSize: "0.85rem", padding: 8 }}
                                                     />
                                                     <span className="departure-verifier-decision__hint">
-                                                        O quadro não muda de dono aqui: se outro médico assumiu este alvo, ele
-                                                        continua onde está e a tela diz de quem é a chegada a corrigir. Mudança de
-                                                        posto/base se faz pelo remanejamento, que move este mesmo plantão.
+                                                        Ninguém sai do quadro aqui: se outro médico assumiu o {target.targetCode}, este plantão
+                                                        volta fora do quadro e a tela diz de quem é a chegada a corrigir. Fora do quadro,
+                                                        fecha sozinho no fim da janela{scheduledEndMs !== null ? ` (${formatLocalHourMinute(scheduledEndMs)})` : ""}.
                                                     </span>
                                                     <div style={{ display: "flex", gap: 8 }}>
                                                         <motion.button

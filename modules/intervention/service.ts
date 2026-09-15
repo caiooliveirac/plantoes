@@ -12,11 +12,8 @@ import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modul
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
-import {
-    describeContestedDeparture,
-    resolveContestedBoardDecision,
-    type ContestedDepartureContinuation,
-} from "@/modules/operational/contested-departure";
+import { describeContestBlockedByLaterArrival, describeContestedDeparture, isContestedDepartureNotes, resolveContestedBoardDecision, type ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
+import { findLaterArrivalForDoctor } from "@/modules/operational/later-arrival";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveContinuationInPlaceShiftLabel, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
 
 type Executor = any;
@@ -237,6 +234,8 @@ export function isInterventionDisplacedOccupancyNotes(notes: string | null | und
 
 export function resolveStaleShadowInterventionEndedAt(params: {
     notes: string | null | undefined;
+    /** Reaberto por "NÃO SAIU" fora do quadro (board nulo) vence como sombra. */
+    boardStartedAt?: Date | null;
     scheduledEndAt?: Date | null;
     endedAt?: Date | null;
     referenceAt: Date;
@@ -245,7 +244,8 @@ export function resolveStaleShadowInterventionEndedAt(params: {
         return null;
     }
 
-    if (!isInterventionShadowOccupancyNotes(params.notes)) {
+    const contestedOutOfBoard = !params.boardStartedAt && isContestedDepartureNotes(params.notes);
+    if (!isInterventionShadowOccupancyNotes(params.notes) && !contestedOutOfBoard) {
         return null;
     }
 
@@ -563,6 +563,25 @@ export async function reopenContestedInterventionDeparture(occupancyId: string, 
         const contestedDepartureAt = existing.actualEndedAt ?? existing.endedAt;
         if (!contestedDepartureAt) {
             throw new Error("Esta ocupacao nao tem saida registrada para contestar.");
+        }
+
+        const laterArrival = await findLaterArrivalForDoctor(tx, {
+            doctorId: existing.doctorId,
+            excludeOccupancyId: existing.id,
+            afterStartedAt: existing.startedAt,
+            contestedDepartureAt,
+        });
+        if (laterArrival) {
+            const [doctor, base] = await Promise.all([
+                tx.query.doctors.findFirst({ where: eq(doctors.id, existing.doctorId), columns: { fullName: true } }),
+                tx.query.interventionBases.findFirst({ where: eq(interventionBases.id, existing.baseId), columns: { code: true } }),
+            ]);
+            throw new Error(describeContestBlockedByLaterArrival({
+                doctorName: doctor?.fullName ?? "O médico",
+                targetCode: base?.code ?? "esta base",
+                contestedDepartureAt,
+                laterArrival,
+            }));
         }
 
         const carrier = await tx.query.interventionOccupancies.findFirst({
@@ -1269,6 +1288,7 @@ export async function expireStaleShadowInterventionOccupancies(referenceAt: Date
     for (const occupancy of openOccupancies) {
         const endedAt = resolveStaleShadowInterventionEndedAt({
             notes: occupancy.notes,
+            boardStartedAt: occupancy.boardStartedAt,
             scheduledEndAt: occupancy.scheduledEndAt,
             endedAt: occupancy.endedAt,
             referenceAt,

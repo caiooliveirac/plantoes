@@ -11304,6 +11304,30 @@ button.chief-payable-tag:focus-visible {
     padding: 0 2px;
 }
 
+/* Correções do registro (horário errado / não saiu): linha compacta, abaixo
+   das decisões de pagamento, para não competir com elas. */
+.departure-verifier-secondary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--surface-elevated-border);
+}
+
+.departure-verifier-secondary__label {
+    font-size: 0.76rem;
+    color: var(--muted-strong);
+    margin-right: 4px;
+}
+
+.departure-verifier-secondary .departure-verifier-action {
+    padding: 8px 12px;
+    font-size: 0.82rem;
+    background: transparent;
+}
+
 .departure-verifier-note,
 .departure-verifier-adjust {
     display: flex;
