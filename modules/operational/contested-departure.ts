@@ -66,6 +66,42 @@ export function resolveContestedBoardDecision(params: {
     };
 }
 
+/**
+ * Marcador gravado na nota de toda ocupação reaberta por contestação. É por ele
+ * que a varredura reconhece um registro reaberto FORA do quadro e o fecha no fim
+ * da janela — sem isso ficava aberto para sempre (incidente IT30 2026-09-15).
+ */
+export const CONTESTED_DEPARTURE_NOTE_MARKER = "[NÃO SAIU]";
+
+export function isContestedDepartureNotes(notes: string | null | undefined) {
+    return (notes ?? "").includes(CONTESTED_DEPARTURE_NOTE_MARKER);
+}
+
+/** Chegada do mesmo médico registrada depois da saída contestada. */
+export interface LaterArrival {
+    targetCode: string;
+    startedAt: Date;
+}
+
+/**
+ * Se o médico já registrou chegada em outro lugar depois da saída, a saída
+ * ACONTECEU — foi rendição/passagem, não erro de registro. Reabrir aqui criaria
+ * um plantão paralelo eterno (caso Laisse IT30→CZ50, 2026-09-15). O chefe que
+ * clicou "não saiu" querendo dizer "continuou trabalhando" recebe o caminho certo.
+ */
+export function describeContestBlockedByLaterArrival(params: {
+    doctorName: string;
+    targetCode: string;
+    contestedDepartureAt: Date;
+    laterArrival: LaterArrival;
+}) {
+    const chegada = formatHourMinute(params.laterArrival.startedAt);
+    const saida = formatHourMinute(params.contestedDepartureAt);
+    return `${params.doctorName} já registrou chegada em ${params.laterArrival.targetCode} às ${chegada}. `
+        + `A saída de ${params.targetCode} às ${saida} aconteceu (passou para ${params.laterArrival.targetCode}), `
+        + `não é erro de registro. Confirme a saída — ou corrija o horário para ${chegada} se saiu junto com a chegada lá.`;
+}
+
 /** Nota de auditoria da contestação: o que foi desmentido, e o que o chefe disse. */
 export function describeContestedDeparture(params: {
     contestedDepartureAt: Date;
@@ -79,7 +115,7 @@ export function describeContestedDeparture(params: {
             ? `seguiu em ${params.continuedAtLabel?.trim() || "outro posto/base"}`
             : "sem informação de onde ficou";
 
-    return `[NÃO SAIU] chefia contestou a saída registrada às ${formatHourMinute(params.contestedDepartureAt)}: `
+    return `${CONTESTED_DEPARTURE_NOTE_MARKER} chefia contestou a saída registrada às ${formatHourMinute(params.contestedDepartureAt)}: `
         + `${onde}. Registro reaberto — nenhuma ocupação nova foi criada.`;
 }
 

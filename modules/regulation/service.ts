@@ -10,11 +10,8 @@ import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
-import {
-    describeContestedDeparture,
-    resolveContestedBoardDecision,
-    type ContestedDepartureContinuation,
-} from "@/modules/operational/contested-departure";
+import { describeContestBlockedByLaterArrival, describeContestedDeparture, resolveContestedBoardDecision, type ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
+import { findLaterArrivalForDoctor } from "@/modules/operational/later-arrival";
 import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
@@ -514,6 +511,25 @@ export async function reopenContestedRegulationDeparture(occupancyId: string, in
         const contestedDepartureAt = existing.actualEndedAt ?? existing.endedAt;
         if (!contestedDepartureAt) {
             throw new Error("Esta ocupacao nao tem saida registrada para contestar.");
+        }
+
+        const laterArrival = await findLaterArrivalForDoctor(tx, {
+            doctorId: existing.doctorId,
+            excludeOccupancyId: existing.id,
+            afterStartedAt: existing.startedAt,
+            contestedDepartureAt,
+        });
+        if (laterArrival) {
+            const [doctor, post] = await Promise.all([
+                tx.query.doctors.findFirst({ where: eq(doctors.id, existing.doctorId), columns: { fullName: true } }),
+                tx.query.regulationPosts.findFirst({ where: eq(regulationPosts.id, existing.postId), columns: { code: true } }),
+            ]);
+            throw new Error(describeContestBlockedByLaterArrival({
+                doctorName: doctor?.fullName ?? "O médico",
+                targetCode: post?.code ?? "este ramal",
+                contestedDepartureAt,
+                laterArrival,
+            }));
         }
 
         const carrier = await tx.query.regulationOccupancies.findFirst({

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+    CONTESTED_DEPARTURE_NOTE_MARKER,
+    describeContestBlockedByLaterArrival,
     describeContestedDeparture,
+    isContestedDepartureNotes,
     resolveContestedBoardDecision,
 } from "@/modules/operational/contested-departure";
+import { resolveStaleShadowInterventionEndedAt } from "@/modules/intervention/service";
 
 function d(value: string) {
     return new Date(value);
@@ -95,5 +99,65 @@ describe("describeContestedDeparture", () => {
             continuation: "unknown",
         });
         assert.match(nota, /sem informação/);
+    });
+});
+
+describe("contestação bloqueada por chegada posterior", () => {
+    it("médico já chegou em outra base: explica que a saída aconteceu e aponta os dois caminhos", () => {
+        // Caso Laisse IT30→CZ50, 2026-09-15: "não saiu" reabriu a SN e derrubou o quadro.
+        const texto = describeContestBlockedByLaterArrival({
+            doctorName: "Laisse Oliveira",
+            targetCode: "IT30",
+            contestedDepartureAt: d("2026-09-15T07:20:00-03:00"),
+            laterArrival: { targetCode: "CZ50", startedAt: d("2026-09-15T07:45:00-03:00") },
+        });
+        assert.match(texto, /chegada em CZ50 às 07:45/);
+        assert.match(texto, /saída de IT30 às 07:20 aconteceu/);
+        assert.match(texto, /Confirme a saída/);
+        assert.match(texto, /corrija o horário para 07:45/);
+    });
+});
+
+describe("reaberto por NÃO SAIU fora do quadro vence no fim da janela", () => {
+    const notes = describeContestedDeparture({
+        contestedDepartureAt: d("2026-09-15T07:20:00-03:00"),
+        continuation: "other_target",
+        continuedAtLabel: "CZ50",
+    });
+
+    it("a nota da contestação carrega o marcador", () => {
+        assert.ok(notes.includes(CONTESTED_DEPARTURE_NOTE_MARKER));
+        assert.ok(isContestedDepartureNotes(notes));
+        assert.equal(isContestedDepartureNotes("Fulano SN 30"), false);
+    });
+
+    it("sem board e passada a janela, a varredura fecha no scheduledEnd", () => {
+        assert.equal(resolveStaleShadowInterventionEndedAt({
+            notes,
+            boardStartedAt: null,
+            scheduledEndAt: d("2026-09-15T07:00:00-03:00"),
+            endedAt: null,
+            referenceAt: d("2026-09-15T19:00:00-03:00"),
+        })?.toISOString(), d("2026-09-15T07:00:00-03:00").toISOString());
+    });
+
+    it("com board (voltou ao quadro como titular), não é a varredura que fecha", () => {
+        assert.equal(resolveStaleShadowInterventionEndedAt({
+            notes,
+            boardStartedAt: d("2026-09-14T19:03:00-03:00"),
+            scheduledEndAt: d("2026-09-15T07:00:00-03:00"),
+            endedAt: null,
+            referenceAt: d("2026-09-15T19:00:00-03:00"),
+        }), null);
+    });
+
+    it("registro comum sem marcador e sem board segue fora da varredura", () => {
+        assert.equal(resolveStaleShadowInterventionEndedAt({
+            notes: "Fulano SN 30",
+            boardStartedAt: null,
+            scheduledEndAt: d("2026-09-15T07:00:00-03:00"),
+            endedAt: null,
+            referenceAt: d("2026-09-15T19:00:00-03:00"),
+        }), null);
     });
 });
