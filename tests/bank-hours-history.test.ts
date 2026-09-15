@@ -443,10 +443,10 @@ test("estatutário: saldo é a cascata da folha (parcela de folha fora do banco;
     assert.equal(model.summary.balanceMinutes, 0);
 });
 
-test("summarizeBankHoursHistory keeps balances and counters and drops the per-shift proof/audit payload", () => {
+test("summarizeBankHoursHistory keeps balances and counters and turns shifts into month aggregates", () => {
     const model = buildBankHoursHistoryModel([
         makeShift({ occupancyId: "s-1", continuityGroupId: "cg-s1", balanceMinutes: 30, creditedOvertimeMinutes: 30, overtimeMinutes: 30 }),
-        makeShift({ occupancyId: "s-2", continuityGroupId: "cg-s2", startedAt: "2026-04-02T10:20:00.000Z", arrivalDelayMinutes: 20, balanceMinutes: -20 }),
+        makeShift({ occupancyId: "s-2", continuityGroupId: "cg-s2", startedAt: "2026-04-02T10:20:00.000Z", bankScheduledStartAt: "2026-04-02T10:00:00.000Z", occupancyScheduledStartAt: "2026-04-02T10:00:00.000Z", arrivalDelayMinutes: 20, balanceMinutes: -20 }),
     ]);
     const summary = summarizeBankHoursHistory(model);
 
@@ -458,16 +458,14 @@ test("summarizeBankHoursHistory keeps balances and counters and drops the per-sh
     assert.equal(doctor.applicationBalanceMinutes, full.applicationBalanceMinutes);
     assert.equal(doctor.shiftCount, full.shiftCount);
     assert.equal(doctor.lateArrivalCount, full.lateArrivalCount);
-    assert.equal(doctor.shifts.length, full.shifts.length);
-    for (const [index, shift] of doctor.shifts.entries()) {
-        const source = full.shifts[index]!;
-        assert.equal(shift.occupancyId, source.occupancyId);
-        assert.equal(shift.monthKey, source.monthKey);
-        assert.equal(shift.balanceMinutes, source.balanceMinutes);
-        assert.deepEqual(shift.flags, source.flags);
-        assert.equal("proof" in shift, false);
-        assert.equal("auditTrail" in shift, false);
-        assert.equal("corrections" in shift, false);
-        assert.equal("bankHoursExplanation" in shift, false);
-    }
+    assert.equal("shifts" in doctor, false);
+    assert.deepEqual(doctor.months.map((month) => month.monthKey), ["2026-03", "2026-04"]);
+    const march = doctor.months[0]!;
+    const april = doctor.months[1]!;
+    assert.equal(march.shiftCount + april.shiftCount, full.shifts.length);
+    assert.equal(march.balanceMinutes + april.balanceMinutes, full.shifts.reduce((sum, shift) => sum + (shift.balanceMinutes ?? 0), 0));
+    assert.equal(march.bonusCount + april.bonusCount, full.shifts.filter((shift) => (shift.creditedOvertimeMinutes ?? 0) > 0).length);
+    assert.equal(april.delayCount, 1);
+    assert.equal(doctor.months.every((month) => month.payrollMinutes === 0), true, "PJ não tem folha");
+    assert.ok(doctor.searchTerms.includes("PR03") && doctor.searchTerms.includes("Base PR03"));
 });

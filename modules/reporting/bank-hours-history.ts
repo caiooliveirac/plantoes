@@ -2,7 +2,7 @@ import { buildContinuityGroups } from "@/modules/bank-hours/continuity";
 import { applyAnomalyGuard, calculateBankHours, calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { buildBankHoursBalanceOverrideExplanation, MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE } from "@/modules/bank-hours/service";
-import { resolvePayrollLedger } from "@/modules/bank-hours/payroll";
+import { resolvePayrollDeductionForDoctorMonth, resolvePayrollLedger } from "@/modules/bank-hours/payroll";
 import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import {
     describeLateDepartureReason,
@@ -817,62 +817,82 @@ const EMPTY_BANK_HOURS_PROOF: BankHoursProof = {
 };
 
 /**
- * Plantão enxuto para a LISTA de médicos (/admin/bank-hours): só o que o card
- * mostra e agrega — data, turno, alvo, saldo e contadores. Prova, auditoria,
- * correções e explicação ficam no detalhe, carregado por médico ao abrir.
- * O modelo completo serializava ~22 MB de props para a tela inteira.
+ * Um mês do médico na LISTA de /admin/bank-hours: só os agregados que o card
+ * mostra. Plantão a plantão, prova, auditoria e correções ficam no detalhe,
+ * carregado por médico ao abrir. A lista chegou a serializar ~22 MB de props
+ * (todos os plantões com prova) e depois ~3 MB (plantões enxutos) — com
+ * agregados por mês são dezenas de KB, e o DOM deixa de ter milhares de linhas.
  */
-export type BankHoursShiftSummary = Pick<
-    BankHoursHistoryShift,
-    | "occupancyId"
-    | "domain"
-    | "startedAt"
-    | "shiftLabel"
-    | "targetCode"
-    | "targetLabel"
-    | "monthKey"
-    | "balanceMinutes"
-    | "arrivalDelayMinutes"
-    | "creditedOvertimeMinutes"
-    | "countedStartAt"
-    | "countedEndAt"
-    | "flags"
->;
+export interface BankHoursMonthSummary {
+    monthKey: string;
+    shiftCount: number;
+    /** Soma do saldo dos plantões do mês (sem legado nem acertos). */
+    balanceMinutes: number;
+    delayCount: number;
+    bonusCount: number;
+    /** Estatutário: previsto para a folha neste mês (modules/bank-hours/payroll.ts); 0 para PJ. */
+    payrollMinutes: number;
+}
 
 export interface BankHoursDoctorSummary extends Omit<BankHoursDoctorHistory, "shifts"> {
-    shifts: BankHoursShiftSummary[];
+    /** Meses em ordem crescente; inclui meses só com acerto antigo de folha (shiftCount 0). */
+    months: BankHoursMonthSummary[];
+    /** Códigos e rótulos dos alvos por onde o médico passou — alimenta a busca da lista. */
+    searchTerms: string[];
 }
 
 export interface BankHoursHistorySummaryModel extends Omit<BankHoursHistoryModel, "doctors"> {
     doctors: BankHoursDoctorSummary[];
 }
 
-export function summarizeBankHoursShift(shift: BankHoursHistoryShift): BankHoursShiftSummary {
+export function summarizeBankHoursDoctor(doctor: BankHoursDoctorHistory): BankHoursDoctorSummary {
+    const { shifts, ...rest } = doctor;
+    const byMonth = new Map<string, BankHoursMonthSummary>();
+    const monthOf = (monthKey: string) => {
+        const current = byMonth.get(monthKey);
+        if (current) return current;
+        const created = { monthKey, shiftCount: 0, balanceMinutes: 0, delayCount: 0, bonusCount: 0, payrollMinutes: 0 };
+        byMonth.set(monthKey, created);
+        return created;
+    };
+    const terms = new Set<string>();
+    for (const shift of shifts) {
+        const month = monthOf(shift.monthKey);
+        month.shiftCount += 1;
+        month.balanceMinutes += shift.balanceMinutes ?? 0;
+        if ((shift.arrivalDelayMinutes ?? 0) > 0) month.delayCount += 1;
+        if ((shift.creditedOvertimeMinutes ?? 0) > 0) month.bonusCount += 1;
+        terms.add(shift.targetCode);
+        terms.add(shift.targetLabel);
+    }
+    if (doctor.employmentType === "estatutario") {
+        // Meses com acerto antigo de folha entram mesmo sem plantão: o card
+        // mostra o desconto previsto neles. Mesma régua da tela (payroll.ts).
+        for (const settlement of doctor.settlements) {
+            if (settlement.kind === "payroll") monthOf(settlement.monthKey);
+        }
+        const legacyMinutes = doctor.legacy?.totalMinutes ?? 0;
+        for (const month of byMonth.values()) {
+            month.payrollMinutes = resolvePayrollDeductionForDoctorMonth({
+                monthKey: month.monthKey,
+                legacyMinutes,
+                shifts,
+                settlements: doctor.settlements,
+            }).payrollMinutes;
+        }
+    }
     return {
-        occupancyId: shift.occupancyId,
-        domain: shift.domain,
-        startedAt: shift.startedAt,
-        shiftLabel: shift.shiftLabel,
-        targetCode: shift.targetCode,
-        targetLabel: shift.targetLabel,
-        monthKey: shift.monthKey,
-        balanceMinutes: shift.balanceMinutes,
-        arrivalDelayMinutes: shift.arrivalDelayMinutes,
-        creditedOvertimeMinutes: shift.creditedOvertimeMinutes,
-        countedStartAt: shift.countedStartAt,
-        countedEndAt: shift.countedEndAt,
-        flags: shift.flags,
+        ...rest,
+        months: Array.from(byMonth.values()).sort((left, right) => left.monthKey.localeCompare(right.monthKey)),
+        searchTerms: Array.from(terms),
     };
 }
 
-/** Mesmos médicos, mesmos saldos e contadores; só os plantões ficam enxutos. */
+/** Mesmos médicos, mesmos saldos e contadores; os plantões viram agregados por mês. */
 export function summarizeBankHoursHistory(model: BankHoursHistoryModel): BankHoursHistorySummaryModel {
     return {
         ...model,
-        doctors: model.doctors.map((doctor) => ({
-            ...doctor,
-            shifts: doctor.shifts.map(summarizeBankHoursShift),
-        })),
+        doctors: model.doctors.map(summarizeBankHoursDoctor),
     };
 }
 
