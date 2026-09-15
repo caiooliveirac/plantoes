@@ -1,5 +1,6 @@
 import { hasDatabaseUrl } from "@/db";
 import { readAuthenticatedSession } from "@/lib/auth/server";
+import { escalaUrl, federacaoConfigurada } from "@/lib/auth/federacao";
 import { OperationalBoardClient } from "@/app/operational-board-client";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
 import { getExpectedSchedule } from "@/modules/operational/expected-schedule";
@@ -79,6 +80,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
             recentHandoffs={board.recentHandoffs ?? []}
             pendingChiefExits={board.pendingChiefExits ?? []}
             expectedSchedule={expectedSchedule}
+            escalaUrl={federacaoConfigurada() ? escalaUrl() : null}
             session={session ? {
                 email: session.user.email,
                 roles: session.user.roles,

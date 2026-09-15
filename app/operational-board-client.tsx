@@ -112,6 +112,9 @@ interface OperationalBoardClientProps {
     recentHandoffs?: RecentHandoff[];
     pendingChiefExits?: PendingChiefExit[];
     expectedSchedule?: ExpectedScheduleData | null;
+    /** URL pública do Escalas & Trocas quando a federação está ligada; null
+        esconde os atalhos "entrar pelo escala" / "abrir a escala". */
+    escalaUrl?: string | null;
 }
 
 interface FormState {
@@ -1137,7 +1140,7 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], pendingChiefExits = [], expectedSchedule = null } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], pendingChiefExits = [], expectedSchedule = null, escalaUrl = null } = props;
     // Admin abre tudo; payment_closing_limited (ex.: Iasmin) só enxerga o fechamento
     // de pagamento para visualizar e lançar NF/processo — sem editar o quadro.
     const canOpenPaymentClosing = Boolean(
@@ -1170,6 +1173,22 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [authPassword, setAuthPassword] = useState("");
     const [previousShiftQuery, setPreviousShiftQuery] = useState("");
     const [authError, setAuthError] = useState<string | null>(null);
+    /* Volta da federação com o escala (/api/auth/sso e /api/auth/handoff): o
+       motivo vem na URL e a frase mora aqui — a rota redireciona, não fala. */
+    useEffect(() => {
+        const q = new URLSearchParams(window.location.search);
+        const sso = q.get("sso");
+        const entrar = q.get("entrar");
+        if (!sso && !entrar) return;
+        setAuthOpen(true);
+        if (sso === "sem-acesso") {
+            setAuthError("Sua conta do escala foi reconhecida, mas este e-mail não tem conta liberada aqui. Peça à chefia para criar ou liberar seu acesso.");
+        } else if (sso === "token-invalido") {
+            setAuthError("A entrada pelo escala expirou. Tente de novo pelo botão de lá.");
+        }
+        window.history.replaceState(null, "", window.location.pathname);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     const [authInfo, setAuthInfo] = useState<string | null>(null);
     const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
     const [currentPasswordInput, setCurrentPasswordInput] = useState("");
@@ -3684,6 +3703,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     {isAuthSubmitting || isRefreshing ? "Saindo..." : "Sair"}
                                 </button>
                             </div>
+                            {escalaUrl && !session.mustChangePassword && (
+                                <div className="ops-auth-actions">
+                                    <a className="ops-auth-inline-link" href="/api/auth/handoff?para=samu-salvador">
+                                        Abrir o Escalas &amp; Trocas com esta conta
+                                    </a>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <form className="ops-auth-panel" onSubmit={handleAuthSubmit}>
@@ -3740,6 +3766,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     Sou medico e quero me cadastrar
                                 </a>
                             </div>
+                            {escalaUrl && (
+                                <div className="ops-auth-actions">
+                                    <a className="ops-auth-inline-link" href={`${escalaUrl}/api/auth/handoff?para=plantoes`}>
+                                        Já estou logado no Escalas &amp; Trocas — entrar por lá
+                                    </a>
+                                </div>
+                            )}
                         </form>
                     )}
                     </div>
