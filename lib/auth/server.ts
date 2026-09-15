@@ -5,8 +5,14 @@ import { userRoles, users } from "@/db/schema";
 import { USER_ROLES, type UserRole } from "@/modules/auth/contracts";
 import { createSessionToken, verifySessionToken } from "@/lib/auth/token";
 
-const SESSION_COOKIE_NAME = "operations_v2_session";
-const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+export const SESSION_COOKIE_NAME = "operations_v2_session";
+/* 30 dias, renovada a cada uso (proxy.ts). Com 12 h a sessão morria entre um
+   plantão e o seguinte e o médico redigitava e-mail e senha no celular a cada
+   turno — o log do escala mostrava o mesmo médico 4 a 6 vezes por semana
+   (15/09/2026). "Sair" continua um clique. */
+export const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+/** Idade a partir da qual o portão reemite o cookie: uma vez por dia. */
+export const SESSION_RENEW_AFTER_MS = 1000 * 60 * 60 * 24;
 
 export class AuthError extends Error {
     status: number;
@@ -28,7 +34,7 @@ export interface AuthenticatedSession {
     expiresAt: string;
 }
 
-function getAuthSecret() {
+export function getAuthSecret() {
     const secret = process.env.AUTH_SECRET;
     if (!secret) {
         throw new Error("AUTH_SECRET is required to use authenticated operations.");
