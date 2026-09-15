@@ -1008,6 +1008,10 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                     .set({
                         endedAt: otherCloseAt,
                         actualEndedAt: otherRamalOccupancy.actualEndedAt ?? otherCloseAt,
+                        // O médico continua trabalhando, só em outro ramal: não é
+                        // decisão do chefe. Nasce confirmado para não entrar na fila.
+                        departureConfirmedAt: otherRamalOccupancy.departureConfirmedAt ?? otherCloseAt,
+                        departureConfirmedNote: otherRamalOccupancy.departureConfirmedNote ?? "Saida por mudanca de posto/base: chegada registrada em outro alvo.",
                         updatedByUserId: input.createdByUserId ?? null,
                         updatedAt: new Date(),
                     })
@@ -1044,6 +1048,8 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                     .set({
                         endedAt: input.startedAt,
                         actualEndedAt: otherInterventionOccupancy.actualEndedAt ?? input.startedAt,
+                        departureConfirmedAt: otherInterventionOccupancy.departureConfirmedAt ?? input.startedAt,
+                        departureConfirmedNote: otherInterventionOccupancy.departureConfirmedNote ?? "Saida por mudanca de posto/base: chegada registrada em outro alvo.",
                         updatedByUserId: input.createdByUserId ?? null,
                         updatedAt: new Date(),
                     })

@@ -913,6 +913,10 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                     .set({
                         endedAt: otherCloseAt,
                         actualEndedAt: otherCloseAt,
+                        // Mudança de base do próprio médico: nasce confirmado, não
+                        // entra na fila do chefe (nada a decidir — ele segue no plantão).
+                        departureConfirmedAt: otherBaseOccupancy.departureConfirmedAt ?? otherCloseAt,
+                        departureConfirmedNote: otherBaseOccupancy.departureConfirmedNote ?? "Saida por mudanca de posto/base: chegada registrada em outro alvo.",
                         updatedByUserId: input.createdByUserId ?? null,
                         updatedAt: new Date(),
                     })
@@ -972,6 +976,8 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                     .set({
                         endedAt: input.startedAt,
                         actualEndedAt: otherRegulationOccupancy.actualEndedAt ?? input.startedAt,
+                        departureConfirmedAt: otherRegulationOccupancy.departureConfirmedAt ?? input.startedAt,
+                        departureConfirmedNote: otherRegulationOccupancy.departureConfirmedNote ?? "Saida por mudanca de posto/base: chegada registrada em outro alvo.",
                         updatedByUserId: input.createdByUserId ?? null,
                         updatedAt: new Date(),
                     })

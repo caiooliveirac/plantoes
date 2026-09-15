@@ -22,6 +22,7 @@
  *   - Regulation posts with isNucleo=true get special pending-label logic
  */
 import { sql } from "drizzle-orm";
+import { resolveDepartureOrigin, shouldQueueDepartureForChief, type DepartureOrigin } from "@/modules/operational/departure-origin";
 import { getDb } from "@/db";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { CHIEF_REGULATION_POST_CODE } from "@/modules/operational/roles";
@@ -2182,6 +2183,16 @@ export interface PendingDepartureConfirmation {
   arrivalCorrectedInTelegram: boolean;
   /** When the verbalized departure was recorded. */
   recordedAt: string;
+  /**
+   * De onde veio esta saída (modules/operational/departure-origin.ts). É o que
+   * decide a pergunta que a tela faz: "avisou a saída" não é "outro assumiu".
+   */
+  origin: DepartureOrigin;
+  /** Quem assumiu o alvo na hora do encerramento, quando a origem é "successor". */
+  successorName: string | null;
+  successorStartedAt: string | null;
+  /** Chegada posterior do mesmo médico em outro alvo — torna "ainda está aqui" impossível. */
+  laterArrivalCode: string | null;
 }
 
 export type TelegramLateDepartureReasonCode = "occurrence" | "hygienization" | "chief_release" | "handoff";
@@ -2438,6 +2449,7 @@ export async function listPendingDepartureConfirmations(
     select
       ro.id as "occupancyId",
       'regulation'::text as "domain",
+      ro.post_id as "targetId",
       rp.code as "targetCode",
       rp.label as "targetLabel",
       ro.doctor_id as "doctorId",
@@ -2478,6 +2490,7 @@ export async function listPendingDepartureConfirmations(
     select
       io.id as "occupancyId",
       'intervention'::text as "domain",
+      io.base_id as "targetId",
       ib.code as "targetCode",
       ib.label as "targetLabel",
       io.doctor_id as "doctorId",
@@ -2613,7 +2626,9 @@ export async function listPendingDepartureConfirmations(
     reasonCountsByDoctor.set(row.doctorId, inner);
   }
 
-  return items.map((row: any): PendingDepartureConfirmation => {
+  const originByOccupancy = await resolvePendingDepartureOrigins(items);
+
+  const pending = items.map((row: any): PendingDepartureConfirmation => {
     const correlatedMessages = messagesByOccupancy.get(row.occupancyId) ?? [];
     const recentMessages = correlatedMessages.slice(0, MESSAGES_SHOWN_PER_CARD);
     // A busca por evidência olha a lista INTEIRA, não só o que a timeline mostra:
@@ -2658,6 +2673,14 @@ export async function listPendingDepartureConfirmations(
       ? (reasonCountsByDoctor.get(row.doctorId)?.get(reasonCode) ?? 0)
       : 0;
     const bankWindow = resolveBankHoursWindowForRow(row);
+    const originData = originByOccupancy.get(row.occupancyId) ?? null;
+    const origin = resolveDepartureOrigin({
+      hasDepartureMessage: departureEvidence.length > 0,
+      actualEndedAt: row.actualEndedAt,
+      scheduledEndAt: row.scheduledEndAt,
+      successorStartedAt: originData?.successorStartedAt ?? null,
+      movedToStartedAt: originData?.movedToStartedAt ?? null,
+    });
 
     return {
       occupancyId: row.occupancyId,
@@ -2685,8 +2708,96 @@ export async function listPendingDepartureConfirmations(
       reasonOccurrenceCount30d,
       arrivalCorrectedInTelegram: detectArrivalCorrectedInTelegram(row.notes),
       recordedAt: row.recordedAt,
+      origin,
+      successorName: originData?.successorName ?? null,
+      successorStartedAt: originData?.successorStartedAt ?? null,
+      laterArrivalCode: originData?.laterArrivalCode ?? null,
     };
   });
+
+  // Mudança de posto do próprio médico não é decisão de ninguém: ele continua
+  // trabalhando, só em outro lugar. Registros antigos desse tipo ainda chegam
+  // sem confirmação; os novos já nascem confirmados no fechamento.
+  return pending.filter((item) => shouldQueueDepartureForChief(item.origin));
+}
+
+interface PendingDepartureOriginData {
+  successorName: string | null;
+  successorStartedAt: string | null;
+  movedToStartedAt: string | null;
+  laterArrivalCode: string | null;
+}
+
+/**
+ * Para cada saída da fila, procura no banco quem chegou no mesmo alvo na hora do
+ * encerramento (sucessor) e onde o próprio médico chegou depois (mudança de
+ * posto / chegada posterior). Duas consultas para a fila inteira, casadas em TS.
+ */
+async function resolvePendingDepartureOrigins(items: any[]): Promise<Map<string, PendingDepartureOriginData>> {
+  const result = new Map<string, PendingDepartureOriginData>();
+  if (items.length === 0) return result;
+  const db = getDb();
+  const toleranceMs = 2 * 60 * 1000;
+  const endedTimes = items.map((row) => new Date(row.actualEndedAt).getTime());
+  const fromAt = new Date(Math.min(...endedTimes) - toleranceMs).toISOString();
+  const toAt = new Date(Math.max(...endedTimes) + toleranceMs).toISOString();
+  const doctorIdList = sql.join(
+    Array.from(new Set(items.map((row) => row.doctorId))).map((id) => sql`${id}::uuid`),
+    sql`, `,
+  );
+  // Chegadas de qualquer médico no período (sucessores) + todas as chegadas
+  // posteriores dos médicos da fila (mudança de posto e chegada posterior).
+  const rows = await db.execute<{
+    id: string; domain: string; targetId: number; targetCode: string; doctorId: string;
+    doctorName: string; startedAt: string; endedAt: string | null;
+  }>(sql`
+    select o.id, 'regulation' as "domain", o.post_id as "targetId", p.code as "targetCode",
+           o.doctor_id as "doctorId", d.full_name as "doctorName", o.started_at as "startedAt", o.ended_at as "endedAt"
+    from operations_v2.regulation_occupancies o
+    join operations_v2.regulation_posts p on p.id = o.post_id
+    join operations_v2.doctors d on d.id = o.doctor_id
+    where (o.started_at between ${fromAt} and ${toAt}) or (o.doctor_id in (${doctorIdList}) and o.started_at >= ${fromAt})
+    union all
+    select o.id, 'intervention', o.base_id, b.code, o.doctor_id, d.full_name, o.started_at, o.ended_at
+    from operations_v2.intervention_occupancies o
+    join operations_v2.intervention_bases b on b.id = o.base_id
+    join operations_v2.doctors d on d.id = o.doctor_id
+    where (o.started_at between ${fromAt} and ${toAt}) or (o.doctor_id in (${doctorIdList}) and o.started_at >= ${fromAt})
+  `);
+  const arrivals = ((rows as unknown as { rows: any[] }).rows ?? (rows as any)) as any[];
+
+  for (const item of items) {
+    const endedMs = new Date(item.actualEndedAt).getTime();
+    const startedMs = new Date(item.startedAt).getTime();
+    let successor: any = null;
+    let movedTo: any = null;
+    let laterArrival: any = null;
+    for (const a of arrivals) {
+      if (a.id === item.occupancyId) continue;
+      const aMs = new Date(a.startedAt).getTime();
+      const sameTarget = a.domain === item.domain && Number(a.targetId) === Number(item.targetId);
+      if (a.doctorId !== item.doctorId) {
+        if (sameTarget && Math.abs(aMs - endedMs) <= toleranceMs && (!successor || aMs < new Date(successor.startedAt).getTime())) {
+          successor = a;
+        }
+        continue;
+      }
+      if (aMs <= startedMs) continue;
+      const stillOpenAfterDeparture = !a.endedAt || new Date(a.endedAt).getTime() > endedMs;
+      if (!stillOpenAfterDeparture) continue;
+      if (!laterArrival || aMs < new Date(laterArrival.startedAt).getTime()) laterArrival = a;
+      if (!sameTarget && Math.abs(aMs - endedMs) <= toleranceMs && (!movedTo || aMs < new Date(movedTo.startedAt).getTime())) {
+        movedTo = a;
+      }
+    }
+    result.set(item.occupancyId, {
+      successorName: successor?.doctorName ?? null,
+      successorStartedAt: successor ? new Date(successor.startedAt).toISOString() : null,
+      movedToStartedAt: movedTo ? new Date(movedTo.startedAt).toISOString() : null,
+      laterArrivalCode: laterArrival?.targetCode ?? null,
+    });
+  }
+  return result;
 }
 
 export async function getPreviousOperationalBoard(
