@@ -14,6 +14,7 @@ import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-se
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
 import { describeContestBlockedByLaterArrival, describeContestedDeparture, isContestedDepartureNotes, resolveContestedBoardDecision, type ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
 import { findLaterArrivalForDoctor } from "@/modules/operational/later-arrival";
+import { shouldJoinDoctorTurnoGroup } from "@/modules/operational/turno";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveContinuationInPlaceShiftLabel, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
 
 type Executor = any;
@@ -641,6 +642,50 @@ export async function reopenContestedInterventionDeparture(occupancyId: string, 
     return result;
 }
 
+
+/**
+ * ADR-007 R1: sem grupo resolvido pelos caminhos explícitos (continuação,
+ * remanejo, chegada anterior), procura a última posição do médico nos dois
+ * domínios e, se ela pertence ao mesmo turno ou está encostada na virada,
+ * herda o grupo dela. É o que faz "turno" existir para banco de horas e
+ * pagamento sem tabela nova.
+ */
+async function resolveTurnoContinuityGroupId(tx: Executor, params: {
+    doctorId: string;
+    arrivalAt: Date;
+    excludeRegulationId?: string | null;
+    excludeInterventionId?: string | null;
+}): Promise<string | null> {
+    const since = new Date(params.arrivalAt.getTime() - 36 * 60 * 60 * 1000);
+    const [reg, intv] = await Promise.all([
+        tx.query.regulationOccupancies.findMany({
+            where: and(eq(regulationOccupancies.doctorId, params.doctorId), gte(regulationOccupancies.startedAt, since)),
+            columns: { id: true, startedAt: true, endedAt: true, continuityGroupId: true },
+            orderBy: [desc(regulationOccupancies.startedAt)],
+            limit: 5,
+        }),
+        tx.query.interventionOccupancies.findMany({
+            where: and(eq(interventionOccupancies.doctorId, params.doctorId), gte(interventionOccupancies.startedAt, since)),
+            columns: { id: true, startedAt: true, endedAt: true, continuityGroupId: true },
+            orderBy: [desc(interventionOccupancies.startedAt)],
+            limit: 5,
+        }),
+    ]);
+    const candidates = [
+        ...reg.filter((r: { id: string }) => r.id !== params.excludeRegulationId),
+        ...intv.filter((r: { id: string }) => r.id !== params.excludeInterventionId),
+    ].sort((a: { startedAt: Date }, b: { startedAt: Date }) => b.startedAt.getTime() - a.startedAt.getTime());
+    const previous = candidates[0];
+    if (!previous) return null;
+    return shouldJoinDoctorTurnoGroup({
+        previousStartedAt: previous.startedAt,
+        previousEndedAt: previous.endedAt,
+        arrivalAt: params.arrivalAt,
+    })
+        ? previous.continuityGroupId
+        : null;
+}
+
 export async function startInterventionOccupancy(input: StartInterventionOccupancyInput) {
     const db = getDb();
     const now = new Date();
@@ -1035,6 +1080,13 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
 
                 await syncInterventionBankHours(tx, currentBoardCarrier.id);
             }
+        }
+
+        if (!resolvedContinuityGroupId) {
+            resolvedContinuityGroupId = await resolveTurnoContinuityGroupId(tx, {
+                doctorId: input.doctorId,
+                arrivalAt: input.startedAt,
+            });
         }
 
         const [created] = await tx.insert(interventionOccupancies).values({
