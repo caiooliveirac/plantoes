@@ -2,6 +2,7 @@ import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/bo
 import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_ROLE_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
 import { isPaymentAffectingEarlyDepartureOutcome, resolveEarlyDeparturePaymentUnit } from "@/modules/operational/early-departure";
+import { resolveTurnoOutcomeShadow } from "@/modules/reporting/turno-outcome";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 import type { ContractStatementMonth } from "@/lib/contracts/statement";
 import type { RenewalKind } from "@/lib/contracts/renewal";
@@ -791,6 +792,26 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
             ? EARLY_DEPARTURE_HALF_DISPLAY_LABEL
             : null;
 
+    // ADR-007 R4 em SOMBRA: régua por turno (presença posicionada somada do
+    // médico no slot, todas as posições dos dois domínios) calculada em
+    // paralelo. Não muda pagamento; marca a linha e loga para comparar por um
+    // mês antes de valer. ponytail: só vê as linhas escolhidas do quadro, não
+    // toda a presença bruta — basta para apontar os casos medidos no ADR.
+    const turnoPieces = [...board.regulation, ...board.intervention]
+        .filter((other) => other.doctorId === row.doctorId && other.occupancyId)
+        .map((other) => ({ occupancyId: other.occupancyId!, startedAt: other.startedAt, endedAt: other.endedAt }));
+    // Meio plantão (11:30–17:00) tem 5h30 por desenho: fora da régua de turno.
+    const turnoShadow = isHalfShift ? null : resolveTurnoOutcomeShadow({
+        row: { occupancyId: row.occupancyId, startedAt: row.startedAt, endedAt: row.endedAt, earlyDepartureOutcome: earlyOutcome },
+        pieces: turnoPieces,
+        slotStartAt: board.startedAt,
+        slotEndAt: board.endedAt,
+    });
+    const turnoShadowIssue = turnoShadow?.divergence ? `[sombra ADR-007] ${turnoShadow.divergence}` : null;
+    if (turnoShadow && turnoShadowIssue) {
+        console.warn(`[turno-sombra] ${operationalDate} ${board.shiftLabel} ${row.doctorName} ${row.targetCode}: ${turnoShadow.divergence}`);
+    }
+
     return {
         payableShiftId: [row.doctorId, board.startedAt, board.shiftLabel, row.domain, row.targetCode].join("|"),
         occupancyId: row.occupancyId,
@@ -817,6 +838,7 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
             ...row.issues,
             ...(isHalfShift ? [HALF_SHIFT_DISPLAY_LABEL] : []),
             ...(earlyOutcomeLabel ? [earlyOutcomeLabel] : []),
+            ...(turnoShadowIssue ? [turnoShadowIssue] : []),
         ],
         source: row.source,
         roleLabel: row.roleLabel,
