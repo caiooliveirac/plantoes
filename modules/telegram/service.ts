@@ -57,6 +57,7 @@ import {
 import { isStoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
+import { pickDeparturePosition, type DoctorPosition } from "@/modules/telegram/departure-position";
 import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, isInterventionShadowOccupancyNotes, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
 import { getSaoPauloParts, isSameOperationalShiftArrival, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
@@ -9323,6 +9324,11 @@ async function applyParsedEntry(params: {
 }) {
     const db = getDb();
     const { parsed, resolvedDoctor, referenceAt, messageText } = params;
+    // ADR-007 R5: saída resolve pelo médico. Se citou alvo onde não está, vai
+    // para a posição real dele (o resto do fluxo não muda).
+    const departureRouting = parsed.isDeparture
+        ? await maybeRouteDepartureToDoctorPosition(parsed, resolvedDoctor.id, params.eventAt)
+        : { applied: false, citedCode: null as string | null };
     // Back-correction guard: HH:mm > 4h no futuro em chegadas vira HH:mm de
     // ontem (ver normalizeArrivalEventTime). Saidas e continuacoes/reassignments
     // mantem o evento como veio porque preannouncement de saida noturna e legitimo.
@@ -10117,6 +10123,21 @@ async function applyParsedEntry(params: {
     // registrada com a sessão do turno JÁ montada entra no roster na hora, sem
     // esperar a chefia editar o ramal nem "/jantar reiniciar" (incidente de
     // 03/08/2026). Best-effort: falha aqui nunca derruba o registro da chegada.
+    if (departureRouting.applied && occupancyId && parsed.isDeparture) {
+        const marker = `telegram saida citou ${departureRouting.citedCode ?? "outro alvo"}; aplicada em ${parsed.baseCode}`;
+        if (parsed.sector === "REGULATION") {
+            const row = await db.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, occupancyId), columns: { notes: true } });
+            await db.update(regulationOccupancies)
+                .set({ notes: appendTelegramOperationalNote(row?.notes, marker, messageText) })
+                .where(eq(regulationOccupancies.id, occupancyId));
+        } else {
+            const row = await db.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, occupancyId), columns: { notes: true } });
+            await db.update(interventionOccupancies)
+                .set({ notes: appendTelegramOperationalNote(row?.notes, marker, messageText) })
+                .where(eq(interventionOccupancies.id, occupancyId));
+        }
+    }
+
     if (parsed.sector === "REGULATION" && !parsed.isDeparture && occupancyId && parsed.baseCode) {
         try {
             await ensureArrivalInCurrentMealBreakSession({ ramal: parsed.baseCode });
@@ -10321,6 +10342,49 @@ function hasExplicitOperationalSignal(parsed: OperationalParsedEntry) {
         || parsed.isContinuation
         || parsed.arrivalTime,
     );
+}
+
+/**
+ * ADR-007 R5. Lista as posições do médico (abertas e fechadas nas últimas 18h,
+ * nos dois domínios) e deixa pickDeparturePosition escolher onde a saída se
+ * aplica. Muta parsed.sector/baseCode como o roteamento PIAM faz.
+ */
+async function maybeRouteDepartureToDoctorPosition(
+    parsed: OperationalParsedEntry,
+    doctorId: string,
+    eventAt: Date,
+): Promise<{ applied: boolean; citedCode: string | null }> {
+    if (!parsed.isDeparture || !parsed.baseCode || (parsed.sector !== "REGULATION" && parsed.sector !== "INTERVENTION")) {
+        return { applied: false, citedCode: null };
+    }
+    const db = getDb();
+    const since = new Date(eventAt.getTime() - 36 * 60 * 60 * 1000);
+    const [reg, intv] = await Promise.all([
+        db.select({ code: regulationPosts.code, startedAt: regulationOccupancies.startedAt, endedAt: regulationOccupancies.endedAt })
+            .from(regulationOccupancies)
+            .innerJoin(regulationPosts, eq(regulationPosts.id, regulationOccupancies.postId))
+            .where(and(eq(regulationOccupancies.doctorId, doctorId), gte(regulationOccupancies.startedAt, since))),
+        db.select({ code: interventionBases.code, startedAt: interventionOccupancies.startedAt, endedAt: interventionOccupancies.endedAt })
+            .from(interventionOccupancies)
+            .innerJoin(interventionBases, eq(interventionBases.id, interventionOccupancies.baseId))
+            .where(and(eq(interventionOccupancies.doctorId, doctorId), gte(interventionOccupancies.startedAt, since))),
+    ]);
+    const positions: DoctorPosition[] = [
+        ...reg.map((r) => ({ sector: "REGULATION" as const, code: r.code, startedAt: r.startedAt, endedAt: r.endedAt })),
+        ...intv.map((r) => ({ sector: "INTERVENTION" as const, code: r.code, startedAt: r.startedAt, endedAt: r.endedAt })),
+    ];
+    const picked = pickDeparturePosition({
+        cited: { sector: parsed.sector, code: parsed.baseCode },
+        positions,
+        eventAt,
+    });
+    if (!picked.redirected) {
+        return { applied: false, citedCode: null };
+    }
+    const citedCode = parsed.baseCode;
+    parsed.sector = picked.sector;
+    parsed.baseCode = picked.code;
+    return { applied: true, citedCode };
 }
 
 async function maybeApplyPiamRouting(
