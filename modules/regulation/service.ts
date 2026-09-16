@@ -1007,7 +1007,9 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 await tx.update(regulationOccupancies)
                     .set({
                         endedAt: otherCloseAt,
-                        actualEndedAt: otherRamalOccupancy.actualEndedAt ?? otherCloseAt,
+                        // ADR-007 R2: mudança de posição não é saída. ended_at fecha a posição;
+                        // actual_ended_at fica nulo (só aviso do médico, chefe ou janela gravam saída).
+                        actualEndedAt: otherRamalOccupancy.actualEndedAt ?? null,
                         // O médico continua trabalhando, só em outro ramal: não é
                         // decisão do chefe. Nasce confirmado para não entrar na fila.
                         departureConfirmedAt: otherRamalOccupancy.departureConfirmedAt ?? otherCloseAt,
@@ -1047,7 +1049,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 await tx.update(interventionOccupancies)
                     .set({
                         endedAt: input.startedAt,
-                        actualEndedAt: otherInterventionOccupancy.actualEndedAt ?? input.startedAt,
+                        actualEndedAt: otherInterventionOccupancy.actualEndedAt ?? null,
                         departureConfirmedAt: otherInterventionOccupancy.departureConfirmedAt ?? input.startedAt,
                         departureConfirmedNote: otherInterventionOccupancy.departureConfirmedNote ?? "Saida por mudanca de posto/base: chegada registrada em outro alvo.",
                         updatedByUserId: input.createdByUserId ?? null,

@@ -912,7 +912,9 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 await tx.update(interventionOccupancies)
                     .set({
                         endedAt: otherCloseAt,
-                        actualEndedAt: otherCloseAt,
+                        // ADR-007 R2: mudança de posição não é saída. ended_at fecha a posição;
+                        // actual_ended_at fica nulo (só aviso do médico, chefe ou janela gravam saída).
+                        actualEndedAt: null,
                         // Mudança de base do próprio médico: nasce confirmado, não
                         // entra na fila do chefe (nada a decidir — ele segue no plantão).
                         departureConfirmedAt: otherBaseOccupancy.departureConfirmedAt ?? otherCloseAt,
@@ -975,7 +977,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 await tx.update(regulationOccupancies)
                     .set({
                         endedAt: input.startedAt,
-                        actualEndedAt: otherRegulationOccupancy.actualEndedAt ?? input.startedAt,
+                        actualEndedAt: otherRegulationOccupancy.actualEndedAt ?? null,
                         departureConfirmedAt: otherRegulationOccupancy.departureConfirmedAt ?? input.startedAt,
                         departureConfirmedNote: otherRegulationOccupancy.departureConfirmedNote ?? "Saida por mudanca de posto/base: chegada registrada em outro alvo.",
                         updatedByUserId: input.createdByUserId ?? null,
