@@ -598,7 +598,8 @@ async function closeOccupancyForTransferTx(tx: Executor, params: {
         await tx.update(regulationOccupancies)
             .set({
                 endedAt: params.closedAt,
-                actualEndedAt: params.closedAt,
+                // ADR-007 R2: remanejamento não é saída; actual_ended_at fica nulo.
+                actualEndedAt: null,
                 departureConfirmedAt: params.closedAt,
                 departureConfirmedByUserId: params.updatedByUserId ?? null,
                 departureConfirmedNote: "Saida por remanejamento administrativo.",
@@ -612,7 +613,7 @@ async function closeOccupancyForTransferTx(tx: Executor, params: {
     await tx.update(interventionOccupancies)
         .set({
             endedAt: params.closedAt,
-            actualEndedAt: params.closedAt,
+            actualEndedAt: null,
             departureConfirmedAt: params.closedAt,
             departureConfirmedByUserId: params.updatedByUserId ?? null,
             departureConfirmedNote: "Saida por remanejamento administrativo.",
