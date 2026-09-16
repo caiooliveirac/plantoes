@@ -800,14 +800,15 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
     const turnoPieces = [...board.regulation, ...board.intervention]
         .filter((other) => other.doctorId === row.doctorId && other.occupancyId)
         .map((other) => ({ occupancyId: other.occupancyId!, startedAt: other.startedAt, endedAt: other.endedAt }));
-    const turnoShadow = resolveTurnoOutcomeShadow({
+    // Meio plantão (11:30–17:00) tem 5h30 por desenho: fora da régua de turno.
+    const turnoShadow = isHalfShift ? null : resolveTurnoOutcomeShadow({
         row: { occupancyId: row.occupancyId, startedAt: row.startedAt, endedAt: row.endedAt, earlyDepartureOutcome: earlyOutcome },
         pieces: turnoPieces,
         slotStartAt: board.startedAt,
         slotEndAt: board.endedAt,
     });
-    const turnoShadowIssue = turnoShadow.divergence ? `[sombra ADR-007] ${turnoShadow.divergence}` : null;
-    if (turnoShadowIssue) {
+    const turnoShadowIssue = turnoShadow?.divergence ? `[sombra ADR-007] ${turnoShadow.divergence}` : null;
+    if (turnoShadow && turnoShadowIssue) {
         console.warn(`[turno-sombra] ${operationalDate} ${board.shiftLabel} ${row.doctorName} ${row.targetCode}: ${turnoShadow.divergence}`);
     }
 
