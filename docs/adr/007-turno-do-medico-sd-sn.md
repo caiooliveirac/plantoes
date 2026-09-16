@@ -1,7 +1,10 @@
 # ADR-007: O turno do médico (SD/SN) é a unidade; posição é detalhe
 
 ## Status
-Proposto (2026-09-15). Aguarda decisão sobre as três perguntas em aberto no fim.
+Aceito (2026-09-15). As três perguntas do fim foram decididas pelo usuário:
+(1) ao vencer a janela, presume-se só o tempo **posicionado**; (2) chegada
+antecipada no ramal errado é **posição do SD**; (3) ordem de entrega
+R2 → R5 → R1 → R3/R4 → R6 → R7, com R4 em sombra por um mês antes de valer.
 
 ## Contexto
 
@@ -136,7 +139,7 @@ forçam COI) seguem valendo no read-time.
   precisam agrupar por turno. Memória `punicao-banco-horas-tres-superficies`
   já registra que essas superfícies divergem; este ADR é a chance de alinhar.
 
-## Perguntas em aberto (decisão do usuário)
+## Perguntas decididas (2026-09-15)
 
 1. **Turno aberto por rendição no meio do turno, sem aviso e sem chefe: o que a
    janela presume ao vencer?** (a) presença até o fim da janela → paga inteiro;
