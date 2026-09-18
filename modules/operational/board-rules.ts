@@ -123,6 +123,34 @@ export function isSameTurnoOccupant(occupantAnchorAt: string | Date, arrivalAt: 
     return gapMs < SAME_TURNO_MAX_GAP_MS && isSameOperationalShiftArrival(occupantAnchorAt, arrivalAt);
 }
 
+// Início do turno de quem está chegando: chegada antecipada (até 3h antes da virada)
+// pertence ao PRÓXIMO turno.
+export function resolveArrivingShiftStartAt(arrivalAt: string | Date): Date {
+    const window = resolveOperationalShiftWindow(arrivalAt);
+    return resolveArrivalShiftLabel(arrivalAt) === window.shiftLabel ? window.startedAt : window.nextBoundaryAt;
+}
+
+// Quem chega NUNCA encerra um ocupante cuja cobertura ainda vale: mesmo turno, ou
+// plantão (P/continuidade) que segue além do início do turno de quem chega. Esses
+// viram DESLOCADOS após confirmação — seguem no plantão, fora do quadro, e são pagos.
+// Só é rendição (encerra) quem está no fim do turno anterior (SD às 18:50, SN às 07:13).
+const VIGENT_COVERAGE_MARGIN_MS = 30 * 60 * 1000;
+
+export function shouldDisplaceInsteadOfRelieve(params: {
+    occupantAnchorAt: string | Date;
+    occupantCoverageEndAt: string | Date | null;
+    arrivalAt: string | Date;
+}): boolean {
+    if (isSameTurnoOccupant(params.occupantAnchorAt, params.arrivalAt)) {
+        return true;
+    }
+    if (!params.occupantCoverageEndAt) {
+        return false;
+    }
+    const arrivingShiftStartMs = resolveArrivingShiftStartAt(params.arrivalAt).getTime();
+    return new Date(params.occupantCoverageEndAt).getTime() > arrivingShiftStartMs + VIGENT_COVERAGE_MARGIN_MS;
+}
+
 export function isBeforeCurrentOperationalShift(startedAt: string | Date | null, reference: string | Date) {
     if (!startedAt) {
         return false;

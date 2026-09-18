@@ -18,7 +18,8 @@
  *   - Removal cascades to bank-hours entries for that occupancy
  *   - actualEndedAt tracks the real departure; endedAt tracks scheduled handoff
  */
-import { and, asc, desc, eq, isNotNull, isNull, ne, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { CHIEF_ARRIVAL_ADMIN_ONLY_MESSAGE, shouldBlockChiefArrivalEdit } from "@/modules/operational/chief-arrival-guard";
 import { getDb } from "@/db";
 import {
     auditLogs,
@@ -1520,4 +1521,105 @@ export async function transferOperationalOccupancy(
     publishBoardUpdate(`operational:transfer:${sourceOccupancyId}`);
     await hookMealBreakAfterBoardChange({ actorUserId: updatedByUserId ?? null });
     return result;
+}
+
+// ── Correção de chegada num card que veio de troca de ramal ─────────────────────────
+// O quadro mostra, para quem trocou de posto no turno, a PRIMEIRA chegada do turno
+// (services/board.service.ts → turnoArrivalSql), que mora na ocupação de ORIGEM, já
+// fechada. Os formulários do quadro devolvem esse horário no PATCH da ocupação do
+// destino. Sem este desvio: (1) qualquer edição no card gravaria a chegada antiga na
+// linha do destino — reescrevendo o passado (caso Murilo/Sadja); (2) corrigir a
+// chegada pelo card não "pegava", porque o quadro seguia lendo a origem.
+// Regra: horário devolvido = eco → ignora; horário diferente → corrige a ORIGEM.
+export type TurnoArrivalEditOutcome =
+    | { kind: "not_a_move" }
+    | { kind: "echo" }
+    | { kind: "origin_corrected"; originDomain: "regulation" | "intervention"; originOccupancyId: string };
+
+export function classifyTurnoArrivalEdit(params: {
+    originStartedAt: Date | null;
+    requestedArrivalAt: Date | null;
+}): "not_a_move" | "echo" | "correct_origin" {
+    if (!params.originStartedAt || !params.requestedArrivalAt) {
+        return "not_a_move";
+    }
+    // Formulário trabalha em minutos: 06:49:44 volta como 06:49:00 — é eco, não correção.
+    const sameMinute = Math.floor(params.originStartedAt.getTime() / 60000) === Math.floor(params.requestedArrivalAt.getTime() / 60000);
+    return sameMinute ? "echo" : "correct_origin";
+}
+
+export async function redirectTurnoArrivalEdit(params: {
+    existing: { id: string; doctorId: string; continuityGroupId: string | null; shiftLabel: string | null; startedAt: Date };
+    requestedArrivalAt: Date | null;
+    notes: string | null;
+    updatedByUserId: string | null;
+    isAdmin: boolean;
+}): Promise<TurnoArrivalEditOutcome> {
+    if (!params.requestedArrivalAt || !params.existing.continuityGroupId) {
+        return { kind: "not_a_move" };
+    }
+    const db = getDb();
+    const result = await db.execute<{ id: string; domain: "regulation" | "intervention"; startedAt: string; hasBoard: boolean }>(sql`
+        select x.id, x.domain, x.started_at as "startedAt", x.has_board as "hasBoard" from (
+            select id, 'regulation' as domain, doctor_id, continuity_group_id, shift_label, started_at, board_started_at is not null as has_board
+            from operations_v2.regulation_occupancies
+            union all
+            select id, 'intervention', doctor_id, continuity_group_id, shift_label, started_at, board_started_at is not null
+            from operations_v2.intervention_occupancies
+        ) x
+        where x.doctor_id = ${params.existing.doctorId}::uuid
+          and x.continuity_group_id = ${params.existing.continuityGroupId}::uuid
+          and x.shift_label is not distinct from ${params.existing.shiftLabel}
+          and x.id <> ${params.existing.id}::uuid
+          and x.started_at < ${params.existing.startedAt.toISOString()}::timestamptz
+          and x.started_at > ${params.existing.startedAt.toISOString()}::timestamptz - interval '12 hours'
+        order by x.started_at asc
+    `);
+    const earlier = ((result as unknown as { rows?: unknown[] }).rows ?? result) as Array<{ id: string; domain: "regulation" | "intervention"; startedAt: string; hasBoard: boolean }>;
+    const origin = earlier[0] ?? null;
+    // Empate na primeira chegada (duas pernas corrigidas à mão para a mesma hora): todas
+    // seguram o mínimo que o quadro lê, então a correção precisa alcançar todas.
+    const origins = origin
+        ? earlier.filter((row) => new Date(row.startedAt).getTime() === new Date(origin.startedAt).getTime())
+        : [];
+
+    const verdict = classifyTurnoArrivalEdit({
+        originStartedAt: origin ? new Date(origin.startedAt) : null,
+        requestedArrivalAt: params.requestedArrivalAt,
+    });
+    if (verdict === "not_a_move" || !origin) {
+        return { kind: "not_a_move" };
+    }
+    if (verdict === "echo") {
+        return { kind: "echo" };
+    }
+    if (!params.notes?.trim()) {
+        throw new Error("Motivo obrigatorio ao corrigir horario de chegada.");
+    }
+    // A trava da chegada da chefia (2031, só admin) vale também quando a origem é o 2031.
+    if (origin.domain === "regulation") {
+        const [originPost] = await db
+            .select({ code: regulationPosts.code })
+            .from(regulationOccupancies)
+            .innerJoin(regulationPosts, eq(regulationPosts.id, regulationOccupancies.postId))
+            .where(eq(regulationOccupancies.id, origin.id));
+        if (originPost && shouldBlockChiefArrivalEdit({ postCode: originPost.code, isAdmin: params.isAdmin, arrivalChanged: true })) {
+            throw new Error(CHIEF_ARRIVAL_ADMIN_ONLY_MESSAGE);
+        }
+    }
+    for (const target of origins) {
+        const patch = {
+            startedAt: params.requestedArrivalAt,
+            ...(target.hasBoard ? { boardStartedAt: params.requestedArrivalAt } : {}),
+            notes: params.notes,
+            chiefConfirmed: true,
+            auditSource: "correcao de chegada pelo card do posto atual (troca de ramal no turno)",
+        };
+        if (target.domain === "regulation") {
+            await correctRegulationOccupancy(target.id, patch, params.updatedByUserId);
+        } else {
+            await correctInterventionOccupancy(target.id, patch, params.updatedByUserId);
+        }
+    }
+    return { kind: "origin_corrected", originDomain: origin.domain, originOccupancyId: origin.id };
 }

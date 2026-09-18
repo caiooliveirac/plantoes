@@ -59,7 +59,7 @@ import { buildEarlyDepartureSummary } from "@/modules/operational/early-departur
 import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
 import { pickDeparturePosition, type DoctorPosition } from "@/modules/telegram/departure-position";
 import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, isInterventionShadowOccupancyNotes, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
-import { getSaoPauloParts, isSameOperationalShiftArrival, isSameTurnoOccupant, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
+import { getSaoPauloParts, isSameOperationalShiftArrival, shouldDisplaceInsteadOfRelieve, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import {
     HALF_SHIFT_ROLE_LABEL,
@@ -834,6 +834,26 @@ export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
     }
 
     return true;
+}
+
+/** Turno novo (SD/SN) quando um "remanejo" acontece depois do fim do turno de origem; senão null. */
+export function resolveCrossTurnoMoveShift(params: {
+    isMove: boolean;
+    activeShiftLabel: string | null;
+    activeScheduledEndAt: Date | null;
+    eventAt: Date;
+}): "SD" | "SN" | null {
+    if (!params.isMove || !params.activeScheduledEndAt) {
+        return null;
+    }
+    if (params.activeShiftLabel !== "SD" && params.activeShiftLabel !== "SN") {
+        return null; // P segue P: remanejo dentro do plantão de 24h
+    }
+    if (params.eventAt.getTime() < params.activeScheduledEndAt.getTime()) {
+        return null;
+    }
+    const currentShift = resolveOperationalShiftWindow(params.eventAt).shiftLabel;
+    return currentShift !== params.activeShiftLabel && (currentShift === "SD" || currentShift === "SN") ? currentShift : null;
 }
 
 export function shouldLinkTelegramArrivalToContinuitySource(params: {
@@ -1852,7 +1872,7 @@ async function sendTelegramDepartureFailureReply(params: {
 async function findActiveBoardOccupantOnTarget(params: {
     sector: "REGULATION" | "INTERVENTION";
     targetCode: string;
-}): Promise<{ doctorName: string; sinceTime: string } | null> {
+}): Promise<{ occupancyId: string; doctorId: string; isShadow: boolean; doctorName: string; sinceTime: string } | null> {
     const db = getDb();
     if (params.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({ where: eq(regulationPosts.code, params.targetCode) });
@@ -1872,6 +1892,9 @@ async function findActiveBoardOccupantOnTarget(params: {
         }
         const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
         return {
+            occupancyId: occ.id,
+            doctorId: occ.doctorId,
+            isShadow: isRegulationShadowOccupancyNotes(occ.notes),
             doctorName: resolveTelegramDoctorSurfaceName(doc),
             sinceTime: formatTelegramReplyTime(occ.boardStartedAt ?? occ.startedAt),
         };
@@ -1893,6 +1916,9 @@ async function findActiveBoardOccupantOnTarget(params: {
     }
     const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
     return {
+        occupancyId: occ.id,
+        doctorId: occ.doctorId,
+        isShadow: isInterventionShadowOccupancyNotes(occ.notes),
         doctorName: resolveTelegramDoctorSurfaceName(doc),
         sinceTime: formatTelegramReplyTime(occ.boardStartedAt ?? occ.startedAt),
     };
@@ -2087,6 +2113,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new
     shiftLabel: string | null;
     continuityGroupId: string | null;
     boardStartedAt: Date | null;
+    scheduledEndAt: Date | null;
 } | null> {
     const db = getDb();
     const coverageFloor = resolveActiveOccupancyCoverageFloor(referenceAt);
@@ -2099,6 +2126,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new
             shiftLabel: regulationOccupancies.shiftLabel,
             continuityGroupId: regulationOccupancies.continuityGroupId,
             boardStartedAt: regulationOccupancies.boardStartedAt,
+            scheduledEndAt: regulationOccupancies.scheduledEndAt,
         })
         .from(regulationOccupancies)
         .where(and(
@@ -2120,6 +2148,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new
                 shiftLabel: regOcc[0].shiftLabel,
                 continuityGroupId: regOcc[0].continuityGroupId,
                 boardStartedAt: regOcc[0].boardStartedAt,
+                scheduledEndAt: regOcc[0].scheduledEndAt,
             };
         }
     }
@@ -2132,6 +2161,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new
             shiftLabel: interventionOccupancies.shiftLabel,
             continuityGroupId: interventionOccupancies.continuityGroupId,
             boardStartedAt: interventionOccupancies.boardStartedAt,
+            scheduledEndAt: interventionOccupancies.scheduledEndAt,
         })
         .from(interventionOccupancies)
         .where(and(
@@ -2153,6 +2183,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new
                 shiftLabel: intOcc[0].shiftLabel,
                 continuityGroupId: intOcc[0].continuityGroupId,
                 boardStartedAt: intOcc[0].boardStartedAt,
+                scheduledEndAt: intOcc[0].scheduledEndAt,
             };
         }
     }
@@ -8862,11 +8893,11 @@ export function isExpiredReassignmentConflict(coverageEndAt: Date | null, eventA
 // Ocupante que veio do turno ANTERIOR (ex.: SN ainda aberto às 07:05, com
 // scheduledEndAt 07:15) é rendição normal, não conflito, como na chegada comum. Sem isso
 // o remanejo na virada ficava barrado até o noturno declarar saída.
-export function isPreviousShiftReassignmentConflict(occupantAnchorAt: Date, eventAt: Date) {
-    // Só o rótulo do turno de chegada: comparar com o início da janela trataria o SD
-    // que chegou 06:50 como "turno anterior". Ocupante velho de mesmo rótulo (P/SD de
-    // ontem) cai na régua de cobertura vencida acima.
-    return !isSameTurnoOccupant(occupantAnchorAt, eventAt);
+export function isPreviousShiftReassignmentConflict(occupantAnchorAt: Date, eventAt: Date, coverageEndAt: Date | null = null) {
+    // Rende só quem está no FIM do turno anterior. P/continuidade com cobertura que
+    // segue além do turno de quem chega NÃO é rendido por remanejo (era o furo que
+    // encerrava um plantão de 24h às 19:20 e derrubava o pagamento do noturno dele).
+    return !shouldDisplaceInsteadOfRelieve({ occupantAnchorAt, occupantCoverageEndAt: coverageEndAt, arrivalAt: eventAt });
 }
 
 const REASSIGNMENT_TARGET_OCCUPIED_PREFIX = "Encontrei *";
@@ -8943,7 +8974,7 @@ async function handleTelegramReassignment(params: {
             const occupantDoc = await db.query.doctors.findFirst({ where: eq(doctors.id, targetConflict.doctorId) });
             const occupantName = resolveTelegramDoctorSurfaceName(occupantDoc);
             if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)
-                && !isPreviousShiftReassignmentConflict(targetConflict.boardStartedAt ?? targetConflict.startedAt, eventAt)) {
+                && !isPreviousShiftReassignmentConflict(targetConflict.boardStartedAt ?? targetConflict.startedAt, eventAt, coverageEndAt)) {
                 throw new Error(buildReassignmentTargetOccupiedMessage({ occupantName, targetLabel: targetCode }));
             }
             // Cobertura vencida: rendição automática. endRegulationOccupancy capa o
@@ -8975,7 +9006,7 @@ async function handleTelegramReassignment(params: {
             const occupantDoc = await db.query.doctors.findFirst({ where: eq(doctors.id, targetConflict.doctorId) });
             const occupantName = resolveTelegramDoctorSurfaceName(occupantDoc);
             if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)
-                && !isPreviousShiftReassignmentConflict(targetConflict.boardStartedAt ?? targetConflict.startedAt, eventAt)) {
+                && !isPreviousShiftReassignmentConflict(targetConflict.boardStartedAt ?? targetConflict.startedAt, eventAt, coverageEndAt)) {
                 throw new Error(buildReassignmentTargetOccupiedMessage({ occupantName, targetLabel: targetCode }));
             }
             // Cobertura vencida: rendição automática, fechando no fim da cobertura do
@@ -9148,7 +9179,7 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         // do turno anterior (started_at antes da janela) é rendição normal, não tomada.
         // Também não é tomada quando a chegada é para o PRÓXIMO turno (relevo de fim de
         // plantão ~17h/05h): o ocupante do turno que acaba é rendido normalmente.
-        if (!isSameTurnoOccupant(occupancyAnchorAt, params.eventAt)) {
+        if (!shouldDisplaceInsteadOfRelieve({ occupantAnchorAt: occupancyAnchorAt, occupantCoverageEndAt: resolveReassignmentConflictCoverageEndAt(occ), arrivalAt: params.eventAt })) {
             return null;
         }
         const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
@@ -9183,7 +9214,7 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         return null;
     }
     const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
-    if (!isSameTurnoOccupant(occupancyAnchorAt, params.eventAt)) {
+    if (!shouldDisplaceInsteadOfRelieve({ occupantAnchorAt: occupancyAnchorAt, occupantCoverageEndAt: resolveReassignmentConflictCoverageEndAt(occ), arrivalAt: params.eventAt })) {
         return null;
     }
     const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
@@ -9466,6 +9497,24 @@ async function applyParsedEntry(params: {
         activeBaseCode: activeOcc?.baseCode,
         activeShiftLabel: activeOcc?.shiftLabel,
     });
+
+    // Remanejo só existe DENTRO do turno. Depois que o SD/SN de origem acabou (o plantão
+    // aberto segue "ativo" por 3h de folga), ir para outro posto é o turno SEGUINTE do
+    // médico: vira chegada com o turno atual, que cai no caminho de continuidade de
+    // todo dia ("Fulano CC70 SN"). Antes o remanejo clonava rótulo e janela do SD para
+    // o trabalho noturno — beltrano da CZ50 que ia à noite para a CC70 não tinha SN.
+    const crossTurnoShift = resolveCrossTurnoMoveShift({
+        isMove: Boolean(parsed.isReassignment || implicitReassignment),
+        activeShiftLabel: activeOcc?.shiftLabel ?? null,
+        activeScheduledEndAt: activeOcc?.scheduledEndAt ?? null,
+        eventAt,
+    });
+    if (crossTurnoShift) {
+        return applyParsedEntry({
+            ...params,
+            parsed: { ...parsed, isReassignment: false, shiftType: crossTurnoShift },
+        });
+    }
 
     // Handle reassignment as a special case (end source + start target)
     if (parsed.isReassignment || implicitReassignment) {
@@ -14305,6 +14354,20 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                         targetLabel: firstParsed.baseCode,
                         sinceTime: formatTelegramReplyTime(occupant.startedAt),
                     };
+                }
+            }
+
+            // Chegada retroativa (hora da 1ª tentativa): o ocupante do turno anterior NÃO
+            // pode ser encerrado nessa hora passada — ele estava lá. Desloca (fora do
+            // quadro, plantão aberto); a saída dele vem do próprio aviso ou da chefia.
+            if (takeoverWantsBoard && !takeoverDisplaced && firstParsed.baseCode && eventAt.getTime() < messageEventAt.getTime()) {
+                const previous = await findActiveBoardOccupantOnTarget({ sector: firstParsed.sector, targetCode: firstParsed.baseCode });
+                if (previous && !previous.isShadow && previous.doctorId !== resolvedDoctor.id) {
+                    const displace = firstParsed.sector === "REGULATION" ? displaceRegulationOccupant : displaceInterventionOccupant;
+                    await displace(previous.occupancyId, {
+                        displacedAt: messageEventAt,
+                        takenByDoctorName: resolveTelegramDoctorSurfaceName(resolvedDoctor),
+                    });
                 }
             }
 
