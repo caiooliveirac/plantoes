@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
     formatTelegramErrorForUser,
+    isTelegramTechnicalErrorMessage,
     isTelegramUserFacingError,
     resolveTelegramErrorText,
     TELEGRAM_GENERIC_ERROR_TEXT,
@@ -34,7 +35,7 @@ test("formatTelegramErrorForUser: técnico conhecido é traduzido", () => {
 });
 
 test("formatTelegramErrorForUser: erro de negócio pt da allowlist passa direto", () => {
-    const business = "Medico nao tem ocupacao ativa para remanejar. Registre a chegada normalmente.";
+    const business = "Ramal de destino nao encontrado.";
     assert.equal(formatTelegramErrorForUser(business), business);
     const activation = "Este ramal ja esta desativado.";
     assert.equal(formatTelegramErrorForUser(activation), activation);
@@ -74,4 +75,32 @@ test("resolveTelegramErrorText: TelegramUserFacingError passa direto, Error cru 
     // Não-Error (throw de string/objeto) também degrada para a mensagem fixa.
     assert.equal(resolveTelegramErrorText("boom"), TELEGRAM_GENERIC_ERROR_TEXT);
     assert.equal(resolveTelegramErrorText(undefined), TELEGRAM_GENERIC_ERROR_TEXT);
+});
+
+// Levantamento de 90 dias em prod (18/09/2026): cada erro real que caía no genérico
+// (ou saía sem acento / com vocabulário do site) ganha texto próprio com ação.
+test("erros reais de prod ganham texto proprio; so o tecnico aciona o admin", () => {
+    const negocio = [
+        "Medico nao tem ocupacao ativa para remanejar. Registre a chegada normalmente.",
+        "Continuacao caiu numa janela de turno ja encerrada — registro nao efetivado, avise a regulacao.",
+        "Medico ja esta em 1366. Nao e necessario remanejar.",
+        "O destino IT30 ja esta ocupado. Escolha se a chefia vai retirar ou remanejar quem esta la.",
+        "A base BR05 esta desativada e nao pode receber remanejamento agora.",
+        "Base ja rendida por outro medico apos a sua saida — continuidade nao registrada. Se for engano, procure a chefia.",
+        "Telegram API sendMessage: Too Many Requests: retry after 27",
+    ];
+    for (const raw of negocio) {
+        const text = formatTelegramErrorForUser(raw);
+        assert.notEqual(text, TELEGRAM_GENERIC_ERROR_TEXT, raw);
+        assert.notEqual(text, raw, raw);
+        assert.equal(isTelegramTechnicalErrorMessage(raw), false, raw);
+    }
+    assert.match(formatTelegramErrorForUser("Medico ja esta em 1366. Nao e necessario remanejar."), /já está em 1366/);
+    assert.match(formatTelegramErrorForUser("A base BR05 esta desativada e nao pode receber remanejamento agora."), /\/ativar BR05/);
+
+    for (const raw of ["db_update_failed", "Failed query: update x\nparams: 1", "Cannot read properties of undefined"]) {
+        assert.equal(isTelegramTechnicalErrorMessage(raw), true, raw);
+        assert.ok(!formatTelegramErrorForUser(raw).includes(raw.slice(0, 12)), "cru não vaza");
+    }
+    assert.match(formatTelegramErrorForUser("db_update_failed"), /banco recusou/);
 });

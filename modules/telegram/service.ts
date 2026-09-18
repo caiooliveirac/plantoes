@@ -222,6 +222,7 @@ import type { TelegramCallbackQuery, TelegramFormatOptions, TelegramUpdate } fro
 import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, escapeTelegramMarkdown, getBotUsername, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
 import {
     formatTelegramErrorForUser,
+    isTelegramTechnicalErrorMessage,
     resolveTelegramErrorText,
     TelegramUserFacingError,
 } from "@/modules/telegram/errors";
@@ -1763,6 +1764,22 @@ function formatDepartureCorrectionCandidateSummary(candidate: TelegramDepartureC
     return `${candidate.targetCode} | ${domainLabel}${shiftLabel} | chegada ${startedAt} | saída ${endedLabel}`;
 }
 
+// Erro que o médico não resolve sozinho (desconhecido/banco): o grupo recebe o texto
+// curto e o detalhe cru vai para o privado dos admins — ninguém fica reenviando no
+// escuro sem que alguém saiba. Erro de negócio conhecido não alerta.
+async function alertAdminsOnOperationalTechnicalError(
+    action: "chegada" | "saída",
+    parsed: Pick<OperationalParsedEntry, "baseCode">,
+    errorMessage: string,
+) {
+    if (!isTelegramTechnicalErrorMessage(errorMessage)) {
+        return "";
+    }
+    const detail = (errorMessage.split(/\r?\n/, 1)[0] ?? errorMessage).slice(0, 300);
+    await sendPrivateAdminAlert(`⚠️ Falha técnica numa ${action} (${parsed.baseCode ?? "sem alvo"}): ${detail}`);
+    return " O admin já foi avisado.";
+}
+
 async function sendTelegramDepartureFailureReply(params: {
     chatId: number;
     replyToMessageId: number;
@@ -1793,6 +1810,13 @@ async function sendTelegramDepartureFailureReply(params: {
     }
 
     if (!kind) {
+        // Antes: silêncio total — o médico reenviava a saída no escuro.
+        const adminNotice = await alertAdminsOnOperationalTechnicalError("saída", params.parsed, params.errorMessage);
+        await sendMessage(
+            params.chatId,
+            `⚠️ Não consegui registrar essa saída. ${formatTelegramErrorForUser(params.errorMessage)}${adminNotice}`,
+            params.replyToMessageId,
+        );
         return;
     }
 
@@ -1899,6 +1923,8 @@ async function sendTelegramArrivalFailureReply(params: {
         }
     }
 
+    const adminNotice = await alertAdminsOnOperationalTechnicalError("chegada", params.parsed, params.errorMessage);
+
     const userMessage = buildTelegramArrivalConflictMessage({
         parsed: params.parsed,
         errorMessage: params.errorMessage,
@@ -1908,7 +1934,7 @@ async function sendTelegramArrivalFailureReply(params: {
 
     await sendMessage(
         params.chatId,
-        userMessage,
+        `${userMessage}${adminNotice}`,
         params.replyToMessageId,
         undefined,
         { parseMode: "Markdown" },
@@ -1928,6 +1954,10 @@ export function buildTelegramArrivalConflictMessage(params: {
     occupant?: { name: string; sinceTime: string } | null;
     senderIsPrivileged?: boolean;
 }): string {
+    if (params.errorMessage.startsWith(REASSIGNMENT_TARGET_OCCUPIED_PREFIX)) {
+        // Já escrita para o usuário, com Markdown nosso (nome escapado no builder).
+        return `⚠️ Não consegui registrar essa chegada. ${params.errorMessage}`;
+    }
     if (params.errorMessage !== "arrival_conflicts_with_active_occupancy") {
         return `⚠️ Não consegui registrar essa chegada. ${escapeTelegramMarkdown(formatTelegramErrorForUser(params.errorMessage))}`;
     }
@@ -8815,13 +8845,26 @@ export function isExpiredReassignmentConflict(coverageEndAt: Date | null, eventA
     return Boolean(coverageEndAt && coverageEndAt.getTime() <= eventAt.getTime());
 }
 
+// Ocupante que veio do turno ANTERIOR (ex.: SN ainda aberto às 07:05, com
+// scheduledEndAt 07:15) é rendição normal, não conflito, como na chegada comum. Sem isso
+// o remanejo na virada ficava barrado até o noturno declarar saída.
+export function isPreviousShiftReassignmentConflict(occupantAnchorAt: Date, eventAt: Date) {
+    // Só o rótulo do turno de chegada: comparar com o início da janela trataria o SD
+    // que chegou 06:50 como "turno anterior". Ocupante velho de mesmo rótulo (P/SD de
+    // ontem) cai na régua de cobertura vencida acima.
+    return !isSameOperationalShiftArrival(occupantAnchorAt, eventAt);
+}
+
+const REASSIGNMENT_TARGET_OCCUPIED_PREFIX = "Encontrei *";
+
 // Mensagem curta para conflito real (ocupante com cobertura vigente). Vai atrás do
 // prefixo "Não consegui registrar essa chegada." em sendTelegramArrivalFailureReply.
 export function buildReassignmentTargetOccupiedMessage(params: {
     occupantName: string;
     targetLabel: string;
 }) {
-    return `Encontrei *${params.occupantName}* em *${params.targetLabel}*. Se essa pessoa já saiu, declare a saída dela (ex.: \`${params.occupantName} saiu ${params.targetLabel}\`) e depois reenvie sua chegada.`;
+    const occupantName = escapeTelegramMarkdown(params.occupantName);
+    return `${REASSIGNMENT_TARGET_OCCUPIED_PREFIX}${occupantName}* em *${params.targetLabel}*. Se essa pessoa já saiu, declare a saída dela (ex.: \`${params.occupantName} saiu ${params.targetLabel}\`) e depois reenvie sua chegada.`;
 }
 
 async function handleTelegramReassignment(params: {
@@ -8885,7 +8928,8 @@ async function handleTelegramReassignment(params: {
             const coverageEndAt = resolveReassignmentConflictCoverageEndAt(targetConflict);
             const occupantDoc = await db.query.doctors.findFirst({ where: eq(doctors.id, targetConflict.doctorId) });
             const occupantName = resolveTelegramDoctorSurfaceName(occupantDoc);
-            if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)) {
+            if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)
+                && !isPreviousShiftReassignmentConflict(targetConflict.boardStartedAt ?? targetConflict.startedAt, eventAt)) {
                 throw new Error(buildReassignmentTargetOccupiedMessage({ occupantName, targetLabel: targetCode }));
             }
             // Cobertura vencida: rendição automática. endRegulationOccupancy capa o
@@ -8916,7 +8960,8 @@ async function handleTelegramReassignment(params: {
             const coverageEndAt = resolveReassignmentConflictCoverageEndAt(targetConflict);
             const occupantDoc = await db.query.doctors.findFirst({ where: eq(doctors.id, targetConflict.doctorId) });
             const occupantName = resolveTelegramDoctorSurfaceName(occupantDoc);
-            if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)) {
+            if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)
+                && !isPreviousShiftReassignmentConflict(targetConflict.boardStartedAt ?? targetConflict.startedAt, eventAt)) {
                 throw new Error(buildReassignmentTargetOccupiedMessage({ occupantName, targetLabel: targetCode }));
             }
             // Cobertura vencida: rendição automática, fechando no fim da cobertura do

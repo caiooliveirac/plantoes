@@ -33,9 +33,18 @@ export function isTelegramUserFacingError(error: unknown): error is TelegramUser
         );
 }
 
-/** Mensagem curta fixa para erro desconhecido (o técnico fica só no log). */
+/**
+ * Último recurso para erro desconhecido (o técnico fica só no log + privado do admin).
+ * Diz o que o médico precisa saber: nada foi gravado, a culpa não é da mensagem dele,
+ * e qual é a saída se repetir. Chegada/saída acrescentam "o admin já foi avisado"
+ * (só lá o alerta privado é de fato enviado).
+ */
 export const TELEGRAM_GENERIC_ERROR_TEXT =
-    "Algo falhou do meu lado — o detalhe técnico ficou registrado. Tente de novo em instantes; se repetir, chame a chefia.";
+    "Falha interna minha — sua mensagem estava certa, mas nada foi gravado. Reenvie em 1 minuto; se repetir, peça à chefia para lançar pelo painel.";
+
+/** Banco recusou a gravação (Drizzle "Failed query" / sentinela db_update_failed). */
+export const TELEGRAM_DB_FAILURE_TEXT =
+    "O banco recusou a gravação — nada foi registrado e o problema não é a sua mensagem. Não adianta reenviar em sequência: peça à chefia para lançar pelo painel.";
 
 // Mensagens técnicas conhecidas → pt-BR com ação.
 const TELEGRAM_TECHNICAL_ERROR_TRANSLATIONS: Record<string, string> = {
@@ -64,7 +73,39 @@ const TELEGRAM_TECHNICAL_ERROR_TRANSLATIONS: Record<string, string> = {
     "Board end cannot be before the recorded arrival.":
         "O horário final ficou antes da chegada registrada. Confira os horários e reenvie.",
     telegram_processing_failed: TELEGRAM_GENERIC_ERROR_TEXT,
+    db_update_failed: TELEGRAM_DB_FAILURE_TEXT,
+    // Erros de negócio legados sem acento / com vocabulário do site — reescritos para o chat.
+    "Medico nao tem ocupacao ativa para remanejar. Registre a chegada normalmente.":
+        "Não achei plantão ativo seu para remanejar. Registre como chegada normal (ex.: Nome 2153 SD).",
+    "So ocupacoes ativas podem ser remanejadas.":
+        "O plantão de origem já foi encerrado — registre como chegada normal em vez de remanejamento.",
+    "Continuacao caiu numa janela de turno ja encerrada — registro nao efetivado, avise a regulacao.":
+        "Essa continuação caiu num turno que já acabou — não registrei. Se você segue no plantão, envie uma chegada nova com o turno atual.",
+    "Base ja rendida por outro medico apos a sua saida — continuidade nao registrada. Se for engano, procure a chefia.":
+        "Depois da sua saída outro médico já assumiu essa base — não registrei a continuidade. Se for engano, procure a chefia.",
+    "Ramal ja rendido por outro medico apos a sua saida — continuidade nao registrada. Se for engano, procure a chefia.":
+        "Depois da sua saída outro médico já assumiu esse ramal — não registrei a continuidade. Se for engano, procure a chefia.",
 };
+
+// Mensagens com interpolação: padrão → texto para o chat ($1 = código do ramal/base).
+const TELEGRAM_ERROR_PATTERN_TRANSLATIONS: Array<[RegExp, string]> = [
+    [/^Failed query:/, TELEGRAM_DB_FAILURE_TEXT],
+    [/^Medico ja esta em (\S+)\. Nao e necessario remanejar\.$/, "Você já está em $1 — não há o que remanejar."],
+    [
+        /^(?:O ramal|A base) (\S+) esta desativad[oa] e nao pode receber remanejamento agora\.$/,
+        "$1 consta como desativado no quadro. Peça à chefia para reativar (/ativar $1) e reenvie.",
+    ],
+    [
+        /^O destino (\S+) ja esta ocupado\. Escolha se a chefia vai retirar ou remanejar quem esta la\.$/,
+        "$1 está ocupado. Se quem está lá já saiu, declare a saída dessa pessoa e reenvie; senão, a chefia decide quem fica.",
+    ],
+    [
+        /^O ramal (\S+) ja esta ocupado\. Encerre ou mova a cobertura atual antes de reutilizar este posto\.$/,
+        "$1 está ocupado. Se quem está lá já saiu, declare a saída dessa pessoa e reenvie; senão, a chefia decide quem fica.",
+    ],
+    // Falha do próprio Telegram ao responder: o registro pode TER sido gravado.
+    [/^Telegram API /, "O Telegram recusou minha resposta. Confira no quadro se o registro entrou antes de reenviar."],
+];
 
 // Erros de negócio legados (Error cru, pt) que JÁ são user-facing — passam direto.
 const TELEGRAM_USER_FACING_MESSAGE_ALLOWLIST = new Set<string>([
@@ -109,7 +150,26 @@ export function translateTelegramErrorMessage(errorMessage: string | null | unde
     if (!trimmed) {
         return null;
     }
-    return TELEGRAM_TECHNICAL_ERROR_TRANSLATIONS[trimmed] ?? null;
+    const exact = TELEGRAM_TECHNICAL_ERROR_TRANSLATIONS[trimmed];
+    if (exact) {
+        return exact;
+    }
+    for (const [pattern, replacement] of TELEGRAM_ERROR_PATTERN_TRANSLATIONS) {
+        const match = trimmed.match(pattern);
+        if (match) {
+            return replacement.replaceAll("$1", match[1] ?? "");
+        }
+    }
+    return null;
+}
+
+/**
+ * Erro TÉCNICO = o médico não tem como resolver sozinho (desconhecido, banco,
+ * Telegram). É o gatilho do alerta no privado do admin.
+ */
+export function isTelegramTechnicalErrorMessage(errorMessage: string | null | undefined): boolean {
+    const text = formatTelegramErrorForUser(errorMessage);
+    return text === TELEGRAM_GENERIC_ERROR_TEXT || text === TELEGRAM_DB_FAILURE_TEXT;
 }
 
 function isAllowlistedUserFacingMessage(message: string) {
