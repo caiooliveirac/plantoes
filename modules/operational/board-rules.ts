@@ -112,6 +112,17 @@ export function isSameOperationalShiftArrival(occupantStartedAt: string | Date, 
     return resolveArrivalShiftLabel(occupantStartedAt) === resolveArrivalShiftLabel(arrivalAt);
 }
 
+// "Mesmo turno" entre quem ocupa e quem chega: mesmo rótulo de chegada E menos de um
+// turno de distância. Não compara com o início da janela — quem chegou 06:50 para o SD
+// é do MESMO turno de quem chega 07:10 (antes era tratado como turno anterior e
+// rendido/fechado sem confirmação). O teto de 13h separa o SD de ontem do SD de hoje.
+const SAME_TURNO_MAX_GAP_MS = 13 * 60 * 60 * 1000;
+
+export function isSameTurnoOccupant(occupantAnchorAt: string | Date, arrivalAt: string | Date): boolean {
+    const gapMs = new Date(arrivalAt).getTime() - new Date(occupantAnchorAt).getTime();
+    return gapMs < SAME_TURNO_MAX_GAP_MS && isSameOperationalShiftArrival(occupantAnchorAt, arrivalAt);
+}
+
 export function isBeforeCurrentOperationalShift(startedAt: string | Date | null, reference: string | Date) {
     if (!startedAt) {
         return false;

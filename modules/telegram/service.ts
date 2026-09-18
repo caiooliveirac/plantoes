@@ -59,7 +59,7 @@ import { buildEarlyDepartureSummary } from "@/modules/operational/early-departur
 import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
 import { pickDeparturePosition, type DoctorPosition } from "@/modules/telegram/departure-position";
 import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, isInterventionShadowOccupancyNotes, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
-import { getSaoPauloParts, isSameOperationalShiftArrival, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
+import { getSaoPauloParts, isSameOperationalShiftArrival, isSameTurnoOccupant, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import {
     HALF_SHIFT_ROLE_LABEL,
@@ -8852,7 +8852,7 @@ export function isPreviousShiftReassignmentConflict(occupantAnchorAt: Date, even
     // Só o rótulo do turno de chegada: comparar com o início da janela trataria o SD
     // que chegou 06:50 como "turno anterior". Ocupante velho de mesmo rótulo (P/SD de
     // ontem) cai na régua de cobertura vencida acima.
-    return !isSameOperationalShiftArrival(occupantAnchorAt, eventAt);
+    return !isSameTurnoOccupant(occupantAnchorAt, eventAt);
 }
 
 const REASSIGNMENT_TARGET_OCCUPIED_PREFIX = "Encontrei *";
@@ -8864,7 +8864,7 @@ export function buildReassignmentTargetOccupiedMessage(params: {
     targetLabel: string;
 }) {
     const occupantName = escapeTelegramMarkdown(params.occupantName);
-    return `${REASSIGNMENT_TARGET_OCCUPIED_PREFIX}${occupantName}* em *${params.targetLabel}*. Se essa pessoa já saiu, declare a saída dela (ex.: \`${params.occupantName} saiu ${params.targetLabel}\`) e depois reenvie sua chegada.`;
+    return `${REASSIGNMENT_TARGET_OCCUPIED_PREFIX}${occupantName}* em *${params.targetLabel}*. Se essa pessoa já saiu, declare a saída dela (ex.: \`${params.occupantName} saiu ${params.targetLabel}\`); se ela só mudou de lugar, peça para ela avisar o novo posto. Depois reenvie sua chegada.`;
 }
 
 async function handleTelegramReassignment(params: {
@@ -9101,8 +9101,6 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
     excludeDoctorId: string;
 }): Promise<{ occupancyId: string; doctorId: string; doctorName: string; startedAt: Date; shiftLabel: string | null } | null> {
     const db = getDb();
-    const windowStart = resolveOperationalShiftWindow(params.eventAt).startedAt;
-
     if (params.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({
             where: eq(regulationPosts.code, params.targetCode),
@@ -9136,8 +9134,7 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         // do turno anterior (started_at antes da janela) é rendição normal, não tomada.
         // Também não é tomada quando a chegada é para o PRÓXIMO turno (relevo de fim de
         // plantão ~17h/05h): o ocupante do turno que acaba é rendido normalmente.
-        if (occupancyAnchorAt.getTime() < windowStart.getTime()
-            || !isSameOperationalShiftArrival(occupancyAnchorAt, params.eventAt)) {
+        if (!isSameTurnoOccupant(occupancyAnchorAt, params.eventAt)) {
             return null;
         }
         const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
@@ -9172,8 +9169,7 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         return null;
     }
     const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
-    if (occupancyAnchorAt.getTime() < windowStart.getTime()
-        || !isSameOperationalShiftArrival(occupancyAnchorAt, params.eventAt)) {
+    if (!isSameTurnoOccupant(occupancyAnchorAt, params.eventAt)) {
         return null;
     }
     const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
@@ -9279,6 +9275,44 @@ async function respondUnknownDestination(params: {
         { parseMode: "Markdown" },
     );
     return { ok: true, ignored: true };
+}
+
+// Primeira tentativa vale: se a chegada deu erro do bot (ou ficou pendente de confirmar
+// tomada) e só passou num reenvio, a hora de chegada é a da PRIMEIRA mensagem — é ela
+// que ordena prioridade de refeição/saída e mede atraso. Mesmo remetente, mesmo médico,
+// mesmo turno, até 2h antes. Só para chegada sem HH:mm explícito.
+const FIRST_ARRIVAL_ATTEMPT_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+export function pickFirstArrivalAttemptAt(attemptsAt: Date[], eventAt: Date): Date {
+    const earliest = attemptsAt
+        .filter((at) => at.getTime() < eventAt.getTime()
+            && eventAt.getTime() - at.getTime() <= FIRST_ARRIVAL_ATTEMPT_WINDOW_MS
+            && isSameOperationalShiftArrival(at, eventAt))
+        .sort((left, right) => left.getTime() - right.getTime())[0];
+    return earliest ?? eventAt;
+}
+
+async function resolveFirstArrivalAttemptAt(params: {
+    chatId: string;
+    senderTelegramId: string;
+    doctorFullName: string;
+    targetCode: string;
+    eventAt: Date;
+}): Promise<Date> {
+    const db = getDb();
+    const rows = await db.query.telegramIngestedMessages.findMany({
+        columns: { createdAt: true },
+        where: and(
+            eq(telegramIngestedMessages.chatId, params.chatId),
+            eq(telegramIngestedMessages.senderTelegramId, params.senderTelegramId),
+            eq(telegramIngestedMessages.parsedDoctorName, params.doctorFullName),
+            eq(telegramIngestedMessages.parsedTargetCode, params.targetCode),
+            eq(telegramIngestedMessages.parsedAction, "arrival"),
+            inArray(telegramIngestedMessages.status, ["error", "pending_takeover_confirmation"]),
+            gte(telegramIngestedMessages.createdAt, new Date(params.eventAt.getTime() - FIRST_ARRIVAL_ATTEMPT_WINDOW_MS)),
+        ),
+    });
+    return pickFirstArrivalAttemptAt(rows.map((row) => row.createdAt), params.eventAt);
 }
 
 async function findPendingTakeoverConfirmation(chatId: string, senderTelegramId: string) {
@@ -14159,7 +14193,16 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
 
             const messageReferenceAt = new Date(message.date * 1000);
             const isGenuineArrival = !firstParsed.isDeparture && !firstParsed.isContinuation && !firstParsed.isReassignment;
-            const eventAt = resolveArrivalEventTimeForPhase(messageReferenceAt, firstParsed.arrivalTime, isGenuineArrival);
+            const messageEventAt = resolveArrivalEventTimeForPhase(messageReferenceAt, firstParsed.arrivalTime, isGenuineArrival);
+            const eventAt = isGenuineArrival && !firstParsed.arrivalTime && firstParsed.baseCode && message.from?.id
+                ? await resolveFirstArrivalAttemptAt({
+                    chatId: String(message.chat.id),
+                    senderTelegramId: String(message.from.id),
+                    doctorFullName: resolvedDoctor.fullName,
+                    targetCode: firstParsed.baseCode,
+                    eventAt: messageEventAt,
+                })
+                : messageEventAt;
 
             // Tomada de ramal/base ocupado no mesmo turno: avisa quem ocupa e exige
             // reenvio EXATO para confirmar. Só então desloca o ocupante (preservando a
