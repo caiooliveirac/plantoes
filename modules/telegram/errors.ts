@@ -44,7 +44,7 @@ export const TELEGRAM_GENERIC_ERROR_TEXT =
 
 /** Banco recusou a gravação (Drizzle "Failed query" / sentinela db_update_failed). */
 export const TELEGRAM_DB_FAILURE_TEXT =
-    "O banco recusou a gravação — nada foi registrado e o problema não é a sua mensagem. Não adianta reenviar em sequência: peça à chefia para lançar pelo painel.";
+    "O banco recusou a gravação — nada foi registrado e o problema não é a sua mensagem. Reenvie UMA vez daqui a 1 minuto; se falhar de novo, não insista: peça à chefia para lançar pelo painel.";
 
 // Mensagens técnicas conhecidas → pt-BR com ação.
 const TELEGRAM_TECHNICAL_ERROR_TRANSLATIONS: Record<string, string> = {

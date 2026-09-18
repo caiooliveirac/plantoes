@@ -1767,6 +1767,9 @@ function formatDepartureCorrectionCandidateSummary(candidate: TelegramDepartureC
 // Erro que o médico não resolve sozinho (desconhecido/banco): o grupo recebe o texto
 // curto e o detalhe cru vai para o privado dos admins — ninguém fica reenviando no
 // escuro sem que alguém saiba. Erro de negócio conhecido não alerta.
+const TECHNICAL_ALERT_THROTTLE_MS = 10 * 60 * 1000;
+const technicalAlertLastSentAt = new Map<string, number>();
+
 async function alertAdminsOnOperationalTechnicalError(
     action: "chegada" | "saída",
     parsed: Pick<OperationalParsedEntry, "baseCode">,
@@ -1776,6 +1779,17 @@ async function alertAdminsOnOperationalTechnicalError(
         return "";
     }
     const detail = (errorMessage.split(/\r?\n/, 1)[0] ?? errorMessage).slice(0, 300);
+    // Incidente tipo 15/09 (32 chegadas falhando em minutos) viraria 32 alertas por
+    // admin e empurraria o bot para o rate limit do Telegram — justo quando ele mais
+    // precisa responder. Um alerta por erro a cada 10 min; o resto fica no log.
+    // ponytail: memória do processo (zera no restart, 1 instância PM2); se o webhook
+    // escalar para N processos, trocar por telegramBotNotices.noticeKey.
+    const nowMs = Date.now();
+    const lastAlertAt = technicalAlertLastSentAt.get(detail) ?? 0;
+    if (nowMs - lastAlertAt < TECHNICAL_ALERT_THROTTLE_MS) {
+        return " O admin já foi avisado.";
+    }
+    technicalAlertLastSentAt.set(detail, nowMs);
     await sendPrivateAdminAlert(`⚠️ Falha técnica numa ${action} (${parsed.baseCode ?? "sem alvo"}): ${detail}`);
     return " O admin já foi avisado.";
 }
