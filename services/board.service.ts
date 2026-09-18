@@ -1706,6 +1706,8 @@ function comparePreviousEntries(left: PreviousOperationalEntry, right: PreviousO
 // refeição e de saída e mede atraso; sem isso quem troca de ramal às 07:26 tendo
 // chegado 06:49 perdia a vez. Mesmo médico + mesmo grupo de continuidade + mesmo
 // rótulo de turno (continuação SD→SN tem rótulo diferente e não recua a chegada).
+// Vale para startedAt E boardStartedAt: card e prioridade de refeição leem
+// `boardStartedAt ?? startedAt`. Board nulo (sombra/deslocado) continua nulo.
 function turnoArrivalSql(alias: "ro" | "io") {
   const o = sql.raw(alias);
   return sql`(
@@ -1775,8 +1777,7 @@ export async function listRegulationBoard() {
       case when ro.id is not null or lr.post_code is not null then coalesce(d.full_name, lr.doctor_name) else null end as "doctorName",
       case when ro.id is not null or lr.post_code is not null then coalesce(d.display_name, lr.display_name) else null end as "displayName",
       case when ro.id is not null or lr.post_code is not null then coalesce(${turnoArrivalSql("ro")}, ro.started_at, lr.started_at) else null end as "startedAt",
-      ro.started_at as "targetStartedAt",
-      case when ro.id is not null or lr.post_code is not null then coalesce(ro.board_started_at, lr.board_started_at) else null end as "boardStartedAt",
+      case when ro.id is not null or lr.post_code is not null then coalesce(case when ro.board_started_at is null then null else least(ro.board_started_at, ${turnoArrivalSql("ro")}) end, lr.board_started_at) else null end as "boardStartedAt",
       case when ro.id is not null or lr.post_code is not null then coalesce(ro.scheduled_end_at, lr.scheduled_end_at) else null end as "scheduledEndAt",
       case when ro.id is not null or lr.post_code is not null then ro.shift_label else null end as "shiftLabel",
       case
@@ -1918,9 +1919,8 @@ export async function listInterventionBoard() {
       case when io.id is not null or li.base_code is not null then coalesce(d.full_name, li.doctor_name) else null end as "doctorName",
       case when io.id is not null or li.base_code is not null then coalesce(d.display_name, li.display_name) else null end as "displayName",
       case when io.id is not null or li.base_code is not null then coalesce(${turnoArrivalSql("io")}, io.started_at, li.started_at) else null end as "startedAt",
-      io.started_at as "targetStartedAt",
       case when io.id is not null or li.base_code is not null then io.scheduled_start_at else null end as "scheduledStartAt",
-      case when io.id is not null or li.base_code is not null then coalesce(io.board_started_at, li.board_started_at) else null end as "boardStartedAt",
+      case when io.id is not null or li.base_code is not null then coalesce(case when io.board_started_at is null then null else least(io.board_started_at, ${turnoArrivalSql("io")}) end, li.board_started_at) else null end as "boardStartedAt",
       case when io.id is not null or li.base_code is not null then coalesce(io.scheduled_end_at, li.scheduled_end_at) else null end as "scheduledEndAt",
       case when io.id is not null or li.base_code is not null then io.shift_label else null end as "shiftLabel",
       case
