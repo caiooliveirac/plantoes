@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
     buildReassignmentTargetOccupiedMessage,
+    buildTelegramArrivalConflictMessage,
     isExpiredReassignmentConflict,
+    isPreviousShiftReassignmentConflict,
     resolveReassignmentConflictCoverageEndAt,
 } from "@/modules/telegram/service";
 
@@ -70,4 +72,22 @@ test("mensagem de destino ocupado nomeia o ocupante e ensina a declarar a saida"
     assert.match(message, /Helmira Rafaela/);
     assert.match(message, /2032/);
     assert.match(message, /declare a sa[íi]da/i);
+});
+
+// Incidente 18/09/2026: Caio (SD) remanejando 2152 -> 2153 às 07:13 foi barrado pelo
+// SN da véspera (scheduledEndAt 07:15) e o chat recebeu o erro genérico.
+test("SN da vespera nao barra remanejo na virada; mesmo turno continua barrando", () => {
+    const eventAt = new Date("2026-09-18T07:13:05-03:00");
+    assert.equal(isPreviousShiftReassignmentConflict(new Date("2026-09-17T18:41:36-03:00"), eventAt), true);
+    assert.equal(isPreviousShiftReassignmentConflict(new Date("2026-09-18T07:05:00-03:00"), eventAt), false);
+    assert.equal(isPreviousShiftReassignmentConflict(new Date("2026-09-18T06:50:00-03:00"), eventAt), false);
+});
+
+test("destino ocupado chega ao chat com o ocupante, nunca o erro generico", () => {
+    const text = buildTelegramArrivalConflictMessage({
+        parsed: { baseCode: "2153", isDeparture: false, isContinuation: false },
+        errorMessage: buildReassignmentTargetOccupiedMessage({ occupantName: "José Roberto", targetLabel: "2153" }),
+    });
+    assert.match(text, /Encontrei \*José Roberto\* em \*2153\*/);
+    assert.doesNotMatch(text, /do meu lado/);
 });

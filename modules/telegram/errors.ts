@@ -101,6 +101,7 @@ const TELEGRAM_USER_FACING_MESSAGE_ALLOWLIST = new Set<string>([
 const TELEGRAM_USER_FACING_MESSAGE_PREFIXES = [
     "Ja existe outro medico ativo com o nome ",
     "Nao encontrei um plantao ",
+    "Medico ja esta em ",
 ];
 
 /** Tradução exata de uma mensagem técnica conhecida, ou null. */
