@@ -222,6 +222,7 @@ import type { TelegramCallbackQuery, TelegramFormatOptions, TelegramUpdate } fro
 import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, escapeTelegramMarkdown, getBotUsername, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
 import {
     formatTelegramErrorForUser,
+    isTelegramTechnicalErrorMessage,
     resolveTelegramErrorText,
     TelegramUserFacingError,
 } from "@/modules/telegram/errors";
@@ -1763,6 +1764,22 @@ function formatDepartureCorrectionCandidateSummary(candidate: TelegramDepartureC
     return `${candidate.targetCode} | ${domainLabel}${shiftLabel} | chegada ${startedAt} | saída ${endedLabel}`;
 }
 
+// Erro que o médico não resolve sozinho (desconhecido/banco): o grupo recebe o texto
+// curto e o detalhe cru vai para o privado dos admins — ninguém fica reenviando no
+// escuro sem que alguém saiba. Erro de negócio conhecido não alerta.
+async function alertAdminsOnOperationalTechnicalError(
+    action: "chegada" | "saída",
+    parsed: Pick<OperationalParsedEntry, "baseCode">,
+    errorMessage: string,
+) {
+    if (!isTelegramTechnicalErrorMessage(errorMessage)) {
+        return "";
+    }
+    const detail = (errorMessage.split(/\r?\n/, 1)[0] ?? errorMessage).slice(0, 300);
+    await sendPrivateAdminAlert(`⚠️ Falha técnica numa ${action} (${parsed.baseCode ?? "sem alvo"}): ${detail}`);
+    return " O admin já foi avisado.";
+}
+
 async function sendTelegramDepartureFailureReply(params: {
     chatId: number;
     replyToMessageId: number;
@@ -1793,6 +1810,13 @@ async function sendTelegramDepartureFailureReply(params: {
     }
 
     if (!kind) {
+        // Antes: silêncio total — o médico reenviava a saída no escuro.
+        const adminNotice = await alertAdminsOnOperationalTechnicalError("saída", params.parsed, params.errorMessage);
+        await sendMessage(
+            params.chatId,
+            `⚠️ Não consegui registrar essa saída. ${formatTelegramErrorForUser(params.errorMessage)}${adminNotice}`,
+            params.replyToMessageId,
+        );
         return;
     }
 
@@ -1899,6 +1923,8 @@ async function sendTelegramArrivalFailureReply(params: {
         }
     }
 
+    const adminNotice = await alertAdminsOnOperationalTechnicalError("chegada", params.parsed, params.errorMessage);
+
     const userMessage = buildTelegramArrivalConflictMessage({
         parsed: params.parsed,
         errorMessage: params.errorMessage,
@@ -1908,7 +1934,7 @@ async function sendTelegramArrivalFailureReply(params: {
 
     await sendMessage(
         params.chatId,
-        userMessage,
+        `${userMessage}${adminNotice}`,
         params.replyToMessageId,
         undefined,
         { parseMode: "Markdown" },

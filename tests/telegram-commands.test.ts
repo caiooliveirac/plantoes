@@ -3804,7 +3804,7 @@ test("buildTelegramArrivalConflictMessage traduz erro técnico conhecido e não 
         errorMessage: 'insert into "operations_v2" violates constraint xyz',
     });
     assert.ok(!desconhecido.includes("violates constraint"), "erro desconhecido vira mensagem fixa");
-    assert.match(desconhecido, /detalhe técnico ficou registrado/);
+    assert.match(desconhecido, /Falha interna minha/);
 });
 
 test("buildForcedTakeoverHint retorna aviso 🔁 com nome do médico deslocado", () => {
