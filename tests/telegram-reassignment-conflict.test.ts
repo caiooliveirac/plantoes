@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isSameTurnoOccupant } from "@/modules/operational/board-rules";
+import { classifyTurnoArrivalEdit } from "@/modules/operational/corrections";
+
+import { isSameTurnoOccupant, shouldDisplaceInsteadOfRelieve } from "@/modules/operational/board-rules";
 import {
     buildReassignmentTargetOccupiedMessage,
     buildTelegramArrivalConflictMessage,
     isExpiredReassignmentConflict,
     isPreviousShiftReassignmentConflict,
     pickFirstArrivalAttemptAt,
+    resolveCrossTurnoMoveShift,
     resolveReassignmentConflictCoverageEndAt,
 } from "@/modules/telegram/service";
 
@@ -98,17 +101,71 @@ test("destino ocupado chega ao chat com o ocupante, nunca o erro generico", () =
 // Quem chegou 06:49 para o SD é do MESMO turno de quem chega 07:26: tomada pede
 // confirmação e o ocupante vira deslocado — nunca é rendido/fechado por troca de ramal.
 test("mesmo turno nao depende do inicio da janela; SD de ontem nao e o SD de hoje", () => {
-    const at = (iso: string) => new Date(iso);
     assert.equal(isSameTurnoOccupant(at("2026-09-18T06:49:44-03:00"), at("2026-09-18T07:26:22-03:00")), true);
     assert.equal(isSameTurnoOccupant(at("2026-09-17T18:41:00-03:00"), at("2026-09-18T07:13:00-03:00")), false);
     assert.equal(isSameTurnoOccupant(at("2026-09-17T07:20:00-03:00"), at("2026-09-18T07:10:00-03:00")), false);
 });
 
 test("hora da chegada e a da primeira tentativa: mesmo turno, ate 2h", () => {
-    const at = (iso: string) => new Date(iso);
     const eventAt = at("2026-09-18T07:20:00-03:00");
     assert.deepEqual(pickFirstArrivalAttemptAt([at("2026-09-18T07:10:00-03:00"), at("2026-09-18T07:05:00-03:00")], eventAt), at("2026-09-18T07:05:00-03:00"));
     // fora da janela de 2h, ou nenhuma tentativa: vale a hora da mensagem que passou
     assert.deepEqual(pickFirstArrivalAttemptAt([at("2026-09-18T05:10:00-03:00")], eventAt), eventAt);
     assert.deepEqual(pickFirstArrivalAttemptAt([], eventAt), eventAt);
+});
+
+const at = (iso: string) => new Date(iso);
+
+// Quem chega nunca ENCERRA cobertura vigente: desloca (segue no plantão, é pago).
+test("P vigente e mesmo turno sao deslocados; fim do turno anterior e rendicao", () => {
+    // P de 24h que começou 07:10 (cobre até 07:15 de amanhã), SN chega/é remanejado 19:20
+    assert.equal(shouldDisplaceInsteadOfRelieve({
+        occupantAnchorAt: at("2026-09-18T07:10:00-03:00"),
+        occupantCoverageEndAt: at("2026-09-19T07:15:00-03:00"),
+        arrivalAt: at("2026-09-18T19:20:00-03:00"),
+    }), true);
+    // SD (até 19:15) rendido pelo SN que chega cedo 17:30 ou 19:05
+    for (const arrival of ["2026-09-18T17:30:00-03:00", "2026-09-18T19:05:00-03:00"]) {
+        assert.equal(shouldDisplaceInsteadOfRelieve({
+            occupantAnchorAt: at("2026-09-18T07:05:00-03:00"),
+            occupantCoverageEndAt: at("2026-09-18T19:15:00-03:00"),
+            arrivalAt: at(arrival),
+        }), false, arrival);
+    }
+    // SN (até 07:15) rendido pelo SD das 07:13 — o incidente de hoje
+    assert.equal(shouldDisplaceInsteadOfRelieve({
+        occupantAnchorAt: at("2026-09-17T18:41:00-03:00"),
+        occupantCoverageEndAt: at("2026-09-18T07:15:00-03:00"),
+        arrivalAt: at("2026-09-18T07:13:00-03:00"),
+    }), false);
+    // P fantasma (cobertura vencida) segue sendo rendido
+    assert.equal(shouldDisplaceInsteadOfRelieve({
+        occupantAnchorAt: at("2026-09-17T07:20:00-03:00"),
+        occupantCoverageEndAt: at("2026-09-18T07:15:00-03:00"),
+        arrivalAt: at("2026-09-18T07:40:00-03:00"),
+    }), false);
+});
+
+// Beltrano (SD na CZ50) vai à noite para a CC70: é SN novo, não clone do SD.
+test("remanejo depois do fim do turno de origem vira chegada do turno seguinte", () => {
+    const sdEnd = at("2026-09-18T19:15:00-03:00");
+    const move = (eventAt: string, label = "SD") => resolveCrossTurnoMoveShift({
+        isMove: true, activeShiftLabel: label, activeScheduledEndAt: sdEnd, eventAt: at(eventAt),
+    });
+    assert.equal(move("2026-09-18T19:20:00-03:00"), "SN");
+    assert.equal(move("2026-09-18T21:50:00-03:00"), "SN");
+    assert.equal(move("2026-09-18T15:00:00-03:00"), null); // troca de ramal dentro do SD
+    assert.equal(move("2026-09-18T19:05:00-03:00"), null); // ainda dentro da janela do SD
+    assert.equal(move("2026-09-18T19:20:00-03:00", "P"), null); // P segue P
+    assert.equal(resolveCrossTurnoMoveShift({ isMove: false, activeShiftLabel: "SD", activeScheduledEndAt: sdEnd, eventAt: at("2026-09-18T19:20:00-03:00") }), null);
+});
+
+// Card de quem trocou de ramal devolve a chegada do turno: eco não grava nada no
+// destino (senão qualquer edição reescrevia o livro); horário novo corrige a ORIGEM.
+test("edicao de chegada em card movido: eco ignora, mudanca real vai para a origem", () => {
+    const origin = at("2026-09-18T06:49:44-03:00");
+    assert.equal(classifyTurnoArrivalEdit({ originStartedAt: origin, requestedArrivalAt: at("2026-09-18T06:49:44-03:00") }), "echo");
+    assert.equal(classifyTurnoArrivalEdit({ originStartedAt: origin, requestedArrivalAt: at("2026-09-18T06:49:00-03:00") }), "echo");
+    assert.equal(classifyTurnoArrivalEdit({ originStartedAt: origin, requestedArrivalAt: at("2026-09-18T06:55:00-03:00") }), "correct_origin");
+    assert.equal(classifyTurnoArrivalEdit({ originStartedAt: null, requestedArrivalAt: at("2026-09-18T06:55:00-03:00") }), "not_a_move");
 });

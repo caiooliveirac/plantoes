@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { correctRegulationOccupancy, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
+import { correctRegulationOccupancy, redirectTurnoArrivalEdit, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { avisarSecretario } from "@/lib/avisos/secretario";
 import {
     buildChiefArrivalBlockNotice,
@@ -124,6 +124,25 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
             }
 
             requestedPostId = requestedPost.id;
+        }
+
+        // Card de quem trocou de ramal devolve a chegada do TURNO (da ocupação de origem):
+        // eco é ignorado; correção de verdade vai para a origem. Nunca grava no destino.
+        const requestedArrivalIso = parsed.data.startedAt ?? parsed.data.boardStartedAt ?? null;
+        const turnoArrivalEdit = await redirectTurnoArrivalEdit({
+            existing,
+            requestedArrivalAt: requestedArrivalIso ? new Date(requestedArrivalIso) : null,
+            notes: parsed.data.notes ?? null,
+            updatedByUserId: session.user.id,
+            isAdmin: session.user.roles.includes("admin"),
+        });
+        if (turnoArrivalEdit.kind !== "not_a_move") {
+            delete parsed.data.startedAt;
+            delete parsed.data.boardStartedAt;
+            // A correção da origem já levou o motivo; não duplica a nota no destino.
+            if (turnoArrivalEdit.kind === "origin_corrected") {
+                delete parsed.data.notes;
+            }
         }
 
         const nextStartedAt = parsed.data.startedAt ? new Date(parsed.data.startedAt) : null;
