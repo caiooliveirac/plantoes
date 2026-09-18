@@ -1559,12 +1559,12 @@ export async function redirectTurnoArrivalEdit(params: {
         return { kind: "not_a_move" };
     }
     const db = getDb();
-    const result = await db.execute<{ id: string; domain: "regulation" | "intervention"; startedAt: string; hasBoard: boolean }>(sql`
-        select x.id, x.domain, x.started_at as "startedAt", x.has_board as "hasBoard" from (
-            select id, 'regulation' as domain, doctor_id, continuity_group_id, shift_label, started_at, board_started_at is not null as has_board
+    const result = await db.execute<{ id: string; domain: "regulation" | "intervention"; startedAt: string; hasBoard: boolean; notes: string | null }>(sql`
+        select x.id, x.domain, x.started_at as "startedAt", x.has_board as "hasBoard", x.notes from (
+            select id, 'regulation' as domain, doctor_id, continuity_group_id, shift_label, started_at, board_started_at is not null as has_board, notes
             from operations_v2.regulation_occupancies
             union all
-            select id, 'intervention', doctor_id, continuity_group_id, shift_label, started_at, board_started_at is not null
+            select id, 'intervention', doctor_id, continuity_group_id, shift_label, started_at, board_started_at is not null, notes
             from operations_v2.intervention_occupancies
         ) x
         where x.doctor_id = ${params.existing.doctorId}::uuid
@@ -1575,7 +1575,7 @@ export async function redirectTurnoArrivalEdit(params: {
           and x.started_at > ${params.existing.startedAt.toISOString()}::timestamptz - interval '12 hours'
         order by x.started_at asc
     `);
-    const earlier = ((result as unknown as { rows?: unknown[] }).rows ?? result) as Array<{ id: string; domain: "regulation" | "intervention"; startedAt: string; hasBoard: boolean }>;
+    const earlier = ((result as unknown as { rows?: unknown[] }).rows ?? result) as Array<{ id: string; domain: "regulation" | "intervention"; startedAt: string; hasBoard: boolean; notes: string | null }>;
     const origin = earlier[0] ?? null;
     // Empate na primeira chegada (duas pernas corrigidas à mão para a mesma hora): todas
     // seguram o mínimo que o quadro lê, então a correção precisa alcançar todas.
@@ -1611,7 +1611,9 @@ export async function redirectTurnoArrivalEdit(params: {
         const patch = {
             startedAt: params.requestedArrivalAt,
             ...(target.hasBoard ? { boardStartedAt: params.requestedArrivalAt } : {}),
-            notes: params.notes,
+            // A correção SUBSTITUI as notas: preserva as da origem (mensagem original,
+            // marcadores) e acrescenta o motivo.
+            notes: mergeOperationalNotes(target.notes, `[correcao de chegada pelo quadro] ${params.notes.trim()}`),
             chiefConfirmed: true,
             auditSource: "correcao de chegada pelo card do posto atual (troca de ramal no turno)",
         };

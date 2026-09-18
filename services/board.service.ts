@@ -1708,13 +1708,18 @@ function comparePreviousEntries(left: PreviousOperationalEntry, right: PreviousO
 // rótulo de turno (continuação SD→SN tem rótulo diferente e não recua a chegada).
 // Vale para startedAt E boardStartedAt: card e prioridade de refeição leem
 // `boardStartedAt ?? startedAt`. Board nulo (sombra/deslocado) continua nulo.
-function turnoArrivalSql(alias: "ro" | "io") {
+// withBoardAnchor: para o boardStartedAt considera também a âncora de quadro das pernas
+// anteriores — quem continuou SD→SN (âncora 07:05 da manhã) e troca de ramal às 21:00
+// segue com 07:05 no quadro, não com a hora da continuação. O primeiro horário
+// declarado vale sempre, inclusive o do plantão anterior.
+function turnoArrivalSql(alias: "ro" | "io", withBoardAnchor = false) {
   const o = sql.raw(alias);
+  const value = withBoardAnchor ? sql.raw("least(x.started_at, x.board_started_at)") : sql.raw("x.started_at");
   return sql`(
-    select min(x.started_at) from (
-      select doctor_id, continuity_group_id, shift_label, started_at from operations_v2.regulation_occupancies
+    select min(${value}) from (
+      select doctor_id, continuity_group_id, shift_label, started_at, board_started_at from operations_v2.regulation_occupancies
       union all
-      select doctor_id, continuity_group_id, shift_label, started_at from operations_v2.intervention_occupancies
+      select doctor_id, continuity_group_id, shift_label, started_at, board_started_at from operations_v2.intervention_occupancies
     ) x
     where x.doctor_id = ${o}.doctor_id
       and x.continuity_group_id = ${o}.continuity_group_id
@@ -1777,7 +1782,7 @@ export async function listRegulationBoard() {
       case when ro.id is not null or lr.post_code is not null then coalesce(d.full_name, lr.doctor_name) else null end as "doctorName",
       case when ro.id is not null or lr.post_code is not null then coalesce(d.display_name, lr.display_name) else null end as "displayName",
       case when ro.id is not null or lr.post_code is not null then coalesce(${turnoArrivalSql("ro")}, ro.started_at, lr.started_at) else null end as "startedAt",
-      case when ro.id is not null or lr.post_code is not null then coalesce(case when ro.board_started_at is null then null else least(ro.board_started_at, ${turnoArrivalSql("ro")}) end, lr.board_started_at) else null end as "boardStartedAt",
+      case when ro.id is not null or lr.post_code is not null then coalesce(case when ro.board_started_at is null then null else least(ro.board_started_at, ${turnoArrivalSql("ro", true)}) end, lr.board_started_at) else null end as "boardStartedAt",
       case when ro.id is not null or lr.post_code is not null then coalesce(ro.scheduled_end_at, lr.scheduled_end_at) else null end as "scheduledEndAt",
       case when ro.id is not null or lr.post_code is not null then ro.shift_label else null end as "shiftLabel",
       case
@@ -1920,7 +1925,7 @@ export async function listInterventionBoard() {
       case when io.id is not null or li.base_code is not null then coalesce(d.display_name, li.display_name) else null end as "displayName",
       case when io.id is not null or li.base_code is not null then coalesce(${turnoArrivalSql("io")}, io.started_at, li.started_at) else null end as "startedAt",
       case when io.id is not null or li.base_code is not null then io.scheduled_start_at else null end as "scheduledStartAt",
-      case when io.id is not null or li.base_code is not null then coalesce(case when io.board_started_at is null then null else least(io.board_started_at, ${turnoArrivalSql("io")}) end, li.board_started_at) else null end as "boardStartedAt",
+      case when io.id is not null or li.base_code is not null then coalesce(case when io.board_started_at is null then null else least(io.board_started_at, ${turnoArrivalSql("io", true)}) end, li.board_started_at) else null end as "boardStartedAt",
       case when io.id is not null or li.base_code is not null then coalesce(io.scheduled_end_at, li.scheduled_end_at) else null end as "scheduledEndAt",
       case when io.id is not null or li.base_code is not null then io.shift_label else null end as "shiftLabel",
       case
