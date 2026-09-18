@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+
+import { isSameTurnoOccupant } from "@/modules/operational/board-rules";
 import {
     buildReassignmentTargetOccupiedMessage,
     buildTelegramArrivalConflictMessage,
     isExpiredReassignmentConflict,
     isPreviousShiftReassignmentConflict,
+    pickFirstArrivalAttemptAt,
     resolveReassignmentConflictCoverageEndAt,
 } from "@/modules/telegram/service";
 
@@ -90,4 +93,22 @@ test("destino ocupado chega ao chat com o ocupante, nunca o erro generico", () =
     });
     assert.match(text, /Encontrei \*José Roberto\* em \*2153\*/);
     assert.doesNotMatch(text, /do meu lado/);
+});
+
+// Quem chegou 06:49 para o SD é do MESMO turno de quem chega 07:26: tomada pede
+// confirmação e o ocupante vira deslocado — nunca é rendido/fechado por troca de ramal.
+test("mesmo turno nao depende do inicio da janela; SD de ontem nao e o SD de hoje", () => {
+    const at = (iso: string) => new Date(iso);
+    assert.equal(isSameTurnoOccupant(at("2026-09-18T06:49:44-03:00"), at("2026-09-18T07:26:22-03:00")), true);
+    assert.equal(isSameTurnoOccupant(at("2026-09-17T18:41:00-03:00"), at("2026-09-18T07:13:00-03:00")), false);
+    assert.equal(isSameTurnoOccupant(at("2026-09-17T07:20:00-03:00"), at("2026-09-18T07:10:00-03:00")), false);
+});
+
+test("hora da chegada e a da primeira tentativa: mesmo turno, ate 2h", () => {
+    const at = (iso: string) => new Date(iso);
+    const eventAt = at("2026-09-18T07:20:00-03:00");
+    assert.deepEqual(pickFirstArrivalAttemptAt([at("2026-09-18T07:10:00-03:00"), at("2026-09-18T07:05:00-03:00")], eventAt), at("2026-09-18T07:05:00-03:00"));
+    // fora da janela de 2h, ou nenhuma tentativa: vale a hora da mensagem que passou
+    assert.deepEqual(pickFirstArrivalAttemptAt([at("2026-09-18T05:10:00-03:00")], eventAt), eventAt);
+    assert.deepEqual(pickFirstArrivalAttemptAt([], eventAt), eventAt);
 });
