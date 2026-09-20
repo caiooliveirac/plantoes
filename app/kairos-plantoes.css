@@ -268,6 +268,10 @@
     background: var(--ambar-50);
 }
 
+.pagina-kairos button.ops-doctor-line.companion.clickable:hover {
+    background: var(--azul-50);
+}
+
 .pagina-kairos .chief-shadow-toggle .chief-shadow-toggle__label strong {
     color: var(--azul-dado);
 }

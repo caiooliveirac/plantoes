@@ -366,6 +366,23 @@ export function resolveImplicitOccupancyExpiry(startedAt: string | Date | null, 
     return resolveFirstVerificationBoundary(startedAt);
 }
 
+// Fim de cobertura de quem ocupa um posto/base: scheduledEndAt quando existe, senão a
+// expiração implícita do turno (SD/SN = próxima virada; P = 07:00 do dia seguinte).
+export function resolveOccupantCoverageEndAt(params: {
+    startedAt: Date;
+    boardStartedAt: Date | null;
+    scheduledEndAt: Date | null;
+    shiftLabel: string | null;
+}): Date | null {
+    if (params.scheduledEndAt) {
+        return params.scheduledEndAt;
+    }
+    const shiftLabel: OccupancyShiftLabel = params.shiftLabel === "P" || params.shiftLabel === "SD" || params.shiftLabel === "SN"
+        ? params.shiftLabel
+        : null;
+    return resolveImplicitOccupancyExpiry(params.boardStartedAt ?? params.startedAt, shiftLabel);
+}
+
 function resolveInterventionVerificationBoundary(
     startedAt: string | Date | null,
     reference: string | Date,

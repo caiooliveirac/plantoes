@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { inArray } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { auditLogs } from "@/db/schema";
+import { auditLogs, doctors } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { transferOperationalOccupancy } from "@/modules/operational/corrections";
+import { describeOperationalError, transferOperationalOccupancy } from "@/modules/operational/corrections";
+import { avisarDeslocamento } from "@/modules/operational/displacement-alert";
 import { avisarRemanejamentoQuadro } from "@/modules/operational/reassignment-alert";
 
 function serializeOccupancySnapshot(snapshot: {
@@ -57,7 +59,7 @@ const schema = z.object({
     notes: z.string().trim().min(8).max(2000),
     asShadow: z.boolean().optional().nullable(),
     conflictResolution: z.object({
-        strategy: z.enum(["remove_destination", "move_destination"]),
+        strategy: z.enum(["remove_destination", "move_destination", "share_destination", "displace_destination"]),
         relocationTarget: targetSchema.optional().nullable(),
     }).optional().nullable(),
 });
@@ -127,9 +129,21 @@ export async function POST(request: NextRequest) {
                         : null,
                     relocationTarget: transfer.displaced.relocationTarget,
                 } : null,
+                displacedInPlace: transfer.displacedInPlace,
+                sharedWithDoctorId: transfer.sharedWithDoctorId,
                 sourceContinuityGroupId: transfer.sourceContinuityGroupId,
             },
         });
+
+        // Quem foi deslocado pelo quadro precisa saber que saiu dele (mesmo aviso
+        // da tomada pelo bot). Fail-soft e fire-and-forget.
+        if (transfer.displacedInPlace) {
+            void avisarDeslocadoPeloQuadro({
+                displacedDoctorId: transfer.displacedInPlace.doctorId,
+                takenByDoctorId: transfer.movedSnapshot.doctorId,
+                destination: { domain: transfer.destination.domain, code: transfer.destination.code },
+            });
+        }
 
         // Remanejamento pelo quadro não passa pelo bot — sem estes avisos o
         // médico muda de base sem receber a chave do checklist do destino.
@@ -156,8 +170,33 @@ export async function POST(request: NextRequest) {
     } catch (error) {
         console.error("[operational/transfers] transfer failed", error);
         return NextResponse.json(
-            { error: error instanceof Error ? error.message : "Nao foi possivel remanejar a ocupacao operacional." },
+            { error: describeOperationalError(error, "Nao foi possivel remanejar agora. Atualize a tela e tente de novo; se persistir, avise o suporte.") },
             { status: 400 },
         );
+    }
+}
+
+async function avisarDeslocadoPeloQuadro(params: {
+    displacedDoctorId: string;
+    takenByDoctorId: string;
+    destination: { domain: "regulation" | "intervention"; code: string };
+}) {
+    try {
+        const rows = await getDb().query.doctors.findMany({
+            where: inArray(doctors.id, [params.displacedDoctorId, params.takenByDoctorId]),
+            columns: { id: true, fullName: true, displayName: true },
+        });
+        const nameOf = (id: string) => {
+            const doctor = rows.find((row) => row.id === id);
+            return doctor?.displayName?.trim() || doctor?.fullName?.trim() || null;
+        };
+        await avisarDeslocamento({
+            doctorName: nameOf(params.displacedDoctorId) ?? "Médico não identificado",
+            targetCode: params.destination.code,
+            takenByDoctorName: nameOf(params.takenByDoctorId),
+            domain: params.destination.domain,
+        });
+    } catch (error) {
+        console.error("[operational/transfers] aviso de deslocamento falhou", error);
     }
 }

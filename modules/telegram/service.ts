@@ -58,8 +58,8 @@ import { isStoredEarlyDepartureOutcome } from "@/modules/operational/early-depar
 import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
 import { pickDeparturePosition, type DoctorPosition } from "@/modules/telegram/departure-position";
-import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, isInterventionShadowOccupancyNotes, reactivateInterventionBase, startInterventionOccupancy } from "@/modules/intervention/service";
-import { getSaoPauloParts, isSameOperationalShiftArrival, shouldDisplaceInsteadOfRelieve, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
+import { continueInterventionOccupancy, deactivateInterventionBase, displaceInterventionOccupant, endInterventionOccupancy, isInterventionCompanionOccupancyNotes, isInterventionShadowOccupancyNotes, reactivateInterventionBase, shouldJoinInterventionBaseAsCompanion, startInterventionOccupancy } from "@/modules/intervention/service";
+import { getSaoPauloParts, isSameOperationalShiftArrival, shouldDisplaceInsteadOfRelieve, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import {
     HALF_SHIFT_ROLE_LABEL,
@@ -1872,7 +1872,15 @@ async function sendTelegramDepartureFailureReply(params: {
 async function findActiveBoardOccupantOnTarget(params: {
     sector: "REGULATION" | "INTERVENTION";
     targetCode: string;
-}): Promise<{ occupancyId: string; doctorId: string; isShadow: boolean; doctorName: string; sinceTime: string } | null> {
+}): Promise<{
+    occupancyId: string;
+    doctorId: string;
+    isShadow: boolean;
+    doctorName: string;
+    sinceTime: string;
+    /** Titular da base, para decidir se quem chega divide a base com ele (dupla). */
+    interventionCarrier?: typeof interventionOccupancies.$inferSelect;
+} | null> {
     const db = getDb();
     if (params.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({ where: eq(regulationPosts.code, params.targetCode) });
@@ -1921,6 +1929,7 @@ async function findActiveBoardOccupantOnTarget(params: {
         isShadow: isInterventionShadowOccupancyNotes(occ.notes),
         doctorName: resolveTelegramDoctorSurfaceName(doc),
         sinceTime: formatTelegramReplyTime(occ.boardStartedAt ?? occ.startedAt),
+        interventionCarrier: occ,
     };
 }
 
@@ -8874,14 +8883,7 @@ export function resolveReassignmentConflictCoverageEndAt(params: {
     scheduledEndAt: Date | null;
     shiftLabel: string | null;
 }): Date | null {
-    if (params.scheduledEndAt) {
-        return params.scheduledEndAt;
-    }
-    const anchor = params.boardStartedAt ?? params.startedAt;
-    const shiftLabel: OccupancyShiftLabel = params.shiftLabel === "P" || params.shiftLabel === "SD" || params.shiftLabel === "SN"
-        ? params.shiftLabel
-        : null;
-    return resolveImplicitOccupancyExpiry(anchor, shiftLabel);
+    return resolveOccupantCoverageEndAt(params);
 }
 
 // Ocupante cuja cobertura já venceu (ex.: P da véspera que o painel esconde às 07:15
@@ -8952,6 +8954,7 @@ async function handleTelegramReassignment(params: {
     // Step 3: Check if the target has a conflicting occupancy from another doctor
     let destination: { domain: "regulation" | "intervention"; targetId: number };
     let renderedGhostDoctorName: string | null = null;
+    let sharesInterventionBaseWith: string | null = null;
     if (parsed.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({
             where: eq(regulationPosts.code, targetCode),
@@ -9008,13 +9011,16 @@ async function handleTelegramReassignment(params: {
             const occupantName = resolveTelegramDoctorSurfaceName(occupantDoc);
             if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)
                 && !isPreviousShiftReassignmentConflict(targetConflict.boardStartedAt ?? targetConflict.startedAt, eventAt, coverageEndAt)) {
-                throw new Error(buildReassignmentTargetOccupiedMessage({ occupantName, targetLabel: targetCode }));
+                // Base comporta dois médicos: titular vigente segue no quadro e quem
+                // se remaneja para lá entra como dupla. Ninguém é barrado nem encerrado.
+                sharesInterventionBaseWith = occupantName;
+            } else {
+                // Cobertura vencida: rendição automática, fechando no fim da cobertura do
+                // fantasma (endInterventionOccupancy não capa sozinho no scheduledEndAt).
+                const ghostEndedAt = coverageEndAt && coverageEndAt.getTime() < eventAt.getTime() ? coverageEndAt : eventAt;
+                await endInterventionOccupancy(targetConflict.id, { endedAt: ghostEndedAt, handoffClosure: true });
+                renderedGhostDoctorName = occupantName;
             }
-            // Cobertura vencida: rendição automática, fechando no fim da cobertura do
-            // fantasma (endInterventionOccupancy não capa sozinho no scheduledEndAt).
-            const ghostEndedAt = coverageEndAt && coverageEndAt.getTime() < eventAt.getTime() ? coverageEndAt : eventAt;
-            await endInterventionOccupancy(targetConflict.id, { endedAt: ghostEndedAt, handoffClosure: true });
-            renderedGhostDoctorName = occupantName;
         }
         destination = {
             domain: "intervention",
@@ -9029,7 +9035,7 @@ async function handleTelegramReassignment(params: {
             destination,
             roleLabel: parsed.roleFunction ?? undefined,
             notes: `Remanejado via Telegram de ${sourceCode} para ${targetCode}. ${messageText}`.trim(),
-            conflictResolution: null,
+            conflictResolution: sharesInterventionBaseWith ? { strategy: "share_destination" } : null,
         },
         null,
     );
@@ -9193,39 +9199,10 @@ async function findActiveSameTurnoBoardCarrierOnTarget(params: {
         };
     }
 
-    const base = await db.query.interventionBases.findFirst({
-        where: eq(interventionBases.code, params.targetCode),
-    });
-    if (!base) {
-        return null;
-    }
-    const occ = await db.query.interventionOccupancies.findFirst({
-        where: and(
-            eq(interventionOccupancies.baseId, base.id),
-            isNull(interventionOccupancies.endedAt),
-            isNotNull(interventionOccupancies.boardStartedAt),
-            ne(interventionOccupancies.doctorId, params.excludeDoctorId),
-        ),
-        orderBy: [desc(interventionOccupancies.boardStartedAt)],
-    });
-    if (!occ) {
-        return null;
-    }
-    if (isInterventionShadowOccupancyNotes(occ.notes)) {
-        return null;
-    }
-    const occupancyAnchorAt = occ.boardStartedAt ?? occ.startedAt;
-    if (!shouldDisplaceInsteadOfRelieve({ occupantAnchorAt: occupancyAnchorAt, occupantCoverageEndAt: resolveReassignmentConflictCoverageEndAt(occ), arrivalAt: params.eventAt })) {
-        return null;
-    }
-    const doc = await db.query.doctors.findFirst({ where: eq(doctors.id, occ.doctorId) });
-    return {
-        occupancyId: occ.id,
-        doctorId: occ.doctorId,
-        doctorName: resolveTelegramDoctorSurfaceName(doc),
-        startedAt: occupancyAnchorAt,
-        shiftLabel: occ.shiftLabel,
-    };
+    // Base de intervenção (USA) comporta dois médicos: chegar numa base ocupada não é
+    // tomada — quem estava segue titular e quem chega entra como dupla, sem alarme e
+    // sem confirmação (startInterventionOccupancy → shouldJoinInterventionBaseAsCompanion).
+    return null;
 }
 
 // Códigos REAIS ativos de ramais e bases — fonte para as sugestões de destino
@@ -10604,6 +10581,55 @@ async function sendPiamAlreadyPresentReply(
     await sendMessage(chatId, buildPiamAlreadyPresentReply(doctorName, info), replyToMessageId);
 }
 
+export function buildSharedBaseHint(params: { baseCode: string; doctorNames: string[] }): string {
+    if (params.doctorNames.length < 2) {
+        return "";
+    }
+    const names = params.doctorNames.map((name) => `*${escapeTelegramMarkdown(name)}*`).join(" + ");
+    return `\n👥 *${escapeTelegramMarkdown(params.baseCode)}* está com ${params.doctorNames.length} médicos: ${names}. Ninguém foi retirado — se alguém já saiu, avise a saída.`;
+}
+
+// Base com dois médicos (dupla): o balão diz com quem a base está dividida, para
+// ninguém achar que tirou o colega do plantão. Fail-soft: sem banco, segue sem a dica.
+async function sharedBaseHintForConfirmation(parsed: OperationalParsedEntry): Promise<string> {
+    if (parsed.sector !== "INTERVENTION" || parsed.isDeparture || parsed.isShadow || !parsed.baseCode) {
+        return "";
+    }
+    try {
+        const db = getDb();
+        const base = await db.query.interventionBases.findFirst({
+            where: eq(interventionBases.code, parsed.baseCode),
+            columns: { id: true },
+        });
+        if (!base) {
+            return "";
+        }
+        const open = await db.query.interventionOccupancies.findMany({
+            where: and(eq(interventionOccupancies.baseId, base.id), isNull(interventionOccupancies.endedAt)),
+            columns: { doctorId: true, boardStartedAt: true, notes: true, startedAt: true },
+        });
+        const titular = open.find((occupancy) => occupancy.boardStartedAt !== null);
+        const companions = open
+            .filter((occupancy) => occupancy.boardStartedAt === null && isInterventionCompanionOccupancyNotes(occupancy.notes))
+            .sort((left, right) => left.startedAt.getTime() - right.startedAt.getTime());
+        if (!titular || companions.length === 0) {
+            return "";
+        }
+        const present = [titular, ...companions];
+        const rows = await db.query.doctors.findMany({
+            where: inArray(doctors.id, present.map((occupancy) => occupancy.doctorId)),
+            columns: { id: true, fullName: true, displayName: true },
+        });
+        return buildSharedBaseHint({
+            baseCode: parsed.baseCode,
+            doctorNames: present.map((occupancy) => resolveTelegramDoctorSurfaceName(rows.find((row) => row.id === occupancy.doctorId))),
+        });
+    } catch (error) {
+        console.error("[telegram] falha ao montar a dica de base dividida", error);
+        return "";
+    }
+}
+
 async function sendSuccessReply(
     chatId: number,
     replyToMessageId: number,
@@ -10759,9 +10785,10 @@ async function sendSuccessReply(
     // UPAs restritas pela chefia (fonte: /tabela). Só na chegada de quem assume
     // ramal de regulação — é quem decide para onde o paciente vai. Fail-soft.
     const upaRestrictionsHint = await upaRestrictionsHintForConfirmation(parsed, replyKind);
+    const sharedBaseHint = successKind === "standard" ? await sharedBaseHintForConfirmation(parsed) : "";
     await sendMessage(
         chatId,
-        `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${piamHint}${longShiftHint}${arrivalHint}${checklistKeyHint}${upaRestrictionsHint}`,
+        `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${sharedBaseHint}${piamHint}${longShiftHint}${arrivalHint}${checklistKeyHint}${upaRestrictionsHint}`,
         replyToMessageId,
         undefined,
         { parseMode: "Markdown" },
@@ -14363,7 +14390,13 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             // quadro, plantão aberto); a saída dele vem do próprio aviso ou da chefia.
             if (takeoverWantsBoard && !takeoverDisplaced && firstParsed.baseCode && eventAt.getTime() < messageEventAt.getTime()) {
                 const previous = await findActiveBoardOccupantOnTarget({ sector: firstParsed.sector, targetCode: firstParsed.baseCode });
-                if (previous && !previous.isShadow && previous.doctorId !== resolvedDoctor.id) {
+                // Titular vigente de uma base não é deslocado: quem chega divide a base com ele.
+                const sharesBase = shouldJoinInterventionBaseAsCompanion({
+                    carrier: previous?.interventionCarrier,
+                    arrivingDoctorId: resolvedDoctor.id,
+                    arrivalAt: eventAt,
+                });
+                if (previous && !previous.isShadow && previous.doctorId !== resolvedDoctor.id && !sharesBase) {
                     const displace = firstParsed.sector === "REGULATION" ? displaceRegulationOccupant : displaceInterventionOccupant;
                     await displace(previous.occupancyId, {
                         displacedAt: messageEventAt,

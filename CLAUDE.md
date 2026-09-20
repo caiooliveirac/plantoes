@@ -83,7 +83,8 @@ telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
   (`corrections.ts`), sistema de undo com journaling (`undo.ts`), feriados
 - `modules/regulation/` e `modules/intervention/` — operações de criar/encerrar/corrigir
   ocupações nos dois domínios paralelos (regulação = ramais telefônicos; intervenção =
-  bases de ambulância)
+  bases de ambulância). Base comporta dois médicos ("dupla"): quem chega nunca encerra
+  titular vigente — ver [docs/dupla-usa.md](docs/dupla-usa.md).
 - `modules/bank-hours/` — cálculo de banco de horas (atraso, hora extra, continuidade)
 - `lib/contracts/` (puro) + `services/contract-balance.service.ts` + as varreduras de
   `modules/telegram/contract-balance-alerts.ts` — saldo de contrato: métricas do ciclo,
