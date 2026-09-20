@@ -33,15 +33,22 @@ import {
 } from "@/db/schema";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
-import { isInterventionBaseDeactivationActive } from "@/modules/intervention/service";
+import {
+    INTERVENTION_DISPLACED_NOTE_MARKER,
+    appendInterventionCompanionMarker,
+    isInterventionBaseDeactivationActive,
+    isInterventionShadowOccupancyNotes,
+    preserveInterventionOffBoardMarkers,
+    stripInterventionCompanionMarker,
+} from "@/modules/intervention/service";
 import { isBeforeHalfShiftWindow, isHalfShiftRoleLabel, isHalfShiftScheduledWindow, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
 import { applyOperationalRoleShiftPolicy, resolveRoleLabelForTargetChange } from "@/modules/operational/roles";
 import { applyShadowMarkerToOccupancyNotes } from "@/modules/operational/shadow";
-import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { resolveArrivalShiftLabel, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, shouldDisplaceInsteadOfRelieve } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
-import { expireStaleRegulationOccupancies, isRegulationPostDeactivationActive } from "@/modules/regulation/service";
+import { REGULATION_DISPLACED_NOTE_MARKER, expireStaleRegulationOccupancies, isRegulationPostDeactivationActive } from "@/modules/regulation/service";
 import { hookMealBreakAfterBoardChange } from "@/modules/telegram/meal-break-board-hook";
 
 type OptionalDate = Date | null | undefined;
@@ -94,9 +101,102 @@ export interface TransferOperationalOccupancyInput {
     // Cobre os 4 casos: sombra→médica, médico→sombra, sombra→sombra, médico→médico.
     asShadow?: boolean | null;
     conflictResolution?: {
-        strategy: "remove_destination" | "move_destination";
+        strategy: TransferConflictStrategy;
         relocationTarget?: OperationalTransferTargetInput | null;
     } | null;
+}
+
+// O que a chefia decide quando o destino já tem titular:
+//   share_destination    → ficam os dois na base (só intervenção): quem estava segue
+//                          titular, quem chega entra como dupla. Ninguém é encerrado.
+//   displace_destination → quem estava sai do quadro como [DESLOCADO], segue no
+//                          plantão e pago; quem chega assume o quadro.
+//   move_destination     → quem estava é remanejado para um terceiro posto/base.
+//   remove_destination   → quem estava é retirado do plantão (encerra).
+export type TransferConflictStrategy =
+    | "remove_destination"
+    | "move_destination"
+    | "share_destination"
+    | "displace_destination";
+
+export type TransferDestinationDecision =
+    | { kind: "free" }
+    | { kind: "relieve"; closedAt: Date }
+    | { kind: "needs_resolution" }
+    | { kind: "resolve"; strategy: TransferConflictStrategy };
+
+// Decide o que fazer com o titular do destino. O índice único do banco não liga para
+// turno: QUALQUER titular aberto colide com o insert. Então ou ele é tratado aqui, ou
+// o remanejamento morre com 23505 cru (era o "erro enorme em SQL" do painel).
+export function resolveTransferDestinationDecision(params: {
+    carrier: {
+        startedAt: Date;
+        boardStartedAt: Date | null;
+        scheduledEndAt: Date | null;
+        shiftLabel: string | null;
+    } | null;
+    destinationDomain: OperationalDomain;
+    asShadow?: boolean | null;
+    strategy?: TransferConflictStrategy | null;
+    transferredAt: Date;
+}): TransferDestinationDecision {
+    // Sombra coexiste fora do quadro: nunca disputa o posto, nunca mexe em quem está lá.
+    if (!params.carrier || params.asShadow === true) {
+        return { kind: "free" };
+    }
+
+    if (params.strategy) {
+        if (params.strategy === "share_destination" && params.destinationDomain !== "intervention") {
+            throw new Error("Ramal da regulacao nao comporta dois medicos. Escolha deslocar, remanejar ou retirar quem esta la.");
+        }
+        return { kind: "resolve", strategy: params.strategy };
+    }
+
+    const coverageEndAt = resolveOccupantCoverageEndAt(params.carrier);
+    // Cobertura vencida (ex.: P da véspera que o painel esconde mas ninguém fechou):
+    // fantasma, rendido sozinho no fim da cobertura dele.
+    if (coverageEndAt && coverageEndAt.getTime() <= params.transferredAt.getTime()) {
+        const closedAt = coverageEndAt.getTime() > params.carrier.startedAt.getTime()
+            ? coverageEndAt
+            : params.transferredAt;
+        return { kind: "relieve", closedAt };
+    }
+
+    const vigent = shouldDisplaceInsteadOfRelieve({
+        occupantAnchorAt: params.carrier.boardStartedAt ?? params.carrier.startedAt,
+        occupantCoverageEndAt: coverageEndAt,
+        arrivalAt: params.transferredAt,
+    });
+    // Fim do turno anterior é rendição normal; cobertura vigente exige decisão.
+    return vigent ? { kind: "needs_resolution" } : { kind: "relieve", closedAt: params.transferredAt };
+}
+
+const BOARD_UNIQUE_INDEX_FRAGMENT = "one_active_board_per";
+
+// Rede de proteção: se mesmo assim o índice de um titular por posto/base rejeitar a
+// gravação (corrida entre dois cliques), a chefia lê português, não SQL.
+export function isOperationalBoardConflictError(error: unknown): boolean {
+    for (let current: unknown = error, depth = 0; current && depth < 4; depth++) {
+        const candidate = current as { constraint_name?: unknown; message?: unknown; cause?: unknown };
+        const text = `${String(candidate.constraint_name ?? "")} ${String(candidate.message ?? "")}`;
+        if (text.includes(BOARD_UNIQUE_INDEX_FRAGMENT)) {
+            return true;
+        }
+        current = candidate.cause;
+    }
+    return false;
+}
+
+// Erro de banco nunca chega cru à tela: "Failed query: insert into ..." vira frase.
+export function describeOperationalError(error: unknown, fallback: string): string {
+    if (isOperationalBoardConflictError(error)) {
+        return "Esse posto/base ja tem um titular no quadro e o sistema nao conseguiu acomodar os dois. Atualize a tela e tente de novo; se persistir, retire ou remaneje quem esta la primeiro.";
+    }
+    const message = error instanceof Error ? error.message : "";
+    if (!message || /^Failed query/i.test(message)) {
+        return fallback;
+    }
+    return message;
 }
 
 export interface RegulationOccupancyCorrectionInput {
@@ -333,9 +433,13 @@ async function reconcileInterventionBoardState(tx: Executor, baseId: number, upd
         orderBy: [desc(interventionOccupancies.endedAt), asc(interventionOccupancies.startedAt)],
     });
 
-    const nextCarrier = latestEnded?.endedAt
-        ? openOccupancies.find((occupancy) => occupancy.startedAt.getTime() <= latestEnded.endedAt!.getTime()) ?? openOccupancies[0]
-        : openOccupancies[0];
+    // Base ficou sem titular: herda o quadro a dupla (médico de fato na base) antes da
+    // sombra; entre iguais, quem já estava lá quando o titular saiu.
+    const presentAtVacancy = latestEnded?.endedAt
+        ? openOccupancies.filter((occupancy) => occupancy.startedAt.getTime() <= latestEnded.endedAt!.getTime())
+        : openOccupancies;
+    const candidates = presentAtVacancy.length > 0 ? presentAtVacancy : openOccupancies;
+    const nextCarrier = candidates.find((occupancy) => !isInterventionShadowOccupancyNotes(occupancy.notes)) ?? candidates[0];
 
     for (const occupancy of openOccupancies) {
         const nextBoardStartedAt = occupancy.id === nextCarrier.id
@@ -345,6 +449,8 @@ async function reconcileInterventionBoardState(tx: Executor, baseId: number, upd
             await tx.update(interventionOccupancies)
                 .set({
                     boardStartedAt: nextBoardStartedAt,
+                    // Quem assume o quadro deixa de ser dupla.
+                    ...(nextBoardStartedAt ? { notes: stripInterventionCompanionMarker(occupancy.notes) } : {}),
                     updatedAt: new Date(),
                     updatedByUserId: updatedByUserId ?? null,
                 })
@@ -624,6 +730,60 @@ async function closeOccupancyForTransferTx(tx: Executor, params: {
         .where(eq(interventionOccupancies.id, params.occupancyId));
 }
 
+/**
+ * Rendição do titular do destino por um remanejamento: fecha só a POSIÇÃO
+ * (ended_at), sem saída declarada — mesmo contrato do handoffClosure das chegadas.
+ * Saída tardia avisada depois ainda preenche actual_ended_at.
+ */
+async function relieveCarrierForTransferTx(tx: Executor, params: {
+    domain: OperationalDomain;
+    occupancyId: string;
+    closedAt: Date;
+    updatedByUserId?: string | null;
+}) {
+    const patch = {
+        endedAt: params.closedAt,
+        updatedAt: new Date(),
+        updatedByUserId: params.updatedByUserId ?? null,
+    };
+    if (params.domain === "regulation") {
+        await tx.update(regulationOccupancies).set(patch).where(eq(regulationOccupancies.id, params.occupancyId));
+        return;
+    }
+    await tx.update(interventionOccupancies).set(patch).where(eq(interventionOccupancies.id, params.occupancyId));
+}
+
+/**
+ * Desloca o titular do destino sem encerrar: board nulo + marcador [DESLOCADO],
+ * chegada preservada. Segue no plantão, pago, visível no painel como "deslocado"
+ * (com Remanejar e Retirar). Espelha displaceRegulationOccupant/
+ * displaceInterventionOccupant, mas por dentro da transação do remanejamento.
+ */
+async function displaceCarrierForTransferTx(tx: Executor, params: {
+    domain: OperationalDomain;
+    occupancy: { id: string; notes: string | null };
+    displacedAt: Date;
+    updatedByUserId?: string | null;
+}) {
+    const markerPrefix = params.domain === "regulation"
+        ? REGULATION_DISPLACED_NOTE_MARKER
+        : INTERVENTION_DISPLACED_NOTE_MARKER;
+    const marker = `${markerPrefix} ${params.displacedAt.toISOString()} por remanejamento da chefia`;
+    const patch = {
+        boardStartedAt: null,
+        notes: params.occupancy.notes?.includes(markerPrefix)
+            ? params.occupancy.notes
+            : mergeOperationalNotes(params.occupancy.notes, marker),
+        updatedAt: new Date(),
+        updatedByUserId: params.updatedByUserId ?? null,
+    };
+    if (params.domain === "regulation") {
+        await tx.update(regulationOccupancies).set(patch).where(eq(regulationOccupancies.id, params.occupancy.id));
+        return;
+    }
+    await tx.update(interventionOccupancies).set(patch).where(eq(interventionOccupancies.id, params.occupancy.id));
+}
+
 async function cloneOccupancyIntoTarget(tx: Executor, params: {
     source: OccupancySnapshot;
     /** Posto/base de ORIGEM do movimento — necessário para o carimbo de função
@@ -633,6 +793,8 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
     roleLabel?: string | null;
     notes?: string | null;
     asShadow?: boolean | null;
+    /** Entra como dupla de quem já é titular da base (board nulo + [DUPLA]). */
+    asCompanion?: boolean;
     updatedByUserId?: string | null;
     /**
      * Momento em que o remanejamento de fato aconteceu — vira o started_at/
@@ -648,12 +810,16 @@ async function cloneOccupancyIntoTarget(tx: Executor, params: {
     effectiveStartedAt: Date;
 }) {
     // Resolve notas e board conforme o status de sombra desejado no destino.
-    const resolvedNotes = (params.asShadow === true || params.asShadow === false)
+    const asCompanion = Boolean(params.asCompanion) && params.asShadow !== true && params.destination.domain === "intervention";
+    const shadowResolvedNotes = (params.asShadow === true || params.asShadow === false)
         ? applyShadowMarkerToOccupancyNotes(params.notes, params.asShadow)
         : (params.notes ?? null);
-    // Sombra coexiste com board nulo (fica fora do índice one-active-board-per-target);
+    const resolvedNotes = asCompanion
+        ? appendInterventionCompanionMarker(shadowResolvedNotes, params.effectiveStartedAt)
+        : shadowResolvedNotes;
+    // Sombra e dupla coexistem com board nulo (fora do índice one-active-board-per-target);
     // titular/neutro recebe o board a partir do momento real do remanejamento.
-    const resolvedBoardStartedAt = params.asShadow === true
+    const resolvedBoardStartedAt = params.asShadow === true || asCompanion
         ? null
         : params.effectiveStartedAt;
     const cloneShiftLabel = params.source.shiftLabel === "SD" || params.source.shiftLabel === "SN" || params.source.shiftLabel === "P"
@@ -1246,7 +1412,11 @@ export async function correctInterventionOccupancy(
                 actualEndedAt,
                 shiftLabel: departureTrim?.shiftLabel ?? nextShiftLabel,
                 roleLabel: nextRoleLabel,
-                notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
+                // Corrigir pela tela troca as notas pelo motivo digitado: quem está fora
+                // do quadro (dupla/deslocado) mantém o marcador, senão some do painel.
+                notes: hasOwn(input, "notes")
+                    ? (boardStartedAt ? input.notes ?? null : preserveInterventionOffBoardMarkers(existing.notes, input.notes))
+                    : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),
                 departureConfirmedAt: departureConfirmedAtNext,
@@ -1350,22 +1520,38 @@ export async function transferOperationalOccupancy(
             throw new Error("Escolha um destino diferente do posto/base atual para remanejar.");
         }
 
-        const transferShiftWindow = resolveTransferShiftWindow(new Date());
-        const destinationConflicts = filterTransferConflictsToShiftWindow(await findOpenTargetOccupancies(tx, {
+        // Todo titular aberto do destino entra na conta — inclusive o de turno anterior,
+        // que o filtro por janela de turno deixava escapar até o insert bater no índice.
+        const destinationCarriers = await findOpenTargetOccupancies(tx, {
             target: destinationTarget,
             excludeOccupancyIds: [source.id],
-        }), transferShiftWindow.startedAt);
-        if (destinationConflicts.length > 1) {
+        });
+        if (destinationCarriers.length > 1) {
             throw new Error(`O destino ${destinationTarget.code} tem multiplas ocupacoes abertas. Limpe o destino antes de remanejar.`);
         }
 
-        const destinationConflict = destinationConflicts[0] ?? null;
-        const conflictResolution = input.conflictResolution ?? null;
-        let relocationTarget: TargetMetadata | null = null;
-
-        if (destinationConflict && !conflictResolution) {
-            throw new Error(`O destino ${destinationTarget.code} ja esta ocupado. Escolha se a chefia vai retirar ou remanejar quem esta la.`);
+        const destinationCarrier = destinationCarriers[0] ?? null;
+        const destinationDecision = resolveTransferDestinationDecision({
+            carrier: destinationCarrier,
+            destinationDomain: destinationTarget.domain,
+            asShadow: input.asShadow ?? null,
+            strategy: input.conflictResolution?.strategy ?? null,
+            transferredAt,
+        });
+        if (destinationDecision.kind === "needs_resolution") {
+            throw new Error(destinationTarget.domain === "intervention"
+                ? `A base ${destinationTarget.code} ja tem medico. Confirme se ficam os dois na base, ou escolha remanejar/retirar quem esta la.`
+                : `O ramal ${destinationTarget.code} ja esta ocupado. Escolha deslocar, remanejar ou retirar quem esta la.`);
         }
+
+        const conflictResolution = destinationDecision.kind === "resolve" ? (input.conflictResolution ?? null) : null;
+        const sharesDestination = conflictResolution?.strategy === "share_destination";
+        const displacesDestination = conflictResolution?.strategy === "displace_destination";
+        // Só remove/move encerram a ocupação de quem estava no destino.
+        const destinationConflict = conflictResolution && !sharesDestination && !displacesDestination
+            ? destinationCarrier
+            : null;
+        let relocationTarget: TargetMetadata | null = null;
 
         if (destinationConflict && conflictResolution?.strategy === "move_destination") {
             if (!conflictResolution.relocationTarget) {
@@ -1389,6 +1575,27 @@ export async function transferOperationalOccupancy(
         });
         if (source.domain === "intervention") {
             affectedInterventionBases.add(source.targetId);
+        }
+
+        // Titular do destino que NÃO é encerrado pela chefia: rendido (fim de turno ou
+        // fantasma) ou deslocado para fora do quadro, seguindo no plantão.
+        let displacedInPlace: { occupancyId: string; doctorId: string } | null = null;
+        if (destinationCarrier && destinationDecision.kind === "relieve") {
+            await relieveCarrierForTransferTx(tx, {
+                domain: destinationTarget.domain,
+                occupancyId: destinationCarrier.id,
+                closedAt: destinationDecision.closedAt,
+                updatedByUserId,
+            });
+            touchedContinuityGroups.add(destinationCarrier.continuityGroupId);
+        } else if (destinationCarrier && displacesDestination) {
+            await displaceCarrierForTransferTx(tx, {
+                domain: destinationTarget.domain,
+                occupancy: destinationCarrier,
+                displacedAt: transferredAt,
+                updatedByUserId,
+            });
+            displacedInPlace = { occupancyId: destinationCarrier.id, doctorId: destinationCarrier.doctorId };
         }
 
         let displaced:
@@ -1477,8 +1684,10 @@ export async function transferOperationalOccupancy(
             destination: destinationTarget,
             roleLabel: input.roleLabel ?? source.roleLabel,
             asShadow: input.asShadow ?? undefined,
+            asCompanion: sharesDestination,
             notes: mergeOperationalNotes(
-                source.notes,
+                // Dupla é estado da base de ORIGEM; no destino quem decide é este remanejo.
+                stripInterventionCompanionMarker(source.notes),
                 transferNoteLine({
                     source: sourceTarget,
                     destination: destinationTarget,
@@ -1510,12 +1719,19 @@ export async function transferOperationalOccupancy(
             movedOccupancyId: created.id,
             movedDomain: created.domain,
             displaced,
+            displacedInPlace,
+            sharedWithDoctorId: sharesDestination ? destinationCarrier?.doctorId ?? null : null,
             sourceSnapshot: source,
             sourceTarget,
             movedSnapshot,
             sourceContinuityGroupId: source.continuityGroupId,
             destination: destinationTarget,
         };
+    }).catch((error: unknown) => {
+        if (isOperationalBoardConflictError(error)) {
+            throw new Error(describeOperationalError(error, "Nao foi possivel remanejar a ocupacao operacional."));
+        }
+        throw error;
     });
 
     publishBoardUpdate(`operational:transfer:${sourceOccupancyId}`);

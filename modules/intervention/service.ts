@@ -8,7 +8,7 @@ import { avisarDeslocamento } from "@/modules/operational/displacement-alert";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
-import { resolveArrivalShiftLabel, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { resolveArrivalShiftLabel, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, shouldDisplaceInsteadOfRelieve } from "@/modules/operational/board-rules";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
@@ -233,6 +233,147 @@ export function isInterventionDisplacedOccupancyNotes(notes: string | null | und
     return normalizeInterventionOperationalNotes(notes).includes(INTERVENTION_DISPLACED_NOTE_MARKER);
 }
 
+// "Dupla": segundo médico na MESMA base (USA com dois médicos). Quem já estava segue
+// titular do quadro; quem chega entra com board_started_at nulo — fora do índice de um
+// titular por base — e o painel desenha os dois ("Fulano + Beltrano"), cada um com
+// remanejar/retirar próprios. Ninguém precisa escrever "sombra" para dividir a base.
+export const INTERVENTION_COMPANION_NOTE_MARKER = "[DUPLA]";
+
+export function isInterventionCompanionOccupancyNotes(notes: string | null | undefined) {
+    return normalizeInterventionOperationalNotes(notes).includes(INTERVENTION_COMPANION_NOTE_MARKER);
+}
+
+export function appendInterventionCompanionMarker(notes: string | null | undefined, joinedAt: Date) {
+    if (isInterventionCompanionOccupancyNotes(notes)) {
+        return notes ?? null;
+    }
+    const marker = `${INTERVENTION_COMPANION_NOTE_MARKER} ${joinedAt.toISOString()}`;
+    return notes?.trim() ? `${notes}\n${marker}` : marker;
+}
+
+// Dupla que assume o quadro (o titular saiu) deixa de ser dupla: o marcador sai
+// das notas para ela não voltar a ser lida como acompanhante depois.
+export function stripInterventionCompanionMarker(notes: string | null | undefined) {
+    if (!notes || !isInterventionCompanionOccupancyNotes(notes)) {
+        return notes ?? null;
+    }
+    const kept = notes
+        .split("\n")
+        .filter((line) => !line.trim().toUpperCase().startsWith(INTERVENTION_COMPANION_NOTE_MARKER))
+        .join("\n")
+        .trim();
+    return kept || null;
+}
+
+// Reescrever as notas de quem está FORA do quadro não pode apagar o marcador que o
+// mantém visível no painel: board nulo + marcador apagado = médico aberto que ninguém
+// vê nem consegue retirar. Anexa a linha original do marcador às notas novas.
+// Idempotente. Espelha preserveRegulationDisplacedMarker.
+export function preserveInterventionOffBoardMarkers(
+    existingNotes: string | null | undefined,
+    nextNotes: string | null | undefined,
+): string | null {
+    let result = nextNotes ?? null;
+    for (const marker of [INTERVENTION_COMPANION_NOTE_MARKER, INTERVENTION_DISPLACED_NOTE_MARKER]) {
+        if (!normalizeInterventionOperationalNotes(existingNotes).includes(marker)
+            || normalizeInterventionOperationalNotes(result).includes(marker)) {
+            continue;
+        }
+        const markerLine = (existingNotes ?? "")
+            .split("\n")
+            .find((line) => normalizeInterventionOperationalNotes(line).includes(marker));
+        if (markerLine) {
+            result = result ? `${result}\n${markerLine.trim()}` : markerLine.trim();
+        }
+    }
+    return result;
+}
+
+// Regra-mãe: quem avisou chegada para o turno NÃO sai da base por comando de outro
+// médico. Se o titular ainda tem cobertura vigente (mesmo turno, ou P/continuidade
+// que segue), quem chega entra como dupla em vez de encerrá-lo. Só o fim do turno
+// anterior é rendição. Sombra declarada e carga histórica seguem suas regras.
+export function shouldJoinInterventionBaseAsCompanion(params: {
+    carrier: {
+        doctorId: string;
+        startedAt: Date;
+        boardStartedAt: Date | null;
+        scheduledEndAt: Date | null;
+        shiftLabel: string | null;
+        notes: string | null | undefined;
+    } | null | undefined;
+    arrivingDoctorId: string;
+    arrivalAt: Date;
+    arrivingIsShadow?: boolean | null;
+}) {
+    const carrier = params.carrier;
+    if (!carrier || params.arrivingIsShadow || carrier.doctorId === params.arrivingDoctorId) {
+        return false;
+    }
+    if (isInterventionShadowOccupancyNotes(carrier.notes)) {
+        return false;
+    }
+    return shouldDisplaceInsteadOfRelieve({
+        occupantAnchorAt: carrier.boardStartedAt ?? carrier.startedAt,
+        occupantCoverageEndAt: resolveOccupantCoverageEndAt(carrier),
+        arrivalAt: params.arrivalAt,
+    });
+}
+
+// Quem herda o quadro quando o titular sai: a dupla (médico de fato na base) antes
+// da sombra; sem dupla, vale a regra antiga (aberto mais antigo sem board).
+export function pickInterventionBoardReplacement<T extends { startedAt: Date; notes: string | null }>(
+    openWithoutBoard: T[],
+    vacatedAt: Date,
+): T | null {
+    const eligible = openWithoutBoard
+        .filter((occupancy) => occupancy.startedAt.getTime() <= vacatedAt.getTime())
+        .sort((left, right) => left.startedAt.getTime() - right.startedAt.getTime());
+    return eligible.find((occupancy) => !isInterventionShadowOccupancyNotes(occupancy.notes))
+        ?? eligible[0]
+        ?? null;
+}
+
+async function promoteInterventionBoardReplacement(tx: Executor, params: {
+    baseId: number;
+    vacatedAt: Date;
+    updatedByUserId: string | null;
+}) {
+    const openWithoutBoard: Array<typeof interventionOccupancies.$inferSelect> = await tx.query.interventionOccupancies.findMany({
+        where: and(
+            eq(interventionOccupancies.baseId, params.baseId),
+            isNull(interventionOccupancies.boardStartedAt),
+            isNull(interventionOccupancies.endedAt),
+        ),
+        orderBy: [asc(interventionOccupancies.startedAt)],
+    });
+    const replacement = pickInterventionBoardReplacement(openWithoutBoard, params.vacatedAt);
+    if (!replacement) {
+        return;
+    }
+    // Base que já tem titular não promove ninguém: o índice de um titular por base
+    // rejeitaria o update (23505) e derrubaria a operação inteira.
+    const currentCarrier = await tx.query.interventionOccupancies.findFirst({
+        where: and(
+            eq(interventionOccupancies.baseId, params.baseId),
+            isNotNull(interventionOccupancies.boardStartedAt),
+            isNull(interventionOccupancies.endedAt),
+        ),
+        columns: { id: true },
+    });
+    if (currentCarrier) {
+        return;
+    }
+    await tx.update(interventionOccupancies)
+        .set({
+            boardStartedAt: params.vacatedAt,
+            notes: stripInterventionCompanionMarker(replacement.notes),
+            updatedByUserId: params.updatedByUserId,
+            updatedAt: new Date(),
+        })
+        .where(eq(interventionOccupancies.id, replacement.id));
+}
+
 export function resolveStaleShadowInterventionEndedAt(params: {
     notes: string | null | undefined;
     /** Reaberto por "NÃO SAIU" fora do quadro (board nulo) vence como sombra. */
@@ -245,8 +386,12 @@ export function resolveStaleShadowInterventionEndedAt(params: {
         return null;
     }
 
-    const contestedOutOfBoard = !params.boardStartedAt && isContestedDepartureNotes(params.notes);
-    if (!isInterventionShadowOccupancyNotes(params.notes) && !contestedOutOfBoard) {
+    // Dupla fora do quadro vence como sombra: ninguém a rende na virada (não é
+    // titular), então sem isto ficaria aberta para sempre. Saída tardia avisada
+    // depois ainda ajusta o registro fechado ("telegram saida ajustada").
+    const expiresOutOfBoard = !params.boardStartedAt
+        && (isContestedDepartureNotes(params.notes) || isInterventionCompanionOccupancyNotes(params.notes));
+    if (!isInterventionShadowOccupancyNotes(params.notes) && !expiresOutOfBoard) {
         return null;
     }
 
@@ -516,6 +661,16 @@ async function mergeInterventionArrival(tx: Executor, params: {
         arrivalAt: params.arrivalAt,
     });
 
+    const mergedNotes = [params.target.notes, mergeNote, params.notes]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+    // Voltou com outro médico no quadro: os dois estão na base — entra como dupla
+    // (visível no painel, com remanejar/retirar) em vez de sumir sem board.
+    const rejoinsAsCompanion = Boolean(boardHeldByOther)
+        && !isInterventionShadowOccupancyNotes(mergedNotes)
+        && !isInterventionDisplacedOccupancyNotes(mergedNotes);
+
     const [updated] = await tx.update(interventionOccupancies)
         .set({
             startedAt: params.keptStartedAt,
@@ -529,10 +684,9 @@ async function mergeInterventionArrival(tx: Executor, params: {
             departureConfirmedNote: null,
             earlyDepartureOutcome: null,
             shiftLabel: params.shiftLabel ?? params.target.shiftLabel,
-            notes: [params.target.notes, mergeNote, params.notes]
-                .filter(Boolean)
-                .join("\n")
-                .trim(),
+            notes: rejoinsAsCompanion
+                ? appendInterventionCompanionMarker(mergedNotes, params.arrivalAt)
+                : mergedNotes,
             updatedByUserId: params.updatedByUserId,
             updatedAt: new Date(),
         })
@@ -691,6 +845,9 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
     const now = new Date();
     let autoReactivated = false;
     let closedPreviousBaseId: number | null = null;
+    let joinsAsCompanion = false;
+    /** Titular com quem esta chegada passou a dividir a base (dupla). */
+    let sharedWithDoctorId = null as string | null;
     await expireStaleShadowInterventionOccupancies(input.startedAt, input.createdByUserId ?? null);
     const created = await db.transaction(async (tx) => {
         const doctor = await tx.query.doctors.findFirst({
@@ -970,24 +1127,11 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                     .where(eq(interventionOccupancies.id, otherBaseOccupancy.id));
 
                 if (otherBaseOccupancy.boardStartedAt) {
-                    const replacement = await tx.query.interventionOccupancies.findFirst({
-                        where: and(
-                            eq(interventionOccupancies.baseId, otherBaseOccupancy.baseId),
-                            isNull(interventionOccupancies.boardStartedAt),
-                            isNull(interventionOccupancies.endedAt),
-                        ),
-                        orderBy: [asc(interventionOccupancies.startedAt)],
+                    await promoteInterventionBoardReplacement(tx, {
+                        baseId: otherBaseOccupancy.baseId,
+                        vacatedAt: otherCloseAt,
+                        updatedByUserId: input.createdByUserId ?? null,
                     });
-
-                    if (replacement && replacement.startedAt.getTime() <= otherCloseAt.getTime()) {
-                        await tx.update(interventionOccupancies)
-                            .set({
-                                boardStartedAt: otherCloseAt,
-                                updatedByUserId: input.createdByUserId ?? null,
-                                updatedAt: new Date(),
-                            })
-                            .where(eq(interventionOccupancies.id, replacement.id));
-                    }
                 }
 
                 await syncInterventionBankHours(tx, otherBaseOccupancy.id);
@@ -1052,7 +1196,21 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             && input.startedAt.getTime() < currentBoardCarrier.startedAt.getTime(),
         );
 
-        if (shouldTakeBoardImmediately && currentBoardCarrier && !shouldPreserveCurrentBoardCarrier) {
+        // Titular com cobertura vigente nunca é encerrado pela chegada de outro:
+        // quem chega divide a base com ele (dupla), fora do quadro.
+        joinsAsCompanion = shouldTakeBoardImmediately
+            && !shouldPreserveCurrentBoardCarrier
+            && shouldJoinInterventionBaseAsCompanion({
+                carrier: currentBoardCarrier,
+                arrivingDoctorId: input.doctorId,
+                arrivalAt: input.startedAt,
+                arrivingIsShadow: input.isShadow,
+            });
+        if (joinsAsCompanion && currentBoardCarrier) {
+            sharedWithDoctorId = currentBoardCarrier.doctorId;
+        }
+
+        if (shouldTakeBoardImmediately && currentBoardCarrier && !shouldPreserveCurrentBoardCarrier && !joinsAsCompanion) {
             const shouldCloseCurrentBoardCarrier = shouldCloseInterventionBoardCarrierOnArrival({
                 currentCarrierDoctorId: currentBoardCarrier.doctorId,
                 arrivingDoctorId: input.doctorId,
@@ -1105,14 +1263,16 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 roleLabel: defaultDoctorRoleLabel,
             }),
             source: input.source,
-            notes: input.notes ?? null,
+            notes: joinsAsCompanion && !historicalCorrectionEndAt
+                ? appendInterventionCompanionMarker(input.notes, input.startedAt)
+                : input.notes ?? null,
             endedAt: historicalCorrectionEndAt,
             actualEndedAt: historicalCorrectionEndAt,
             createdByUserId: input.createdByUserId ?? null,
             updatedByUserId: input.createdByUserId ?? null,
         }).returning();
 
-        if (shouldTakeBoardImmediately && !historicalCorrectionEndAt) {
+        if (shouldTakeBoardImmediately && !historicalCorrectionEndAt && !joinsAsCompanion) {
             await tx.update(interventionOccupancies)
                 .set({
                     boardStartedAt: null,
@@ -1147,7 +1307,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
     if (autoReactivated) {
         publishBoardUpdate(`intervention:reactivate:${input.baseId}`);
     }
-    return { ...created, autoReactivated };
+    return { ...created, autoReactivated, sharedWithDoctorId };
 }
 
 export async function deactivateInterventionBase(input: DeactivateInterventionBaseInput) {
@@ -1301,25 +1461,12 @@ export async function endInterventionOccupancy(
         // e a promoção estoura o índice de um titular por base (incidente
         // 2026-09-15: registro reaberto por "NÃO SAIU" promovido em cima do
         // titular da noite, derrubando todo carregamento do quadro e o bot).
-        const replacement = existing.boardStartedAt
-            ? await tx.query.interventionOccupancies.findFirst({
-                where: and(
-                    eq(interventionOccupancies.baseId, existing.baseId),
-                    isNull(interventionOccupancies.boardStartedAt),
-                    isNull(interventionOccupancies.endedAt),
-                ),
-                orderBy: [asc(interventionOccupancies.startedAt)],
-            })
-            : null;
-
-        if (replacement && replacement.startedAt.getTime() <= input.endedAt.getTime()) {
-            await tx.update(interventionOccupancies)
-                .set({
-                    boardStartedAt: input.endedAt,
-                    updatedByUserId: updatedByUserId ?? null,
-                    updatedAt: new Date(),
-                })
-                .where(eq(interventionOccupancies.id, replacement.id));
+        if (existing.boardStartedAt) {
+            await promoteInterventionBoardReplacement(tx, {
+                baseId: existing.baseId,
+                vacatedAt: input.endedAt,
+                updatedByUserId: updatedByUserId ?? null,
+            });
         }
 
         await syncInterventionBankHours(tx, id);
@@ -1417,11 +1564,27 @@ export async function continueInterventionOccupancy(
             existingScheduledEndAt: existing.scheduledEndAt,
             continuationAt,
         });
-        const nextBoardStartedAt = resolveContinuationBoardStartedAt({
-            startedAt: existing.startedAt,
-            boardStartedAt: existing.boardStartedAt,
-            continuedAt: continuationAt,
-        });
+        // Quem continua FORA do quadro (dupla, deslocado, sombra) com outro titular
+        // na base segue fora dele: dar board aqui estouraria o índice de um titular
+        // por base (23505 cru no "continua" de quem divide a USA).
+        const boardHeldByOther = existing.boardStartedAt
+            ? null
+            : await tx.query.interventionOccupancies.findFirst({
+                where: and(
+                    eq(interventionOccupancies.baseId, existing.baseId),
+                    isNotNull(interventionOccupancies.boardStartedAt),
+                    isNull(interventionOccupancies.endedAt),
+                    ne(interventionOccupancies.id, existing.id),
+                ),
+                columns: { id: true },
+            });
+        const nextBoardStartedAt = boardHeldByOther
+            ? null
+            : resolveContinuationBoardStartedAt({
+                startedAt: existing.startedAt,
+                boardStartedAt: existing.boardStartedAt,
+                continuedAt: continuationAt,
+            });
         const nextShiftLabel = resolveContinuationInPlaceShiftLabel({
             existingStartedAt: existing.startedAt,
             existingShiftLabel: existing.shiftLabel,
@@ -1436,7 +1599,11 @@ export async function continueInterventionOccupancy(
                 shiftLabel: nextShiftLabel,
                 scheduledStartAt: inferredScheduledStartAt,
                 scheduledEndAt: nextScheduledEndAt,
-                notes: nextNotes ?? null,
+                // "continua" troca as notas pelo texto da mensagem: quem segue fora do
+                // quadro mantém o marcador; quem assumiu o quadro deixa de ser dupla.
+                notes: nextBoardStartedAt
+                    ? stripInterventionCompanionMarker(nextNotes)
+                    : preserveInterventionOffBoardMarkers(existing.notes, nextNotes),
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),
             })

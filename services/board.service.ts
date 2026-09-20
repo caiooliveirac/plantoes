@@ -134,6 +134,8 @@ export interface InterventionBoardRow {
   scheduledStartAt?: string | null;
   shadowOccupants?: BoardShadowOccupant[];
   displacedOccupants?: BoardShadowOccupant[];
+  /** Dupla: outros médicos dividindo a base com o titular ("Fulano + Beltrano"). */
+  companionOccupants?: BoardShadowOccupant[];
 }
 
 export type PreviousOperationalBucket = "P_INVERTIDO" | "P" | "SD" | "SN";
@@ -907,6 +909,28 @@ async function listOpenInterventionDisplacedOccupantsByBase(): Promise<Map<numbe
     from operations_v2.intervention_occupancies io
     join operations_v2.doctors d on d.id = io.doctor_id
     where io.ended_at is null and coalesce(io.notes, '') like '%[DESLOCADO]%'
+  `);
+  return groupShadowOccupantsByTarget(result, "baseId");
+}
+
+// "Dupla": segundo médico na mesma base (USA com dois médicos). Aberta, fora do
+// quadro (board nulo) e com o marcador [DUPLA] — ver modules/intervention/service.ts.
+// Deslocado e sombra têm lista própria; quem carrega os dois marcadores fica só nelas.
+async function listOpenInterventionCompanionOccupantsByBase(): Promise<Map<number, BoardShadowOccupant[]>> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    select io.id as "occupancyId", io.base_id as "baseId", io.doctor_id as "doctorId",
+           d.full_name as "doctorName", d.display_name as "displayName",
+           io.started_at as "startedAt", io.board_started_at as "boardStartedAt",
+           io.scheduled_end_at as "scheduledEndAt", io.scheduled_start_at as "scheduledStartAt"
+    from operations_v2.intervention_occupancies io
+    join operations_v2.doctors d on d.id = io.doctor_id
+    where io.ended_at is null
+      and io.board_started_at is null
+      and coalesce(io.notes, '') like '%[DUPLA]%'
+      and coalesce(io.notes, '') not like '%[DESLOCADO]%'
+      and coalesce(io.notes, '') !~* 'SOMBRA'
+    order by io.started_at
   `);
   return groupShadowOccupantsByTarget(result, "baseId");
 }
@@ -2022,14 +2046,18 @@ export async function listInterventionBoard() {
 
   const shadowByBase = await listOpenInterventionShadowOccupantsByBase();
   const displacedByBase = await listOpenInterventionDisplacedOccupantsByBase();
+  const companionByBase = await listOpenInterventionCompanionOccupantsByBase();
 
   return (result as unknown as Record<string, unknown>[]).map(mapInterventionRow).map((row) => {
     const shadows = (shadowByBase.get(row.baseId) ?? [])
       .filter((shadow) => shadow.occupancyId !== row.occupancyId);
     const displaced = (displacedByBase.get(row.baseId) ?? [])
       .filter((occ) => occ.occupancyId !== row.occupancyId);
+    const companions = (companionByBase.get(row.baseId) ?? [])
+      .filter((occ) => occ.occupancyId !== row.occupancyId);
     const withShadows = shadows.length > 0 ? { ...row, shadowOccupants: shadows } : row;
-    return displaced.length > 0 ? { ...withShadows, displacedOccupants: displaced } : withShadows;
+    const withDisplaced = displaced.length > 0 ? { ...withShadows, displacedOccupants: displaced } : withShadows;
+    return companions.length > 0 ? { ...withDisplaced, companionOccupants: companions } : withDisplaced;
   });
 }
 

@@ -59,7 +59,7 @@ import type { UserRole } from "@/modules/auth/contracts";
 type ActionMode = "correct" | "end" | "start";
 type PriorityLevel = "critical" | "high" | "elevated" | "steady";
 type OperationalDomain = "regulation" | "intervention";
-type TransferConflictStrategy = "remove_destination" | "move_destination";
+type TransferConflictStrategy = "remove_destination" | "move_destination" | "share_destination" | "displace_destination";
 type ViewMode = "live" | "history";
 
 const NIGHT_WORK_OPTIONS: MealBreakNightWorkSlot[] = ["23:00", "03:00"];
@@ -93,6 +93,8 @@ interface InterventionCard extends InterventionBoardRow {
     domain: "intervention";
     isShadow?: boolean;
     isDisplaced?: boolean;
+    // Dupla: segundo médico da mesma base, acionado pela própria sub-linha.
+    isCompanion?: boolean;
 }
 
 type BoardCard = RegulationCard | InterventionCard;
@@ -410,6 +412,77 @@ function renderDisplacedOccupantLines(
             })}
         </div>
     );
+}
+
+// Sub-linhas de "dupla": outro médico dividindo a MESMA base com o titular (USA com
+// dois médicos). É par do titular, não acompanhante: nome em destaque com "+" na
+// frente ("Leo Morais" / "+ Leonardo Copque") e as mesmas ações — abrir (remanejar,
+// corrigir, encerrar) e Retirar.
+function renderCompanionOccupantLines(
+    companionOccupants: BoardShadowOccupant[] | undefined,
+    actions?: {
+        onOpen?: (occ: BoardShadowOccupant) => void;
+        onRetirar?: (occ: BoardShadowOccupant) => void;
+    },
+) {
+    if (!companionOccupants || companionOccupants.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="ops-inline-flags subtle">
+            {companionOccupants.map((occ) => {
+                const name = occ.displayName?.trim() || occ.doctorName;
+                const arrival = formatBoardTime(occ.startedAt);
+                const content = (
+                    <>
+                        <span className="ops-companion-plus" aria-hidden="true">+</span>
+                        <span className="ops-shadow-name" title={name}>{name}</span>
+                        <span className="ops-shadow-time">{arrival}</span>
+                    </>
+                );
+                const line = actions?.onOpen ? (
+                    <button
+                        key={`${occ.occupancyId}-open`}
+                        type="button"
+                        className="ops-doctor-line companion clickable"
+                        onClick={(event) => { event.stopPropagation(); actions.onOpen?.(occ); }}
+                        title={`${name} divide esta base com o titular desde ${arrival}. Abrir ações (remanejar, corrigir ou encerrar).`}
+                    >
+                        {content}
+                    </button>
+                ) : (
+                    <span
+                        key={`${occ.occupancyId}-open`}
+                        className="ops-doctor-line companion"
+                        title={`${name} divide esta base com o titular desde ${arrival}.`}
+                    >
+                        {content}
+                    </span>
+                );
+                if (!actions?.onRetirar) {
+                    return line;
+                }
+                return (
+                    <span key={occ.occupancyId} className="ops-displaced-actions">
+                        {line}
+                        <button
+                            type="button"
+                            className="ops-kick-button"
+                            onClick={(event) => { event.stopPropagation(); actions.onRetirar?.(occ); }}
+                            title={`Retirar ${name} desta base`}
+                        >
+                            Retirar
+                        </button>
+                    </span>
+                );
+            })}
+        </div>
+    );
+}
+
+function isCompanionCard(card: BoardCard) {
+    return card.domain === "intervention" && Boolean(card.isCompanion);
 }
 
 function formatDateTimeDetail(value: string | null) {
@@ -1003,13 +1076,14 @@ function canContinueIntervention(card: BoardCard, generatedAt: string) {
         && Boolean(card.occupancyId)
         && !card.isDisplaced
         && !card.isShadow
+        && !isCompanionCard(card)
         && isInterventionAwaitingNews(card, generatedAt);
 }
 
 function overlayOffBoardOccupant(
     card: BoardCard,
     occ: BoardShadowOccupant,
-    kind: "shadow" | "displaced",
+    kind: "shadow" | "displaced" | "companion",
 ): BoardCard {
     const common = {
         occupancyId: occ.occupancyId,
@@ -1030,6 +1104,8 @@ function overlayOffBoardOccupant(
         return {
             ...card,
             ...common,
+            companionOccupants: undefined,
+            isCompanion: kind === "companion",
             scheduledStartAt: occ.scheduledStartAt ?? card.scheduledStartAt,
         };
     }
@@ -1236,7 +1312,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     // genérico) e concentra destino + sombra + motivo + conflito + erro num só lugar.
     const [remanejarOpen, setRemanejarOpen] = useState(false);
     const [fixedRoleAck, setFixedRoleAck] = useState(false);
-    const [transferConflictStrategy, setTransferConflictStrategy] = useState<TransferConflictStrategy>("remove_destination");
+    const [transferConflictStrategy, setTransferConflictStrategy] = useState<TransferConflictStrategy>("displace_destination");
     const [transferRelocationKey, setTransferRelocationKey] = useState("");
     // Toggle do remanejamento: o ocupante chega ao destino como sombra (acompanha o
     // titular, não ocupa a vaga) ou como médico/titular. Espelha o estado de origem.
@@ -1757,7 +1833,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         && selectedTransferTarget
         && selectedTransferTarget.key !== selectedCardTargetKey,
     );
-    const selectedTransferConflict = isTransferAction && selectedTransferTarget && selectedTransferTarget.occupancyId && selectedTransferTarget.occupancyId !== selectedCard?.occupancyId
+    // Sombra coexiste com quem está no destino: não há conflito a resolver (antes, marcar
+    // "sombra" ainda mandava "retirar o ocupante" e tirava o titular do plantão).
+    const selectedTransferConflict = isTransferAction && !transferAsShadow && selectedTransferTarget && selectedTransferTarget.occupancyId && selectedTransferTarget.occupancyId !== selectedCard?.occupancyId
         ? selectedTransferTarget
         : null;
     const transferFixedRoleImpact = isTransferAction && selectedCard && selectedTransferTarget
@@ -1850,14 +1928,17 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         .slice(0, 8);
     const doctorSelectionLocked = Boolean(selectedDoctor && doctorQuery.trim() === doctorOptionLabel(selectedDoctor));
 
+    // Padrão nunca é tirar alguém do plantão: base de intervenção comporta dois médicos
+    // (ficam os dois); ramal desloca quem estava (sai do quadro, segue no plantão).
+    // Retirar e remanejar o ocupante continuam disponíveis, mas por escolha explícita.
     useEffect(() => {
         if (!selectedTransferConflict || !selectedCardTargetKey) {
-            setTransferConflictStrategy("remove_destination");
+            setTransferConflictStrategy("displace_destination");
             setTransferRelocationKey("");
             return;
         }
 
-        setTransferConflictStrategy("remove_destination");
+        setTransferConflictStrategy(selectedTransferConflict.domain === "intervention" ? "share_destination" : "displace_destination");
         setTransferRelocationKey(selectedCardTargetKey);
     }, [selectedCardTargetKey, selectedTransferConflict?.key]);
 
@@ -1892,7 +1973,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
     function resetTransferFlow() {
         setTransferConfirmOpen(false);
-        setTransferConflictStrategy("remove_destination");
+        setTransferConflictStrategy("displace_destination");
         setTransferRelocationKey("");
         setTransferAsShadow(false);
     }
@@ -1918,7 +1999,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setActionMode(
             card.status === "waiting"
                 ? "start"
-                : card.isDisplaced || card.isShadow
+                : card.isDisplaced || card.isShadow || isCompanionCard(card)
                     ? null
                     : canEditActiveCard(card) ? "correct" : null,
         );
@@ -3179,6 +3260,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         {renderShadowOccupantLines(card.shadowOccupants, session?.canManage
                             ? (shadow) => openProfessionalDrawer(overlayOffBoardOccupant(card, shadow, "shadow"))
                             : undefined)}
+                        {renderCompanionOccupantLines(card.companionOccupants, session?.canManage
+                            ? {
+                                onOpen: (occ) => openProfessionalDrawer(overlayOffBoardOccupant(card, occ, "companion")),
+                                onRetirar: (occ) => setKickModalCard(overlayOffBoardOccupant(card, occ, "companion")),
+                            }
+                            : undefined)}
                         {renderDisplacedOccupantLines(card.displacedOccupants, session?.canManage
                             ? {
                                 onOpen: (occ) => openProfessionalDrawer(overlayOffBoardOccupant(card, occ, "displaced")),
@@ -4270,6 +4357,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                 {" "}Fora do quadro — chegada preservada. Remaneje para um destino ou encerre se foi erro.
                                             </p>
                                         )}
+                                        {isCompanionCard(selectedCard) && (
+                                            <p className="chief-field-hint">
+                                                Divide esta base com o titular — os dois seguem no plantão. Remaneje, corrija ou encerre só este médico.
+                                            </p>
+                                        )}
                                         {selectedCard.isShadow && (
                                             <p className="chief-field-hint">
                                                 <span className="ops-inline-flag shadow">sombra</span>
@@ -4345,7 +4437,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     </section>
                                 )}
 
-                                {session?.canManage && canManageCardState(selectedCard) && !selectedCard.isDisplaced && !selectedCard.isShadow && (
+                                {session?.canManage && canManageCardState(selectedCard) && !selectedCard.isDisplaced && !selectedCard.isShadow && !isCompanionCard(selectedCard) && (
                                     <section className="chief-drawer-section">
                                         <div className="chief-departure-strip">
                                             <div>
@@ -4657,7 +4749,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                         Encerrar
                                                     </button>
                                                 )}
-                                                {canEditActiveCard(selectedCard) && (selectedCard.isDisplaced || selectedCard.isShadow) && (
+                                                {canEditActiveCard(selectedCard) && (selectedCard.isDisplaced || selectedCard.isShadow || isCompanionCard(selectedCard)) && (
                                                     <button type="button" className="chief-primary-button" onClick={() => openRemanejarModal(selectedCard)}>
                                                         Remanejar
                                                     </button>
@@ -5066,20 +5158,40 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     <div className="chief-transfer-resolution-block">
                                         <div className="chief-transfer-warning-card">
                                             <strong>Destino ocupado</strong>
-                                            <span>{selectedTransferConflict.code} esta com {selectedTransferConflict.occupantName}.</span>
+                                            <span>
+                                                {selectedTransferConflict.code} esta com {selectedTransferConflict.occupantName}.
+                                                {transferConflictStrategy === "share_destination"
+                                                    ? ` Ao confirmar, a base fica com dois medicos: ${selectedTransferConflict.occupantName} + ${displayDoctorName(selectedCard)}. Ninguem e retirado; cada um pode ser remanejado ou retirado depois, clicando no nome.`
+                                                    : transferConflictStrategy === "displace_destination"
+                                                        ? ` Ao confirmar, ${selectedTransferConflict.occupantName} sai do quadro como deslocado, mas segue no plantao (e pago) ate ser remanejado ou retirado.`
+                                                        : ""}
+                                            </span>
                                         </div>
 
                                         <div className="chief-transfer-resolution-grid">
-                                            <label className={`chief-transfer-choice ${transferConflictStrategy === "remove_destination" ? "active" : ""}`.trim()}>
-                                                <input
-                                                    type="radio"
-                                                    name="transfer-conflict-strategy"
-                                                    value="remove_destination"
-                                                    checked={transferConflictStrategy === "remove_destination"}
-                                                    onChange={() => setTransferConflictStrategy("remove_destination")}
-                                                />
-                                                <span>Retirar {selectedTransferConflict.occupantName} do plantao</span>
-                                            </label>
+                                            {selectedTransferConflict.domain === "intervention" ? (
+                                                <label className={`chief-transfer-choice ${transferConflictStrategy === "share_destination" ? "active" : ""}`.trim()}>
+                                                    <input
+                                                        type="radio"
+                                                        name="transfer-conflict-strategy"
+                                                        value="share_destination"
+                                                        checked={transferConflictStrategy === "share_destination"}
+                                                        onChange={() => setTransferConflictStrategy("share_destination")}
+                                                    />
+                                                    <span>Ficam os dois em {selectedTransferConflict.code}</span>
+                                                </label>
+                                            ) : (
+                                                <label className={`chief-transfer-choice ${transferConflictStrategy === "displace_destination" ? "active" : ""}`.trim()}>
+                                                    <input
+                                                        type="radio"
+                                                        name="transfer-conflict-strategy"
+                                                        value="displace_destination"
+                                                        checked={transferConflictStrategy === "displace_destination"}
+                                                        onChange={() => setTransferConflictStrategy("displace_destination")}
+                                                    />
+                                                    <span>Deslocar {selectedTransferConflict.occupantName} (sai do quadro, segue no plantao)</span>
+                                                </label>
+                                            )}
                                             <label className={`chief-transfer-choice ${transferConflictStrategy === "move_destination" ? "active" : ""}`.trim()}>
                                                 <input
                                                     type="radio"
@@ -5089,6 +5201,16 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                                     onChange={() => setTransferConflictStrategy("move_destination")}
                                                 />
                                                 <span>Remanejar {selectedTransferConflict.occupantName} para outro posto/base</span>
+                                            </label>
+                                            <label className={`chief-transfer-choice ${transferConflictStrategy === "remove_destination" ? "active" : ""}`.trim()}>
+                                                <input
+                                                    type="radio"
+                                                    name="transfer-conflict-strategy"
+                                                    value="remove_destination"
+                                                    checked={transferConflictStrategy === "remove_destination"}
+                                                    onChange={() => setTransferConflictStrategy("remove_destination")}
+                                                />
+                                                <span>Retirar {selectedTransferConflict.occupantName} do plantao</span>
                                             </label>
                                         </div>
 
@@ -5133,8 +5255,17 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     </div>
                                 ) : (
                                     <div className="chief-transfer-info-card">
-                                        <strong>Destino livre</strong>
-                                        <span>O remanejamento vai apenas limpar a origem e recriar a lotacao em {selectedTransferTarget.code}.</span>
+                                        {transferAsShadow && selectedTransferTarget.status === "occupied" && selectedTransferTarget.key !== selectedCardTargetKey ? (
+                                            <>
+                                                <strong>Entra como sombra</strong>
+                                                <span>{selectedTransferTarget.occupantName} segue titular em {selectedTransferTarget.code}. Ninguem e retirado.</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <strong>Destino livre</strong>
+                                                <span>O remanejamento vai apenas limpar a origem e recriar a lotacao em {selectedTransferTarget.code}.</span>
+                                            </>
+                                        )}
                                     </div>
                                 ))}
 

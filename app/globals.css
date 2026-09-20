@@ -13908,3 +13908,44 @@ button.chief-payable-tag:focus-visible {
     display: flex;
     gap: 8px;
 }
+
+/* Dupla: segundo médico da MESMA base de intervenção (USA com dois médicos). É par
+   do titular, não acompanhante — sem tracejado nem itálico: lê-se "Fulano" / "+ Beltrano". */
+.ops-doctor-line.companion {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.ops-doctor-line.companion .ops-companion-plus {
+    font-weight: 700;
+    opacity: 0.7;
+}
+
+.ops-doctor-line.companion .ops-shadow-name {
+    font-weight: 700;
+}
+
+.ops-doctor-line.companion .ops-shadow-time {
+    font-size: 0.62rem;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.7;
+}
+
+button.ops-doctor-line.companion.clickable {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    padding: 0 4px 0 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+
+button.ops-doctor-line.companion.clickable:hover {
+    background: rgba(132, 146, 166, 0.16);
+}
