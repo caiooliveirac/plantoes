@@ -58,6 +58,13 @@ test("resolveRoleLabelForTargetChange: remanejo 1367 -> 2263 sem papel carimba C
     }), "COI");
 });
 
+test("ramal eventual 4091 carimba DISP em qualquer turno", () => {
+    for (const shiftLabel of ["SD", "SN", "P"] as const) {
+        assert.equal(resolveOperationalRoleLabel({ domain: "regulation", code: "4091", shiftLabel, roleLabel: null }), "DISP");
+    }
+    assert.equal(resolveOperationalRoleLabel({ domain: "regulation", code: "4091", shiftLabel: "SD", roleLabel: "MRV" }), "DISP");
+});
+
 test("resolveRoleLabelForTargetChange: destino fixo vence papel carregado, exceto meio plantao e excecao manual", () => {
     assert.equal(resolveRoleLabelForTargetChange({
         destination: { domain: "regulation", code: "2262" },

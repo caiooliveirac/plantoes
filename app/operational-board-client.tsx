@@ -1147,6 +1147,10 @@ function resolveRegulationRoleEmphasis(card: RegulationCard, mealBreakSession: M
         return "emphasis-ies";
     }
 
+    if (roleLabel === "DISP") {
+        return "emphasis-disp";
+    }
+
     return "";
 }
 
@@ -1207,6 +1211,10 @@ function rowAccentLabel(card: BoardCard, shiftLabel: string, generatedAt: string
 
     if (emphasisClass === "emphasis-recip") {
         return "RECIP";
+    }
+
+    if (emphasisClass === "emphasis-disp") {
+        return "DISP";
     }
 
     return null;
