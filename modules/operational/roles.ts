@@ -4,6 +4,8 @@ export const OPERATIONAL_ROLE_REMOVED_SENTINEL = "SEM_FUNCAO";
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
 
 const COI_REGULATION_CODES = new Set(["2262", "2263"]);
+// Ramal eventual (on_demand, migration 0043): quem está nele está sempre DISP.
+const DISP_REGULATION_CODES = new Set(["4091"]);
 const RMT_DEFAULT_REGULATION_CODES = new Set(["1366"]);
 const DAY_MRV_BASAL_REGULATION_CODES = new Set(["2032", "2151"]);
 const REMOTE_PRIORITY_REGULATION_CODES = new Set(["1321", "1322", "1323", "1325", "1361", "1362", "1363", "1364", "1365"]);
@@ -68,6 +70,10 @@ export function resolveFixedOperationalRole(params: {
 
     if (params.domain === "regulation" && COI_REGULATION_CODES.has(params.code)) {
         return "COI";
+    }
+
+    if (params.domain === "regulation" && DISP_REGULATION_CODES.has(params.code)) {
+        return "DISP";
     }
 
     return null;
@@ -254,6 +260,9 @@ export function getOperationalRoleTone(roleLabel: string | null | undefined) {
     }
     if (normalized === "PIAM") {
         return "piam" as const;
+    }
+    if (normalized === "DISP") {
+        return "disp" as const;
     }
 
     return "neutral" as const;
