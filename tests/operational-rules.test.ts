@@ -1038,6 +1038,16 @@ test("parses regulation arrival on ramal 1476 in Telegram arrival", () => {
     assert.equal(parsed.isDeparture, false);
 });
 
+test("parses regulation arrival on eventual ramal 4091 in Telegram arrival", () => {
+    const parsed = parseMessage("Karen Seifarth 4091 07:00 SD");
+
+    assert.equal(parsed.sector, "REGULATION");
+    assert.equal(parsed.baseCode, "4091");
+    assert.equal(parsed.arrivalTime, "07:00");
+    assert.equal(parsed.shiftType, "SD");
+    assert.equal(parsed.unknownTargetToken ?? null, null);
+});
+
 test("parses continuation wording without explicit P as continuation", () => {
     const parsed = parseMessage("Taiane Pinto continua BR05 19:00");
 

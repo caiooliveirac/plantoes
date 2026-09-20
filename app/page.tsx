@@ -5,7 +5,7 @@ import { OperationalBoardClient } from "@/app/operational-board-client";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
 import { getExpectedSchedule } from "@/modules/operational/expected-schedule";
 import { evaluateMealBreakSessionAgainstBoard, getCurrentOperationalMealBreakSession, getCurrentMealBreakEligibilityOverrides } from "@/modules/telegram/meal-breaks";
-import { getOperationalBoard, getPreviousOperationalBoard } from "@/services/board.service";
+import { getOperationalBoard, getPreviousOperationalBoard, listOnDemandRegulationPostOptions } from "@/services/board.service";
 import { listDoctorsForChiefInvite } from "@/services/chief-access.service";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +42,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         session?.user.roles.some((role) => role === "admin" || role === "chief")
         && !session.user.mustChangePassword,
     );
-    const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility, expectedSchedule] = await Promise.all([
+    const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility, expectedSchedule, onDemandRegulationPosts] = await Promise.all([
         getOperationalBoard(),
         // Dashboard mantem a visao legada (dia operacional anterior completo,
         // tudo editavel) independente do turno corrente. A pivotagem shift-aware
@@ -54,6 +54,9 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         // Nomes previstos da escala externa seguem a mesma regra das faltas
         // nominais: leitura da chefia — anônimo continua vendo o quadro puro.
         canManage ? getExpectedSchedule() : Promise.resolve(null),
+        // Ramais eventuais (4091): fora do quadro quando vazios; a chefia ainda
+        // precisa vê-los nos seletores de chegada manual e remanejamento.
+        canManage ? listOnDemandRegulationPostOptions() : Promise.resolve([]),
     ]);
 
     return (
@@ -62,6 +65,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
             shiftLabel={resolveOperationalShiftLabel(new Date())}
             regulation={board.regulation}
             intervention={board.intervention}
+            onDemandRegulationPosts={onDemandRegulationPosts}
             mealBreakSession={mealBreakSession}
             mealBreakEligibility={mealBreakEligibility}
             mealBreakEvaluation={mealBreakSession

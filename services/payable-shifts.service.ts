@@ -70,6 +70,7 @@ function mapPaymentAllocationTarget(row: Record<string, unknown>): PaymentAlloca
         targetLabel: String(row.targetLabel),
         sortOrder: Number(row.sortOrder ?? 0),
         defaultRole: (row.defaultRole ?? null) as string | null,
+        onDemand: Boolean(row.onDemand ?? false),
         disabledAt: null,
         reactivatedAt: null,
         disabledReason: null,
@@ -158,7 +159,8 @@ async function loadTargets(startIso: string, endIso: string) {
             rp.code as "targetCode",
             rp.label as "targetLabel",
             rp.sort_order as "sortOrder",
-            rp.default_role as "defaultRole"
+            rp.default_role as "defaultRole",
+            rp.on_demand as "onDemand"
         from operations_v2.regulation_posts rp
                 where rp.is_active = true
                      or exists (
@@ -182,7 +184,8 @@ async function loadTargets(startIso: string, endIso: string) {
             ib.code as "targetCode",
             ib.label as "targetLabel",
             ib.sort_order as "sortOrder",
-            null::text as "defaultRole"
+            null::text as "defaultRole",
+            false as "onDemand"
         from operations_v2.intervention_bases ib
                 where ib.is_active = true
                      or exists (

@@ -170,6 +170,11 @@ export const regulationPosts = operationsV2.table(
         defaultRole: varchar("default_role", { length: 100 }),
         sortOrder: integer("sort_order").notNull().default(0),
         isActive: boolean("is_active").notNull().default(true),
+        // Ramal "eventual" (ex.: 4091, migration 0043): só entra no quadro enquanto
+        // tem médico ativo, nunca conta como vaga descoberta e fica fora da divisão
+        // de almoço/jantar por regra fixa. Continua ativo (is_active) para que a
+        // chegada pelo bot/painel seja aceita normalmente.
+        onDemand: boolean("on_demand").notNull().default(false),
     },
     (table) => [uniqueIndex("regulation_posts_code_idx").on(table.code)],
 );

@@ -33,6 +33,7 @@
 Quadro operacional do SAMU São Paulo. Rastreia a presença de médicos em:
 - **Bases de intervenção** (USA/ambulâncias): SM01, SM02, PR03, PM04, PM05, CC10, CC20, CC30, CC40, CC50, CC60, CC70
 - **Postos de regulação** (ramais telefônicos): 1321–1329, 1361–1368, 2031–2035, 2151–2154, 2377, NUCLEO, PIAM
+  - **4091** é ramal *eventual* (`regulation_posts.on_demand`): só aparece no quadro com médico dentro, nunca conta como vaga e fica fora da divisão de almoço/jantar
 
 O sistema recebe mensagens de grupos no Telegram, interpreta chegadas/saídas/continuidades, e mantém um quadro em tempo real via Next.js. Também gera relatórios de pagamento, auditorias de cobertura, e alertas operacionais.
 
