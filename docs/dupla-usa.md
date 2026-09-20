@@ -14,7 +14,7 @@ valendo: **um titular por base**. A dupla cabe nele porque entra fora do quadro:
 | `board_started_at` | preenchido | `NULL` |
 | nota | — | `[DUPLA] <iso>` |
 | painel | linha principal | sub-linha `+ Nome`, clicável, com **Retirar** |
-| pagamento | linha do alvo | linha extra ("presença sem titularidade") |
+| pagamento | linha do alvo | linha extra, **sem aviso de conflito** |
 
 Helpers em `modules/intervention/service.ts`: `shouldJoinInterventionBaseAsCompanion`,
 `appendInterventionCompanionMarker`, `stripInterventionCompanionMarker`,
@@ -37,13 +37,20 @@ balão avisa: "CZ50 está com 2 médicos: A + B. Ninguém foi retirado".
 
 ## Ciclo de vida
 
-- **Titular sai** (saída, Retirar, remanejo): a dupla mais antiga assume o quadro e
-  perde o marcador — dupla antes de sombra (`pickInterventionBoardReplacement`,
+- **Titular sai** (saída, Retirar, remanejo): a dupla mais antiga assume o quadro —
+  dupla antes de sombra (`pickInterventionBoardReplacement`,
   `reconcileInterventionBoardState`). Base que já tem titular não promove ninguém.
+  O `[DUPLA]` **fica** nas notas: é o registro de como ela entrou e é o que o pagamento
+  lê. Em quem tem board o marcador é inerte para painel e varredura (os dois exigem
+  board nulo). Só o remanejo para OUTRO alvo tira o marcador, e só da ocupação nova.
 - **Dupla esquecida**: vence no `scheduled_end_at`, como sombra
   (`resolveStaleShadowInterventionEndedAt`). Saída tardia avisada depois ainda ajusta o
   registro fechado.
 - **"Continua" fora do quadro** com outro titular na base mantém board nulo.
+- **Notas reescritas** ("continua", correção pela tela) nunca apagam o marcador:
+  `preserveInterventionOffBoardMarkers` (fora do quadro: `[DUPLA]` + `[DESLOCADO]`) e
+  `preserveInterventionCompanionMarker` (com board: só `[DUPLA]`). Board nulo com
+  marcador apagado = médico aberto que ninguém vê nem retira.
 
 ## Remanejo pelo painel (`transferOperationalOccupancy`)
 
@@ -64,9 +71,24 @@ plantão), `move_destination`, `remove_destination`. **O padrão nunca é retira
 
 Erro de banco nunca chega cru à tela: `describeOperationalError`.
 
-## Em aberto
+## Pagamento (`services/board.service.ts`)
 
-- Pagamento: titular + dupla no mesmo alvo/turno ainda recebem o aviso "Conflito entre
-  medicos titulares no mesmo alvo/turno" (vão para revisão, os dois pagáveis). Tirar o
-  aviso para `[DUPLA]` é decisão financeira — ler ADR-006 antes.
+Decisão do dono (20/09/2026): **os dois são pagos.**
+
+- **USA com dupla**: `isCompanion` (nota `[DUPLA]`) não conta como titular concorrente
+  em `hasDoctorOverlapConflict` → sem "Conflito entre medicos titulares", linha
+  `ready_for_payment`.
+- **Ramal com deslocado**: o aviso de conflito **fica** (é erro de não ter remanejado),
+  e a linha é paga do mesmo jeito. `needs_review` avisa, **não bloqueia**: o total do
+  fechamento soma todo plantão pagável, qualquer que seja o status.
+- **Elegibilidade**: a base descartava toda presença sem board vinda do bot
+  (`lacksInterventionBoardTitularity` em `isEligiblePresenceCandidate`). Dupla e
+  deslocado são fora-do-quadro POR REGISTRO, não ruído — `isDeclaredOffBoardPresence`
+  os mantém na folha. Sem isso quem dividia a USA, ou era deslocado dela, não recebia.
+- ADR-006 intacto (um médico, um plantão por slot): aqui são médicos diferentes no
+  mesmo alvo. `tests/payment-dupla.test.ts` cobre os dois casos e o invariante.
+
+## Limites
+
 - Regulação não tem dupla: ramal é um telefone. Lá vale deslocar.
+- Dupla não aparece no "Plantão Anterior" como titular (mesmo tratamento da sombra).

@@ -38,6 +38,7 @@ import {
     appendInterventionCompanionMarker,
     isInterventionBaseDeactivationActive,
     isInterventionShadowOccupancyNotes,
+    preserveInterventionCompanionMarker,
     preserveInterventionOffBoardMarkers,
     stripInterventionCompanionMarker,
 } from "@/modules/intervention/service";
@@ -449,8 +450,6 @@ async function reconcileInterventionBoardState(tx: Executor, baseId: number, upd
             await tx.update(interventionOccupancies)
                 .set({
                     boardStartedAt: nextBoardStartedAt,
-                    // Quem assume o quadro deixa de ser dupla.
-                    ...(nextBoardStartedAt ? { notes: stripInterventionCompanionMarker(occupancy.notes) } : {}),
                     updatedAt: new Date(),
                     updatedByUserId: updatedByUserId ?? null,
                 })
@@ -1415,7 +1414,9 @@ export async function correctInterventionOccupancy(
                 // Corrigir pela tela troca as notas pelo motivo digitado: quem está fora
                 // do quadro (dupla/deslocado) mantém o marcador, senão some do painel.
                 notes: hasOwn(input, "notes")
-                    ? (boardStartedAt ? input.notes ?? null : preserveInterventionOffBoardMarkers(existing.notes, input.notes))
+                    ? (boardStartedAt
+                        ? preserveInterventionCompanionMarker(existing.notes, input.notes)
+                        : preserveInterventionOffBoardMarkers(existing.notes, input.notes))
                     : existing.notes,
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),

@@ -5,6 +5,7 @@ import {
     appendInterventionCompanionMarker,
     isInterventionCompanionOccupancyNotes,
     pickInterventionBoardReplacement,
+    preserveInterventionCompanionMarker,
     preserveInterventionOffBoardMarkers,
     resolveStaleShadowInterventionEndedAt,
     shouldJoinInterventionBaseAsCompanion,
@@ -87,7 +88,7 @@ describe("shouldJoinInterventionBaseAsCompanion", () => {
 });
 
 describe("marcador [DUPLA]", () => {
-    it("entra uma vez só e sai limpo quando a dupla assume o quadro", () => {
+    it("entra uma vez só; o remanejo para outro alvo tira o marcador da ocupação nova", () => {
         const joinedAt = d("2026-09-20T09:40:00-03:00");
         const marked = appendInterventionCompanionMarker("Leonardo Copque CZ50", joinedAt);
         assert.ok(marked?.includes(INTERVENTION_COMPANION_NOTE_MARKER));
@@ -113,6 +114,13 @@ describe("preserveInterventionOffBoardMarkers", () => {
             /\[DESLOCADO\]/,
         );
         assert.equal(preserveInterventionOffBoardMarkers(existing, null), "[DUPLA] 2026-09-20T12:40:00.000Z");
+    });
+
+    it("quem assumiu o quadro leva só o [DUPLA] adiante (é o que o pagamento lê); [DESLOCADO] não acompanha", () => {
+        const existing = "Fulano CZ50\n[DUPLA] 2026-09-20T12:40:00.000Z\n[DESLOCADO] 2026-09-20T13:00:00.000Z por Beltrano";
+        const kept = preserveInterventionCompanionMarker(existing, "Fulano continua CZ50") ?? "";
+        assert.match(kept, /\[DUPLA\]/);
+        assert.doesNotMatch(kept, /\[DESLOCADO\]/);
     });
 });
 
