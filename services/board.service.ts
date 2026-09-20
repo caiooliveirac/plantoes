@@ -323,7 +323,7 @@ function resolveTitularCandidateLabels(candidates: LogicalShiftCandidate[]) {
   const labels: string[] = [];
   const seen = new Set<string>();
   for (const candidate of candidates) {
-    if (candidate.isShadow) {
+    if (candidate.isShadow || candidate.isCompanion) {
       continue;
     }
 
@@ -339,10 +339,14 @@ function resolveTitularCandidateLabels(candidates: LogicalShiftCandidate[]) {
   return labels;
 }
 
+// Conflito = dois médicos DISPUTANDO a titularidade do mesmo alvo/turno. Sombra e
+// dupla não disputam nada: dividem o alvo com o titular, por registro do próprio
+// sistema. Deslocado de ramal (board nulo, sem marcador de dupla) segue contando —
+// lá o aviso fica, e a linha é paga do mesmo jeito (needs_review não bloqueia).
 function hasDoctorOverlapConflict(candidates: LogicalShiftCandidate[]) {
   const titularDoctorIds = new Set<string>();
   for (const candidate of candidates) {
-    if (candidate.isShadow) {
+    if (candidate.isShadow || candidate.isCompanion) {
       continue;
     }
 
@@ -477,6 +481,14 @@ export interface LogicalShiftCandidate extends PreviousOperationalRawRow {
    * construção, e tratá-la como presença extra duplicaria junho/2026 inteiro.
    */
   isBoardlessPresence: boolean;
+  /**
+   * Entrou como DUPLA numa base de intervenção ([DUPLA] nas notas): o próprio
+   * sistema registrou que dividia a base com o titular (docs/dupla-usa.md). Não é
+   * titular concorrente — os dois são pagos, sem aviso de conflito. Vale mesmo
+   * depois de assumir o quadro (o marcador fica como registro de como entrou).
+   * Opcional para não obrigar os fixtures de teste a preencher.
+   */
+  isCompanion?: boolean;
   duplicateConflict: boolean;
   durationMinutes: number | null;
   isLikelyNoise: boolean;
@@ -1064,6 +1076,7 @@ function mapLogicalShiftCandidate(row: PreviousOperationalRawRow): LogicalShiftC
     invalidTimeline,
     isShadow: /SOMBRA/.test(normalizeFreeText(row.notes)),
     isBoardlessPresence: row.boardStartedAt === null && row.source !== "import",
+    isCompanion: row.domain === "intervention" && (row.notes ?? "").toUpperCase().includes("[DUPLA]"),
     duplicateConflict: false,
     durationMinutes,
     isLikelyNoise,
@@ -4320,6 +4333,17 @@ function buildOccupiedSlotPresenceRow(params: {
   };
 }
 
+/**
+ * Fora do quadro POR REGISTRO do sistema, não por ruído: dupla ([DUPLA], dividia a
+ * base com o titular) e deslocado ([DESLOCADO], perdeu o board numa tomada/remanejo
+ * e seguiu no plantão). Os dois prestaram o plantão e são pagos — regra do dono
+ * (18 e 20/09/2026). Sem isto a base descartava toda presença sem board vinda do
+ * bot, e quem dividia a USA ou era deslocado dela sumia da folha.
+ */
+function isDeclaredOffBoardPresence(candidate: LogicalShiftCandidate) {
+  return Boolean(candidate.isCompanion) || (candidate.notes ?? "").toUpperCase().includes("[DESLOCADO]");
+}
+
 export function isEligiblePresenceCandidate(candidate: LogicalShiftCandidate) {
   if (candidate.invalidTimeline || candidate.isLikelyNoise) {
     return false;
@@ -4328,6 +4352,7 @@ export function isEligiblePresenceCandidate(candidate: LogicalShiftCandidate) {
   if (
     lacksInterventionBoardTitularity(candidate)
     && !candidate.isShadow
+    && !isDeclaredOffBoardPresence(candidate)
     && candidate.source !== "admin_correction"
     && candidate.source !== "manual"
   ) {

@@ -251,8 +251,12 @@ export function appendInterventionCompanionMarker(notes: string | null | undefin
     return notes?.trim() ? `${notes}\n${marker}` : marker;
 }
 
-// Dupla que assume o quadro (o titular saiu) deixa de ser dupla: o marcador sai
-// das notas para ela não voltar a ser lida como acompanhante depois.
+// Remanejo leva o médico para OUTRO alvo: lá ele não entrou como dupla, então o
+// marcador sai das notas da ocupação nova (a de origem, fechada, guarda o dela).
+// Quem assume o quadro na MESMA base NÃO perde o marcador: ele é o registro de que
+// entrou dividindo a base, e é o que o pagamento lê para não acusar conflito entre
+// titular e dupla. Fora do quadro só é dupla quem tem board nulo — marcador em quem
+// tem board é inerte para painel e varredura.
 export function stripInterventionCompanionMarker(notes: string | null | undefined) {
     if (!notes || !isInterventionCompanionOccupancyNotes(notes)) {
         return notes ?? null;
@@ -273,8 +277,28 @@ export function preserveInterventionOffBoardMarkers(
     existingNotes: string | null | undefined,
     nextNotes: string | null | undefined,
 ): string | null {
+    return preserveInterventionNoteMarkers(existingNotes, nextNotes, [
+        INTERVENTION_COMPANION_NOTE_MARKER,
+        INTERVENTION_DISPLACED_NOTE_MARKER,
+    ]);
+}
+
+// Quem tem board só carrega adiante o [DUPLA] (registro de como entrou, lido pelo
+// pagamento); [DESLOCADO] é estado de quem está fora do quadro e não acompanha.
+export function preserveInterventionCompanionMarker(
+    existingNotes: string | null | undefined,
+    nextNotes: string | null | undefined,
+): string | null {
+    return preserveInterventionNoteMarkers(existingNotes, nextNotes, [INTERVENTION_COMPANION_NOTE_MARKER]);
+}
+
+function preserveInterventionNoteMarkers(
+    existingNotes: string | null | undefined,
+    nextNotes: string | null | undefined,
+    markers: string[],
+): string | null {
     let result = nextNotes ?? null;
-    for (const marker of [INTERVENTION_COMPANION_NOTE_MARKER, INTERVENTION_DISPLACED_NOTE_MARKER]) {
+    for (const marker of markers) {
         if (!normalizeInterventionOperationalNotes(existingNotes).includes(marker)
             || normalizeInterventionOperationalNotes(result).includes(marker)) {
             continue;
@@ -367,7 +391,6 @@ async function promoteInterventionBoardReplacement(tx: Executor, params: {
     await tx.update(interventionOccupancies)
         .set({
             boardStartedAt: params.vacatedAt,
-            notes: stripInterventionCompanionMarker(replacement.notes),
             updatedByUserId: params.updatedByUserId,
             updatedAt: new Date(),
         })
@@ -1600,9 +1623,9 @@ export async function continueInterventionOccupancy(
                 scheduledStartAt: inferredScheduledStartAt,
                 scheduledEndAt: nextScheduledEndAt,
                 // "continua" troca as notas pelo texto da mensagem: quem segue fora do
-                // quadro mantém o marcador; quem assumiu o quadro deixa de ser dupla.
+                // quadro mantém o marcador que o deixa visível; [DUPLA] acompanha sempre.
                 notes: nextBoardStartedAt
-                    ? stripInterventionCompanionMarker(nextNotes)
+                    ? preserveInterventionCompanionMarker(existing.notes, nextNotes)
                     : preserveInterventionOffBoardMarkers(existing.notes, nextNotes),
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),
