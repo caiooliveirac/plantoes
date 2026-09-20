@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { interventionBases, regulationPosts } from "@/db/schema";
 import {
@@ -177,7 +177,10 @@ async function loadActiveTargetCodes() {
         db
             .select({ code: regulationPosts.code })
             .from(regulationPosts)
-            .where(eq(regulationPosts.isActive, true)),
+            // Ramal eventual (on_demand) não é posição fixa: fica fora da contagem
+            // de ativos e, como "inativo" para a auditoria, só aparece no slot em
+            // que alguém de fato foi pago nele (ver filtro em buildPositions).
+            .where(and(eq(regulationPosts.isActive, true), eq(regulationPosts.onDemand, false))),
         db
             .select({ code: interventionBases.code })
             .from(interventionBases)

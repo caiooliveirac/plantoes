@@ -1024,9 +1024,9 @@ function resolveMealBreakDoctorShiftLabel(params: {
 }
 
 /** Por que um ramal ativo do quadro fica fora da divisão. `fixed_post` (PIAM/
- *  NUCLEO) e `half_shift` (MEIO plantão) são regra fixa: nem participam nem
- *  interferem no cálculo das vagas. */
-export type MealBreakOutOfDivisionReason = "inactive" | "fixed_post" | "other_shift" | "half_shift";
+ *  NUCLEO), `on_demand_post` (ramal eventual, ex.: 4091) e `half_shift` (MEIO
+ *  plantão) são regra fixa: nem participam nem interferem no cálculo das vagas. */
+export type MealBreakOutOfDivisionReason = "inactive" | "fixed_post" | "on_demand_post" | "other_shift" | "half_shift";
 
 type MealBreakBoardEntry =
     | { kind: "doctor"; doctor: MealBreakRosterDoctor }
@@ -1048,6 +1048,14 @@ function mapRegulationBoardEntry(row: OperationalBoard["regulation"][number], mo
     // em qualquer modo. Sao postos fora do esquema de prioridade ordenada.
     if (isPiamRegulationPost(row.postCode) || isNucleoRegulationPost(row.postCode)) {
         return { kind: "excluded", reason: "fixed_post", ramal, name };
+    }
+
+    // Ramal eventual (on_demand, ex.: 4091): quem está nele é reforço fora do
+    // quadro fixo e não entra na divisão de almoço/jantar/descanso/trabalho —
+    // mesma regra de PIAM/NUCLEO (decisão do usuário, 20/09/2026). A chefia ainda
+    // pode incluir à mão pelo painel (forceMealBreakDoctorIntoSession).
+    if (row.onDemand) {
+        return { kind: "excluded", reason: "on_demand_post", ramal, name };
     }
 
     const effectiveShiftLabel = resolveMealBreakDoctorShiftLabel({
@@ -6827,6 +6835,9 @@ function resolveMealBreakOutOfDivisionMessage(ramal: string, reason: MealBreakOu
     }
     if (reason === "fixed_post" || isPiamRegulationPost(ramal) || isNucleoRegulationPost(ramal)) {
         return `O posto ${ramal} (PIAM/NUCLEO) não entra na divisão de almoço/jantar por regra fixa.`;
+    }
+    if (reason === "on_demand_post") {
+        return `O ramal ${ramal} é eventual e não entra na divisão de almoço/jantar por regra fixa (igual a PIAM/NÚCLEO). Se precisar, inclua à mão pelo ${resolveMealBreakPanelLabel()}.`;
     }
     if (reason === "other_shift") {
         return `O ramal ${ramal} está no outro turno, então não entra nesta divisão.`;

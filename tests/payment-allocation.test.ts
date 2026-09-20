@@ -1275,6 +1275,35 @@ test("buildPaymentAllocationBoardModel: base diurna (dayOnly) entra no SD e some
     assert.ok(snCodes.includes("PM04"), "base normal continua aparecendo no SN");
 });
 
+test("buildPaymentAllocationBoardModel: ramal eventual (onDemand) some vazio e entra ocupado", () => {
+    const onDemandTarget = makeTarget({ domain: "regulation", targetCode: "4091", targetLabel: "Ramal 4091", sortOrder: 235, onDemand: true });
+    const normalTarget = makeTarget();
+
+    const emptyBoard = buildPaymentAllocationBoardModel({
+        targets: [normalTarget, onDemandTarget],
+        rawRows: [],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        generatedAt: "2026-03-28T23:00:00.000Z",
+    });
+    assert.ok(!emptyBoard.regulation.some((row) => row.targetCode === "4091"), "ramal eventual vazio não é vaga descoberta");
+    assert.ok(emptyBoard.intervention.some((row) => row.targetCode === "PM04"), "alvo fixo continua aparecendo vazio");
+
+    const occupiedBoard = buildPaymentAllocationBoardModel({
+        targets: [normalTarget, onDemandTarget],
+        rawRows: [makeRow({ domain: "regulation", targetCode: "4091", targetLabel: "Ramal 4091", ramalLabel: "4091", notes: "Ana Souza 4091 SD 07:00" })],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        generatedAt: "2026-03-28T23:00:00.000Z",
+    });
+    const row4091 = occupiedBoard.regulation.find((row) => row.targetCode === "4091");
+    assert.equal(row4091?.doctorName, "Ana Souza", "chegada no 4091 vira linha pagável normal");
+});
+
 // Caso real (Rafael Santana, ramal 2152, 19/08/2026): declarou 24h às 07:00,
 // Jean Rios chegou às 07:09 e tomou a titularidade do quadro, Rafael ficou sem
 // board e permaneceu até 07:14 do dia seguinte. A folha truncava a cobertura

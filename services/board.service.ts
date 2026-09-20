@@ -80,6 +80,13 @@ export interface RegulationBoardRow {
   postCode: string;
   postLabel: string;
   defaultRole: string | null;
+  /**
+   * Ramal eventual (ex.: 4091): a linha só existe no quadro enquanto há médico
+   * ativo nele — nunca aparece como "aguardando" nem conta como vaga. Fica fora
+   * da divisão de almoço/jantar por regra fixa. Opcional para não obrigar os
+   * fixtures de teste a preencher; ausente = ramal fixo.
+   */
+  onDemand?: boolean;
   doctorId: string | null;
   doctorName: string | null;
   displayName: string | null;
@@ -96,6 +103,14 @@ export interface RegulationBoardRow {
   liveUpdatedAt: string | null;
   shadowOccupants?: BoardShadowOccupant[];
   displacedOccupants?: BoardShadowOccupant[];
+}
+
+/** Ramal eventual oferecido nos seletores (chegada manual / remanejamento) mesmo
+ *  sem linha no quadro — o quadro só o mostra com médico ativo. */
+export interface OnDemandRegulationPostOption {
+  postId: number;
+  postCode: string;
+  postLabel: string;
 }
 
 export interface InterventionBoardRow {
@@ -184,6 +199,9 @@ export interface PaymentAllocationTargetDefinition {
   defaultRole: string | null;
   /** Base diurna (07-19): só é alvo de cobertura/pagamento no turno SD. */
   dayOnly?: boolean;
+  /** Ramal eventual: só vira linha de pagamento/presença quando alguém ocupou o
+   *  slot; sem candidato, some (nunca é "vaga descoberta"). */
+  onDemand?: boolean;
   disabledAt?: string | null;
   reactivatedAt?: string | null;
   disabledReason?: string | null;
@@ -762,6 +780,7 @@ function mapRegulationRow(row: Record<string, unknown>): RegulationBoardRow {
     postCode: String(row.postCode ?? row.post_code ?? ""),
     postLabel: String(row.postLabel ?? row.post_label ?? ""),
     defaultRole: (row.defaultRole ?? row.default_role ?? null) as string | null,
+    onDemand: Boolean(row.onDemand ?? row.on_demand ?? false),
     doctorId: (row.doctorId ?? row.doctor_id ?? null) as string | null,
     doctorName: (row.doctorName ?? row.doctor_name ?? null) as string | null,
     displayName: (row.displayName ?? row.display_name ?? null) as string | null,
@@ -1778,6 +1797,7 @@ export async function listRegulationBoard() {
       rp.code as "postCode",
       rp.label as "postLabel",
       rp.default_role as "defaultRole",
+      rp.on_demand as "onDemand",
       case when ro.id is not null or lr.post_code is not null then coalesce(d.id, lr.doctor_id) else null end as "doctorId",
       case when ro.id is not null or lr.post_code is not null then coalesce(d.full_name, lr.doctor_name) else null end as "doctorName",
       case when ro.id is not null or lr.post_code is not null then coalesce(d.display_name, lr.display_name) else null end as "displayName",
@@ -1843,6 +1863,9 @@ export async function listRegulationBoard() {
       on ad.post_id = rp.id
      and ad.row_rank = 1
     where rp.is_active = true
+      -- Ramal eventual (on_demand): só existe no quadro enquanto alguém está
+      -- nele. Vazio ou desativado, não vira linha "aguardando" (nem vaga).
+      and (rp.on_demand = false or ro.id is not null or lr.post_code is not null)
     order by rp.sort_order asc, rp.code asc
   `);
 
@@ -1851,7 +1874,7 @@ export async function listRegulationBoard() {
   const shadowByPost = await listOpenRegulationShadowOccupantsByPost();
   const displacedByPost = await listOpenRegulationDisplacedOccupantsByPost();
 
-  return rows.map((row) => {
+  return rows.flatMap((row) => {
     const visible = (row.status !== "active" || !row.doctorId)
       ? row
       : (shouldKeepRegulationOccupancyVisible({
@@ -1862,13 +1885,40 @@ export async function listRegulationBoard() {
           reference,
         }) ? row : demoteRegulationRowToWaiting(row));
 
+    // Ocupação vencida num ramal eventual: em vez de rebaixar para "aguardando"
+    // (que o quadro fixo mostra como vaga), a linha some até a próxima chegada.
+    if (visible.onDemand && !(visible.status === "active" && visible.doctorId)) {
+      return [];
+    }
+
     const shadows = (shadowByPost.get(visible.postId) ?? [])
       .filter((shadow) => shadow.occupancyId !== visible.occupancyId);
     const displaced = (displacedByPost.get(visible.postId) ?? [])
       .filter((occ) => occ.occupancyId !== visible.occupancyId);
     const withShadows = shadows.length > 0 ? { ...visible, shadowOccupants: shadows } : visible;
-    return displaced.length > 0 ? { ...withShadows, displacedOccupants: displaced } : withShadows;
+    return [displaced.length > 0 ? { ...withShadows, displacedOccupants: displaced } : withShadows];
   });
+}
+
+/**
+ * Ramais eventuais ativos, para os seletores de chegada manual e remanejamento
+ * do painel: o quadro só lista o ramal com médico dentro, mas a chefia precisa
+ * conseguir escolhê-lo vazio para colocar alguém lá.
+ */
+export async function listOnDemandRegulationPostOptions(): Promise<OnDemandRegulationPostOption[]> {
+  const db = getDb();
+  const result = await db.execute(sql`
+    select rp.id as "postId", rp.code as "postCode", rp.label as "postLabel"
+    from operations_v2.regulation_posts rp
+    where rp.is_active = true
+      and rp.on_demand = true
+    order by rp.sort_order asc, rp.code asc
+  `);
+  return (result as unknown as Record<string, unknown>[]).map((row) => ({
+    postId: Number(row.postId),
+    postCode: String(row.postCode ?? ""),
+    postLabel: String(row.postLabel ?? ""),
+  }));
 }
 
 export async function listInterventionBoard() {
@@ -3057,6 +3107,7 @@ function resolvePaymentAllocationTarget(row: Record<string, unknown>): PaymentAl
     sortOrder: Number(row.sortOrder ?? 0),
     defaultRole: (row.defaultRole ?? null) as string | null,
     dayOnly: Boolean(row.dayOnly ?? false),
+    onDemand: Boolean(row.onDemand ?? false),
     disabledAt: (row.disabledAt ?? null) as string | null,
     reactivatedAt: (row.reactivatedAt ?? null) as string | null,
     disabledReason: (row.disabledReason ?? null) as string | null,
@@ -3083,6 +3134,15 @@ function shouldIncludePaymentAllocationTarget(target: PaymentAllocationTargetDef
   }
 
   return true;
+}
+
+/**
+ * Ramal eventual (on_demand) sem ninguém no slot não é linha nenhuma: nem
+ * "Sem ocupacao identificada" no pagamento, nem furo na auditoria/presença.
+ * Com candidato, segue o fluxo normal (o plantão é pago como em qualquer ramal).
+ */
+function isEmptyOnDemandTarget(target: PaymentAllocationTargetDefinition, candidateCount: number) {
+  return Boolean(target.onDemand) && candidateCount === 0;
 }
 
 function shouldAllowCarriedPaymentCandidate(params: {
@@ -4002,6 +4062,10 @@ export function buildPaymentAllocationBoardModel(params: {
   });
 
   const rows = targetChoices
+    // Ramal eventual só vira linha quando ficou com um escolhido: sem candidato,
+    // ou com o candidato pago noutro alvo (conflito do mesmo médico), não há
+    // vaga a revisar — o ramal simplesmente não existiu neste slot.
+    .filter((choice) => !(choice.target.onDemand && !choice.chosenCandidate))
     .map((choice) => {
       if (choice.chosenCandidate) {
         const deactivationOutcome = resolveChosenCandidateDeactivationOutcome({
@@ -4409,18 +4473,22 @@ export function buildOperationalSlotPresenceBoardModel(params: {
   }
 
   const rows = eligibleTargets
-    .map((target) => {
+    .flatMap((target) => {
       const key = [target.domain, target.targetCode].join("|");
       const candidates = candidatesByTarget.get(key) ?? [];
       if (candidates.length > 0) {
-        return buildOccupiedSlotPresenceRow({
+        return [buildOccupiedSlotPresenceRow({
           target,
           candidates,
           slotStartIso: params.startedAt,
-        });
+        })];
       }
 
-      return buildEmptySlotPresenceRow({ target });
+      if (isEmptyOnDemandTarget(target, candidates.length)) {
+        return [];
+      }
+
+      return [buildEmptySlotPresenceRow({ target })];
     })
     .sort(comparePaymentAllocationRows);
 
@@ -4476,18 +4544,22 @@ export function buildHistoricalOperationalPresenceBoardModel(params: {
   }
 
   const rows = eligibleTargets
-    .map((target) => {
+    .flatMap((target) => {
       const key = [target.domain, target.targetCode].join("|");
       const candidates = candidatesByTarget.get(key) ?? [];
       if (candidates.length > 0) {
-        return buildOccupiedHistoricalOperationalPresenceRow({
+        return [buildOccupiedHistoricalOperationalPresenceRow({
           target,
           candidates,
           slotStartIso: params.startedAt,
-        });
+        })];
       }
 
-      return buildEmptyHistoricalOperationalPresenceRow({ target });
+      if (isEmptyOnDemandTarget(target, candidates.length)) {
+        return [];
+      }
+
+      return [buildEmptyHistoricalOperationalPresenceRow({ target })];
     })
     .sort(comparePaymentAllocationRows);
 
@@ -4531,6 +4603,7 @@ async function loadPaymentAllocationSourceData(
       rp.sort_order as "sortOrder",
       rp.default_role as "defaultRole",
       false as "dayOnly",
+      rp.on_demand as "onDemand",
       rpd.deactivated_at as "disabledAt",
       rpd.reactivated_at as "reactivatedAt",
       rpd.notes as "disabledReason",
@@ -4566,6 +4639,7 @@ async function loadPaymentAllocationSourceData(
       ib.sort_order as "sortOrder",
       null::text as "defaultRole",
       ib.day_only as "dayOnly",
+      false as "onDemand",
       ibd.deactivated_at as "disabledAt",
       ibd.reactivated_at as "reactivatedAt",
       ibd.notes as "disabledReason",

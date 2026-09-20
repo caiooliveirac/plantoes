@@ -6557,6 +6557,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "▸ Ramais de regulação:",
             "  1321–1329 · 1361–1368 · 1476",
             "  2031–2035 · 2151–2154 · 2262 · 2263 · 2377 · NUCLEO · PIAM",
+            "  4091 (eventual: só entra no quadro quando alguém avisa chegada nele)",
             "",
             "ℹ️ 2031 entra como CP; 2262/2263 entram como COI (função automática).",
         );

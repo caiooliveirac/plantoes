@@ -64,14 +64,19 @@ function resolveRegulationOrderBucket(value: string) {
     if (normalized.startsWith("1")) {
         return 2;
     }
-    // PIAM precisa vir antes de NUCLEO (nunca apresentar NUCLEO → PIAM nessa ordem).
-    if (normalized === "PIAM") {
+    // Demais ramais numéricos (ex.: 4091 eventual) vêm depois dos fixos e antes
+    // dos postos nomeados.
+    if (/^\d+$/.test(normalized)) {
         return 3;
     }
-    if (normalized === "NUCLEO") {
+    // PIAM precisa vir antes de NUCLEO (nunca apresentar NUCLEO → PIAM nessa ordem).
+    if (normalized === "PIAM") {
         return 4;
     }
-    return 5;
+    if (normalized === "NUCLEO") {
+        return 5;
+    }
+    return 6;
 }
 
 export function compareTelegramRegulationCodes(left: string, right: string) {

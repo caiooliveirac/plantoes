@@ -28,6 +28,7 @@ import type { ExpectedDoctor, ExpectedScheduleData } from "@/modules/operational
 import type {
     BoardShadowOccupant,
     InterventionBoardRow,
+    OnDemandRegulationPostOption,
     PendingChiefExit,
     PendingDepartureConfirmation,
     PreviousOperationalBoard,
@@ -101,6 +102,9 @@ interface OperationalBoardClientProps {
     shiftLabel: string;
     regulation: RegulationBoardRow[];
     intervention: InterventionBoardRow[];
+    /** Ramais eventuais (ex.: 4091): fora do quadro quando vazios, mas
+        oferecidos nos seletores de chegada manual e remanejamento. */
+    onDemandRegulationPosts?: OnDemandRegulationPostOption[];
     mealBreakSession: MealBreakSession | null;
     mealBreakEligibility: { lunchExcludedRamals: string[]; restExcludedRamals: string[] };
     mealBreakEvaluation?: MealBreakBoardEvaluation | null;
@@ -195,7 +199,13 @@ function shouldExcludeFromRegulationHeaderCounter(card: RegulationCard) {
     return normalizedRoleLabel === "CP" || normalizedRoleLabel === "PSIQ";
 }
 
-function resolveMealBreakExclusionHint(ramal: string, mode: "day" | "night") {
+function resolveMealBreakExclusionHint(ramal: string, mode: "day" | "night", onDemand = false) {
+    if (onDemand) {
+        return mode === "day"
+            ? `O ramal ${ramal} e eventual e fica fora da divisao de almoco e descanso por regra fixa (como PIAM/NUCLEO).`
+            : `O ramal ${ramal} e eventual e fica fora da divisao de jantar e trabalho por regra fixa (como PIAM/NUCLEO).`;
+    }
+
     if (ramal === CHIEF_RAMAL) {
         return mode === "day"
             ? "O posto 2031 (chefia) fica fora da divisao automatica de almoco e descanso."
@@ -225,7 +235,8 @@ function isMealBreakExcluded(session: MealBreakSession | null, ramal: string, ki
         : session.restExcludedRamals.includes(ramal);
 }
 
-function isSystemicallyExcludedFromMealBreak(ramal: string, mode: "day" | "night") {
+function isSystemicallyExcludedFromMealBreak(ramal: string, mode: "day" | "night", onDemand = false) {
+    if (onDemand) return true;
     if (isNucleoRegulationPost(ramal)) return true;
     if (mode === "day" && isPiamRegulationPost(ramal)) return true;
     return false;
@@ -1140,7 +1151,7 @@ type BoardSnapshot = {
 };
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
-    const { generatedAt, shiftLabel, regulation, intervention, mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], pendingChiefExits = [], expectedSchedule = null, escalaUrl = null } = props;
+    const { generatedAt, shiftLabel, regulation, intervention, onDemandRegulationPosts = [], mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], pendingChiefExits = [], expectedSchedule = null, escalaUrl = null } = props;
     // Admin abre tudo; payment_closing_limited (ex.: Iasmin) só enxerga o fechamento
     // de pagamento para visualizar e lançar NF/processo — sem editar o quadro.
     const canOpenPaymentClosing = Boolean(
@@ -1512,15 +1523,25 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         doctorId: card.doctorId,
         shiftLabel,
     }));
-    const regulationPostOptions = Array.from(new Map(
-        [...regulationCards]
+    const regulationPostOptions = Array.from(new Map([
+        ...[...regulationCards]
             .sort((left, right) => compareRegulationCards(left, right, shiftLabel))
             .map((card) => [card.postId, {
                 postId: card.postId,
                 postCode: card.postCode,
                 postLabel: card.postLabel,
-            }]),
-    ).values());
+            }] as const),
+        // Ramal eventual vazio não tem card no quadro, mas a chefia precisa
+        // conseguir escolhê-lo para colocar alguém lá (chegada manual/remanejo).
+        // Vai por último e só quando ainda não apareceu como card ocupado.
+        ...onDemandRegulationPosts
+            .filter((post) => !regulationCards.some((card) => card.postId === post.postId))
+            .map((post) => [post.postId, {
+                postId: post.postId,
+                postCode: post.postCode,
+                postLabel: `${post.postLabel} (eventual)`,
+            }] as const),
+    ]).values());
     const interventionBaseOptions = Array.from(new Map(
         [...interventionCards]
             .sort((left, right) => extractTrailingNumber(left.baseCode) - extractTrailingNumber(right.baseCode))
@@ -1535,7 +1556,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     ).values());
     const visibleRegulationCards = rootBoardRegulationCards
         .sort((left, right) => compareRegulationCards(left, right, shiftLabel));
-    const hasAvailableRegulationPost = rootBoardRegulationCards.some((card) => card.status === "waiting");
+    const hasAvailableRegulationPost = rootBoardRegulationCards.some((card) => card.status === "waiting")
+        || regulationPostOptions.some((option) => !regulationCards.some((card) => card.postId === option.postId));
     const visibleInterventionCards = interventionCards
         .filter((card) => (card.status === "active" && Boolean(card.doctorId)) || card.status === "waiting" || card.status === "disabled")
         .sort((left, right) => extractTrailingNumber(left.baseCode) - extractTrailingNumber(right.baseCode));
@@ -1618,7 +1640,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
         let cruIndex = 0;
         for (const card of visibleRegulationCards) {
-            if (card.status === "disabled" || isPiamRegulationPost(card.postCode) || isNucleoRegulationPost(card.postCode)) {
+            // Ramal eventual (on_demand) não é posição da escala: não recebe "aguardando fulano".
+            if (card.status === "disabled" || card.onDemand || isPiamRegulationPost(card.postCode) || isNucleoRegulationPost(card.postCode)) {
                 continue;
             }
             const role = resolveCardRoleLabel(card);
@@ -2921,11 +2944,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             : resolveMealBreakSlot<MealBreakRestSlot>(mealBreakSession, card.postCode, "restAssignments");
         const rowRoleLabel = resolveCardRoleLabel(card);
         const isRowIsolatedOrDiscretionary = mealBreakDisplayMode === "day" && (rowRoleLabel === "PSIQ" || rowRoleLabel === "CP");
-        const lunchExcluded = isSystemicallyExcludedFromMealBreak(card.postCode, mealBreakDisplayMode)
+        const lunchExcluded = isSystemicallyExcludedFromMealBreak(card.postCode, mealBreakDisplayMode, Boolean(card.onDemand))
             || (mealBreakDisplayMode === "day" && isMealBreakExcluded(mealBreakSession, card.postCode, "lunch"))
             || isRowIsolatedOrDiscretionary
             || (!mealBreakSession && mealBreakDisplayMode === "day" && mealBreakEligibility.lunchExcludedRamals.includes(card.postCode));
-        const restExcluded = isSystemicallyExcludedFromMealBreak(card.postCode, mealBreakDisplayMode)
+        const restExcluded = isSystemicallyExcludedFromMealBreak(card.postCode, mealBreakDisplayMode, Boolean(card.onDemand))
             || (mealBreakDisplayMode === "day" && isMealBreakExcluded(mealBreakSession, card.postCode, "rest"))
             || isRowIsolatedOrDiscretionary
             || (!mealBreakSession && mealBreakDisplayMode === "day" && mealBreakEligibility.restExcludedRamals.includes(card.postCode));
@@ -4680,7 +4703,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                             </div>
 
                                             {!canEditSelectedDayMealBreak ? (
-                                                <p className="chief-field-hint">{resolveMealBreakExclusionHint(selectedRegulationRamal ?? "", "day")}</p>
+                                                <p className="chief-field-hint">{resolveMealBreakExclusionHint(selectedRegulationRamal ?? "", "day", selectedCard?.domain === "regulation" && Boolean(selectedCard.onDemand))}</p>
                                             ) : (
                                                 <>
                                                     {mealBreakSession && (
@@ -4809,7 +4832,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                             </div>
 
                                             {!canEditSelectedNightMealBreak ? (
-                                                <p className="chief-field-hint">{resolveMealBreakExclusionHint(selectedRegulationRamal ?? "", "night")}</p>
+                                                <p className="chief-field-hint">{resolveMealBreakExclusionHint(selectedRegulationRamal ?? "", "night", selectedCard?.domain === "regulation" && Boolean(selectedCard.onDemand))}</p>
                                             ) : (
                                                 <>
                                                     <div className="chief-timing-grid chief-night-grid">

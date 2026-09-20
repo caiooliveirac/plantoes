@@ -10,6 +10,8 @@ const RAMAIS_REGULACAO = new Set([
     "2151", "2152", "2153", "2154",
     "2262", "2263",
     "2376", "2377",
+    // Ramal eventual (on_demand, migration 0043): só aparece no quadro com médico.
+    "4091",
 ]);
 
 const BASES_INTERVENCAO = new Set([

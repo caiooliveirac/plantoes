@@ -48,6 +48,7 @@ PP20  IT30  PM40  CZ50  BR60  CC70
 ```
 1321–1329   1361–1368   1476
 2031–2035   2151–2154   2262   2263   2377   (e NUCLEO / PIAM pelo nome)
+4091 (ramal eventual: só aparece no quadro quando alguém avisa chegada nele)
 ```
 
 > ⚠️ Nos exemplos do `/ajuda` aparece "USB-01" — isso é **só um modelo de
