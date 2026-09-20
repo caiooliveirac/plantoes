@@ -1,4 +1,4 @@
-export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IES", "RMT", "PSIQ", "PIAM"] as const;
+export const STANDARD_OPERATIONAL_ROLE_CODES = ["CP", "MRV", "RECIP", "COI", "IES", "RMT", "PSIQ", "PIAM", "DISP"] as const;
 export const OPERATIONAL_ROLE_REMOVED_SENTINEL = "SEM_FUNCAO";
 
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
