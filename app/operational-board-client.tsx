@@ -150,6 +150,8 @@ interface AuthResponse {
     session?: {
         user?: {
             mustChangePassword?: boolean;
+            doctorId?: string | null;
+            roles?: string[];
         };
     };
 }
@@ -1247,6 +1249,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const router = useRouter();
     const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
     const [authOpen, setAuthOpen] = useState(false);
+    const authEmailRef = useRef<HTMLInputElement>(null);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
     const [verifierTarget, setVerifierTarget] = useState<PendingDepartureConfirmation | null>(null);
     const [boardSearch, setBoardSearch] = useState("");
@@ -1257,6 +1260,17 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     // liga após montar (no SSR fica 0 → sem hint, evitando hidratação divergente).
     const [expectedHintsOn, setExpectedHintsOn] = useState(true);
     const [expectedHintsNowMs, setExpectedHintsNowMs] = useState(0);
+    // /?entrar=1 (atalho /entrar e redirects de telas protegidas) abre o login pronto.
+    useEffect(() => {
+        if (!session && new URLSearchParams(window.location.search).has("entrar")) {
+            setAuthOpen(true);
+        }
+    }, []);
+    useEffect(() => {
+        if (authOpen && !session) {
+            authEmailRef.current?.focus();
+        }
+    }, [authOpen, session]);
     useEffect(() => {
         setExpectedHintsOn(window.localStorage.getItem(EXPECTED_HINTS_STORAGE_KEY) !== "off");
         setExpectedHintsNowMs(Date.now());
@@ -2226,6 +2240,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             }
 
             const passwordChangeRequired = Boolean(body?.session?.user?.mustChangePassword);
+            // Médico sem papel de gestão não opera a mesa: vai direto ao painel dele.
+            const loggedUser = body?.session?.user;
+            if (!passwordChangeRequired && loggedUser?.doctorId
+                && !loggedUser.roles?.some((role) => role === "admin" || role === "chief")) {
+                window.location.assign("/medico");
+                return;
+            }
             if (!passwordChangeRequired) {
                 setAuthPassword("");
                 setAuthOpen(false);
@@ -3408,7 +3429,28 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             <KairosTopo
                 titulo="Mesa operacional"
                 abas={session?.canManage ? ABAS_ADMIN : undefined}
-                extra={session?.roles.includes("admin") ? <CadastrarMedicoBotao /> : undefined}
+                extra={
+                    session?.roles.includes("admin") ? (
+                        <CadastrarMedicoBotao />
+                    ) : !session ? (
+                        // Visitante: entrada e cadastro ficam NA barra — o dock flutuante
+                        // ficava por trás dela e o link de cadastro só existia dentro do login.
+                        <>
+                            <a className="k-topo-acao" href="/cadastro-medico">Sou médico: criar conta</a>
+                            <button
+                                type="button"
+                                className="k-topo-acao"
+                                onClick={() => {
+                                    setAuthOpen((current) => !current);
+                                    setAuthError(null);
+                                    setAuthInfo(null);
+                                }}
+                            >
+                                Entrar
+                            </button>
+                        </>
+                    ) : undefined
+                }
             />
             {viewMode === "live" && session?.roles.includes("admin") && (
                 <ChiefArrivalRequestsRail />
@@ -3839,7 +3881,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             <div className="ops-auth-panel-header">
                                 <div>
                                     <p className="ops-auth-kicker">Acesso operacional</p>
-                                    <h2>Chief ou admin</h2>
+                                    <h2>Entrar</h2>
                                 </div>
                                 <span className="ops-auth-state read">Leitura publica em /</span>
                             </div>
@@ -3851,6 +3893,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             <label className="ops-auth-field">
                                 <span>Email</span>
                                 <input
+                                    ref={authEmailRef}
                                     type="email"
                                     className="ops-auth-input"
                                     value={authEmail}
