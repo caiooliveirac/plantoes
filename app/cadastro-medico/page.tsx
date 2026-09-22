@@ -164,6 +164,9 @@ export default function CadastroMedicoPage() {
                         <button type="submit" className="et-btn primary" disabled={busy}>
                             {busy ? "Enviando…" : "Enviar código de confirmação"}
                         </button>
+                        <p>
+                            Já tem conta? <a href="/entrar">Entrar</a>
+                        </p>
                     </form>
                 )}
             </motion.section>

@@ -104,6 +104,31 @@
     color: var(--navy-900);
 }
 
+/* Dock de acesso sob a barra de topo. Visitante entra pelo botão da barra, então
+   o cadeado flutuante (que ficava por trás da barra) some; o dock sai do topo e o
+   painel fechado deixa de ocupar espaço — no mobile ele empurrava o cadeado para
+   cima, para trás da barra. */
+.pagina-kairos .ops-auth-trigger.login { display: none; }
+
+.pagina-kairos .ops-auth-dock { top: 84px; }
+
+.pagina-kairos .ops-auth-popover {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    max-height: calc(100dvh - 120px);
+    overflow-y: auto;
+}
+
+@media (max-width: 820px) {
+    .pagina-kairos .ops-auth-dock { top: auto; }
+
+    .pagina-kairos .ops-auth-popover {
+        top: auto;
+        bottom: calc(100% + 10px);
+    }
+}
+
 /* Modal de cadastro de médico (components/doctors/cadastrar-medico-botao.tsx). */
 .pagina-kairos .cadastro-medico-modal {
     width: min(560px, calc(100vw - 32px));

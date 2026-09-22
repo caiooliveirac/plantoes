@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export default async function MedicoHomePage() {
     const session = await readAuthenticatedSession();
     if (!session) {
-        redirect("/");
+        redirect("/?entrar=1");
     }
     if (!session.user.doctorId) {
         return (
