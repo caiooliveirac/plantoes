@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
+import { CadastrarMedicoBotao } from "@/components/doctors/cadastrar-medico-botao";
 import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
 import { ContractTermsCard } from "@/components/payment-closing/contract-terms-card";
 // Nenhuma ação desta tela pode ficar pendurada esperando o servidor.
@@ -1624,7 +1625,11 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
     return (
         // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
         <div className="pagina-kairos">
-        <KairosTopo titulo="Fechamento de pagamento" abas={ABAS_ADMIN} />
+        <KairosTopo
+            titulo="Fechamento de pagamento"
+            abas={ABAS_ADMIN}
+            extra={canManageClosing ? <CadastrarMedicoBotao /> : undefined}
+        />
         {financialsPromise ? (
             <Suspense fallback={null}>
                 <FinancialsBridge promise={financialsPromise} onResolved={setFinancials} />

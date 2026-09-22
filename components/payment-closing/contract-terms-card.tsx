@@ -11,17 +11,7 @@
  * /api/admin/contracts/[id]/redefine).
  */
 import { useState } from "react";
-
-// Tetos habituais por CH/categoria — mesma tabela de referência do backfill
-// (scripts/backfill-saldo-contrato.ts, REFERENCE_CEILINGS).
-const CEILING_PRESETS: { label: string; brl: number }[] = [
-    { label: "24h generalista", brl: 165732 },
-    { label: "24h especialista", brl: 174858 },
-    { label: "36h generalista", brl: 248598 },
-    { label: "36h especialista", brl: 262287 },
-    { label: "48h generalista", brl: 331464 },
-    { label: "48h especialista", brl: 349716 },
-];
+import { CEILING_PRESETS } from "@/lib/contracts/ceiling-presets";
 
 const MONTH_NAMES = [
     "janeiro", "fevereiro", "março", "abril", "maio", "junho",

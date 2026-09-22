@@ -4,6 +4,7 @@ import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTrans
 import { useRouter } from "next/navigation";
 import { OperationalHistoryPanel } from "@/components/operational-history-panel";
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
+import { CadastrarMedicoBotao } from "@/components/doctors/cadastrar-medico-botao";
 import { buildOperationalRoleChoices, describeFixedRoleTransferImpact, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
@@ -3404,7 +3405,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
         // As abas só aparecem para quem gerencia — visitante sem sessão vê marca + tema.
         <div className="pagina-kairos">
-            <KairosTopo titulo="Mesa operacional" abas={session?.canManage ? ABAS_ADMIN : undefined} />
+            <KairosTopo
+                titulo="Mesa operacional"
+                abas={session?.canManage ? ABAS_ADMIN : undefined}
+                extra={session?.roles.includes("admin") ? <CadastrarMedicoBotao /> : undefined}
+            />
             {viewMode === "live" && session?.roles.includes("admin") && (
                 <ChiefArrivalRequestsRail />
             )}
