@@ -144,7 +144,7 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 
 | # | Status | Defeito | Evidência |
 |---|---|---|---|
-| D1 | VERIFICADO | **Reenvio no fim do turno abre plantão novo com a hora da noite.** `shouldReopenStaleSameDoctorRegulationOccupancy` mede "vencida" contra o turno da MENSAGEM NOVA, não contra a janela da ocupação existente. SD que chegou 06:47 e reenvia às 19:11 (ocupação ainda aberta até 19:15) → fecha o SD e cria SD com chegada 19:11. Viola o princípio 2. | Livia Andrade, 2153, 13/09/2026 |
+| D1 | CORRIGIDO | Reenvio no fim do turno abria plantão novo com a hora da noite: "vencida" era medida contra o turno da mensagem nova. Agora reenvio antes do fim programado da ocupação, com mesmo rótulo (ou omitido), é o mesmo plantão (`isRearrivalWithinOwnWindow`) | Livia, 2153, 13/09/2026; PR #298 |
 | D2 | VERIFICADO | **Correção de rótulo em segundos vira continuação.** "2034 sd" às 19:08:05 e "2034 sn" às 19:08:15 (corrigindo a digitação) → gravado como SD estendido até 07:15 do dia seguinte (padrão de continuação SD→SN), rótulo SD, janela começando 07:00. A chefia tentou corrigir 3× pela tela (remanejando entre ramais) e não conseguiu. | Emily Thays, 2034, 07/09/2026 (audit_logs) |
 | D3 | SUSPEITO | Reenvio com HH:mm escrito desliga a recuperação da 1ª tentativa (guarda `!arrivalTime`); vale a hora do reenvio | código |
 | D4 | SUSPEITO | 1ª tentativa só conta status `error`/`pending_takeover_confirmation` e só do MESMO remetente. Colega que avisa pelo médico, ou aviso que caiu em "ignorado"/"nome não resolvido", perde a hora | código; José Roberto 23/09 teve avisos de 3 remetentes |
@@ -152,7 +152,7 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 | D6 | SUSPEITO | Reenvio "SD" entre 11:10 e 17:00 de quem já está no plantão pode virar meio plantão (fim 17:00) — `shouldAssumeTelegramHalfShift` ignora `effectiveShiftType` | código; não reproduzido |
 | D7 | VERIFICADO | "SD" declarado às 18:35 em outro ramal grava rótulo SD com janela SN (19:00) — rótulo e janela discordam | Gerardson, 2152, 03/09/2026 |
 | D8 | VERIFICADO | Mensagem editada no Telegram é ignorada; quem corrige a digitação editando não é ouvido | grep: nenhum handler de `edited_message` |
-| D9 | SUSPEITO | Intervenção: reenvio com âncora "vencida" move `board_started_at` e a janela para a hora nova (`resolveSameDoctorBoardStartedAt`) | código |
+| D9 | CORRIGIDO | Intervenção: reenvio com âncora "vencida" movia o board e a janela para a hora nova; mesma regra da janela própria | PR #298 |
 | D10 | ABERTO | Quando quem tomou o posto é remanejado ou sai, o deslocado NÃO reassume sozinho; precisa reenviar | pedido do dono, 18/09 |
 | D11 | CORRIGIDO | Deslocado que reenviava no mesmo alvo nunca voltava ao quadro | PR #295, 23/09/2026 |
 
