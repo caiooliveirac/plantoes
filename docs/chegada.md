@@ -149,7 +149,7 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 | D3 | CORRIGIDO | Reenvio com HH:mm escrito desligava a recuperação da 1ª tentativa; na fase 2 a hora escrita é ignorada, então a 1ª tentativa volta a valer | PR #301 |
 | D4 | PARCIAL | 1ª tentativa não exige mais o MESMO remetente (colega avisando pelo médico conta). Segue contando só status `error`/`pending_takeover_confirmation`: aviso que caiu em "ignorado" sem nome resolvido não tem médico para casar | PR #301 |
 | D5 | CORRIGIDO | Resposta do bot dizia "desde <hora deste aviso>" mesmo quando o banco preservou a 1ª chegada; o médico relia, achava que perdeu o horário e reenviava (alimentava D1). Agora mostra a chegada gravada + "chegada mantida pelo primeiro aviso" | PR #297, 23/09/2026 |
-| D6 | SUSPEITO | Reenvio "SD" entre 11:10 e 17:00 de quem já está no plantão pode virar meio plantão (fim 17:00) — `shouldAssumeTelegramHalfShift` ignora `effectiveShiftType` | código; não reproduzido |
+| D6 | CORRIGIDO | Reenvio entre 11:10 e 17:00 de quem já estava no ramal desde antes das 11:10 virava meio plantão (fim 17:00, pago como meio). Agora só vira meio plantão quem chegou na janela | Jonas, 2154, 22/09/2026 (SD 07:16 → meio às 16:12); PR #302 |
 | D7 | VERIFICADO | "SD" declarado às 18:35 em outro ramal grava rótulo SD com janela SN (19:00) — rótulo e janela discordam | Gerardson, 2152, 03/09/2026 |
 | D8 | VERIFICADO | Mensagem editada no Telegram é ignorada; quem corrige a digitação editando não é ouvido | grep: nenhum handler de `edited_message` |
 | D9 | CORRIGIDO | Intervenção: reenvio com âncora "vencida" movia o board e a janela para a hora nova; mesma regra da janela própria | PR #298 |
