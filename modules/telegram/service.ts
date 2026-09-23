@@ -63,6 +63,7 @@ import { getSaoPauloParts, isSameOperationalShiftArrival, shouldDisplaceInsteadO
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import {
     HALF_SHIFT_ROLE_LABEL,
+    isBeforeHalfShiftWindow,
     isHalfShiftRoleLabel,
     isWithinHalfShiftWindow,
     resolveHalfShiftScheduledWindow,
@@ -1034,8 +1035,16 @@ export function shouldAssumeTelegramHalfShift(params: {
     parsed: Pick<ParsedMessage, "sector" | "isDeparture" | "isContinuation">;
     eventAt: Date;
     effectiveShiftType: string | null;
+    // Chegada já aberta do mesmo médico no mesmo ramal. Se é de antes das 11:10, o
+    // aviso é reenvio de plantão inteiro, não meio plantão (defeito D6 de
+    // docs/chegada.md; Jonas, 2154, 22/09/2026: SD desde 07:16 virou meio às 16:12).
+    activeStartedAt?: Date | null;
 }) {
     if (params.parsed.sector !== "REGULATION" || params.parsed.isDeparture || params.parsed.isContinuation) {
+        return false;
+    }
+
+    if (params.activeStartedAt && isBeforeHalfShiftWindow(params.activeStartedAt)) {
         return false;
     }
 
@@ -9565,6 +9574,7 @@ async function applyParsedEntry(params: {
     let occupancyId: string | null = null;
     let successKind: "standard" | "departure_adjusted" = "standard";
     let treatedAsContinuation = false;
+    let regulationActiveStartedAt: Date | null = null;
     let autoReactivated = false;
     let replyTimeAt = eventAt;
     let effectiveShiftType: string | null = parsed.shiftType ?? null;
@@ -9769,10 +9779,12 @@ async function applyParsedEntry(params: {
                     extendedLongShift,
                 });
             } else {
+                regulationActiveStartedAt = activeOccupancy?.startedAt ?? null;
                 const assumedHalfShift = shouldAssumeTelegramHalfShift({
                     parsed,
                     eventAt,
                     effectiveShiftType,
+                    activeStartedAt: regulationActiveStartedAt,
                 });
                 const halfShiftScheduledEndAt = assumedHalfShift ? resolveHalfShiftScheduledEndAt(eventAt) : null;
                 // O início agendado do meio plantão é SEMPRE a hora esperada (11:30),
@@ -10359,6 +10371,7 @@ async function applyParsedEntry(params: {
         parsed,
         eventAt,
         effectiveShiftType,
+        activeStartedAt: regulationActiveStartedAt,
     }) && parsed.sector === "REGULATION" && !parsed.isDeparture;
 
     // "P forward": chegada registrada como P que vai cobrir também o turno seguinte.

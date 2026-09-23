@@ -153,3 +153,12 @@ test("banco: caso Uenderson — aviso às 14:34 debita o atraso desde as 11:30",
 test("pagamento: meio plantão é meia jornada (0.5)", () => {
     assert.equal(resolvePaymentUnitFromRole(HALF_SHIFT_ROLE_LABEL), 0.5);
 });
+
+// D6 (docs/chegada.md): Jonas, 2154, 22/09/2026 — SD desde 07:16, reenvio às 16:12 virou
+// meio plantão com fim 17:00. Quem já está no ramal desde antes das 11:10 é plantão inteiro.
+test("shouldAssumeTelegramHalfShift: reenvio de quem chegou antes das 11:10 não vira meio plantão", () => {
+    const parsed = parseMessage("jonas 2154 SD");
+    assert.equal(shouldAssumeTelegramHalfShift({ parsed, eventAt: at("16:12"), effectiveShiftType: "SD", activeStartedAt: at("07:16") }), false);
+    // Meio plantão de verdade (chegou 11:30) reenviando segue meio plantão.
+    assert.equal(shouldAssumeTelegramHalfShift({ parsed, eventAt: at("14:00"), effectiveShiftType: "SD", activeStartedAt: at("11:30") }), true);
+});
