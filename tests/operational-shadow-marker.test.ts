@@ -86,15 +86,29 @@ test("shouldPromoteShadowToBoardOnRearrival: com titular no quadro NÃO promove"
     }), false);
 });
 
-// Quem perdeu o quadro numa tomada volta declarando posição nova, não reassumindo
-// esta. As notas do caso Vaner trazem os DOIS marcadores.
-test("shouldPromoteShadowToBoardOnRearrival: deslocado não é sombra promovível", () => {
+// A chegada é soberana: quem ficou deslocado e redeclara no mesmo alvo, com o quadro
+// livre, reassume (caso José Roberto, 2153, 23/09/2026 — quem tomou o ramal foi
+// remanejado e ele avisou três vezes sem voltar ao quadro). As notas do caso Vaner
+// trazem os DOIS marcadores; vale igual.
+test("shouldPromoteShadowToBoardOnRearrival: deslocado que redeclara reassume o quadro livre", () => {
+    for (const existingIsShadow of [false, true]) {
+        assert.equal(shouldPromoteShadowToBoardOnRearrival({
+            existingHasBoard: false,
+            existingIsShadow,
+            existingIsDisplaced: true,
+            arrivingIsShadow: false,
+            hasOtherBoardCarrier: false,
+        }), true);
+    }
+});
+
+test("shouldPromoteShadowToBoardOnRearrival: deslocado com outro titular no quadro segue fora", () => {
     assert.equal(shouldPromoteShadowToBoardOnRearrival({
         existingHasBoard: false,
-        existingIsShadow: true,
+        existingIsShadow: false,
         existingIsDisplaced: true,
         arrivingIsShadow: false,
-        hasOtherBoardCarrier: false,
+        hasOtherBoardCarrier: true,
     }), false);
 });
 
@@ -118,6 +132,15 @@ test("resolveRearrivalNotes: promoção anexa a mensagem nova e limpa o marcador
     }) ?? "";
     assert.doesNotMatch(notes, /sombra/i);
     assert.match(notes, /Vaner P 2031/);
+});
+
+test("resolveRearrivalNotes: deslocado que reassume perde a linha [DESLOCADO] e mantém o resto", () => {
+    const notes = resolveRearrivalNotes({
+        existingNotes: "Jose Roberto PA 2153 SD\n[DESLOCADO] 2026-09-23T10:07:06.010Z por Jean Rios",
+        incomingNotes: "Jose Roberto PA 2153 SD",
+        promotingShadow: true,
+    });
+    assert.equal(notes, "Jose Roberto PA 2153 SD\nJose Roberto PA 2153 SD");
 });
 
 test("resolveRearrivalNotes: re-chegada comum só anexa, sem mexer nas notas", () => {

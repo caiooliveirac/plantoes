@@ -8,6 +8,8 @@
  */
 
 const ADMIN_SHADOW_MARKER = "[sombra]";
+// Mesmo texto de REGULATION_/INTERVENTION_DISPLACED_NOTE_MARKER (módulo folha, não importa os domínios).
+const DISPLACED_NOTE_MARKER = "[DESLOCADO]";
 
 export function operationalNotesIndicateShadow(notes: string | null | undefined) {
     const normalized = (notes ?? "")
@@ -45,11 +47,16 @@ export function applyShadowMarkerToOccupancyNotes(notes: string | null | undefin
  * (resolveRegulationArrivalBoardPolicy), redeclarar caía no caminho de re-chegada,
  * que preserva board nulo, e nada acontecia.
  *
- * As duas guardas que não podem cair:
- *   - deslocado NÃO é sombra promovível: quem perdeu o quadro numa tomada volta
- *     declarando uma posição nova, não reassumindo esta;
- *   - com outro titular no quadro, promover violaria o índice único de um board por
- *     alvo (23505 cru). Nesse caso a ocupação segue sombra, coexistindo.
+ * Vale também para o DESLOCADO: quem perdeu o quadro numa tomada e redeclara
+ * chegada no mesmo alvo reassume o quadro. A chegada é soberana — sem isto o médico
+ * que ficou deslocado (ex.: quem tomou o ramal foi remanejado depois) avisava "cheguei"
+ * quantas vezes quisesse, o bot aceitava e ele seguia fora do quadro (caso José
+ * Roberto, 2153, 23/09/2026).
+ *
+ * A guarda que não pode cair: com outro titular no quadro, promover violaria o
+ * índice único de um board por alvo (23505 cru). Nesse caso a ocupação segue fora do
+ * quadro — e a tomada vigente, se houver, já passou pelo portão de confirmação do
+ * Telegram, que desloca o titular antes de chegar aqui.
  */
 export function shouldPromoteShadowToBoardOnRearrival(params: {
     existingHasBoard: boolean;
@@ -59,8 +66,7 @@ export function shouldPromoteShadowToBoardOnRearrival(params: {
     hasOtherBoardCarrier: boolean;
 }) {
     return !params.existingHasBoard
-        && params.existingIsShadow
-        && !params.existingIsDisplaced
+        && (params.existingIsShadow || params.existingIsDisplaced)
         && !params.arrivingIsShadow
         && !params.hasOtherBoardCarrier;
 }
@@ -79,5 +85,14 @@ export function resolveRearrivalNotes(params: {
     const merged = params.incomingNotes
         ? `${params.existingNotes ?? ""}\n${params.incomingNotes}`.trim()
         : (params.existingNotes ?? null);
-    return params.promotingShadow ? applyShadowMarkerToOccupancyNotes(merged, false) : merged;
+    if (!params.promotingShadow) {
+        return merged;
+    }
+    // Reassumiu o quadro: sai também a linha "[DESLOCADO] ...", senão o painel segue
+    // desenhando o médico como deslocado ao lado do próprio card.
+    const semDeslocado = (merged ?? "")
+        .split("\n")
+        .filter((line) => !line.includes(DISPLACED_NOTE_MARKER))
+        .join("\n");
+    return applyShadowMarkerToOccupancyNotes(semDeslocado, false);
 }
