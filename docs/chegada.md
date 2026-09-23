@@ -104,6 +104,7 @@ até 15 min é zero.
 | Base (USA) com titular vigente | Quem chega entra como dupla, sem portão | USA comporta dois médicos |
 | Mesmo médico reenvia no mesmo turno | Atualiza no lugar; chegada só recua; notas acumulam | Reenvio por insegurança é comum |
 | Deslocado reenvia no mesmo alvo, quadro livre | Reassume o quadro com a 1ª chegada; linha `[DESLOCADO]` sai | Princípio 1 (caso José Roberto, 2153, 23/09) |
+| Quem tomou o posto do deslocado sai ou é remanejado | O deslocado reassume o quadro sozinho, com a 1ª chegada | Princípio 1; ninguém precisa reenviar |
 | Deslocado reenvia com outro titular no quadro | Passa pelo portão de tomada | Princípio 4 |
 | Deslocado declara OUTRO alvo | Vira remanejo, preserva chegada | — |
 | Sombra reenvia sem a palavra "sombra", quadro livre | Vira titular | Assumiu de fato |
