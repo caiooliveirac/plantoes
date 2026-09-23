@@ -9891,6 +9891,9 @@ async function applyParsedEntry(params: {
                     displacedDoctorName = resolveTelegramDoctorSurfaceName(displacedDoctor);
                 }
                 occupancyId = regResult.id;
+                // Re-chegada preserva a 1ª chegada: a resposta mostra a hora GRAVADA, não a
+                // deste aviso — senão o médico lê que perdeu o horário e reenvia (defeito D5).
+                replyTimeAt = earliestArrivalReplyAt(replyTimeAt, regResult.startedAt);
                 if (regResult.autoReactivated) autoReactivated = true;
 
                 // Uma continuação nunca pode materializar uma janela já vencida:
@@ -10217,6 +10220,9 @@ async function applyParsedEntry(params: {
                     displacedDoctorName = resolveTelegramDoctorSurfaceName(displacedDoctor);
                 }
                 occupancyId = intResult.id;
+                // Re-chegada preserva a 1ª chegada: a resposta mostra a hora GRAVADA, não a
+                // deste aviso — senão o médico lê que perdeu o horário e reenvia (defeito D5).
+                replyTimeAt = earliestArrivalReplyAt(replyTimeAt, intResult.startedAt);
                 if (intResult.autoReactivated) autoReactivated = true;
 
                 // Paridade com a regulação: janela já vencida = erro alto, nunca
@@ -10679,6 +10685,7 @@ async function sendSuccessReply(
             messageReferenceAt: messageReferenceAt as Date,
             declaredArrivalTime,
             isPcoverage: replyKind === "arrival_p_recorded",
+            recordedArrivalAt: replyTimeAt ?? null,
         })
         : pickTelegramReply(
             replyKind,
@@ -10822,14 +10829,24 @@ export function resolveArrivalEventTimeForPhase(
 
 // Monta a confirmação de chegada com texto fixo (FASE 1 avisa que a regra muda;
 // FASE 2 deixa explícito que só vale a hora do aviso). Mensagens curtas e diretas.
+export function earliestArrivalReplyAt(current: Date, recordedStartedAt: Date | null | undefined) {
+    return recordedStartedAt && recordedStartedAt.getTime() < current.getTime() ? recordedStartedAt : current;
+}
+
 export function buildArrivalRuleReply(params: {
     name: string;
     base: string;
     messageReferenceAt: Date;
     declaredArrivalTime: string | null | undefined;
     isPcoverage: boolean;
+    // Chegada efetivamente gravada. Quando é anterior a este aviso (reenvio, 1ª
+    // tentativa), é ela que a resposta mostra.
+    recordedArrivalAt?: Date | null;
 }) {
     const msgTime = formatTelegramReplyTime(params.messageReferenceAt);
+    const recordedTime = params.recordedArrivalAt ? formatTelegramReplyTime(params.recordedArrivalAt) : null;
+    const keptEarlier = recordedTime !== null && recordedTime !== msgTime
+        && params.recordedArrivalAt!.getTime() < params.messageReferenceAt.getTime();
     const phase = resolveArrivalPhase(params.messageReferenceAt);
     const declared = params.declaredArrivalTime?.trim() || null;
     const hasDeclared = Boolean(declared) && declared !== msgTime;
@@ -10844,6 +10861,10 @@ export function buildArrivalRuleReply(params: {
         const msgNote = hasDeclared ? ` (msg ${msgTime})` : "";
         return `✅ ${params.name} na ${params.base} desde ${registrada}${msgNote}\n`
             + `⚠️ A partir de amanhã vale a HORA DO AVISO, não a hora informada.${pNote}`;
+    }
+
+    if (keptEarlier) {
+        return `✅ ${params.name} na ${params.base} desde ${recordedTime} — chegada mantida pelo primeiro aviso${pNote}`;
     }
 
     // FASE 2 — confirmação direta, sem sermão: vale a hora do aviso e ponto.

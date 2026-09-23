@@ -146,3 +146,36 @@ test("buildArrivalRuleReply: cobertura P acrescenta a nota de duplo plantão", (
         assert.match(reply, /Cobertura \*P\*/);
     });
 });
+
+// D5 (docs/chegada.md): reenvio às 10:06 de quem chegou 06:41 — a resposta mostra a
+// chegada gravada, não a hora do reenvio. Antes dizia "desde 10:06" e o médico reenviava.
+test("buildArrivalRuleReply: FASE 2 com chegada anterior preservada mostra a 1ª chegada", () => {
+    withCutoff(CUTOFF, () => {
+        const reply = buildArrivalRuleReply({
+            name: "José Roberto",
+            base: "2153",
+            messageReferenceAt: new Date("2026-09-23T10:06:33-03:00"),
+            declaredArrivalTime: null,
+            isPcoverage: false,
+            recordedArrivalAt: new Date("2026-09-23T06:41:09-03:00"),
+        });
+        assert.match(reply, /desde 06:41/);
+        assert.match(reply, /chegada mantida/);
+        assert.doesNotMatch(reply, /10:06/);
+    });
+});
+
+test("buildArrivalRuleReply: FASE 2 com chegada gravada igual ao aviso segue o texto normal", () => {
+    withCutoff(CUTOFF, () => {
+        const reply = buildArrivalRuleReply({
+            name: "Ana",
+            base: "2153",
+            messageReferenceAt: AFTER,
+            declaredArrivalTime: null,
+            isPcoverage: false,
+            recordedArrivalAt: AFTER,
+        });
+        assert.match(reply, /desde 07:30/);
+        assert.doesNotMatch(reply, /mantida/);
+    });
+});
