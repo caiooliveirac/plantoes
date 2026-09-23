@@ -16,6 +16,7 @@ import { shouldJoinDoctorTurnoGroup } from "@/modules/operational/turno";
 import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { isRearrivalWithinOwnWindow, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { restoreDisplacedOnVacatedTargetTx } from "@/modules/operational/displaced-restore";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 import { hookMealBreakAfterBoardChange } from "@/modules/telegram/meal-break-board-hook";
@@ -1507,6 +1508,16 @@ export async function endRegulationOccupancy(
             })
             .where(eq(regulationOccupancies.id, id))
             .returning();
+
+        // Quem tinha o quadro saiu (sem ser rendido por quem chega): o deslocado que
+        // segue no plantão neste ramal reassume sozinho (D10, docs/chegada.md).
+        if (existing.boardStartedAt && !input.handoffClosure) {
+            await restoreDisplacedOnVacatedTargetTx(tx, {
+                domain: "regulation",
+                targetId: existing.postId,
+                at: boardEndedAt,
+            });
+        }
 
         await syncRegulationBankHours(tx, id);
         return updated;

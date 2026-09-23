@@ -45,6 +45,7 @@ import {
 import { isBeforeHalfShiftWindow, isHalfShiftRoleLabel, isHalfShiftScheduledWindow, resolveHalfShiftScheduledWindow } from "@/modules/operational/half-shift";
 import { applyOperationalRoleShiftPolicy, resolveRoleLabelForTargetChange } from "@/modules/operational/roles";
 import { applyShadowMarkerToOccupancyNotes } from "@/modules/operational/shadow";
+import { restoreDisplacedOnVacatedTargetTx } from "@/modules/operational/displaced-restore";
 import { resolveArrivalShiftLabel, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, shouldDisplaceInsteadOfRelieve } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
 import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
@@ -1574,6 +1575,16 @@ export async function transferOperationalOccupancy(
             closedAt: transferredAt,
             updatedByUserId,
         });
+        // Quem tinha o quadro na origem foi remanejado: o deslocado que segue no
+        // plantão ali reassume sozinho (D10, docs/chegada.md; José Roberto, 2153,
+        // 23/09/2026 — Jean foi remanejado e a 2153 ficou vazia no quadro).
+        if (source.boardStartedAt) {
+            await restoreDisplacedOnVacatedTargetTx(tx, {
+                domain: source.domain,
+                targetId: source.targetId,
+                at: transferredAt,
+            });
+        }
         if (source.domain === "intervention") {
             affectedInterventionBases.add(source.targetId);
         }
