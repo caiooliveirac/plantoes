@@ -477,3 +477,27 @@ export function resolveContinuationBadgeLabel(params: {
         timeZone: "America/Sao_Paulo",
     })}`;
 }
+/**
+ * Reenvio do mesmo médico no mesmo alvo DENTRO da janela da ocupação que ele já tem
+ * (antes do fim programado, mesmo rótulo ou rótulo omitido) é o mesmo plantão: nunca
+ * "âncora vencida". Sem isto, SD que chegou 06:47 e reenviava às 19:11 caía no turno
+ * da mensagem (SN, início 19:00), a âncora parecia vencida e o SD era fechado e
+ * recriado com chegada 19:11 (defeito D1 de docs/chegada.md; Livia, 2153, 13/09/2026).
+ * Rótulo diferente (SD → SN) não entra aqui: é continuação ou turno novo.
+ */
+export function isRearrivalWithinOwnWindow(params: {
+    existingScheduledEndAt: Date | null | undefined;
+    existingShiftLabel: string | null | undefined;
+    incomingAt: Date;
+    incomingShiftLabel: string | null | undefined;
+}): boolean {
+    if (!params.existingScheduledEndAt) {
+        return false;
+    }
+    if (params.incomingAt.getTime() >= params.existingScheduledEndAt.getTime()) {
+        return false;
+    }
+    const incoming = params.incomingShiftLabel?.trim().toUpperCase() || null;
+    const existing = params.existingShiftLabel?.trim().toUpperCase() || null;
+    return incoming === null || existing === null || incoming === existing;
+}

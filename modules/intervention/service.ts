@@ -8,7 +8,7 @@ import { avisarDeslocamento } from "@/modules/operational/displacement-alert";
 import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
-import { resolveArrivalShiftLabel, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, shouldDisplaceInsteadOfRelieve } from "@/modules/operational/board-rules";
+import { isRearrivalWithinOwnWindow, resolveArrivalShiftLabel, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, shouldDisplaceInsteadOfRelieve } from "@/modules/operational/board-rules";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
@@ -116,6 +116,7 @@ export function resolveSameDoctorBoardStartedAt(params: {
     existingBoardStartedAt?: Date | null;
     effectiveBoardStartedAt?: Date | null;
     currentShiftStart: Date;
+    withinOwnWindow?: boolean;
 }) {
     // Shadow occupancies intentionally keep boardStartedAt=null so they never contend
     // for the unique active board-carrier slot on the base.
@@ -137,7 +138,8 @@ export function resolveSameDoctorBoardStartedAt(params: {
         startedAt: params.existingStartedAt,
         boardStartedAt: params.existingBoardStartedAt,
     });
-    const existingAnchorIsStale = existingBoardAnchor.getTime() < (params.currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
+    const existingAnchorIsStale = !params.withinOwnWindow
+        && existingBoardAnchor.getTime() < (params.currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
 
     if (existingAnchorIsStale || params.effectiveBoardStartedAt.getTime() < existingBoardAnchor.getTime()) {
         return params.effectiveBoardStartedAt;
@@ -1041,6 +1043,12 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                     existingBoardStartedAt: existingSameDoctor.boardStartedAt,
                     effectiveBoardStartedAt,
                     currentShiftStart,
+                    withinOwnWindow: isRearrivalWithinOwnWindow({
+                        existingScheduledEndAt: existingSameDoctor.scheduledEndAt,
+                        existingShiftLabel: existingSameDoctor.shiftLabel,
+                        incomingAt: input.startedAt,
+                        incomingShiftLabel: input.shiftLabel,
+                    }),
                 });
 
             const keptContinuityGroupId = resolvedContinuityGroupId ?? existingSameDoctor.continuityGroupId;

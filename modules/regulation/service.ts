@@ -15,7 +15,7 @@ import { findLaterArrivalForDoctor } from "@/modules/operational/later-arrival";
 import { shouldJoinDoctorTurnoGroup } from "@/modules/operational/turno";
 import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
 import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
-import { resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
+import { isRearrivalWithinOwnWindow, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 import { hookMealBreakAfterBoardChange } from "@/modules/telegram/meal-break-board-hook";
@@ -331,7 +331,11 @@ export function shouldReopenStaleSameDoctorRegulationOccupancy(params: {
     existingStartedAt: Date;
     existingBoardStartedAt: Date;
     incomingStartedAt: Date;
+    withinOwnWindow?: boolean;
 }) {
+    if (params.withinOwnWindow) {
+        return false;
+    }
     const currentShiftStart = resolveOperationalShiftWindow(params.incomingStartedAt).startedAt;
     const preShiftToleranceMs = 60 * 60 * 1000;
     const existingAnchorIsStale = params.existingBoardStartedAt.getTime() < (currentShiftStart.getTime() - preShiftToleranceMs);
@@ -836,10 +840,17 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             // BUT only if that anchor is still from the current operational shift context.
             // If the existing boardStartedAt is from a past shift (i.e., more than 60 min before the
             // current shift start), carrying it forward would make the occupancy invisible on the board.
+            const withinOwnWindow = isRearrivalWithinOwnWindow({
+                existingScheduledEndAt: existing.scheduledEndAt,
+                existingShiftLabel: existing.shiftLabel,
+                incomingAt: input.startedAt,
+                incomingShiftLabel: input.shiftLabel,
+            });
             const shouldReopenStale = shouldReopenStaleSameDoctorRegulationOccupancy({
                 existingStartedAt: existing.startedAt,
                 existingBoardStartedAt: existing.boardStartedAt ?? existing.startedAt,
                 incomingStartedAt: input.startedAt,
+                withinOwnWindow,
             });
 
             if (shouldReopenStale) {
@@ -881,6 +892,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 // A shadow re-arrival (board anchor null) must stay board-null so it
                 // keeps coexisting without entering the one-active-board-per-post index.
                 const existingAnchorIsStale = existingBoardStartedAt !== null
+                    && !withinOwnWindow
                     && existingBoardStartedAt.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
                 // F2 safety: never allow started_at to advance forward past the existing value.
                 // A re-arrival (same doctor, same post) should only move started_at EARLIER (correction),
