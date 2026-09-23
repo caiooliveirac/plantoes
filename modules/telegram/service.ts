@@ -9371,7 +9371,6 @@ export function pickFirstArrivalAttemptAt(attemptsAt: Date[], eventAt: Date): Da
 
 async function resolveFirstArrivalAttemptAt(params: {
     chatId: string;
-    senderTelegramId: string;
     doctorFullName: string;
     targetCode: string;
     eventAt: Date;
@@ -9381,7 +9380,8 @@ async function resolveFirstArrivalAttemptAt(params: {
         columns: { createdAt: true },
         where: and(
             eq(telegramIngestedMessages.chatId, params.chatId),
-            eq(telegramIngestedMessages.senderTelegramId, params.senderTelegramId),
+            // Sem filtro de remetente (D4): colega que avisa pelo médico, ou o médico
+            // trocando de aparelho, conta. O que identifica é médico + alvo + turno.
             eq(telegramIngestedMessages.parsedDoctorName, params.doctorFullName),
             eq(telegramIngestedMessages.parsedTargetCode, params.targetCode),
             eq(telegramIngestedMessages.parsedAction, "arrival"),
@@ -14389,10 +14389,12 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             const messageReferenceAt = new Date(message.date * 1000);
             const isGenuineArrival = !firstParsed.isDeparture && !firstParsed.isContinuation && !firstParsed.isReassignment;
             const messageEventAt = resolveArrivalEventTimeForPhase(messageReferenceAt, firstParsed.arrivalTime, isGenuineArrival);
-            const eventAt = isGenuineArrival && !firstParsed.arrivalTime && firstParsed.baseCode && message.from?.id
+            // HH:mm escrito só impede a busca na fase 1, onde ele vale; na fase 2 é
+            // ignorado e a 1ª tentativa continua valendo (D3).
+            const declaredTimeCounts = Boolean(firstParsed.arrivalTime) && resolveArrivalPhase(messageReferenceAt) === "phase1";
+            const eventAt = isGenuineArrival && !declaredTimeCounts && firstParsed.baseCode
                 ? await resolveFirstArrivalAttemptAt({
                     chatId: String(message.chat.id),
-                    senderTelegramId: String(message.from.id),
                     doctorFullName: resolvedDoctor.fullName,
                     targetCode: firstParsed.baseCode,
                     eventAt: messageEventAt,

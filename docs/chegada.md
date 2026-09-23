@@ -78,7 +78,7 @@ Gravação: `startRegulationOccupancy` / `startInterventionOccupancy`.
 | Caminho | Hora gravada |
 |---|---|
 | Chegada genuína (fase 2) | `message.date` do aviso; HH:mm escrito é ignorado e a resposta avisa |
-| Chegada que só passou num reenvio | a da 1ª tentativa (`resolveFirstArrivalAttemptAt`): mesmo remetente, mesmo nome, mesmo alvo, status `error` ou `pending_takeover_confirmation`, até 2h, mesmo turno |
+| Chegada que só passou num reenvio | a da 1ª tentativa (`resolveFirstArrivalAttemptAt`): qualquer remetente, mesmo nome, mesmo alvo, status `error` ou `pending_takeover_confirmation`, até 2h, mesmo turno; HH:mm escrito não desliga isso na fase 2 |
 | Pendência respondida depois (nome, turno, ramal) | hora da mensagem original guardada na pendência |
 | Botão de tomada | hora da mensagem pendente (1ª tentativa) |
 | Re-chegada do mesmo médico no mesmo alvo, mesmo turno | `min(existente, nova)` — só recua |
@@ -146,8 +146,8 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 |---|---|---|---|
 | D1 | CORRIGIDO | Reenvio no fim do turno abria plantão novo com a hora da noite: "vencida" era medida contra o turno da mensagem nova. Agora reenvio antes do fim programado da ocupação, com mesmo rótulo (ou omitido), é o mesmo plantão (`isRearrivalWithinOwnWindow`) | Livia, 2153, 13/09/2026; PR #298 |
 | D2 | CORRIGIDO | Correção de rótulo SD↔SN até 15 min depois da própria chegada virava continuação SD→SN (janela 07:00 → 07:15 do dia seguinte). Agora é re-chegada que troca o rótulo e preserva a chegada (`isTelegramShiftLabelCorrection`) | Emily Thays, 2034, 07/09/2026; PR #299 |
-| D3 | SUSPEITO | Reenvio com HH:mm escrito desliga a recuperação da 1ª tentativa (guarda `!arrivalTime`); vale a hora do reenvio | código |
-| D4 | SUSPEITO | 1ª tentativa só conta status `error`/`pending_takeover_confirmation` e só do MESMO remetente. Colega que avisa pelo médico, ou aviso que caiu em "ignorado"/"nome não resolvido", perde a hora | código; José Roberto 23/09 teve avisos de 3 remetentes |
+| D3 | CORRIGIDO | Reenvio com HH:mm escrito desligava a recuperação da 1ª tentativa; na fase 2 a hora escrita é ignorada, então a 1ª tentativa volta a valer | PR #301 |
+| D4 | PARCIAL | 1ª tentativa não exige mais o MESMO remetente (colega avisando pelo médico conta). Segue contando só status `error`/`pending_takeover_confirmation`: aviso que caiu em "ignorado" sem nome resolvido não tem médico para casar | PR #301 |
 | D5 | CORRIGIDO | Resposta do bot dizia "desde <hora deste aviso>" mesmo quando o banco preservou a 1ª chegada; o médico relia, achava que perdeu o horário e reenviava (alimentava D1). Agora mostra a chegada gravada + "chegada mantida pelo primeiro aviso" | PR #297, 23/09/2026 |
 | D6 | SUSPEITO | Reenvio "SD" entre 11:10 e 17:00 de quem já está no plantão pode virar meio plantão (fim 17:00) — `shouldAssumeTelegramHalfShift` ignora `effectiveShiftType` | código; não reproduzido |
 | D7 | VERIFICADO | "SD" declarado às 18:35 em outro ramal grava rótulo SD com janela SN (19:00) — rótulo e janela discordam | Gerardson, 2152, 03/09/2026 |
