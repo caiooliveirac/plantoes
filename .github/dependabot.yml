@@ -1,18 +1,22 @@
 version: 2
 updates:
+  # Mensal: o ciclo semanal enchia a fila de PRs que ninguém revisava, e PR de
+  # dependência parado tempo demais só serve para alguém mergear no piloto
+  # automático.
   - package-ecosystem: "npm"
     directories: [ "/" ]
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 3
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
-  - package-ecosystem: "docker"
-    directories: [ "/" ]
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+        # next/react saem do lote: são upgrade de framework num app que compila
+        # no servidor de produção, e merecem PR próprio com smoke depois do
+        # deploy — não carona num "bump de 17 dependências".
+        exclude-patterns: [ "next", "react", "react-dom" ]
+    ignore:
+      # Tipos nunca na frente do runtime: produção roda Node 24. Subir os tipos
+      # sozinho deixa passar chamada de API que não existe na máquina.
+      - dependency-name: "@types/node"
+        update-types: [ "version-update:semver-major" ]
