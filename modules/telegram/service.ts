@@ -639,12 +639,40 @@ export function shouldRouteToDepartureJustification(errorMessage: string, parsed
     return isTelegramJustificationRequiredError(errorMessage) && !isTelegramContinuationEntry(parsed);
 }
 
+// Emily, 2034, 07/09/2026: "2034 sd" às 19:08:05 e "2034 sn" às 19:08:15 viraram SD
+// continuando em SN (janela 07:00 → 07:15 do dia seguinte). Quem emenda SD→SN de
+// verdade chegou horas antes; rótulo trocado minutos depois da própria chegada é
+// correção — segue como re-chegada, que troca o rótulo e preserva a chegada.
+const SHIFT_LABEL_CORRECTION_WINDOW_MS = 15 * 60 * 1000;
+
+export function isTelegramShiftLabelCorrection(params: {
+    incomingShiftLabel?: string | null;
+    activeShiftLabel?: string | null;
+    activeStartedAt?: Date | null;
+    eventAt?: Date | null;
+}) {
+    if (!params.activeStartedAt || !params.eventAt) {
+        return false;
+    }
+    const swapsDayNight = (params.incomingShiftLabel === "SD" && params.activeShiftLabel === "SN")
+        || (params.incomingShiftLabel === "SN" && params.activeShiftLabel === "SD");
+    if (!swapsDayNight) {
+        return false;
+    }
+    const elapsedMs = params.eventAt.getTime() - params.activeStartedAt.getTime();
+    return elapsedMs >= 0 && elapsedMs <= SHIFT_LABEL_CORRECTION_WINDOW_MS;
+}
+
 export function shouldTreatTelegramArrivalAsContinuation(params: {
     sector: "REGULATION" | "INTERVENTION";
     isDeparture: boolean;
     isContinuation: boolean;
     incomingShiftLabel?: string | null;
     activeShiftLabel?: string | null;
+    // Quando informados, troca de rótulo SD↔SN logo depois da própria chegada é
+    // correção de digitação, não continuação (defeito D2 de docs/chegada.md).
+    activeStartedAt?: Date | null;
+    eventAt?: Date | null;
 }) {
     if (params.isDeparture) {
         return false;
@@ -652,6 +680,10 @@ export function shouldTreatTelegramArrivalAsContinuation(params: {
 
     if (params.isContinuation) {
         return true;
+    }
+
+    if (isTelegramShiftLabelCorrection(params)) {
+        return false;
     }
 
     if (params.sector === "REGULATION") {
@@ -9679,6 +9711,8 @@ async function applyParsedEntry(params: {
                 isContinuation: parsed.isContinuation,
                 incomingShiftLabel: parsed.shiftType,
                 activeShiftLabel: activeOccupancy?.shiftLabel,
+                activeStartedAt: activeOccupancy?.startedAt,
+                eventAt,
             });
 
             if (shouldContinueActiveOccupancy && activeOccupancy) {
@@ -9715,7 +9749,15 @@ async function applyParsedEntry(params: {
                 // atraso a partir das 11:30 (com a mesma tolerância de 15 min) em vez
                 // de tratar todo aviso como pontual.
                 const halfShiftScheduledStartAt = assumedHalfShift ? resolveHalfShiftScheduledStartAt(eventAt) : null;
-                const continuityContext = parsed.isDeparture
+                // Correção de rótulo (D2) não busca cadeia: senão a ocupação que o
+                // próprio médico acabou de abrir vira "fonte" de uma continuação SD→SN.
+                const isLabelCorrection = isTelegramShiftLabelCorrection({
+                    incomingShiftLabel: parsed.shiftType,
+                    activeShiftLabel: activeOccupancy?.shiftLabel,
+                    activeStartedAt: activeOccupancy?.startedAt,
+                    eventAt,
+                });
+                const continuityContext = parsed.isDeparture || isLabelCorrection
                     ? null
                     : await findTelegramContinuityContext({
                         doctorId: resolvedDoctor.id,
@@ -10042,6 +10084,8 @@ async function applyParsedEntry(params: {
                 isContinuation: parsed.isContinuation,
                 incomingShiftLabel: parsed.shiftType,
                 activeShiftLabel: activeOccupancy?.shiftLabel,
+                activeStartedAt: activeOccupancy?.startedAt,
+                eventAt,
             });
 
             if (shouldContinueActiveOccupancy && activeOccupancy) {
@@ -10071,7 +10115,15 @@ async function applyParsedEntry(params: {
                     extendedLongShift,
                 });
             } else {
-                const continuityContext = parsed.isDeparture
+                // Correção de rótulo (D2) não busca cadeia: senão a ocupação que o
+                // próprio médico acabou de abrir vira "fonte" de uma continuação SD→SN.
+                const isLabelCorrection = isTelegramShiftLabelCorrection({
+                    incomingShiftLabel: parsed.shiftType,
+                    activeShiftLabel: activeOccupancy?.shiftLabel,
+                    activeStartedAt: activeOccupancy?.startedAt,
+                    eventAt,
+                });
+                const continuityContext = parsed.isDeparture || isLabelCorrection
                     ? null
                     : await findTelegramContinuityContext({
                         doctorId: resolvedDoctor.id,
