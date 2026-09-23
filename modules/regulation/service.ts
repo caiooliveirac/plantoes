@@ -882,8 +882,17 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 // keeps coexisting without entering the one-active-board-per-post index.
                 const existingAnchorIsStale = existingBoardStartedAt !== null
                     && existingBoardStartedAt.getTime() < (currentShiftStart.getTime() - PRE_SHIFT_TOLERANCE_MS);
+                // F2 safety: never allow started_at to advance forward past the existing value.
+                // A re-arrival (same doctor, same post) should only move started_at EARLIER (correction),
+                // never later — a later time is likely a meal-break or typo (e.g. "12:30" = lunch, not arrival).
+                const keptStartedAt = input.startedAt.getTime() < existing.startedAt.getTime()
+                    ? input.startedAt
+                    : existing.startedAt;
+
+                // Deslocado que reassume volta ao quadro com a PRIMEIRA chegada, nunca com a
+                // hora do reenvio — senão a janela do turno é recalculada pela mensagem nova.
                 const keptBoardStartedAt = promotingShadow
-                    ? effectiveBoardStartedAt
+                    ? (isRegulationDisplacedOccupancyNotes(existing.notes) ? keptStartedAt : effectiveBoardStartedAt)
                     : existingBoardStartedAt === null
                         ? null
                         : ((existingAnchorIsStale || effectiveBoardStartedAt.getTime() < existingBoardStartedAt.getTime())
@@ -891,13 +900,6 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                             : existingBoardStartedAt);
 
                 const keptContinuityGroupId = resolvedContinuityGroupId ?? existing.continuityGroupId;
-
-                // F2 safety: never allow started_at to advance forward past the existing value.
-                // A re-arrival (same doctor, same post) should only move started_at EARLIER (correction),
-                // never later — a later time is likely a meal-break or typo (e.g. "12:30" = lunch, not arrival).
-                const keptStartedAt = input.startedAt.getTime() < existing.startedAt.getTime()
-                    ? input.startedAt
-                    : existing.startedAt;
 
                 const windowRef = keptBoardStartedAt !== null && keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                     ? keptBoardStartedAt : keptStartedAt;

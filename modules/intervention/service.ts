@@ -1027,8 +1027,15 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 arrivingIsShadow: Boolean(input.isShadow),
                 hasOtherBoardCarrier: Boolean(otherBoardCarrier),
             });
+            // F2 safety: never allow started_at to advance forward past the existing value.
+            const keptStartedAt = input.startedAt.getTime() < existingSameDoctor.startedAt.getTime()
+                ? input.startedAt
+                : existingSameDoctor.startedAt;
+
+            // Deslocado que reassume volta ao quadro com a PRIMEIRA chegada, nunca com a
+            // hora do reenvio — senão a janela do turno é recalculada pela mensagem nova.
             const keptBoardStartedAt = promotingShadow
-                ? effectiveBoardStartedAt
+                ? (isInterventionDisplacedOccupancyNotes(existingSameDoctor.notes) ? keptStartedAt : effectiveBoardStartedAt)
                 : resolveSameDoctorBoardStartedAt({
                     existingStartedAt: existingSameDoctor.startedAt,
                     existingBoardStartedAt: existingSameDoctor.boardStartedAt,
@@ -1037,11 +1044,6 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 });
 
             const keptContinuityGroupId = resolvedContinuityGroupId ?? existingSameDoctor.continuityGroupId;
-
-            // F2 safety: never allow started_at to advance forward past the existing value.
-            const keptStartedAt = input.startedAt.getTime() < existingSameDoctor.startedAt.getTime()
-                ? input.startedAt
-                : existingSameDoctor.startedAt;
 
             const windowRef = keptBoardStartedAt && keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                 ? keptBoardStartedAt : keptStartedAt;
