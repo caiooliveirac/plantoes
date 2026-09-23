@@ -12,6 +12,7 @@ import {
     pickFirstArrivalAttemptAt,
     resolveCrossTurnoMoveShift,
     resolveReassignmentConflictCoverageEndAt,
+    shouldTreatReassignmentAsArrival,
 } from "@/modules/telegram/service";
 
 // Cenário real (jul/2026): Helmira Rafaela deu P na véspera na 2032. O painel a
@@ -168,4 +169,14 @@ test("edicao de chegada em card movido: eco ignora, mudanca real vai para a orig
     assert.equal(classifyTurnoArrivalEdit({ originStartedAt: origin, requestedArrivalAt: at("2026-09-18T06:49:00-03:00") }), "echo");
     assert.equal(classifyTurnoArrivalEdit({ originStartedAt: origin, requestedArrivalAt: at("2026-09-18T06:55:00-03:00") }), "correct_origin");
     assert.equal(classifyTurnoArrivalEdit({ originStartedAt: null, requestedArrivalAt: at("2026-09-18T06:55:00-03:00") }), "not_a_move");
+});
+
+// D12 (docs/chegada.md): "remanejado para X" nunca é recusado. Sem plantão aberto, ou
+// já estando em X, vira chegada comum.
+test("shouldTreatReassignmentAsArrival: sem plantão aberto ou já no destino vira chegada", () => {
+    const parsed = { isReassignment: true, sector: "REGULATION" as const, baseCode: "2153" };
+    assert.equal(shouldTreatReassignmentAsArrival({ parsed, activeOcc: null }), true);
+    assert.equal(shouldTreatReassignmentAsArrival({ parsed, activeOcc: { sector: "REGULATION", baseCode: "2153" } }), true);
+    assert.equal(shouldTreatReassignmentAsArrival({ parsed, activeOcc: { sector: "REGULATION", baseCode: "2151" } }), false);
+    assert.equal(shouldTreatReassignmentAsArrival({ parsed: { ...parsed, isReassignment: false }, activeOcc: null }), false);
 });
