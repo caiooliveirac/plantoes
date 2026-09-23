@@ -155,6 +155,7 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 | D9 | CORRIGIDO | Intervenção: reenvio com âncora "vencida" movia o board e a janela para a hora nova; mesma regra da janela própria | PR #298 |
 | D10 | ABERTO | Quando quem tomou o posto é remanejado ou sai, o deslocado NÃO reassume sozinho; precisa reenviar | pedido do dono, 18/09 |
 | D11 | CORRIGIDO | Deslocado que reenviava no mesmo alvo nunca voltava ao quadro | PR #295, 23/09/2026 |
+| D12 | CORRIGIDO | **Chegada recusada no remanejo.** ~50 recusas em 60 dias ("Encontrei X em Y… declare a saída dela e depois reenvie sua chegada"), quase todas na virada 07h/19h: o portão de tomada achava que o ocupante era de outro turno e a checagem do remanejo achava que ele seguia vigente — zona morta. Agora o titular vigente é deslocado e quem chega assume. "Remanejado" de quem não tem plantão aberto, ou já está no destino, vira chegada em vez de erro | Yngra 05/09 (5 tentativas), Leonardo 08/09, Emily 09/09, Caio 18/09; PR #300 |
 
 ### Débito que atrapalha achar esses bugs
 

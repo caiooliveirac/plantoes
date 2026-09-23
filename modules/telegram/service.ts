@@ -8947,6 +8947,19 @@ export function buildReassignmentTargetOccupiedMessage(params: {
     return `${REASSIGNMENT_TARGET_OCCUPIED_PREFIX}${occupantName}* em *${params.targetLabel}*. Se essa pessoa já saiu, declare a saída dela (ex.: \`${params.occupantName} saiu ${params.targetLabel}\`); se ela só mudou de lugar, peça para ela avisar o novo posto. Depois reenvie sua chegada.`;
 }
 
+export function shouldTreatReassignmentAsArrival(params: {
+    parsed: Pick<OperationalParsedEntry, "isReassignment" | "sector" | "baseCode">;
+    activeOcc: { sector: "REGULATION" | "INTERVENTION"; baseCode: string } | null | undefined;
+}) {
+    if (!params.parsed.isReassignment) {
+        return false;
+    }
+    if (!params.activeOcc) {
+        return true;
+    }
+    return params.activeOcc.sector === params.parsed.sector && params.activeOcc.baseCode === params.parsed.baseCode;
+}
+
 async function handleTelegramReassignment(params: {
     parsed: OperationalParsedEntry;
     resolvedDoctor: ResolvedTelegramDoctorRef;
@@ -9011,12 +9024,21 @@ async function handleTelegramReassignment(params: {
             const occupantName = resolveTelegramDoctorSurfaceName(occupantDoc);
             if (!isExpiredReassignmentConflict(coverageEndAt, eventAt)
                 && !isPreviousShiftReassignmentConflict(targetConflict.boardStartedAt ?? targetConflict.startedAt, eventAt, coverageEndAt)) {
-                throw new Error(buildReassignmentTargetOccupiedMessage({ occupantName, targetLabel: targetCode }));
+                // Chegada é soberana (docs/chegada.md, D12): titular com cobertura
+                // vigente é DESLOCADO — segue no plantão, pago, fora do quadro — e quem
+                // se remaneja assume. Antes o bot recusava ("Encontrei X em Y… reenvie
+                // sua chegada") na virada 07h/19h, quando o portão de tomada e esta
+                // checagem discordam sobre "mesmo turno": ninguém conseguia chegar.
+                await displaceRegulationOccupant(targetConflict.id, {
+                    displacedAt: eventAt,
+                    takenByDoctorName: resolveTelegramDoctorSurfaceName(resolvedDoctor),
+                });
+            } else {
+                // Cobertura vencida: rendição automática. endRegulationOccupancy capa o
+                // endedAt no scheduledEndAt do fantasma (ex.: P da véspera fecha às 07:15).
+                await endRegulationOccupancy(targetConflict.id, { endedAt: eventAt, handoffClosure: true });
+                renderedGhostDoctorName = occupantName;
             }
-            // Cobertura vencida: rendição automática. endRegulationOccupancy capa o
-            // endedAt no scheduledEndAt do fantasma (ex.: P da véspera fecha às 07:15).
-            await endRegulationOccupancy(targetConflict.id, { endedAt: eventAt, handoffClosure: true });
-            renderedGhostDoctorName = occupantName;
         }
         destination = {
             domain: "regulation",
@@ -9523,6 +9545,15 @@ async function applyParsedEntry(params: {
         return applyParsedEntry({
             ...params,
             parsed: { ...parsed, isReassignment: false, shiftType: crossTurnoShift },
+        });
+    }
+
+    // "Remanejado para X" de quem não tem plantão aberto, ou que já está em X, é uma
+    // chegada: registra em vez de recusar (docs/chegada.md, D12 — a chegada é soberana).
+    if (shouldTreatReassignmentAsArrival({ parsed, activeOcc })) {
+        return applyParsedEntry({
+            ...params,
+            parsed: { ...parsed, isReassignment: false },
         });
     }
 
