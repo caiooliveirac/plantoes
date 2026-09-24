@@ -1905,6 +1905,11 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                     <p>
                                                         Use quando o plantão deve permanecer no histórico, mas o saldo final precisa ser corrigido por decisão administrativa.
                                                     </p>
+                                                    {shift.actualEndedAt && !shift.departureConfirmedAt && (
+                                                        <p>
+                                                            A saída deste plantão ainda não foi confirmada pela chefia. Salvar o ajuste confirma a saída em seu nome.
+                                                        </p>
+                                                    )}
 
                                                     <div className="hours-override-grid">
                                                         <label className="hours-override-field compact">

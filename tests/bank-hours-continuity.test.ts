@@ -5,6 +5,8 @@ import {
     buildContinuityCarrierLookup,
     isDepartureClosureAuthoritative,
     resolveContinuityEffectiveEndedAt,
+    resolveManualOverrideDepartures,
+    type ContinuityOccupancy,
 } from "@/modules/bank-hours/continuity";
 import { calculateBankHours } from "@/modules/bank-hours/calculator";
 
@@ -233,4 +235,95 @@ test("saída faltando menos de 2h para o fim do P não recua o previsto nem vira
 
     assert.equal(calculation.overtimeMinutes, 0);
     assert.equal(calculation.balanceMinutes, 0);
+});
+
+function overrideMember(overrides: Partial<ContinuityOccupancy> & { occupancyId: string; roleLabel?: string | null; earlyDepartureOutcome?: string | null }) {
+    return {
+        doctorId: "doctor-1",
+        continuityGroupId: "group-1",
+        domain: "intervention" as const,
+        startedAt: new Date("2026-09-21T07:00:00-03:00"),
+        endedAt: null,
+        actualEndedAt: null,
+        departureConfirmedAt: null,
+        scheduledStartAt: new Date("2026-09-21T07:00:00-03:00"),
+        scheduledEndAt: new Date("2026-09-21T19:00:00-03:00"),
+        shiftLabel: "SD",
+        roleLabel: null,
+        earlyDepartureOutcome: null,
+        ...overrides,
+    };
+}
+
+test("ajuste manual confirma a saída de mudança de posto no meio da cadeia (fora da fila da chefia)", () => {
+    // Caso de 21/09: GOA SD fechou às 18:35 com saída real ao chegar no SM01 (own_move,
+    // nunca entra na fila) — o grupo ficava sem banco e o ajuste era recusado para sempre.
+    const moved = overrideMember({
+        occupancyId: "goa-sd",
+        startedAt: new Date("2026-09-21T09:20:00-03:00"),
+        endedAt: new Date("2026-09-21T18:35:00-03:00"),
+        actualEndedAt: new Date("2026-09-21T18:35:00-03:00"),
+    });
+    const tail = overrideMember({
+        occupancyId: "sm01-sn",
+        startedAt: new Date("2026-09-21T18:35:00-03:00"),
+        endedAt: new Date("2026-09-22T07:08:00-03:00"),
+        actualEndedAt: new Date("2026-09-22T07:08:00-03:00"),
+        departureConfirmedAt: new Date("2026-09-22T09:50:00-03:00"),
+        scheduledStartAt: new Date("2026-09-21T19:00:00-03:00"),
+        scheduledEndAt: new Date("2026-09-22T07:00:00-03:00"),
+        shiftLabel: "SN",
+    });
+
+    const result = resolveManualOverrideDepartures([tail, moved]);
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.status === "ok" ? result.toConfirm.map((member) => member.occupancyId) : [], ["goa-sd"]);
+});
+
+test("ajuste manual confirma saída tardia ainda em hold no fim da cadeia", () => {
+    const late = overrideMember({
+        occupancyId: "late",
+        endedAt: new Date("2026-09-17T19:13:00-03:00"),
+        actualEndedAt: new Date("2026-09-17T19:13:00-03:00"),
+        scheduledStartAt: new Date("2026-09-17T07:00:00-03:00"),
+        scheduledEndAt: new Date("2026-09-17T19:00:00-03:00"),
+        startedAt: new Date("2026-09-17T07:00:00-03:00"),
+    });
+
+    const result = resolveManualOverrideDepartures([late]);
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.status === "ok" ? result.toConfirm.map((member) => member.occupancyId) : [], ["late"]);
+});
+
+test("ajuste manual não passa por cima de saída antecipada sem desfecho da chefia", () => {
+    const early = overrideMember({
+        occupancyId: "early",
+        endedAt: new Date("2026-09-21T13:00:00-03:00"),
+        actualEndedAt: new Date("2026-09-21T13:00:00-03:00"),
+    });
+
+    const result = resolveManualOverrideDepartures([early]);
+    assert.equal(result.status, "early_departure_pending");
+
+    // Com o desfecho já gravado, a decisão de pagamento existe: o ajuste confirma.
+    const decided = resolveManualOverrideDepartures([{ ...early, earlyDepartureOutcome: "half_shift" }]);
+    assert.equal(decided.status, "ok");
+    // Meio plantão declarado não entra na régua de saída antecipada.
+    const halfShift = resolveManualOverrideDepartures([{ ...early, roleLabel: "MEIO_PLANTAO" }]);
+    assert.equal(halfShift.status, "ok");
+});
+
+test("ajuste manual recusa plantão ainda aberto e não confirma nada já confirmado", () => {
+    const open = overrideMember({ occupancyId: "open" });
+    assert.equal(resolveManualOverrideDepartures([open]).status, "open");
+
+    const confirmed = overrideMember({
+        occupancyId: "confirmed",
+        endedAt: new Date("2026-09-21T19:05:00-03:00"),
+        actualEndedAt: new Date("2026-09-21T19:05:00-03:00"),
+        departureConfirmedAt: new Date("2026-09-21T20:00:00-03:00"),
+    });
+    const result = resolveManualOverrideDepartures([confirmed]);
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.status === "ok" ? result.toConfirm : null, []);
 });
