@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
                 occupancyId: parsed.data.occupancyId,
                 balanceMinutes: parsed.data.balanceMinutes,
                 notes: parsed.data.notes,
+                confirmedDepartures: result.confirmedDepartures,
             },
         });
 

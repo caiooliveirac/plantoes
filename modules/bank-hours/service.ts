@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { BANK_HOURS_RULE_VERSION, applyAnomalyGuard, buildEarlyDepartureBankHours, calculateBankHours } from "@/modules/bank-hours/calculator";
-import { buildContinuityBankHoursSpan } from "@/modules/bank-hours/continuity";
+import { buildContinuityBankHoursSpan, resolveManualOverrideDepartures } from "@/modules/bank-hours/continuity";
 import { EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES, classifyEarlyDeparture, isPaymentAffectingEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { getDb } from "@/db";
 import { bankHoursBalanceOverrides, bankHoursEntries, doctors, interventionOccupancies, regulationOccupancies } from "@/db/schema";
@@ -110,6 +110,7 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
             scheduledStartAt: occupancy.scheduledStartAt,
             scheduledEndAt: occupancy.scheduledEndAt,
             shiftLabel: occupancy.shiftLabel,
+            roleLabel: occupancy.roleLabel,
             earlyDepartureOutcome: occupancy.earlyDepartureOutcome,
         })),
         ...intervention.map((occupancy: typeof interventionOccupancies.$inferSelect) => ({
@@ -124,6 +125,7 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
             scheduledStartAt: occupancy.scheduledStartAt,
             scheduledEndAt: occupancy.scheduledEndAt,
             shiftLabel: occupancy.shiftLabel,
+            roleLabel: occupancy.roleLabel,
             earlyDepartureOutcome: occupancy.earlyDepartureOutcome,
         })),
     ];
@@ -360,9 +362,46 @@ export async function applyBankHoursBalanceOverride(params: {
             throw new Error("Nao encontrei o grupo de continuidade desse plantao.");
         }
 
-        const span = buildContinuityBankHoursSpan(occupancies);
+        const departures = resolveManualOverrideDepartures(occupancies);
+        if (departures.status === "open") {
+            throw new Error("Esse plantao ainda esta aberto: o ajuste manual do banco so vale depois da saida.");
+        }
+        if (departures.status === "early_departure_pending") {
+            throw new Error("A saida desse plantao foi antecipada e ainda espera a decisao da chefia sobre o pagamento (MEIO ou so banco). Decida a saida antes do ajuste manual.");
+        }
+
+        const confirmedAt = new Date();
+        const confirmedNote = "Saida confirmada pelo ajuste manual do banco de horas.";
+        for (const member of departures.toConfirm) {
+            if (member.domain === "regulation") {
+                await tx.update(regulationOccupancies)
+                    .set({
+                        departureConfirmedAt: confirmedAt,
+                        departureConfirmedByUserId: params.actorUserId ?? null,
+                        departureConfirmedNote: sql`coalesce(${regulationOccupancies.departureConfirmedNote}, ${confirmedNote})`,
+                        updatedByUserId: params.actorUserId ?? null,
+                        updatedAt: confirmedAt,
+                    })
+                    .where(eq(regulationOccupancies.id, member.occupancyId));
+            } else {
+                await tx.update(interventionOccupancies)
+                    .set({
+                        departureConfirmedAt: confirmedAt,
+                        departureConfirmedByUserId: params.actorUserId ?? null,
+                        departureConfirmedNote: sql`coalesce(${interventionOccupancies.departureConfirmedNote}, ${confirmedNote})`,
+                        updatedByUserId: params.actorUserId ?? null,
+                        updatedAt: confirmedAt,
+                    })
+                    .where(eq(interventionOccupancies.id, member.occupancyId));
+            }
+        }
+
+        const confirmedIds = new Set(departures.toConfirm.map((member) => member.occupancyId));
+        const span = buildContinuityBankHoursSpan(occupancies.map((occupancy) => (
+            confirmedIds.has(occupancy.occupancyId) ? { ...occupancy, departureConfirmedAt: confirmedAt } : occupancy
+        )));
         if (!span.isClosed || !span.actualEndAt || !span.scheduledStartAt || !span.scheduledEndAt) {
-            throw new Error("Esse plantao ainda nao tem fechamento suficiente para ajuste manual do banco.");
+            throw new Error("Esse plantao nao tem janela prevista suficiente para ajuste manual do banco.");
         }
 
         const [saved] = await tx.insert(bankHoursBalanceOverrides)
@@ -394,6 +433,7 @@ export async function applyBankHoursBalanceOverride(params: {
             bankEntry,
             continuityGroupId: target.continuityGroupId,
             doctorId: target.doctorId,
+            confirmedDepartures: departures.toConfirm.map(({ domain, occupancyId }) => ({ domain, occupancyId })),
         };
     });
 }

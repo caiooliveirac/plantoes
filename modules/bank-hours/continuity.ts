@@ -1,4 +1,5 @@
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
+import { classifyEarlyDeparture, isEarlyDepartureEligible, isStoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 
 export type ContinuityDomain = "regulation" | "intervention";
 
@@ -174,4 +175,48 @@ export function buildContinuityBankHoursSpan(records: ContinuityOccupancy[]) {
         actualEndAt: tailEndedAt,
         isClosed: group.members.every((member) => isDepartureClosureAuthoritative(member)),
     } satisfies ContinuityBankHoursSpan;
+}
+
+export type ManualOverrideDepartureCheck<T> =
+    | { status: "open" }
+    | { status: "early_departure_pending"; member: T }
+    | { status: "ok"; toConfirm: T[] };
+
+/**
+ * O ajuste manual do saldo é a revisão do admin sobre o grupo inteiro: as saídas
+ * ainda em hold (saída real sem confirmação) são confirmadas junto com ele. Sem
+ * isso, uma saída que nunca chega à fila da chefia — mudança de posto do próprio
+ * médico, ou a que passou da janela de 7 dias — travava o grupo para sempre: sem
+ * banco e sem ajuste possível.
+ *
+ * Duas recusas: plantão ainda aberto (não há saída a revisar) e saída antecipada
+ * no fim da cadeia sem desfecho gravado — MEIO ou "só banco" decide pagamento, e
+ * essa decisão é da chefia, não do saldo.
+ */
+export function resolveManualOverrideDepartures<T extends ContinuityOccupancy & {
+    roleLabel?: string | null;
+    earlyDepartureOutcome?: string | null;
+}>(records: T[]): ManualOverrideDepartureCheck<T> {
+    if (records.length === 0 || records.some((record) => !record.endedAt && !record.actualEndedAt)) {
+        return { status: "open" };
+    }
+
+    const group = buildContinuityGroups(records)[0]!;
+    const toConfirm = group.members.filter((member) => !isDepartureClosureAuthoritative(member));
+    const tail = group.tail;
+    if (
+        toConfirm.includes(tail)
+        && isEarlyDepartureEligible({ roleLabel: tail.roleLabel })
+        && !isStoredEarlyDepartureOutcome(tail.earlyDepartureOutcome)
+        && classifyEarlyDeparture({
+            departureAt: tail.actualEndedAt!,
+            scheduledStartAt: tail.scheduledStartAt,
+            scheduledEndAt: tail.scheduledEndAt,
+            startedAt: tail.startedAt,
+        }).outcome !== "full_shift"
+    ) {
+        return { status: "early_departure_pending", member: tail };
+    }
+
+    return { status: "ok", toConfirm };
 }
