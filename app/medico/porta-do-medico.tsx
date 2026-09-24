@@ -7,16 +7,24 @@ import "@/app/auth-pages.css";
  * Porta de entrada do médico logado: resolve o mês atual (fuso SP) e manda para
  * o painel dele (/banco-de-horas/[medicoId]/[ano]/[mes]) ou para a folha de
  * ponto (/folha-ponto/…) — as mesmas páginas que o bot já entrega por link
- * assinado, agora acessíveis por login. Endereços curtos: /banco-de-horas e
- * /medico (banco), /folha-ponto e /medico/folha-ponto (folha). Sem sessão,
- * vão ao login do portal mnrs.com.br, que devolve a pessoa aqui já logada.
+ * assinado, agora acessíveis por login. Endereços curtos: /medico, /folha-ponto
+ * e /medico/folha-ponto (painel, topo) e /banco-de-horas (painel, na seção do
+ * banco). Sem sessão, vão ao login do portal mnrs.com.br, que devolve a pessoa
+ * aqui já logada.
  */
-export async function portaDoMedico(destino: "banco-de-horas" | "folha-ponto") {
+/* Para onde cada porta leva, dentro do Painel do médico (o link do /pagamento
+   do bot): "painel" = topo (pagamento do mês e, logo abaixo, a folha de ponto
+   para gerar — o médico confere antes de emitir); "banco-de-horas" = o mesmo
+   painel já na seção dos extras e do saldo. O PDF da folha
+   (/folha-ponto/<médico>/<ano>/<mês>) sai do botão "Gerar" do painel. */
+export type PortaDoMedico = "painel" | "banco-de-horas";
+
+export async function portaDoMedico(destino: PortaDoMedico) {
     const session = await readAuthenticatedSession();
     if (!session) {
         // Login único: entra no portal e volta direto para cá (porteiro → SSO
         // → /medico ou /medico/folha-ponto). Ver kairos ADR 0013.
-        redirect(`https://mnrs.com.br/?proximo=${destino === "folha-ponto" ? "folha-ponto" : "banco-horas"}`);
+        redirect(`https://mnrs.com.br/?proximo=${destino === "painel" ? "folha-ponto" : "banco-horas"}`);
     }
     if (!session.user.doctorId) {
         return (
@@ -46,5 +54,6 @@ export async function portaDoMedico(destino: "banco-de-horas" | "folha-ponto") {
         month: "2-digit",
     }).format(new Date());
     const [ano, mes] = spNow.split("-");
-    redirect(`/${destino}/${session.user.doctorId}/${ano}/${Number(mes)}`);
+    const ancora = destino === "banco-de-horas" ? "#banco-de-horas" : "";
+    redirect(`/banco-de-horas/${session.user.doctorId}/${ano}/${Number(mes)}${ancora}`);
 }

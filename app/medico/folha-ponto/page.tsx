@@ -2,7 +2,7 @@ import { portaDoMedico } from "../porta-do-medico";
 
 export const dynamic = "force-dynamic";
 
-/** /medico/folha-ponto → folha de ponto do médico logado, mês corrente. */
+/** /medico/folha-ponto → Painel do médico (pagamento do mês e a folha para gerar logo abaixo). */
 export default async function MedicoFolhaPontoPage() {
-    return portaDoMedico("folha-ponto");
+    return portaDoMedico("painel");
 }

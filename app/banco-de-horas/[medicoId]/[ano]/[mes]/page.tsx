@@ -362,7 +362,7 @@ export default async function PainelDoMedicoPage({
             {/* ---------------- Banco de horas ---------------- */}
             {doctor ? (
                 <>
-                    <section className="panel-section">
+                    <section className="panel-section" id="banco-de-horas" style={{ scrollMarginTop: "72px" }}>
                         <div className="panel-balance-head">
                             <h2>Seu banco de horas</h2>
                             <span className={`hours-balance-pill large ${balanceClass(displayedBalanceMinutes)}`}>
