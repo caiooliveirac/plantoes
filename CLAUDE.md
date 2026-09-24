@@ -88,6 +88,8 @@ telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
 - **Declaração de chegada** (parser → tomada/deslocado → `start*Occupancy` → quadro):
   princípios, cenários e registro de defeitos em [docs/chegada.md](docs/chegada.md).
   **Leia antes de mexer** — regra dura: vale a primeira mensagem, chegada nunca avança.
+- **Passagem de ocorrências** no almoço/descanso (quem sai passa para quem, faixa
+  acima do quadro + bot): regras e janela em [docs/passagem-ocorrencias.md](docs/passagem-ocorrencias.md).
 - `modules/bank-hours/` — cálculo de banco de horas (atraso, hora extra, continuidade)
 - `lib/contracts/` (puro) + `services/contract-balance.service.ts` + as varreduras de
   `modules/telegram/contract-balance-alerts.ts` — saldo de contrato: métricas do ciclo,
