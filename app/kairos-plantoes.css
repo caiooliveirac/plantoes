@@ -4261,3 +4261,265 @@
     align-self: start;
     margin: 0;
 }
+
+/* ==========================================================================
+   Passagem de ocorrências (almoço/descanso) — faixa acima do quadro e
+   expansão sob a linha de quem sai/recebe. Aguardando = âmbar (pendente),
+   Regulado = verde (resolvida).
+   ========================================================================== */
+
+.pagina-kairos .ops-handoff {
+    margin: 0 0 14px;
+    padding: 14px 16px;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-left: 3px solid var(--ambar-500);
+    border-radius: 0 14px 14px 0;
+    box-shadow: var(--sombra-painel);
+    color: var(--texto);
+}
+
+.pagina-kairos .ops-handoff.phase-divisao { border-left-color: var(--verde-600); }
+
+.pagina-kairos .ops-handoff-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 8px 16px;
+}
+
+.pagina-kairos .ops-handoff-eyebrow {
+    display: block;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--texto-fraco);
+}
+
+.pagina-kairos .ops-handoff-title h3 {
+    margin: 2px 0 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .ops-handoff-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    font-size: 0.8rem;
+    color: var(--texto-medio);
+}
+
+.pagina-kairos .ops-handoff-meta strong,
+.pagina-kairos .ops-handoff-who strong { color: var(--texto-forte); font-weight: 600; }
+
+.pagina-kairos .ops-handoff-who {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+    margin: 8px 0 0;
+    font-size: 0.8rem;
+    color: var(--texto-medio);
+}
+
+.pagina-kairos .ops-handoff-alert {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--vermelho-200);
+    border-radius: 10px;
+    background: var(--vermelho-50);
+    color: var(--vermelho-700);
+    font-size: 0.82rem;
+    animation: ops-handoff-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ops-handoff-pulse {
+    50% { border-color: var(--vermelho-600); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pagina-kairos .ops-handoff-alert { animation: none; }
+}
+
+.pagina-kairos .ops-handoff-hint {
+    margin: 8px 0 0;
+    font-size: 0.78rem;
+    color: var(--texto-fraco);
+}
+
+.pagina-kairos .ops-handoff-list {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+}
+
+.pagina-kairos .ops-handoff-list li {
+    display: grid;
+    grid-template-columns: minmax(140px, 200px) minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding-top: 6px;
+    border-top: 1px solid var(--divisor);
+}
+
+.pagina-kairos .ops-handoff-giver strong { color: var(--texto-forte); font-weight: 600; }
+
+.pagina-kairos .ops-handoff-giver em {
+    margin-left: 6px;
+    font-style: normal;
+    font-family: var(--fonte-mono);
+    font-size: 0.75rem;
+    color: var(--texto-fraco);
+}
+
+/* Passagens em grid: etiqueta | seta | nome — setas e nomes sempre na mesma coluna */
+.pagina-kairos .ops-handoff-transfers {
+    display: grid;
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+    align-items: center;
+    gap: 6px 8px;
+    font-size: 0.82rem;
+}
+
+.pagina-kairos .ops-handoff-transfer { display: contents; }
+.pagina-kairos .ops-handoff-transfer .ops-handoff-tag { justify-self: start; }
+
+.pagina-kairos .ops-handoff-person {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.pagina-kairos .ops-handoff-arrow { color: var(--texto-fraco); }
+.pagina-kairos .ops-handoff-person { color: var(--texto-forte); }
+
+.pagina-kairos .ops-handoff-tag {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    padding: 1px 8px;
+    border: 1px solid;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.pagina-kairos .ops-handoff-tag strong { font-family: var(--fonte-mono); font-size: 0.78rem; }
+
+.pagina-kairos .ops-handoff-tag.aguardando {
+    background: var(--ambar-50);
+    border-color: var(--ambar-200);
+    color: var(--ambar-700);
+}
+
+.pagina-kairos .ops-handoff-tag.regulado {
+    background: var(--verde-50);
+    border-color: var(--verde-200);
+    color: var(--verde-700);
+}
+
+/* Expansão sob a linha do ramal (mesmo encaixe do row-actions) */
+/* Rótulo | conteúdo: cada rótulo numa coluna só, conteúdo alinhado à direita dele */
+.pagina-kairos .ops-handoff-row {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: center;
+    gap: 8px 14px;
+    margin: 0 14px;
+    padding: 8px 0 10px;
+    border-top: 1px dashed var(--ambar-200);
+    font-size: 0.8rem;
+}
+
+.pagina-kairos .ops-handoff-row.receiver { border-top-color: var(--verde-200); }
+.pagina-kairos .ops-handoff-row.pending { background: linear-gradient(90deg, var(--vermelho-50), transparent 60%); }
+
+.pagina-kairos .ops-handoff-row-label {
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--texto-fraco);
+}
+
+.pagina-kairos .ops-handoff-row > .ops-handoff-hint:only-child { grid-column: 1 / -1; margin: 0; }
+
+.pagina-kairos .ops-handoff-inputs {
+    display: grid;
+    grid-template-columns: repeat(2, max-content);
+    gap: 8px;
+}
+
+/* Pílulas de mesma largura: nome à esquerda, campo sempre na mesma posição */
+.pagina-kairos .ops-handoff-input {
+    display: grid;
+    grid-template-columns: 6.6em max-content;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px 2px 10px;
+    border: 1px solid;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 600;
+}
+
+.pagina-kairos .ops-handoff-input.aguardando { background: var(--ambar-50); border-color: var(--ambar-200); color: var(--ambar-700); }
+.pagina-kairos .ops-handoff-input.regulado { background: var(--verde-50); border-color: var(--verde-200); color: var(--verde-700); }
+
+.pagina-kairos .ops-handoff-input input {
+    width: 3.2em;
+    height: 26px;
+    padding: 0 6px;
+    border: 1px solid var(--borda);
+    border-radius: 999px;
+    background: var(--superficie);
+    color: var(--texto-forte);
+    font-family: var(--fonte-mono);
+    font-size: 0.85rem;
+    text-align: center;
+}
+
+.pagina-kairos .ops-handoff-input input:focus-visible { outline: 2px solid var(--foco); outline-offset: 1px; }
+
+.pagina-kairos .ops-grid-row.is-handoff-giver { background: color-mix(in oklab, var(--ambar-50) 60%, transparent); }
+.pagina-kairos .ops-grid-row.is-handoff-returning { background: color-mix(in oklab, var(--verde-50) 60%, transparent); }
+
+@media (max-width: 720px) {
+    .pagina-kairos .ops-handoff-list li { grid-template-columns: 1fr; gap: 4px; }
+    .pagina-kairos .ops-handoff-row { grid-template-columns: minmax(0, 1fr); }
+    .pagina-kairos .ops-handoff-inputs { grid-template-columns: repeat(2, minmax(0, max-content)); }
+}
+
+.pagina-kairos .ops-handoff-check {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border: 1px dashed var(--azul-300);
+    border-radius: 10px;
+    background: var(--azul-50);
+    color: var(--texto);
+    font-size: 0.8rem;
+}
+
+.pagina-kairos .ops-handoff-check b { color: var(--texto-forte); font-weight: 600; }
+
+/* Quem está fora (almoço/descanso): linha apagada + tag — erro de horário salta aos olhos */
+.pagina-kairos .ops-grid-row.is-on-break > .ops-grid-cell { opacity: 0.38; }
+.pagina-kairos .ops-grid-row.is-on-break > .ops-grid-cell.column-name { opacity: 1; }
+.pagina-kairos .ops-grid-row.is-on-break .ops-doctor-line.primary > strong { opacity: 0.4; }
+
+.pagina-kairos .ops-inline-flag.break-almoco,
+.pagina-kairos .ops-inline-flag.break-descanso {
+    border-color: var(--slate-300);
+    background: var(--slate-100);
+    color: var(--slate-700);
+    letter-spacing: 0.06em;
+}
+
+.pagina-kairos .ops-handoff.phase-encerrada { border-left-color: var(--slate-400); }
+.pagina-kairos .ops-handoff-input input:read-only { background: var(--superficie-recuada); color: var(--texto-medio); }

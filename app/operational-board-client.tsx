@@ -53,6 +53,8 @@ import { BoardQuickFilters, type BoardRoleFilter, type BoardStatusFilter } from 
 import { InlineTimeEditor } from "@/components/board/InlineTimeEditor";
 import { RowActions } from "@/components/board/RowActions";
 import { MealSlotPicker, type MealKind } from "@/components/board/MealSlotPicker";
+import { OccurrenceHandoffBanner, OccurrenceHandoffRowDetail } from "@/components/board/OccurrenceHandoff";
+import { useOccurrenceHandoff } from "@/components/board/useOccurrenceHandoff";
 import { AnimatePresence } from "framer-motion";
 import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
 import type { UserRole } from "@/modules/auth/contracts";
@@ -1893,6 +1895,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         ? "Marque o reconhecimento da funcao fixa do destino para continuar."
                         : null;
     const mealBreakDisplayMode = resolveMealBreakDisplayMode(shiftLabel, mealBreakSession);
+    // Passagem de ocorrências (almoço/descanso diurno): faixa acima do quadro + linhas.
+    const handoff = useOccurrenceHandoff(generatedAt);
+    const handoffPlan = mealBreakDisplayMode === "day" ? handoff.plan : null;
     const selectedRegulationRamal = selectedCard?.domain === "regulation" ? selectedCard.postCode : null;
     const selectedNightWorkCurrent = selectedRegulationRamal
         ? resolveMealBreakSlot<MealBreakNightWorkSlot>(mealBreakSession, selectedRegulationRamal, "nightWorkAssignments")
@@ -3077,11 +3082,15 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
         const cardPriority = resolvePriority(card, generatedAt);
         const isExpanded = expandedCardKey === cardKey;
+        const breakTag = mealBreakDisplayMode === "day" && card.status === "active" ? handoff.breakLabel(card.postCode) : null;
+        const handoffClass = handoffPlan
+            ? `${handoffPlan.givers.some((g) => g.ramal === card.postCode) ? "is-handoff-giver" : ""} ${handoffPlan.returning.some((p) => p.ramal === card.postCode) ? "is-handoff-returning" : ""}`
+            : "";
         return (
             <div key={cardKey} className={`ops-grid-row-group ${isExpanded ? "is-expanded" : ""}`.trim()}>
             <div
                 role="row"
-                className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${isLeaving ? "is-leaving" : ""} ${clickable ? "clickable" : ""} ${isExpanded ? "is-expanded" : ""}`.trim()}
+                className={`ops-grid-row regulation ${emphasisClass} priority-${cardPriority} ${isLeaving ? "is-leaving" : ""} ${clickable ? "clickable" : ""} ${isExpanded ? "is-expanded" : ""} ${breakTag ? "is-on-break" : ""} ${handoffClass}`.replace(/\s+/g, " ").trim()}
                 onClick={clickable ? () => { activateBoardRow(card, cardKey); } : undefined}
                 onKeyDown={clickable ? (event) => handleBoardRowKeyDown(event, card, cardKey) : undefined}
                 tabIndex={clickable ? 0 : undefined}
@@ -3118,6 +3127,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 <>
                                     {renderPrimaryDoctorLabel(card)}
                                     {renderCardIdentityTags(card)}
+                                    {breakTag ? (
+                                        <span className={`ops-inline-flag ${breakTag === "ALMOÇO" ? "break-almoco" : "break-descanso"}`}>{breakTag}</span>
+                                    ) : null}
                                 </>
                             )}
                         </div>
@@ -3192,6 +3204,16 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     })}
                 </div>
             </div>
+            {handoffPlan && handoff.window && card.status === "active" ? (
+                <OccurrenceHandoffRowDetail
+                    ramal={card.postCode}
+                    role={handoff.role(card.postCode)}
+                    plan={handoffPlan}
+                    phase={handoff.window.phase}
+                    counts={handoff.counts[card.postCode]}
+                    onCountsChange={handoff.setCounts}
+                />
+            ) : null}
             <AnimatePresence initial={false}>
                 {isExpanded && clickable && (
                     <RowActions
@@ -4035,6 +4057,16 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 totalCount={totalBoardCount}
                             />
                         )}
+
+                        {handoffPlan && handoff.window ? (
+                            <OccurrenceHandoffBanner
+                                plan={handoffPlan}
+                                phase={handoff.window.phase}
+                                canManage={Boolean(session?.canManage)}
+                                scheduleWarnings={handoff.scheduleWarnings}
+                                error={handoff.error}
+                            />
+                        ) : null}
 
                         <section className="ops-main-grid">
                             <section className="ops-operational-panel regulation">

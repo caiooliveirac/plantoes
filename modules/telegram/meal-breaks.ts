@@ -5895,6 +5895,24 @@ export async function getCurrentOperationalMealBreakSession(referenceAt = new Da
     return state?.session ?? null;
 }
 
+/** Sessão diurna corrente e o chat dela — base da passagem de ocorrências. */
+export async function getCurrentDayMealBreakSessionWithChat(referenceAt = new Date()) {
+    if (resolveMealBreakModeFromReference(referenceAt) !== "day") {
+        return null;
+    }
+    return resolveCurrentOperationalMealBreakState(referenceAt, "day");
+}
+
+/** @ do médico no grupo (mesma resolução do lembrete de vez), pronto para Markdown. */
+export async function resolveMealBreakDoctorMention(params: { chatId: string; referenceAt: Date; doctorId: string }) {
+    const mention = await resolveMealBreakTargetMention({
+        chatId: params.chatId,
+        referenceAt: params.referenceAt,
+        targetDoctorId: params.doctorId,
+    });
+    return formatMealBreakTelegramMention(mention);
+}
+
 type MealBreakRewindStageKey = "lunch" | "rest_choice" | "night_work" | "dinner_choice";
 
 export interface MealBreakLatecomerRewind {
