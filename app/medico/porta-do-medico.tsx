@@ -22,9 +22,10 @@ export type PortaDoMedico = "painel" | "banco-de-horas";
 export async function portaDoMedico(destino: PortaDoMedico) {
     const session = await readAuthenticatedSession();
     if (!session) {
-        // Login único: entra no portal e volta direto para cá (porteiro → SSO
-        // → /medico ou /medico/folha-ponto). Ver kairos ADR 0013.
-        redirect(`https://mnrs.com.br/?proximo=${destino === "painel" ? "folha-ponto" : "banco-horas"}`);
+        // Login único (kairos ADR 0013): o endereço curto do portal decide no
+        // servidor — com o login do portal, volta para cá já logado sem mostrar
+        // tela nenhuma (porteiro → SSO); sem ele, abre o login do portal.
+        redirect(`https://mnrs.com.br/${destino === "painel" ? "folha-ponto" : "banco-de-horas"}`);
     }
     if (!session.user.doctorId) {
         return (
