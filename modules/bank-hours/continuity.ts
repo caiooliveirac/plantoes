@@ -48,7 +48,10 @@ export interface ContinuityBankHoursSpan {
     scheduledEndAt: Date | null;
     actualStartAt: Date;
     actualEndAt: Date | null;
+    /** Todo membro tem o fechamento autoritativo (saída verbalizada exige confirmação). */
     isClosed: boolean;
+    /** Todo membro terminou (rendição ou saída real), confirmado pela chefia ou não. */
+    isEnded: boolean;
 }
 
 function asDate(value: string | Date | null | undefined) {
@@ -84,6 +87,28 @@ export function isDepartureClosureAuthoritative(
         return true;
     }
     return Boolean(record.departureConfirmedAt);
+}
+
+/**
+ * O span pode virar lançamento de banco?
+ *
+ * Sem ajuste manual, só com o fechamento autoritativo: saída verbalizada ainda
+ * na fila da chefia não credita nada. Com ajuste manual basta o plantão ter
+ * terminado — o saldo passa a ser decisão do admin e não sai da hora de saída
+ * que a confirmação protege. Exigir a confirmação aqui travava o ajuste de
+ * plantões antigos que nunca foram validados, enquanto o histórico já mostrava
+ * (e somava) o saldo reconstruído deles.
+ */
+export function isContinuitySpanSettledForBankHours<
+    T extends Pick<ContinuityBankHoursSpan, "isClosed" | "isEnded" | "scheduledStartAt" | "scheduledEndAt" | "actualEndAt">,
+>(
+    span: T,
+    options: { hasManualOverride: boolean },
+): span is T & { scheduledStartAt: Date; scheduledEndAt: Date; actualEndAt: Date } {
+    if (!span.scheduledStartAt || !span.scheduledEndAt || !span.actualEndAt) {
+        return false;
+    }
+    return options.hasManualOverride ? span.isEnded : span.isClosed;
 }
 
 function compareContinuityMembers<T extends ContinuityRecord>(left: T, right: T) {
@@ -173,5 +198,6 @@ export function buildContinuityBankHoursSpan(records: ContinuityOccupancy[]) {
         actualStartAt: asDate(group.carrier.startedAt)!,
         actualEndAt: tailEndedAt,
         isClosed: group.members.every((member) => isDepartureClosureAuthoritative(member)),
+        isEnded: group.members.every((member) => Boolean(member.endedAt || member.actualEndedAt)),
     } satisfies ContinuityBankHoursSpan;
 }

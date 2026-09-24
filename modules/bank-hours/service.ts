@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { BANK_HOURS_RULE_VERSION, applyAnomalyGuard, buildEarlyDepartureBankHours, calculateBankHours } from "@/modules/bank-hours/calculator";
-import { buildContinuityBankHoursSpan } from "@/modules/bank-hours/continuity";
+import { buildContinuityBankHoursSpan, isContinuitySpanSettledForBankHours } from "@/modules/bank-hours/continuity";
 import { EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES, classifyEarlyDeparture, isPaymentAffectingEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { getDb } from "@/db";
 import { bankHoursBalanceOverrides, bankHoursEntries, doctors, interventionOccupancies, regulationOccupancies } from "@/db/schema";
@@ -192,7 +192,10 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
     }
 
     const span = buildContinuityBankHoursSpan(meaningful);
-    if (!span.isClosed || !span.scheduledStartAt || !span.scheduledEndAt || !span.actualEndAt) {
+    const override = span.isEnded
+        ? (await listBankHoursBalanceOverridesByContinuityGroupIds(db, [continuityGroupId])).get(continuityGroupId) ?? null
+        : null;
+    if (!isContinuitySpanSettledForBankHours(span, { hasManualOverride: override !== null })) {
         return null;
     }
 
@@ -238,7 +241,6 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
         : null;
 
     const calculation = earlyDepartureCalculation ?? applyAnomalyGuard(rawCalculation);
-    const override = (await listBankHoursBalanceOverridesByContinuityGroupIds(db, [continuityGroupId])).get(continuityGroupId) ?? null;
     const balanceMinutes = override?.balanceMinutes ?? calculation.balanceMinutes;
     const ruleCode = override ? MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE : calculation.ruleCode;
     const explanation = override
@@ -360,8 +362,10 @@ export async function applyBankHoursBalanceOverride(params: {
             throw new Error("Nao encontrei o grupo de continuidade desse plantao.");
         }
 
+        // Basta o plantão ter terminado: a confirmação da saída pela chefia não é
+        // pré-requisito do ajuste (ver isContinuitySpanSettledForBankHours).
         const span = buildContinuityBankHoursSpan(occupancies);
-        if (!span.isClosed || !span.actualEndAt || !span.scheduledStartAt || !span.scheduledEndAt) {
+        if (!isContinuitySpanSettledForBankHours(span, { hasManualOverride: true })) {
             throw new Error("Esse plantao ainda nao tem fechamento suficiente para ajuste manual do banco.");
         }
 

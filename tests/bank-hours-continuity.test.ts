@@ -3,6 +3,7 @@ import test from "node:test";
 import {
     buildContinuityBankHoursSpan,
     buildContinuityCarrierLookup,
+    isContinuitySpanSettledForBankHours,
     isDepartureClosureAuthoritative,
     resolveContinuityEffectiveEndedAt,
 } from "@/modules/bank-hours/continuity";
@@ -233,4 +234,96 @@ test("saída faltando menos de 2h para o fim do P não recua o previsto nem vira
 
     assert.equal(calculation.overtimeMinutes, 0);
     assert.equal(calculation.balanceMinutes, 0);
+});
+
+// Plantão antigo cuja saída foi verbalizada no bot e nunca validada pela chefia:
+// o histórico mostra (e soma) o saldo reconstruído, então o admin precisa
+// conseguir fixá-lo. A fila de confirmação só segura o crédito AUTOMÁTICO.
+function buildPendingDepartureSpan() {
+    return buildContinuityBankHoursSpan([
+        {
+            occupancyId: "reg-antigo",
+            domain: "regulation",
+            doctorId: "doc-1",
+            continuityGroupId: "cg-antigo",
+            startedAt: new Date("2026-05-10T07:48:00-03:00"),
+            endedAt: new Date("2026-05-10T19:15:00-03:00"),
+            actualEndedAt: new Date("2026-05-10T19:05:00-03:00"),
+            departureConfirmedAt: null,
+            scheduledStartAt: new Date("2026-05-10T07:00:00-03:00"),
+            scheduledEndAt: new Date("2026-05-10T19:15:00-03:00"),
+            shiftLabel: "SD",
+        },
+    ]);
+}
+
+test("saída pendente de confirmação: sem ajuste manual o banco espera a chefia", () => {
+    const span = buildPendingDepartureSpan();
+
+    assert.equal(span.isClosed, false);
+    assert.equal(span.isEnded, true);
+    assert.equal(isContinuitySpanSettledForBankHours(span, { hasManualOverride: false }), false);
+});
+
+test("saída pendente de confirmação não bloqueia o ajuste manual do saldo", () => {
+    const span = buildPendingDepartureSpan();
+
+    assert.equal(isContinuitySpanSettledForBankHours(span, { hasManualOverride: true }), true);
+});
+
+test("ajuste manual continua recusado enquanto algum membro do grupo segue aberto", () => {
+    const span = buildContinuityBankHoursSpan([
+        {
+            occupancyId: "int-1",
+            domain: "intervention",
+            doctorId: "doc-1",
+            continuityGroupId: "cg-aberto",
+            startedAt: new Date("2026-05-10T07:00:00-03:00"),
+            endedAt: new Date("2026-05-10T19:00:00-03:00"),
+            actualEndedAt: null,
+            departureConfirmedAt: null,
+            scheduledStartAt: null,
+            scheduledEndAt: null,
+            shiftLabel: "SD",
+        },
+        {
+            occupancyId: "reg-2",
+            domain: "regulation",
+            doctorId: "doc-1",
+            continuityGroupId: "cg-aberto",
+            startedAt: new Date("2026-05-10T19:00:00-03:00"),
+            endedAt: null,
+            actualEndedAt: null,
+            departureConfirmedAt: null,
+            scheduledStartAt: null,
+            scheduledEndAt: null,
+            shiftLabel: "SN",
+        },
+    ]);
+
+    assert.equal(span.isEnded, false);
+    assert.equal(isContinuitySpanSettledForBankHours(span, { hasManualOverride: true }), false);
+});
+
+test("grupo com fechamento autoritativo vale com ou sem ajuste manual", () => {
+    const span = buildContinuityBankHoursSpan([
+        {
+            occupancyId: "int-rendido",
+            domain: "intervention",
+            doctorId: "doc-1",
+            continuityGroupId: "cg-rendido",
+            startedAt: new Date("2026-03-25T19:00:00-03:00"),
+            endedAt: new Date("2026-03-26T07:20:00-03:00"),
+            actualEndedAt: null,
+            departureConfirmedAt: null,
+            scheduledStartAt: null,
+            scheduledEndAt: null,
+            shiftLabel: "SN",
+        },
+    ]);
+
+    assert.equal(span.isClosed, true);
+    assert.equal(span.isEnded, true);
+    assert.equal(isContinuitySpanSettledForBankHours(span, { hasManualOverride: false }), true);
+    assert.equal(isContinuitySpanSettledForBankHours(span, { hasManualOverride: true }), true);
 });
