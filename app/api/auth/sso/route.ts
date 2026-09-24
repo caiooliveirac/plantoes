@@ -5,6 +5,7 @@ import { userRoles, users } from "@/db/schema";
 import { USER_ROLES, type UserRole } from "@/modules/auth/contracts";
 import { writeSessionCookie } from "@/lib/auth/server";
 import { federacaoConfigurada, lerTokenHandoff } from "@/lib/auth/federacao";
+import { destinoInterno } from "@/lib/auth/destino-interno";
 
 /* Troca de serviço — lado do DESTINO (quem vem do escala entra aqui).
 
@@ -44,5 +45,6 @@ export async function GET(req: NextRequest) {
 
     await writeSessionCookie(user.id);
     console.log(`[sso-escala] ${new Date().toISOString()} ok ${JSON.stringify({ email: handoff.email, origem: handoff.origem })}`);
-    return NextResponse.redirect(new URL("/", base(req)));
+    // ?proximo=: o portal mnrs.com.br leva direto a /medico, /medico/folha-ponto…
+    return NextResponse.redirect(new URL(destinoInterno(req.nextUrl.searchParams.get("proximo")), base(req)));
 }
