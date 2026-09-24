@@ -7,13 +7,16 @@ import "@/app/auth-pages.css";
  * Porta de entrada do médico logado: resolve o mês atual (fuso SP) e manda para
  * o painel dele (/banco-de-horas/[medicoId]/[ano]/[mes]) ou para a folha de
  * ponto (/folha-ponto/…) — as mesmas páginas que o bot já entrega por link
- * assinado, agora acessíveis por login. /medico e /medico/folha-ponto são os
- * endereços curtos (o portal mnrs.com.br leva direto a eles pelo SSO).
+ * assinado, agora acessíveis por login. Endereços curtos: /banco-de-horas e
+ * /medico (banco), /folha-ponto e /medico/folha-ponto (folha). Sem sessão,
+ * vão ao login do portal mnrs.com.br, que devolve a pessoa aqui já logada.
  */
 export async function portaDoMedico(destino: "banco-de-horas" | "folha-ponto") {
     const session = await readAuthenticatedSession();
     if (!session) {
-        redirect("/?entrar=1");
+        // Login único: entra no portal e volta direto para cá (porteiro → SSO
+        // → /medico ou /medico/folha-ponto). Ver kairos ADR 0013.
+        redirect(`https://mnrs.com.br/?proximo=${destino === "folha-ponto" ? "folha-ponto" : "banco-horas"}`);
     }
     if (!session.user.doctorId) {
         return (
