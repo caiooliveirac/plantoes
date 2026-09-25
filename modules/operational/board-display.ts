@@ -15,6 +15,16 @@ export function isPiamRegulationPost(code: string) {
     return normalizeOperationalCode(code) === "PIAM";
 }
 
+/**
+ * A sessão de refeições do dia é gravada por ramal e vale até 19:00. Quem chega
+ * ao ramal para o SN antes disso não herda nada dela — nem RECIP/MRV, nem
+ * ALMOÇO/DESCANSO, nem a passagem de ocorrências. Caso real (24/09): SN chegou
+ * 18:22 no ramal do RECIP e apareceu como RECIP em DESCANSO.
+ */
+export function cardFollowsDayMealSession(session: { mode: string } | null, card: { shiftLabel: string | null }) {
+    return !(session?.mode === "day" && card.shiftLabel === "SN");
+}
+
 export function resolvePendingRegulationOccupantLabel(code: string) {
     if (isNucleoRegulationPost(code)) {
         return "REMANEJADO PARA CRU";

@@ -25,6 +25,10 @@ no grupo do Telegram. Regras definidas pela chefia em 2026-09-24.
   quebrada. Dentro disso, o **menor número de colegas com quem cada um fala**
   (contando os dois tipos juntos), depois o pior caso por médico, depois a carga
   total. **Empate: fica a divisão anterior** (uma tecla não embaralha o quadro).
+- **Quem chega para o SN** antes das 19:00 não herda nada da sessão diurna do
+  ramal (RECIP, MRV, ALMOÇO/DESCANSO, passagem): a sessão é gravada por ramal,
+  e o quadro só a aplica a cartão SD/P (`cardFollowsDayMealSession`).
+- **18:00** (descanso fixo de RECIP, MRV, PSIQ) fica sem passagem, por decisão.
 
 ## Janela (por horário de saída)
 

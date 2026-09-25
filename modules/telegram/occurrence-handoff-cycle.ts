@@ -27,6 +27,17 @@ export function isOccurrenceHandoffBotEnabled(env: NodeJS.ProcessEnv = process.e
     return !(raw === "0" || raw === "false" || raw === "off");
 }
 
+/**
+ * Erro de edição que não adianta repetir: texto igual, mensagem apagada ou velha
+ * demais. Sem isto o ciclo tentava a cada poll até +10 min, logando cada vez.
+ */
+export function isSettledEditError(error: unknown) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    return message.includes("message is not modified")
+        || message.includes("message to edit not found")
+        || message.includes("message can't be edited");
+}
+
 function publicLink() {
     const base = process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br";
     return base.endsWith("/") ? base : `${base}/`;
@@ -81,7 +92,8 @@ export async function sendOccurrenceHandoffCycle(reference = new Date()) {
         }
 
         const ready = plan.pendingGivers.length === 0 || window.phase === "divisao" || window.phase === "encerrada";
-        if (ready && plan.transfers.length > 0) {
+        // Com a mensagem já enviada, edita mesmo se a divisão zerou (todos corrigiram para 0).
+        if (ready && (plan.transfers.length > 0 || record.divisionMessageId)) {
             await resolveMentions([...plan.givers.map((g) => g.ramal)]);
             const text = buildHandoffDivisionMessage({ plan, link, mention });
             if (!record.divisionMessageId) {
@@ -92,9 +104,16 @@ export async function sendOccurrenceHandoffCycle(reference = new Date()) {
                 });
                 sent += 1;
             } else if (text !== record.divisionText && window.editable) {
-                await editMessageText(chatId, record.divisionMessageId, text, undefined, MEAL_BREAK_FORMAT_OPTIONS);
+                let edited = true;
+                try {
+                    await editMessageText(chatId, record.divisionMessageId, text, undefined, MEAL_BREAK_FORMAT_OPTIONS);
+                } catch (error) {
+                    if (!isSettledEditError(error)) throw error;
+                    console.warn(`[occurrence-handoff] edit skipped for ${chatId} ${operationalDate} ${window.slot}`, error);
+                    edited = false;
+                }
                 await patchOccurrenceHandoffRecord(chatId, operationalDate, window.slot, { divisionText: text });
-                sent += 1;
+                if (edited) sent += 1;
             }
         }
     } catch (error) {
