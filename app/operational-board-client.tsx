@@ -6,7 +6,7 @@ import { OperationalHistoryPanel } from "@/components/operational-history-panel"
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { CadastrarMedicoBotao } from "@/components/doctors/cadastrar-medico-botao";
 import { buildOperationalRoleChoices, describeFixedRoleTransferImpact, getOperationalRoleTone, isOperationalRoleRemovalSentinel, normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveOperationalRoleLabel, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
-import { compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
+import { cardFollowsDayMealSession, compareRootBoardRegulationCodes, isNucleoRegulationPost, isPiamRegulationPost, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 import type {
     MealBreakBoardEvaluation,
     MealBreakDinnerDuration,
@@ -289,12 +289,15 @@ function formatMealBreakCapacity(entries: Array<{ slot: string; remaining: numbe
     return entries.map((entry) => `${entry.slot} (${entry.remaining})`).join(" • ");
 }
 
-function isRecipRamal(session: MealBreakSession | null, ramal: string) {
-    return session?.recipRamal === ramal;
+type MealBreakCardRef = { postCode: string; shiftLabel: string | null };
+
+function isRecipRamal(session: MealBreakSession | null, card: MealBreakCardRef) {
+    return session?.recipRamal === card.postCode && cardFollowsDayMealSession(session, card);
 }
 
-function isMrvRamal(session: MealBreakSession | null, ramal: string) {
-    return Boolean(session?.mrvRamals.includes(ramal as MealBreakSession["mrvRamals"][number]));
+function isMrvRamal(session: MealBreakSession | null, card: MealBreakCardRef) {
+    return Boolean(session?.mrvRamals.includes(card.postCode as MealBreakSession["mrvRamals"][number]))
+        && cardFollowsDayMealSession(session, card);
 }
 
 function formatBoardTime(value: string | null) {
@@ -1124,7 +1127,7 @@ function requiresReasonForContinuation(card: BoardCard, generatedAt: string) {
 function resolveRegulationRoleEmphasis(card: RegulationCard, mealBreakSession: MealBreakSession | null) {
     const roleLabel = resolveCardRoleLabel(card);
 
-    if (isRecipRamal(mealBreakSession, card.postCode) || roleLabel === "RECIP") {
+    if (isRecipRamal(mealBreakSession, card) || roleLabel === "RECIP") {
         return "emphasis-recip";
     }
 
@@ -2989,7 +2992,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
         const items: React.ReactNode[] = [];
         const roleLabel = resolveCardRoleLabel(card);
-        const sessionRecip = card.domain === "regulation" && isRecipRamal(mealBreakSession, card.postCode);
+        const sessionRecip = card.domain === "regulation" && isRecipRamal(mealBreakSession, card);
         // seenLabels é populado conforme os itens são de fato emitidos — não antecipadamente.
         // Se pré-populado com roleLabel antes de emitir, o caso roleLabel="RECIP"+sessionRecip=true
         // bloqueava tanto o role badge (guard abaixo) quanto a inline flag (seenLabels.has("RECIP")),
@@ -3002,7 +3005,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
 
         if (card.domain === "regulation") {
-            if (isMrvRamal(mealBreakSession, card.postCode) && mealBreakDisplayMode !== "night" && !seenLabels.has("MRV")) {
+            if (isMrvRamal(mealBreakSession, card) && mealBreakDisplayMode !== "night" && !seenLabels.has("MRV")) {
                 items.push(<span key={`mrv-${card.postCode}`} className="ops-inline-flag mrv">MRV</span>);
                 seenLabels.add("MRV");
             }
@@ -3082,8 +3085,10 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
         const cardPriority = resolvePriority(card, generatedAt);
         const isExpanded = expandedCardKey === cardKey;
-        const breakTag = mealBreakDisplayMode === "day" && card.status === "active" ? handoff.breakLabel(card.postCode) : null;
-        const handoffClass = handoffPlan
+        // Quem chegou para o SN não herda horário nem passagem da sessão diurna do ramal.
+        const followsDaySession = cardFollowsDayMealSession({ mode: mealBreakDisplayMode }, card);
+        const breakTag = mealBreakDisplayMode === "day" && card.status === "active" && followsDaySession ? handoff.breakLabel(card.postCode) : null;
+        const handoffClass = handoffPlan && followsDaySession
             ? `${handoffPlan.givers.some((g) => g.ramal === card.postCode) ? "is-handoff-giver" : ""} ${handoffPlan.returning.some((p) => p.ramal === card.postCode) ? "is-handoff-returning" : ""}`
             : "";
         return (
@@ -3204,7 +3209,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     })}
                 </div>
             </div>
-            {handoffPlan && handoff.window && card.status === "active" ? (
+            {handoffPlan && handoff.window && card.status === "active" && followsDaySession ? (
                 <OccurrenceHandoffRowDetail
                     ramal={card.postCode}
                     role={handoff.role(card.postCode)}

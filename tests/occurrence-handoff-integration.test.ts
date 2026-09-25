@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { planOccurrenceHandoff } from "../modules/operational/occurrence-handoff";
-import { isOccurrenceHandoffBotEnabled } from "../modules/telegram/occurrence-handoff-cycle";
+import { isOccurrenceHandoffBotEnabled, isSettledEditError } from "../modules/telegram/occurrence-handoff-cycle";
 import {
     buildHandoffDivisionMessage,
     buildHandoffNoticeMessage,
@@ -74,4 +74,12 @@ test("mensagens do bot: aviso, cobrança com @, divisão com plural de Regulado"
     assert.match(division, /Regulados →|1 Regulado →/);
     assert.doesNotMatch(division, /Psiq\*? passa:\n {2}• \d+ \w+ → Recip/);
     assert.match(division, /Correções no painel até 12:40/);
+});
+
+test("edição da divisão: erro definitivo não é repetido, erro de rede é", () => {
+    assert.equal(isSettledEditError(new Error("Telegram API editMessageText failed: Bad Request: message is not modified")), true);
+    assert.equal(isSettledEditError(new Error("Bad Request: message to edit not found")), true);
+    assert.equal(isSettledEditError(new Error("Bad Request: message can't be edited")), true);
+    assert.equal(isSettledEditError(new Error("fetch failed")), false);
+    assert.equal(isSettledEditError("texto solto"), false);
 });

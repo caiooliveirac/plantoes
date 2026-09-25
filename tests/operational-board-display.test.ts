@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareRootBoardRegulationCodes, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
+import { cardFollowsDayMealSession, compareRootBoardRegulationCodes, resolvePendingRegulationOccupantLabel, shouldShowRegulationCardOnRootBoard } from "@/modules/operational/board-display";
 
 test("root board keeps nucleo before PIAM at the end of day shift ordering", () => {
     assert.deepEqual(
@@ -104,4 +104,12 @@ test("disabled regulation posts stay visible on the root board regardless of shi
         doctorId: null,
         shiftLabel: "SN",
     }), true);
+});
+test("quem chega para o SN no ramal do RECIP diurno não herda a sessão de refeições do dia", () => {
+    // 24/09: RECIP diurno saiu 18:22 e o SN assumiu o mesmo ramal; a sessão do dia vale até 19:00.
+    assert.equal(cardFollowsDayMealSession({ mode: "day" }, { shiftLabel: "SN" }), false);
+    assert.equal(cardFollowsDayMealSession({ mode: "day" }, { shiftLabel: "SD" }), true);
+    assert.equal(cardFollowsDayMealSession({ mode: "day" }, { shiftLabel: "P" }), true);
+    assert.equal(cardFollowsDayMealSession({ mode: "night" }, { shiftLabel: "SN" }), true);
+    assert.equal(cardFollowsDayMealSession(null, { shiftLabel: "SN" }), true);
 });
