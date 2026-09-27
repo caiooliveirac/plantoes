@@ -40,6 +40,8 @@ export function useOccurrenceHandoff(boardVersion: string) {
     const load = useCallback(async () => {
         try {
             const response = await fetch("/api/board/occurrence-handoff", { cache: "no-store" });
+            // Sessão expirou: recarregar deixa o servidor mandar ao login (portão).
+            if (response.status === 401) { globalThis.location.reload(); return; }
             if (!response.ok) return;
             const body = await response.json() as { state: PublicHandoffState | null };
             setState(body.state);
@@ -87,6 +89,7 @@ export function useOccurrenceHandoff(boardVersion: string) {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ slot, ramal, ...next }),
                 });
+                if (response.status === 401) { globalThis.location.reload(); return; }
                 const body = await response.json().catch(() => ({})) as { error?: string; counts?: Record<string, HandoffCounts>; transfers?: HandoffTransfer[] };
                 if (!response.ok) {
                     setError(body.error ?? "Não foi possível salvar a contagem.");

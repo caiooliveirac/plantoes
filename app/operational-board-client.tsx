@@ -1475,6 +1475,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 headers: { "Accept": "application/json" },
             });
 
+            // Sessão expirou: recarregar deixa o servidor mandar ao login (portão).
+            if (response.status === 401) {
+                window.location.reload();
+                return;
+            }
+
             if (!response.ok) {
                 return;
             }
