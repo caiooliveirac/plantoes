@@ -310,6 +310,41 @@
 .pagina-kairos .ac-c4 { background: color-mix(in srgb, var(--ambar-600) 55%, var(--superficie-alt)); }
 .pagina-kairos .ac-c5 { background: var(--ambar-600); }
 .pagina-kairos .ac-c6 { background: var(--vermelho-600); }
+/* Plantão: verde. Na legenda (ac-cp) e na banda fina sob o calor de cada conta. */
+.pagina-kairos .ac-cp { background: color-mix(in srgb, var(--verde-600) 70%, var(--superficie-alt)); }
+
+.pagina-kairos .ac-calor-pilha { display: grid; gap: 3px; min-width: 0; }
+
+.pagina-kairos .ac-banda {
+    display: grid;
+    gap: 2px;
+    grid-template-columns: repeat(var(--colunas), minmax(0, 1fr));
+    height: 4px;
+    min-width: 0;
+}
+
+.pagina-kairos .ac-banda span { border-radius: 2px; }
+.pagina-kairos .ac-banda span.on { background: var(--verde-600); }
+
+.pagina-kairos .ac-tag-plantao {
+    align-items: center;
+    background: var(--semaforo-verde-fundo);
+    border: 1px solid var(--semaforo-verde-borda);
+    border-radius: 999px;
+    color: var(--semaforo-verde-texto);
+    display: inline-flex;
+    font-size: 0.7rem;
+    font-style: normal;
+    font-weight: 700;
+    margin-right: 6px;
+    padding: 1px 8px;
+    white-space: nowrap;
+}
+
+.pagina-kairos .ac-na-rede { color: var(--semaforo-verde-texto); font-style: normal; font-weight: 600; }
+.pagina-kairos .ac-raia-plantao .ac-raia-quem .ac-tag-plantao { margin-right: 0; }
+.pagina-kairos .ac-detalhe-plantao { color: var(--texto); font-size: 0.86rem; margin: 0; }
+.pagina-kairos .ac-episodio-plantao { color: var(--semaforo-verde-texto); font-size: 0.82rem; margin: 4px 0 0; }
 
 .pagina-kairos .ac-eixo {
     color: var(--texto-fraco);
@@ -335,6 +370,7 @@
 
 .pagina-kairos .ac-legenda li { align-items: center; display: inline-flex; gap: 6px; }
 .pagina-kairos .ac-legenda .ac-c { height: 12px; width: 12px; }
+.pagina-kairos .ac-legenda .ac-cp { background: var(--verde-600); }
 
 /* ── Olhe primeiro ─────────────────────────────────────────────────────── */
 .pagina-kairos .ac-topo-painel {
@@ -449,6 +485,7 @@
 .pagina-kairos .ac-barra span.sinal { background: var(--vermelho-600); }
 .pagina-kairos .ac-lugares-tags { color: var(--texto-medio); display: flex; flex-wrap: wrap; font-size: 0.72rem; gap: 4px 10px; }
 .pagina-kairos .ac-lugares-tags .alerta { color: var(--semaforo-amarelo-texto); font-weight: 600; }
+.pagina-kairos .ac-lugares-tags .plantao { color: var(--semaforo-verde-texto); font-weight: 700; }
 .pagina-kairos .ac-lugares-tags .sinal { color: var(--semaforo-vermelho-texto); font-weight: 700; }
 .pagina-kairos .ac-nota { color: var(--texto-fraco); font-size: 0.78rem; line-height: 1.5; margin: 14px 0 0; }
 
@@ -526,7 +563,8 @@
 .pagina-kairos .ac-quem small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pagina-kairos .ac-quem small { color: var(--texto-medio); font-size: 0.76rem; }
 
-.pagina-kairos .ac-onde { display: flex; flex-wrap: wrap; gap: 4px; max-height: 3.1em; min-width: 0; overflow: hidden; }
+/* Duas linhas de chips inteiras (altura do .ac-lugar × 2 + gap), a terceira some. */
+.pagina-kairos .ac-onde { display: flex; flex-wrap: wrap; gap: 4px; max-height: calc(2 * (0.74rem * 1.35 + 6px) + 6px); min-width: 0; overflow: hidden; }
 .pagina-kairos .ac-onde.vazio { color: var(--texto-fraco); font-size: 0.78rem; }
 
 .pagina-kairos .ac-lugar {
@@ -538,6 +576,7 @@
     display: inline-flex;
     font-size: 0.74rem;
     gap: 5px;
+    line-height: 1.35;
     max-width: 100%;
     overflow: hidden;
     padding: 2px 8px;
@@ -547,6 +586,8 @@
 
 .pagina-kairos .ac-lugar small { color: var(--texto-fraco); font-size: 0.68rem; }
 .pagina-kairos .ac-lugar.coletiva { border-style: dashed; }
+.pagina-kairos .ac-lugar.plantao { background: var(--semaforo-verde-fundo); border-color: var(--semaforo-verde-borda); color: var(--semaforo-verde-texto); }
+.pagina-kairos .ac-lugar.plantao small { color: inherit; opacity: 0.8; }
 .pagina-kairos .ac-lugar.alerta { background: var(--semaforo-amarelo-fundo); border-color: var(--semaforo-amarelo-borda); color: var(--semaforo-amarelo-texto); }
 .pagina-kairos .ac-lugar.mais { color: var(--texto-medio); }
 
@@ -596,7 +637,7 @@
     .pagina-kairos .ac-linha .ac-risco { grid-area: risco; }
     .pagina-kairos .ac-linha .ac-quem { grid-area: quem; }
     .pagina-kairos .ac-linha .ac-onde { grid-area: onde; }
-    .pagina-kairos .ac-linha .ac-calor { grid-area: calor; }
+    .pagina-kairos .ac-linha .ac-calor-pilha { grid-area: calor; }
     .pagina-kairos .ac-linha .ac-seta { grid-area: seta; }
     .pagina-kairos .ac-linha-cabecalho { grid-template-areas: "eixo"; grid-template-columns: minmax(0, 1fr); }
     .pagina-kairos .ac-linha-cabecalho > :not(.ac-eixo) { display: none; }

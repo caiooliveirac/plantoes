@@ -522,3 +522,122 @@ test("painel: lugares do período agrupam por cidade e contam contas com sinal",
     assert.equal(lugares[0].contasComSinal >= lugares[lugares.length - 1].contasComSinal, true, "lugar com sinal primeiro");
 });
 
+
+// ── Plantão: uso de trabalho × login emprestado ────────────────────────────
+
+const CENTRAL = "200.1.1.1";
+const redesComCentral = (extras: Array<[string, Partial<InfoDeRede>]> = []) =>
+    redes([[CENTRAL, { geo: SALVADOR, contas: 20, plantonistas: 9 }], ...extras]);
+const turno = (inicio: number, fim: number, rotulo = "Regulação 1363") => ({ inicio: min(inicio), fim: min(fim), rotulo });
+
+test("plantão: dois PCs na rede do plantão durante o turno é trabalho — vira fraco e não pesa", () => {
+    const analise = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("pc1", UA.windows, CENTRAL), sessao("pc2", UA.windowsEdge, "200.1.1.9")],
+        janelas: [...presenca("pc1", CENTRAL, 0, 60, "uso"), ...presenca("pc2", "200.1.1.9", 0, 60, "uso")],
+        eventos: [],
+        redes: redesComCentral([["200.1.1.9", { geo: SALVADOR, contas: 14, plantonistas: 6 }]]),
+        agora: min(70),
+        plantoes: [turno(-60, 600)],
+    });
+    assert.equal(analise.episodios[0].forca, "fraco");
+    assert.equal(analise.episodios[0].plantao?.todosNaRedeDoPlantao, true);
+    assert.match(analise.episodios[0].motivos[0], /De plantão \(Regulação 1363\).*Uso de trabalho/);
+    assert.equal(analise.nivel, "normal");
+    assert.ok(analise.achados.some((a) => a.titulo === "Mais de um aparelho durante o plantão, todos na rede do plantão"));
+    assert.equal(analise.plantao?.agora?.rotulo, "Regulação 1363");
+    assert.equal(analise.lugares.find((l) => l.rede === CENTRAL)?.plantao, true);
+});
+
+test("plantão: dono na Central e um COMPUTADOR em uso em outra rede ao mesmo tempo é forte", () => {
+    const base = {
+        conta: conta(),
+        eventos: [],
+        redes: redesComCentral([["177.2.2.2", { geo: FEIRA }]]),
+        agora: min(70),
+        plantoes: [turno(-60, 600)],
+    };
+    const casa = analisarConta({
+        ...base,
+        sessoes: [sessao("pc", UA.windows, CENTRAL), sessao("casa", UA.windowsEdge, "177.2.2.2")],
+        janelas: [...presenca("pc", CENTRAL, 0, 60, "uso"), ...presenca("casa", "177.2.2.2", 10, 25, "uso")],
+    });
+    assert.equal(casa.episodios[0].forca, "forte");
+    assert.ok(casa.episodios[0].motivos.some((m) => /não é o celular dele/.test(m)));
+    assert.deepEqual(casa.episodios[0].plantao?.aparelhosFora, ["computador Windows com Edge 128"]);
+
+    const celular = analisarConta({
+        ...base,
+        sessoes: [sessao("pc", UA.windows, CENTRAL), sessao("cel", UA.android, "177.2.2.2")],
+        janelas: [...presenca("pc", CENTRAL, 0, 60, "uso"), ...presenca("cel", "177.2.2.2", 10, 25, "uso")],
+    });
+    assert.notEqual(celular.episodios[0].forca, "forte", "celular fora pode ser o do plantonista");
+    assert.ok(celular.episodios[0].ressalvas.some((r) => /pode ser o do próprio plantonista/.test(r)));
+});
+
+test("plantão: fora do turno, dois lugares ao mesmo tempo seguem a regra normal", () => {
+    const analise = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("pc1", UA.windows, CENTRAL), sessao("pc2", UA.windowsEdge, "200.1.1.9")],
+        janelas: [...presenca("pc1", CENTRAL, 0, 60, "uso"), ...presenca("pc2", "200.1.1.9", 0, 60, "uso")],
+        eventos: [],
+        redes: redesComCentral([["200.1.1.9", { geo: SALVADOR, contas: 14, plantonistas: 6 }]]),
+        agora: min(70),
+        plantoes: [turno(-1440, -720)],
+    });
+    assert.equal(analise.episodios[0].plantao, null);
+    assert.equal(analise.plantao?.agora, null);
+});
+
+test("plantão: conta na rede do plantão fora do turno do dono vira atenção (mas não para a chefia)", () => {
+    const entrada = {
+        sessoes: [sessao("pc", UA.windows, CENTRAL)],
+        janelas: presenca("pc", CENTRAL, 0, 90, "uso"),
+        eventos: [],
+        redes: redesComCentral(),
+        agora: min(95),
+        plantoes: [turno(-2000, -1300)],
+    };
+    const medico = analisarConta({ ...entrada, conta: conta() });
+    const achado = medico.achados.find((a) => a.titulo === "Na rede do plantão fora do turno do dono");
+    assert.ok(achado, medico.achados.map((a) => a.titulo).join(" | "));
+    assert.equal(medico.nivel, "atencao");
+    assert.ok((medico.plantao?.minutosNaRedeForaDoTurno ?? 0) >= 80);
+    const chefe = analisarConta({ ...entrada, conta: conta({ papeis: ["chief", "doctor"] }) });
+    assert.equal(chefe.achados.some((a) => a.titulo === "Na rede do plantão fora do turno do dono"), false);
+    const semMedico = analisarConta({ ...entrada, conta: conta(), plantoes: undefined });
+    assert.equal(semMedico.plantao, null, "conta sem médico vinculado não tem escala para comparar");
+});
+
+test("plantão: PCs usados só na rede do plantão durante o turno não contam em muitos aparelhos", () => {
+    const pcs = [UA.windows, UA.windowsEdge, UA.windows.replace("128", "127"), UA.windows.replace("128", "126"), UA.windows.replace("128", "125")];
+    const sessoes = pcs.map((ua, i) => sessao(`pc${i}`, ua, CENTRAL));
+    const janelas = pcs.flatMap((_, i) => presenca(`pc${i}`, CENTRAL, i * 60, i * 60 + 30, "uso"));
+    const noPlantao = analisarConta({ conta: conta(), sessoes, janelas, eventos: [], redes: redesComCentral(), agora: min(400), plantoes: [turno(-60, 720)] });
+    assert.equal(noPlantao.achados.some((a) => a.titulo === "Muitos aparelhos"), false);
+    assert.ok(noPlantao.aparelhos.every((a) => a.doPlantao));
+    const semTurno = analisarConta({ conta: conta(), sessoes, janelas, eventos: [], redes: redesComCentral(), agora: min(400), plantoes: [] });
+    assert.ok(semTurno.achados.some((a) => a.titulo === "Muitos aparelhos"));
+});
+
+test("painel: banda de plantão e raia do plantão", async () => {
+    const { faixaDePlantao, raiaDoPlantao } = await import("@/modules/acessos/painel");
+    const escala = escalaDoPeriodo(min(-5), min(115));
+    assert.equal(faixaDePlantao([turno(30, 70)], escala), "00110");
+    assert.equal(raiaDoPlantao([], escala), null);
+    assert.equal(raiaDoPlantao([turno(30, 70), turno(90, 100, "Intervenção BR60")], escala)?.rotulo, "Regulação 1363 · Intervenção BR60");
+});
+
+test("plantão: aba parada na rede do plantão fora do turno (sem toque) não vira achado", () => {
+    const analise = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("pc", UA.windows, CENTRAL)],
+        janelas: presenca("pc", CENTRAL, 0, 120, "visivel"),
+        eventos: [],
+        redes: redesComCentral(),
+        agora: min(125),
+        plantoes: [turno(-2000, -1300)],
+    });
+    assert.equal(analise.achados.some((a) => a.titulo === "Na rede do plantão fora do turno do dono"), false);
+    assert.equal(analise.plantao?.minutosNaRedeForaDoTurno, 0);
+});

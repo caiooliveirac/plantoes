@@ -6,7 +6,7 @@ import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { descreverRede, type EpisodioSimultaneo, type InfoDeRede } from "@/modules/acessos/analise";
 import { montarLinhaDoTempo, rotuloDaSessao, type LinhaDoTempo } from "@/modules/acessos/linha-do-tempo";
-import { escalaDoPeriodo, faixasPorAparelho, riscoDaConta } from "@/modules/acessos/painel";
+import { escalaDoPeriodo, faixasPorAparelho, raiaDoPlantao, riscoDaConta } from "@/modules/acessos/painel";
 import { LegendaDoCalor, RaiasPorAparelho } from "@/app/admin/acessos/calor";
 import { duracao, horaComSegundos, intervalo, plural, quando } from "@/modules/acessos/texto";
 import { carregarMonitor, lerPeriodo, PERIODOS, type ChavePeriodo } from "@/services/acessos-relatorio.service";
@@ -149,6 +149,7 @@ export default async function RelatorioDaContaPage({
     const faixaDeRisco = risco >= 70 ? "forte" : risco >= 40 ? "alto" : risco >= 20 ? "atencao" : "calmo";
     const escala = escalaDoPeriodo(dados.desde, dados.geradoEm);
     const raias = faixasPorAparelho(bruto.sessoes, bruto.janelas, analise.episodios, dados.redes, escala, 8);
+    const raiaPlantao = raiaDoPlantao(dados.plantoes.get(userId), escala);
 
     // Mesmo rótulo (A, B, C…) para o mesmo aparelho no relatório inteiro.
     const rotulos = new Map<string, string>();
@@ -193,6 +194,14 @@ export default async function RelatorioDaContaPage({
                             </span>
                         </div>
                         <p className="ac-resumo">{analise.resumo}</p>
+                        {analise.plantao ? (
+                            <p className="ac-sub">
+                                {analise.plantao.agora ? <span className="ac-tag-plantao">de plantão agora · {analise.plantao.agora.rotulo}</span> : "Não está de plantão agora."}
+                                {" "}{analise.plantao.turnos} {analise.plantao.turnos === 1 ? "turno" : "turnos"} no período.
+                            </p>
+                        ) : (
+                            <p className="ac-sub">Conta sem médico vinculado: sem escala para comparar com o uso.</p>
+                        )}
                         <p className="ac-sub">
                             Relatório de {PERIODOS[periodo].rotulo} ({quando(dados.desde)} a {quando(dados.geradoEm)}, horário da Bahia).{" "}
                             {plural(analise.aparelhos.length, "aparelho", "aparelhos")}, {plural(analise.lugares.length, "rede", "redes")},{" "}
@@ -218,10 +227,11 @@ export default async function RelatorioDaContaPage({
                             <LegendaDoCalor />
                         </div>
                         <p className="ac-sub" style={{ marginTop: 6, marginBottom: 14 }}>
-                            Uma raia por aparelho, com a cidade (ou a rede) de onde ele mais usa. Vermelho na raia: aquele aparelho estava num
-                            uso simultâneo forte. Passe o mouse num trecho para ver a hora.
+                            Uma raia por aparelho, com a cidade (ou a rede) de onde ele mais usa. Verde no topo: quando o dono estava de plantão.
+                            Uso intenso — até em dois PCs — dentro do plantão e na rede do plantão é trabalho; o que chama atenção é a conta em
+                            uso fora da rede do plantão enquanto ele trabalha, ou na Central fora do turno dele. Vermelho: uso simultâneo forte.
                         </p>
-                        <RaiasPorAparelho faixas={raias} escala={escala} />
+                        <RaiasPorAparelho faixas={raias} escala={escala} plantao={raiaPlantao} />
                     </section>
 
                     <section className="ac-card ac-nao-imprimir">

@@ -3,7 +3,19 @@
    por conta. Usado pela tela /admin/acessos e pelos avisos do Telegram. */
 import { and, asc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { authNetworkInfo, authSessionActivity, authSessionEvents, authSessions, doctors, userRoles, users } from "@/db/schema";
+import {
+    authNetworkInfo,
+    authSessionActivity,
+    authSessionEvents,
+    authSessions,
+    doctors,
+    interventionBases,
+    interventionOccupancies,
+    regulationOccupancies,
+    regulationPosts,
+    userRoles,
+    users,
+} from "@/db/schema";
 import type { GeoAcesso } from "@/lib/acessos/contexto";
 import {
     analisarConta,
@@ -12,6 +24,7 @@ import {
     type EventoDeSessao,
     type InfoDeRede,
     type JanelaDeAtividade,
+    type Plantao,
     type SessaoMonitorada,
 } from "@/modules/acessos/analise";
 import { chaveDeRede, provedorPorDnsReverso } from "@/modules/acessos/rede";
@@ -35,10 +48,77 @@ export interface DadosDoMonitor {
     redes: Map<string, InfoDeRede>;
     /** Por conta, o bruto que a análise usou — a tela de detalhe monta a linha do tempo com ele. */
     brutos: Map<string, { sessoes: SessaoMonitorada[]; janelas: JanelaDeAtividade[]; eventos: EventoDeSessao[] }>;
+    /** Turnos do período por conta (só contas com médico vinculado). */
+    plantoes: Map<string, Plantao[]>;
 }
 
 const comoGeo = (valor: unknown): GeoAcesso => (valor && typeof valor === "object" ? (valor as GeoAcesso) : {});
 const comoObjeto = (valor: unknown): Record<string, unknown> => (valor && typeof valor === "object" ? (valor as Record<string, unknown>) : {});
+
+/* Turnos no período (ocupações de regulação e intervenção, inclusive sombra):
+   da chegada (started_at) à saída real, ou à prevista; sem nenhuma das duas,
+   no máximo 24 h — ocupação esquecida aberta não deixa ninguém "de plantão"
+   para sempre. E, por rede, quantos plantonistas diferentes foram vistos nela
+   durante o próprio turno — 2+ é a "rede do plantão" (Central, base com dupla). */
+async function carregarPlantoes(desde: Date, ate: Date) {
+    const db = getDb();
+    const de = desde.toISOString();
+    const ateIso = ate.toISOString();
+    const turnos = await db.execute(sql`
+        select u.id as user_id, o.inicio, least(o.fim, ${ateIso}::timestamptz) as fim, o.rotulo
+        from (
+            select r.doctor_id, r.started_at as inicio,
+                   coalesce(r.actual_ended_at, r.ended_at, least(${ateIso}::timestamptz, r.started_at + interval '24 hours')) as fim,
+                   'Regulação ' || coalesce(nullif(r.ramal_label, ''), p.code) as rotulo
+            from ${regulationOccupancies} r
+            join ${regulationPosts} p on p.id = r.post_id
+            where r.started_at <= ${ateIso}::timestamptz
+              and coalesce(r.actual_ended_at, r.ended_at, least(${ateIso}::timestamptz, r.started_at + interval '24 hours')) >= ${de}::timestamptz
+            union all
+            select i.doctor_id, i.started_at,
+                   coalesce(i.actual_ended_at, i.ended_at, least(${ateIso}::timestamptz, i.started_at + interval '24 hours')),
+                   'Intervenção ' || b.code
+            from ${interventionOccupancies} i
+            join ${interventionBases} b on b.id = i.base_id
+            where i.started_at <= ${ateIso}::timestamptz
+              and coalesce(i.actual_ended_at, i.ended_at, least(${ateIso}::timestamptz, i.started_at + interval '24 hours')) >= ${de}::timestamptz
+        ) o
+        join ${users} u on u.doctor_id = o.doctor_id
+    `) as unknown as Array<{ user_id: string; inicio: string | Date; fim: string | Date; rotulo: string }>;
+
+    const porConta = new Map<string, Plantao[]>();
+    for (const turno of turnos) {
+        const lista = porConta.get(turno.user_id) ?? [];
+        lista.push({ inicio: new Date(turno.inicio), fim: new Date(turno.fim), rotulo: turno.rotulo });
+        porConta.set(turno.user_id, lista);
+    }
+
+    const pares = await db.execute(sql`
+        with turnos as (
+            select u.id as user_id, o.inicio - interval '30 minutes' as ini, o.fim + interval '30 minutes' as fim
+            from (
+                select doctor_id, started_at as inicio, coalesce(actual_ended_at, ended_at, least(${ateIso}::timestamptz, started_at + interval '24 hours')) as fim
+                from ${regulationOccupancies}
+                where started_at <= ${ateIso}::timestamptz and coalesce(actual_ended_at, ended_at, least(${ateIso}::timestamptz, started_at + interval '24 hours')) >= ${de}::timestamptz
+                union all
+                select doctor_id, started_at, coalesce(actual_ended_at, ended_at, least(${ateIso}::timestamptz, started_at + interval '24 hours'))
+                from ${interventionOccupancies}
+                where started_at <= ${ateIso}::timestamptz and coalesce(actual_ended_at, ended_at, least(${ateIso}::timestamptz, started_at + interval '24 hours')) >= ${de}::timestamptz
+            ) o
+            join ${users} u on u.doctor_id = o.doctor_id
+        )
+        select distinct a.ip, a.user_id
+        from ${authSessionActivity} a
+        join turnos t on t.user_id = a.user_id and a.window_start between t.ini and t.fim
+        where a.window_start >= ${de}::timestamptz and a.window_start <= ${ateIso}::timestamptz
+    `) as unknown as Array<{ ip: string; user_id: string }>;
+    const plantonistasPorRede = new Map<string, Set<string>>();
+    for (const par of pares) {
+        const chave = chaveDeRede(par.ip);
+        plantonistasPorRede.set(chave, (plantonistasPorRede.get(chave) ?? new Set()).add(par.user_id));
+    }
+    return { porConta, plantonistasPorRede: new Map([...plantonistasPorRede].map(([chave, set]) => [chave, set.size])) };
+}
 
 async function carregarRedes(ips: Set<string>, desde: Date, ate: Date): Promise<Map<string, InfoDeRede>> {
     const db = getDb();
@@ -123,6 +203,7 @@ export async function carregarMonitor(opcoes: { desde: Date; ate?: Date; userId?
             sessionVersion: users.sessionVersion,
             fullName: doctors.fullName,
             displayName: doctors.displayName,
+            doctorId: users.doctorId,
         }).from(users).leftJoin(doctors, eq(doctors.id, users.doctorId)).where(inArray(users.id, ids)),
         db.select({ userId: userRoles.userId, role: userRoles.role }).from(userRoles).where(inArray(userRoles.userId, ids)),
     ]);
@@ -132,7 +213,12 @@ export async function carregarMonitor(opcoes: { desde: Date; ate?: Date; userId?
         ...linhasSessoes.map((s) => s.createdIp).filter((ip): ip is string => Boolean(ip)),
         ...linhasEventos.map((e) => e.ip).filter((ip): ip is string => Boolean(ip)),
     ]);
-    const redes = await carregarRedes(ips, desde, ate);
+    const [redes, plantoes] = await Promise.all([carregarRedes(ips, desde, ate), carregarPlantoes(desde, ate)]);
+    for (const [chave, plantonistas] of plantoes.plantonistasPorRede) {
+        const info = redes.get(chave);
+        if (info) info.plantonistas = plantonistas;
+        else redes.set(chave, { geo: {}, provedor: null, contas: plantonistas, plantonistas });
+    }
 
     const papeisPorConta = new Map<string, string[]>();
     for (const papel of papeis) papeisPorConta.set(papel.userId, [...(papeisPorConta.get(papel.userId) ?? []), papel.role]);
@@ -226,8 +312,14 @@ export async function carregarMonitor(opcoes: { desde: Date; ate?: Date; userId?
             ativa: conta.isActive,
             versaoSessao: conta.sessionVersion,
         };
-        analises.push(analisarConta({ conta: monitorada, ...bruto, redes, agora: geradoEm }));
+        analises.push(analisarConta({
+            conta: monitorada,
+            ...bruto,
+            redes,
+            agora: geradoEm,
+            plantoes: conta.doctorId ? plantoes.porConta.get(conta.id) ?? [] : undefined,
+        }));
     }
     analises.sort((a, b) => b.pontuacao - a.pontuacao || (b.ultimaAtividade?.getTime() ?? 0) - (a.ultimaAtividade?.getTime() ?? 0));
-    return { geradoEm, desde, ate, analises, redes, brutos };
+    return { geradoEm, desde, ate, analises, redes, brutos, plantoes: plantoes.porConta };
 }

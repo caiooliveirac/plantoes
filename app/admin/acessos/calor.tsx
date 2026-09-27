@@ -55,6 +55,7 @@ export function LegendaDoCalor() {
         ["4", "duas redes no intervalo"],
         ["5", "simultâneo"],
         ["6", "simultâneo forte"],
+        ["p", "de plantão"],
     ];
     return (
         <ul className="ac-legenda" aria-label="Legenda do calor">
@@ -65,20 +66,50 @@ export function LegendaDoCalor() {
     );
 }
 
-/** "Quem está onde": uma raia por aparelho, com o lugar de onde ele usa. Vermelho = aquele aparelho estava num uso simultâneo forte. */
-export function RaiasPorAparelho({ faixas, escala }: { faixas: FaixaDoAparelho[]; escala: EscalaDoCalor }) {
-    if (faixas.length === 0) return <p className="ac-vazio">Sem uso registrado no período.</p>;
+/** Faixa fina sob o calor: verde onde o dono estava de plantão. */
+export function BandaDePlantao({ faixa, escala }: { faixa: string; escala: EscalaDoCalor }) {
+    return (
+        <span className="ac-banda" style={estiloDaGrade(escala)} aria-hidden="true">
+            {[...faixa].map((valor, coluna) => <span key={coluna} className={valor === "1" ? "on" : undefined} />)}
+        </span>
+    );
+}
+
+/** "Quem está onde": uma raia por aparelho, com o lugar de onde ele usa. Vermelho = aquele aparelho
+    estava num uso simultâneo forte. Primeira raia, verde: quando o dono estava de plantão. */
+export function RaiasPorAparelho({ faixas, escala, plantao = null }: {
+    faixas: FaixaDoAparelho[];
+    escala: EscalaDoCalor;
+    plantao?: { rotulo: string; faixa: string } | null;
+}) {
+    if (faixas.length === 0 && !plantao) return <p className="ac-vazio">Sem uso registrado no período.</p>;
     return (
         <div className="ac-raias">
+            {plantao ? (
+                <div className="ac-raia ac-raia-plantao">
+                    <div className="ac-raia-quem">
+                        <span className="ac-tag-plantao">Plantão</span>
+                        <span className="ac-raia-texto" title={plantao.rotulo}>
+                            <strong>{plantao.rotulo}</strong>
+                            <small>quando o dono estava de plantão</small>
+                        </span>
+                    </div>
+                    <span className="ac-calor alta" style={estiloDaGrade(escala)} role="img" aria-label={`De plantão: ${plantao.rotulo}`}>
+                        {[...plantao.faixa].map((valor, coluna) => (
+                            <span key={coluna} className={`ac-c${valor === "1" ? " ac-cp" : ""}`} title={`${rotuloDaColuna(escala, coluna)} · ${valor === "1" ? "de plantão" : "fora do plantão"}`} />
+                        ))}
+                    </span>
+                </div>
+            ) : null}
             {faixas.map((raia, indice) => {
                 const letra = String.fromCharCode(65 + indice);
                 return (
                     <div key={raia.sessaoId} className="ac-raia">
                         <div className="ac-raia-quem">
                             <span className={classeDoLado(letra)}>{letra}</span>
-                            <span className="ac-raia-texto" title={`${raia.onde} — ${raia.aparelho}${raia.provedor ? ` · ${raia.provedor}` : ""}`}>
+                            <span className="ac-raia-texto" title={`${raia.onde} — ${raia.aparelho}${raia.provedor ? ` · ${raia.provedor}` : ""}${raia.redeDoPlantao ? " · rede do plantão" : ""}`}>
                                 <strong>{raia.onde}</strong>
-                                <small>{raia.aparelho}{raia.provedor ? ` · ${raia.provedor}` : ""}</small>
+                                <small>{raia.redeDoPlantao ? <em className="ac-na-rede">rede do plantão · </em> : null}{raia.aparelho}{raia.provedor ? ` · ${raia.provedor}` : ""}</small>
                             </span>
                         </div>
                         <FaixaDeCalor faixa={raia.faixa} escala={escala} rotulo={`Aparelho ${letra}`} detalhe alta />

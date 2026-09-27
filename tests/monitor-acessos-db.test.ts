@@ -229,3 +229,60 @@ test("monitor (banco): o porteiro confere o login do portal — vale, senha troc
         .where(and(eq(schema.authSessionEvents.userId, medico.id), eq(schema.authSessionEvents.kind, "portal_recusado")));
     assert.ok(recusas.length >= 2, "cada recusa fica na linha do tempo da conta");
 });
+
+test("monitor (banco): turnos das ocupações e rede do plantão (2+ plantonistas trabalhando nela)", { skip }, async () => {
+    const { getDb, schema, gravacao, relatorio } = await modulos();
+    gravacao.limparMemoriaDoMonitor();
+    const db = getDb();
+    const marca = randomUUID().slice(0, 6).toUpperCase();
+    const [posto] = await db.insert(schema.regulationPosts).values({ code: `T${marca}`, label: `Teste ${marca}` }).returning({ id: schema.regulationPosts.id });
+    const medicos: string[] = [];
+    const contas: Array<{ id: string; email: string }> = [];
+    try {
+        for (let i = 0; i < 2; i += 1) {
+            const [medico] = await db.insert(schema.doctors).values({ fullName: `Medico Teste ${marca} ${i}`, normalizedName: `medico teste ${marca.toLowerCase()} ${i}` }).returning({ id: schema.doctors.id });
+            medicos.push(medico.id);
+            const conta = await criarConta("doctor");
+            await db.update(schema.users).set({ doctorId: medico.id }).where(eq(schema.users.id, conta.id));
+            contas.push(conta);
+            await db.insert(schema.regulationOccupancies).values({
+                doctorId: medico.id,
+                continuityGroupId: randomUUID(),
+                postId: posto.id,
+                startedAt: new Date(Date.now() - 3 * 3_600_000),
+                ramalLabel: `13${i}${i}`,
+                source: "manual",
+            });
+            // Os dois trabalhando na mesma rede durante o turno: é a rede do plantão.
+            const sessaoId = randomUUID();
+            for (let minuto = 0; minuto < 20; minuto += 5) {
+                await gravacao.registrarAcesso({ sessaoId, userId: conta.id, versao: 0, contexto: ctx(IP_CENTRAL, WINDOWS), agora: new Date(Date.now() - (60 - minuto) * 60_000) });
+            }
+        }
+        const dados = await relatorio.carregarMonitor({ desde: new Date(Date.now() - 6 * 3_600_000), userId: contas[0].id });
+        assert.equal(dados.redes.get(IP_CENTRAL)?.plantonistas, 2, "rede com 2 plantonistas no turno");
+        const analise = dados.analises.find((a) => a.conta.userId === contas[0].id)!;
+        assert.equal(analise.plantao?.turnos, 1);
+        assert.equal(analise.plantao?.agora?.rotulo, "Regulação 1300", "turno aberto (sem saída) = de plantão agora");
+        assert.equal(analise.lugares[0].plantao, true);
+
+        // Ocupação esquecida aberta há 3 dias: vale 24 h, não "de plantão agora".
+        await db.insert(schema.regulationOccupancies).values({
+            doctorId: medicos[1],
+            continuityGroupId: randomUUID(),
+            postId: posto.id,
+            startedAt: new Date(Date.now() - 72 * 3_600_000),
+            ramalLabel: "1399",
+            source: "manual",
+        });
+        const antigo = await relatorio.carregarMonitor({ desde: new Date(Date.now() - 96 * 3_600_000), userId: contas[1].id });
+        const turnos = antigo.plantoes.get(contas[1].id) ?? [];
+        const esquecido = turnos.find((t) => t.rotulo === "Regulação 1399")!;
+        assert.equal(Math.round((esquecido.fim.getTime() - esquecido.inicio.getTime()) / 3_600_000), 24);
+    } finally {
+        await db.delete(schema.regulationOccupancies).where(eq(schema.regulationOccupancies.postId, posto.id));
+        await db.delete(schema.regulationPosts).where(eq(schema.regulationPosts.id, posto.id));
+        for (const conta of contas) await db.update(schema.users).set({ doctorId: null }).where(eq(schema.users.id, conta.id));
+        if (medicos.length) await db.delete(schema.doctors).where(inArray(schema.doctors.id, medicos));
+    }
+});
