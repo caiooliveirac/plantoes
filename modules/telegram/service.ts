@@ -222,6 +222,7 @@ import { isCasualTelegramMessage, listKnownInterventionBaseCodes, looksLikeDepar
 import type { TelegramCallbackQuery, TelegramFormatOptions, TelegramUpdate } from "@/modules/telegram/api";
 import { answerCallbackQuery, buildChoiceKeyboard, buildInlineKeyboard, editMessageText, escapeTelegramMarkdown, getBotUsername, REMOVE_KEYBOARD, sendMessage, type TelegramReplyMarkup } from "@/modules/telegram/api";
 import {
+    describeTelegramError,
     formatTelegramErrorForUser,
     isTelegramTechnicalErrorMessage,
     resolveTelegramErrorText,
@@ -2988,6 +2989,7 @@ async function logTelegramMessage(update: TelegramUpdate) {
 // (visto em audit 2026-05: linhas com 1KB+ poluindo o log).
 function sanitizeErrorMessage(value: unknown): string | null | undefined {
     if (value === null || value === undefined) return value as null | undefined;
+    if (value instanceof Error) return describeTelegramError(value, "telegram_processing_failed");
     if (typeof value !== "string") return String(value).slice(0, 240);
     const trimmed = value.trim();
     if (!trimmed) return null;
@@ -3007,9 +3009,22 @@ async function markTelegramProcessed(id: string, patch: Partial<typeof telegramI
     await db.update(telegramIngestedMessages)
         .set({
             ...normalizedPatch,
+            ...clampTelegramLogColumns(normalizedPatch),
             processedAt: new Date(),
         })
         .where(eq(telegramIngestedMessages.id, id));
+}
+
+// Anotações do log cabem nas colunas (varchar 32/64): um rótulo longo demais não pode
+// derrubar o registro da mensagem — era 22001 e "erro técnico" para o médico com a
+// ação já aplicada (auditoria 21/09/2026, "departure_justification_manual_review").
+export function clampTelegramLogColumns(patch: Partial<typeof telegramIngestedMessages.$inferInsert>) {
+    const clamped: Partial<typeof telegramIngestedMessages.$inferInsert> = {};
+    for (const [key, max] of [["parsedDomain", 32], ["parsedAction", 32], ["parsedTargetCode", 64]] as const) {
+        const value = patch[key];
+        if (typeof value === "string" && value.length > max) clamped[key] = value.slice(0, max);
+    }
+    return clamped;
 }
 
 function buildResolutionData(current: unknown, patch: Record<string, unknown>) {
@@ -11207,7 +11222,7 @@ async function tryHandlePendingNameSelection(update: TelegramUpdate, logId: stri
         await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, result.forwardContinuityPrompt);
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        const errorMessage = describeTelegramError(error, "telegram_processing_failed");
         if (shouldRouteToDepartureJustification(errorMessage, pending.resolutionData.parsed)) {
             await markTelegramProcessed(pending.id, {
                 status: "superseded",
@@ -11295,7 +11310,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             status: "accepted",
             parsedDomain: pending.resolutionData.parsed.sector,
             parsedTargetCode: pending.resolutionData.parsed.baseCode,
-            parsedAction: "departure_justification_cancelled",
+            parsedAction: "departure_justif_cancelled",
             parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
             errorMessage: null,
         });
@@ -11456,7 +11471,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 status: "accepted",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justification_manual_review",
+                parsedAction: "departure_justif_manual_review",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 relatedOccupancyId,
                 errorMessage: null,
@@ -11478,7 +11493,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             );
             return { ok: true, occupancyId: relatedOccupancyId };
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+            const errorMessage = describeTelegramError(error, "telegram_processing_failed");
             await markTelegramProcessed(pending.id, {
                 status: "error",
                 errorMessage,
@@ -11487,7 +11502,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 status: "error",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justification_manual_review",
+                parsedAction: "departure_justif_manual_review",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 errorMessage,
                 resolutionData: {
@@ -11558,7 +11573,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 status: "accepted",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justification_manual_review",
+                parsedAction: "departure_justif_manual_review",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 relatedOccupancyId,
                 errorMessage: null,
@@ -11575,13 +11590,13 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             );
             return { ok: true, occupancyId: relatedOccupancyId };
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+            const errorMessage = describeTelegramError(error, "telegram_processing_failed");
             await markTelegramProcessed(pending.id, { status: "error", errorMessage });
             await markTelegramProcessed(logId, {
                 status: "error",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justification_manual_review",
+                parsedAction: "departure_justif_manual_review",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 errorMessage,
                 resolutionData: { justificationFromPending: true },
@@ -11642,7 +11657,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         );
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        const errorMessage = describeTelegramError(error, "telegram_processing_failed");
         if (isTelegramJustificationRequiredError(errorMessage)) {
             await markTelegramProcessed(logId, {
                 status: "ignored",
@@ -12457,7 +12472,7 @@ async function completeArrivalFromPendingSelection(params: {
         }
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        const errorMessage = describeTelegramError(error, "telegram_processing_failed");
 
         if (isTelegramPiamShiftRequiredError(errorMessage)) {
             // Médico PIAM escolheu P (só SD/SN valem): transiciona para a pergunta
@@ -12614,7 +12629,7 @@ async function completePiamShiftPending(params: {
         }
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        const errorMessage = describeTelegramError(error, "telegram_processing_failed");
         const errorPatch = {
             status: "error",
             parsedDomain: parsedEntry.sector,
@@ -12693,7 +12708,7 @@ async function completeNameSelectionFromCallback(params: {
         await maybeSendContinuityForwardPrompt(ctx.chatId, anchorMessageId, result.forwardContinuityPrompt);
         return { ok: true, occupancyId: result.occupancyId };
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        const errorMessage = describeTelegramError(error, "telegram_processing_failed");
         if (shouldRouteToDepartureJustification(errorMessage, data.parsed)) {
             // Saída tardia exige justificativa POR TEXTO: transiciona a pendência e
             // manda o prompt de justificativa ancorado na mensagem original.
@@ -13133,7 +13148,7 @@ async function completeDepartureJustificationWithoutReason(params: {
         );
         return { ok: true, occupancyId: relatedOccupancyId };
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+        const errorMessage = describeTelegramError(error, "telegram_processing_failed");
         await markTelegramProcessed(pending.id, { status: "error", errorMessage });
         await answerCallbackQuery(params.callbackQueryId, formatTelegramErrorForUser(errorMessage), true);
         return { ok: true, ignored: true, processingError: true };
@@ -14838,7 +14853,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                 // função no quadro — ver modules/operational/half-shift.ts.
                 return { ok: true, occupancyId };
             } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : "telegram_processing_failed";
+                const errorMessage = describeTelegramError(error, "telegram_processing_failed");
                 if (shouldRouteToDepartureJustification(errorMessage, firstParsed)) {
                     await queuePendingDepartureJustification({
                         logId: log.id,
@@ -14916,7 +14931,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
         } catch (error) {
             await markTelegramProcessed(log.id, {
                 status: "error",
-                errorMessage: error instanceof Error ? error.message : "telegram_processing_failed",
+                errorMessage: describeTelegramError(error, "telegram_processing_failed"),
             });
             return { ok: true, ignored: true, processingError: true };
         }

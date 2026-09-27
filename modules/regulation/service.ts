@@ -827,7 +827,12 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             ),
             orderBy: [desc(regulationOccupancies.startedAt)],
         });
+        // Quem DETÉM o quadro vem primeiro: um deslocado (board nulo) mais recente
+        // não pode ficar no lugar do titular — senão o titular não é rendido e o
+        // INSERT com board bate no índice (23505 em produção, 21–24/09/2026).
         const takeoverTarget = otherActiveOccupancies.find(
+            (occupancy) => occupancy.boardStartedAt !== null && !isRegulationShadowOccupancyNotes(occupancy.notes),
+        ) ?? otherActiveOccupancies.find(
             (occupancy) => !isRegulationShadowOccupancyNotes(occupancy.notes),
         ) ?? otherActiveOccupancies[0] ?? null;
 
@@ -999,29 +1004,34 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             return merged;
         }
 
+        // Quem é rendido por esta chegada. Normalmente o próprio `existing`; mas se o
+        // médico só tinha aqui um plantão VENCIDO dele (ex.: deslocado dias atrás, que
+        // acabou de ser fechado acima), o titular de outro médico continua no quadro e
+        // também precisa ser rendido — senão o INSERT com board bate no índice.
+        const occupantToRelieve = reopenedFromStaleSameDoctor ? takeoverTarget : existing;
         const shouldPreserveCurrentTargetOccupancy = Boolean(
             historicalCorrectionEndAt
-            && existing
-            && input.startedAt.getTime() < existing.startedAt.getTime(),
+            && occupantToRelieve
+            && input.startedAt.getTime() < occupantToRelieve.startedAt.getTime(),
         );
 
         const shouldCloseExistingOnTakeover = Boolean(
-            existing
+            occupantToRelieve
             && shouldCloseRegulationOccupantOnArrival({
-                currentOccupantDoctorId: existing.doctorId,
+                currentOccupantDoctorId: occupantToRelieve.doctorId,
                 arrivingDoctorId: input.doctorId,
                 arrivingIsShadow,
-                currentOccupantNotes: existing.notes,
+                currentOccupantNotes: occupantToRelieve.notes,
             }),
         );
 
-        if (existing && !reopenedFromStaleSameDoctor && !shouldPreserveCurrentTargetOccupancy && shouldCloseExistingOnTakeover) {
-            const closeAt = input.startedAt.getTime() >= existing.startedAt.getTime()
-                ? resolveRegulationBoardEndAt(input.startedAt, existing.scheduledEndAt)
-                : existing.startedAt;
+        if (occupantToRelieve && !shouldPreserveCurrentTargetOccupancy && shouldCloseExistingOnTakeover) {
+            const closeAt = input.startedAt.getTime() >= occupantToRelieve.startedAt.getTime()
+                ? resolveRegulationBoardEndAt(input.startedAt, occupantToRelieve.scheduledEndAt)
+                : occupantToRelieve.startedAt;
 
             // P2: guard against zero-duration occupancies caused by retroactive or duplicate arrivals.
-            const resultingDurationMs = closeAt.getTime() - existing.startedAt.getTime();
+            const resultingDurationMs = closeAt.getTime() - occupantToRelieve.startedAt.getTime();
             if (resultingDurationMs < 60_000) {
                 throw new Error("arrival_conflicts_with_active_occupancy");
             }
@@ -1029,13 +1039,13 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             await tx.update(regulationOccupancies)
                 .set({
                     endedAt: closeAt,
-                    actualEndedAt: existing.actualEndedAt ?? closeAt,
+                    actualEndedAt: occupantToRelieve.actualEndedAt ?? closeAt,
                     updatedByUserId: input.createdByUserId ?? null,
                     updatedAt: new Date(),
                 })
-                .where(eq(regulationOccupancies.id, existing.id));
+                .where(eq(regulationOccupancies.id, occupantToRelieve.id));
 
-            await syncRegulationBankHours(tx, existing.id);
+            await syncRegulationBankHours(tx, occupantToRelieve.id);
         }
 
         // Close any active occupancy the same doctor holds on a DIFFERENT ramal.
@@ -1136,6 +1146,22 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             });
         }
 
+        // When this arrival takes the board, it must be the only board carrier on
+        // the post (one-active-board-per-post unique index). A real handoff already
+        // closed the predecessor, but a coexisting shadow that previously held the
+        // board (e.g. a shadow that had arrived to an empty post) is NOT closed —
+        // demote its board anchor to NULL so it keeps coexisting without conflicting.
+        // Tem que vir ANTES do INSERT: o índice não é adiável, depois era tarde.
+        if (shouldTakeBoardImmediately && !historicalCorrectionEndAt) {
+            await tx.update(regulationOccupancies)
+                .set({ boardStartedAt: null, updatedAt: new Date() })
+                .where(and(
+                    eq(regulationOccupancies.postId, input.postId),
+                    isNull(regulationOccupancies.endedAt),
+                    isNotNull(regulationOccupancies.boardStartedAt),
+                ));
+        }
+
         const [created] = await tx.insert(regulationOccupancies).values({
             doctorId: input.doctorId,
             postId: input.postId,
@@ -1157,22 +1183,6 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             createdByUserId: input.createdByUserId ?? null,
             updatedByUserId: input.createdByUserId ?? null,
         }).returning();
-
-        // When this arrival takes the board, it must be the only board carrier on
-        // the post (one-active-board-per-post unique index). A real handoff already
-        // closed the predecessor, but a coexisting shadow that previously held the
-        // board (e.g. a shadow that had arrived to an empty post) is NOT closed —
-        // demote its board anchor to NULL so it keeps coexisting without conflicting.
-        if (shouldTakeBoardImmediately && !historicalCorrectionEndAt) {
-            await tx.update(regulationOccupancies)
-                .set({ boardStartedAt: null, updatedAt: new Date() })
-                .where(and(
-                    eq(regulationOccupancies.postId, input.postId),
-                    isNull(regulationOccupancies.endedAt),
-                    isNotNull(regulationOccupancies.boardStartedAt),
-                    ne(regulationOccupancies.id, created.id),
-                ));
-        }
 
         if (historicalCorrectionEndAt) {
             await syncRegulationBankHours(tx, created.id);
