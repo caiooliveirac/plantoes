@@ -52,7 +52,10 @@ test("isSignupRateLimited bloqueia a 11ª tentativa na janela e libera em janela
     assert.equal(isSignupRateLimited("10.0.0.1", now + 15 * 60 * 1000), false);
 });
 
-test("getRequestIp usa o primeiro x-forwarded-for", () => {
-    assert.equal(getRequestIp(new Headers({ "x-forwarded-for": "1.2.3.4, 10.0.0.1" })), "1.2.3.4");
+test("getRequestIp usa cf-connecting-ip/x-real-ip e ignora x-forwarded-for forjável", () => {
+    assert.equal(getRequestIp(new Headers({ "cf-connecting-ip": "1.1.1.1", "x-forwarded-for": "9.9.9.9" })), "1.1.1.1");
+    assert.equal(getRequestIp(new Headers({ "x-real-ip": "2.2.2.2", "x-forwarded-for": "9.9.9.9" })), "2.2.2.2");
+    // Girar x-forwarded-for não cria chave nova: cai tudo no mesmo balde.
+    assert.equal(getRequestIp(new Headers({ "x-forwarded-for": "1.2.3.4, 10.0.0.1" })), "unknown");
     assert.equal(getRequestIp(new Headers()), "unknown");
 });
