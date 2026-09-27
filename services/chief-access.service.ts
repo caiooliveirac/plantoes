@@ -305,6 +305,8 @@ export async function provisionChiefBootstrapAccess(input: BootstrapChiefAccessI
                     passwordHash,
                     mustChangePassword: true,
                     isActive: true,
+                    // Senha provisória nova: sessões abertas com a anterior caem.
+                    sessionVersion: sql`${users.sessionVersion} + 1`,
                     updatedAt: new Date(),
                 })
                 .where(eq(users.id, existingUser.id))
@@ -402,6 +404,7 @@ export async function reviewChiefAccessRequest(input: ReviewChiefAccessRequestIn
                     passwordHash: request.passwordHash,
                     mustChangePassword: false,
                     isActive: true,
+                    sessionVersion: sql`${users.sessionVersion} + 1`,
                     updatedAt: new Date(),
                 })
                 .where(eq(users.id, existingUser.id))

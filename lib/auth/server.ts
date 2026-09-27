@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { userRoles, users } from "@/db/schema";
 import { USER_ROLES, type UserRole } from "@/modules/auth/contracts";
-import { createSessionToken, verifySessionToken } from "@/lib/auth/token";
+import { createSessionToken, isSessionVersionCurrent, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
 
 export const SESSION_COOKIE_NAME = "operations_v2_session";
 /* 30 dias, renovada a cada uso (proxy.ts). Com 12 h a sessão morria entre um
@@ -42,11 +42,19 @@ export function getAuthSecret() {
     return secret;
 }
 
+/** Lê a session_version atual do banco: login, SSO, cadastro e troca de senha
+    são raros, a consulta a mais só acontece neles. */
 export async function writeSessionCookie(userId: string, expiresAt = new Date(Date.now() + SESSION_TTL_MS)) {
+    const [row] = await getDb()
+        .select({ sessionVersion: users.sessionVersion })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
     const token = createSessionToken(
         {
             sub: userId,
             exp: expiresAt.getTime(),
+            sv: row?.sessionVersion ?? 0,
         },
         getAuthSecret(),
     );
@@ -74,7 +82,7 @@ export async function clearSessionCookie() {
     });
 }
 
-async function loadUserSession(userId: string, expiresAt: number): Promise<AuthenticatedSession | null> {
+async function loadUserSession(token: SessionTokenPayload): Promise<AuthenticatedSession | null> {
     const db = getDb();
     const [user] = await db
         .select({
@@ -83,12 +91,13 @@ async function loadUserSession(userId: string, expiresAt: number): Promise<Authe
             doctorId: users.doctorId,
             mustChangePassword: users.mustChangePassword,
             isActive: users.isActive,
+            sessionVersion: users.sessionVersion,
         })
         .from(users)
-        .where(eq(users.id, userId))
+        .where(eq(users.id, token.sub))
         .limit(1);
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || !isSessionVersionCurrent(token, user.sessionVersion)) {
         return null;
     }
 
@@ -113,7 +122,7 @@ async function loadUserSession(userId: string, expiresAt: number): Promise<Authe
             roles,
             mustChangePassword: user.mustChangePassword,
         },
-        expiresAt: new Date(expiresAt).toISOString(),
+        expiresAt: new Date(token.exp).toISOString(),
     };
 }
 
@@ -129,7 +138,7 @@ export async function readAuthenticatedSession(): Promise<AuthenticatedSession |
         return null;
     }
 
-    return loadUserSession(parsed.sub, parsed.exp);
+    return loadUserSession(parsed);
 }
 
 export async function requireAuthenticatedSession(requiredRoles?: UserRole[], options?: { allowPasswordChange?: boolean }) {

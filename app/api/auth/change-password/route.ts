@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { hasDatabaseUrl } from "@/db";
-import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { AuthError, requireAuthenticatedSession, writeSessionCookie } from "@/lib/auth/server";
 import { changeOwnPassword } from "@/services/auth.service";
 
 const schema = z.object({
@@ -29,6 +29,9 @@ export async function POST(request: NextRequest) {
 
     try {
         await changeOwnPassword(session.user.id, parsed.data.currentPassword, parsed.data.nextPassword);
+        // A troca subiu session_version: os outros aparelhos caem, este recebe
+        // cookie novo com a versão atual.
+        await writeSessionCookie(session.user.id);
         return NextResponse.json({ ok: true });
     } catch (error) {
         return NextResponse.json(

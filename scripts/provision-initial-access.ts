@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { doctors, userRoles, users } from "@/db/schema";
 import { hashPassword } from "@/services/auth.service";
@@ -60,6 +60,7 @@ async function main() {
                     passwordHash,
                     mustChangePassword: true,
                     isActive: true,
+                    sessionVersion: sql`${users.sessionVersion} + 1`,
                     updatedAt: new Date(),
                 })
                 .where(eq(users.id, existingUser.id))

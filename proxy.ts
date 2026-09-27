@@ -19,7 +19,7 @@ export function proxy(request: NextRequest) {
     const emitidoEm = parsed.exp - SESSION_TTL_MS;
     if (Date.now() - emitidoEm < SESSION_RENEW_AFTER_MS) return res;
     const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-    res.cookies.set(SESSION_COOKIE_NAME, createSessionToken({ sub: parsed.sub, exp: expiresAt.getTime() }, secret), {
+    res.cookies.set(SESSION_COOKIE_NAME, createSessionToken({ sub: parsed.sub, exp: expiresAt.getTime(), sv: parsed.sv ?? 0 }, secret), {
         httpOnly: true,
         sameSite: "lax",
         secure: process.env.NODE_ENV === "production",

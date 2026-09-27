@@ -86,6 +86,8 @@ export const users = operationsV2.table(
         passwordHash: text("password_hash").notNull(),
         mustChangePassword: boolean("must_change_password").notNull().default(false),
         isActive: boolean("is_active").notNull().default(true),
+        /** Sobe a cada troca/redefinição de senha; cookie com `sv` menor cai (lib/auth/server.ts). */
+        sessionVersion: integer("session_version").notNull().default(0),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
         updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     },

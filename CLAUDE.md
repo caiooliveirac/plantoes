@@ -211,10 +211,14 @@ manualmente no servidor **antes** do merge/deploy (zero-downtime). Veja
 
 Autenticação **customizada**, não usa NextAuth apesar da dependência estar instalada:
 
-- **Sessão**: cookie HTTP-only `operations_v2_session`, TTL padrão 12h, `secure` só
-  em produção. Token é JWT simplificado (`{ sub: userId, exp }`) assinado com HMAC-SHA256
+- **Sessão**: cookie HTTP-only `operations_v2_session`, TTL 30 dias deslizante
+  (`proxy.ts`), `secure` só em produção. Token é JWT simplificado
+  (`{ typ: "session", sub: userId, exp, sv }`) assinado com HMAC-SHA256
   usando `AUTH_SECRET`, verificação timing-safe. Implementação em
   [lib/auth/token.ts](lib/auth/token.ts) e [lib/auth/server.ts](lib/auth/server.ts).
+  `sv` tem que bater com `users.session_version`: toda gravação de senha sobe a coluna
+  e derruba os cookies antigos (teste-guarda em `tests/sessao-revogavel.test.ts`).
+  Login: 10 falhas/15 min por IP e por e-mail → 429 (`modules/auth/login-rate-limit.ts`).
 - **Login**: `POST /api/auth/login` (email+senha, bcrypt) em
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em
   [services/auth.service.ts](services/auth.service.ts). Trata contas inativas, sem

@@ -3,6 +3,14 @@ import { z } from "zod";
 import { hasDatabaseUrl } from "@/db";
 import { authenticateWithPassword } from "@/services/auth.service";
 import { writeSessionCookie } from "@/lib/auth/server";
+import {
+    LOGIN_RATE_LIMIT_MESSAGE,
+    clearLoginFailures,
+    getLoginClientIp,
+    isLoginRateLimited,
+    loginRateLimitKeys,
+    registerLoginFailure,
+} from "@/modules/auth/login-rate-limit";
 
 const schema = z.object({
     email: z.string().email(),
@@ -27,11 +35,20 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "email and password are required." }, { status: 400 });
     }
 
+    const rateLimitKeys = loginRateLimitKeys(getLoginClientIp(request.headers), parsed.data.email);
+    if (isLoginRateLimited(rateLimitKeys)) {
+        return NextResponse.json({ error: "too_many_attempts", message: LOGIN_RATE_LIMIT_MESSAGE }, { status: 429 });
+    }
+
     const result = await authenticateWithPassword(parsed.data.email, parsed.data.password);
+    if (result.status === "invalid_credentials") {
+        registerLoginFailure(rateLimitKeys);
+    }
     if (result.status !== "success") {
         return NextResponse.json({ error: result.status }, { status: statusCodeByError[result.status] });
     }
 
+    clearLoginFailures(parsed.data.email);
     const expiresAt = await writeSessionCookie(result.user.id);
     return NextResponse.json({
         session: {
