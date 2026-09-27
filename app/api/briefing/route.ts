@@ -15,7 +15,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 
-import { sql } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 
 import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
         const doctorRows = await getDb()
             .select({ id: doctors.id, fullName: doctors.fullName, displayName: doctors.displayName })
             .from(doctors)
-            .where(sql`${doctors.id} = any(${sql.raw(`array[${[...new Set(rows.map((row) => `'${row.doctorId}'`))].join(",")}]::uuid[]`)})`);
+            .where(inArray(doctors.id, [...new Set(rows.map((row) => row.doctorId))]));
         for (const doctor of doctorRows) {
             nomeCurto.set(doctor.id, formatDoctorSurfaceName(doctor));
         }

@@ -47,8 +47,8 @@ import {
   type BankHoursBalanceOverrideSummary,
 } from "@/modules/bank-hours/service";
 import { extractTelegramOccurrenceNumber } from "@/modules/telegram/departure-flow";
-import { expireInterventionBaseDeactivations, expireStaleShadowInterventionOccupancies } from "@/modules/intervention/service";
-import { expireRegulationPostDeactivations, expireStaleRegulationOccupancies } from "@/modules/regulation/service";
+import { expireStaleShadowInterventionOccupancies } from "@/modules/intervention/service";
+import { expireStaleRegulationOccupancies } from "@/modules/regulation/service";
 
 // A "sombra" (shadow) doctor coexisting on the same ramal/base as the titular.
 // Shown on the live board as a distinct sub-line under the active occupant, never
@@ -1788,6 +1788,9 @@ function turnoArrivalSql(alias: "ro" | "io", withBoardAnchor = false) {
 
 export async function listRegulationBoard() {
   const db = getDb();
+  // Janela aberta de turno anterior já venceu na virada, mesmo que o reaper do
+  // worker ainda não tenha gravado reactivated_at: a leitura não depende dele.
+  const currentShiftStartedAt = resolveOperationalShiftWindow(new Date()).startedAt.toISOString();
   const result = await db.execute(sql`
     with legacy_regulation as (
       select
@@ -1828,6 +1831,7 @@ export async function listRegulationBoard() {
       from operations_v2.regulation_post_deactivations rpd
       where rpd.reactivated_at is null
         and rpd.deactivated_at <= now()
+        and rpd.deactivated_at >= ${currentShiftStartedAt}::timestamptz
     )
     select
       rp.id as "postId",
@@ -1961,6 +1965,8 @@ export async function listOnDemandRegulationPostOptions(): Promise<OnDemandRegul
 
 export async function listInterventionBoard() {
   const db = getDb();
+  // Ver listRegulationBoard: desativação de turno anterior não aparece.
+  const currentShiftStartedAt = resolveOperationalShiftWindow(new Date()).startedAt.toISOString();
   const result = await db.execute(sql`
     with legacy_intervention as (
       select
@@ -2002,6 +2008,7 @@ export async function listInterventionBoard() {
       from operations_v2.intervention_base_deactivations ibd
       where ibd.reactivated_at is null
         and ibd.deactivated_at <= now()
+        and ibd.deactivated_at >= ${currentShiftStartedAt}::timestamptz
     )
     select
       ib.id as "baseId",
@@ -2100,8 +2107,9 @@ export interface OperationalBoardSnapshot {
 }
 
 export async function getOperationalBoard(): Promise<OperationalBoardSnapshot> {
-  await expireInterventionBaseDeactivations(new Date());
-  await expireRegulationPostDeactivations(new Date());
+  // Desativações vencidas: o quadro já as esconde na leitura (list*Board) e o
+  // plantoes-telegram-worker grava o reactivated_at a cada ciclo
+  // (expireInterventionBaseDeactivations / expireRegulationPostDeactivations).
   await expireStaleShadowInterventionOccupancies(new Date());
   await expireStaleRegulationOccupancies(new Date());
 
@@ -2184,7 +2192,7 @@ export async function listRecentHandoffs(
       where so.post_id = ro.post_id
         and so.doctor_id <> ro.doctor_id
         and so.id <> ro.id
-        and so.started_at >= ro.ended_at - ${sql.raw(`interval '${toleranceMinutes} minutes'`)}
+        and so.started_at >= ro.ended_at - make_interval(mins => ${toleranceMinutes})
       order by abs(extract(epoch from (so.started_at - ro.ended_at)))
       limit 1
     ) succ on true
@@ -2214,7 +2222,7 @@ export async function listRecentHandoffs(
       where so.base_id = io.base_id
         and so.doctor_id <> io.doctor_id
         and so.id <> io.id
-        and so.started_at >= io.ended_at - ${sql.raw(`interval '${toleranceMinutes} minutes'`)}
+        and so.started_at >= io.ended_at - make_interval(mins => ${toleranceMinutes})
       order by abs(extract(epoch from (so.started_at - io.ended_at)))
       limit 1
     ) succ on true
@@ -4677,6 +4685,9 @@ async function loadPaymentAllocationSourceData(
       where state.post_id = rp.id
         and state.deactivated_at < ${request.endedAt}::timestamptz
         and coalesce(state.reactivated_at, 'infinity'::timestamptz) > ${request.startedAt}::timestamptz
+        -- Aberta e de antes do turno pedido = vencida na virada (o reaper grava
+        -- reactivated_at = virada <= início do turno). Não conta, gravada ou não.
+        and (state.reactivated_at is not null or state.deactivated_at >= ${request.startedAt}::timestamptz)
       order by state.deactivated_at desc, state.created_at desc
       limit 1
     ) rpd on true
@@ -4713,6 +4724,9 @@ async function loadPaymentAllocationSourceData(
       where state.base_id = ib.id
         and state.deactivated_at < ${request.endedAt}::timestamptz
         and coalesce(state.reactivated_at, 'infinity'::timestamptz) > ${request.startedAt}::timestamptz
+        -- Aberta e de antes do turno pedido = vencida na virada (o reaper grava
+        -- reactivated_at = virada <= início do turno). Não conta, gravada ou não.
+        and (state.reactivated_at is not null or state.deactivated_at >= ${request.startedAt}::timestamptz)
       order by state.deactivated_at desc, state.created_at desc
       limit 1
     ) ibd on true
@@ -4910,13 +4924,9 @@ export async function getPaymentAllocationBoard(params: {
   operationalDate?: string | Date | null;
   shiftLabel?: "SD" | "SN" | null;
   reference?: Date;
-  expireDeactivations?: boolean;
 } = {}): Promise<PaymentAllocationBoard> {
   const db = getDb();
   const request = resolvePaymentAllocationRequest(params);
-  if (params.expireDeactivations !== false) {
-    await expireInterventionBaseDeactivations(new Date(request.startedAt));
-  }
   const sourceData = await loadPaymentAllocationSourceData(db, request);
   const rawRows = sourceData.rawRows;
 

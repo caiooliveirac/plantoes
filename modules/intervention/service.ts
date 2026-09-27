@@ -572,7 +572,8 @@ async function findActiveInterventionBaseDeactivation(tx: Executor, params: {
 // Reaper: fecha janelas de desativação que já passaram da virada do turno em que
 // foram feitas (ver resolveInterventionBaseDeactivationExpiresAt), gravando
 // reactivatedAt = fronteira do turno (fim histórico correto — a base voltou na virada).
-// Chamado a cada montagem do quadro, devolve a base ao estado 'waiting' na virada sem
+// Chamado a cada ciclo do plantoes-telegram-worker (o quadro já esconde a vencida na
+// leitura, sem esperar por ele), devolve a base ao estado 'waiting' na virada sem
 // depender de reativação manual ou da chegada de um médico. Idempotente; também sana
 // janelas antigas que ficaram abertas antes desta regra (a fronteira já passou).
 export async function expireInterventionBaseDeactivations(referenceAt: Date, updatedByUserId?: string | null) {
