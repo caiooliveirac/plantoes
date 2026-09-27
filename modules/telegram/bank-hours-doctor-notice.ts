@@ -22,6 +22,13 @@ import { isBankHoursPendingAlertsEnabled } from "@/modules/telegram/bank-hours-p
 
 const STAGE = "bank-hours";
 
+/**
+ * Ações que só o próprio médico faz: exigem o codinome dele. Ações de admin no
+ * privado (/pagamento de outro médico, reset de codinome) também gravam o
+ * doctorId do médico, mas no chat do ADMIN — não servem para achar o médico.
+ */
+const DOCTOR_OWN_PRIVATE_ACTIONS = ["payment_self", "payment_profile_setup"];
+
 /** Último chat privado conhecido do médico (autoatendimento aceito). */
 export async function findDoctorTelegramChatId(doctorId: string): Promise<string | null> {
     const result = await getDb().execute(sql`
@@ -30,6 +37,7 @@ export async function findDoctorTelegramChatId(doctorId: string): Promise<string
         where resolution_data->>'doctorId' = ${doctorId}
           and status = 'accepted'
           and chat_id not like '-%'
+          and parsed_action in (${sql.join(DOCTOR_OWN_PRIVATE_ACTIONS.map((action) => sql`${action}`), sql`, `)})
         order by created_at desc
         limit 1
     `);
