@@ -599,7 +599,9 @@ export async function loadChiefPayableBoardCore(monthKey?: string | null): Promi
     // Datas operacionais (São Paulo, -180min) que delimitam o mês visível — usadas
     // para buscar os plantões extra do admin, cuja coluna operational_date é um date.
     const extraStartDate = new Date(range.start.getTime() - (180 * 60000)).toISOString().slice(0, 10);
-    const extraEndDate = new Date(range.end.getTime() - (180 * 60000) - 1).toISOString().slice(0, 10);
+    // range.end é exclusivo (07:00 local do dia 1 seguinte): o último dia visível
+    // é o anterior, senão o extra do dia 1 entra no fechamento dos dois meses.
+    const extraEndDate = new Date(range.end.getTime() - 86400000 - (180 * 60000)).toISOString().slice(0, 10);
     const tQueries = perfStart();
     const [targets, targetDeactivationIntervals, rawResultRows, adminExtraRows, doctorAttestations, allDoctorRows] = await Promise.all([
         timed("q:loadTargets", loadTargets(rawStartIso, rawEndIso)),

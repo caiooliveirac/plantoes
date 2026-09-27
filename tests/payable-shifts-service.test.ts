@@ -316,9 +316,6 @@ test("base desativada o dia inteiro aparece como desativada no SD e no SN", { sk
     assert.deepEqual(pm04, [`SD true ${deactivationNote}`, `SN true ${deactivationNote}`]);
 });
 
-test("fechamento de abril NÃO deveria incluir o extra do admin lançado em 01/05", {
-    skip,
-    todo: "bug: extraEndDate converte range.end (01/05 07:00 local) na data local 01/05, então o extra desse dia entra no fechamento de abril E no de maio",
-}, () => {
+test("fechamento de abril não inclui o extra do admin lançado em 01/05", { skip }, () => {
     assert.deepEqual(shiftsOf("jonas"), []);
 });
