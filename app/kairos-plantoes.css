@@ -4523,3 +4523,76 @@
 
 .pagina-kairos .ops-handoff.phase-encerrada { border-left-color: var(--slate-400); }
 .pagina-kairos .ops-handoff-input input:read-only { background: var(--superficie-recuada); color: var(--texto-medio); }
+
+/* Fila de pendências de contrato (/admin/payment-closing/pendencias-contrato).
+   Cartão de status com a faixa lateral de 5px; cor da faixa pelo tom do grupo. */
+.pagina-kairos .contract-queue-back a {
+    color: var(--texto-medio);
+    font-size: 13px;
+}
+
+.pagina-kairos .contract-queue {
+    display: grid;
+    gap: 14px;
+}
+
+.pagina-kairos .contract-queue-summary {
+    margin: 0;
+    color: var(--texto-medio);
+}
+
+.pagina-kairos .contract-queue-summary strong {
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .contract-queue-group {
+    border: 1px solid var(--borda);
+    border-left: 5px solid var(--semaforo-neutro-borda);
+    border-radius: 14px;
+    background: var(--superficie);
+    padding: 14px 16px;
+}
+
+.pagina-kairos .contract-queue-group.danger { border-left-color: var(--semaforo-vermelho-borda); }
+.pagina-kairos .contract-queue-group.warn { border-left-color: var(--semaforo-amarelo-borda); }
+
+.pagina-kairos .contract-queue-group h2 {
+    margin: 0 0 8px;
+    font-size: 15px;
+    color: var(--texto-forte);
+}
+
+.pagina-kairos .contract-queue-group ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.pagina-kairos .contract-queue-group li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--divisor);
+}
+
+.pagina-kairos .contract-queue-group li p {
+    margin: 2px 0 0;
+    color: var(--texto-medio);
+    font-size: 13px;
+}
+
+.pagina-kairos .contract-queue-group li small {
+    color: var(--texto-fraco);
+    font-family: var(--fonte-mono);
+}
+
+@media (max-width: 640px) {
+    .pagina-kairos .contract-queue-group li {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
