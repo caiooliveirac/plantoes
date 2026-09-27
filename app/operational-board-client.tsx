@@ -3451,128 +3451,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         );
     }
 
-    return (
-        // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
-        // As abas só aparecem para quem gerencia — visitante sem sessão vê marca + tema.
-        <div className="pagina-kairos">
-            <KairosTopo
-                titulo="Mesa operacional"
-                abas={session?.canManage ? ABAS_ADMIN : undefined}
-                extra={
-                    session?.roles.includes("admin") ? (
-                        <CadastrarMedicoBotao />
-                    ) : !session ? (
-                        // Visitante: entrada e cadastro ficam NA barra — o dock flutuante
-                        // ficava por trás dela e o link de cadastro só existia dentro do login.
-                        <>
-                            <a className="k-topo-acao" href="/cadastro-medico">Sou médico: criar conta</a>
-                            <button
-                                type="button"
-                                className="k-topo-acao"
-                                onClick={() => {
-                                    setAuthOpen((current) => !current);
-                                    setAuthError(null);
-                                    setAuthInfo(null);
-                                }}
-                            >
-                                Entrar
-                            </button>
-                        </>
-                    ) : undefined
-                }
-            />
-            {viewMode === "live" && session?.roles.includes("admin") && (
-                <ChiefArrivalRequestsRail />
-            )}
-
-            {viewMode === "live" && session?.canManage && pendingDepartures.length > 0 && (
-                <AuditRail
-                    pendingDepartures={pendingDepartures}
-                    onOpenVerifier={setVerifierTarget}
-                />
-            )}
-
-            {viewMode === "live" && session?.canManage && recentHandoffs.length > 0 && (
-                <RecentHandoffsRail recentHandoffs={recentHandoffs} />
-            )}
-
-            {session?.canManage && viewMode === "live" && pendingChiefExits.length > 0 && (
-                <ChiefExitGate pendingChiefExits={pendingChiefExits} />
-            )}
-
-            {session?.canManage && (
-                <DepartureVerifier
-                    target={verifierTarget}
-                    onClose={() => setVerifierTarget(null)}
-                />
-            )}
-
-            {session?.canManage && kickModalCard?.occupancyId && (
-                <DepartureDialog
-                    open={Boolean(kickModalCard)}
-                    onOpenChange={(open) => { if (!open) setKickModalCard(null); }}
-                    domain={kickModalCard.domain}
-                    occupancyId={kickModalCard.occupancyId}
-                    targetCode={cardCode(kickModalCard)}
-                    doctorName={kickModalCard.displayName || kickModalCard.doctorName || "Plantonista"}
-                    chiefKick
-                    startedAt={kickModalCard.startedAt}
-                    scheduledStartAt={(kickModalCard as { scheduledStartAt?: string | null }).scheduledStartAt ?? null}
-                    scheduledEndAt={kickModalCard.scheduledEndAt}
-                    roleLabel={kickModalCard.roleLabel}
-                    displaced={Boolean(kickModalCard.isDisplaced)}
-                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
-                />
-            )}
-
-            {session?.canManage && startModalCard && (
-                <StartCoverageDialog
-                    open={Boolean(startModalCard)}
-                    onOpenChange={(open) => { if (!open) setStartModalCard(null); }}
-                    domain={startModalCard.domain}
-                    targetId={startModalCard.domain === "regulation" ? startModalCard.postId : startModalCard.baseId}
-                    targetCode={cardCode(startModalCard)}
-                    targetLabel={cardLabel(startModalCard)}
-                    shiftLabel={shiftLabel}
-                    doctors={doctors}
-                    onDeactivate={() => {
-                        const card = startModalCard;
-                        setStartModalCard(null);
-                        setDeactivateModalCard(card);
-                    }}
-                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
-                />
-            )}
-
-            {session?.canManage && deactivateModalCard && (
-                <DeactivateDialog
-                    open={Boolean(deactivateModalCard)}
-                    onOpenChange={(open) => { if (!open) setDeactivateModalCard(null); }}
-                    domain={deactivateModalCard.domain}
-                    targetId={deactivateModalCard.domain === "regulation" ? deactivateModalCard.postId : deactivateModalCard.baseId}
-                    targetCode={cardCode(deactivateModalCard)}
-                    targetLabel={cardLabel(deactivateModalCard)}
-                    occupantName={deactivateModalCard.occupancyId
-                        ? (deactivateModalCard.displayName || deactivateModalCard.doctorName)
-                        : null}
-                    occupantStartedAt={deactivateModalCard.startedAt}
-                    occupantScheduledStartAt={(deactivateModalCard as { scheduledStartAt?: string | null }).scheduledStartAt ?? null}
-                    occupantScheduledEndAt={deactivateModalCard.scheduledEndAt}
-                    occupantRoleLabel={deactivateModalCard.roleLabel}
-                    isReactivate={deactivateModalCard.status === "disabled"}
-                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
-                />
-            )}
-
-            {session?.canManage && (
-                <CommandPalette
-                    pendingDepartures={pendingDepartures}
-                    onConfirm={quickConfirmDeparture}
-                    onOpenVerifier={setVerifierTarget}
-                />
-            )}
-
-            {viewMode === "live" && (
+    // Menu da mesa: atalhos + sessão/login, ancorado no botão do header.
+    // Antes era um dock flutuante que, no mobile, ficava por cima do quadro.
+    const menuMesa = viewMode === "live" && authOpen ? (
                 <div className={`ops-auth-dock ${authOpen ? "open" : ""}`.trim()}>
                     {session?.canManage && (
                         <button
@@ -3673,27 +3554,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             <span className="ops-history-trigger-label">Prioridades refeição</span>
                         </button>
                     )}
-
-                    <button
-                        type="button"
-                        className={`ops-auth-trigger ${session ? "connected" : "login"}`.trim()}
-                        aria-label={session ? `Sessao ativa: ${summarizeRoles(session.roles)}. Abrir acesso operacional.` : "Abrir acesso operacional"}
-                        title={session ? `${summarizeRoles(session.roles)} • ${session.email}` : "Acesso operacional"}
-                        onClick={() => {
-                            setAuthOpen((current) => !current);
-                            setAuthError(null);
-                            setAuthInfo(null);
-                        }}
-                    >
-                        <span className={`ops-auth-trigger-status ${session ? "connected" : "idle"}`.trim()} aria-hidden="true" />
-                        <span className="ops-auth-trigger-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" focusable="false">
-                                <path d="M12 2.75a5 5 0 0 0-5 5v1.5H6.5A2.75 2.75 0 0 0 3.75 12v6.25A2.75 2.75 0 0 0 6.5 21h11a2.75 2.75 0 0 0 2.75-2.75V12a2.75 2.75 0 0 0-2.75-2.75H17V7.75a5 5 0 0 0-5-5Zm-3.5 6.5v-1.5a3.5 3.5 0 1 1 7 0v1.5h-7Zm3.5 3.25a1.75 1.75 0 0 1 .75 3.33V18a.75.75 0 0 1-1.5 0v-2.17a1.75 1.75 0 0 1 .75-3.33Z" />
-                            </svg>
-                        </span>
-                        {!session && <span className="ops-auth-trigger-label">Entrar</span>}
-                        <span className="ops-auth-sr">{session ? `${summarizeRoles(session.roles)} ${session.email}` : "Abrir acesso operacional"}</span>
-                    </button>
 
                     <div className={`ops-auth-popover ${authOpen ? "open" : ""}`.trim()}>
                     {session ? (
@@ -3888,6 +3748,130 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     )}
                     </div>
                 </div>
+    ) : null;
+
+    return (
+        // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
+        // As abas só aparecem para quem gerencia — visitante sem sessão vê marca + tema.
+        <div className="pagina-kairos">
+            <KairosTopo
+                titulo="Mesa operacional"
+                abas={session?.canManage ? ABAS_ADMIN : undefined}
+                extra={
+                    <>
+                        {session?.roles.includes("admin") && <CadastrarMedicoBotao />}
+                        {/* Visitante: cadastro fica NA barra, fora do menu. */}
+                        {!session && <a className="k-topo-acao" href="/cadastro-medico">Sou médico: criar conta</a>}
+                        {viewMode === "live" && (
+                        <span className="ops-menu-ancora">
+                            <button
+                                type="button"
+                                className={`k-topo-acao ${authOpen ? "on" : ""}`.trim()}
+                                aria-expanded={authOpen}
+                                aria-haspopup="true"
+                                onClick={() => {
+                                    setAuthOpen((current) => !current);
+                                    setAuthError(null);
+                                    setAuthInfo(null);
+                                }}
+                            >
+                                {session ? (authOpen ? "Fechar ✕" : "Menu ▾") : "Entrar"}
+                            </button>
+                            {menuMesa}
+                        </span>
+                        )}
+                    </>
+                }
+            />
+            {viewMode === "live" && session?.roles.includes("admin") && (
+                <ChiefArrivalRequestsRail />
+            )}
+
+            {viewMode === "live" && session?.canManage && pendingDepartures.length > 0 && (
+                <AuditRail
+                    pendingDepartures={pendingDepartures}
+                    onOpenVerifier={setVerifierTarget}
+                />
+            )}
+
+            {viewMode === "live" && session?.canManage && recentHandoffs.length > 0 && (
+                <RecentHandoffsRail recentHandoffs={recentHandoffs} />
+            )}
+
+            {session?.canManage && viewMode === "live" && pendingChiefExits.length > 0 && (
+                <ChiefExitGate pendingChiefExits={pendingChiefExits} />
+            )}
+
+            {session?.canManage && (
+                <DepartureVerifier
+                    target={verifierTarget}
+                    onClose={() => setVerifierTarget(null)}
+                />
+            )}
+
+            {session?.canManage && kickModalCard?.occupancyId && (
+                <DepartureDialog
+                    open={Boolean(kickModalCard)}
+                    onOpenChange={(open) => { if (!open) setKickModalCard(null); }}
+                    domain={kickModalCard.domain}
+                    occupancyId={kickModalCard.occupancyId}
+                    targetCode={cardCode(kickModalCard)}
+                    doctorName={kickModalCard.displayName || kickModalCard.doctorName || "Plantonista"}
+                    chiefKick
+                    startedAt={kickModalCard.startedAt}
+                    scheduledStartAt={(kickModalCard as { scheduledStartAt?: string | null }).scheduledStartAt ?? null}
+                    scheduledEndAt={kickModalCard.scheduledEndAt}
+                    roleLabel={kickModalCard.roleLabel}
+                    displaced={Boolean(kickModalCard.isDisplaced)}
+                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
+                />
+            )}
+
+            {session?.canManage && startModalCard && (
+                <StartCoverageDialog
+                    open={Boolean(startModalCard)}
+                    onOpenChange={(open) => { if (!open) setStartModalCard(null); }}
+                    domain={startModalCard.domain}
+                    targetId={startModalCard.domain === "regulation" ? startModalCard.postId : startModalCard.baseId}
+                    targetCode={cardCode(startModalCard)}
+                    targetLabel={cardLabel(startModalCard)}
+                    shiftLabel={shiftLabel}
+                    doctors={doctors}
+                    onDeactivate={() => {
+                        const card = startModalCard;
+                        setStartModalCard(null);
+                        setDeactivateModalCard(card);
+                    }}
+                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
+                />
+            )}
+
+            {session?.canManage && deactivateModalCard && (
+                <DeactivateDialog
+                    open={Boolean(deactivateModalCard)}
+                    onOpenChange={(open) => { if (!open) setDeactivateModalCard(null); }}
+                    domain={deactivateModalCard.domain}
+                    targetId={deactivateModalCard.domain === "regulation" ? deactivateModalCard.postId : deactivateModalCard.baseId}
+                    targetCode={cardCode(deactivateModalCard)}
+                    targetLabel={cardLabel(deactivateModalCard)}
+                    occupantName={deactivateModalCard.occupancyId
+                        ? (deactivateModalCard.displayName || deactivateModalCard.doctorName)
+                        : null}
+                    occupantStartedAt={deactivateModalCard.startedAt}
+                    occupantScheduledStartAt={(deactivateModalCard as { scheduledStartAt?: string | null }).scheduledStartAt ?? null}
+                    occupantScheduledEndAt={deactivateModalCard.scheduledEndAt}
+                    occupantRoleLabel={deactivateModalCard.roleLabel}
+                    isReactivate={deactivateModalCard.status === "disabled"}
+                    onSaved={() => { if (session?.canManage) void fetchLatestUndoableAction(); }}
+                />
+            )}
+
+            {session?.canManage && (
+                <CommandPalette
+                    pendingDepartures={pendingDepartures}
+                    onConfirm={quickConfirmDeparture}
+                    onOpenVerifier={setVerifierTarget}
+                />
             )}
 
             {viewMode === "live" && (authError || authInfo) && (
