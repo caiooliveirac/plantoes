@@ -160,3 +160,11 @@ Rodar de novo as contagens deste ADR (movimentos, grupos quebrados, pedaços
 não-primeiros com atraso falso, turnos ≥10h com desfecho de corte, "No active
 occupancy"). Todas devem tender a zero; a de rendições (1 067) não muda, porque
 rendição é normal.
+
+**Sombra da R4 (desde 15/09, decisão de virada ~15/10):** a sombra não grava
+nada — marca a linha do fechamento com `[sombra ADR-007]` e loga
+`[turno-sombra]`. O relatório de divergência remonta o fechamento do período e
+conta por tipo, com exemplos e impacto estimado em plantões e R$:
+`npm run audit:turno-sombra -- --de 2026-09-15 --ate 2026-10-14`
+(sessão read-only; contra produção, via túnel do `docs/agent-operations.md` §3).
+R6 e R7 ficam para depois da virada da R4.
