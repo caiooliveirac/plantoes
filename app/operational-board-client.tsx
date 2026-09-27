@@ -1247,13 +1247,6 @@ type BoardSnapshot = {
 
 export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const { generatedAt, shiftLabel, regulation, intervention, onDemandRegulationPosts = [], mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], pendingChiefExits = [], expectedSchedule = null, escalaUrl = null } = props;
-    // Admin abre tudo; payment_closing_limited (ex.: Iasmin) só enxerga o fechamento
-    // de pagamento para visualizar e lançar NF/processo — sem editar o quadro.
-    const canOpenPaymentClosing = Boolean(
-        session
-        && !session.mustChangePassword
-        && (session.roles.includes("admin") || session.roles.includes("payment_closing_limited")),
-    );
     const router = useRouter();
     const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
     const [authOpen, setAuthOpen] = useState(false);
@@ -3678,90 +3671,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 </svg>
                             </span>
                             <span className="ops-history-trigger-label">Prioridades refeição</span>
-                        </button>
-                    )}
-
-                    {session?.roles.includes("admin") && !session.mustChangePassword && (
-                        <button
-                            type="button"
-                            className="ops-history-trigger payment-allocation"
-                            aria-label="Abrir visão de alocação de pagamento"
-                            title="Alocação de pagamento"
-                            onClick={() => {
-                                setPreviousShiftOpen(false);
-                                setAuthOpen(false);
-                                router.push("/admin/payment-allocation");
-                            }}
-                        >
-                            <span className="ops-history-trigger-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" focusable="false">
-                                    <path d="M4.75 4h10.5A2.75 2.75 0 0 1 18 6.75v1.1h1.25A2.75 2.75 0 0 1 22 10.6v6.65A2.75 2.75 0 0 1 19.25 20h-10.5A2.75 2.75 0 0 1 6 17.25v-1.1H4.75A2.75 2.75 0 0 1 2 13.4V6.75A2.75 2.75 0 0 1 4.75 4Zm0 1.5A1.25 1.25 0 0 0 3.5 6.75v6.65a1.25 1.25 0 0 0 1.25 1.25H6v-4.05a2.75 2.75 0 0 1 2.75-2.75H16.5v-1.1a1.25 1.25 0 0 0-1.25-1.25H4.75Zm4 3.85A1.25 1.25 0 0 0 7.5 10.6v6.65a1.25 1.25 0 0 0 1.25 1.25h10.5a1.25 1.25 0 0 0 1.25-1.25V10.6a1.25 1.25 0 0 0-1.25-1.25H8.75Zm2.35 1.9h5.8a.75.75 0 0 1 0 1.5h-5.8a.75.75 0 0 1 0-1.5Zm0 3.5h3.2a.75.75 0 0 1 0 1.5h-3.2a.75.75 0 0 1 0-1.5Z" />
-                                </svg>
-                            </span>
-                            <span className="ops-history-trigger-label">Alocação pagamento</span>
-                        </button>
-                    )}
-
-                    {canOpenPaymentClosing && (
-                        <button
-                            type="button"
-                            className="ops-history-trigger payment-allocation"
-                            aria-label="Abrir visão principal de pagamento"
-                            title="Fechamento de pagamento"
-                            onClick={() => {
-                                setPreviousShiftOpen(false);
-                                setAuthOpen(false);
-                                router.push("/admin/payment-closing");
-                            }}
-                        >
-                            <span className="ops-history-trigger-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" focusable="false">
-                                    <path d="M3 6.75A2.75 2.75 0 0 1 5.75 4h12.5A2.75 2.75 0 0 1 21 6.75v10.5A2.75 2.75 0 0 1 18.25 20H5.75A2.75 2.75 0 0 1 3 17.25V6.75Zm2.75-1.25A1.25 1.25 0 0 0 4.5 6.75v10.5A1.25 1.25 0 0 0 5.75 18.5h12.5a1.25 1.25 0 0 0 1.25-1.25V6.75a1.25 1.25 0 0 0-1.25-1.25H5.75Zm1.5 3a.75.75 0 0 1 .75-.75h8a.75.75 0 0 1 0 1.5h-8a.75.75 0 0 1-.75-.75Zm0 3.75a.75.75 0 0 1 .75-.75h5.5a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75Zm0 3.75a.75.75 0 0 1 .75-.75h3.25a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75Z" />
-                                </svg>
-                            </span>
-                            <span className="ops-history-trigger-label">Fechamento pagamento</span>
-                        </button>
-                    )}
-
-                    {session?.roles.includes("admin") && !session.mustChangePassword && (
-                        <button
-                            type="button"
-                            className="ops-history-trigger slot-audit"
-                            aria-label="Abrir auditoria historica de slots"
-                            title="Auditoria de slots"
-                            onClick={() => {
-                                setPreviousShiftOpen(false);
-                                setAuthOpen(false);
-                                router.push("/admin/slot-audit");
-                            }}
-                        >
-                            <span className="ops-history-trigger-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" focusable="false">
-                                    <path d="M6.75 3.5A2.75 2.75 0 0 0 4 6.25v11A2.75 2.75 0 0 0 6.75 20h10.5A2.75 2.75 0 0 0 20 17.25v-11A2.75 2.75 0 0 0 17.25 3.5H6.75Zm0 1.5h10.5A1.25 1.25 0 0 1 18.5 6.25v11a1.25 1.25 0 0 1-1.25 1.25H6.75A1.25 1.25 0 0 1 5.5 17.25v-11A1.25 1.25 0 0 1 6.75 5Zm1.5 2.25a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Zm0 4a.75.75 0 0 0 0 1.5h3.75a.75.75 0 0 0 0-1.5H8.25Zm0 4a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Z" />
-                                </svg>
-                            </span>
-                            <span className="ops-history-trigger-label">Auditoria de slots</span>
-                        </button>
-                    )}
-
-                    {session?.roles.includes("admin") && !session.mustChangePassword && (
-                        <button
-                            type="button"
-                            className="ops-history-trigger bank-hours"
-                            aria-label="Abrir visão de banco de horas"
-                            title="Banco de horas"
-                            onClick={() => {
-                                setPreviousShiftOpen(false);
-                                setAuthOpen(false);
-                                router.push("/admin/bank-hours");
-                            }}
-                        >
-                            <span className="ops-history-trigger-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24" focusable="false">
-                                    <path d="M12 2.75a9.25 9.25 0 1 0 9.25 9.25A9.26 9.26 0 0 0 12 2.75Zm0 1.5a7.75 7.75 0 0 1 7.74 7.5h-1.9a5.85 5.85 0 0 0-4.34-5.34V4.26c.13 0 .25-.01.38-.01ZM10.88 4.34v2.07a5.86 5.86 0 0 0-4.45 5.34H4.26a7.77 7.77 0 0 1 6.62-7.41Zm-6.62 8.91h2.17a5.86 5.86 0 0 0 4.45 5.34v2.07a7.77 7.77 0 0 1-6.62-7.41Zm8.12 7.4v-2.06a5.85 5.85 0 0 0 4.34-5.34h3.02a7.75 7.75 0 0 1-7.36 7.4Zm-3.38-8.65a3 3 0 1 1 6 0 3 3 0 0 1-6 0Zm3-1.5a1.5 1.5 0 1 0 1.5 1.5 1.5 1.5 0 0 0-1.5-1.5Z" />
-                                </svg>
-                            </span>
-                            <span className="ops-history-trigger-label">Banco de horas</span>
                         </button>
                     )}
 
