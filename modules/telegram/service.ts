@@ -81,7 +81,7 @@ import { isChiefRegulationPostCode } from "@/modules/operational/roles";
 const ARRIVAL_EDIT_COMMANDS = new Set(["corrigir", "hoje", "ontem"]);
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveHandoffClosure } from "@/modules/operational/handoff-closure";
-import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime, resolveUndeclaredContinuationScheduledEndAt } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferRegulationCoverageWindow, resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime, resolveUndeclaredContinuationScheduledEndAt } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
@@ -247,6 +247,8 @@ import {
     buildPiamShiftPromptText,
     buildResetAllConfirmationKeyboard,
     buildResetAllConfirmationPromptText,
+    buildShiftLabelMismatchKeyboard,
+    buildShiftLabelMismatchPromptText,
     buildShiftSelectionKeyboard,
     buildShiftSelectionPromptText,
     buildTakeoverDecisionKeyboard,
@@ -333,6 +335,8 @@ interface PendingNameResolutionData {
         isDeparture: boolean;
         isContinuation: boolean;
         isReassignment: boolean;
+        /** Turno escolhido pelo médico no botão/resposta da pendência (D7). */
+        shiftLabelConfirmed?: boolean;
     };
     candidates: Array<{ id: string; fullName: string; displayName: string | null; normalizedName: string }>;
     originalText: string;
@@ -386,6 +390,8 @@ interface PendingShiftSelectionData {
     senderTelegramId: string;
     originalText: string;
     originalReferenceAt: string;
+    /** D7: rótulo que veio na mensagem e discordou da hora (pergunta "SD ou SN?"). */
+    declaredShift?: "SD" | "SN";
 }
 
 // PIAM SD/SN (auditoria §3.1#12): a pergunta binária vira pendência com botões;
@@ -510,6 +516,7 @@ type TelegramReviewReason =
     | "meal_break_outside_flow"
     | "meal_break_button_outside_flow"
     | "arrival_missing_name_or_shift"
+    | "arrival_shift_label_mismatch"
     | "late_arrival_acknowledgement_required"
     | "no_operational_match"
     | "unknown_destination"
@@ -1050,6 +1057,51 @@ export function shouldAssumeTelegramHalfShift(params: {
 
     const parts = getSaoPauloParts(params.eventAt);
     return isWithinHalfShiftWindow((parts.hour * 60) + parts.minute);
+}
+
+// D7 (docs/chegada.md): rótulo declarado é o do turno que ESTÁ ACABANDO e a hora cai
+// na janela antecipada de 3h do próximo ("SD" às 18:35, "SN" às 05:30). A régua de
+// tempo (resolvePShiftAwareBaseShiftLabel) vira a janela para o próximo turno e o
+// registro saía com rótulo SD e janela SN (Gerardson, 2152, 03/09/2026).
+export function isTelegramShiftLabelTimeMismatch(eventAt: Date, shiftType: string | null | undefined): shiftType is "SD" | "SN" {
+    if (shiftType !== "SD" && shiftType !== "SN") return false;
+    const clockWindow = resolveOperationalShiftWindow(eventAt);
+    return shiftType === clockWindow.shiftLabel && resolveArrivalShiftLabel(eventAt) !== clockWindow.shiftLabel;
+}
+
+// Pergunta "SD ou SN?" só na chegada NOVA: quem já tem plantão aberto (reenvio,
+// correção de rótulo D2, remanejo) segue as regras próprias; meio plantão e PIAM têm
+// janela fixa e não discordam.
+export function shouldAskTelegramShiftLabelMismatch(params: {
+    parsed: Pick<ParsedMessage, "sector" | "baseCode" | "shiftType" | "isDeparture" | "isContinuation" | "isReassignment">;
+    eventAt: Date;
+    hasActiveOccupancy: boolean;
+}): boolean {
+    const { parsed } = params;
+    if (parsed.isDeparture || parsed.isContinuation || parsed.isReassignment) return false;
+    if (params.hasActiveOccupancy || parsed.baseCode === "PIAM") return false;
+    if (shouldAssumeTelegramHalfShift({ parsed, eventAt: params.eventAt, effectiveShiftType: parsed.shiftType })) return false;
+    return isTelegramShiftLabelTimeMismatch(params.eventAt, parsed.shiftType);
+}
+
+// Médico CONFIRMOU no botão o turno que está acabando: a janela é a desse turno,
+// explícita (senão a régua de tempo a vira de novo). Nulo = regra normal.
+export function resolveConfirmedShiftLabelWindow(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    eventAt: Date;
+    shiftType: string | null | undefined;
+    shiftLabelConfirmed?: boolean;
+    postCode?: string | null;
+}): { scheduledStartAt: Date; scheduledEndAt: Date } | null {
+    if (!params.shiftLabelConfirmed || !isTelegramShiftLabelTimeMismatch(params.eventAt, params.shiftType)) return null;
+    // Referência no início do turno corrente: fora da janela antecipada, sem virada.
+    const turnoStartAt = resolveOperationalShiftWindow(params.eventAt).startedAt;
+    const window = params.sector === "REGULATION"
+        ? inferRegulationCoverageWindow({ startedAt: turnoStartAt, shiftLabel: params.shiftType, postCode: params.postCode ?? null })
+        : inferInterventionCoverageWindow({ startedAt: turnoStartAt, shiftLabel: params.shiftType });
+    return window.scheduledStartAt && window.scheduledEndAt
+        ? { scheduledStartAt: window.scheduledStartAt, scheduledEndAt: window.scheduledEndAt }
+        : null;
 }
 
 function appendTelegramOperationalNote(existingNotes: string | null | undefined, marker: string, messageText: string) {
@@ -8799,6 +8851,8 @@ async function queuePendingShiftSelection(params: {
     message: NonNullable<TelegramUpdate["message"]>;
     parsed: ParsedMessage & OperationalParsedEntry;
     senderTelegramId: string;
+    /** D7: veio rótulo, mas discorda da hora — mesma pendência, outra pergunta. */
+    mismatch?: { declaredShift: "SD" | "SN"; eventAt: Date };
 }) {
     const senderName = [params.message.from?.first_name, params.message.from?.last_name].filter(Boolean).join(" ") || null;
     const doctorQuery = params.parsed.extractedNames[0] ?? null;
@@ -8821,6 +8875,7 @@ async function queuePendingShiftSelection(params: {
         senderTelegramId: params.senderTelegramId,
         originalText: params.message.text ?? "",
         originalReferenceAt: new Date(params.message.date * 1000).toISOString(),
+        ...(params.mismatch ? { declaredShift: params.mismatch.declaredShift } : {}),
     };
 
     await markTelegramProcessed(params.logId, {
@@ -8831,23 +8886,33 @@ async function queuePendingShiftSelection(params: {
         errorMessage: null,
         resolutionData: {
             ...buildTelegramReviewLogData({
-                reason: "arrival_missing_name_or_shift",
+                reason: params.mismatch ? "arrival_shift_label_mismatch" : "arrival_missing_name_or_shift",
                 parsed: snapshot,
                 doctorQuery,
-                trainingCandidate: true,
+                trainingCandidate: !params.mismatch,
             }),
             ...data,
         },
     });
 
+    const doctorLabel = doctorQuery ?? senderName ?? "o médico";
     await sendMessage(
         params.message.chat.id,
-        buildShiftSelectionPromptText({
-            doctorLabel: doctorQuery ?? senderName ?? "o médico",
-            targetLabel: snapshot.baseCode,
-        }),
+        params.mismatch
+            ? buildShiftLabelMismatchPromptText({
+                doctorLabel,
+                targetLabel: snapshot.baseCode,
+                declaredShift: params.mismatch.declaredShift,
+                timeLabel: formatSaoPauloClock(params.mismatch.eventAt),
+            })
+            : buildShiftSelectionPromptText({
+                doctorLabel,
+                targetLabel: snapshot.baseCode,
+            }),
         params.message.message_id,
-        buildShiftSelectionKeyboard(params.logId),
+        params.mismatch
+            ? buildShiftLabelMismatchKeyboard(params.mismatch.declaredShift, params.logId)
+            : buildShiftSelectionKeyboard(params.logId),
         { parseMode: "Markdown" },
     );
 }
@@ -9905,14 +9970,22 @@ async function applyParsedEntry(params: {
                         ?? resolveArrivalShiftLabel(effectiveContinuationStartedAt);
                 }
 
+                // D7: turno confirmado no botão que é o que está acabando → janela dele.
+                const confirmedShiftWindow = assumedHalfShift ? null : resolveConfirmedShiftLabelWindow({
+                    sector: "REGULATION",
+                    eventAt,
+                    shiftType: effectiveShiftType,
+                    shiftLabelConfirmed: parsed.shiftLabelConfirmed,
+                    postCode: post.code,
+                });
                 const createRegulationArrival = (startedAtOverride?: Date) => startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
                     postId: post.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: startedAtOverride ?? effectiveContinuationStartedAt,
                     boardStartedAt: continuationBoardStartedAt,
-                    scheduledStartAt: assumedHalfShift ? (halfShiftScheduledStartAt ?? undefined) : undefined,
-                    scheduledEndAt: halfShiftScheduledEndAt ?? undefined,
+                    scheduledStartAt: assumedHalfShift ? (halfShiftScheduledStartAt ?? undefined) : confirmedShiftWindow?.scheduledStartAt,
+                    scheduledEndAt: halfShiftScheduledEndAt ?? confirmedShiftWindow?.scheduledEndAt,
                     shiftLabel: effectiveShiftType,
                     roleLabel: assumedHalfShift ? HALF_SHIFT_ROLE_LABEL : parsed.roleFunction,
                     ramalLabel: parsed.baseCode,
@@ -10248,12 +10321,21 @@ async function applyParsedEntry(params: {
                         ?? resolveArrivalShiftLabel(effectiveContinuationStartedAtIntv);
                 }
 
+                // D7: turno confirmado no botão que é o que está acabando → janela dele.
+                const confirmedShiftWindowIntv = resolveConfirmedShiftLabelWindow({
+                    sector: "INTERVENTION",
+                    eventAt,
+                    shiftType: effectiveShiftType,
+                    shiftLabelConfirmed: parsed.shiftLabelConfirmed,
+                });
                 const createInterventionArrival = (startedAtOverride?: Date) => startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,
                     baseId: base.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: startedAtOverride ?? effectiveContinuationStartedAtIntv,
                     boardStartedAt: continuationBoardStartedAtIntv,
+                    scheduledStartAt: confirmedShiftWindowIntv?.scheduledStartAt,
+                    scheduledEndAt: confirmedShiftWindowIntv?.scheduledEndAt,
                     shiftLabel: effectiveShiftType,
                     roleLabel: parsed.roleFunction,
                     isShadow: isShadowArrival,
@@ -12432,7 +12514,7 @@ async function completeShiftSelectionPending(params: {
     shift: PendingShiftChoice;
     ctx: PendingButtonCompletionCtx;
 }) {
-    const parsedEntry: OperationalParsedEntry = { ...params.data.parsed, shiftType: params.shift };
+    const parsedEntry: OperationalParsedEntry = { ...params.data.parsed, shiftType: params.shift, shiftLabelConfirmed: true };
     return completeArrivalFromPendingSelection({
         pending: params.pending,
         parsedEntry,
@@ -14413,6 +14495,30 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     eventAt: messageEventAt,
                 })
                 : messageEventAt;
+
+            // D7: "SD" às 18:35 (ou "SN" às 05:30) — rótulo e hora apontam turnos
+            // diferentes. Em vez de gravar rótulo de um turno com janela do outro,
+            // pergunta com botões (mesma pendência do F6; expira igual).
+            const mismatchSenderId = message.from?.id ? String(message.from.id) : null;
+            if (
+                mismatchSenderId
+                && parsedEntries.length === 1
+                && isTelegramShiftLabelTimeMismatch(eventAt, firstParsed.shiftType)
+                && shouldAskTelegramShiftLabelMismatch({
+                    parsed: firstParsed,
+                    eventAt,
+                    hasActiveOccupancy: Boolean(await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt)),
+                })
+            ) {
+                await queuePendingShiftSelection({
+                    logId: log.id,
+                    message,
+                    parsed: firstParsed,
+                    senderTelegramId: mismatchSenderId,
+                    mismatch: { declaredShift: firstParsed.shiftType, eventAt },
+                });
+                return { ok: true, ignored: true, pending: true };
+            }
 
             // Tomada de ramal/base ocupado no mesmo turno: avisa quem ocupa e exige
             // reenvio EXATO para confirmar. Só então desloca o ocupante (preservando a
