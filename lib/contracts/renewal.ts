@@ -20,6 +20,7 @@
  * ciclo com `cycleEnd = 2026-08-01` vale até 31/07 e está vencido em 01/08.
  */
 import type { ContractBalanceRow } from "@/services/contract-balance.service";
+import { bahiaDateIso } from "@/lib/time";
 
 export type RenewalKind = "vencido" | "sem_saldo_de_abertura";
 
@@ -36,9 +37,6 @@ export interface PendingRenewal {
     daysOverdue: number;
 }
 
-function dayOf(reference: Date): string {
-    return reference.toISOString().slice(0, 10);
-}
 
 function daysBetween(fromDay: string, toDay: string): number {
     const from = Date.parse(`${fromDay}T00:00:00Z`);
@@ -55,7 +53,7 @@ function daysBetween(fromDay: string, toDay: string): number {
  * contrato encerrado não é pendência de ninguém.
  */
 export function findPendingRenewals(rows: ContractBalanceRow[], asOf: Date): PendingRenewal[] {
-    const hoje = dayOf(asOf);
+    const hoje = bahiaDateIso(asOf);
 
     const maisRecentePorMedico = new Map<string, ContractBalanceRow>();
     for (const row of rows) {
