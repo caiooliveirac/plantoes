@@ -24,6 +24,7 @@
 import { sql } from "drizzle-orm";
 import { resolveDepartureOrigin, shouldQueueDepartureForChief, type DepartureOrigin } from "@/modules/operational/departure-origin";
 import { getDb } from "@/db";
+import { bahiaClockHHMM } from "@/lib/time";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { CHIEF_REGULATION_POST_CODE } from "@/modules/operational/roles";
 import {
@@ -2770,10 +2771,7 @@ export async function listPendingDepartureConfirmations(
     // mistaken for the occurrence number.
     const timeFragments = [row.actualEndedAt, row.scheduledEndAt]
       .filter(Boolean)
-      .map((iso: string) => {
-        const d = new Date(iso);
-        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-      });
+      .map((iso: string) => bahiaClockHHMM(iso));
     const occurrenceNumber = reasonCode === "occurrence"
       ? (extractTelegramOccurrenceNumber(sourceMessage?.rawText ?? "", timeFragments)
         ?? extractTelegramOccurrenceNumber(stripArrivalCorrectionNotes(row.notes) ?? "", timeFragments)

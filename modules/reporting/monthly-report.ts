@@ -1,8 +1,8 @@
+import { BAHIA_OFFSET_MINUTES } from "@/lib/time";
+
 export type MonthlyReportDomain = "regulation" | "intervention";
 export type MonthlyReportSource = "manual" | "telegram" | "import" | "admin_correction";
 export type MonthlyReportPaymentStatus = "ready_for_payment" | "needs_review";
-
-const SAO_PAULO_OFFSET_HOURS = -3;
 
 export interface MonthlyReportAuditEntry {
     id: string;
@@ -132,7 +132,7 @@ function startOfUtcMonth(year: number, monthIndex: number) {
 }
 
 function fromSaoPauloClockParts(year: number, month: number, day: number, hour: number, minute: number) {
-    return new Date(Date.UTC(year, month - 1, day, hour - SAO_PAULO_OFFSET_HOURS, minute, 0, 0));
+    return new Date(Date.UTC(year, month - 1, day, hour - (BAHIA_OFFSET_MINUTES / 60), minute, 0, 0));
 }
 
 function inferOperationalScheduledStartIso(startedAt: string, shiftLabel?: string | null) {
@@ -141,7 +141,7 @@ function inferOperationalScheduledStartIso(startedAt: string, shiftLabel?: strin
         return null;
     }
 
-    const local = new Date(new Date(startedAt).getTime() + (SAO_PAULO_OFFSET_HOURS * 60 * 60000));
+    const local = new Date(new Date(startedAt).getTime() + (BAHIA_OFFSET_MINUTES * 60000));
     const year = local.getUTCFullYear();
     const month = local.getUTCMonth() + 1;
     const day = local.getUTCDate();
