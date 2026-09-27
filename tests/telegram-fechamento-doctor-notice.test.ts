@@ -135,6 +135,7 @@ describe("notifyDoctorMonthClosed (banco + Telegram mockado)", { skip: !process.
             telegramMessageId: Math.floor(Math.random() * 1_000_000_000),
             chatId: doctorChatId,
             rawText: "/pagamento codinome",
+            parsedAction: "payment_self",
             status: "accepted",
             resolutionData: { doctorId },
         });
@@ -152,6 +153,25 @@ describe("notifyDoctorMonthClosed (banco + Telegram mockado)", { skip: !process.
 
     after(async () => {
         await closeDb();
+    });
+
+    test("ação de admin no privado (reset de codinome) não vira o chat do médico", async () => {
+        // Mais recente que o /pagamento do médico, no chat do admin, com o doctorId dele.
+        await getDb().insert(telegramIngestedMessages).values({
+            telegramMessageId: Math.floor(Math.random() * 1_000_000_000),
+            chatId: doctorChatId + "9",
+            rawText: "/pagamento resetar-codinome Fulano",
+            parsedAction: "reset_codinome",
+            status: "accepted",
+            resolutionData: { doctorId },
+            createdAt: new Date(Date.now() + 60_000),
+        });
+        try {
+            const result = await notifyDoctorMonthClosed({ doctorId, monthKey: "2026-06" }, deps);
+            assert.deepEqual(result, { status: "sent", chatIds: [doctorChatId] });
+        } finally {
+            await getDb().delete(telegramIngestedMessages).where(eq(telegramIngestedMessages.chatId, doctorChatId + "9"));
+        }
     });
 
     test("off: não envia nada", async () => {

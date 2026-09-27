@@ -21,7 +21,9 @@ import { JANELA_MS } from "@/modules/acessos/analise";
 import { provedorPorDnsReverso } from "@/modules/acessos/rede";
 import { classificarPedido, mascararCaminho } from "@/modules/acessos/registro";
 
-export type OrigemSessao = "login" | "portal" | "escala" | "cadastro" | "anterior";
+/** `portal_cookie` = o próprio login do portal (mnrs_sso) usado na Tabela e em
+    outros sistemas sem conta própria — o porteiro reporta (api/servicos/portal/acesso). */
+export type OrigemSessao = "login" | "portal" | "escala" | "cadastro" | "anterior" | "portal_cookie";
 
 const GRAVAR_A_CADA_MS = 60_000;
 const GEO_A_CADA_MS = 60 * 60_000;
@@ -315,6 +317,12 @@ export interface AcessoAutenticado {
     versao: number;
     contexto: ContextoRequisicao;
     agora?: Date;
+    /** Quantos pedidos este registro representa (o porteiro soma por minuto). Padrão 1. */
+    pedidos?: number;
+    /** Origem se a sessão ainda não existir: "anterior" (cookie daqui antigo) ou "portal_cookie". */
+    origemSeNova?: OrigemSessao;
+    /** Sistema do portal (tabela, triagem…) — vai nos detalhes dos eventos. */
+    sistema?: string;
 }
 
 function acumular(p: AcessoAutenticado, ip: string, agora: Date, visivel: boolean, emUso: boolean) {
@@ -325,7 +333,7 @@ function acumular(p: AcessoAutenticado, ip: string, agora: Date, visivel: boolea
         pendente = { sessaoId: p.sessaoId, userId: p.userId, ip, janela, primeira: agora, ultima: agora, pedidos: 0, visiveis: 0, emUso: 0, gravadaEm: null };
         pendentes.set(chave, pendente);
     }
-    pendente.pedidos += 1;
+    pendente.pedidos += Math.max(1, Math.min(p.pedidos ?? 1, 100_000));
     if (visivel) pendente.visiveis += 1;
     if (emUso) pendente.emUso += 1;
     pendente.ultima = agora;
@@ -341,12 +349,13 @@ function acumular(p: AcessoAutenticado, ip: string, agora: Date, visivel: boolea
 async function garantirSessao(p: AcessoAutenticado, agora: Date) {
     if (sessoesGarantidas.has(p.sessaoId)) return;
     sessoesGarantidas.add(p.sessaoId);
-    // Cookie de antes do monitor (ou emitido noutro ambiente): a sessão nasce aqui,
-    // com o que se sabe agora. A data real do login não é conhecida.
+    // Cookie de antes do monitor (ou emitido noutro ambiente) ou login do portal
+    // visto pela primeira vez: a sessão nasce aqui, com o que se sabe agora.
+    const origem = p.origemSeNova ?? "anterior";
     const [criada] = await getDb().insert(authSessions).values({
         id: p.sessaoId,
         userId: p.userId,
-        origin: "anterior",
+        origin: origem,
         sessionVersion: p.versao,
         createdAt: agora,
         createdIp: p.contexto.ip,
@@ -361,7 +370,9 @@ async function garantirSessao(p: AcessoAutenticado, agora: Date) {
             sessaoId: p.sessaoId,
             userId: p.userId,
             contexto: p.contexto,
-            detalhes: { origem: "anterior", observacao: "login anterior ao monitor; primeira vez vista agora" },
+            detalhes: origem === "anterior"
+                ? { origem, observacao: "login anterior ao monitor; primeira vez vista agora" }
+                : { origem, ...(p.sistema ? { sistema: p.sistema } : {}) },
             em: agora,
         });
     }
@@ -443,7 +454,14 @@ export async function registrarAcesso(p: AcessoAutenticado) {
         }
 
         if (classificacao.evento) {
-            await inserirEvento({ tipo: classificacao.evento, sessaoId: p.sessaoId, userId: p.userId, contexto: p.contexto, em: agora });
+            await inserirEvento({
+                tipo: classificacao.evento,
+                sessaoId: p.sessaoId,
+                userId: p.userId,
+                contexto: p.contexto,
+                em: agora,
+                ...(p.sistema ? { detalhes: { sistema: p.sistema } } : {}),
+            });
         }
 
         if (ip) await atualizarRede(ip, p.contexto.geo, agora);

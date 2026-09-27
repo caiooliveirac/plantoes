@@ -179,3 +179,53 @@ test("monitor (banco): sessão de cookie antigo nasce na primeira visita; rede n
     const sobrou = await getDb().select().from(schema.authSessions).where(eq(schema.authSessions.userId, medico.id));
     assert.equal(sobrou.length, 0);
 });
+
+test("monitor (banco): o porteiro confere o login do portal — vale, senha trocada recusa, suspensa recusa — e o uso da Tabela entra no monitor", { skip }, async () => {
+    const { getDb, schema, gravacao, acoes } = await modulos();
+    gravacao.limparMemoriaDoMonitor();
+    process.env.ESCALA_SSO_TOKEN = "token-de-servico-de-teste";
+    const { POST } = await import("@/app/api/servicos/portal/acesso/route");
+    const { NextRequest } = await import("next/server");
+    const medico = await criarConta("doctor");
+    const admin = await criarConta("admin");
+    const sid = randomUUID();
+    const chamar = async (corpo: Record<string, unknown>, token = "token-de-servico-de-teste") => {
+        const resposta = await POST(new NextRequest("http://127.0.0.1:3004/api/servicos/portal/acesso", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-escala-token": token, "cf-connecting-ip": IP_CASA, "user-agent": EDGE, "cf-ipcity": "Feira de Santana", "cf-ipcountry": "BR" },
+            body: JSON.stringify(corpo),
+        }));
+        return { status: resposta.status, dados: await resposta.json() as { ok?: boolean; motivo?: string } };
+    };
+
+    assert.equal((await chamar({ email: medico.email, sid, sv: 0 }, "token-errado")).status, 401);
+    const valendo = await chamar({ email: medico.email, sid, sv: 0, pedidos: 7, sistema: "tabela", metodo: "GET", caminho: "/tabela/?tab=destino&local=Rua%20X" });
+    assert.deepEqual(valendo, { status: 200, dados: { ok: true } });
+    assert.deepEqual((await chamar({ email: "ninguem@acessos-teste.invalid", sid, sv: 0 })).dados, { ok: false, motivo: "sem_conta" });
+
+    // O registro sai "depois da resposta" (fora de pedido, roda já): espera assentar.
+    let sessao: { origin: string } | undefined;
+    for (let tentativa = 0; tentativa < 20 && !sessao; tentativa += 1) {
+        [sessao] = await getDb().select({ origin: schema.authSessions.origin }).from(schema.authSessions).where(eq(schema.authSessions.id, sid));
+        if (!sessao) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(sessao?.origin, "portal_cookie");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const [presenca] = await getDb().select().from(schema.authSessionActivity).where(eq(schema.authSessionActivity.sessionId, sid));
+    assert.equal(presenca.requests, 7, "o porteiro soma os pedidos do minuto");
+    const eventos = await getDb().select().from(schema.authSessionEvents).where(eq(schema.authSessionEvents.sessionId, sid));
+    const pagina = eventos.find((e) => e.kind === "pagina");
+    assert.equal(pagina?.path, "/tabela/", "caminho sem a query string (endereço de ocorrência)");
+    assert.equal((pagina?.details as { sistema?: string }).sistema, "tabela");
+
+    // "Encerrar sessões" sobe a versão: o mesmo login do portal passa a ser recusado.
+    await acoes.agirNaConta("encerrar_sessoes", medico.id, admin.id, "teste da tabela");
+    assert.deepEqual((await chamar({ email: medico.email, sid, sv: 0 })).dados, { ok: false, motivo: "versao" });
+    assert.deepEqual((await chamar({ email: medico.email, sid: randomUUID(), sv: 1 })).dados, { ok: true }, "login novo, com a versão nova, vale");
+    await acoes.agirNaConta("suspender", medico.id, admin.id, "teste da tabela");
+    assert.deepEqual((await chamar({ email: medico.email, sid: randomUUID(), sv: 1 })).dados, { ok: false, motivo: "inativa" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const recusas = await getDb().select().from(schema.authSessionEvents)
+        .where(and(eq(schema.authSessionEvents.userId, medico.id), eq(schema.authSessionEvents.kind, "portal_recusado")));
+    assert.ok(recusas.length >= 2, "cada recusa fica na linha do tempo da conta");
+});
