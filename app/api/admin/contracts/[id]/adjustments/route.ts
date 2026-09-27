@@ -9,6 +9,7 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { bahiaDateIso } from "@/lib/time";
 import { recordBalanceAnchor, recordManualAdjustment } from "@/services/contract-ledger.service";
 
 // Dois modos. Delta: o admin sabe o valor do ajuste (glosa, dobra). Âncora: o
@@ -87,7 +88,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             return NextResponse.json({ contractId: id, anchorDate, deltaBrl: result.deltaCents / 100 });
         }
 
-        const entryDate = parsed.data.entryDate ?? new Date().toISOString().slice(0, 10);
+        const entryDate = parsed.data.entryDate ?? bahiaDateIso();
         await recordManualAdjustment({
             contractId: id,
             amountCents: Math.round(parsed.data.amountBrl * 100),

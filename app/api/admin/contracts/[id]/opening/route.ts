@@ -12,6 +12,7 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { bahiaDateIso } from "@/lib/time";
 import { recordOpeningBalance } from "@/services/contract-ledger.service";
 
 const payloadSchema = z.object({
@@ -40,7 +41,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         return NextResponse.json({ error: "Informe o saldo de abertura em reais." }, { status: 400 });
     }
 
-    const entryDate = parsed.data.entryDate ?? new Date().toISOString().slice(0, 10);
+    const entryDate = parsed.data.entryDate ?? bahiaDateIso();
     try {
         await recordOpeningBalance({
             contractId: id,

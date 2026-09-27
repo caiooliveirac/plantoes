@@ -6,8 +6,8 @@ import { resolveTurnoOutcomeShadow } from "@/modules/reporting/turno-outcome";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 import type { ContractStatementMonth } from "@/lib/contracts/statement";
 import type { RenewalKind } from "@/lib/contracts/renewal";
+import { BAHIA_OFFSET_MINUTES } from "@/lib/time";
 
-const SAO_PAULO_OFFSET_MINUTES = -180;
 const MIN_SEGMENT_MINUTES = 45;
 
 // Rótulos exibidos no fechamento para os desfechos de retirada antecipada.
@@ -524,7 +524,7 @@ export interface ChiefPayableBoardModel {
 }
 
 function toSaoPauloClock(dateIso: string) {
-    return new Date(new Date(dateIso).getTime() + (SAO_PAULO_OFFSET_MINUTES * 60000));
+    return new Date(new Date(dateIso).getTime() + (BAHIA_OFFSET_MINUTES * 60000));
 }
 
 function toOperationalDate(dateIso: string) {
