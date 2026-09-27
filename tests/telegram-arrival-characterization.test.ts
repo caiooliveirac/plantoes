@@ -109,7 +109,9 @@ describe("chegada pelo bot — caracterização (banco + Telegram mockado)", { s
         return { id: row.id, name: fullName };
     }
 
-    async function send(text: string, sentAt: Date, senderId = 900_001) {
+    // `late`: processa com o relógio real (semanas depois da mensagem) sem alinhar o
+    // created_at do log — simula fila do webhook / reprocessamento tardio.
+    async function send(text: string, sentAt: Date, senderId = 900_001, options: { late?: boolean } = {}) {
         messageId += 1;
         updateId += 1;
         const update = {
@@ -123,8 +125,9 @@ describe("chegada pelo bot — caracterização (banco + Telegram mockado)", { s
             },
         } as unknown as TelegramUpdate;
         const result = await processTelegramUpdate(update);
+        if (options.late) return result;
         // Em produção a linha do log nasce na hora da mensagem; aqui nasce "agora".
-        // A 1ª tentativa e a janela da tomada leem created_at: alinha com a mensagem.
+        // A 1ª tentativa e a tomada leem message_sent_at; alinhar created_at só imita a operação normal.
         await getDb().update(telegramIngestedMessages).set({ createdAt: sentAt })
             .where(and(eq(telegramIngestedMessages.chatId, String(chatId)), eq(telegramIngestedMessages.telegramMessageId, messageId)));
         return result;
@@ -297,15 +300,16 @@ describe("chegada pelo bot — caracterização (banco + Telegram mockado)", { s
     });
 
     test("troca de ramal com plantão aberto é tratada como remanejo (implícito)", async () => {
-        // O remanejo (transferOperationalOccupancy) usa o relógio real: com data fixa
-        // no passado a origem já está vencida e o remanejo é recusado. O que se trava
-        // aqui é a CLASSIFICAÇÃO: foi para o remanejo, não virou chegada nova.
+        // Antes o remanejo (transferOperationalOccupancy) usava o relógio real: com data
+        // fixa no passado a origem já estava vencida e o remanejo era recusado. Agora
+        // usa a hora do aviso (docs/chegada.md §1.3) e o remanejo acontece.
         const a = await createDoctor("Paulo");
         await send(`1322 ${a.name} SD`, at("2026-09-14T07:00:00"));
         await send(`1323 ${a.name} SD`, at("2026-09-14T10:00:00"));
-        assert.equal(await status(), "error");
-        assert.deepEqual((await regulationRows(a.id)).map((row) => row.code), ["1322"]);
-        assert.match(replies[1], /registre como chegada normal em vez de remanejamento/);
+        assert.equal(await status(), "accepted");
+        const rows = await regulationRows(a.id);
+        assert.deepEqual(brief(rows), ["1322 07:00 07:00 10:00 19:15 SD RMT", "1323 10:00 10:00  19:15 SD RMT"]);
+        assert.equal(rows[0].group, rows[1].group);
     });
 
     test("remanejo depois do fim do turno de origem vira chegada do turno atual", async () => {
@@ -416,5 +420,43 @@ describe("chegada pelo bot — caracterização (banco + Telegram mockado)", { s
         } as unknown as TelegramUpdate);
         assert.equal(await status(), "accepted");
         assert.deepEqual(brief(await regulationRows(a.id)), ["1365 07:02 07:02  19:15 SD RMT"]);
+    });
+
+    // ── Vale a hora do AVISO (message.date), não a do processamento ───────────────
+    // Nestes cenários o log nasce com o relógio real, semanas depois da mensagem.
+
+    test("processamento tardio: 1ª tentativa e janela da tomada usam a hora da mensagem", async () => {
+        const a = await createDoctor("Ana");
+        const b = await createDoctor("Bruno");
+        await send(`1366 ${a.name} SD`, at("2026-09-14T07:00:00"), 900_050, { late: true });
+        await send(`1366 ${b.name} SD`, at("2026-09-14T08:00:00"), 900_051, { late: true });
+        assert.equal(await status(), "pending_takeover_confirmation");
+        // Reenvio 40 min depois da pendência: fora da janela de 30 min → pergunta de novo.
+        await send(`1366 ${b.name} SD`, at("2026-09-14T08:40:00"), 900_051, { late: true });
+        assert.equal(await status(), "pending_takeover_confirmation");
+        assert.deepEqual(await regulationRows(b.id), []);
+        // Reenvio dentro da janela: desloca e grava a 1ª tentativa (08:00).
+        await send(`1366 ${b.name} SD`, at("2026-09-14T08:45:00"), 900_051, { late: true });
+        assert.equal(await status(), "accepted");
+        assert.deepEqual(brief(await regulationRows(b.id)), ["1366 08:00 08:00  19:15 SD RMT"]);
+    });
+
+    test("processamento tardio: remanejo fecha a origem e abre o destino na hora do aviso", async () => {
+        const a = await createDoctor("Paulo");
+        await send(`1367 ${a.name} SD`, at("2026-09-14T07:00:00"), 900_001, { late: true });
+        await send(`${a.name} remanejado para 1368`, at("2026-09-14T10:00:00"), 900_001, { late: true });
+        assert.equal(await status(), "accepted");
+        const rows = await regulationRows(a.id);
+        assert.deepEqual(brief(rows), ["1367 07:00 07:00 10:00 19:15 SD ", "1368 10:00 10:00  19:15 SD "]);
+        assert.equal(rows[0].group, rows[1].group);
+    });
+
+    test("continuação sem 'continua' às 12:00 (rótulo P) não responde meio plantão", async () => {
+        const a = await createDoctor("Sergio");
+        await send(`1329 ${a.name} SD`, at("2026-09-14T07:00:00"));
+        await send(`1329 ${a.name} P`, at("2026-09-14T12:00:00"));
+        assert.equal(await status(), "accepted");
+        assert.deepEqual(brief(await regulationRows(a.id)), ["1329 07:00 07:00  19:15 SD "]);
+        assert.doesNotMatch(replies[1], /[Mm]eio [Pp]lant[aã]o/);
     });
 });
