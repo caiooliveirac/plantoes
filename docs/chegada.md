@@ -121,7 +121,7 @@ até 15 min é zero.
 | Troca de ramal dentro do turno | Remanejo; destino ocupado por titular vigente barra (ou vira dupla na USA) | — |
 | Troca de ramal depois do fim do turno de origem | Vira chegada do turno atual (`resolveCrossTurnoMoveShift`) | Senão o noturno herdava rótulo SD e não era pago |
 | SD → SN seguido (mesmo médico) | Continuação: estende a ocupação ou abre bloco novo no mesmo grupo | Uma corrida, duas unidades de pagamento |
-| Meio plantão (11:10–17:00, só regulação) | Aviso sem hora nessa faixa assume meio plantão, fim 17:00 | — |
+| Meio plantão (11:10–17:00, só regulação) | Chegada NOVA cuja hora (declarada ou, sem hora, a da mensagem) cai nessa faixa vira meio plantão, fim 17:00 — na tag e no pagamento — **qualquer que seja o turno escrito**: "SD" às 12:05 é meio plantão (`shouldAssumeTelegramHalfShift` ignora o rótulo de propósito). Reenvio de quem já estava no ramal desde antes das 11:10 não vira meio (D6) | Regra confirmada pelo dono (set/2026): quem chega depois das 11h não fez plantão inteiro. **É intencional — não "corrigir" para respeitar o SD declarado** |
 | PIAM | Roteado ao ramal PIAM com 07:00/19:00 | — |
 | Posto desativado | A chegada reativa o posto | Chegada é soberana |
 | Nome não resolvido | Pergunta com candidatos | Sem vínculo formal telegram↔médico |
