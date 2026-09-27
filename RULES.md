@@ -414,6 +414,7 @@ Divide por `\n`, detecta headings REGULAÇÃO/INTERVENÇÃO para propagar `headi
 |--------|-----------|
 | `correctRegulationOccupancy(id, input)` | Corrige horários, turno, função, ramal |
 | `correctInterventionOccupancy(id, input)` | Corrige horários, turno, função |
+| `correctOccupancyShiftAndDeparture(params)` | Turno (SD/SN/P) + saída de um plantão, motivo obrigatório na nota e no audit log — ação "Corrigir turno e saída" em `/admin/payment-allocation` |
 | `removeRegulationOccupancyRecord(id)` | Remove ocupação + cascata para bank hours |
 | `removeInterventionOccupancyRecord(id)` | Remove ocupação + cascata para bank hours |
 | `transferOperationalOccupancy(id, input)` | Move ocupação para outro posto/base |
