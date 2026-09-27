@@ -479,7 +479,7 @@ export async function getPayableAllocationBoardsForRange(
     return { boards, continuityGroupByOccupancyId };
 }
 
-async function loadDoctorPaymentSettings(): Promise<{
+export async function loadDoctorPaymentSettings(): Promise<{
     profiles: Map<string, DoctorPaymentProfile>;
     employmentTypes: Map<string, DoctorEmploymentType>;
 }> {
