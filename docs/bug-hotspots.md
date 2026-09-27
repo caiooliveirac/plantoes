@@ -11,7 +11,7 @@
 
 | ID | File(s) | Priority | Issue | Evidence |
 |----|---------|----------|-------|----------|
-| H1 | `modules/telegram/service.ts` | **P0** | ~14.7k-line god file (14.706) mixing 10+ responsibilities; 47 commits in the last 90 days (highest churn). Every feature/fix touches this file. | Session 1–6 fixes all touched this file. |
+| H1 | `modules/telegram/service.ts` | **P0** | ~14.5k-line god file (14.508 em 27/09, após extrair a decisão de chegada para `arrival-classification.ts`) mixing 10+ responsibilities; 47 commits in the last 90 days (highest churn). Every feature/fix touches this file. | Session 1–6 fixes all touched this file. |
 | H2 | `services/board.service.ts` | **P0** | ~4.9k lines (4.937), 20 commits in 90 days. Hidden business rules in payment allocation (candidate ranking, noise filtering, closure logic). Read-model calls mutations before reading. | Session 4: P-shift bleeding via regulation buffer. |
 | H3 | `modules/telegram/shift-report.ts` | **P0** | Shift status resolution missed null `shiftLabel` (29% of occupancies). False carryover reports. | Session 6: false pending fix. |
 | H4 | `modules/regulation/service.ts` | **P0** | Ramal switch didn't close occupancy on old ramal → overlapping occupancies. 19 historical overlaps found. | Session 5: ramal switch auto-close. |
@@ -21,7 +21,7 @@
 | H8 | `modules/telegram/meal-breaks.ts` | **P1** | ~7.7k lines (7.735), 17 commits in 90 days. Self-contained but oversized. Meal-break session state + Telegram + DB in one file. | Session fix: meal-break consuming arrival messages. |
 | H9 | `modules/telegram/parser.ts` | **P1** | 708 lines. Parser contains keyword stoplists that look like business rules. | Repeated fixes to parsing edge cases. |
 | H10 | `services/board.service.ts` (closure) | **P0** | Occupancy closure logic (`resolveCandidateEffectiveEndedAt`) embeds rules about successor handoff, implicit expiry, departure evidence detection via regex on notes. | Session 4 fix was in this exact area. |
-| H11 | `modules/telegram/service.ts` (applyParsedEntry) | **P0** | 250+ line function mixing business rule decisions, DB queries, continuation chain resolution, and persistence. | Sessions 1, 3, 5 all modified this function. |
+| H11 | `modules/telegram/service.ts` (applyParsedEntry) | **P0** | Long function mixing DB queries, continuation chain resolution, and persistence. The arrival-type decisions now live in `modules/telegram/arrival-classification.ts` (pure, table-tested). | Sessions 1, 3, 5 all modified this function. |
 | H12 | `modules/telegram/service.ts` (handleTelegramCommand) | **P1** | ~1600-line command dispatcher with inline permission checks, DB queries, and reply formatting per command. | Growing with each new command. |
 | H13 | `modules/telegram/service.ts` (processTelegramUpdate) | **P1** | ~450-line main entry with 10+ code paths, each fetching pending state from DB. | Every Telegram flow change forces reading this. |
 | H14 | `services/auth.service.ts` | **P2** | No dedicated tests (240 lines). | Low churn but security-sensitive. |
@@ -35,7 +35,7 @@
 
 | # | Arquivo | Commits | Linhas |
 |---|---------|---------|--------|
-| 1 | `modules/telegram/service.ts` | 47 | 14.706 |
+| 1 | `modules/telegram/service.ts` | 47 | 14.508 |
 | 2 | `app/admin/payment-attestation/chief-payment-view-client.tsx` | 24 | 3.264 |
 | 3 | `app/operational-board-client.tsx` | 22 | 5.414 |
 | 4 | `services/board.service.ts` | 20 | 4.937 |
