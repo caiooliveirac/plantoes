@@ -62,8 +62,22 @@ import { continueInterventionOccupancy, deactivateInterventionBase, displaceInte
 import { getSaoPauloParts, isSameOperationalShiftArrival, shouldDisplaceInsteadOfRelieve, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import {
+    isTelegramShiftLabelCorrection,
+    isTelegramShiftLabelTimeMismatch,
+    resolveCrossTurnoMoveShift,
+    shouldAskTelegramShiftLabelMismatch,
+    shouldAssumeTelegramHalfShift,
+    shouldInferCrossShiftContinuation,
+    shouldLinkTelegramArrivalToContinuitySource,
+    shouldReopenStaleTelegramInterventionContinuation,
+    shouldReopenStaleTelegramRegulationContinuation,
+    shouldTreatReassignmentAsArrival,
+    shouldTreatTelegramArrivalAsContinuation,
+    shouldTreatTelegramArrivalAsImplicitReassignment,
+    type ArrivalParsedEntry,
+} from "@/modules/telegram/arrival-classification";
+import {
     HALF_SHIFT_ROLE_LABEL,
-    isBeforeHalfShiftWindow,
     isHalfShiftRoleLabel,
     isWithinHalfShiftWindow,
     resolveHalfShiftScheduledWindow,
@@ -324,20 +338,25 @@ export {
     requiresTelegramDepartureAdjustmentJustification,
 } from "@/modules/telegram/departure-flow";
 
+// Decisão de chegada extraída para arrival-classification.ts (sem I/O); reexporta
+// para os importadores que já apontavam para cá.
+export {
+    isTelegramShiftLabelCorrection,
+    isTelegramShiftLabelTimeMismatch,
+    resolveCrossTurnoMoveShift,
+    shouldAskTelegramShiftLabelMismatch,
+    shouldAssumeTelegramHalfShift,
+    shouldInferCrossShiftContinuation,
+    shouldLinkTelegramArrivalToContinuitySource,
+    shouldReopenStaleTelegramInterventionContinuation,
+    shouldReopenStaleTelegramRegulationContinuation,
+    shouldTreatReassignmentAsArrival,
+    shouldTreatTelegramArrivalAsContinuation,
+    shouldTreatTelegramArrivalAsImplicitReassignment,
+};
+
 interface PendingNameResolutionData {
-    parsed: {
-        sector: "REGULATION" | "INTERVENTION";
-        baseCode: string;
-        arrivalTime: string | null;
-        shiftType: "SD" | "SN" | "P" | null;
-        roleFunction: string | null;
-        isShadow?: boolean;
-        isDeparture: boolean;
-        isContinuation: boolean;
-        isReassignment: boolean;
-        /** Turno escolhido pelo médico no botão/resposta da pendência (D7). */
-        shiftLabelConfirmed?: boolean;
-    };
+    parsed: ArrivalParsedEntry;
     candidates: Array<{ id: string; fullName: string; displayName: string | null; normalizedName: string }>;
     originalText: string;
     originalEventAt: string;
@@ -647,89 +666,6 @@ export function shouldRouteToDepartureJustification(errorMessage: string, parsed
     return isTelegramJustificationRequiredError(errorMessage) && !isTelegramContinuationEntry(parsed);
 }
 
-// Emily, 2034, 07/09/2026: "2034 sd" às 19:08:05 e "2034 sn" às 19:08:15 viraram SD
-// continuando em SN (janela 07:00 → 07:15 do dia seguinte). Quem emenda SD→SN de
-// verdade chegou horas antes; rótulo trocado minutos depois da própria chegada é
-// correção — segue como re-chegada, que troca o rótulo e preserva a chegada.
-const SHIFT_LABEL_CORRECTION_WINDOW_MS = 15 * 60 * 1000;
-
-export function isTelegramShiftLabelCorrection(params: {
-    incomingShiftLabel?: string | null;
-    activeShiftLabel?: string | null;
-    activeStartedAt?: Date | null;
-    eventAt?: Date | null;
-}) {
-    if (!params.activeStartedAt || !params.eventAt) {
-        return false;
-    }
-    const swapsDayNight = (params.incomingShiftLabel === "SD" && params.activeShiftLabel === "SN")
-        || (params.incomingShiftLabel === "SN" && params.activeShiftLabel === "SD");
-    if (!swapsDayNight) {
-        return false;
-    }
-    const elapsedMs = params.eventAt.getTime() - params.activeStartedAt.getTime();
-    return elapsedMs >= 0 && elapsedMs <= SHIFT_LABEL_CORRECTION_WINDOW_MS;
-}
-
-export function shouldTreatTelegramArrivalAsContinuation(params: {
-    sector: "REGULATION" | "INTERVENTION";
-    isDeparture: boolean;
-    isContinuation: boolean;
-    incomingShiftLabel?: string | null;
-    activeShiftLabel?: string | null;
-    // Quando informados, troca de rótulo SD↔SN logo depois da própria chegada é
-    // correção de digitação, não continuação (defeito D2 de docs/chegada.md).
-    activeStartedAt?: Date | null;
-    eventAt?: Date | null;
-}) {
-    if (params.isDeparture) {
-        return false;
-    }
-
-    if (params.isContinuation) {
-        return true;
-    }
-
-    if (isTelegramShiftLabelCorrection(params)) {
-        return false;
-    }
-
-    if (params.sector === "REGULATION") {
-        if (params.incomingShiftLabel === "P") {
-            return params.activeShiftLabel === "SD"
-                || params.activeShiftLabel === "SN"
-                || params.activeShiftLabel === "P";
-        }
-
-        // Explicit cross-shift updates in regulation must keep continuity instead of opening
-        // a brand-new arrival (ex.: SD→SN, P→SN, SN→SD, P→SD).
-        if (
-            (params.incomingShiftLabel === "SN" && (params.activeShiftLabel === "SD" || params.activeShiftLabel === "P"))
-            || (params.incomingShiftLabel === "SD" && (params.activeShiftLabel === "SN" || params.activeShiftLabel === "P"))
-        ) {
-            return true;
-        }
-
-        return false;
-    }
-
-    if (params.incomingShiftLabel === "P") {
-        return params.activeShiftLabel === "SD"
-            || params.activeShiftLabel === "SN"
-            || params.activeShiftLabel === "P";
-    }
-
-    if (
-        params.incomingShiftLabel
-        && params.activeShiftLabel
-        && params.incomingShiftLabel !== params.activeShiftLabel
-    ) {
-        return true;
-    }
-
-    return params.activeShiftLabel === "P";
-}
-
 // Um plantao P normal cobre 24h (com ~15min de folga). Quando a continuidade
 // estende a cobertura bem alem disso, o medico esta de fato emendando um
 // terceiro turno (~36h+) — caso em que o bot alerta na resposta.
@@ -814,99 +750,6 @@ export function buildContinuityInterpretation(params: {
         coverageHours,
         explanation,
     };
-}
-
-// Normaliza um rótulo de turno para SD/SN concretos. P e nulos viram null porque
-// só uma troca explícita SD↔SN sinaliza "plantão novo" — P/ausente é ambíguo
-// (continuidade/24h) e não deve bloquear o remanejamento implícito.
-function normalizeConcreteShift(value: string | null | undefined): "SD" | "SN" | null {
-    const normalized = (value ?? "").trim().toUpperCase();
-    return normalized === "SD" || normalized === "SN" ? normalized : null;
-}
-
-export function shouldTreatTelegramArrivalAsImplicitReassignment(params: {
-    sector: "REGULATION" | "INTERVENTION";
-    baseCode: string | null;
-    arrivalTime?: string | null;
-    shiftType?: string | null;
-    roleFunction?: string | null;
-    isShadow?: boolean;
-    isDeparture: boolean;
-    isContinuation: boolean;
-    isReassignment?: boolean;
-    activeSector?: "REGULATION" | "INTERVENTION" | null;
-    activeBaseCode?: string | null;
-    activeShiftLabel?: string | null;
-}) {
-    if (!params.baseCode) {
-        return false;
-    }
-
-    if (params.isDeparture || params.isContinuation || params.isReassignment) {
-        return false;
-    }
-
-    // Uma chegada de "sombra" é uma coexistência própria no novo ramal, não uma
-    // mudança de posição do titular — nunca move a ocupação existente.
-    if (params.isShadow) {
-        return false;
-    }
-
-    if (!params.activeSector || !params.activeBaseCode) {
-        return false;
-    }
-
-    // Mesma posição (mesmo domínio + mesmo código) não é remanejamento.
-    if (params.activeSector === params.sector && params.activeBaseCode === params.baseCode) {
-        return false;
-    }
-
-    // Um médico que já está no plantão e avisa chegada em OUTRA posição — ramal ou
-    // ambulância, inclusive cross-domínio — está mudando de posto, não começando
-    // um plantão novo. O sistema preserva o 1º horário de chegada (handled pelo
-    // transfer, que clona started_at/boardStartedAt) em vez de marcá-lo atrasado.
-    // A única exceção é declarar um turno concreto DIFERENTE do atual (SD↔SN):
-    // isso sinaliza um plantão novo de verdade, então trata como chegada nova.
-    const declaredShift = normalizeConcreteShift(params.shiftType);
-    const activeShift = normalizeConcreteShift(params.activeShiftLabel);
-    if (declaredShift && activeShift && declaredShift !== activeShift) {
-        return false;
-    }
-
-    return true;
-}
-
-/** Turno novo (SD/SN) quando um "remanejo" acontece depois do fim do turno de origem; senão null. */
-export function resolveCrossTurnoMoveShift(params: {
-    isMove: boolean;
-    activeShiftLabel: string | null;
-    activeScheduledEndAt: Date | null;
-    eventAt: Date;
-}): "SD" | "SN" | null {
-    if (!params.isMove || !params.activeScheduledEndAt) {
-        return null;
-    }
-    if (params.activeShiftLabel !== "SD" && params.activeShiftLabel !== "SN") {
-        return null; // P segue P: remanejo dentro do plantão de 24h
-    }
-    if (params.eventAt.getTime() < params.activeScheduledEndAt.getTime()) {
-        return null;
-    }
-    const currentShift = resolveOperationalShiftWindow(params.eventAt).shiftLabel;
-    return currentShift !== params.activeShiftLabel && (currentShift === "SD" || currentShift === "SN") ? currentShift : null;
-}
-
-export function shouldLinkTelegramArrivalToContinuitySource(params: {
-    parsed: OperationalParsedEntry;
-    sourceShiftLabel?: string | null;
-}) {
-    return shouldTreatTelegramArrivalAsContinuation({
-        sector: params.parsed.sector,
-        isDeparture: params.parsed.isDeparture,
-        isContinuation: params.parsed.isContinuation,
-        incomingShiftLabel: params.parsed.shiftType,
-        activeShiftLabel: params.sourceShiftLabel,
-    });
 }
 
 function resolveTelegramParsedAction(parsed: OperationalParsedEntry) {
@@ -1036,52 +879,6 @@ export function arrivalHalfShiftSatisfiesShiftGate(
     // por shouldAssumeTelegramHalfShift), para que aviso sem horário seja aceito.
     const parts = getSaoPauloParts(referenceAt);
     return isWithinHalfShiftWindow((parts.hour * 60) + parts.minute);
-}
-
-export function shouldAssumeTelegramHalfShift(params: {
-    parsed: Pick<ParsedMessage, "sector" | "isDeparture" | "isContinuation">;
-    eventAt: Date;
-    effectiveShiftType: string | null;
-    // Chegada já aberta do mesmo médico no mesmo ramal. Se é de antes das 11:10, o
-    // aviso é reenvio de plantão inteiro, não meio plantão (defeito D6 de
-    // docs/chegada.md; Jonas, 2154, 22/09/2026: SD desde 07:16 virou meio às 16:12).
-    activeStartedAt?: Date | null;
-}) {
-    if (params.parsed.sector !== "REGULATION" || params.parsed.isDeparture || params.parsed.isContinuation) {
-        return false;
-    }
-
-    if (params.activeStartedAt && isBeforeHalfShiftWindow(params.activeStartedAt)) {
-        return false;
-    }
-
-    const parts = getSaoPauloParts(params.eventAt);
-    return isWithinHalfShiftWindow((parts.hour * 60) + parts.minute);
-}
-
-// D7 (docs/chegada.md): rótulo declarado é o do turno que ESTÁ ACABANDO e a hora cai
-// na janela antecipada de 3h do próximo ("SD" às 18:35, "SN" às 05:30). A régua de
-// tempo (resolvePShiftAwareBaseShiftLabel) vira a janela para o próximo turno e o
-// registro saía com rótulo SD e janela SN (Gerardson, 2152, 03/09/2026).
-export function isTelegramShiftLabelTimeMismatch(eventAt: Date, shiftType: string | null | undefined): shiftType is "SD" | "SN" {
-    if (shiftType !== "SD" && shiftType !== "SN") return false;
-    const clockWindow = resolveOperationalShiftWindow(eventAt);
-    return shiftType === clockWindow.shiftLabel && resolveArrivalShiftLabel(eventAt) !== clockWindow.shiftLabel;
-}
-
-// Pergunta "SD ou SN?" só na chegada NOVA: quem já tem plantão aberto (reenvio,
-// correção de rótulo D2, remanejo) segue as regras próprias; meio plantão e PIAM têm
-// janela fixa e não discordam.
-export function shouldAskTelegramShiftLabelMismatch(params: {
-    parsed: Pick<ParsedMessage, "sector" | "baseCode" | "shiftType" | "isDeparture" | "isContinuation" | "isReassignment">;
-    eventAt: Date;
-    hasActiveOccupancy: boolean;
-}): boolean {
-    const { parsed } = params;
-    if (parsed.isDeparture || parsed.isContinuation || parsed.isReassignment) return false;
-    if (params.hasActiveOccupancy || parsed.baseCode === "PIAM") return false;
-    if (shouldAssumeTelegramHalfShift({ parsed, eventAt: params.eventAt, effectiveShiftType: parsed.shiftType })) return false;
-    return isTelegramShiftLabelTimeMismatch(params.eventAt, parsed.shiftType);
 }
 
 // Médico CONFIRMOU no botão o turno que está acabando: a janela é a desse turno,
@@ -1594,32 +1391,6 @@ export function shouldLinkExplicitContinuationClosedSource(params: {
     return params.sourceEndedAt.getTime() >= referenceBoundary.getTime() - TELEGRAM_CONTINUATION_SOURCE_CLOSURE_TOLERANCE_MS;
 }
 
-/**
- * "Chegou num plantão e seguiu no outro" — a travessia de virada como prova de
- * continuidade, sem depender de o médico ter escrito a palavra.
- *
- * Compara o turno da OCUPAÇÃO ANTERIOR com o turno em que a nova mensagem cai.
- * Diferentes = ele atravessou a virada, e quem atravessa a virada continuou.
- * Antes esta inferência também exigia que o médico NÃO tivesse escrito o rótulo
- * do turno, e aí digitar "SN" ao voltar de um SD custava a âncora da cadeia —
- * justamente quem tentou ser explícito saía pior do que quem não disse nada.
- *
- * A adjacência temporal (a fonte ter ficado até perto da virada) é garantida
- * antes, por shouldLinkExplicitContinuationClosedSource, na escolha da fonte.
- */
-export function shouldInferCrossShiftContinuation(params: {
-    sourceShiftLabel?: string | null;
-    eventAt: Date;
-    isExplicitContinuation: boolean;
-}) {
-    // Continuidade explícita já entra pelo caminho de shouldLinkTelegramArrivalToContinuitySource.
-    if (params.isExplicitContinuation || !params.sourceShiftLabel) {
-        return false;
-    }
-
-    return params.sourceShiftLabel !== resolveOperationalShiftWindow(params.eventAt).shiftLabel;
-}
-
 export function shouldLinkRecentClosedTelegramContinuity(eventAt: Date, endedAt: Date) {
     const elapsedMs = eventAt.getTime() - endedAt.getTime();
     if (elapsedMs < 0) {
@@ -1638,32 +1409,6 @@ export function shouldLinkRecentClosedTelegramContinuity(eventAt: Date, endedAt:
     const eventShift = resolveOperationalShiftWindow(eventAt);
     return endedShift.shiftLabel === eventShift.shiftLabel
         && endedShift.startedAt.getTime() === eventShift.startedAt.getTime();
-}
-
-export function shouldReopenStaleTelegramRegulationContinuation(params: {
-    activeShiftLabel?: string | null;
-    activeStartedAt?: Date | null;
-    eventAt: Date;
-}) {
-    if (params.activeShiftLabel !== "P" || !params.activeStartedAt) {
-        return false;
-    }
-
-    const expiryAt = resolveProlongedShiftExpiry(params.activeStartedAt, "P");
-    return Boolean(expiryAt && expiryAt.getTime() <= params.eventAt.getTime());
-}
-
-export function shouldReopenStaleTelegramInterventionContinuation(params: {
-    activeShiftLabel?: string | null;
-    activeStartedAt?: Date | null;
-    eventAt: Date;
-}) {
-    if (params.activeShiftLabel !== "P" || !params.activeStartedAt) {
-        return false;
-    }
-
-    const expiryAt = resolveProlongedShiftExpiry(params.activeStartedAt, "P");
-    return Boolean(expiryAt && expiryAt.getTime() <= params.eventAt.getTime());
 }
 
 export function resolveContinuationShiftStart(eventAt: Date, shiftType: string | null | undefined): Date {
@@ -9019,19 +8764,6 @@ export function buildReassignmentTargetOccupiedMessage(params: {
 }) {
     const occupantName = escapeTelegramMarkdown(params.occupantName);
     return `${REASSIGNMENT_TARGET_OCCUPIED_PREFIX}${occupantName}* em *${params.targetLabel}*. Se essa pessoa já saiu, declare a saída dela (ex.: \`${params.occupantName} saiu ${params.targetLabel}\`); se ela só mudou de lugar, peça para ela avisar o novo posto. Depois reenvie sua chegada.`;
-}
-
-export function shouldTreatReassignmentAsArrival(params: {
-    parsed: Pick<OperationalParsedEntry, "isReassignment" | "sector" | "baseCode">;
-    activeOcc: { sector: "REGULATION" | "INTERVENTION"; baseCode: string } | null | undefined;
-}) {
-    if (!params.parsed.isReassignment) {
-        return false;
-    }
-    if (!params.activeOcc) {
-        return true;
-    }
-    return params.activeOcc.sector === params.parsed.sector && params.activeOcc.baseCode === params.parsed.baseCode;
 }
 
 async function handleTelegramReassignment(params: {
