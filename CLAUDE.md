@@ -218,6 +218,11 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   `sv` tem que bater com `users.session_version`: toda gravação de senha sobe a coluna
   e derruba os cookies antigos (teste-guarda em `tests/sessao-revogavel.test.ts`).
   Login: 10 falhas/15 min por IP e por e-mail → 429 (`modules/auth/login-rate-limit.ts`).
+- **Monitor de acessos** (`/admin/acessos`): cada login é uma sessão (`sid` no cookie,
+  tabela `auth_sessions`) e cada pedido autenticado é registrado depois da resposta
+  (`after()` em `readAuthenticatedSession`) para provar uso simultâneo da mesma conta
+  em lugares diferentes. Nada bloqueia sozinho. Critérios, alertas e limites em
+  [docs/monitor-acessos.md](docs/monitor-acessos.md).
 - **Login**: `POST /api/auth/login` (email+senha, bcrypt) em
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em
   [services/auth.service.ts](services/auth.service.ts). Trata contas inativas, sem

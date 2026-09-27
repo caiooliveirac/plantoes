@@ -3,6 +3,7 @@ import { getTelegramReminderPollMs } from "@/modules/telegram/config";
 import { assertSingleRuntimeConfig, logRuntimeIdentity } from "@/lib/runtime-identity";
 import { sendTelegramMealBreakCycle, sendTelegramMealBreakTurnNudges } from "@/modules/telegram/meal-breaks";
 import { sendBankHoursPendingCycle } from "@/modules/telegram/bank-hours-pending-alerts";
+import { sendAcessosCycle } from "@/modules/telegram/acessos-alerts";
 import { sendChecklistDigestCycle } from "@/modules/telegram/checklist-digest";
 import { sendOccurrenceHandoffCycle } from "@/modules/telegram/occurrence-handoff-cycle";
 import { sendContractBalanceCycle } from "@/modules/telegram/contract-balance-alerts";
@@ -37,6 +38,7 @@ async function runCycle() {
             checklistDigest,
             occurrenceHandoff,
             verificacaoPosVirada,
+            acessos,
             expiredBaseDeactivations,
             expiredPostDeactivations,
         ] = await Promise.all([
@@ -57,6 +59,8 @@ async function runCycle() {
             sendOccurrenceHandoffCycle(referenceDate),
             // Roteiro de docs/verificacao-saidas-continuidade.md após cada virada (flag VERIFICACAO_POS_VIRADA).
             sendVerificacaoPosViradaCycle(referenceDate),
+            // Monitor de acessos: alerta forte na hora + resumo 8h (flag ACESSOS_ALERTAS_ENABLED) e poda de 180 dias.
+            sendAcessosCycle(referenceDate),
             // Desativação de base/posto vence na virada do turno: grava reactivated_at =
             // virada. O quadro já esconde a vencida na leitura; aqui só o registro
             // (antes era feito dentro de getOperationalBoard — leitura que gravava).
@@ -66,11 +70,11 @@ async function runCycle() {
         const evaluated = reminders.evaluated + mealBreak.evaluated + mealBreakNudges.evaluated
             + paymentDigest.evaluated + contractBalance.evaluated + bankHoursPending.evaluated
             + selfDeclaredExtra.evaluated + checklistDigest.evaluated + occurrenceHandoff.evaluated
-            + verificacaoPosVirada.evaluated;
+            + verificacaoPosVirada.evaluated + acessos.evaluated;
         const sent = reminders.sent + mealBreak.sent + mealBreakNudges.sent
             + paymentDigest.sent + contractBalance.sent + bankHoursPending.sent
             + selfDeclaredExtra.sent + checklistDigest.sent + occurrenceHandoff.sent
-            + verificacaoPosVirada.sent;
+            + verificacaoPosVirada.sent + acessos.sent;
         if (evaluated > 0 || sent > 0) {
             console.log(`[telegram-reminder-worker] evaluated=${evaluated} sent=${sent}`);
         }

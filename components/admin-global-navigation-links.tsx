@@ -8,6 +8,7 @@ export type AdminNavKey =
     | "slot-audit"
     | "bank-hours"
     | "chief-access"
+    | "acessos"
     | "history"
     | "board";
 
@@ -19,6 +20,7 @@ const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string }> 
     { key: "slot-audit", href: "/admin/slot-audit", label: "Abrir auditoria de slots" },
     { key: "bank-hours", href: "/admin/bank-hours", label: "Abrir banco de horas" },
     { key: "chief-access", href: "/admin/chief-access", label: "Abrir acesso de chefia" },
+    { key: "acessos", href: "/admin/acessos", label: "Abrir monitor de acessos" },
     { key: "history", href: "/?view=history", label: "Abrir historico operacional" },
     { key: "board", href: "/", label: "Voltar ao quadro" },
 ];

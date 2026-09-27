@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
         case "email_taken":
             return NextResponse.json({ error: "Este email já está em uso por outra conta. Use outro email." }, { status: 409 });
         case "created": {
-            await writeSessionCookie(result.userId);
+            await writeSessionCookie(result.userId, { origem: "cadastro" });
             return NextResponse.json({ ok: true }, { status: 201 });
         }
     }

@@ -1,0 +1,356 @@
+/* Monitor de acessos (/admin/acessos). Só tokens de app/kairos.css — o tema
+   escuro vem de graça pelo [data-tema="escuro"]. Relatório feito para ser
+   lido com calma e impresso (Ctrl+P / "Imprimir relatório"). */
+
+.pagina-kairos .ac-shell {
+    background: var(--fundo-app);
+    color: var(--texto);
+    min-height: calc(100vh - 64px);
+    padding: 20px 16px 48px;
+}
+
+.pagina-kairos .ac-conteudo {
+    margin: 0 auto;
+    max-width: 1180px;
+    display: grid;
+    gap: 16px;
+}
+
+.pagina-kairos .ac-card {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 14px;
+    box-shadow: var(--sombra-painel);
+    padding: 18px 20px;
+    min-width: 0;
+}
+
+.pagina-kairos .ac-card h1,
+.pagina-kairos .ac-card h2,
+.pagina-kairos .ac-card h3 {
+    color: var(--texto-forte);
+    margin: 0;
+}
+
+.pagina-kairos .ac-card h1 { font-size: 1.35rem; }
+.pagina-kairos .ac-card h2 { font-size: 1.05rem; margin-bottom: 10px; }
+.pagina-kairos .ac-card h3 { font-size: 0.95rem; }
+
+.pagina-kairos .ac-sub {
+    color: var(--texto-medio);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    margin: 6px 0 0;
+    max-width: 80ch;
+}
+
+.pagina-kairos .ac-topo {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.pagina-kairos .ac-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.pagina-kairos .ac-chips a,
+.pagina-kairos .ac-btn {
+    align-items: center;
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 999px;
+    color: var(--texto);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: 0.85rem;
+    gap: 6px;
+    padding: 6px 12px;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.pagina-kairos .ac-chips a:hover,
+.pagina-kairos .ac-btn:hover { border-color: var(--borda-forte); }
+
+.pagina-kairos .ac-chips a.on {
+    background: var(--acao-primaria);
+    border-color: var(--acao-primaria);
+    color: var(--acao-primaria-texto);
+}
+
+.pagina-kairos .ac-btn.perigo {
+    border-color: var(--semaforo-vermelho-borda);
+    color: var(--semaforo-vermelho-texto);
+}
+
+.pagina-kairos .ac-btn.perigo:hover { background: var(--semaforo-vermelho-fundo); }
+.pagina-kairos .ac-btn:disabled { cursor: wait; opacity: 0.6; }
+
+.pagina-kairos .ac-atualizacao {
+    color: var(--texto-fraco);
+    font-size: 0.8rem;
+    margin-top: 8px;
+}
+
+.pagina-kairos .ac-kpis {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.pagina-kairos .ac-kpi {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+
+.pagina-kairos .ac-kpi-valor {
+    color: var(--texto-forte);
+    display: block;
+    font-size: 1.6rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.pagina-kairos .ac-kpi-rotulo { color: var(--texto-medio); font-size: 0.82rem; }
+.pagina-kairos .ac-kpi.forte { border-color: var(--semaforo-vermelho-borda); background: var(--semaforo-vermelho-fundo); }
+.pagina-kairos .ac-kpi.forte .ac-kpi-valor { color: var(--semaforo-vermelho-texto); }
+.pagina-kairos .ac-kpi.atencao { border-color: var(--semaforo-amarelo-borda); background: var(--semaforo-amarelo-fundo); }
+.pagina-kairos .ac-kpi.atencao .ac-kpi-valor { color: var(--semaforo-amarelo-texto); }
+
+.pagina-kairos .ac-nivel {
+    border: 1px solid var(--borda);
+    border-radius: 999px;
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 3px 9px;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.pagina-kairos .ac-nivel.forte { background: var(--semaforo-vermelho-fundo); border-color: var(--semaforo-vermelho-borda); color: var(--semaforo-vermelho-texto); }
+.pagina-kairos .ac-nivel.atencao,
+.pagina-kairos .ac-nivel.moderado { background: var(--semaforo-amarelo-fundo); border-color: var(--semaforo-amarelo-borda); color: var(--semaforo-amarelo-texto); }
+.pagina-kairos .ac-nivel.normal,
+.pagina-kairos .ac-nivel.fraco,
+.pagina-kairos .ac-nivel.info { background: var(--semaforo-neutro-fundo); border-color: var(--semaforo-neutro-borda); color: var(--semaforo-neutro-texto); }
+.pagina-kairos .ac-nivel.aberta { background: var(--semaforo-verde-fundo); border-color: var(--semaforo-verde-borda); color: var(--semaforo-verde-texto); }
+
+.pagina-kairos .ac-agora {
+    border-color: var(--semaforo-vermelho-borda);
+    border-width: 2px;
+}
+
+.pagina-kairos .ac-lista {
+    display: grid;
+    gap: 8px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.pagina-kairos .ac-conta {
+    align-items: center;
+    border: 1px solid var(--borda);
+    border-radius: 12px;
+    display: grid;
+    gap: 6px 14px;
+    grid-template-columns: auto minmax(0, 1.2fr) minmax(0, 2fr) auto;
+    padding: 12px 14px;
+}
+
+.pagina-kairos .ac-conta:hover { border-color: var(--borda-forte); }
+.pagina-kairos .ac-conta a { color: var(--texto-forte); font-weight: 600; text-decoration: none; }
+.pagina-kairos .ac-conta a:hover { text-decoration: underline; }
+.pagina-kairos .ac-conta-quem { display: grid; gap: 2px; min-width: 0; }
+.pagina-kairos .ac-conta-quem small,
+.pagina-kairos .ac-conta-numeros { color: var(--texto-medio); font-size: 0.8rem; }
+.pagina-kairos .ac-conta-resumo { font-size: 0.88rem; line-height: 1.45; }
+.pagina-kairos .ac-conta-numeros { text-align: right; white-space: nowrap; }
+
+@media (max-width: 760px) {
+    .pagina-kairos .ac-conta { grid-template-columns: auto minmax(0, 1fr); }
+    .pagina-kairos .ac-conta-resumo,
+    .pagina-kairos .ac-conta-numeros { grid-column: 1 / -1; text-align: left; }
+}
+
+/* Achado: o selo de nível no título diz a gravidade; separador fino entre eles. */
+.pagina-kairos .ac-achado {
+    display: grid;
+    gap: 6px;
+    padding: 12px 0;
+}
+
+.pagina-kairos .ac-achado + .ac-achado { border-top: 1px solid var(--divisor); }
+.pagina-kairos .ac-achado:first-of-type { padding-top: 0; }
+.pagina-kairos .ac-achado h3 { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.pagina-kairos .ac-achado p { line-height: 1.5; margin: 0; }
+
+.pagina-kairos .ac-evidencias {
+    display: grid;
+    font-size: 0.86rem;
+    gap: 6px;
+    line-height: 1.45;
+    margin: 4px 0 0;
+    padding-left: 18px;
+}
+
+.pagina-kairos .ac-resumo {
+    background: var(--superficie-alt);
+    border-radius: 10px;
+    color: var(--texto-forte);
+    font-size: 0.98rem;
+    line-height: 1.55;
+    margin: 12px 0 0;
+    padding: 12px 14px;
+}
+
+.pagina-kairos .ac-episodio {
+    border: 1px solid var(--borda);
+    border-radius: 12px;
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+}
+
+.pagina-kairos .ac-episodio + .ac-episodio { margin-top: 12px; }
+.pagina-kairos .ac-episodio.forte { border-color: var(--semaforo-vermelho-borda); }
+.pagina-kairos .ac-episodio ul { margin: 0; padding-left: 18px; }
+.pagina-kairos .ac-episodio li { font-size: 0.86rem; line-height: 1.45; }
+.pagina-kairos .ac-ressalva { color: var(--texto-medio); }
+
+.pagina-kairos .ac-tabela-wrap {
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    overflow-x: auto;
+}
+
+.pagina-kairos .ac-tabela {
+    border-collapse: collapse;
+    font-size: 0.84rem;
+    min-width: 640px;
+    width: 100%;
+}
+
+.pagina-kairos .ac-tabela th,
+.pagina-kairos .ac-tabela td {
+    border-bottom: 1px solid var(--divisor);
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.pagina-kairos .ac-tabela th {
+    background: var(--superficie-alt);
+    color: var(--texto-medio);
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.pagina-kairos .ac-tabela tr:last-child td { border-bottom: 0; }
+.pagina-kairos .ac-tabela td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pagina-kairos .ac-tabela tr.presenca td { color: var(--texto-medio); }
+.pagina-kairos .ac-mono { font-family: var(--fonte-mono, monospace); font-size: 0.8rem; overflow-wrap: anywhere; }
+
+.pagina-kairos .ac-lado {
+    border-radius: 6px;
+    color: var(--branco);
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 700;
+    min-width: 22px;
+    padding: 2px 6px;
+    text-align: center;
+}
+
+.pagina-kairos .ac-lado.l0 { background: var(--azul-acao); }
+.pagina-kairos .ac-lado.l1 { background: var(--laranja-600); }
+.pagina-kairos .ac-lado.l2 { background: var(--roxo-600); }
+.pagina-kairos .ac-lado.l3 { background: var(--verde-700); }
+.pagina-kairos .ac-lado.l4 { background: var(--vermelho-700); }
+.pagina-kairos .ac-lado.l5 { background: var(--slate-600); }
+
+.pagina-kairos .ac-acoes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.pagina-kairos .ac-dialogo {
+    background: var(--superficie);
+    border: 1px solid var(--borda-forte);
+    border-radius: 12px;
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 14px;
+}
+
+.pagina-kairos .ac-dialogo textarea {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    color: var(--texto-forte);
+    font: inherit;
+    min-height: 70px;
+    padding: 8px 10px;
+    resize: vertical;
+}
+
+.pagina-kairos .ac-aviso {
+    background: var(--semaforo-amarelo-fundo);
+    border: 1px solid var(--semaforo-amarelo-borda);
+    border-radius: 10px;
+    color: var(--semaforo-amarelo-texto);
+    font-size: 0.86rem;
+    line-height: 1.5;
+    padding: 10px 12px;
+}
+
+.pagina-kairos .ac-ok {
+    background: var(--semaforo-verde-fundo);
+    border: 1px solid var(--semaforo-verde-borda);
+    border-radius: 10px;
+    color: var(--semaforo-verde-texto);
+    font-size: 0.86rem;
+    padding: 10px 12px;
+}
+
+.pagina-kairos .ac-erro {
+    background: var(--semaforo-vermelho-fundo);
+    border: 1px solid var(--semaforo-vermelho-borda);
+    border-radius: 10px;
+    color: var(--semaforo-vermelho-texto);
+    font-size: 0.86rem;
+    padding: 10px 12px;
+}
+
+.pagina-kairos .ac-como-ler summary { color: var(--texto-forte); cursor: pointer; font-weight: 600; }
+.pagina-kairos .ac-como-ler ul { line-height: 1.55; margin: 10px 0 0; padding-left: 18px; }
+.pagina-kairos .ac-como-ler li + li { margin-top: 6px; }
+
+.pagina-kairos .ac-vazio { color: var(--texto-medio); font-size: 0.9rem; margin: 0; }
+.pagina-kairos .ac-voltar { color: var(--texto-medio); font-size: 0.85rem; text-decoration: none; }
+.pagina-kairos .ac-voltar:hover { text-decoration: underline; }
+
+@media print {
+    .pagina-kairos .k-topo,
+    .pagina-kairos .ac-nao-imprimir { display: none !important; }
+    .pagina-kairos .ac-shell { background: #fff; padding: 0; }
+    .pagina-kairos .ac-card { border-color: #ccc; box-shadow: none; break-inside: avoid-page; }
+    .pagina-kairos .ac-tabela-wrap { overflow: visible; }
+    .pagina-kairos .ac-tabela { min-width: 0; }
+}

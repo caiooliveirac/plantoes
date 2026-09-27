@@ -53,6 +53,10 @@ export interface HandoffClaims {
     origem: string;
     nome?: string;
     normalizedName?: string;
+    /** users.session_version de quando a senha foi conferida no portal (porteiro).
+        Presente e diferente da atual = login do portal de antes de uma troca de
+        senha ou de "encerrar sessões": o /sso recusa (docs/monitor-acessos.md). */
+    sv?: number;
 }
 
 /** Token que ESTA origem emite para `para`. `agora` em segundos, injetável. */
@@ -100,12 +104,14 @@ export function lerTokenHandoff(
         if (c.tipo !== TIPO || c.aud !== meuId) return null;
         if (typeof c.exp !== "number" || c.exp <= agora) return null;
         if (typeof c.sub !== "string" || !c.sub.includes("@")) return null;
-        return {
+        const claims: HandoffClaims = {
             email: c.sub.trim().toLowerCase(),
             origem: typeof c.origem === "string" ? c.origem : "?",
             nome: typeof c.nome === "string" ? c.nome : undefined,
             normalizedName: typeof c.normalizedName === "string" ? c.normalizedName : undefined,
         };
+        if (Number.isInteger(c.sv) && (c.sv as number) >= 0) claims.sv = c.sv as number;
+        return claims;
     } catch {
         return null;
     }

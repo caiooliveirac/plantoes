@@ -23,6 +23,7 @@ export const ABAS_ADMIN: KairosAba[] = [
     { href: "/admin/bank-hours", nome: "Banco de horas" },
     { href: "/admin/payment-attestation", nome: "Atestação" },
     { href: "/admin/reports", nome: "Relatórios" },
+    { href: "/admin/acessos", nome: "Acessos" },
 ];
 
 function abaAtiva(pathname: string, href: string): boolean {

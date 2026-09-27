@@ -305,6 +305,9 @@ export async function changeOwnPassword(userId: string, currentPassword: string,
  * fora da lista porque o entity dele é a solicitação — é tratado à parte, pelo
  * details.approvedUserId.
  */
+/** Monitor de acessos: admin trocou a senha por uma aleatória e mandou o link de redefinição. */
+export const REDEFINICAO_PELO_ADMIN = "auth.password_revoked_by_admin";
+
 export const SENHA_DEFINIDA_ACTIONS = [
     "auth.password_changed",
     "auth.password_changed_first_login",
@@ -314,6 +317,7 @@ export const SENHA_DEFINIDA_ACTIONS = [
     "doctor_signup_email_verified",
     "doctor_signup_rebound_account",
     "portal_account.created",
+    REDEFINICAO_PELO_ADMIN,
 ] as const;
 
 export interface SituacaoConta {

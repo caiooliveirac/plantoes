@@ -139,5 +139,5 @@ test("sessão confere a versão e a troca de senha reemite o cookie deste aparel
     const proxy = readFileSync(join(process.cwd(), "proxy.ts"), "utf8");
     assert.match(proxy, /sv: parsed\.sv \?\? 0/, "renovação do proxy preserva o sv");
     const changePassword = readFileSync(join(process.cwd(), "app/api/auth/change-password/route.ts"), "utf8");
-    assert.match(changePassword, /changeOwnPassword[\s\S]*writeSessionCookie\(session\.user\.id\)/);
+    assert.match(changePassword, /changeOwnPassword[\s\S]*writeSessionCookie\(session\.user\.id[,)]/);
 });
