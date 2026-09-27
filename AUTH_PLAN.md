@@ -35,7 +35,7 @@ Nao entram nesta fase:
 
 O sistema nao tera cadastro publico.
 
-O painel operacional continua publico em modo leitura na URL `/`.
+O painel operacional em `/` so abre com sessao (qualquer papel) desde 2026-09-27. Sem sessao, a pessoa vai ao login unico do portal (`https://mnrs.com.br/?proximo=plantoes`, kairos ADR 0013), que volta ja logada via `/api/auth/sso`; `/entrar` e a porta de emergencia com login local. Regra em `lib/auth/portao.ts`.
 
 O acesso nasce assim:
 
@@ -461,7 +461,7 @@ Esta fase estara pronta quando:
 5. So apos aprovacao o usuario conseguir logar.
 6. Um `chief` autenticado nao conseguir acessar rotas exclusivas de `admin`.
 7. Um `admin` autenticado conseguir revisar convites, solicitacoes e historico amplo.
-8. O quadro em `/` continuar utilizavel em leitura mesmo sem login.
+8. O quadro em `/` e as rotas que o entregam (`/api/board`, `/api/board/stream`, passagem de ocorrencias) nao mostrarem nada sem sessao: `/` redireciona ao login unico do portal, as rotas respondem 401, e `/entrar` continua funcionando como login local de emergencia.
 9. Apos login de `chief`, acoes de `saiu` e `continuar` gravarem em banco e reaparecerem corretamente no board.
 
 ## Riscos e cuidados
