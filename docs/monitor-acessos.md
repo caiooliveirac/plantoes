@@ -140,14 +140,42 @@ para a linha do tempo):
 | Trocar a senha e mandar link | senha aleatória que ninguém conhece, tudo cai, link de 24 h ao e-mail da conta | **sim** |
 | Suspender / reativar | `is_active` — ninguém entra, nem o dono | sim, até reativar |
 
-**Portal (mnrs.com.br)**: o porteiro guarda login próprio por 30 dias e reabre o
-plantões pelo `/api/auth/sso` sem pedir senha. Desde este monitor, o SSO recusa
-handoff com `sv` (versão da sessão) diferente da atual — então "encerrar todas"
-e troca de senha derrubam também o login do portal. **Depende do porteiro mandar
-o `sv`** (PR no kairos, `deploy/porteiro`): antes dele, só "trocar a senha" e
-"suspender" cortam quem entra pelo portal. Handoff vindo do app Escalas ainda
-não leva `sv` — quem tem sessão aberta lá consegue abrir o plantões até ela
-vencer (dívida registrada).
+**Portal (mnrs.com.br)**: o porteiro guarda login próprio por 30 dias
+(`mnrs_sso`, com `sid` e `sv` desde 27/09/2026) e reabre o plantões pelo
+`/api/auth/sso` sem pedir senha. O SSO recusa handoff com `sv` (versão da
+sessão) diferente da atual — então "encerrar todas" e troca de senha derrubam
+também o login do portal. Handoff vindo do app Escalas ainda não leva `sv` —
+quem tem sessão aberta lá consegue abrir o plantões até ela vencer (dívida).
+
+## Tabela (e Triagem): o login do portal também é vigiado
+
+A Tabela não tem login próprio: o nginx pergunta ao porteiro a cada pedido
+(`auth_request` → `/_auth/portao`) se o cookie do portal vale. Desde
+27/09/2026 o porteiro também pergunta ao plantões —
+`POST /api/servicos/portal/acesso` (token de serviço `ESCALA_SSO_TOKEN`) — se
+**aquela sessão do portal** ainda vale:
+
+- recusa conta inexistente, suspensa, sem papel, ou `sv` antigo (senha trocada,
+  "encerrar sessões"). Recusado = "sem sessão": Tabela volta ao login do portal
+  e o `/sessao` do portal mostra deslogado. Cada recusa vira evento
+  `portal_recusado` na linha do tempo da conta;
+- aceita e **registra o uso**: o login do portal vira uma sessão de origem
+  `portal_cookie` (o `sid` do cookie), com IP, aparelho e localização que o
+  porteiro repassa, pedidos somados por minuto, página aberta (`/tabela/`),
+  ações (POST/PATCH/DELETE) e WebSocket. Caminho sem query string: a Tabela
+  manda endereço de ocorrência em `?local=`.
+
+O porteiro guarda a resposta por 60 s por sessão × IP: suspender ou encerrar
+sessões corta a Tabela em até 1 minuto. **Plantões fora do ar = a sessão passa**
+(sem resposta, o porteiro não derruba a Tabela a cada deploy do plantões);
+recusa já guardada continua valendo. Para saber sistema, caminho e método, o
+bloco `/_porteiro_tabela` do nginx manda `X-Mnrs-Sistema`, `X-Original-URI` e
+`X-Original-Method` (fonte: `nginx-host.conf` do repo tabela). Sem eles o uso
+ainda é registrado, como "portal".
+
+Assim um login emprestado da Tabela aparece no mesmo relatório e nos mesmos
+alertas que o da Mesa: Tabela aberta em casa enquanto a Mesa está em uso na
+Central é uso simultâneo em redes diferentes.
 
 ## Limitações conhecidas
 
@@ -174,4 +202,5 @@ exporte antes o relatório de quem estiver sob apuração).
    registra, e a tela diz que falta a migration.
 2. Cloudflare: ligar "Add visitor location headers" para ter cidade.
 3. `ACESSOS_ALERTAS_ENABLED=1` no `.env.production` para os avisos.
-4. Porteiro com `sv` (PR no kairos) para "encerrar todas" valer no portal.
+4. Porteiro com `sv` e a conferência do `/portao` (PRs no kairos) para "encerrar
+   todas", troca de senha e suspensão valerem no portal e na Tabela.

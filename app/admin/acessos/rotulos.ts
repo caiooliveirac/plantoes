@@ -18,6 +18,7 @@ export const NOME_DA_ORIGEM: Record<string, string> = {
     escala: "app Escalas",
     cadastro: "cadastro de médico",
     anterior: "login anterior ao monitor",
+    portal_cookie: "login do portal (Tabela e outros)",
 };
 
 export const NOME_DA_SITUACAO = { aberta: "aberta agora", inativa: "parada", encerrada: "encerrada" } as const;

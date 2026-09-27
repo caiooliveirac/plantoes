@@ -409,3 +409,16 @@ test("mensagens: alerta na hora e resumo diário em português, dentro do limite
     assert.match(cheio, /o resto está no monitor/);
     assert.match(cheio, /Monitor: https:\/\/x\/admin\/acessos$/);
 });
+
+test("pedido da Tabela (via porteiro): página, ação, WebSocket e arquivos", () => {
+    assert.equal(classificarPedido(contexto({ caminho: "/tabela/" }), null).evento, "pagina");
+    assert.equal(classificarPedido(contexto({ caminho: "/tabela/api/cases" }), null).evento, null, "consulta de API é presença");
+    assert.equal(classificarPedido(contexto({ caminho: "/tabela/assets/index-abc123.js" }), null).evento, null, "arquivo estático é presença");
+    assert.equal(classificarPedido(contexto({ caminho: "/tabela/ws" }), null).evento, "quadro_ao_vivo");
+    assert.equal(classificarPedido(contexto({ metodo: "POST", caminho: "/tabela/api/cases" }), null).evento, "acao");
+    assert.equal(descreverPedido("pagina", "GET", "/tabela/"), "abriu a Tabela de vagas");
+    assert.equal(descreverPedido("acao", "POST", "/tabela/api/cases"), "registrou ou alterou caso na Tabela");
+    assert.equal(descreverPedido("acao", "DELETE", "/tabela/api/upas/restrictions/3"), "mexeu em restrição de UPA na Tabela");
+    assert.equal(descreverPedido("quadro_ao_vivo", "GET", "/tabela/ws"), "ligou a Tabela ao vivo");
+    assert.equal(descreverPedido("quadro_ao_vivo", "GET", "/api/board/stream"), "ligou o quadro ao vivo");
+});

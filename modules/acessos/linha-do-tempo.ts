@@ -25,6 +25,7 @@ const FRASES: Record<string, string> = {
     senha_trocada: "trocou a senha",
     saida: "saiu (botão Sair)",
     sso_recusado: "entrada pelo portal recusada (login antigo)",
+    portal_recusado: "login do portal recusado (senha trocada, sessões encerradas ou conta suspensa)",
     senha_login_ok: "digitou a senha certa no login do Plantões",
     senha_login_falhou: "errou a senha no login do Plantões",
     senha_portal_ok: "digitou a senha certa no portal",
@@ -37,6 +38,7 @@ const ORIGENS: Record<string, string> = {
     escala: "pelo app Escalas",
     cadastro: "no cadastro de médico",
     anterior: "(login anterior ao monitor — vista pela primeira vez)",
+    portal_cookie: "com o login do portal mnrs.com.br (Tabela e outros sistemas)",
 };
 
 function fraseDoEvento(evento: EventoDeSessao) {
