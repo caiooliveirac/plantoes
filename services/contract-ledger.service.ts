@@ -34,6 +34,9 @@ import { getDoctorMonthlyPayableBreakdown } from "@/services/payable-shifts.serv
 /** Origem dos lançamentos automáticos. Casa com contract_ledger.source_type. */
 export const CLOSING_SOURCE_TYPE = "payment_closing_attestation";
 
+/** Origem da abertura: chave = contractId, só uma por contrato (índice único). */
+export const OPENING_SOURCE_TYPE = "contract_opening";
+
 /** '<doctorId>|<AAAA-MM>' — chave lógica estável (a atestação some ao desassinar). */
 export function closingSourceKey(doctorId: string, monthKey: string): string {
     return `${doctorId}|${monthKey}`;
@@ -406,15 +409,52 @@ export async function syncContractLedgerForMonthBatch(params: {
     return results;
 }
 
-/** Ajuste manual do admin. Justificativa é obrigatória — sem ela não há auditoria. */
+/**
+ * Origem do ajuste manual que veio de um formulário com `requestId`: clique
+ * duplo ou reenvio da mesma submissão bate no índice único
+ * (source_type, source_key, source_revision) e não lança duas vezes.
+ */
+export const MANUAL_ADJUSTMENT_SOURCE_TYPE = "admin_manual_adjustment";
+
+/** '<contractId>|<requestId>' — o requestId é gerado no cliente, por submissão. */
+export function manualAdjustmentSourceKey(contractId: string, requestId: string): string {
+    return `${contractId}|${requestId}`;
+}
+
+export interface ManualAdjustmentEntry {
+    entryDate: string;
+    amountCents: number;
+    /** true quando o requestId já tinha sido gravado: nada novo foi lançado. */
+    replayed: boolean;
+}
+
+async function findManualAdjustment(tx: DbLike, sourceKey: string): Promise<ManualAdjustmentEntry | null> {
+    const [row] = await tx
+        .select({ entryDate: contractLedger.entryDate, amount: contractLedger.amount })
+        .from(contractLedger)
+        .where(and(
+            eq(contractLedger.sourceType, MANUAL_ADJUSTMENT_SOURCE_TYPE),
+            eq(contractLedger.sourceKey, sourceKey),
+        ))
+        .limit(1);
+    return row
+        ? { entryDate: row.entryDate, amountCents: Math.round(Number(row.amount) * 100), replayed: true }
+        : null;
+}
+
+/**
+ * Ajuste manual do admin. Justificativa é obrigatória — sem ela não há auditoria.
+ * Com `requestId`, repetir a mesma requisição devolve o lançamento já gravado.
+ */
 export async function recordManualAdjustment(params: {
     contractId: string;
     amountCents: number;
     entryDate: string;
     description: string;
     actorUserId: string;
+    requestId?: string;
     tx?: DbLike;
-}): Promise<void> {
+}): Promise<ManualAdjustmentEntry> {
     const description = params.description.trim();
     if (description.length < 5) {
         throw new Error("Descreva o motivo do ajuste — ele fica no histórico do contrato.");
@@ -424,14 +464,28 @@ export async function recordManualAdjustment(params: {
     }
 
     const tx = params.tx ?? getDb();
-    await tx.insert(contractLedger).values({
+    const sourceKey = params.requestId
+        ? manualAdjustmentSourceKey(params.contractId, params.requestId)
+        : null;
+    const inserted = await tx.insert(contractLedger).values({
         contractId: params.contractId,
         entryDate: params.entryDate,
         type: "manual_adjustment",
         amount: centsToNumeric(params.amountCents),
         description,
+        sourceType: sourceKey ? MANUAL_ADJUSTMENT_SOURCE_TYPE : null,
+        sourceKey,
         createdByUserId: params.actorUserId,
-    });
+    })
+        .onConflictDoNothing()
+        .returning({ id: contractLedger.id });
+
+    if (inserted.length === 0 && sourceKey) {
+        // Perdeu a corrida para a mesma submissão: devolve o que ela gravou.
+        const existing = await findManualAdjustment(tx, sourceKey);
+        if (existing) return existing;
+    }
+    return { entryDate: params.entryDate, amountCents: params.amountCents, replayed: false };
 }
 
 
@@ -469,8 +523,15 @@ export async function recordBalanceAnchor(params: {
     anchorDate: string;
     description: string;
     actorUserId: string;
-}): Promise<{ deltaCents: number; balanceBeforeCents: number }> {
+    requestId?: string;
+}): Promise<{ deltaCents: number; balanceBeforeCents: number | null; replayed: boolean }> {
     const db = getDb();
+    if (params.requestId) {
+        // Reenvio de uma correção já aplicada: recalcular daria delta zero (ou
+        // outro delta, se o razão mudou) — devolve a que foi gravada.
+        const existing = await findManualAdjustment(db, manualAdjustmentSourceKey(params.contractId, params.requestId));
+        if (existing) return { deltaCents: existing.amountCents, balanceBeforeCents: null, replayed: true };
+    }
     const rows = await db
         .select({ entryDate: contractLedger.entryDate, amount: contractLedger.amount })
         .from(contractLedger)
@@ -488,14 +549,17 @@ export async function recordBalanceAnchor(params: {
             "O saldo calculado nessa data já é exatamente esse — nenhum ajuste necessário.",
         );
     }
-    await recordManualAdjustment({
+    const entry = await recordManualAdjustment({
         contractId: params.contractId,
         amountCents: deltaCents,
         entryDate: params.anchorDate,
         description: params.description,
         actorUserId: params.actorUserId,
+        requestId: params.requestId,
     });
-    return { deltaCents, balanceBeforeCents };
+    return entry.replayed
+        ? { deltaCents: entry.amountCents, balanceBeforeCents: null, replayed: true }
+        : { deltaCents, balanceBeforeCents, replayed: false };
 }
 
 /**
@@ -520,16 +584,26 @@ export async function recordOpeningBalance(params: {
             eq(contractLedger.type, "opening"),
         ))
         .limit(1);
+    const jaTemAbertura = "Este contrato já tem saldo de abertura. Para corrigir, lance um ajuste manual.";
     if (existing.length > 0) {
-        throw new Error("Este contrato já tem saldo de abertura. Para corrigir, lance um ajuste manual.");
+        throw new Error(jaTemAbertura);
     }
 
-    await tx.insert(contractLedger).values({
+    // A consulta acima não segura duas requisições simultâneas (clique duplo):
+    // a origem '<contractId>' no índice único faz a segunda perder a corrida.
+    const inserted = await tx.insert(contractLedger).values({
         contractId: params.contractId,
         entryDate: params.entryDate,
         type: "opening",
         amount: centsToNumeric(params.balanceCents),
         description: "Saldo de abertura informado pelo coordenador",
+        sourceType: OPENING_SOURCE_TYPE,
+        sourceKey: params.contractId,
         createdByUserId: params.actorUserId,
-    });
+    })
+        .onConflictDoNothing()
+        .returning({ id: contractLedger.id });
+    if (inserted.length === 0) {
+        throw new Error(jaTemAbertura);
+    }
 }

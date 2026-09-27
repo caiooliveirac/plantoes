@@ -16,6 +16,12 @@ import { recordBalanceAnchor, recordManualAdjustment } from "@/services/contract
 // admin sabe o SALDO que valia no início de uma data ("em 01/05 era R$ X") e o
 // servidor calcula o delta contra o razão — nunca confiar num delta vindo do
 // cliente para este caso, o razão pode ter mudado entre a leitura e o clique.
+//
+// `requestId` (opcional, uuid gerado no cliente por submissão): repetir a mesma
+// requisição — clique duplo, reenvio — devolve o lançamento já gravado em vez
+// de lançar de novo. Sem ele, cada POST lança (comportamento antigo).
+const requestIdSchema = z.string().uuid().optional();
+
 const payloadSchema = z.union([
     z.object({
         mode: z.literal("anchor"),
@@ -27,6 +33,7 @@ const payloadSchema = z.union([
          */
         anchorDate: z.string().regex(/^\d{4}-\d{2}-01$/, "A correção de saldo só vale para o dia 1º de um mês."),
         description: z.string().trim().min(5, "Descreva o motivo da correção."),
+        requestId: requestIdSchema,
     }),
     z.object({
         mode: z.literal("delta").optional(),
@@ -34,6 +41,7 @@ const payloadSchema = z.union([
         amountBrl: z.number().finite().refine((value) => value !== 0, "O ajuste não pode ser zero."),
         description: z.string().trim().min(5, "Descreva o motivo do ajuste."),
         entryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        requestId: requestIdSchema,
     }),
 ]);
 
@@ -61,14 +69,18 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
 
     try {
         if (parsed.data.mode === "anchor") {
-            const { targetBalanceBrl, anchorDate, description } = parsed.data;
+            const { targetBalanceBrl, anchorDate, description, requestId } = parsed.data;
             const result = await recordBalanceAnchor({
                 contractId: id,
                 targetBalanceCents: Math.round(targetBalanceBrl * 100),
                 anchorDate,
                 description,
                 actorUserId: session.user.id,
+                requestId,
             });
+            if (result.replayed) {
+                return NextResponse.json({ contractId: id, anchorDate, deltaBrl: result.deltaCents / 100, replayed: true });
+            }
 
             await getDb().insert(auditLogs).values({
                 actorUserId: session.user.id,
@@ -80,7 +92,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
                     anchorDate,
                     description,
                     deltaBrl: result.deltaCents / 100,
-                    balanceBeforeBrl: result.balanceBeforeCents / 100,
+                    balanceBeforeBrl: (result.balanceBeforeCents ?? 0) / 100,
                 },
             });
 
@@ -89,13 +101,17 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
         }
 
         const entryDate = parsed.data.entryDate ?? bahiaDateIso();
-        await recordManualAdjustment({
+        const entry = await recordManualAdjustment({
             contractId: id,
             amountCents: Math.round(parsed.data.amountBrl * 100),
             entryDate,
             description: parsed.data.description,
             actorUserId: session.user.id,
+            requestId: parsed.data.requestId,
         });
+        if (entry.replayed) {
+            return NextResponse.json({ contractId: id, entryDate: entry.entryDate, replayed: true });
+        }
 
         await getDb().insert(auditLogs).values({
             actorUserId: session.user.id,
