@@ -36,8 +36,7 @@ rodar a suíte de testes, e até **consultar logs e banco de produção remotame
   18 tabelas no schema Postgres `operations_v2`).
 - Bot de Telegram para registro de plantões médicos (chegada/saída/continuação/meal
   breaks/pagamento). Worker de lembretes roda como processo PM2 separado.
-- Autenticação própria (JWT + cookie), sem NextAuth/Auth.js apesar da dependência
-  `next-auth` estar no `package.json` (não é usada no fluxo de auth atual).
+- Autenticação própria (JWT + cookie), sem NextAuth/Auth.js.
 - Runtime de produção: **PM2** com dois processos: `plantoes` (web, porta `3004`) e
   `plantoes-telegram-worker` (worker).
 
