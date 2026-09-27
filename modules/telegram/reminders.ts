@@ -1363,7 +1363,6 @@ export async function sendTelegramReminderCycle(referenceDate = new Date()) {
     try {
         const paymentBoard = await getPaymentAllocationBoard({
             reference: referenceDate,
-            expireDeactivations: false,
         });
         const paymentConflictPlan = buildPaymentConflictAlertPlan({ now: referenceDate, paymentBoard });
         if (paymentConflictPlan) {
