@@ -328,3 +328,241 @@ export function shouldTreatReassignmentAsArrival(params: {
     }
     return params.activeOcc.sector === params.parsed.sector && params.activeOcc.baseCode === params.parsed.baseCode;
 }
+
+// ---------------------------------------------------------------------------
+// Decisões compostas: cada uma é um passo do caminho de docs/chegada.md §3, entre
+// duas leituras do banco. service.ts lê o estado, chama e executa o efeito.
+// ---------------------------------------------------------------------------
+
+/**
+ * Rótulo de turno com que a chegada começa, antes de olhar o banco.
+ */
+export function resolveInitialArrivalShiftType(params: {
+    parsed: Pick<ArrivalParsedEntry, "shiftType" | "isDeparture" | "isContinuation">;
+    eventAt: Date;
+    /** Hora da mensagem ("agora" do aviso). */
+    referenceAt: Date;
+}): string | null {
+    const { parsed, eventAt, referenceAt } = params;
+    let effectiveShiftType: string | null = parsed.shiftType ?? null;
+    if (!parsed.isDeparture && parsed.isContinuation) {
+        // "continua" diz de onde o médico VEM, não que ele promete mais 24h. O rótulo
+        // aqui é o turno em que ele está chegando — nunca "P", que daria a este registro
+        // cobertura de 24h e, com ela, pagamento do turno seguinte sem tê-lo trabalhado
+        // (doesCandidateCoverPaymentSlot) e a tag "Continua" travada no lugar do botão de
+        // retirar (continuesBeyondShift).
+        //
+        // O rótulo continua preenchido — a preocupação original de não deixar SD/SN/null
+        // sumir de painéis com escopo de turno segue atendida, agora com o turno certo.
+        // Continuidade no MESMO posto é outro caminho (continueRegulation/Intervention
+        // Occupancy), que estende a ocupação existente em um bloco de 12h e mantém "P".
+        effectiveShiftType = resolveArrivalShiftLabel(eventAt);
+    }
+
+    // When no explicit shift is provided and the arrival time is near a shift boundary,
+    // use the message timestamp's shift to disambiguate.
+    // Example: arrival 18:55 (technically SD) but message sent 20:06 (SN) → doctor is arriving for SN.
+    if (!effectiveShiftType && !parsed.isDeparture) {
+        const arrivalShiftWindow = resolveOperationalShiftWindow(eventAt);
+        const messageShiftWindow = resolveOperationalShiftWindow(referenceAt);
+        if (arrivalShiftWindow.shiftLabel !== messageShiftWindow.shiftLabel) {
+            const minutesToBoundary = (arrivalShiftWindow.nextBoundaryAt.getTime() - eventAt.getTime()) / 60000;
+            if (minutesToBoundary >= 0 && minutesToBoundary <= 60) {
+                effectiveShiftType = messageShiftWindow.shiftLabel;
+            }
+        }
+    }
+
+    return effectiveShiftType;
+}
+
+/**
+ * Para onde vai o aviso, dado o plantão aberto do médico (em qualquer alvo):
+ * - `cross_turno_arrival`: "remanejo" depois do fim do turno de origem → chegada
+ *   com o turno atual (reprocessa sem a marca de remanejo);
+ * - `reassignment_as_arrival`: "remanejado para X" sem plantão aberto, ou já em X → chegada (D12);
+ * - `reassignment`: troca de posto dentro do turno (explícita ou implícita);
+ * - `on_target`: segue para o alvo declarado (chegada, continuação ou saída).
+ */
+export type ArrivalRoute =
+    | { kind: "cross_turno_arrival"; shiftType: "SD" | "SN" }
+    | { kind: "reassignment_as_arrival" }
+    | { kind: "reassignment"; implicit: boolean }
+    | { kind: "on_target" };
+
+export function classifyArrivalRoute(params: {
+    parsed: ArrivalParsedEntry;
+    activeOcc: {
+        sector: "REGULATION" | "INTERVENTION";
+        baseCode: string;
+        shiftLabel: string | null;
+        scheduledEndAt: Date | null;
+    } | null;
+    eventAt: Date;
+}): ArrivalRoute {
+    const { parsed, activeOcc, eventAt } = params;
+    const implicitReassignment = shouldTreatTelegramArrivalAsImplicitReassignment({
+        sector: parsed.sector,
+        baseCode: parsed.baseCode,
+        arrivalTime: parsed.arrivalTime,
+        shiftType: parsed.shiftType,
+        roleFunction: parsed.roleFunction,
+        isShadow: parsed.isShadow,
+        isDeparture: parsed.isDeparture,
+        isContinuation: parsed.isContinuation,
+        isReassignment: parsed.isReassignment,
+        activeSector: activeOcc?.sector,
+        activeBaseCode: activeOcc?.baseCode,
+        activeShiftLabel: activeOcc?.shiftLabel,
+    });
+
+    // Remanejo só existe DENTRO do turno. Depois que o SD/SN de origem acabou (o plantão
+    // aberto segue "ativo" por 3h de folga), ir para outro posto é o turno SEGUINTE do
+    // médico: vira chegada com o turno atual, que cai no caminho de continuidade de
+    // todo dia ("Fulano CC70 SN"). Antes o remanejo clonava rótulo e janela do SD para
+    // o trabalho noturno — beltrano da CZ50 que ia à noite para a CC70 não tinha SN.
+    const crossTurnoShift = resolveCrossTurnoMoveShift({
+        isMove: Boolean(parsed.isReassignment || implicitReassignment),
+        activeShiftLabel: activeOcc?.shiftLabel ?? null,
+        activeScheduledEndAt: activeOcc?.scheduledEndAt ?? null,
+        eventAt,
+    });
+    if (crossTurnoShift) {
+        return { kind: "cross_turno_arrival", shiftType: crossTurnoShift };
+    }
+
+    // "Remanejado para X" de quem não tem plantão aberto, ou que já está em X, é uma
+    // chegada: registra em vez de recusar (docs/chegada.md, D12 — a chegada é soberana).
+    if (shouldTreatReassignmentAsArrival({ parsed, activeOcc })) {
+        return { kind: "reassignment_as_arrival" };
+    }
+
+    if (parsed.isReassignment || implicitReassignment) {
+        return { kind: "reassignment", implicit: !parsed.isReassignment };
+    }
+
+    return { kind: "on_target" };
+}
+
+/**
+ * Chegada (não saída) no alvo declarado, dada a ocupação aberta do MESMO médico
+ * NESSE alvo:
+ * - `continue_active`: estende essa ocupação (continue*Occupancy) — "continua",
+ *   rótulo P ou troca SD↔SN horas depois;
+ * - `new_occupancy`: vai para start*Occupancy (que decide re-chegada in-place,
+ *   stale ou junção). `assumedHalfShift` = meio plantão da regulação (D6);
+ *   `lookupContinuity` = vale buscar uma fonte de continuidade (falso na correção
+ *   de rótulo D2, senão a ocupação que o médico acabou de abrir vira "fonte").
+ */
+export type TargetArrivalDecision =
+    | { kind: "continue_active" }
+    | { kind: "new_occupancy"; assumedHalfShift: boolean; lookupContinuity: boolean };
+
+export function classifyTargetArrival(params: {
+    parsed: ArrivalParsedEntry;
+    activeOnTarget: { shiftLabel: string | null; startedAt: Date } | null | undefined;
+    eventAt: Date;
+    effectiveShiftType: string | null;
+}): TargetArrivalDecision {
+    const { parsed, activeOnTarget, eventAt } = params;
+    // When the message carries an explicit continuation intent (e.g. "continua 2153"),
+    // never treat the existing active P-shift as stale: the operator/chief is confirming
+    // continuity and we must update the existing occupancy in place instead of closing
+    // it and opening a new one (which would shift started_at to eventAt and break
+    // downstream displays — board, meal break panel, shift report, reminders).
+    const shouldReopenStale = parsed.sector === "REGULATION"
+        ? shouldReopenStaleTelegramRegulationContinuation
+        : shouldReopenStaleTelegramInterventionContinuation;
+    const shouldReopenStaleContinuation = !parsed.isContinuation && shouldReopenStale({
+        activeShiftLabel: activeOnTarget?.shiftLabel,
+        activeStartedAt: activeOnTarget?.startedAt,
+        eventAt,
+    });
+
+    const shouldContinueActiveOccupancy = Boolean(activeOnTarget) && !shouldReopenStaleContinuation && shouldTreatTelegramArrivalAsContinuation({
+        sector: parsed.sector,
+        isDeparture: parsed.isDeparture,
+        isContinuation: parsed.isContinuation,
+        incomingShiftLabel: parsed.shiftType,
+        activeShiftLabel: activeOnTarget?.shiftLabel,
+        activeStartedAt: activeOnTarget?.startedAt,
+        eventAt,
+    });
+    if (shouldContinueActiveOccupancy && activeOnTarget) {
+        return { kind: "continue_active" };
+    }
+
+    const assumedHalfShift = shouldAssumeTelegramHalfShift({
+        parsed,
+        eventAt,
+        effectiveShiftType: params.effectiveShiftType,
+        activeStartedAt: activeOnTarget?.startedAt ?? null,
+    });
+    const isLabelCorrection = isTelegramShiftLabelCorrection({
+        incomingShiftLabel: parsed.shiftType,
+        activeShiftLabel: activeOnTarget?.shiftLabel,
+        activeStartedAt: activeOnTarget?.startedAt,
+        eventAt,
+    });
+    return {
+        kind: "new_occupancy",
+        assumedHalfShift,
+        lookupContinuity: !(parsed.isDeparture || isLabelCorrection),
+    };
+}
+
+/**
+ * Com a fonte de continuidade achada no banco (findTelegramContinuityContext):
+ * a chegada entra na cadeia dela? Sim quando o aviso é continuação pelas regras de
+ * rótulo, ou quando atravessou a virada (shouldInferCrossShiftContinuation).
+ */
+export function shouldUseTelegramContinuitySource(params: {
+    parsed: ArrivalParsedEntry;
+    source: { shiftLabel: string | null; boardStartedAt: Date | null; startedAt: Date } | null | undefined;
+    eventAt: Date;
+}): boolean {
+    const { parsed, source } = params;
+    if (!source) {
+        return false;
+    }
+    const sourceShiftLabel = source.shiftLabel
+        ?? resolveOperationalShiftWindow(source.boardStartedAt ?? source.startedAt).shiftLabel;
+    return shouldLinkTelegramArrivalToContinuitySource({ parsed, sourceShiftLabel })
+        || shouldInferCrossShiftContinuation({
+            sourceShiftLabel,
+            eventAt: params.eventAt,
+            isExplicitContinuation: Boolean(parsed.isContinuation),
+        });
+}
+
+/**
+ * A chegada quer o quadro do alvo (passa pelo portão de tomada e pode deslocar o
+ * ocupante na chegada retroativa)? Saída, continuação e sombra nunca querem.
+ */
+export function arrivalWantsBoard(
+    parsed: Pick<ArrivalParsedEntry, "isDeparture" | "isContinuation" | "baseCode">,
+    isShadow: boolean,
+): boolean {
+    return !parsed.isDeparture
+        && !parsed.isContinuation
+        && !isShadow
+        && Boolean(parsed.baseCode);
+}
+
+/**
+ * Chegada retroativa (hora da 1ª tentativa, anterior a este aviso) que quer o quadro
+ * sem tomada confirmada: o ocupante do quadro NÃO pode ser encerrado nessa hora
+ * passada — ele estava lá. É deslocado (fora do quadro, plantão aberto), exceto
+ * sombra, o próprio médico, ou titular de base que divide a base com quem chega.
+ */
+export function shouldDisplaceOnRetroactiveArrival(params: {
+    previous: { doctorId: string; isShadow: boolean } | null | undefined;
+    arrivingDoctorId: string;
+    /** Titular vigente de uma base não é deslocado: quem chega divide a base com ele. */
+    sharesBase: boolean;
+}): boolean {
+    return Boolean(params.previous)
+        && !params.previous!.isShadow
+        && params.previous!.doctorId !== params.arrivingDoctorId
+        && !params.sharesBase;
+}

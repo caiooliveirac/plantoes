@@ -62,18 +62,15 @@ import { continueInterventionOccupancy, deactivateInterventionBase, displaceInte
 import { getSaoPauloParts, isSameOperationalShiftArrival, shouldDisplaceInsteadOfRelieve, resolveArrivalShiftLabel, resolveImplicitOccupancyExpiry, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, resolveProlongedShiftExpiry } from "@/modules/operational/board-rules";
 import type { OccupancyShiftLabel } from "@/modules/operational/board-rules";
 import {
-    isTelegramShiftLabelCorrection,
+    arrivalWantsBoard,
+    classifyArrivalRoute,
+    classifyTargetArrival,
     isTelegramShiftLabelTimeMismatch,
-    resolveCrossTurnoMoveShift,
+    resolveInitialArrivalShiftType,
     shouldAskTelegramShiftLabelMismatch,
     shouldAssumeTelegramHalfShift,
-    shouldInferCrossShiftContinuation,
-    shouldLinkTelegramArrivalToContinuitySource,
-    shouldReopenStaleTelegramInterventionContinuation,
-    shouldReopenStaleTelegramRegulationContinuation,
-    shouldTreatReassignmentAsArrival,
-    shouldTreatTelegramArrivalAsContinuation,
-    shouldTreatTelegramArrivalAsImplicitReassignment,
+    shouldDisplaceOnRetroactiveArrival,
+    shouldUseTelegramContinuitySource,
     type ArrivalParsedEntry,
 } from "@/modules/telegram/arrival-classification";
 import {
@@ -353,7 +350,7 @@ export {
     shouldTreatReassignmentAsArrival,
     shouldTreatTelegramArrivalAsContinuation,
     shouldTreatTelegramArrivalAsImplicitReassignment,
-};
+} from "@/modules/telegram/arrival-classification";
 
 interface PendingNameResolutionData {
     parsed: ArrivalParsedEntry;
@@ -9321,42 +9318,15 @@ async function applyParsedEntry(params: {
         ? await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt)
         : null;
 
-    const implicitReassignment = shouldTreatTelegramArrivalAsImplicitReassignment({
-        sector: parsed.sector,
-        baseCode: parsed.baseCode,
-        arrivalTime: parsed.arrivalTime,
-        shiftType: parsed.shiftType,
-        roleFunction: parsed.roleFunction,
-        isShadow: parsed.isShadow,
-        isDeparture: parsed.isDeparture,
-        isContinuation: parsed.isContinuation,
-        isReassignment: parsed.isReassignment,
-        activeSector: activeOcc?.sector,
-        activeBaseCode: activeOcc?.baseCode,
-        activeShiftLabel: activeOcc?.shiftLabel,
-    });
-
-    // Remanejo só existe DENTRO do turno. Depois que o SD/SN de origem acabou (o plantão
-    // aberto segue "ativo" por 3h de folga), ir para outro posto é o turno SEGUINTE do
-    // médico: vira chegada com o turno atual, que cai no caminho de continuidade de
-    // todo dia ("Fulano CC70 SN"). Antes o remanejo clonava rótulo e janela do SD para
-    // o trabalho noturno — beltrano da CZ50 que ia à noite para a CC70 não tinha SN.
-    const crossTurnoShift = resolveCrossTurnoMoveShift({
-        isMove: Boolean(parsed.isReassignment || implicitReassignment),
-        activeShiftLabel: activeOcc?.shiftLabel ?? null,
-        activeScheduledEndAt: activeOcc?.scheduledEndAt ?? null,
-        eventAt,
-    });
-    if (crossTurnoShift) {
+    // Decisão pura: arrival-classification.ts (classifyArrivalRoute).
+    const route = classifyArrivalRoute({ parsed, activeOcc, eventAt });
+    if (route.kind === "cross_turno_arrival") {
         return applyParsedEntry({
             ...params,
-            parsed: { ...parsed, isReassignment: false, shiftType: crossTurnoShift },
+            parsed: { ...parsed, isReassignment: false, shiftType: route.shiftType },
         });
     }
-
-    // "Remanejado para X" de quem não tem plantão aberto, ou que já está em X, é uma
-    // chegada: registra em vez de recusar (docs/chegada.md, D12 — a chegada é soberana).
-    if (shouldTreatReassignmentAsArrival({ parsed, activeOcc })) {
+    if (route.kind === "reassignment_as_arrival") {
         return applyParsedEntry({
             ...params,
             parsed: { ...parsed, isReassignment: false },
@@ -9364,7 +9334,7 @@ async function applyParsedEntry(params: {
     }
 
     // Handle reassignment as a special case (end source + start target)
-    if (parsed.isReassignment || implicitReassignment) {
+    if (route.kind === "reassignment") {
         return handleTelegramReassignment({ parsed, resolvedDoctor, eventAt, messageText, activeOcc, piamRouting });
     }
 
@@ -9374,20 +9344,7 @@ async function applyParsedEntry(params: {
     let regulationActiveStartedAt: Date | null = null;
     let autoReactivated = false;
     let replyTimeAt = eventAt;
-    let effectiveShiftType: string | null = parsed.shiftType ?? null;
-    if (!parsed.isDeparture && parsed.isContinuation) {
-        // "continua" diz de onde o médico VEM, não que ele promete mais 24h. O rótulo
-        // aqui é o turno em que ele está chegando — nunca "P", que daria a este registro
-        // cobertura de 24h e, com ela, pagamento do turno seguinte sem tê-lo trabalhado
-        // (doesCandidateCoverPaymentSlot) e a tag "Continua" travada no lugar do botão de
-        // retirar (continuesBeyondShift).
-        //
-        // O rótulo continua preenchido — a preocupação original de não deixar SD/SN/null
-        // sumir de painéis com escopo de turno segue atendida, agora com o turno certo.
-        // Continuidade no MESMO posto é outro caminho (continueRegulation/Intervention
-        // Occupancy), que estende a ocupação existente em um bloco de 12h e mantém "P".
-        effectiveShiftType = resolveArrivalShiftLabel(eventAt);
-    }
+    let effectiveShiftType = resolveInitialArrivalShiftType({ parsed, eventAt, referenceAt });
     let continuationFrom: string | null = null;
     let displacedDoctorName: string | null = null;
     // Marca quando uma continuidade estendeu a cobertura alem de 24h (plantao
@@ -9397,20 +9354,6 @@ async function applyParsedEntry(params: {
     // verbosa). Persistida em telegram_ingested_messages.resolution_data.
     let continuityInterpretation: ContinuityInterpretation | null = null;
     const isShadowArrival = resolveTelegramShadowFlag(parsed, messageText);
-
-    // When no explicit shift is provided and the arrival time is near a shift boundary,
-    // use the message timestamp's shift to disambiguate.
-    // Example: arrival 18:55 (technically SD) but message sent 20:06 (SN) → doctor is arriving for SN.
-    if (!effectiveShiftType && !parsed.isDeparture) {
-        const arrivalShiftWindow = resolveOperationalShiftWindow(eventAt);
-        const messageShiftWindow = resolveOperationalShiftWindow(referenceAt);
-        if (arrivalShiftWindow.shiftLabel !== messageShiftWindow.shiftLabel) {
-            const minutesToBoundary = (arrivalShiftWindow.nextBoundaryAt.getTime() - eventAt.getTime()) / 60000;
-            if (minutesToBoundary >= 0 && minutesToBoundary <= 60) {
-                effectiveShiftType = messageShiftWindow.shiftLabel;
-            }
-        }
-    }
 
     if (parsed.sector === "REGULATION") {
         const post = await db.query.regulationPosts.findFirst({
@@ -9532,28 +9475,10 @@ async function applyParsedEntry(params: {
                 orderBy: [desc(regulationOccupancies.boardStartedAt), desc(regulationOccupancies.startedAt)],
             });
 
-            // When the message carries an explicit continuation intent (e.g. "continua 2153"),
-            // never treat the existing active P-shift as stale: the operator/chief is confirming
-            // continuity and we must update the existing occupancy in place instead of closing
-            // it and opening a new one (which would shift started_at to eventAt and break
-            // downstream displays — board, meal break panel, shift report, reminders).
-            const shouldReopenStaleContinuation = !parsed.isContinuation && shouldReopenStaleTelegramRegulationContinuation({
-                activeShiftLabel: activeOccupancy?.shiftLabel,
-                activeStartedAt: activeOccupancy?.startedAt,
-                eventAt,
-            });
+            // Decisão pura: arrival-classification.ts (classifyTargetArrival).
+            const decision = classifyTargetArrival({ parsed, activeOnTarget: activeOccupancy, eventAt, effectiveShiftType });
 
-            const shouldContinueActiveOccupancy = Boolean(activeOccupancy) && !shouldReopenStaleContinuation && shouldTreatTelegramArrivalAsContinuation({
-                sector: parsed.sector,
-                isDeparture: parsed.isDeparture,
-                isContinuation: parsed.isContinuation,
-                incomingShiftLabel: parsed.shiftType,
-                activeShiftLabel: activeOccupancy?.shiftLabel,
-                activeStartedAt: activeOccupancy?.startedAt,
-                eventAt,
-            });
-
-            if (shouldContinueActiveOccupancy && activeOccupancy) {
+            if (decision.kind === "continue_active" && activeOccupancy) {
                 const continued = await continueRegulationOccupancy(activeOccupancy.id, {
                     notes: messageText,
                     continuedAt: eventAt.getTime() > referenceAt.getTime() ? referenceAt : eventAt,
@@ -9577,52 +9502,21 @@ async function applyParsedEntry(params: {
                 });
             } else {
                 regulationActiveStartedAt = activeOccupancy?.startedAt ?? null;
-                const assumedHalfShift = shouldAssumeTelegramHalfShift({
-                    parsed,
-                    eventAt,
-                    effectiveShiftType,
-                    activeStartedAt: regulationActiveStartedAt,
-                });
+                const assumedHalfShift = decision.kind === "new_occupancy" && decision.assumedHalfShift;
                 const halfShiftScheduledEndAt = assumedHalfShift ? resolveHalfShiftScheduledEndAt(eventAt) : null;
                 // O início agendado do meio plantão é SEMPRE a hora esperada (11:30),
                 // não o instante em que o médico avisou. Assim o banco de horas mede
                 // atraso a partir das 11:30 (com a mesma tolerância de 15 min) em vez
                 // de tratar todo aviso como pontual.
                 const halfShiftScheduledStartAt = assumedHalfShift ? resolveHalfShiftScheduledStartAt(eventAt) : null;
-                // Correção de rótulo (D2) não busca cadeia: senão a ocupação que o
-                // próprio médico acabou de abrir vira "fonte" de uma continuação SD→SN.
-                const isLabelCorrection = isTelegramShiftLabelCorrection({
-                    incomingShiftLabel: parsed.shiftType,
-                    activeShiftLabel: activeOccupancy?.shiftLabel,
-                    activeStartedAt: activeOccupancy?.startedAt,
-                    eventAt,
-                });
-                const continuityContext = parsed.isDeparture || isLabelCorrection
-                    ? null
-                    : await findTelegramContinuityContext({
+                // Correção de rótulo (D2) não busca cadeia (decision.lookupContinuity).
+                const continuityContext = decision.kind === "new_occupancy" && decision.lookupContinuity
+                    ? await findTelegramContinuityContext({
                         doctorId: resolvedDoctor.id,
                         eventAt,
-                    });
-                const sourceShiftLabelForLink = continuityContext?.source
-                    ? (continuityContext.source.shiftLabel
-                        ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
-                    : undefined;
-                const inferredCrossShiftContinuation = Boolean(continuityContext?.source)
-                    && shouldInferCrossShiftContinuation({
-                        sourceShiftLabel: sourceShiftLabelForLink,
-                        eventAt,
-                        isExplicitContinuation: Boolean(parsed.isContinuation),
-                    });
-                const shouldUseContinuityContext = Boolean(
-                    continuityContext?.source
-                    && (
-                        shouldLinkTelegramArrivalToContinuitySource({
-                            parsed,
-                            sourceShiftLabel: sourceShiftLabelForLink,
-                        })
-                        || inferredCrossShiftContinuation
-                    ),
-                );
+                    })
+                    : null;
+                const shouldUseContinuityContext = shouldUseTelegramContinuitySource({ parsed, source: continuityContext?.source, eventAt });
 
                 let isCrossTargetContinuation = false;
                 if (shouldUseContinuityContext) {
@@ -9918,25 +9812,11 @@ async function applyParsedEntry(params: {
                 orderBy: [desc(interventionOccupancies.boardStartedAt), desc(interventionOccupancies.startedAt)],
             });
 
-            // Mirror the regulation guard: explicit "continua" intent forces continuation of the
-            // existing P occupancy instead of opening a new one with eventAt as started_at.
-            const shouldReopenStaleContinuation = !parsed.isContinuation && shouldReopenStaleTelegramInterventionContinuation({
-                activeShiftLabel: activeOccupancy?.shiftLabel,
-                activeStartedAt: activeOccupancy?.startedAt,
-                eventAt,
-            });
+            // Decisão pura: arrival-classification.ts (classifyTargetArrival; mesma regra
+            // da regulação, com o stale da intervenção e sem meio plantão).
+            const decision = classifyTargetArrival({ parsed, activeOnTarget: activeOccupancy, eventAt, effectiveShiftType });
 
-            const shouldContinueActiveOccupancy = Boolean(activeOccupancy) && !shouldReopenStaleContinuation && shouldTreatTelegramArrivalAsContinuation({
-                sector: parsed.sector,
-                isDeparture: parsed.isDeparture,
-                isContinuation: parsed.isContinuation,
-                incomingShiftLabel: parsed.shiftType,
-                activeShiftLabel: activeOccupancy?.shiftLabel,
-                activeStartedAt: activeOccupancy?.startedAt,
-                eventAt,
-            });
-
-            if (shouldContinueActiveOccupancy && activeOccupancy) {
+            if (decision.kind === "continue_active" && activeOccupancy) {
                 // Continuidade genuina AVISADA ("continua") estende o plantao P sem
                 // exigir justificativa de saida tardia — paridade com a regulacao.
                 // O guard antigo de requiresOvertimeJustification fazia "continua"
@@ -9963,40 +9843,14 @@ async function applyParsedEntry(params: {
                     extendedLongShift,
                 });
             } else {
-                // Correção de rótulo (D2) não busca cadeia: senão a ocupação que o
-                // próprio médico acabou de abrir vira "fonte" de uma continuação SD→SN.
-                const isLabelCorrection = isTelegramShiftLabelCorrection({
-                    incomingShiftLabel: parsed.shiftType,
-                    activeShiftLabel: activeOccupancy?.shiftLabel,
-                    activeStartedAt: activeOccupancy?.startedAt,
-                    eventAt,
-                });
-                const continuityContext = parsed.isDeparture || isLabelCorrection
-                    ? null
-                    : await findTelegramContinuityContext({
+                // Correção de rótulo (D2) não busca cadeia (decision.lookupContinuity).
+                const continuityContext = decision.kind === "new_occupancy" && decision.lookupContinuity
+                    ? await findTelegramContinuityContext({
                         doctorId: resolvedDoctor.id,
                         eventAt,
-                    });
-                const sourceShiftLabelForLink = continuityContext?.source
-                    ? (continuityContext.source.shiftLabel
-                        ?? resolveOperationalShiftWindow(continuityContext.source.boardStartedAt ?? continuityContext.source.startedAt).shiftLabel)
-                    : undefined;
-                const inferredCrossShiftContinuation = Boolean(continuityContext?.source)
-                    && shouldInferCrossShiftContinuation({
-                        sourceShiftLabel: sourceShiftLabelForLink,
-                        eventAt,
-                        isExplicitContinuation: Boolean(parsed.isContinuation),
-                    });
-                const shouldUseContinuityContext = Boolean(
-                    continuityContext?.source
-                    && (
-                        shouldLinkTelegramArrivalToContinuitySource({
-                            parsed,
-                            sourceShiftLabel: sourceShiftLabelForLink,
-                        })
-                        || inferredCrossShiftContinuation
-                    ),
-                );
+                    })
+                    : null;
+                const shouldUseContinuityContext = shouldUseTelegramContinuitySource({ parsed, source: continuityContext?.source, eventAt });
 
                 let isCrossTargetContinuation = false;
                 if (shouldUseContinuityContext) {
@@ -14371,10 +14225,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             let takeoverDisplaced: { occupantName: string; targetLabel: string; sinceTime: string } | null = null;
             const takeoverSenderId = message.from?.id ? String(message.from.id) : null;
             const isShadowTakeoverInput = resolveTelegramShadowFlag(firstParsed, message.text);
-            const takeoverWantsBoard = !firstParsed.isDeparture
-                && !firstParsed.isContinuation
-                && !isShadowTakeoverInput
-                && Boolean(firstParsed.baseCode);
+            const takeoverWantsBoard = arrivalWantsBoard(firstParsed, isShadowTakeoverInput);
             if (takeoverWantsBoard && takeoverSenderId && firstParsed.baseCode) {
                 const occupant = await findActiveSameTurnoBoardCarrierOnTarget({
                     sector: firstParsed.sector,
@@ -14466,7 +14317,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     arrivingDoctorId: resolvedDoctor.id,
                     arrivalAt: eventAt,
                 });
-                if (previous && !previous.isShadow && previous.doctorId !== resolvedDoctor.id && !sharesBase) {
+                if (previous && shouldDisplaceOnRetroactiveArrival({ previous, arrivingDoctorId: resolvedDoctor.id, sharesBase })) {
                     const displace = firstParsed.sector === "REGULATION" ? displaceRegulationOccupant : displaceInterventionOccupant;
                     await displace(previous.occupancyId, {
                         displacedAt: messageEventAt,
