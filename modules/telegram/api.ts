@@ -25,6 +25,8 @@ export interface TelegramMessage {
     from?: TelegramUser;
     chat: { id: number; type: string; title?: string };
     date: number;
+    /** Presente em `edited_message`: hora da edição. `date` continua sendo a do envio original. */
+    edit_date?: number;
     text?: string;
     /** Mensagem citada quando o usuário responde (reply) a um balão — ex.: responder "SD" ao prompt do PIAM. */
     reply_to_message?: TelegramMessage;
@@ -41,6 +43,8 @@ export interface TelegramCallbackQuery {
 export interface TelegramUpdate {
     update_id: number;
     message?: TelegramMessage;
+    /** Mensagem editada pelo autor (mesmo message_id da original). Ver D8 em docs/chegada.md. */
+    edited_message?: TelegramMessage;
     callback_query?: TelegramCallbackQuery;
 }
 

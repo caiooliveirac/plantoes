@@ -1,7 +1,8 @@
+import { BAHIA_OFFSET_MINUTES } from "@/lib/time";
+
 export type OperationalShiftLabel = "SD" | "SN";
 export type OccupancyShiftLabel = OperationalShiftLabel | "P" | null;
 
-const SAO_PAULO_OFFSET_MINUTES = -180;
 const PRE_SHIFT_TOLERANCE_MINUTES = 60;
 // Early-arrival detection window: arrivals within 3 h before the next boundary
 // are classified as belonging to the upcoming shift (04:00→SD, 16:00→SN).
@@ -19,11 +20,11 @@ interface SaoPauloParts {
 
 function toSaoPauloDate(value: string | Date) {
     const date = value instanceof Date ? value : new Date(value);
-    return new Date(date.getTime() + (SAO_PAULO_OFFSET_MINUTES * 60000));
+    return new Date(date.getTime() + (BAHIA_OFFSET_MINUTES * 60000));
 }
 
 function fromSaoPauloClockParts(year: number, month: number, day: number, hour: number, minute: number) {
-    return new Date(Date.UTC(year, month - 1, day, hour - (SAO_PAULO_OFFSET_MINUTES / 60), minute, 0, 0));
+    return new Date(Date.UTC(year, month - 1, day, hour - (BAHIA_OFFSET_MINUTES / 60), minute, 0, 0));
 }
 
 function addDays(date: Date, days: number) {

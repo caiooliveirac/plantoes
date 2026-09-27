@@ -2,12 +2,12 @@ import type { PaymentAllocationBoard, PaymentAllocationRow } from "@/services/bo
 import { HALF_SHIFT_DISPLAY_LABEL, HALF_SHIFT_ROLE_LABEL, HALF_SHIFT_TAG_LABEL, isHalfShiftRoleLabel, resolvePaymentUnitFromRole } from "@/modules/operational/half-shift";
 import { isNucleoRegulationPost, isPiamRegulationPost } from "@/modules/operational/board-display";
 import { isPaymentAffectingEarlyDepartureOutcome, resolveEarlyDeparturePaymentUnit } from "@/modules/operational/early-departure";
-import { resolveTurnoOutcomeShadow } from "@/modules/reporting/turno-outcome";
+import { resolveTurnoOutcomeShadow, type TurnoOutcomeShadow } from "@/modules/reporting/turno-outcome";
 import { isPremiumRateDate } from "@/modules/operational/holidays";
 import type { ContractStatementMonth } from "@/lib/contracts/statement";
 import type { RenewalKind } from "@/lib/contracts/renewal";
+import { BAHIA_OFFSET_MINUTES } from "@/lib/time";
 
-const SAO_PAULO_OFFSET_MINUTES = -180;
 const MIN_SEGMENT_MINUTES = 45;
 
 // Rótulos exibidos no fechamento para os desfechos de retirada antecipada.
@@ -130,6 +130,12 @@ export interface PayableShift {
     extraKind?: string | null;
     /** Desfecho da régua de retirada antecipada aplicado a ESTE slot (ou null). */
     earlyDepartureOutcome: "bank_only" | "half_shift" | null;
+    /**
+     * ADR-007 R4 em sombra: presente só quando a régua por turno divergiria
+     * desta linha. Não muda pagamento; é o que o relatório da sombra lê
+     * (scripts/relatorio-sombra-turno.ts).
+     */
+    turnoShadow?: TurnoOutcomeShadow;
 }
 
 /**
@@ -524,7 +530,7 @@ export interface ChiefPayableBoardModel {
 }
 
 function toSaoPauloClock(dateIso: string) {
-    return new Date(new Date(dateIso).getTime() + (SAO_PAULO_OFFSET_MINUTES * 60000));
+    return new Date(new Date(dateIso).getTime() + (BAHIA_OFFSET_MINUTES * 60000));
 }
 
 function toOperationalDate(dateIso: string) {
@@ -851,6 +857,7 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
                     ? HALF_SHIFT_TAG_LABEL
                     : null,
         earlyDepartureOutcome: earlyOutcome,
+        ...(turnoShadow?.divergence ? { turnoShadow } : {}),
     } satisfies PayableShift;
 }
 

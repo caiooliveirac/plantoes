@@ -222,6 +222,8 @@ export interface RegulationOccupancyCorrectionInput {
     chiefConfirmed?: boolean;
     /** De onde veio a correção, para a auditoria. Ver journalOccupancyCorrection. */
     auditSource?: string;
+    /** Motivo digitado por quem corrige: vai para o audit log e é ANEXADO às notas. */
+    auditReason?: string;
 }
 
 export interface InterventionOccupancyCorrectionInput {
@@ -234,6 +236,8 @@ export interface InterventionOccupancyCorrectionInput {
     scheduledEndAt?: OptionalDate;
     /** De onde veio a correção, para a auditoria. Ver journalOccupancyCorrection. */
     auditSource?: string;
+    /** Mesmo contrato do campo homônimo em RegulationOccupancyCorrectionInput. */
+    auditReason?: string;
     shiftLabel?: string | null;
     roleLabel?: string | null;
     notes?: string | null;
@@ -992,6 +996,7 @@ async function journalOccupancyCorrection(tx: Executor, params: {
     actorUserId: string | null;
     /** De onde veio a correção, em português, para quem lê a auditoria depois. */
     source: string;
+    reason?: string;
     before: ReturnType<typeof toAuditSnapshot>;
     after: ReturnType<typeof toAuditSnapshot>;
 }) {
@@ -1002,6 +1007,7 @@ async function journalOccupancyCorrection(tx: Executor, params: {
         entityId: params.occupancyId,
         details: {
             source: params.source,
+            ...(params.reason ? { reason: params.reason } : {}),
             // Campos que o undo lê no caminho parcial, mantidos por compatibilidade
             // com os registros já gravados pelas rotas web.
             previousDoctorId: params.before.doctorId,
@@ -1089,6 +1095,10 @@ export function resolveCorrectedHalfShiftState(params: {
         scheduledStartAt: inferred.scheduledStartAt,
         scheduledEndAt: keepsStoredEnd ? storedEndAt : inferred.scheduledEndAt,
     };
+}
+
+function appendAuditReasonNote(existingNotes: string | null, reason: string | undefined) {
+    return reason ? mergeOperationalNotes(existingNotes, `[correcao admin] ${reason}`) : existingNotes;
 }
 
 export async function correctRegulationOccupancy(
@@ -1274,7 +1284,7 @@ export async function correctRegulationOccupancy(
                     actualPostCode: targetPost.code,
                     requestedRamalLabel: hasOwn(input, "ramalLabel") ? input.ramalLabel ?? null : existing.ramalLabel,
                 }),
-                notes: hasOwn(input, "notes") ? input.notes ?? null : existing.notes,
+                notes: hasOwn(input, "notes") ? input.notes ?? null : appendAuditReasonNote(existing.notes, input.auditReason),
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),
                 departureConfirmedAt: departureConfirmedAtNext,
@@ -1288,6 +1298,7 @@ export async function correctRegulationOccupancy(
             occupancyId: id,
             actorUserId: updatedByUserId ?? null,
             source: input.auditSource ?? "correcao de ocupacao",
+            reason: input.auditReason,
             before: toAuditSnapshot({ ...existing, postId: existing.postId }),
             after: toAuditSnapshot({ ...updated, postId: updated.postId }),
         });
@@ -1418,7 +1429,7 @@ export async function correctInterventionOccupancy(
                     ? (boardStartedAt
                         ? preserveInterventionCompanionMarker(existing.notes, input.notes)
                         : preserveInterventionOffBoardMarkers(existing.notes, input.notes))
-                    : existing.notes,
+                    : appendAuditReasonNote(existing.notes, input.auditReason),
                 updatedByUserId: updatedByUserId ?? null,
                 updatedAt: new Date(),
                 departureConfirmedAt: departureConfirmedAtNext,
@@ -1432,6 +1443,7 @@ export async function correctInterventionOccupancy(
             occupancyId: id,
             actorUserId: updatedByUserId ?? null,
             source: input.auditSource ?? "correcao de ocupacao",
+            reason: input.auditReason,
             before: toAuditSnapshot({ ...existing, baseId: existing.baseId }),
             after: toAuditSnapshot({ ...updated, baseId: updated.baseId }),
         });
@@ -1443,6 +1455,55 @@ export async function correctInterventionOccupancy(
 
     publishBoardUpdate(`intervention:correct:${id}`);
     return updated;
+}
+
+// ── Correção de turno e saída de UM plantão (tela de alocação de pagamento) ────────
+// O reparo que mais se repetiu em scripts/ (repair-bruna-pp20, repair-murilo-pr03,
+// parte de repair-ana-luiza-2151): turno (SD/SN/P) e saída de um plantão gravados
+// errado — "Foi só este dia (SD)" tocado por engano, "NÃO SAIU" que reabriu quem só
+// mudou de posto — e o conserto era sempre a mesma chamada: correct*Occupancy com
+// shiftLabel + endedAt/actualEndedAt + chiefConfirmed, mais uma nota com o motivo.
+// Aqui ela vira ação de admin: motivo obrigatório (nota + audit log), a janela
+// prevista é recalculada pelo turno novo, a saída entra já validada pela chefia (é
+// o admin decidindo) e o banco de horas é refeito na mesma transação.
+export const OCCUPANCY_FIX_SHIFT_LABELS = ["SD", "SN", "P"] as const;
+export type OccupancyFixShiftLabel = typeof OCCUPANCY_FIX_SHIFT_LABELS[number];
+export const OCCUPANCY_FIX_AUDIT_SOURCE = "correcao de turno e saida pela alocacao de pagamento";
+
+export async function correctOccupancyShiftAndDeparture(params: {
+    domain: OperationalDomain;
+    occupancyId: string;
+    shiftLabel: OccupancyFixShiftLabel;
+    departureAt: Date;
+    reason: string;
+    actorUserId: string | null;
+    now?: Date;
+}) {
+    const reason = params.reason.trim();
+    if (reason.length < 8) {
+        throw new Error("Motivo obrigatorio (minimo 8 caracteres) para corrigir turno e saida.");
+    }
+    if (!(OCCUPANCY_FIX_SHIFT_LABELS as readonly string[]).includes(params.shiftLabel)) {
+        throw new Error("Turno invalido: use SD, SN ou P.");
+    }
+    if (Number.isNaN(params.departureAt.getTime())) {
+        throw new Error("Horario de saida invalido.");
+    }
+    if (params.departureAt.getTime() > (params.now ?? new Date()).getTime()) {
+        throw new Error("A saida nao pode ficar no futuro: esta acao corrige plantao ja cumprido.");
+    }
+
+    const input = {
+        shiftLabel: params.shiftLabel,
+        endedAt: params.departureAt,
+        actualEndedAt: params.departureAt,
+        chiefConfirmed: true,
+        auditSource: OCCUPANCY_FIX_AUDIT_SOURCE,
+        auditReason: reason,
+    };
+    return params.domain === "regulation"
+        ? correctRegulationOccupancy(params.occupancyId, input, params.actorUserId)
+        : correctInterventionOccupancy(params.occupancyId, input, params.actorUserId);
 }
 
 export async function removeRegulationOccupancyRecord(id: string, updatedByUserId?: string | null) {

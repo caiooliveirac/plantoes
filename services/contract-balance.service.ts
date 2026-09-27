@@ -12,6 +12,7 @@
  */
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
+import { bahiaDateIso } from "@/lib/time";
 import { contractLedger, contracts } from "@/db/schema";
 import {
     computeCycleMetrics,
@@ -351,7 +352,8 @@ export async function loadContractBalances(params: {
 
     // Meses a apurar ao vivo: da abertura mais antiga até o mês corrente.
     const mesDe = (data: Date) => `${data.getUTCFullYear()}-${String(data.getUTCMonth() + 1).padStart(2, "0")}`;
-    const mesAtual = mesDe(asOf);
+    // Mês/dia corrente é o de Bahia: depois das 21h o UTC já virou o dia.
+    const mesAtual = bahiaDateIso(asOf).slice(0, 7);
     const primeiroMes = contratos
         .map((c) => mesDe(c.openingAt))
         .reduce((menor, atual) => (atual < menor ? atual : menor), mesAtual);
@@ -371,7 +373,7 @@ export async function loadContractBalances(params: {
         excludeMonthKey: params.excludeMonthKey,
     });
 
-    const asOfDate = asOf.toISOString().slice(0, 10);
+    const asOfDate = bahiaDateIso(asOf);
     // Extrato mês a mês por contrato: razão (fechado + ajustes) + apuração ao
     // vivo dos meses sem lançamento. Diferente do saldo projetado, o extrato
     // NÃO exclui o mês em edição — a última linha é o saldo de hoje de fato.

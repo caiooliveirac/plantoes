@@ -63,6 +63,12 @@ describe("findPendingRenewals — contrato vencido ou renovado sem valor", () =>
         assert.equal(pendencias[0].daysOverdue, 0);
     });
 
+    it("às 22h de Bahia do dia anterior ao vencimento ainda não venceu (UTC já virou o dia)", () => {
+        // 2026-08-06 22:00 em Bahia = 2026-08-07T01:00Z.
+        const noite = new Date("2026-08-07T01:00:00Z");
+        assert.deepEqual(findPendingRenewals([row({ cycleEnd: "2026-08-07" })], noite), []);
+    });
+
     it("contrato correndo dentro do ciclo não é pendência", () => {
         assert.deepEqual(findPendingRenewals([row({ cycleEnd: "2027-01-01" })], HOJE), []);
     });

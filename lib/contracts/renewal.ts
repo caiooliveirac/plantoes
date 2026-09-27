@@ -20,6 +20,14 @@
  * ciclo com `cycleEnd = 2026-08-01` vale até 31/07 e está vencido em 01/08.
  */
 import type { ContractBalanceRow } from "@/services/contract-balance.service";
+import { bahiaDateIso } from "@/lib/time";
+
+/**
+ * Só o que a regra lê. A fila de pendências de contrato monta estas linhas com
+ * uma query leve, sem apurar o saldo (services/contract-pendency-queue.service.ts).
+ */
+export type RenewalInputRow = Pick<ContractBalanceRow,
+    "doctorId" | "doctorName" | "contractId" | "contractNumber" | "cycleStart" | "cycleEnd" | "awaitingOpeningBalance">;
 
 export type RenewalKind = "vencido" | "sem_saldo_de_abertura";
 
@@ -36,9 +44,6 @@ export interface PendingRenewal {
     daysOverdue: number;
 }
 
-function dayOf(reference: Date): string {
-    return reference.toISOString().slice(0, 10);
-}
 
 function daysBetween(fromDay: string, toDay: string): number {
     const from = Date.parse(`${fromDay}T00:00:00Z`);
@@ -54,10 +59,10 @@ function daysBetween(fromDay: string, toDay: string): number {
  * `rows` são os contratos ATIVOS (é o que loadContractBalances devolve):
  * contrato encerrado não é pendência de ninguém.
  */
-export function findPendingRenewals(rows: ContractBalanceRow[], asOf: Date): PendingRenewal[] {
-    const hoje = dayOf(asOf);
+export function findPendingRenewals(rows: RenewalInputRow[], asOf: Date): PendingRenewal[] {
+    const hoje = bahiaDateIso(asOf);
 
-    const maisRecentePorMedico = new Map<string, ContractBalanceRow>();
+    const maisRecentePorMedico = new Map<string, RenewalInputRow>();
     for (const row of rows) {
         const atual = maisRecentePorMedico.get(row.doctorId);
         if (!atual || row.cycleEnd > atual.cycleEnd) maisRecentePorMedico.set(row.doctorId, row);

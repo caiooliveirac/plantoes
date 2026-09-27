@@ -128,6 +128,9 @@ export function ContractBalanceCard({
     const [anchorValue, setAnchorValue] = useState("");
     const [anchorReason, setAnchorReason] = useState("");
     const [anchorBusy, setAnchorBusy] = useState(false);
+    // Um id por abertura do formulário: clique duplo ou reenvio depois de uma
+    // resposta perdida não lança a correção duas vezes no razão.
+    const [anchorRequestId, setAnchorRequestId] = useState("");
     const [anchorError, setAnchorError] = useState<string | null>(null);
 
     const selected = contracts.find((item) => item.contractId === selectedId) ?? contracts[0];
@@ -250,6 +253,7 @@ export function ContractBalanceCard({
                     targetBalanceBrl: value,
                     anchorDate: `${anchorMonth}-01`,
                     description: anchorReason.trim(),
+                    requestId: anchorRequestId || undefined,
                 }),
             });
             const body = await response.json().catch(() => null) as { error?: string } | null;
@@ -439,6 +443,7 @@ export function ContractBalanceCard({
                         onClick={() => {
                             setAnchorOpen((open) => !open);
                             setAnchorError(null);
+                            setAnchorRequestId(crypto.randomUUID());
                             // Default: mês em edição — o caso típico é
                             // "o saldo no início de maio era X".
                             if (!anchorMonth) setAnchorMonth(monthKey ?? new Date().toISOString().slice(0, 7));
