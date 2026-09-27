@@ -184,16 +184,16 @@
     .pagina-kairos .ac-conta-numeros { grid-column: 1 / -1; text-align: left; }
 }
 
+/* Achado: o selo de nível no título diz a gravidade; separador fino entre eles. */
 .pagina-kairos .ac-achado {
-    border-left: 4px solid var(--semaforo-neutro-borda);
     display: grid;
     gap: 6px;
-    padding: 4px 0 4px 14px;
+    padding: 12px 0;
 }
 
-.pagina-kairos .ac-achado + .ac-achado { margin-top: 14px; }
-.pagina-kairos .ac-achado.forte { border-left-color: var(--semaforo-vermelho-borda); }
-.pagina-kairos .ac-achado.atencao { border-left-color: var(--semaforo-amarelo-borda); }
+.pagina-kairos .ac-achado + .ac-achado { border-top: 1px solid var(--divisor); }
+.pagina-kairos .ac-achado:first-of-type { padding-top: 0; }
+.pagina-kairos .ac-achado h3 { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
 .pagina-kairos .ac-achado p { line-height: 1.5; margin: 0; }
 
 .pagina-kairos .ac-evidencias {

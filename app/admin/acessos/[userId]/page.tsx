@@ -217,7 +217,7 @@ export default async function RelatorioDaContaPage({
                             <p className="ac-vazio">Nada fora do comum no período.</p>
                         ) : analise.achados.map((achado) => (
                             <div key={achado.titulo} className={`ac-achado ${achado.nivel}`}>
-                                <h3>{NOME_DO_ACHADO[achado.nivel]} · {achado.titulo}</h3>
+                                <h3><span className={`ac-nivel ${achado.nivel}`}>{NOME_DO_ACHADO[achado.nivel]}</span> {achado.titulo}</h3>
                                 <p>{achado.texto}</p>
                                 {achado.evidencias.length > 0 ? (
                                     <ul className="ac-evidencias">
