@@ -90,6 +90,7 @@ const TELEGRAM_TECHNICAL_ERROR_TRANSLATIONS: Record<string, string> = {
 // Mensagens com interpolação: padrão → texto para o chat ($1 = código do ramal/base).
 const TELEGRAM_ERROR_PATTERN_TRANSLATIONS: Array<[RegExp, string]> = [
     [/^Failed query:/, TELEGRAM_DB_FAILURE_TEXT],
+    [/^db_update_failed:/, TELEGRAM_DB_FAILURE_TEXT],
     [/^Medico ja esta em (\S+)\. Nao e necessario remanejar\.$/, "Você já está em $1 — não há o que remanejar."],
     [
         /^(?:O ramal|A base) (\S+) esta desativad[oa] e nao pode receber remanejamento agora\.$/,
@@ -203,4 +204,25 @@ export function resolveTelegramErrorText(error: unknown): string {
         return error.message;
     }
     return formatTelegramErrorForUser(error instanceof Error ? error.message : null);
+}
+
+/**
+ * Texto do erro para o log (`telegram_ingested_messages.error_message`). Falha de
+ * banco vira `db_update_failed:<SQLSTATE>:<constraint ou coluna>` — sem SQL nem
+ * params — tirado do PostgresError (postgres.js) em `error.cause` (o Drizzle embrulha)
+ * ou no próprio erro. Antes todo "Failed query" virava só `db_update_failed` e a
+ * causa se perdia (65 falhas em 60 dias sem diagnóstico). Demais erros: a mensagem.
+ */
+export function describeTelegramError(error: unknown, fallback: string): string {
+    if (!(error instanceof Error)) {
+        return fallback;
+    }
+    type PgFields = { code?: unknown; constraint_name?: unknown; column_name?: unknown };
+    const pg = [error.cause, error].find((candidate): candidate is PgFields =>
+        candidate instanceof Error && /^[0-9A-Z]{5}$/.test(String((candidate as PgFields).code ?? "")));
+    if (!pg && !error.message.startsWith("Failed query:")) {
+        return error.message;
+    }
+    const detail = pg ? [pg.code, pg.constraint_name ?? pg.column_name].filter((part) => typeof part === "string" && part) : [];
+    return ["db_update_failed", ...detail].join(":").slice(0, 240);
 }
