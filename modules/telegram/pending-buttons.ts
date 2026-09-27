@@ -333,6 +333,15 @@ export function buildShiftSelectionKeyboard(logId: string): TelegramInlineKeyboa
     ]]);
 }
 
+// D7: rótulo declarado é o do turno que ESTÁ ACABANDO, mas a hora cai na janela
+// antecipada do próximo. Mesmo callback do F6 (`buildShiftSelectionCallbackData`); só
+// os rótulos dos botões dizem o horário de cada opção.
+export function buildShiftLabelMismatchKeyboard(declaredShift: "SD" | "SN", logId: string): TelegramInlineKeyboardMarkup {
+    const sd = { text: declaredShift === "SD" ? "☀️ SD até 19h" : "☀️ SD 07h–19h", callback_data: buildShiftSelectionCallbackData("SD", logId) };
+    const sn = { text: declaredShift === "SN" ? "🌙 SN até 07h" : "🌙 SN 19h–07h", callback_data: buildShiftSelectionCallbackData("SN", logId) };
+    return buildInlineKeyboard([declaredShift === "SD" ? [sd, sn] : [sn, sd]]);
+}
+
 export function buildNameSelectionKeyboard(
     candidates: Array<{ fullName: string; displayName?: string | null }>,
     logId: string,
@@ -419,6 +428,22 @@ export function buildShiftSelectionPromptText(params: {
     const example = sanitizeTelegramCodeSpan(`${params.doctorLabel} ${params.targetLabel} SD 07:00`);
     return `⚠️ Falta só o *turno* para registrar *${name}* em *${target}*.`
         + `\nToque abaixo — ou reenvie: \`${example}\``;
+}
+
+/** D7: "SD" às 18:35 (ou "SN" às 05:30) — rótulo e hora apontam turnos diferentes. */
+export function buildShiftLabelMismatchPromptText(params: {
+    doctorLabel: string;
+    targetLabel: string;
+    declaredShift: "SD" | "SN";
+    timeLabel: string;
+}) {
+    const name = escapeTelegramMarkdown(params.doctorLabel);
+    const target = escapeTelegramMarkdown(params.targetLabel);
+    const other = params.declaredShift === "SD" ? "SN" : "SD";
+    const boundary = params.declaredShift === "SD" ? "19h" : "07h";
+    return `⚠️ *${name}* em *${target}*: veio *${params.declaredShift}*, mas às ${params.timeLabel} a chegada já conta para o *${other}*.`
+        + `
+É o *${params.declaredShift}* que termina às ${boundary} ou o *${other}* que começa às ${boundary}? Toque abaixo.`;
 }
 
 /** PIAM SD/SN (auditoria §3.1#12): pergunta binária com botões + fallback textual. */

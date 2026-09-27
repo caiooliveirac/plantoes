@@ -79,6 +79,7 @@ Gravação: `startRegulationOccupancy` / `startInterventionOccupancy`.
 |---|---|
 | Chegada genuína (fase 2) | `message.date` do aviso; HH:mm escrito é ignorado e a resposta avisa |
 | Chegada que só passou num reenvio | a da 1ª tentativa (`resolveFirstArrivalAttemptAt`): qualquer remetente, mesmo nome, mesmo alvo, status `error` ou `pending_takeover_confirmation`, até 2h, mesmo turno; HH:mm escrito não desliga isso na fase 2 |
+| Mensagem editada reprocessada (D8) | `date` da mensagem original (o Telegram mantém; `edit_date` é só a edição) |
 | Pendência respondida depois (nome, turno, ramal) | hora da mensagem original guardada na pendência |
 | Botão de tomada | hora da mensagem pendente (1ª tentativa) |
 | Re-chegada do mesmo médico no mesmo alvo, mesmo turno | `min(existente, nova)` — só recua |
@@ -109,6 +110,7 @@ até 15 min é zero.
 | Deslocado declara OUTRO alvo | Vira remanejo, preserva chegada | — |
 | Sombra reenvia sem a palavra "sombra", quadro livre | Vira titular | Assumiu de fato |
 | Chega 06:50 dizendo SD | É SD (janela antecipada de 3h) | "Mesmo turno" nunca é "início da janela" |
+| Chegada nova dizendo o turno que ACABA dentro da janela antecipada do próximo ("SD" às 18:35, "SN" às 05:30), sem plantão aberto | Pergunta com botões "SD até 19h / SN 19h–07h" (pendência `pending_shift_selection`, expira em 30 min). SN grava SN; SD confirmado grava SD com a janela do turno corrente, explícita (`resolveConfirmedShiftLabelWindow`). Meio plantão e PIAM não perguntam | D7: antes gravava rótulo de um turno com janela do outro |
 | Troca de ramal dentro do turno | Remanejo; destino ocupado por titular vigente barra (ou vira dupla na USA) | — |
 | Troca de ramal depois do fim do turno de origem | Vira chegada do turno atual (`resolveCrossTurnoMoveShift`) | Senão o noturno herdava rótulo SD e não era pago |
 | SD → SN seguido (mesmo médico) | Continuação: estende a ocupação ou abre bloco novo no mesmo grupo | Uma corrida, duas unidades de pagamento |
@@ -117,7 +119,8 @@ até 15 min é zero.
 | Posto desativado | A chegada reativa o posto | Chegada é soberana |
 | Nome não resolvido | Pergunta com candidatos | Sem vínculo formal telegram↔médico |
 | Mensagem de almoço/descanso | Descartada com dica de `/almoco` | — |
-| Mensagem EDITADA no Telegram | **Ignorada** (não há handler de `edited_message`) | ver D8 |
+| Mensagem EDITADA no Telegram, aviso original sem efeito (ignorado/erro), edição em até 2h | Reprocessa o texto editado com a hora da mensagem ORIGINAL (`decideTelegramEditedMessage`) | Princípios 2 e 3: chegou quando mandou; a edição só corrige a digitação |
+| Mensagem EDITADA no Telegram, aviso original já registrou ocupação | Não reprocessa; responde uma vez "edição não altera registro, envie nova mensagem" | Desfazer o efeito da original às cegas é mais perigoso que pedir reenvio |
 
 ---
 
@@ -151,8 +154,8 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 | D4 | PARCIAL | 1ª tentativa não exige mais o MESMO remetente (colega avisando pelo médico conta). Segue contando só status `error`/`pending_takeover_confirmation`: aviso que caiu em "ignorado" sem nome resolvido não tem médico para casar | PR #301 |
 | D5 | CORRIGIDO | Resposta do bot dizia "desde <hora deste aviso>" mesmo quando o banco preservou a 1ª chegada; o médico relia, achava que perdeu o horário e reenviava (alimentava D1). Agora mostra a chegada gravada + "chegada mantida pelo primeiro aviso" | PR #297, 23/09/2026 |
 | D6 | CORRIGIDO | Reenvio entre 11:10 e 17:00 de quem já estava no ramal desde antes das 11:10 virava meio plantão (fim 17:00, pago como meio). Agora só vira meio plantão quem chegou na janela | Jonas, 2154, 22/09/2026 (SD 07:16 → meio às 16:12); PR #302 |
-| D7 | VERIFICADO | "SD" declarado às 18:35 em outro ramal grava rótulo SD com janela SN (19:00) — rótulo e janela discordam | Gerardson, 2152, 03/09/2026 |
-| D8 | VERIFICADO | Mensagem editada no Telegram é ignorada; quem corrige a digitação editando não é ouvido | grep: nenhum handler de `edited_message` |
+| D7 | CORRIGIDO | "SD" declarado às 18:35 em outro ramal gravava rótulo SD com janela SN (19:00) — rótulo e janela discordavam. Agora a chegada nova pergunta "SD ou SN?" com botões e grava o que o médico escolher, com janela coerente (`shouldAskTelegramShiftLabelMismatch`). Quem já tem plantão aberto segue as regras de reenvio/remanejo | Gerardson, 2152, 03/09/2026; PR claude/bot-sd-sn-pergunta |
+| D8 | CORRIGIDO | Mensagem editada no Telegram era ignorada; quem corrigia a digitação editando não era ouvido. Agora `edited_message` reprocessa aviso que não gerou efeito (hora da original) e avisa quando a original já registrou. Pendência aberta, comando e edição após 2h seguem ignorados | grep: nenhum handler de `edited_message`; PR claude/bot-mensagem-editada |
 | D9 | CORRIGIDO | Intervenção: reenvio com âncora "vencida" movia o board e a janela para a hora nova; mesma regra da janela própria | PR #298 |
 | D10 | CORRIGIDO | Quando quem tomou o posto era remanejado ou saía, o deslocado NÃO reassumia sozinho; precisava reenviar. Agora, ao fechar a ocupação de quem tinha o quadro (saída fora de rendição ou origem de remanejo), o deslocado com cobertura vigente reassume com a chegada original (`restoreDisplacedOnVacatedTargetTx`, `modules/operational/displaced-restore.ts`) | pedido do dono, 18/09; José Roberto, 2153, 23/09/2026; PR #303 |
 | D11 | CORRIGIDO | Deslocado que reenviava no mesmo alvo nunca voltava ao quadro | PR #295, 23/09/2026 |

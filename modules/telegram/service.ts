@@ -81,7 +81,7 @@ import { isChiefRegulationPostCode } from "@/modules/operational/roles";
 const ARRIVAL_EDIT_COMMANDS = new Set(["corrigir", "hoje", "ontem"]);
 import { normalizeOperationalRoleLabel, resolveFixedOperationalRole, resolveRoleLabelForExplicitRemoval } from "@/modules/operational/roles";
 import { resolveHandoffClosure } from "@/modules/operational/handoff-closure";
-import { resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime, resolveUndeclaredContinuationScheduledEndAt } from "@/modules/operational/rules";
+import { inferInterventionCoverageWindow, inferRegulationCoverageWindow, resolveContinuationReferenceBoundary, resolvePShiftAwareBaseShiftLabel, resolveTelegramEventTime, resolveForcedDayEventTime, normalizeArrivalEventTime, resolveUndeclaredContinuationScheduledEndAt } from "@/modules/operational/rules";
 import { continueRegulationOccupancy, deactivateRegulationPost, displaceRegulationOccupant, endRegulationOccupancy, isRegulationShadowOccupancyNotes, reactivateRegulationPost, startRegulationOccupancy } from "@/modules/regulation/service";
 import {
     compareDepartureCorrectionCandidates,
@@ -247,6 +247,8 @@ import {
     buildPiamShiftPromptText,
     buildResetAllConfirmationKeyboard,
     buildResetAllConfirmationPromptText,
+    buildShiftLabelMismatchKeyboard,
+    buildShiftLabelMismatchPromptText,
     buildShiftSelectionKeyboard,
     buildShiftSelectionPromptText,
     buildTakeoverDecisionKeyboard,
@@ -333,6 +335,8 @@ interface PendingNameResolutionData {
         isDeparture: boolean;
         isContinuation: boolean;
         isReassignment: boolean;
+        /** Turno escolhido pelo médico no botão/resposta da pendência (D7). */
+        shiftLabelConfirmed?: boolean;
     };
     candidates: Array<{ id: string; fullName: string; displayName: string | null; normalizedName: string }>;
     originalText: string;
@@ -386,6 +390,8 @@ interface PendingShiftSelectionData {
     senderTelegramId: string;
     originalText: string;
     originalReferenceAt: string;
+    /** D7: rótulo que veio na mensagem e discordou da hora (pergunta "SD ou SN?"). */
+    declaredShift?: "SD" | "SN";
 }
 
 // PIAM SD/SN (auditoria §3.1#12): a pergunta binária vira pendência com botões;
@@ -510,6 +516,7 @@ type TelegramReviewReason =
     | "meal_break_outside_flow"
     | "meal_break_button_outside_flow"
     | "arrival_missing_name_or_shift"
+    | "arrival_shift_label_mismatch"
     | "late_arrival_acknowledgement_required"
     | "no_operational_match"
     | "unknown_destination"
@@ -1050,6 +1057,51 @@ export function shouldAssumeTelegramHalfShift(params: {
 
     const parts = getSaoPauloParts(params.eventAt);
     return isWithinHalfShiftWindow((parts.hour * 60) + parts.minute);
+}
+
+// D7 (docs/chegada.md): rótulo declarado é o do turno que ESTÁ ACABANDO e a hora cai
+// na janela antecipada de 3h do próximo ("SD" às 18:35, "SN" às 05:30). A régua de
+// tempo (resolvePShiftAwareBaseShiftLabel) vira a janela para o próximo turno e o
+// registro saía com rótulo SD e janela SN (Gerardson, 2152, 03/09/2026).
+export function isTelegramShiftLabelTimeMismatch(eventAt: Date, shiftType: string | null | undefined): shiftType is "SD" | "SN" {
+    if (shiftType !== "SD" && shiftType !== "SN") return false;
+    const clockWindow = resolveOperationalShiftWindow(eventAt);
+    return shiftType === clockWindow.shiftLabel && resolveArrivalShiftLabel(eventAt) !== clockWindow.shiftLabel;
+}
+
+// Pergunta "SD ou SN?" só na chegada NOVA: quem já tem plantão aberto (reenvio,
+// correção de rótulo D2, remanejo) segue as regras próprias; meio plantão e PIAM têm
+// janela fixa e não discordam.
+export function shouldAskTelegramShiftLabelMismatch(params: {
+    parsed: Pick<ParsedMessage, "sector" | "baseCode" | "shiftType" | "isDeparture" | "isContinuation" | "isReassignment">;
+    eventAt: Date;
+    hasActiveOccupancy: boolean;
+}): boolean {
+    const { parsed } = params;
+    if (parsed.isDeparture || parsed.isContinuation || parsed.isReassignment) return false;
+    if (params.hasActiveOccupancy || parsed.baseCode === "PIAM") return false;
+    if (shouldAssumeTelegramHalfShift({ parsed, eventAt: params.eventAt, effectiveShiftType: parsed.shiftType })) return false;
+    return isTelegramShiftLabelTimeMismatch(params.eventAt, parsed.shiftType);
+}
+
+// Médico CONFIRMOU no botão o turno que está acabando: a janela é a desse turno,
+// explícita (senão a régua de tempo a vira de novo). Nulo = regra normal.
+export function resolveConfirmedShiftLabelWindow(params: {
+    sector: "REGULATION" | "INTERVENTION";
+    eventAt: Date;
+    shiftType: string | null | undefined;
+    shiftLabelConfirmed?: boolean;
+    postCode?: string | null;
+}): { scheduledStartAt: Date; scheduledEndAt: Date } | null {
+    if (!params.shiftLabelConfirmed || !isTelegramShiftLabelTimeMismatch(params.eventAt, params.shiftType)) return null;
+    // Referência no início do turno corrente: fora da janela antecipada, sem virada.
+    const turnoStartAt = resolveOperationalShiftWindow(params.eventAt).startedAt;
+    const window = params.sector === "REGULATION"
+        ? inferRegulationCoverageWindow({ startedAt: turnoStartAt, shiftLabel: params.shiftType, postCode: params.postCode ?? null })
+        : inferInterventionCoverageWindow({ startedAt: turnoStartAt, shiftLabel: params.shiftType });
+    return window.scheduledStartAt && window.scheduledEndAt
+        ? { scheduledStartAt: window.scheduledStartAt, scheduledEndAt: window.scheduledEndAt }
+        : null;
 }
 
 function appendTelegramOperationalNote(existingNotes: string | null | undefined, marker: string, messageText: string) {
@@ -8799,6 +8851,8 @@ async function queuePendingShiftSelection(params: {
     message: NonNullable<TelegramUpdate["message"]>;
     parsed: ParsedMessage & OperationalParsedEntry;
     senderTelegramId: string;
+    /** D7: veio rótulo, mas discorda da hora — mesma pendência, outra pergunta. */
+    mismatch?: { declaredShift: "SD" | "SN"; eventAt: Date };
 }) {
     const senderName = [params.message.from?.first_name, params.message.from?.last_name].filter(Boolean).join(" ") || null;
     const doctorQuery = params.parsed.extractedNames[0] ?? null;
@@ -8821,6 +8875,7 @@ async function queuePendingShiftSelection(params: {
         senderTelegramId: params.senderTelegramId,
         originalText: params.message.text ?? "",
         originalReferenceAt: new Date(params.message.date * 1000).toISOString(),
+        ...(params.mismatch ? { declaredShift: params.mismatch.declaredShift } : {}),
     };
 
     await markTelegramProcessed(params.logId, {
@@ -8831,23 +8886,33 @@ async function queuePendingShiftSelection(params: {
         errorMessage: null,
         resolutionData: {
             ...buildTelegramReviewLogData({
-                reason: "arrival_missing_name_or_shift",
+                reason: params.mismatch ? "arrival_shift_label_mismatch" : "arrival_missing_name_or_shift",
                 parsed: snapshot,
                 doctorQuery,
-                trainingCandidate: true,
+                trainingCandidate: !params.mismatch,
             }),
             ...data,
         },
     });
 
+    const doctorLabel = doctorQuery ?? senderName ?? "o médico";
     await sendMessage(
         params.message.chat.id,
-        buildShiftSelectionPromptText({
-            doctorLabel: doctorQuery ?? senderName ?? "o médico",
-            targetLabel: snapshot.baseCode,
-        }),
+        params.mismatch
+            ? buildShiftLabelMismatchPromptText({
+                doctorLabel,
+                targetLabel: snapshot.baseCode,
+                declaredShift: params.mismatch.declaredShift,
+                timeLabel: formatSaoPauloClock(params.mismatch.eventAt),
+            })
+            : buildShiftSelectionPromptText({
+                doctorLabel,
+                targetLabel: snapshot.baseCode,
+            }),
         params.message.message_id,
-        buildShiftSelectionKeyboard(params.logId),
+        params.mismatch
+            ? buildShiftLabelMismatchKeyboard(params.mismatch.declaredShift, params.logId)
+            : buildShiftSelectionKeyboard(params.logId),
         { parseMode: "Markdown" },
     );
 }
@@ -9905,14 +9970,22 @@ async function applyParsedEntry(params: {
                         ?? resolveArrivalShiftLabel(effectiveContinuationStartedAt);
                 }
 
+                // D7: turno confirmado no botão que é o que está acabando → janela dele.
+                const confirmedShiftWindow = assumedHalfShift ? null : resolveConfirmedShiftLabelWindow({
+                    sector: "REGULATION",
+                    eventAt,
+                    shiftType: effectiveShiftType,
+                    shiftLabelConfirmed: parsed.shiftLabelConfirmed,
+                    postCode: post.code,
+                });
                 const createRegulationArrival = (startedAtOverride?: Date) => startRegulationOccupancy({
                     doctorId: resolvedDoctor.id,
                     postId: post.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: startedAtOverride ?? effectiveContinuationStartedAt,
                     boardStartedAt: continuationBoardStartedAt,
-                    scheduledStartAt: assumedHalfShift ? (halfShiftScheduledStartAt ?? undefined) : undefined,
-                    scheduledEndAt: halfShiftScheduledEndAt ?? undefined,
+                    scheduledStartAt: assumedHalfShift ? (halfShiftScheduledStartAt ?? undefined) : confirmedShiftWindow?.scheduledStartAt,
+                    scheduledEndAt: halfShiftScheduledEndAt ?? confirmedShiftWindow?.scheduledEndAt,
                     shiftLabel: effectiveShiftType,
                     roleLabel: assumedHalfShift ? HALF_SHIFT_ROLE_LABEL : parsed.roleFunction,
                     ramalLabel: parsed.baseCode,
@@ -10248,12 +10321,21 @@ async function applyParsedEntry(params: {
                         ?? resolveArrivalShiftLabel(effectiveContinuationStartedAtIntv);
                 }
 
+                // D7: turno confirmado no botão que é o que está acabando → janela dele.
+                const confirmedShiftWindowIntv = resolveConfirmedShiftLabelWindow({
+                    sector: "INTERVENTION",
+                    eventAt,
+                    shiftType: effectiveShiftType,
+                    shiftLabelConfirmed: parsed.shiftLabelConfirmed,
+                });
                 const createInterventionArrival = (startedAtOverride?: Date) => startInterventionOccupancy({
                     doctorId: resolvedDoctor.id,
                     baseId: base.id,
                     continuityGroupId: shouldUseContinuityContext ? continuityContext?.source?.continuityGroupId ?? null : null,
                     startedAt: startedAtOverride ?? effectiveContinuationStartedAtIntv,
                     boardStartedAt: continuationBoardStartedAtIntv,
+                    scheduledStartAt: confirmedShiftWindowIntv?.scheduledStartAt,
+                    scheduledEndAt: confirmedShiftWindowIntv?.scheduledEndAt,
                     shiftLabel: effectiveShiftType,
                     roleLabel: parsed.roleFunction,
                     isShadow: isShadowArrival,
@@ -12432,7 +12514,7 @@ async function completeShiftSelectionPending(params: {
     shift: PendingShiftChoice;
     ctx: PendingButtonCompletionCtx;
 }) {
-    const parsedEntry: OperationalParsedEntry = { ...params.data.parsed, shiftType: params.shift };
+    const parsedEntry: OperationalParsedEntry = { ...params.data.parsed, shiftType: params.shift, shiftLabelConfirmed: true };
     return completeArrivalFromPendingSelection({
         pending: params.pending,
         parsedEntry,
@@ -13577,9 +13659,122 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
     return { ok: true, ignored: true };
 }
 
+// D8 (docs/chegada.md): mensagem EDITADA no Telegram. O Telegram manda `edited_message`
+// com o MESMO message_id da original; `date` segue sendo a hora do envio original e
+// `edit_date` a da edição. Regra:
+// - a original não gerou efeito (status ignored/error) e a edição veio em até 2h
+//   (mesma janela da 1ª tentativa) → reprocessa o texto editado como aviso novo, com a
+//   hora da ORIGINAL (princípios 2 e 3: vale a primeira mensagem, vale a hora do aviso —
+//   o médico chegou quando mandou; a edição só corrige a digitação);
+// - a original já registrou ocupação → não reprocessa (não dá para desfazer o efeito com
+//   segurança); avisa uma vez que a edição não altera o registro;
+// - qualquer outro caso (pendência aberta, comando, original desconhecida, retry do mesmo
+//   update, edição tardia) → ignora em silêncio.
+export const TELEGRAM_EDIT_ALREADY_REGISTERED_REPLY =
+    "✏️ Edição de mensagem não altera um registro já feito. Para corrigir, envie uma nova mensagem com os dados certos.";
+
+export type TelegramEditedMessageDecision = "reprocess" | "notify_already_registered" | "ignore";
+
+export function decideTelegramEditedMessage(params: {
+    original: { status: string; relatedOccupancyId: string | null; errorMessage: string | null; resolutionData: unknown } | null;
+    updateId: number;
+    editedText: string;
+    sentAt: Date;
+    editedAt: Date;
+}): TelegramEditedMessageDecision {
+    const { original } = params;
+    if (!original) return "ignore";
+    const data = original.resolutionData && typeof original.resolutionData === "object"
+        ? original.resolutionData as Record<string, unknown>
+        : {};
+    // Retry do Telegram do mesmo update: já tratado.
+    if (data.lastEditUpdateId === params.updateId) return "ignore";
+    if (original.status === "accepted" && original.relatedOccupancyId) {
+        return data.editNoticeSentAt ? "ignore" : "notify_already_registered";
+    }
+    if (original.status !== "ignored" && original.status !== "error") return "ignore";
+    // Chat fora da lista: reprocessar só repetiria a recusa (e o tutorial no privado).
+    if (original.errorMessage === "chat_not_allowed") return "ignore";
+    if (params.editedText.trim().startsWith("/")) return "ignore";
+    if (params.editedAt.getTime() - params.sentAt.getTime() > FIRST_ARRIVAL_ATTEMPT_WINDOW_MS) return "ignore";
+    return "reprocess";
+}
+
+async function handleTelegramEditedMessage(update: TelegramUpdate) {
+    const edited = update.edited_message;
+    if (!edited?.text) {
+        return { ok: true, ignored: true };
+    }
+    const db = getDb();
+    const original = await db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, String(edited.chat.id)),
+            eq(telegramIngestedMessages.telegramMessageId, edited.message_id),
+        ),
+    });
+    const decision = decideTelegramEditedMessage({
+        original: original ?? null,
+        updateId: update.update_id,
+        editedText: edited.text,
+        sentAt: new Date(edited.date * 1000),
+        editedAt: new Date((edited.edit_date ?? edited.date) * 1000),
+    });
+    if (!original || decision === "ignore") {
+        return { ok: true, ignored: true, edited: true };
+    }
+
+    const editMarkers = {
+        lastEditUpdateId: update.update_id,
+        lastEditedAt: new Date((edited.edit_date ?? edited.date) * 1000).toISOString(),
+    };
+
+    if (decision === "notify_already_registered") {
+        await db.update(telegramIngestedMessages)
+            .set({ resolutionData: buildResolutionData(original.resolutionData, { ...editMarkers, editNoticeSentAt: new Date().toISOString() }) })
+            .where(eq(telegramIngestedMessages.id, original.id));
+        await sendMessage(edited.chat.id, TELEGRAM_EDIT_ALREADY_REGISTERED_REPLY, edited.message_id);
+        return { ok: true, ignored: true, edited: true };
+    }
+
+    // Reprocessa na MESMA linha do log (índice único chat+message_id): o texto editado
+    // entra no lugar, o original fica em resolutionData, e o resultado anterior é limpo
+    // para não vazar parsed* do erro antigo.
+    const editedFromText = original.rawText;
+    await db.update(telegramIngestedMessages)
+        .set({
+            rawText: edited.text,
+            status: "pending",
+            errorMessage: null,
+            parsedDomain: null,
+            parsedTargetCode: null,
+            parsedAction: null,
+            parsedDoctorName: null,
+            relatedOccupancyId: null,
+            processedAt: null,
+            resolutionData: { ...editMarkers, editedFromText },
+        })
+        .where(eq(telegramIngestedMessages.id, original.id));
+
+    await processTelegramUpdate({ update_id: update.update_id, message: edited });
+
+    // O processamento reescreve resolutionData; recoloca as marcas da edição.
+    const after = await db.query.telegramIngestedMessages.findFirst({
+        columns: { resolutionData: true },
+        where: eq(telegramIngestedMessages.id, original.id),
+    });
+    await db.update(telegramIngestedMessages)
+        .set({ resolutionData: buildResolutionData(after?.resolutionData, { ...editMarkers, editedFromText }) })
+        .where(eq(telegramIngestedMessages.id, original.id));
+    return { ok: true, edited: true, reprocessed: true };
+}
+
 export async function processTelegramUpdate(update: TelegramUpdate) {
     if (update.callback_query) {
         return handleTelegramCallbackQuery(update.callback_query);
+    }
+
+    if (update.edited_message) {
+        return handleTelegramEditedMessage(update);
     }
 
     const message = update.message;
@@ -14413,6 +14608,30 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     eventAt: messageEventAt,
                 })
                 : messageEventAt;
+
+            // D7: "SD" às 18:35 (ou "SN" às 05:30) — rótulo e hora apontam turnos
+            // diferentes. Em vez de gravar rótulo de um turno com janela do outro,
+            // pergunta com botões (mesma pendência do F6; expira igual).
+            const mismatchSenderId = message.from?.id ? String(message.from.id) : null;
+            if (
+                mismatchSenderId
+                && parsedEntries.length === 1
+                && isTelegramShiftLabelTimeMismatch(eventAt, firstParsed.shiftType)
+                && shouldAskTelegramShiftLabelMismatch({
+                    parsed: firstParsed,
+                    eventAt,
+                    hasActiveOccupancy: Boolean(await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt)),
+                })
+            ) {
+                await queuePendingShiftSelection({
+                    logId: log.id,
+                    message,
+                    parsed: firstParsed,
+                    senderTelegramId: mismatchSenderId,
+                    mismatch: { declaredShift: firstParsed.shiftType, eventAt },
+                });
+                return { ok: true, ignored: true, pending: true };
+            }
 
             // Tomada de ramal/base ocupado no mesmo turno: avisa quem ocupa e exige
             // reenvio EXATO para confirmar. Só então desloca o ocupante (preservando a
