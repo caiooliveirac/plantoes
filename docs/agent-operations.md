@@ -55,7 +55,6 @@ ssh plantoes-prod 'tail -n 200 ~/.pm2/logs/plantoes-error.log'
 
 # Healthchecks (devem responder 200)
 ssh plantoes-prod 'curl -fsS http://127.0.0.1:3004/api/health && echo OK'
-ssh plantoes-prod 'curl -fsS http://127.0.0.1:3004/api/board >/dev/null && echo OK'
 
 # Memória do box antes de qualquer operação pesada
 ssh plantoes-prod 'free -h && uptime'

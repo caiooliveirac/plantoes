@@ -219,13 +219,17 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em
   [services/auth.service.ts](services/auth.service.ts). Trata contas inativas, sem
   role atribuída, e o fluxo de `chiefAccessRequests` pendente/rejeitado.
-- **Papéis**: apenas dois — `admin` e `chief` (enum `userRoleEnum`, tabela
-  `userRoles`, many-to-many). Não há role "médico comum" nem "coordenador" como
-  conceito formal do sistema — controle mais granular é feito por checagem manual em
-  cada rota, não por um role dedicado.
+- **Papéis**: `admin`, `chief`, `doctor` e `payment_closing_limited` (enum
+  `userRoleEnum`, tabela `userRoles`, many-to-many; lista em
+  [modules/auth/contracts.ts](modules/auth/contracts.ts)). Controle mais granular é
+  feito por checagem manual em cada rota, não por um role dedicado.
 - **Controle de acesso**: **não há `middleware.ts`**. Cada Server Component/Route
   Handler chama `requireAuthenticatedSession(requiredRoles?)` explicitamente (ex.:
   `requireAuthenticatedSession(["admin"])` nas rotas `/admin/*` e `/api/chief/*`).
+- **Quadro fechado**: `/`, `/api/board`, `/api/board/stream` e a passagem de
+  ocorrências exigem sessão (qualquer papel). Sem sessão, `/` vai ao login único do
+  portal (mnrs.com.br → porteiro → `/api/auth/sso`); `/entrar` é a porta de
+  emergência local. Regra em [lib/auth/portao.ts](lib/auth/portao.ts).
 - **Exceção**: a folha de ponto individual (`/folha-ponto/[medicoId]/[ano]/[mes]`)
   aceita acesso **sem login** via token assinado com validade de 7 dias
   ([lib/folha-ponto/token.ts](lib/folha-ponto/token.ts)), enviado ao médico no
@@ -299,7 +303,7 @@ Sem ESLint/Prettier configurados no repo — a única verificação estática au
   [scripts/deploy-magalu.sh](scripts/deploy-magalu.sh) **no servidor via SSH** — o
   `next build` de produção acontece lá (build atômico com `.next.prev` para
   rollback, guard de memória), com restart dos dois processos PM2 (`plantoes`,
-  `plantoes-telegram-worker`) e healthcheck de `/api/health` + `/api/board`.
+  `plantoes-telegram-worker`) e healthcheck de `/api/health`.
   Não há mais self-hosted runner nem os jobs antigos `test_smoke`/`test_regression`.
 - **Migrations em produção são manuais**: aplicar `db/migrations/NNNN_*.sql` no
   servidor **antes** do merge (via `npm run db:migrate` com `.env.production`), não

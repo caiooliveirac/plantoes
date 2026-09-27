@@ -1,7 +1,12 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
 import { hasDatabaseUrl } from "@/db";
+import { KairosTopo } from "@/components/kairos-topo";
 import { readAuthenticatedSession } from "@/lib/auth/server";
+import { PORTAL_LOGIN_URL, destinoSemSessao } from "@/lib/auth/portao";
 import { escalaUrl, federacaoConfigurada } from "@/lib/auth/federacao";
 import { OperationalBoardClient } from "@/app/operational-board-client";
+import "@/app/auth-pages.css";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
 import { getExpectedSchedule } from "@/modules/operational/expected-schedule";
 import { evaluateMealBreakSessionAgainstBoard, getCurrentOperationalMealBreakSession, getCurrentMealBreakEligibilityOverrides } from "@/modules/telegram/meal-breaks";
@@ -29,6 +34,29 @@ function EmptyState() {
     );
 }
 
+/* Volta do SSO sem sessão (/api/auth/sso falhou): mostrar a frase aqui, sem
+   redirecionar — mandar ao portal de novo viraria ricochete portal↔plantoes. */
+function SsoFalhou({ motivo }: { motivo: string }) {
+    const frase = motivo === "sem-acesso"
+        ? "Sua conta do escala foi reconhecida, mas este e-mail não tem conta liberada aqui. Peça à chefia para criar ou liberar seu acesso."
+        : "A entrada pelo escala expirou. Tente de novo pelo botão de lá.";
+    return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Mesa operacional" />
+        <main className="et-shell" style={{ alignItems: "center", justifyContent: "center" }}>
+            <section className="et-panel" style={{ width: "min(480px, 100%)" }}>
+                <div className="et-panel-head"><h2>Não foi possível entrar</h2></div>
+                <div className="et-empty-state">
+                    <strong>{frase}</strong>
+                    <p><a href={PORTAL_LOGIN_URL}>Entrar pelo portal</a></p>
+                    <p><Link href="/entrar">Entrar com e-mail e senha daqui</Link></p>
+                </div>
+            </section>
+        </main>
+        </div>
+    );
+}
+
 export default async function HomePage({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
     const params = searchParams ? await searchParams : undefined;
     const initialViewMode = params?.view === "history" ? "history" : "live";
@@ -37,9 +65,15 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         return <EmptyState />;
     }
 
+    // Quadro fechado (lib/auth/portao.ts): sem sessão, nenhum dado do quadro.
     const session = await readAuthenticatedSession();
+    if (!session) {
+        const sso = typeof params?.sso === "string" ? params.sso : null;
+        if (sso) return <SsoFalhou motivo={sso} />;
+        redirect(destinoSemSessao());
+    }
     const canManage = Boolean(
-        session?.user.roles.some((role) => role === "admin" || role === "chief")
+        session.user.roles.some((role) => role === "admin" || role === "chief")
         && !session.user.mustChangePassword,
     );
     const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility, expectedSchedule, onDemandRegulationPosts] = await Promise.all([
@@ -85,13 +119,13 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
             pendingChiefExits={board.pendingChiefExits ?? []}
             expectedSchedule={expectedSchedule}
             escalaUrl={federacaoConfigurada() ? escalaUrl() : null}
-            session={session ? {
+            session={{
                 email: session.user.email,
                 roles: session.user.roles,
                 mustChangePassword: session.user.mustChangePassword,
                 canManage,
                 doctorId: session.user.doctorId,
-            } : null}
+            }}
         />
     );
 }

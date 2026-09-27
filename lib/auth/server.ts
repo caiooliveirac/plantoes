@@ -148,3 +148,8 @@ export async function requireAuthenticatedSession(requiredRoles?: UserRole[], op
 
     return session;
 }
+/** Leitura do quadro: qualquer papel, inclusive com senha provisória — a pessoa
+    precisa ver a tela para trocar a senha no popover. */
+export async function requireSessionForRead() {
+    return requireAuthenticatedSession(undefined, { allowPasswordChange: true });
+}
