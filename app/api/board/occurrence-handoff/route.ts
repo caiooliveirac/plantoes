@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasDatabaseUrl } from "@/db";
+import { AuthError, requireSessionForRead } from "@/lib/auth/server";
 import { publishBoardUpdate } from "@/lib/board-live";
 import {
     OccurrenceHandoffError,
@@ -7,15 +8,29 @@ import {
     saveOccurrenceHandoffCounts,
 } from "@/services/occurrence-handoff.service";
 
-// Passagem de ocorrências. Público por decisão da chefia (2026-09-24): quem sai
-// informa a contagem sem login, como o quadro, que também é público. A proteção
-// é de escopo (só ramal que sai, só dentro da janela, números 0–99) e de volume
-// (limite por IP), e toda gravação recalcula a divisão no servidor.
+// Passagem de ocorrências. Exige sessão (qualquer papel) desde 2026-09-27, junto
+// com o quadro fechado (lib/auth/portao.ts): revoga a decisão de 2026-09-24, que
+// a deixava pública porque o quadro também era. Quem sai já está no quadro, e
+// portanto logado. Continuam a proteção de escopo (só ramal que sai, só dentro
+// da janela, números 0–99) e de volume (limite por IP), e toda gravação
+// recalcula a divisão no servidor.
+
+async function sessionError() {
+    try {
+        await requireSessionForRead();
+        return null;
+    } catch (error) {
+        const status = error instanceof AuthError ? error.status : 401;
+        return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });
+    }
+}
 
 export async function GET() {
     if (!hasDatabaseUrl()) {
         return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
     }
+    const denied = await sessionError();
+    if (denied) return denied;
     const state = await getOccurrenceHandoffState();
     if (!state) return NextResponse.json({ state: null });
     const { chatId: _chatId, doctorIds: _doctorIds, ...publicState } = state;
@@ -40,6 +55,8 @@ export async function POST(request: NextRequest) {
     if (!hasDatabaseUrl()) {
         return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
     }
+    const denied = await sessionError();
+    if (denied) return denied;
     // Cloudflare na frente: cf-connecting-ip é o cliente; x-real-ip (nginx) é o
     // fallback. x-forwarded-for não entra — o cliente pode forjá-lo.
     const ip = request.headers.get("cf-connecting-ip")?.trim() || request.headers.get("x-real-ip")?.trim() || "local";
