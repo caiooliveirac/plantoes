@@ -17,7 +17,9 @@ import { notFound } from "next/navigation";
 import { readAuthenticatedSession, requireAuthenticatedSession } from "@/lib/auth/server";
 import { isValidFolhaToken } from "@/lib/folha-ponto/token";
 import { dataMinimaEmissao, formatarDataExtenso, hojeEmSaoPaulo } from "@/lib/folha-ponto/emissao";
-import { hasDatabaseUrl } from "@/db";
+import { eq } from "drizzle-orm";
+import { getDb, hasDatabaseUrl } from "@/db";
+import { doctors } from "@/db/schema";
 import { getBankHoursHistory } from "@/services/bank-hours-history.service";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
 import { formatMinutesForHumans } from "@/modules/reporting/monthly-report";
@@ -27,6 +29,7 @@ import { KairosTopo } from "@/components/kairos-topo";
 import { ApprovalBadge } from "@/components/doctor-panel/approval-badge";
 import { SelfServiceBankHours, type SelfServiceShiftOption } from "@/components/doctor-panel/self-service-bank-hours";
 import { ChiefExtraShifts } from "@/components/doctor-panel/chief-extra-shifts";
+import { DadosFiscais } from "@/components/doctor-panel/dados-fiscais";
 import {
     canDeclareChiefExtraShift,
     loadChiefExtraShifts,
@@ -159,10 +162,14 @@ export default async function PainelDoMedicoPage({
     if (!hasDatabaseUrl()) notFound();
 
     const monthKey = `${ano}-${String(mes).padStart(2, "0")}`;
-    const [history, board] = await Promise.all([
+    const [history, board, [doctorRow]] = await Promise.all([
         getBankHoursHistory({ doctorId: medicoId }),
         getChiefPayableShiftsBoard(monthKey),
+        getDb().select({ metadata: doctors.metadata }).from(doctors).where(eq(doctors.id, medicoId)).limit(1),
     ]);
+    const metadata = (doctorRow?.metadata ?? {}) as Record<string, unknown>;
+    const razaoSocial = typeof metadata.razaoSocial === "string" ? metadata.razaoSocial : null;
+    const cnpj = typeof metadata.cnpj === "string" ? metadata.cnpj : null;
 
     const doctor = history.doctors.find((row) => row.doctorId === medicoId);
     const paymentRow = board.doctors.find((row) => row.doctorId === medicoId);
@@ -329,6 +336,13 @@ export default async function PainelDoMedicoPage({
                     A folha de frequência e o relatório de atividades saem prontos, com os
                     plantões do mês já preenchidos. É só conferir, imprimir e assinar.
                 </p>
+                <DadosFiscais
+                    medicoId={medicoId}
+                    monthKey={monthKey}
+                    token={tokenValido && t ? t : null}
+                    razaoSocial={razaoSocial}
+                    cnpj={cnpj}
+                />
                 <a className="panel-action-btn" href={folhaHref}>
                     Gerar folha de ponto
                 </a>
