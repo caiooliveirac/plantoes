@@ -3,9 +3,13 @@
 **Data:** 07/04/2026
 **Base:** 101 mensagens auditadas hoje + 7 dias de histórico + leitura completa de parser.ts, service.ts, regulation/service.ts, intervention/service.ts, rules.ts
 
+**Status (conferido no código em 27/09/2026):** P1 e P4 concluídos; P6 e P7 concluídos no essencial, com sobras listadas em cada seção. Todos já estavam no primeiro commit do bot neste repositório (`64cd74b`, 03/04/2026) — não há PR específico. P2, P3 e P5 não foram reavaliados aqui.
+
 ---
 
 ## P1 — Pending states sem expiração (CRÍTICO)
+
+> **CONCLUÍDO.** `PENDING_TTL_MS` (30 min) em `modules/telegram/service.ts`: expiração preguiçosa por remetente (`expireStalependings`) e varredura global a cada 5 min (`expireAllStalePendingsGlobal`), marcando `status = superseded`, `error_message = 'pending_expired'`.
 
 ### Causa raiz
 
@@ -250,6 +254,8 @@ if (/^\d{1}$/.test(message.text.trim())) {
 
 ## P4 — NAME_NOISE_TOKENS incompleto (BAIXO-MÉDIO)
 
+> **CONCLUÍDO.** Todos os tokens da lista proposta estão em `NAME_NOISE_TOKENS` (`modules/telegram/parser.ts`, bloco "audit 07/abr/2026"), sem `RAMOS`/`SILVA`/`COSTA`.
+
 ### Causa raiz
 
 `extractNames` ([parser.ts#L414](../modules/telegram/parser.ts#L414)) filtra tokens contra `NAME_NOISE_TOKENS` (L86). Palavras de jargão não listadas sobrevivem como candidatos a nome.
@@ -368,6 +374,8 @@ Toque no número ou redigite nome e sobrenome.
 
 ## P6 — Mensagens casuais e conversacionais capturadas indevidamente (MÉDIO)
 
+> **CONCLUÍDO (6a, 6d).** @menção sem base/nome é descartada como `casual_at_mention`; `CASUAL_PATTERNS` (`parser.ts`) ganhou `AJUDA`, `QUEM E/ESTA/TA`, `CADASTR`, `COMO FAZ/FACO/USA`; conversa casual responde com `casual_smalltalk` (e `casual_smalltalk_pending` com pendência aberta). **Não feito:** 6b (descartar mensagens com menos de 3 caracteres) e 6c (ignorar forwards) — não há tratamento no código.
+
 ### Causa raiz
 
 `isCasualTelegramMessage` ([parser.ts#L353](../modules/telegram/parser.ts#L353)) retorna `false` se encontrar **qualquer** operational cue (base regex, ramal, shift type, arrival/departure signals). Mas muitas mensagens conversacionais contêm fragments que fazem falso match:
@@ -431,6 +439,8 @@ if (message.text && /@\w+/.test(message.text) && !message.text.startsWith('/')) 
 ---
 
 ## P7 — Contas compartilhadas e contexto de sender (MÉDIO)
+
+> **CONCLUÍDO (7a, 7b.1, 7b.3).** `isSharedAccountSender` (`modules/telegram/service.ts`) implementa a heurística proposta; `shouldUseTelegramSenderNameFallback` recusa o nome do remetente em conta compartilhada, e `shouldRejectLowConfidenceTelegramArrival` passa a exigir nome no texto. **Não feito:** TTL de 10 min para pendência de conta compartilhada (7b.2 — todas usam os 30 min do P1) e a mensagem dedicada "Essa conta é usada por vários médicos".
 
 ### Causa raiz
 
