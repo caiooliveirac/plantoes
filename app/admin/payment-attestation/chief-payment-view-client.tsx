@@ -30,6 +30,8 @@ interface Props {
     canManageClosing?: boolean;
     /** Encaminhamento da aba banco de horas: abre o modal deste médico no load. */
     initialDoctorId?: string | null;
+    /** Tamanho da fila de pendências de contrato (só admin; null = não carregou). */
+    contractPendencyCount?: number | null;
 }
 
 interface FlashRecord {
@@ -287,7 +289,7 @@ function FinancialsBridge({ promise, onResolved }: { promise: Promise<ChiefPayab
     return null;
 }
 
-export function ChiefPaymentViewClient({ board: baseBoard, financials: financialsPromise, canManageClosing = true, initialDoctorId = null }: Props) {
+export function ChiefPaymentViewClient({ board: baseBoard, financials: financialsPromise, canManageClosing = true, initialDoctorId = null, contractPendencyCount = null }: Props) {
     // Financeiro chega depois da grade; até lá as linhas ficam sem contrato/banco
     // e as pendências financeiras não são avaliadas (evita "falta contrato" em
     // todo mundo por meio segundo).
@@ -1657,6 +1659,15 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                     <span className="reports-badge danger" title={financials.error}>
                         financeiro indisponível
                     </span>
+                ) : null}
+                {contractPendencyCount !== null ? (
+                    <a
+                        className={`reports-badge ${contractPendencyCount > 0 ? "warn" : "ok"}`}
+                        href="/admin/payment-closing/pendencias-contrato"
+                        title="Médicos sem contrato, contrato vencido, sem teto ou sem saldo de abertura."
+                    >
+                        {contractPendencyCount} pendência{contractPendencyCount === 1 ? "" : "s"} de contrato
+                    </a>
                 ) : null}
 
                 <input

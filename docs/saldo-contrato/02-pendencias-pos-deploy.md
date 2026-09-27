@@ -3,6 +3,11 @@
 > Levantado no LAB (cópia do banco de produção) em 2026-07-31, com a planilha
 > `2026 CHAMAMENTO 004-2.xlsx`. As listas nominais são regeneradas pelo relatório do
 > backfill na hora da carga em produção — os números aqui são a fotografia de agora.
+>
+> **Estado vivo:** `/admin/payment-closing/pendencias-contrato` (contador no topo do
+> fechamento) lista a situação de hoje, agrupada por tipo (sem contrato, vencido, sem
+> saldo de abertura, sem teto, vínculo suspeito, ativo sem plantão recente), com link
+> para a tela que corrige. Régua em `services/contract-pendency-queue.service.ts`.
 
 O backfill carrega **129 saldos** automaticamente. O que sobra está agrupado abaixo por
 motivo, do mais urgente para o que não precisa de nada.
