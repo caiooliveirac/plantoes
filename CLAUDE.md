@@ -257,6 +257,8 @@ npm install            # Node >= 20
 npm run dev            # Next dev server
 npm test               # suíte completa (node --test + tsx)
 npm run test:deploy    # suíte de gate de deploy (exclui meal-breaks, que trava sob isolamento)
+# Os arquivos de teste rodam um de cada vez (--test-concurrency=1): os testes com
+# banco dividem o mesmo DATABASE_URL e, em paralelo, um apagava/criava dado do outro.
 npm run build          # build de produção (faça LOCAL, não no servidor)
 npm run telegram:worker   # roda o worker de lembretes localmente (loop contínuo)
 npm run db:migrate        # aplica migrations SQL pendentes
