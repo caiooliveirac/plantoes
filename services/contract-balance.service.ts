@@ -10,7 +10,7 @@
  * costuma ser dado de origem torto — inclusive saldo negativo que na verdade é
  * consumo acumulado num contrato sem teto lançado.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { bahiaDateIso } from "@/lib/time";
 import { contractLedger, contracts } from "@/db/schema";
@@ -92,7 +92,7 @@ async function loadLedgerBreakdown(contractIds: string[]): Promise<{
             sourceKey: contractLedger.sourceKey,
         })
         .from(contractLedger)
-        .where(sql`${contractLedger.contractId} = any(${sql.raw(`array[${contractIds.map((id) => `'${id}'`).join(",")}]::uuid[]`)})`);
+        .where(inArray(contractLedger.contractId, contractIds));
 
     for (const row of rows) {
         const data = byContract.get(row.contractId)

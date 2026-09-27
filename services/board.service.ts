@@ -2184,7 +2184,7 @@ export async function listRecentHandoffs(
       where so.post_id = ro.post_id
         and so.doctor_id <> ro.doctor_id
         and so.id <> ro.id
-        and so.started_at >= ro.ended_at - ${sql.raw(`interval '${toleranceMinutes} minutes'`)}
+        and so.started_at >= ro.ended_at - make_interval(mins => ${toleranceMinutes})
       order by abs(extract(epoch from (so.started_at - ro.ended_at)))
       limit 1
     ) succ on true
@@ -2214,7 +2214,7 @@ export async function listRecentHandoffs(
       where so.base_id = io.base_id
         and so.doctor_id <> io.doctor_id
         and so.id <> io.id
-        and so.started_at >= io.ended_at - ${sql.raw(`interval '${toleranceMinutes} minutes'`)}
+        and so.started_at >= io.ended_at - make_interval(mins => ${toleranceMinutes})
       order by abs(extract(epoch from (so.started_at - io.ended_at)))
       limit 1
     ) succ on true
