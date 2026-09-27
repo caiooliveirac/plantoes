@@ -17,6 +17,7 @@ import { mensagemDeUsoSimultaneo, mensagemDoResumoDiario } from "@/modules/acess
 import { chaveDeRede, distanciaKm, provedorPorDnsReverso } from "@/modules/acessos/rede";
 import { classificarPedido, descreverPedido, mascararCaminho } from "@/modules/acessos/registro";
 import { duracao, intervalo, quando } from "@/modules/acessos/texto";
+import { escalaDoPeriodo, faixaDeCalor, faixasPorAparelho, lugaresDoPainel, montarPainel, riscoDaConta } from "@/modules/acessos/painel";
 
 /**
  * Monitor de acessos (docs/monitor-acessos.md): leitura do contexto do pedido,
@@ -422,3 +423,102 @@ test("pedido da Tabela (via porteiro): página, ação, WebSocket e arquivos", (
     assert.equal(descreverPedido("quadro_ao_vivo", "GET", "/tabela/ws"), "ligou a Tabela ao vivo");
     assert.equal(descreverPedido("quadro_ao_vivo", "GET", "/api/board/stream"), "ligou o quadro ao vivo");
 });
+
+// ── Painel (/admin/acessos) ────────────────────────────────────────────────
+
+test("painel: escala do período em colunas alinhadas ao relógio da Bahia", () => {
+    const ate = new Date("2026-09-27T20:40:00.000Z"); // 17:40 na Bahia
+    const dia = escalaDoPeriodo(new Date(ate.getTime() - 24 * 3_600_000), ate);
+    assert.equal(dia.passoMs, 30 * 60_000);
+    assert.equal(dia.colunas, 49, "24 h desde 17:40 alinhado a 17:30: a última coluna é parcial");
+    assert.ok(dia.marcas.every((m) => /^\d{1,2}h$/.test(m.texto)), JSON.stringify(dia.marcas));
+    assert.equal(dia.marcas[0].texto, "18h");
+    const semana = escalaDoPeriodo(new Date(ate.getTime() - 7 * 24 * 3_600_000), ate);
+    assert.equal(semana.passoMs, 3 * 3_600_000);
+    assert.ok(semana.marcas.some((m) => m.texto === "dom 27"), JSON.stringify(semana.marcas));
+    assert.equal(escalaDoPeriodo(new Date(ate.getTime() - 30 * 24 * 3_600_000), ate).passoMs, 12 * 3_600_000);
+});
+
+test("painel: faixa de calor — uso por intensidade, duas redes, episódio moderado e forte", () => {
+    const escala = escalaDoPeriodo(min(-5), min(115)); // passo de 30 min a partir de 18:30: [18:30] [19:00] [19:30] [20:00] [20:30]
+    const janelas = [
+        ...presenca("a", "200.1.1.1", 0, 30, "uso"), // coluna 0: uso
+        ...presenca("a", "200.1.1.1", 30, 60, "uso"),
+        ...presenca("b", "177.2.2.2", 30, 60, "uso"), // coluna 1: duas redes
+    ];
+    const faixa = faixaDeCalor(janelas, [], escala);
+    assert.equal(faixa.length, escala.colunas);
+    assert.equal(faixa[0], "0", `antes do uso: ${faixa}`);
+    assert.ok(Number(faixa[1]) >= 1 && Number(faixa[1]) <= 3, `uso numa rede: ${faixa}`);
+    assert.equal(faixa[2], "4", `duas redes no mesmo trecho: ${faixa}`);
+    const analise = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("a", UA.windows, "200.1.1.1"), sessao("b", UA.windowsEdge, "177.2.2.2")],
+        janelas,
+        eventos: [],
+        redes: redes([]),
+        agora: min(70),
+    });
+    assert.ok(faixaDeCalor(janelas, analise.episodios, escala).includes("6"), "episódio forte pinta de vermelho");
+    const raias = faixasPorAparelho([sessao("a", UA.windows, "200.1.1.1"), sessao("b", UA.windowsEdge, "177.2.2.2")], janelas, analise.episodios, redes([["177.2.2.2", { geo: FEIRA }]]), escala);
+    assert.equal(raias.length, 2);
+    assert.ok(raias.every((r) => r.faixa.includes("6")), "os dois aparelhos do episódio forte ficam vermelhos");
+    assert.equal(raias.find((r) => r.sessaoId === "b")?.onde, "Feira de Santana-BA");
+});
+
+test("painel: risco coerente com o nível — forte ≥ 70, atenção 20–69, normal < 20", () => {
+    const base = { eventos: [], agora: min(70) };
+    const forte = analisarConta({
+        ...base,
+        conta: conta(),
+        sessoes: [sessao("a", UA.windows, "200.1.1.1"), sessao("b", UA.windowsEdge, "177.2.2.2")],
+        janelas: [...presenca("a", "200.1.1.1", 0, 60, "uso"), ...presenca("b", "177.2.2.2", 20, 50, "uso")],
+        redes: redes([]),
+    });
+    const normal = analisarConta({ ...base, conta: conta(), sessoes: [sessao("a", UA.windows, "200.1.1.1")], janelas: presenca("a", "200.1.1.1", 0, 60, "uso"), redes: redes([]) });
+    const atencao = analisarConta({
+        ...base,
+        conta: conta(),
+        sessoes: [sessao("a", UA.windows, "200.1.1.1"), sessao("robo", UA.curl, "3.4.5.6")],
+        janelas: [...presenca("a", "200.1.1.1", 0, 30, "uso"), ...presenca("robo", "3.4.5.6", 40, 45, "fundo")],
+        redes: redes([]),
+    });
+    assert.equal(forte.nivel, "forte");
+    assert.ok(riscoDaConta(forte) >= 70);
+    assert.equal(atencao.nivel, "atencao");
+    assert.ok(riscoDaConta(atencao) >= 20 && riscoDaConta(atencao) < 70);
+    assert.equal(normal.nivel, "normal");
+    assert.ok(riscoDaConta(normal) < 20);
+
+    const painel = montarPainel({
+        analises: [normal, forte],
+        brutos: new Map([[forte.conta.userId, { sessoes: [sessao("a", UA.windows, "200.1.1.1"), sessao("b", UA.windowsEdge, "177.2.2.2")], janelas: [] }]]),
+        redes: redes([]),
+        desde: min(-60),
+        ate: min(70),
+        geradoEm: min(70),
+    });
+    assert.equal(painel.foco?.userId, forte.conta.userId, "a conta de maior risco vai para \"Olhe primeiro\"");
+    const calmo = montarPainel({ analises: [normal], brutos: new Map(), redes: redes([]), desde: min(-60), ate: min(70), geradoEm: min(70) });
+    assert.equal(calmo.foco, null, "sem sinal, ninguém é destacado");
+});
+
+test("painel: lugares do período agrupam por cidade e contam contas com sinal", () => {
+    const mapa = redes([["200.1.1.1", { geo: SALVADOR, contas: 12 }], ["201.9.9.9", { geo: SALVADOR }], ["177.2.2.2", { geo: FEIRA }]]);
+    const uma = analisarConta({ conta: conta({ userId: "u1" }), sessoes: [sessao("a", UA.windows, "200.1.1.1")], janelas: presenca("a", "200.1.1.1", 0, 30, "uso"), eventos: [], redes: mapa, agora: min(40) });
+    const outra = analisarConta({
+        conta: conta({ userId: "u2" }),
+        sessoes: [sessao("b", UA.windows, "201.9.9.9"), sessao("c", UA.windowsEdge, "177.2.2.2")],
+        janelas: [...presenca("b", "201.9.9.9", 0, 40, "uso"), ...presenca("c", "177.2.2.2", 0, 40, "uso")],
+        eventos: [],
+        redes: mapa,
+        agora: min(45),
+    });
+    const lugares = lugaresDoPainel([uma, outra], mapa);
+    const salvador = lugares.find((l) => l.rotulo === "Salvador-BA")!;
+    assert.equal(salvador.contas, 2, "duas redes da mesma cidade viram um lugar");
+    assert.equal(salvador.contasComSinal, 1);
+    assert.equal(salvador.coletiva, true);
+    assert.equal(lugares[0].contasComSinal >= lugares[lugares.length - 1].contasComSinal, true, "lugar com sinal primeiro");
+});
+

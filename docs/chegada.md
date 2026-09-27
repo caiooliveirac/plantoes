@@ -2,7 +2,7 @@
 
 Leitura obrigatória antes de mexer em qualquer caminho que grave ou leia a chegada de
 um médico: parser do bot, `applyParsedEntry`, `start*Occupancy`, tomada/deslocado,
-remanejo, continuação, correção pela tela, quadro. Última revisão: 23/09/2026.
+remanejo, continuação, correção pela tela, quadro. Última revisão: 27/09/2026.
 
 Este arquivo descreve **regras**, não código. Aponta para **nomes de função**
 (estáveis), nunca para número de linha (apodrece). Para achar: `grep -n nomeDaFuncao`.
@@ -21,6 +21,10 @@ Este arquivo descreve **regras**, não código. Aponta para **nomes de função*
 3. **Vale a hora do aviso, não a hora escrita** (desde `ARRIVAL_TIME_CUTOFF`,
    01/06/2026, "fase 2"). "Cheguei 07:00" enviado às 07:40 grava 07:40. Exceções:
    saída, continuação, remanejo e PIAM (este sempre 07:00/19:00).
+   "Hora do aviso" é a da MENSAGEM (`message.date`), nunca a do processamento: fila
+   do webhook, retentativa ou edição reprocessada (D8) não empurram nada. Isso vale
+   também para a busca da 1ª tentativa, a janela de 30 min da tomada (coluna
+   `telegram_ingested_messages.message_sent_at`, não `created_at`) e o remanejo.
 4. **Quem chega nunca encerra cobertura vigente do mesmo turno.** Ocupante do mesmo
    turno vira *deslocado* (fora do quadro, plantão aberto, pago). Só o ocupante do
    turno ANTERIOR é rendido (encerrado). Na USA, quem chega vira *dupla*.
@@ -85,14 +89,14 @@ Gravação: `startRegulationOccupancy` / `startInterventionOccupancy`.
 | Caminho | Hora gravada |
 |---|---|
 | Chegada genuína (fase 2) | `message.date` do aviso; HH:mm escrito é ignorado e a resposta avisa |
-| Chegada que só passou num reenvio | a da 1ª tentativa (`resolveFirstArrivalAttemptAt`): qualquer remetente, mesmo nome, mesmo alvo, status `error` ou `pending_takeover_confirmation`, até 2h, mesmo turno; HH:mm escrito não desliga isso na fase 2 |
+| Chegada que só passou num reenvio | a da 1ª tentativa (`resolveFirstArrivalAttemptAt`): qualquer remetente, mesmo nome, mesmo alvo, status `error` ou `pending_takeover_confirmation`, até 2h, mesmo turno — tudo medido pela hora da mensagem (`message_sent_at`); HH:mm escrito não desliga isso na fase 2 |
 | Mensagem editada reprocessada (D8) | `date` da mensagem original (o Telegram mantém; `edit_date` é só a edição) |
 | Pendência respondida depois (nome, turno, ramal) | hora da mensagem original guardada na pendência |
 | Botão de tomada | hora da mensagem pendente (1ª tentativa) |
 | Re-chegada do mesmo médico no mesmo alvo, mesmo turno | `min(existente, nova)` — só recua |
 | Deslocado/sombra que reassume o quadro livre | chegada original; `board_started_at` = `started_at` do deslocado |
 | Junção com plantão recém-fechado | `resolveArrivalIdentity`: se a chegada cai em `[início − 60min, fim − 30min]`, junta e só recua |
-| Remanejo | destino grava a hora da troca; o quadro mostra a 1ª do turno |
+| Remanejo | destino grava a hora da troca = hora do aviso (`transferredAt` que o bot passa a `transferOperationalOccupancy`; a tela da chefia usa "agora"); a origem fecha nessa mesma hora; o quadro mostra a 1ª do turno |
 | Continuação | âncora da cadeia no `board_started_at`; bloco novo começa na virada |
 | PIAM | 07:00 / 19:00 fixos |
 | Correção pela tela | `redirectTurnoArrivalEdit` manda a correção para a ocupação de ORIGEM do turno |
@@ -121,7 +125,7 @@ até 15 min é zero.
 | Troca de ramal dentro do turno | Remanejo; destino ocupado por titular vigente barra (ou vira dupla na USA) | — |
 | Troca de ramal depois do fim do turno de origem | Vira chegada do turno atual (`resolveCrossTurnoMoveShift`) | Senão o noturno herdava rótulo SD e não era pago |
 | SD → SN seguido (mesmo médico) | Continuação: estende a ocupação ou abre bloco novo no mesmo grupo | Uma corrida, duas unidades de pagamento |
-| Meio plantão (11:10–17:00, só regulação) | Chegada NOVA cuja hora (declarada ou, sem hora, a da mensagem) cai nessa faixa vira meio plantão, fim 17:00 — na tag e no pagamento — **qualquer que seja o turno escrito**: "SD" às 12:05 é meio plantão (`shouldAssumeTelegramHalfShift` ignora o rótulo de propósito). Reenvio de quem já estava no ramal desde antes das 11:10 não vira meio (D6) | Regra confirmada pelo dono (set/2026): quem chega depois das 11h não fez plantão inteiro. **É intencional — não "corrigir" para respeitar o SD declarado** |
+| Meio plantão (11:10–17:00, só regulação) | Chegada NOVA nessa faixa é meio plantão (tag e pagamento, fim 17:00), qualquer que seja o turno escrito (regra confirmada pelo dono, 27/09/2026). Continuação do mesmo médico (inclusive sem a palavra "continua": rótulo P, SD↔SN) não é chegada nova: não grava nem responde meio plantão | — |
 | PIAM | Roteado ao ramal PIAM com 07:00/19:00 | — |
 | Posto desativado | A chegada reativa o posto | Chegada é soberana |
 | Nome não resolvido | Pergunta com candidatos | Sem vínculo formal telegram↔médico |
@@ -168,6 +172,8 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 | D11 | CORRIGIDO | Deslocado que reenviava no mesmo alvo nunca voltava ao quadro | PR #295, 23/09/2026 |
 | D12 | CORRIGIDO | **Chegada recusada no remanejo.** ~50 recusas em 60 dias ("Encontrei X em Y… declare a saída dela e depois reenvie sua chegada"), quase todas na virada 07h/19h: o portão de tomada achava que o ocupante era de outro turno e a checagem do remanejo achava que ele seguia vigente — zona morta. Agora o titular vigente é deslocado e quem chega assume. "Remanejado" de quem não tem plantão aberto, ou já está no destino, vira chegada em vez de erro | Yngra 05/09 (5 tentativas), Leonardo 08/09, Emily 09/09, Caio 18/09; PR #300 |
 | D13 | CORRIGIDO | **Chegada do próximo turno falhava com "erro técnico" (23505).** Com o titular do turno que acaba no quadro e um plantão FORA do quadro no mesmo posto (deslocado de um terceiro mais recente que o titular, ou plantão vencido/deslocado do próprio médico que chega), `startRegulationOccupancy` rendia o registro errado e o INSERT com board batia em `regulation_occupancies_one_active_board_per_post_idx`. Agora rende quem detém o quadro (rendição, princípio 4); o deslocado segue fora do quadro; sombra com board sai do quadro antes do INSERT. O log grava `db_update_failed:<SQLSTATE>:<constraint>` | Caroline 1365 24/09 (4x), Míriam 2152 22/09, Gerardson 2152 21/09, Ana Luiza 2032 23/09; PR claude/chegada-antecipada-quadro |
+| D14 | CORRIGIDO | **Processamento tardio usava a hora do servidor.** O remanejo fechava a origem e abria o destino com `new Date()` (e vencia a origem pelo relógio: aviso processado depois do fim do turno virava "plantão de origem já encerrado"); a 1ª tentativa e a janela da tomada comparavam com `created_at` do log (recebimento), então reprocessamento/fila perdia a 1ª tentativa e a pendência de tomada nunca expirava. Agora tudo pela hora da mensagem (`message_sent_at`, migration 0047; `transferredAt`) | achados 3 e 4 do PR #344; PR claude/chegada-hora-do-aviso |
+| D15 | CORRIGIDO | Continuação sem "continua" (rótulo P ou SD↔SN) entre 11:10–17:00 respondia "🟠 Meio Plantão da Tarde (até 17:00)" sem ter gravado meio plantão — só a resposta. A resposta agora reflete o que foi gravado | achado 2 do PR #344; PR claude/chegada-hora-do-aviso |
 
 ### Débito que atrapalha achar esses bugs
 

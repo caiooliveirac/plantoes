@@ -98,34 +98,6 @@
     margin-top: 8px;
 }
 
-.pagina-kairos .ac-kpis {
-    display: grid;
-    gap: 10px;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-}
-
-.pagina-kairos .ac-kpi {
-    background: var(--superficie);
-    border: 1px solid var(--borda);
-    border-radius: 12px;
-    padding: 12px 14px;
-}
-
-.pagina-kairos .ac-kpi-valor {
-    color: var(--texto-forte);
-    display: block;
-    font-size: 1.6rem;
-    font-variant-numeric: tabular-nums;
-    font-weight: 700;
-    line-height: 1.1;
-}
-
-.pagina-kairos .ac-kpi-rotulo { color: var(--texto-medio); font-size: 0.82rem; }
-.pagina-kairos .ac-kpi.forte { border-color: var(--semaforo-vermelho-borda); background: var(--semaforo-vermelho-fundo); }
-.pagina-kairos .ac-kpi.forte .ac-kpi-valor { color: var(--semaforo-vermelho-texto); }
-.pagina-kairos .ac-kpi.atencao { border-color: var(--semaforo-amarelo-borda); background: var(--semaforo-amarelo-fundo); }
-.pagina-kairos .ac-kpi.atencao .ac-kpi-valor { color: var(--semaforo-amarelo-texto); }
-
 .pagina-kairos .ac-nivel {
     border: 1px solid var(--borda);
     border-radius: 999px;
@@ -145,44 +117,6 @@
 .pagina-kairos .ac-nivel.fraco,
 .pagina-kairos .ac-nivel.info { background: var(--semaforo-neutro-fundo); border-color: var(--semaforo-neutro-borda); color: var(--semaforo-neutro-texto); }
 .pagina-kairos .ac-nivel.aberta { background: var(--semaforo-verde-fundo); border-color: var(--semaforo-verde-borda); color: var(--semaforo-verde-texto); }
-
-.pagina-kairos .ac-agora {
-    border-color: var(--semaforo-vermelho-borda);
-    border-width: 2px;
-}
-
-.pagina-kairos .ac-lista {
-    display: grid;
-    gap: 8px;
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-
-.pagina-kairos .ac-conta {
-    align-items: center;
-    border: 1px solid var(--borda);
-    border-radius: 12px;
-    display: grid;
-    gap: 6px 14px;
-    grid-template-columns: auto minmax(0, 1.2fr) minmax(0, 2fr) auto;
-    padding: 12px 14px;
-}
-
-.pagina-kairos .ac-conta:hover { border-color: var(--borda-forte); }
-.pagina-kairos .ac-conta a { color: var(--texto-forte); font-weight: 600; text-decoration: none; }
-.pagina-kairos .ac-conta a:hover { text-decoration: underline; }
-.pagina-kairos .ac-conta-quem { display: grid; gap: 2px; min-width: 0; }
-.pagina-kairos .ac-conta-quem small,
-.pagina-kairos .ac-conta-numeros { color: var(--texto-medio); font-size: 0.8rem; }
-.pagina-kairos .ac-conta-resumo { font-size: 0.88rem; line-height: 1.45; }
-.pagina-kairos .ac-conta-numeros { text-align: right; white-space: nowrap; }
-
-@media (max-width: 760px) {
-    .pagina-kairos .ac-conta { grid-template-columns: auto minmax(0, 1fr); }
-    .pagina-kairos .ac-conta-resumo,
-    .pagina-kairos .ac-conta-numeros { grid-column: 1 / -1; text-align: left; }
-}
 
 /* Achado: o selo de nível no título diz a gravidade; separador fino entre eles. */
 .pagina-kairos .ac-achado {
@@ -354,3 +288,332 @@
     .pagina-kairos .ac-tabela-wrap { overflow: visible; }
     .pagina-kairos .ac-tabela { min-width: 0; }
 }
+
+/* ── Painel: calor ──────────────────────────────────────────────────────
+   Cada coluna é um trecho do período; a cor diz o que aconteceu nele.
+   Azul = uso (mais forte = mais uso); âmbar = duas redes no mesmo trecho;
+   âmbar cheio = uso simultâneo; vermelho = uso simultâneo forte. */
+.pagina-kairos .ac-calor {
+    display: grid;
+    gap: 2px;
+    grid-template-columns: repeat(var(--colunas), minmax(0, 1fr));
+    height: 14px;
+    min-width: 0;
+    width: 100%;
+}
+
+.pagina-kairos .ac-calor.alta { height: 22px; }
+.pagina-kairos .ac-c { background: var(--superficie-alt); border-radius: 2px; display: block; min-width: 2px; }
+.pagina-kairos .ac-c1 { background: color-mix(in srgb, var(--azul-dado) 30%, var(--superficie-alt)); }
+.pagina-kairos .ac-c2 { background: color-mix(in srgb, var(--azul-dado) 60%, var(--superficie-alt)); }
+.pagina-kairos .ac-c3 { background: var(--azul-dado); }
+.pagina-kairos .ac-c4 { background: color-mix(in srgb, var(--ambar-600) 55%, var(--superficie-alt)); }
+.pagina-kairos .ac-c5 { background: var(--ambar-600); }
+.pagina-kairos .ac-c6 { background: var(--vermelho-600); }
+
+.pagina-kairos .ac-eixo {
+    color: var(--texto-fraco);
+    display: grid;
+    font-size: 0.68rem;
+    font-variant-numeric: tabular-nums;
+    grid-template-columns: repeat(var(--colunas), minmax(0, 1fr));
+    min-width: 0;
+}
+
+.pagina-kairos .ac-eixo span { grid-row: 1; white-space: nowrap; }
+
+.pagina-kairos .ac-legenda {
+    color: var(--texto-medio);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.75rem;
+    gap: 6px 14px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.pagina-kairos .ac-legenda li { align-items: center; display: inline-flex; gap: 6px; }
+.pagina-kairos .ac-legenda .ac-c { height: 12px; width: 12px; }
+
+/* ── Olhe primeiro ─────────────────────────────────────────────────────── */
+.pagina-kairos .ac-topo-painel {
+    align-items: start;
+    display: grid;
+    gap: 16px;
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+}
+
+.pagina-kairos .ac-foco {
+    --tom: var(--verde-600);
+    background: color-mix(in srgb, var(--tom) 7%, var(--superficie));
+    border: 1px solid color-mix(in srgb, var(--tom) 40%, var(--borda));
+    border-radius: 16px;
+    box-shadow: var(--sombra-painel);
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+    padding: 20px 22px;
+}
+
+.pagina-kairos .ac-foco.forte,
+.pagina-kairos .ac-foco.alto { --tom: var(--vermelho-600); }
+.pagina-kairos .ac-foco.atencao { --tom: var(--ambar-600); }
+
+.pagina-kairos .ac-foco h2 { color: var(--texto-forte); font-size: 1.05rem; margin: 0; }
+.pagina-kairos .ac-foco-quem { align-items: center; display: flex; gap: 14px; min-width: 0; }
+.pagina-kairos .ac-foco-nome { color: var(--texto-forte); font-size: 1.4rem; font-weight: 800; letter-spacing: -0.01em; line-height: 1.2; margin: 0; }
+.pagina-kairos .ac-foco-meta { align-items: center; color: var(--texto-medio); display: flex; flex-wrap: wrap; font-size: 0.85rem; gap: 4px 12px; margin: 4px 0 0; }
+.pagina-kairos .ac-foco-resumo { color: var(--texto); font-size: 0.95rem; line-height: 1.55; margin: 0; max-width: 72ch; }
+.pagina-kairos .ac-foco-sub { color: var(--texto-medio); font-size: 0.85rem; font-weight: 700; margin: 4px 0 0; }
+.pagina-kairos .ac-foco-calmo { display: grid; gap: 6px; }
+
+.pagina-kairos .ac-risco {
+    background: var(--semaforo-neutro-fundo);
+    border: 1px solid var(--semaforo-neutro-borda);
+    border-radius: 9px;
+    color: var(--semaforo-neutro-texto);
+    display: inline-grid;
+    flex: none;
+    font-size: 0.9rem;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+    height: 1.95rem;
+    place-items: center;
+    width: 2.5rem;
+}
+
+.pagina-kairos .ac-risco.forte { background: var(--vermelho-600); border-color: var(--vermelho-600); color: var(--fundo-app); }
+.pagina-kairos .ac-risco.alto { background: var(--semaforo-vermelho-fundo); border-color: var(--semaforo-vermelho-borda); color: var(--semaforo-vermelho-texto); }
+.pagina-kairos .ac-risco.atencao { background: var(--semaforo-amarelo-fundo); border-color: var(--semaforo-amarelo-borda); color: var(--semaforo-amarelo-texto); }
+.pagina-kairos .ac-risco.calmo { background: var(--semaforo-verde-fundo); border-color: var(--semaforo-verde-borda); color: var(--semaforo-verde-texto); }
+.pagina-kairos .ac-foco .ac-risco { border-radius: 14px; font-size: 1.45rem; height: 3.4rem; width: 3.4rem; }
+
+/* Aberta agora: verde numa rede; vermelho quando está em 2+ redes neste momento. */
+.pagina-kairos .ac-agora { align-items: center; color: var(--semaforo-verde-texto); display: inline-flex; font-weight: 600; gap: 6px; }
+.pagina-kairos .ac-agora.varias { color: var(--semaforo-vermelho-texto); }
+
+.pagina-kairos .ac-pulso {
+    background: var(--verde-600);
+    border-radius: 50%;
+    display: inline-block;
+    flex: none;
+    height: 8px;
+    position: relative;
+    width: 8px;
+}
+
+.pagina-kairos .ac-pulso::after {
+    animation: ac-pulso 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+    background: inherit;
+    border-radius: inherit;
+    content: "";
+    inset: 0;
+    position: absolute;
+}
+
+.pagina-kairos .ac-pulso.varias { background: var(--vermelho-600); }
+
+@keyframes ac-pulso {
+    from { opacity: 0.55; transform: scale(1); }
+    to { opacity: 0; transform: scale(2.8); }
+}
+
+.pagina-kairos .ac-raias { display: grid; gap: 8px; min-width: 0; }
+.pagina-kairos .ac-raia { align-items: center; display: grid; gap: 12px; grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr); }
+.pagina-kairos .ac-raia-quem { align-items: center; display: flex; gap: 8px; min-width: 0; }
+.pagina-kairos .ac-raia-texto { display: grid; min-width: 0; }
+.pagina-kairos .ac-raia-texto strong,
+.pagina-kairos .ac-raia-texto small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pagina-kairos .ac-raia-texto strong { color: var(--texto-forte); font-size: 0.88rem; }
+.pagina-kairos .ac-raia-texto small { color: var(--texto-medio); font-size: 0.74rem; }
+
+/* ── De onde estão acessando ───────────────────────────────────────────── */
+.pagina-kairos .ac-lugares h2 { margin-bottom: 14px; }
+.pagina-kairos .ac-lugares-lista { display: grid; gap: 12px; list-style: none; margin: 0; padding: 0; }
+.pagina-kairos .ac-lugares-lista li { display: grid; gap: 5px; }
+.pagina-kairos .ac-lugares-linha { align-items: baseline; display: flex; gap: 10px; justify-content: space-between; }
+.pagina-kairos .ac-lugares-nome { color: var(--texto-forte); font-size: 0.88rem; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pagina-kairos .ac-lugares-num { color: var(--texto-medio); flex: none; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+
+.pagina-kairos .ac-barra {
+    background: var(--superficie-alt);
+    border-radius: 999px;
+    display: block;
+    height: 6px;
+    overflow: hidden;
+    position: relative;
+}
+
+.pagina-kairos .ac-barra span { background: color-mix(in srgb, var(--azul-dado) 55%, var(--superficie-alt)); border-radius: inherit; inset: 0 auto 0 0; position: absolute; }
+.pagina-kairos .ac-barra span.sinal { background: var(--vermelho-600); }
+.pagina-kairos .ac-lugares-tags { color: var(--texto-medio); display: flex; flex-wrap: wrap; font-size: 0.72rem; gap: 4px 10px; }
+.pagina-kairos .ac-lugares-tags .alerta { color: var(--semaforo-amarelo-texto); font-weight: 600; }
+.pagina-kairos .ac-lugares-tags .sinal { color: var(--semaforo-vermelho-texto); font-weight: 700; }
+.pagina-kairos .ac-nota { color: var(--texto-fraco); font-size: 0.78rem; line-height: 1.5; margin: 14px 0 0; }
+
+/* ── Ranking ───────────────────────────────────────────────────────────── */
+.pagina-kairos .ac-ranking-topo { align-items: center; display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; }
+.pagina-kairos .ac-ranking-topo h2 { margin: 0; }
+
+.pagina-kairos .ac-criterios {
+    display: flex;
+    gap: 6px;
+    margin: 14px 0 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
+}
+
+.pagina-kairos .ac-criterios button {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 999px;
+    color: var(--texto);
+    cursor: pointer;
+    flex: none;
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 7px 14px;
+    scroll-snap-align: start;
+    transition: background-color 0.18s ease-out, border-color 0.18s ease-out, color 0.18s ease-out;
+}
+
+.pagina-kairos .ac-criterios button:hover { border-color: var(--borda-forte); }
+.pagina-kairos .ac-criterios button[aria-pressed="true"] { background: var(--acao-primaria); border-color: var(--acao-primaria); color: var(--acao-primaria-texto); }
+.pagina-kairos .ac-criterios button:focus-visible,
+.pagina-kairos .ac-linha:focus-visible,
+.pagina-kairos .ac-btn:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+.pagina-kairos .ac-criterio-dica { color: var(--texto-medio); font-size: 0.8rem; margin: 0 0 10px; }
+
+.pagina-kairos .ac-linhas { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
+
+.pagina-kairos .ac-linha {
+    align-items: center;
+    background: none;
+    border: 0;
+    border-radius: 12px;
+    color: inherit;
+    cursor: pointer;
+    display: grid;
+    font: inherit;
+    gap: 12px;
+    grid-template-columns: 1.6rem 2.5rem minmax(11rem, 15rem) minmax(9rem, 13rem) minmax(0, 1fr) 1rem;
+    padding: 10px 12px;
+    text-align: left;
+    width: 100%;
+}
+
+.pagina-kairos .ac-linha-cabecalho { color: var(--texto-fraco); cursor: default; font-size: 0.72rem; padding-bottom: 2px; padding-top: 0; }
+
+.pagina-kairos .ac-item {
+    background: var(--superficie);
+    border: 1px solid transparent;
+    border-radius: 14px;
+    transition: background-color 0.18s ease-out, border-color 0.18s ease-out, box-shadow 0.18s ease-out;
+}
+
+.pagina-kairos .ac-item:hover { border-color: var(--borda); }
+.pagina-kairos .ac-item.forte { background: color-mix(in srgb, var(--vermelho-600) 6%, var(--superficie)); border-color: color-mix(in srgb, var(--vermelho-600) 28%, transparent); }
+.pagina-kairos .ac-item.alto { background: color-mix(in srgb, var(--vermelho-600) 3%, var(--superficie)); }
+.pagina-kairos .ac-item.aberta { border-color: var(--borda-forte); box-shadow: 0 6px 18px -10px rgba(15, 23, 42, 0.35); }
+
+.pagina-kairos .ac-pos { color: var(--texto-fraco); font-size: 0.85rem; font-variant-numeric: tabular-nums; text-align: right; }
+.pagina-kairos .ac-quem { display: grid; gap: 2px; min-width: 0; }
+.pagina-kairos .ac-quem strong { align-items: center; color: var(--texto-forte); display: flex; font-size: 0.95rem; gap: 8px; min-width: 0; }
+.pagina-kairos .ac-quem strong,
+.pagina-kairos .ac-quem small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pagina-kairos .ac-quem small { color: var(--texto-medio); font-size: 0.76rem; }
+
+.pagina-kairos .ac-onde { display: flex; flex-wrap: wrap; gap: 4px; max-height: 3.1em; min-width: 0; overflow: hidden; }
+.pagina-kairos .ac-onde.vazio { color: var(--texto-fraco); font-size: 0.78rem; }
+
+.pagina-kairos .ac-lugar {
+    align-items: baseline;
+    background: var(--superficie-alt);
+    border: 1px solid var(--borda);
+    border-radius: 999px;
+    color: var(--texto);
+    display: inline-flex;
+    font-size: 0.74rem;
+    gap: 5px;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 2px 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pagina-kairos .ac-lugar small { color: var(--texto-fraco); font-size: 0.68rem; }
+.pagina-kairos .ac-lugar.coletiva { border-style: dashed; }
+.pagina-kairos .ac-lugar.alerta { background: var(--semaforo-amarelo-fundo); border-color: var(--semaforo-amarelo-borda); color: var(--semaforo-amarelo-texto); }
+.pagina-kairos .ac-lugar.mais { color: var(--texto-medio); }
+
+.pagina-kairos .ac-seta {
+    border-bottom: 2px solid var(--texto-fraco);
+    border-right: 2px solid var(--texto-fraco);
+    height: 8px;
+    justify-self: center;
+    transform: translateY(-2px) rotate(45deg);
+    transition: transform 0.2s ease-out;
+    width: 8px;
+}
+
+.pagina-kairos .ac-item.aberta .ac-seta { transform: translateY(2px) rotate(-135deg); }
+
+.pagina-kairos .ac-detalhe { display: grid; gap: 12px; padding: 2px 16px 16px calc(1.6rem + 2.5rem + 36px); }
+.pagina-kairos .ac-detalhe-resumo { color: var(--texto); font-size: 0.9rem; line-height: 1.55; margin: 0; max-width: 75ch; }
+.pagina-kairos .ac-achados-chips { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.pagina-kairos .ac-episodio-mini { border: 1px solid var(--borda); border-radius: 10px; font-size: 0.85rem; line-height: 1.45; padding: 10px 12px; }
+.pagina-kairos .ac-episodio-mini.forte { background: var(--semaforo-vermelho-fundo); border-color: var(--semaforo-vermelho-borda); }
+.pagina-kairos .ac-episodio-mini ul { margin: 6px 0 0; padding-left: 18px; }
+.pagina-kairos .ac-detalhe-grade { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pagina-kairos .ac-detalhe-grade h4 { color: var(--texto-medio); font-size: 0.78rem; font-weight: 700; margin: 0 0 6px; }
+.pagina-kairos .ac-detalhe-grade .ac-onde { max-height: none; }
+.pagina-kairos .ac-lista-simples { font-size: 0.84rem; line-height: 1.5; margin: 0; padding-left: 18px; }
+.pagina-kairos .ac-detalhe .ac-btn { justify-self: start; }
+.pagina-kairos .ac-btn.primario { background: var(--acao-primaria); border-color: var(--acao-primaria); color: var(--acao-primaria-texto); }
+.pagina-kairos .ac-mais { margin-top: 12px; }
+.pagina-kairos .ac-resumo-geral { color: var(--texto-medio); font-size: 0.88rem; margin: 10px 0 0; }
+.pagina-kairos .ac-resumo-geral b { color: var(--texto-forte); font-variant-numeric: tabular-nums; }
+.pagina-kairos .ac-resumo-geral .forte { color: var(--semaforo-vermelho-texto); }
+
+@media (max-width: 1080px) {
+    .pagina-kairos .ac-topo-painel { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 900px) {
+    .pagina-kairos .ac-linha {
+        grid-template-areas:
+            "pos risco quem seta"
+            ". onde onde onde"
+            "calor calor calor calor";
+        grid-template-columns: 1.4rem 2.5rem minmax(0, 1fr) 1rem;
+        row-gap: 8px;
+    }
+    .pagina-kairos .ac-linha .ac-pos { grid-area: pos; }
+    .pagina-kairos .ac-linha .ac-risco { grid-area: risco; }
+    .pagina-kairos .ac-linha .ac-quem { grid-area: quem; }
+    .pagina-kairos .ac-linha .ac-onde { grid-area: onde; }
+    .pagina-kairos .ac-linha .ac-calor { grid-area: calor; }
+    .pagina-kairos .ac-linha .ac-seta { grid-area: seta; }
+    .pagina-kairos .ac-linha-cabecalho { grid-template-areas: "eixo"; grid-template-columns: minmax(0, 1fr); }
+    .pagina-kairos .ac-linha-cabecalho > :not(.ac-eixo) { display: none; }
+    .pagina-kairos .ac-linha-cabecalho .ac-eixo { grid-area: eixo; }
+    .pagina-kairos .ac-detalhe { padding: 2px 12px 14px; }
+    .pagina-kairos .ac-detalhe-grade { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 640px) {
+    .pagina-kairos .ac-foco { padding: 16px; }
+    .pagina-kairos .ac-raia { gap: 6px; grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pagina-kairos .ac-pulso::after { animation: none; }
+    .pagina-kairos .ac-seta,
+    .pagina-kairos .ac-item,
+    .pagina-kairos .ac-criterios button { transition: none; }
+}
+

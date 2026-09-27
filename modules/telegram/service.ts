@@ -29,7 +29,7 @@
  *   - Departure corrections require justification if the event time exceeds scheduled shift end
  *   - Continuations preserve the original arrival time and create a new occupancy window
  */
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, lt, ne } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, lt, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
     doctors,
@@ -2712,6 +2712,7 @@ async function logTelegramMessage(update: TelegramUpdate) {
             senderTelegramId: message.from?.id ? String(message.from.id) : null,
             senderName: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null,
             rawText: message.text,
+            messageSentAt: new Date(message.date * 1000),
             status: "pending",
         })
         .onConflictDoNothing()
@@ -8908,6 +8909,9 @@ async function handleTelegramReassignment(params: {
             roleLabel: parsed.roleFunction ?? undefined,
             notes: `Remanejado via Telegram de ${sourceCode} para ${targetCode}. ${messageText}`.trim(),
             conflictResolution: sharesInterventionBaseWith ? { strategy: "share_destination" } : null,
+            // Hora do aviso, não a do processamento (docs/chegada.md §1.3). Nunca antes
+            // da própria chegada na origem (fechamento antes da abertura).
+            transferredAt: new Date(Math.max(eventAt.getTime(), activeOcc.startedAt.getTime())),
         },
         null,
     );
@@ -9172,6 +9176,12 @@ async function respondUnknownDestination(params: {
     return { ok: true, ignored: true };
 }
 
+// Hora do aviso de uma linha do log (docs/chegada.md §1.3): a da mensagem, não a de
+// recebimento no servidor. Linhas anteriores à migration 0047 não têm a coluna.
+function telegramLogSentAt(row: { messageSentAt: Date | null; createdAt: Date }) {
+    return row.messageSentAt ?? row.createdAt;
+}
+
 // Primeira tentativa vale: se a chegada deu erro do bot (ou ficou pendente de confirmar
 // tomada) e só passou num reenvio, a hora de chegada é a da PRIMEIRA mensagem — é ela
 // que ordena prioridade de refeição/saída e mede atraso. Mesmo remetente, mesmo médico,
@@ -9195,7 +9205,7 @@ async function resolveFirstArrivalAttemptAt(params: {
 }): Promise<Date> {
     const db = getDb();
     const rows = await db.query.telegramIngestedMessages.findMany({
-        columns: { createdAt: true },
+        columns: { messageSentAt: true, createdAt: true },
         where: and(
             eq(telegramIngestedMessages.chatId, params.chatId),
             // Sem filtro de remetente (D4): colega que avisa pelo médico, ou o médico
@@ -9204,10 +9214,10 @@ async function resolveFirstArrivalAttemptAt(params: {
             eq(telegramIngestedMessages.parsedTargetCode, params.targetCode),
             eq(telegramIngestedMessages.parsedAction, "arrival"),
             inArray(telegramIngestedMessages.status, ["error", "pending_takeover_confirmation"]),
-            gte(telegramIngestedMessages.createdAt, new Date(params.eventAt.getTime() - FIRST_ARRIVAL_ATTEMPT_WINDOW_MS)),
+            sql`coalesce(${telegramIngestedMessages.messageSentAt}, ${telegramIngestedMessages.createdAt}) >= ${new Date(params.eventAt.getTime() - FIRST_ARRIVAL_ATTEMPT_WINDOW_MS).toISOString()}::timestamptz`,
         ),
     });
-    return pickFirstArrivalAttemptAt(rows.map((row) => row.createdAt), params.eventAt);
+    return pickFirstArrivalAttemptAt(rows.map(telegramLogSentAt), params.eventAt);
 }
 
 async function findPendingTakeoverConfirmation(chatId: string, senderTelegramId: string) {
@@ -9266,7 +9276,7 @@ async function tryHandlePendingTakeoverConfirmation(update: TelegramUpdate, logI
     const valid = Boolean(pending) && Boolean(data)
         && Boolean(data!.arrivingMessageText)
         && normalizeTakeoverTargetCode(data!.targetCode) === requestedTarget
-        && isWithinTakeoverConfirmationWindow(pending!.createdAt, referenceAt);
+        && isWithinTakeoverConfirmationWindow(telegramLogSentAt(pending!), referenceAt);
 
     if (!valid) {
         await markTelegramProcessed(logId, {
@@ -9356,7 +9366,9 @@ async function applyParsedEntry(params: {
     let occupancyId: string | null = null;
     let successKind: "standard" | "departure_adjusted" = "standard";
     let treatedAsContinuation = false;
-    let regulationActiveStartedAt: Date | null = null;
+    // Meio plantão efetivamente GRAVADO (só a chegada nova da regulação grava). A
+    // resposta reflete isto: continuação na faixa 11:10–17:00 não é meio plantão.
+    let recordedHalfShift = false;
     let autoReactivated = false;
     let replyTimeAt = eventAt;
     let effectiveShiftType = resolveInitialArrivalShiftType({ parsed, eventAt, referenceAt });
@@ -9516,8 +9528,8 @@ async function applyParsedEntry(params: {
                     extendedLongShift,
                 });
             } else {
-                regulationActiveStartedAt = activeOccupancy?.startedAt ?? null;
                 const assumedHalfShift = decision.kind === "new_occupancy" && decision.assumedHalfShift;
+                recordedHalfShift = assumedHalfShift;
                 const halfShiftScheduledEndAt = assumedHalfShift ? resolveHalfShiftScheduledEndAt(eventAt) : null;
                 // O início agendado do meio plantão é SEMPRE a hora esperada (11:30),
                 // não o instante em que o médico avisou. Assim o banco de horas mede
@@ -10050,13 +10062,6 @@ async function applyParsedEntry(params: {
         }
     }
 
-    const assumedHalfShift = shouldAssumeTelegramHalfShift({
-        parsed,
-        eventAt,
-        effectiveShiftType,
-        activeStartedAt: regulationActiveStartedAt,
-    }) && parsed.sector === "REGULATION" && !parsed.isDeparture;
-
     // "P forward": chegada registrada como P que vai cobrir também o turno seguinte.
     // Só oferecemos o botão de reverter quando NÃO é continuidade do dia
     // (treatedAsContinuation) — espelha a regra do pagamento: quem tem SD no dia
@@ -10083,7 +10088,7 @@ async function applyParsedEntry(params: {
         autoReactivated,
         effectiveShiftType,
         reassignedFrom: null as string | null,
-        assumedHalfShift,
+        assumedHalfShift: recordedHalfShift,
         continuationFrom,
         displacedDoctorName,
         extendedLongShift,
@@ -14259,7 +14264,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     const confirmed = Boolean(pending)
                         && isTakeoverPendingData(pending!.resolutionData)
                         && takeoverPendingMatches(pending!.resolutionData as TakeoverPendingData, incoming)
-                        && isWithinTakeoverConfirmationWindow(pending!.createdAt, messageReferenceAt);
+                        && isWithinTakeoverConfirmationWindow(telegramLogSentAt(pending!), messageReferenceAt);
 
                     if (!confirmed) {
                         await markTelegramProcessed(log.id, {

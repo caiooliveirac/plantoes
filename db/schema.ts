@@ -607,6 +607,9 @@ export const telegramIngestedMessages = operationsV2.table(
         resolutionData: jsonb("resolution_data").notNull().default({}),
         errorMessage: text("error_message"),
         processedAt: timestamp("processed_at", { withTimezone: true }),
+        // Hora da mensagem no Telegram (`message.date`); created_at é a do servidor.
+        // Nula nas linhas anteriores à migration 0047.
+        messageSentAt: timestamp("message_sent_at", { withTimezone: true }),
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [
