@@ -18,6 +18,19 @@
    Limite de tentativa: o escala já conta 5 falhas por e-mail em 15 min antes de
    chegar aqui (lib/auth/store.ts de lá). Este teto por e-mail é o segundo, para
    o caso de o token vazar e alguém falar direto com esta rota.
+
+   Quem chama hoje é também o porteiro do mnrs.com.br (login único do portal).
+   Por isso o escopo aqui é "portal": o papel `portal` (conta que só entra no
+   portal, sem acesso ao app Plantões) vale nesta rota e em nenhum outro lugar.
+
+   Motivo da recusa (401 invalid_credentials): além do `error`, a resposta diz
+   `conta: "inexistente" | "existente"` e, se existe, `senhaAlteradaEm` (ISO ou
+   null). TROCA CONSCIENTE (decisão do Caio, 09/2026): isto deixa quem tem o
+   token saber se um e-mail tem conta aqui — enumeração de contas. Aceita
+   porque a rota só responde a servidor com o token (x-escala-token), tem o teto
+   de falhas por e-mail abaixo, e sem a distinção a pessoa fica presa no portal
+   sem saber se precisa pedir conta ou redefinir a senha. `status` e `error`
+   continuam idênticos aos de antes: porteiro antigo ignora os campos novos.
    ========================================================================== */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -26,7 +39,7 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
-import { authenticateWithPassword } from "@/services/auth.service";
+import { authenticateWithPassword, consultarSituacaoConta, type SituacaoConta } from "@/services/auth.service";
 
 const schema = z.object({
     email: z.string().email(),
@@ -89,11 +102,21 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "too_many_attempts" }, { status: 429 });
     }
 
-    const result = await authenticateWithPassword(email, parsed.data.password);
+    const result = await authenticateWithPassword(email, parsed.data.password, { escopo: "portal" });
     if (result.status !== "success") {
         registrarFalha(email, agora);
-        console.log(`[verificar-escala] ${new Date().toISOString()} recusado ${JSON.stringify({ email, motivo: result.status })}`);
-        return NextResponse.json({ error: result.status }, { status: 401 });
+        let situacao: SituacaoConta | null = null;
+        if (result.status === "invalid_credentials") {
+            situacao = await consultarSituacaoConta(email);
+        }
+        console.log(
+            `[verificar-escala] ${new Date().toISOString()} recusado ${JSON.stringify({
+                email,
+                motivo: result.status,
+                ...(situacao ? { conta: situacao.conta } : {}),
+            })}`,
+        );
+        return NextResponse.json({ error: result.status, ...(situacao ?? {}) }, { status: 401 });
     }
     falhas.delete(email);
 

@@ -5,12 +5,17 @@ import { KairosTopo } from "@/components/kairos-topo";
 import { motion } from "framer-motion";
 import "@/app/auth-pages.css";
 
+/* Conta só com o papel `portal` (criada por /api/servicos/contas-portal) não
+   entra no app Plantões: depois de definir a senha, o caminho é o portal. */
+const PORTAL_URL = "https://mnrs.com.br";
+
 type TokenState = "checking" | "valid" | "invalid";
 
 export default function RedefinirSenhaPage({ params }: { params: Promise<{ token: string }> }) {
     const { token } = use(params);
     const [tokenState, setTokenState] = useState<TokenState>("checking");
     const [email, setEmail] = useState<string | null>(null);
+    const [somentePortal, setSomentePortal] = useState(false);
     const [password, setPassword] = useState("");
     const [busy, setBusy] = useState(false);
     const [done, setDone] = useState(false);
@@ -27,6 +32,7 @@ export default function RedefinirSenhaPage({ params }: { params: Promise<{ token
                     return;
                 }
                 setEmail(payload.email ?? null);
+                setSomentePortal(payload.somentePortal === true);
                 setTokenState("valid");
             })
             .catch(() => {
@@ -53,6 +59,7 @@ export default function RedefinirSenhaPage({ params }: { params: Promise<{ token
                 setError(payload.error ?? "Não foi possível redefinir a senha.");
                 return;
             }
+            if (payload.somentePortal === true) setSomentePortal(true);
             setDone(true);
         } finally {
             setBusy(false);
@@ -70,7 +77,7 @@ export default function RedefinirSenhaPage({ params }: { params: Promise<{ token
                 animate={{ opacity: 1, y: 0 }}
             >
                 <div className="et-panel-head">
-                    <h2>Redefinir senha</h2>
+                    <h2>{somentePortal ? "Definir senha" : "Redefinir senha"}</h2>
                 </div>
                 {tokenState === "checking" ? (
                     <div className="et-empty-state"><p>Verificando o link…</p></div>
@@ -84,14 +91,28 @@ export default function RedefinirSenhaPage({ params }: { params: Promise<{ token
                     </div>
                 ) : done ? (
                     <div className="et-empty-state">
-                        <strong>Senha redefinida ✓</strong>
-                        <p>Já pode entrar com a nova senha.</p>
-                        <a className="et-btn primary" href="/">Ir para o login</a>
+                        <strong>{somentePortal ? "Senha definida ✓" : "Senha redefinida ✓"}</strong>
+                        {somentePortal ? (
+                            <>
+                                <p>
+                                    Já pode entrar em <strong>mnrs.com.br</strong>
+                                    {email ? <> com o e-mail <strong>{email}</strong></> : null} e a senha que acabou de escolher.
+                                </p>
+                                <a className="et-btn primary" href={PORTAL_URL}>Ir para mnrs.com.br</a>
+                            </>
+                        ) : (
+                            <>
+                                <p>Já pode entrar com a nova senha.</p>
+                                <a className="et-btn primary" href="/">Ir para o login</a>
+                            </>
+                        )}
                     </div>
                 ) : (
                     <form className="et-form" onSubmit={submit}>
                         <p>
-                            {email ? <>Definindo nova senha para <strong>{email}</strong>.</> : "Escolha sua nova senha."}
+                            {email
+                                ? <>{somentePortal ? "Definindo a senha de acesso ao portal mnrs.com.br para" : "Definindo nova senha para"} <strong>{email}</strong>.</>
+                                : "Escolha sua nova senha."}
                         </p>
                         <label>
                             Nova senha (mín. 10 caracteres, 3 grupos)

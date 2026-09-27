@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { userRoles, users } from "@/db/schema";
-import { USER_ROLES, type UserRole } from "@/modules/auth/contracts";
+import { rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
 import { createSessionToken, isSessionVersionCurrent, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
 
 export const SESSION_COOKIE_NAME = "operations_v2_session";
@@ -82,7 +82,8 @@ export async function clearSessionCookie() {
     });
 }
 
-async function loadUserSession(token: SessionTokenPayload): Promise<AuthenticatedSession | null> {
+/** Exportada para os testes (tests/contas-portal-db.test.ts); a app usa readAuthenticatedSession. */
+export async function loadUserSession(token: SessionTokenPayload): Promise<AuthenticatedSession | null> {
     const db = getDb();
     const [user] = await db
         .select({
@@ -106,9 +107,9 @@ async function loadUserSession(token: SessionTokenPayload): Promise<Authenticate
         .from(userRoles)
         .where(and(eq(userRoles.userId, user.id)));
 
-    const roles = rolesRows
-        .map((row) => row.role)
-        .filter((role): role is UserRole => USER_ROLES.includes(role));
+    // `portal` não abre nada aqui (modules/auth/contracts.ts): conta só com ele
+    // fica sem sessão, igual a conta sem papel; e ele nunca aparece em roles.
+    const roles: UserRole[] = rolesDoPlantoes(rolesRows.map((row) => row.role));
 
     if (roles.length === 0) {
         return null;
