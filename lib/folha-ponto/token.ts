@@ -7,7 +7,14 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export const FOLHA_TOKEN_DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+/* `typ` distingue este token do de sessão (mesmo AUTH_SECRET). Token sem `typ`
+   é o emitido antes do campo existir e continua aceito: o formato já não
+   passa pelo verify de sessão (sem `sub`) e o link vence em 7 dias — depois de
+   uma semana do deploy o ramo "sem typ" pode sair. `typ` diferente é recusado. */
+export const FOLHA_TOKEN_TYPE = "folha";
+
 export interface FolhaTokenPayload {
+    typ?: typeof FOLHA_TOKEN_TYPE;
     medicoId: string;
     ano: number;
     mes: number;
@@ -34,8 +41,8 @@ function getSecret() {
     return secret;
 }
 
-export function signFolhaToken(payload: FolhaTokenPayload) {
-    const encodedPayload = encodeBase64Url(JSON.stringify(payload));
+export function signFolhaToken(payload: Omit<FolhaTokenPayload, "typ">) {
+    const encodedPayload = encodeBase64Url(JSON.stringify({ typ: FOLHA_TOKEN_TYPE, ...payload }));
     return `${encodedPayload}.${sign(encodedPayload, getSecret())}`;
 }
 
@@ -59,6 +66,9 @@ export function verifyFolhaToken(token: string, now = Date.now()): FolhaTokenPay
     try {
         const parsed = JSON.parse(decodeBase64Url(encodedPayload)) as FolhaTokenPayload;
         if (!parsed?.medicoId || typeof parsed.ano !== "number" || typeof parsed.mes !== "number" || typeof parsed.exp !== "number") {
+            return null;
+        }
+        if (parsed.typ !== undefined && parsed.typ !== FOLHA_TOKEN_TYPE) {
             return null;
         }
         if (parsed.exp <= now) {

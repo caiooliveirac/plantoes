@@ -1,5 +1,5 @@
 import { compare, hash } from "bcryptjs";
-import { and, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, passwordResetTokens, chiefAccessRequests, userRoles, users } from "@/db/schema";
 import { USER_ROLES, type UserRole } from "@/modules/auth/contracts";
@@ -175,6 +175,8 @@ export async function consumePasswordReset(token: string, password: string) {
             .set({
                 passwordHash,
                 mustChangePassword: false,
+                // Derruba as sessões abertas com a senha antiga (lib/auth/server.ts).
+                sessionVersion: sql`${users.sessionVersion} + 1`,
                 updatedAt: new Date(),
             })
             .where(eq(users.id, resetToken.userId));
@@ -222,6 +224,8 @@ export async function changeOwnPassword(userId: string, currentPassword: string,
             .set({
                 passwordHash,
                 mustChangePassword: false,
+                // Derruba as sessões abertas com a senha antiga (lib/auth/server.ts).
+                sessionVersion: sql`${users.sessionVersion} + 1`,
                 updatedAt: new Date(),
             })
             .where(eq(users.id, userId));

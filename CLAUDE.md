@@ -36,8 +36,7 @@ rodar a suíte de testes, e até **consultar logs e banco de produção remotame
   18 tabelas no schema Postgres `operations_v2`).
 - Bot de Telegram para registro de plantões médicos (chegada/saída/continuação/meal
   breaks/pagamento). Worker de lembretes roda como processo PM2 separado.
-- Autenticação própria (JWT + cookie), sem NextAuth/Auth.js apesar da dependência
-  `next-auth` estar no `package.json` (não é usada no fluxo de auth atual).
+- Autenticação própria (JWT + cookie), sem NextAuth/Auth.js.
 - Runtime de produção: **PM2** com dois processos: `plantoes` (web, porta `3004`) e
   `plantoes-telegram-worker` (worker).
 
@@ -211,10 +210,14 @@ manualmente no servidor **antes** do merge/deploy (zero-downtime). Veja
 
 Autenticação **customizada**, não usa NextAuth apesar da dependência estar instalada:
 
-- **Sessão**: cookie HTTP-only `operations_v2_session`, TTL padrão 12h, `secure` só
-  em produção. Token é JWT simplificado (`{ sub: userId, exp }`) assinado com HMAC-SHA256
+- **Sessão**: cookie HTTP-only `operations_v2_session`, TTL 30 dias deslizante
+  (`proxy.ts`), `secure` só em produção. Token é JWT simplificado
+  (`{ typ: "session", sub: userId, exp, sv }`) assinado com HMAC-SHA256
   usando `AUTH_SECRET`, verificação timing-safe. Implementação em
   [lib/auth/token.ts](lib/auth/token.ts) e [lib/auth/server.ts](lib/auth/server.ts).
+  `sv` tem que bater com `users.session_version`: toda gravação de senha sobe a coluna
+  e derruba os cookies antigos (teste-guarda em `tests/sessao-revogavel.test.ts`).
+  Login: 10 falhas/15 min por IP e por e-mail → 429 (`modules/auth/login-rate-limit.ts`).
 - **Login**: `POST /api/auth/login` (email+senha, bcrypt) em
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em
   [services/auth.service.ts](services/auth.service.ts). Trata contas inativas, sem
@@ -225,7 +228,9 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   feito por checagem manual em cada rota, não por um role dedicado.
 - **Controle de acesso**: **não há `middleware.ts`**. Cada Server Component/Route
   Handler chama `requireAuthenticatedSession(requiredRoles?)` explicitamente (ex.:
-  `requireAuthenticatedSession(["admin"])` nas rotas `/admin/*` e `/api/chief/*`).
+  `requireAuthenticatedSession(["admin"])` nas rotas `/admin/*` e `/api/chief/*`). Rota
+  sem sessão só entrando na lista pública de
+  [tests/route-auth-guard-coverage.test.ts](tests/route-auth-guard-coverage.test.ts).
 - **Quadro fechado**: `/`, `/api/board`, `/api/board/stream` e a passagem de
   ocorrências exigem sessão (qualquer papel). Sem sessão, `/` vai ao login único do
   portal (mnrs.com.br → porteiro → `/api/auth/sso`); `/entrar` é a porta de
@@ -239,8 +244,8 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   `TELEGRAM_ADMIN_IDS`/`TELEGRAM_CHIEF_IDS` no `.env`; acesso a pagamento usa
   codinome com HMAC (`doctorPaymentAccess`), não o ID do Telegram.
 - Webhook do bot ([app/api/telegram/webhook/route.ts](app/api/telegram/webhook/route.ts))
-  valida `x-telegram-bot-api-secret-token` contra `TELEGRAM_WEBHOOK_SECRET` (fallback
-  `AUTH_SECRET`).
+  valida `x-telegram-bot-api-secret-token` contra `TELEGRAM_WEBHOOK_SECRET` (tempo
+  constante; sem a variável responde 503 — nunca cai para `AUTH_SECRET`).
 
 ## Comandos (rodar no LOCAL)
 

@@ -71,8 +71,13 @@ export function getTelegramAnnouncementChatIds() {
     return chats.filter((chatId) => chatId.startsWith("-"));
 }
 
+/**
+ * Segredo do header x-telegram-bot-api-secret-token. SÓ de TELEGRAM_WEBHOOK_SECRET:
+ * cair para AUTH_SECRET mandava a chave HMAC da sessão para o Telegram. Vazio =
+ * não configurado, e o webhook falha fechado (503).
+ */
 export function getTelegramWebhookSecret() {
-    return process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || process.env.AUTH_SECRET?.trim() || "";
+    return process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || "";
 }
 
 export function getTelegramAdminUserIds() {

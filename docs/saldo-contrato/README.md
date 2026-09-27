@@ -97,8 +97,13 @@ Lista completa em [03-validacao-alertas-08-2026.md §7](03-validacao-alertas-08-
 
 ## Scripts
 
-Todos são dry-run por padrão e idempotentes. Rodam **no servidor**, por workflow manual
-— o banco só escuta em loopback.
+Todos são dry-run por padrão e idempotentes. Rodam **no servidor** — o banco só escuta
+em loopback. **Todos já rodaram** (reparos pontuais de 08/2026); os workflows que os
+disparavam (`saldo-repair-maio`, `saldo-lancar-tetos`, `saldo-corrigir-aberturas`)
+foram removidos em 2026-09-27, porque gravavam em produção a partir de push de tag,
+branch ou arquivo-marcador. O histórico das execuções fica no Actions e nos commits
+de `.github/saldo-*.run`. Rodar de novo, se um dia for preciso, é à mão no servidor,
+dry-run antes (`npm run saldo:<x>`), com autorização explícita.
 
 | Script | npm | O que faz |
 |---|---|---|
@@ -109,5 +114,5 @@ Todos são dry-run por padrão e idempotentes. Rodam **no servidor**, por workfl
 | `corrigir-aberturas-seed.ts` | `saldo:corrigir-aberturas` | Corrige as aberturas semeadas de Francisco e Karen. |
 
 **A ordem importa** quando se roda mais de um: `repair-ciclos` → `repair-maio` →
-`corrigir-aberturas` → `repair-maio` de novo. Está codificada nos workflows
-`.github/workflows/saldo-*.yml`.
+`corrigir-aberturas` → `repair-maio` de novo. Era a ordem do extinto
+`.github/workflows/saldo-corrigir-aberturas.yml` (ver o histórico do git).

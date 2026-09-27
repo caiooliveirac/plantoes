@@ -11,6 +11,7 @@ function traduzirErro(code?: string) {
     if (code === "no_roles_assigned") return "Conta sem papel operacional ativo.";
     if (code === "pending_chief_approval") return "Cadastro pendente de aprovacao do admin.";
     if (code === "rejected_chief_approval") return "Cadastro rejeitado. Solicite nova validacao ao admin.";
+    if (code === "too_many_attempts") return "Muitas tentativas de login. Aguarde 15 minutos e tente de novo.";
     return "Nao foi possivel autenticar agora.";
 }
 

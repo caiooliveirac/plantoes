@@ -2,6 +2,8 @@
 
 > Derived from git history, conversation-tracked bug fixes, file churn, and structural inspection.
 > Priority: P0 = risk of incorrect data/payment, P1 = maintenance drag, P2 = readability.
+>
+> Números de linhas e churn atualizados em 27/09/2026 (`origin/main` fd17452). As evidências "Session N" são da análise original.
 
 ---
 
@@ -9,21 +11,43 @@
 
 | ID | File(s) | Priority | Issue | Evidence |
 |----|---------|----------|-------|----------|
-| H1 | `modules/telegram/service.ts` | **P0** | 5976-line god file mixing 10+ responsibilities; 16 commits (highest churn). Every feature/fix touches this file. | Session 1–6 fixes all touched this file. |
-| H2 | `services/board.service.ts` | **P0** | Hidden business rules in payment allocation (candidate ranking, noise filtering, closure logic). Read-model calls mutations before reading. | Session 4: P-shift bleeding via regulation buffer. |
+| H1 | `modules/telegram/service.ts` | **P0** | ~14.7k-line god file (14.706) mixing 10+ responsibilities; 47 commits in the last 90 days (highest churn). Every feature/fix touches this file. | Session 1–6 fixes all touched this file. |
+| H2 | `services/board.service.ts` | **P0** | ~4.9k lines (4.937), 20 commits in 90 days. Hidden business rules in payment allocation (candidate ranking, noise filtering, closure logic). Read-model calls mutations before reading. | Session 4: P-shift bleeding via regulation buffer. |
 | H3 | `modules/telegram/shift-report.ts` | **P0** | Shift status resolution missed null `shiftLabel` (29% of occupancies). False carryover reports. | Session 6: false pending fix. |
 | H4 | `modules/regulation/service.ts` | **P0** | Ramal switch didn't close occupancy on old ramal → overlapping occupancies. 19 historical overlaps found. | Session 5: ramal switch auto-close. |
 | H5 | `modules/operational/rules.ts` | **P0** | P-shift boundary tolerance missing → payment-allocation gaps for 6 doctors. | Session 3: `P_SHIFT_PRE_BOUNDARY_TOLERANCE_MS` fix. |
-| H6 | `modules/operational/corrections.ts` | **P1** | 794 lines, no dedicated tests. Handles admin corrections, transfers, removals with bank hours sync. | Zero test coverage for critical mutation path. |
-| H7 | `app/operational-board-client.tsx` | **P1** | 3727-line monolith mixing data fetching, state, drawers, grids, domain rules. 12 commits. | Second highest churn. |
-| H8 | `modules/telegram/meal-breaks.ts` | **P1** | 3723 lines. Self-contained but oversized. Meal-break session state + Telegram + DB in one file. | Session fix: meal-break consuming arrival messages. |
-| H9 | `modules/telegram/parser.ts` | **P1** | Parser contains keyword stoplists that look like business rules. 6 commits of churn. | Repeated fixes to parsing edge cases. |
+| H6 | `modules/operational/corrections.ts` | **P1** | 1.855 lines, 18 commits in 90 days. Handles admin corrections, transfers, removals with bank hours sync. | Tests now exist (`operational-corrections`, `correcao-auditavel`, `half-shift-role-change`, …), but the file more than doubled. |
+| H7 | `app/operational-board-client.tsx` | **P1** | 5.414-line monolith mixing data fetching, state, drawers, grids, domain rules. 22 commits in 90 days. | Third highest churn (90 days). |
+| H8 | `modules/telegram/meal-breaks.ts` | **P1** | ~7.7k lines (7.735), 17 commits in 90 days. Self-contained but oversized. Meal-break session state + Telegram + DB in one file. | Session fix: meal-break consuming arrival messages. |
+| H9 | `modules/telegram/parser.ts` | **P1** | 708 lines. Parser contains keyword stoplists that look like business rules. | Repeated fixes to parsing edge cases. |
 | H10 | `services/board.service.ts` (closure) | **P0** | Occupancy closure logic (`resolveCandidateEffectiveEndedAt`) embeds rules about successor handoff, implicit expiry, departure evidence detection via regex on notes. | Session 4 fix was in this exact area. |
 | H11 | `modules/telegram/service.ts` (applyParsedEntry) | **P0** | 250+ line function mixing business rule decisions, DB queries, continuation chain resolution, and persistence. | Sessions 1, 3, 5 all modified this function. |
 | H12 | `modules/telegram/service.ts` (handleTelegramCommand) | **P1** | ~1600-line command dispatcher with inline permission checks, DB queries, and reply formatting per command. | Growing with each new command. |
 | H13 | `modules/telegram/service.ts` (processTelegramUpdate) | **P1** | ~450-line main entry with 10+ code paths, each fetching pending state from DB. | Every Telegram flow change forces reading this. |
-| H14 | `services/auth.service.ts` | **P2** | No dedicated tests. | Low churn but security-sensitive. |
-| H15 | `services/chief-access.service.ts` | **P2** | No dedicated tests. | Low churn, access control logic. |
+| H14 | `services/auth.service.ts` | **P2** | No dedicated tests (240 lines). | Low churn but security-sensitive. |
+| H15 | `services/chief-access.service.ts` | **P2** | No dedicated tests (450 lines). | Low churn, access control logic. |
+
+---
+
+## Churn — últimos 90 dias
+
+`git log origin/main --since=2026-06-29 --no-merges --name-only`, arquivos `.ts/.tsx` fora de `tests/` (266 commits no período):
+
+| # | Arquivo | Commits | Linhas |
+|---|---------|---------|--------|
+| 1 | `modules/telegram/service.ts` | 47 | 14.706 |
+| 2 | `app/admin/payment-attestation/chief-payment-view-client.tsx` | 24 | 3.264 |
+| 3 | `app/operational-board-client.tsx` | 22 | 5.414 |
+| 4 | `services/board.service.ts` | 20 | 4.937 |
+| 5 | `app/admin/bank-hours/bank-hours-history-client.tsx` | 19 | 2.000 |
+| 6 | `modules/reporting/payable-shifts.ts` | 18 | 1.320 |
+| 7 | `modules/operational/corrections.ts` | 18 | 1.855 |
+| 8 | `modules/intervention/service.ts` | 18 | 1.688 |
+| 9 | `modules/telegram/meal-breaks.ts` | 17 | 7.735 |
+| 10 | `modules/regulation/service.ts` | 17 | 1.529 |
+| 11 | `app/banco-de-horas/[medicoId]/[ano]/[mes]/page.tsx` | 15 | 490 |
+| 12 | `services/payable-shifts.service.ts` | 14 | 863 |
+| 13 | `modules/reporting/bank-hours-history.ts` | 14 | 1.105 |
 
 ---
 
@@ -65,8 +89,8 @@
 
 | File | Lines | Test Coverage | Risk |
 |------|-------|---------------|------|
-| `modules/operational/corrections.ts` | 794 | **None** | Admin corrections, transfers, bank hours sync |
-| `services/auth.service.ts` | 220 | **Minimal** (password policy only) | Authentication, session management |
+| `services/payable-shifts.service.ts` | 863 | **None** for the service (pure rules in `modules/reporting/payable-shifts.ts` are tested); 14 commits in 90 days | Payment closing, monthly consumption for the contract ledger |
+| `services/auth.service.ts` | 240 | **Minimal** (password policy only) | Authentication, session management |
 | `services/chief-access.service.ts` | 450 | **None** | Access control provisioning |
 | `services/board.service.ts` (closure logic) | ~300 lines | **Indirect** (via payment-allocation tests) | Occupancy closure rules, noise filtering |
 
