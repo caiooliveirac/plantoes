@@ -135,7 +135,7 @@ export function buildPaymentDigestMessages(board: ChiefPayableBoardModel, refere
 
 const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
-function formatBRL(value: number | null | undefined) {
+export function formatBRL(value: number | null | undefined) {
     return BRL.format(Number.isFinite(value) ? Number(value) : 0);
 }
 
@@ -145,6 +145,14 @@ function doctorShiftDue(row: ChiefPayableDoctorRow, shift: PayableShift) {
         operationalDate: shift.operationalDate,
         paymentUnit: shift.paymentUnit,
     });
+}
+
+// Os números do /pagamento (contagem e total do mês) — também usados no aviso de
+// fechamento ao médico, para as duas mensagens nunca discordarem.
+export function summarizeDoctorPayroll(row: ChiefPayableDoctorRow) {
+    const shifts = row.cells.flatMap((cell) => cell.shifts);
+    const total = row.totalDue ?? shifts.reduce((sum, shift) => sum + doctorShiftDue(row, shift), 0);
+    return { shifts, total };
 }
 
 // Variante vazia única (auditoria §3.4#7): sem link — folha vazia não ajuda ninguém.
@@ -157,13 +165,12 @@ export function buildDoctorPayrollEmptyMessage(monthLabel: string) {
 // MEIO quando aparece, e link assinado da folha no rodapé. Quebra por linhas se passar
 // do limite, mantendo o rodapé (link) na última mensagem.
 export function buildDoctorPayrollMessages(row: ChiefPayableDoctorRow, board: ChiefPayableBoardModel, folhaUrl: string, bankHoursUrl?: string): string[] {
-    const shifts = row.cells.flatMap((cell) => cell.shifts);
+    const { shifts, total } = summarizeDoctorPayroll(row);
 
     if (shifts.length === 0) {
         return [buildDoctorPayrollEmptyMessage(board.monthLabel)];
     }
 
-    const total = row.totalDue ?? shifts.reduce((sum, shift) => sum + doctorShiftDue(row, shift), 0);
     const hasMeio = shifts.some((shift) => shift.paymentTag);
     const header = `💰 Seu pagamento — ${board.monthLabel} (prévia, sujeita a conferência)`
         + `\nTotal do mês: ${formatBRL(total)}`
