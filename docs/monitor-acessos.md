@@ -91,6 +91,40 @@ distância conhecida (podem ser dois aparelhos da mesma casa).
 Aba esquecida: o computador de casa que ficou com a Mesa aberta continua
 consultando sozinho. Sem toque nos dois lados, nunca passa de moderado.
 
+### Plantão: uso de trabalho soa diferente (`aplicarPlantao`)
+
+Quem está de plantão usa a Mesa o turno inteiro, às vezes em dois PCs da
+Central. Isso é trabalho, não senha emprestada — o monitor precisa saber a
+diferença.
+
+- **Turno** = ocupação do quadro (regulação ou intervenção) do médico vinculado
+  à conta (`users.doctor_id`): de `started_at` até `actual_ended_at`, senão
+  `ended_at`, senão aberta (no máximo 24 h — ocupação esquecida aberta não deixa
+  ninguém de plantão para sempre). Tolerância de 30 min antes e depois. Conta sem médico
+  vinculado não tem turno para comparar e segue a regra geral.
+- **Rede do plantão** = rede onde **2 ou mais plantonistas** diferentes usaram a
+  Mesa *dentro do próprio turno* (Central, base com dupla). Uma rede só vira
+  rede do plantão pelo comportamento de quem trabalha — nada é cadastrado à mão.
+
+| Situação no meio do episódio | Resultado |
+|---|---|
+| De plantão, **todos** os aparelhos na rede do plantão | **fraco** — "uso de trabalho", não pesa no risco |
+| De plantão na rede do plantão + **computador em uso fora dela** | **forte** — alguém usa o login enquanto o dono trabalha; não é o celular dele |
+| De plantão na rede do plantão + só **celular/tablet** fora | desce um nível — pode ser o celular do próprio plantonista, no 4G |
+| De plantão, nenhum aparelho em rede do plantão | regra geral, com ressalva |
+| Fora do turno | regra geral |
+
+Também muda: "Muitos aparelhos" não conta os PCs usados só na rede do plantão
+durante o turno; sobreposições curtas repetidas só pesam fora do turno; e o
+achado novo **"Na rede do plantão fora do turno do dono"** (atenção) aparece
+quando a conta ficou 30+ min em uso na rede do plantão sem o dono estar de
+plantão (1 h de folga ao redor de cada turno) — outra pessoa usando o login na
+Central. Chefia e admin não recebem esse achado: trabalham lá fora da escala.
+
+No painel, a faixa verde sob o calor e a primeira raia de "Quem está onde" são o
+turno; "rede do plantão" aparece no nome da rede e nos lugares. O critério de
+ranking "Na Central fora do turno" ordena por esse tempo.
+
 ### Outros achados (atenção)
 
 | Achado | Limite |
@@ -103,6 +137,7 @@ consultando sozinho. Sem toque nos dois lados, nunca passa de moderado.
 | Fora do Brasil | rede com país ≠ BR (viagem, VPN, Retransmissão Privada do iCloud) |
 | Servidor/VPN | provedor de nuvem ou VPN comercial |
 | Mesma sessão em duas redes | mesmo cookie em duas redes da mesma família em 3+ janelas |
+| Na rede do plantão fora do turno do dono | 30+ min em uso na rede do plantão, 1 h longe de qualquer turno do dono (não vale para chefia/admin) |
 
 **Nível da conta**: forte se houver episódio forte; atenção se houver qualquer
 achado de atenção (inclui episódio moderado); senão normal. A lista ordena por
@@ -187,6 +222,11 @@ Central é uso simultâneo em redes diferentes.
   `cf-connecting-ip` (o nginx não restringe às faixas do Cloudflare).
 - A Central com mais de um IP de saída aparece como duas redes coletivas — o
   episódio é rebaixado e a ressalva diz isso.
+- Rede do plantão depende de haver 2+ plantonistas com conta vinculada ao médico
+  usando a Mesa na mesma rede durante o turno. Base com um médico só, ou médico
+  sem conta vinculada, não forma rede do plantão — o episódio segue a regra geral.
+- Turno vem do quadro: plantão registrado com atraso (chegada tardia) ou saída
+  sem registro distorcem a janela; a folga de 30 min absorve o comum.
 
 ## Retenção e dados pessoais
 

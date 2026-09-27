@@ -12,10 +12,12 @@
      sessão, com 6 onde aquele aparelho estava num episódio forte. */
 import {
     CONTAS_REDE_COLETIVA,
+    redeDoPlantao,
     type AnaliseDaConta,
     type EpisodioSimultaneo,
     type InfoDeRede,
     type JanelaDeAtividade,
+    type Plantao,
     type SessaoMonitorada,
 } from "@/modules/acessos/analise";
 import { descreverAparelho } from "@/modules/acessos/aparelho";
@@ -93,6 +95,17 @@ export function faixaDeCalor(janelas: JanelaDeAtividade[], episodios: EpisodioSi
     return niveis.join("");
 }
 
+/** Uma coluna por trecho do período: "1" se o dono estava de plantão em algum momento dele. */
+export function faixaDePlantao(plantoes: Plantao[], escala: EscalaDoCalor): string {
+    let faixa = "";
+    for (let coluna = 0; coluna < escala.colunas; coluna += 1) {
+        const inicio = escala.desde + coluna * escala.passoMs;
+        const fim = inicio + escala.passoMs;
+        faixa += plantoes.some((p) => p.inicio.getTime() < fim && p.fim.getTime() > inicio) ? "1" : "0";
+    }
+    return faixa;
+}
+
 export interface FaixaDoAparelho {
     sessaoId: string;
     aparelho: string;
@@ -101,6 +114,8 @@ export interface FaixaDoAparelho {
     onde: string;
     provedor: string | null;
     faixa: string;
+    /** A rede principal desse aparelho é a rede do plantão (onde os plantonistas trabalham). */
+    redeDoPlantao: boolean;
 }
 
 /** Uma faixa por sessão (aparelho) com uso no período — o "quem está onde". */
@@ -142,6 +157,7 @@ export function faixasPorAparelho(
             onde: descreverLocal(info?.geo) ?? redePrincipal ?? "rede não informada",
             provedor: info?.provedor?.nome ?? null,
             faixa: niveis.join(""),
+            redeDoPlantao: info ? redeDoPlantao(info) : false,
             total: pedidos.reduce((a, b) => a + b, 0),
         });
     }
@@ -166,6 +182,7 @@ export interface LugarDaConta {
     local: string | null;
     provedor: string | null;
     coletiva: boolean;
+    plantao: boolean;
     servidor: boolean;
     estrangeiro: boolean;
 }
@@ -183,7 +200,9 @@ export interface ContaNoPainel {
     lugares: LugarDaConta[];
     aparelhos: string[];
     achados: Array<{ nivel: string; titulo: string }>;
-    maiorEpisodio: { quando: string; duracao: string; forca: string; lados: string[] } | null;
+    maiorEpisodio: { quando: string; duracao: string; forca: string; lados: string[]; plantao: string | null } | null;
+    /** Escala do dono (null = conta sem médico vinculado). */
+    plantao: { agora: string | null; turnos: number; faixa: string; foraDoTurnoMin: number } | null;
     metricas: {
         minutosSimultaneos: number;
         episodiosFortes: number;
@@ -208,6 +227,8 @@ export interface LugarNoPainel {
     coletiva: boolean;
     servidor: boolean;
     estrangeiro: boolean;
+    /** Plantonistas vistos nela durante o próprio turno (2+ = rede do plantão). */
+    plantonistas: number;
 }
 
 export interface Painel {
@@ -215,7 +236,7 @@ export interface Painel {
     escala: EscalaDoCalor;
     contas: ContaNoPainel[];
     lugares: LugarNoPainel[];
-    foco: { userId: string; faixas: FaixaDoAparelho[] } | null;
+    foco: { userId: string; faixas: FaixaDoAparelho[]; plantao: { rotulo: string; faixa: string } | null } | null;
     temCidade: boolean;
 }
 
@@ -229,6 +250,7 @@ function lugaresDaConta(analise: AnaliseDaConta, redes: Map<string, InfoDeRede>)
                 local: lugar.local,
                 provedor: lugar.provedor,
                 coletiva: lugar.coletiva,
+                plantao: lugar.plantao,
                 servidor: lugar.servidor,
                 estrangeiro: Boolean(pais && pais !== "BR"),
             };
@@ -240,6 +262,7 @@ export function contaNoPainel(
     bruto: { janelas: JanelaDeAtividade[] },
     redes: Map<string, InfoDeRede>,
     escala: EscalaDoCalor,
+    plantoes?: Plantao[],
 ): ContaNoPainel {
     const simultaneos = analise.episodios.filter((e) => e.forca !== "fraco");
     const maior = [...simultaneos].sort((a, b) => (a.forca === b.forca ? b.duracaoMs - a.duracaoMs : a.forca === "forte" ? -1 : 1))[0];
@@ -263,11 +286,22 @@ export function contaNoPainel(
                 quando: intervalo(maior.inicio, maior.fim),
                 duracao: duracao(maior.duracaoMs),
                 forca: maior.forca,
+                plantao: maior.plantao
+                    ? `${maior.plantao.rotulo}${maior.plantao.todosNaRedeDoPlantao ? " — todos os aparelhos na rede do plantão" : ` — fora da rede do plantão: ${maior.plantao.aparelhosFora.join(", ")}`}`
+                    : null,
                 lados: maior.lados.map((lado) => {
                     const info = redes.get(lado.rede);
                     const onde = descreverLocal(info?.geo) ?? lado.rede;
                     return `${lado.aparelho.descricao} · ${onde}${info?.provedor ? ` · ${info.provedor.nome}` : ""}`;
                 }),
+            }
+            : null,
+        plantao: analise.plantao
+            ? {
+                agora: analise.plantao.agora?.rotulo ?? null,
+                turnos: analise.plantao.turnos,
+                faixa: faixaDePlantao(plantoes ?? [], escala),
+                foraDoTurnoMin: analise.plantao.minutosNaRedeForaDoTurno,
             }
             : null,
         metricas: {
@@ -305,6 +339,7 @@ export function lugaresDoPainel(analises: AnaliseDaConta[], redes: Map<string, I
                     coletiva: false,
                     servidor: false,
                     estrangeiro: false,
+                    plantonistas: 0,
                     contasSet: new Set(),
                     comSinal: new Set(),
                 };
@@ -314,6 +349,7 @@ export function lugaresDoPainel(analises: AnaliseDaConta[], redes: Map<string, I
             if (analise.nivel !== "normal") grupo.comSinal.add(analise.conta.userId);
             grupo.coletiva ||= lugar.coletiva || (info?.contas ?? 0) >= CONTAS_REDE_COLETIVA;
             grupo.servidor ||= lugar.servidor;
+            grupo.plantonistas = Math.max(grupo.plantonistas, info?.plantonistas ?? 0);
             grupo.estrangeiro ||= Boolean(pais && pais !== "BR");
         }
     }
@@ -330,6 +366,7 @@ export function montarPainel(entrada: {
     desde: Date;
     ate: Date;
     geradoEm: Date;
+    plantoes?: Map<string, Plantao[]>;
 }): Painel {
     const escala = escalaDoPeriodo(entrada.desde, entrada.ate);
     const contas = entrada.analises.map((analise) => contaNoPainel(
@@ -337,6 +374,7 @@ export function montarPainel(entrada: {
         entrada.brutos.get(analise.conta.userId) ?? { janelas: [] },
         entrada.redes,
         escala,
+        entrada.plantoes?.get(analise.conta.userId),
     ));
     const primeira = [...contas].sort((a, b) => b.risco - a.risco || b.metricas.agoraRedes - a.metricas.agoraRedes)[0];
     const focoAnalise = primeira && primeira.risco >= 20 ? entrada.analises.find((a) => a.conta.userId === primeira.userId) : undefined;
@@ -347,9 +385,23 @@ export function montarPainel(entrada: {
         contas,
         lugares: lugaresDoPainel(entrada.analises, entrada.redes),
         foco: focoAnalise && bruto
-            ? { userId: focoAnalise.conta.userId, faixas: faixasPorAparelho(bruto.sessoes, bruto.janelas, focoAnalise.episodios, entrada.redes, escala) }
+            ? {
+                userId: focoAnalise.conta.userId,
+                faixas: faixasPorAparelho(bruto.sessoes, bruto.janelas, focoAnalise.episodios, entrada.redes, escala),
+                plantao: raiaDoPlantao(entrada.plantoes?.get(focoAnalise.conta.userId), escala),
+            }
             : null,
         temCidade: [...entrada.redes.values()].some((rede) => Boolean(rede.geo.cidade)),
+    };
+}
+
+/** Raia "De plantão" do quem-está-onde: os locais dos turnos e onde caem no período. */
+export function raiaDoPlantao(plantoes: Plantao[] | undefined, escala: EscalaDoCalor) {
+    if (!plantoes?.length) return null;
+    const locais = [...new Set(plantoes.map((p) => p.rotulo))];
+    return {
+        rotulo: locais.length <= 2 ? locais.join(" · ") : `${locais.slice(0, 2).join(" · ")} +${locais.length - 2}`,
+        faixa: faixaDePlantao(plantoes, escala),
     };
 }
 

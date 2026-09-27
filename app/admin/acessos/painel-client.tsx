@@ -8,7 +8,7 @@ import Link from "next/link";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import type { ContaNoPainel, Painel } from "@/modules/acessos/painel";
-import { EixoDoCalor, FaixaDeCalor, LegendaDoCalor, RaiasPorAparelho } from "@/app/admin/acessos/calor";
+import { BandaDePlantao, EixoDoCalor, FaixaDeCalor, LegendaDoCalor, RaiasPorAparelho } from "@/app/admin/acessos/calor";
 import { NOME_DO_NIVEL, papeisDaConta } from "@/app/admin/acessos/rotulos";
 
 type Criterio = {
@@ -66,6 +66,13 @@ const CRITERIOS: Criterio[] = [
         medida: (c) => (c.metricas.senhas ? `senha de ${plural(c.metricas.redesDeSenha, "rede", "redes")}` : "—"),
     },
     {
+        id: "fora-do-turno",
+        nome: "Na Central fora do turno",
+        dica: "uso na rede do plantão sem o dono estar de plantão",
+        valor: (c) => c.plantao?.foraDoTurnoMin ?? 0,
+        medida: (c) => (c.plantao?.foraDoTurnoMin ? `${horasEMinutos(c.plantao.foraDoTurnoMin)} fora do turno` : "—"),
+    },
+    {
         id: "recente",
         nome: "Uso mais recente",
         dica: "quem usou por último",
@@ -90,8 +97,8 @@ function Lugares({ conta, max = 3 }: { conta: ContaNoPainel; max?: number }) {
             {visiveis.map((lugar) => (
                 <span
                     key={lugar.rede}
-                    className={`ac-lugar${lugar.coletiva ? " coletiva" : ""}${lugar.servidor || lugar.estrangeiro ? " alerta" : ""}`}
-                    title={`${lugar.rede}${lugar.provedor ? ` · ${lugar.provedor}` : ""}${lugar.coletiva ? " · rede coletiva" : ""}`}
+                    className={`ac-lugar${lugar.plantao ? " plantao" : lugar.coletiva ? " coletiva" : ""}${lugar.servidor || lugar.estrangeiro ? " alerta" : ""}`}
+                    title={`${lugar.rede}${lugar.provedor ? ` · ${lugar.provedor}` : ""}${lugar.plantao ? " · rede do plantão" : lugar.coletiva ? " · rede coletiva" : ""}`}
                 >
                     {lugar.local ?? lugar.rede}
                     {lugar.provedor && lugar.local ? <small>{lugar.provedor}</small> : null}
@@ -113,9 +120,17 @@ function Detalhe({ conta, periodo }: { conta: ContaNoPainel; periodo: string }) 
                     ))}
                 </ul>
             ) : null}
+            {conta.plantao ? (
+                <p className="ac-detalhe-plantao">
+                    {conta.plantao.agora ? <span className="ac-tag-plantao">de plantão agora · {conta.plantao.agora}</span> : null}
+                    {" "}{conta.plantao.turnos ? `${conta.plantao.turnos} ${conta.plantao.turnos === 1 ? "turno" : "turnos"} no período.` : "Sem turno registrado no período."}
+                    {conta.plantao.foraDoTurnoMin ? ` Na rede do plantão fora do turno: ${horasEMinutos(conta.plantao.foraDoTurnoMin)}.` : ""}
+                </p>
+            ) : null}
             {conta.maiorEpisodio ? (
                 <div className={`ac-episodio-mini ${conta.maiorEpisodio.forca}`}>
                     <strong>Maior uso ao mesmo tempo: {conta.maiorEpisodio.quando} ({conta.maiorEpisodio.duracao})</strong>
+                    {conta.maiorEpisodio.plantao ? <p className="ac-episodio-plantao">De plantão: {conta.maiorEpisodio.plantao}</p> : null}
                     <ul>
                         {conta.maiorEpisodio.lados.map((lado, indice) => <li key={`${lado}-${indice}`}>{lado}</li>)}
                     </ul>
@@ -206,6 +221,7 @@ export function PainelDeAcessos({ painel, periodo }: { painel: Painel; periodo: 
                                     <p className="ac-foco-nome">{foco.nome}</p>
                                     <p className="ac-foco-meta">
                                         {foco.email} · {papeisDaConta(foco.papeis)}
+                                        {foco.plantao?.agora ? <span className="ac-tag-plantao">de plantão agora · {foco.plantao.agora}</span> : null}
                                         {foco.metricas.agoraSessoes > 0 ? (
                                             <span className={`ac-agora${foco.metricas.agoraRedes >= 2 ? " varias" : ""}`}>
                                                 <span className={`ac-pulso${foco.metricas.agoraRedes >= 2 ? " varias" : ""}`} aria-hidden="true" />
@@ -217,7 +233,7 @@ export function PainelDeAcessos({ painel, periodo }: { painel: Painel; periodo: 
                             </div>
                             <p className="ac-foco-resumo">{foco.resumo}</p>
                             <h3 className="ac-foco-sub">Quem está onde</h3>
-                            <RaiasPorAparelho faixas={painel.foco.faixas} escala={painel.escala} />
+                            <RaiasPorAparelho faixas={painel.foco.faixas} escala={painel.escala} plantao={painel.foco.plantao} />
                             <div className="ac-acoes">
                                 <Link className="ac-btn primario" href={`/admin/acessos/${foco.userId}?periodo=${periodo}`}>Abrir relatório</Link>
                                 <button type="button" className="ac-btn" onClick={() => verNaLista(foco.userId)}>Ver no ranking</button>
@@ -249,7 +265,7 @@ export function PainelDeAcessos({ painel, periodo }: { painel: Painel; periodo: 
                                     </span>
                                     <span className="ac-lugares-tags">
                                         {lugar.detalhe ? <span>{lugar.detalhe}</span> : null}
-                                        {lugar.coletiva ? <span>rede coletiva</span> : null}
+                                        {lugar.plantonistas >= 2 ? <span className="plantao">rede do plantão · {lugar.plantonistas} plantonistas</span> : lugar.coletiva ? <span>rede coletiva</span> : null}
                                         {lugar.servidor ? <span className="alerta">servidor/VPN</span> : null}
                                         {lugar.estrangeiro ? <span className="alerta">fora do Brasil</span> : null}
                                         {lugar.contasComSinal ? <span className="sinal">{plural(lugar.contasComSinal, "conta com sinal", "contas com sinal")}</span> : null}
@@ -330,11 +346,15 @@ export function PainelDeAcessos({ painel, periodo }: { painel: Painel; periodo: 
                                                     ) : null}
                                                 </strong>
                                                 <small>
+                                                    {conta.plantao?.agora ? <span className="ac-tag-plantao">de plantão · {conta.plantao.agora}</span> : null}
                                                     {NOME_DO_NIVEL[conta.nivel]} · {papeisDaConta(conta.papeis)}{conta.ativa ? "" : " · SUSPENSA"} · {criterio.medida(conta)}
                                                 </small>
                                             </span>
                                             <Lugares conta={conta} />
-                                            <FaixaDeCalor faixa={conta.faixa} escala={painel.escala} rotulo={conta.nome} />
+                                            <span className="ac-calor-pilha">
+                                                <FaixaDeCalor faixa={conta.faixa} escala={painel.escala} rotulo={conta.nome} />
+                                                {conta.plantao?.faixa.includes("1") ? <BandaDePlantao faixa={conta.plantao.faixa} escala={painel.escala} /> : null}
+                                            </span>
                                             <span className="ac-seta" aria-hidden="true" />
                                         </button>
                                         <AnimatePresence initial={false}>

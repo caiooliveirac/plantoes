@@ -105,6 +105,16 @@ export interface InfoDeRede {
     geo: GeoAcesso;
     provedor: Provedor | null;
     contas: number;
+    /** Plantonistas diferentes vistos nela DURANTE o próprio plantão. 2+ = rede do plantão (Central, base). */
+    plantonistas?: number;
+}
+
+/** Um turno do dono da conta (ocupação na regulação ou na intervenção). */
+export interface Plantao {
+    inicio: Date;
+    fim: Date;
+    /** "Regulação 1363", "Intervenção BR60". */
+    rotulo: string;
 }
 
 export interface EntradaAnalise {
@@ -115,6 +125,8 @@ export interface EntradaAnalise {
     /** Por chave de rede (chaveDeRede). */
     redes: Map<string, InfoDeRede>;
     agora: Date;
+    /** Turnos do médico da conta no período. `undefined` = conta sem médico vinculado (sem escala para comparar). */
+    plantoes?: Plantao[];
 }
 
 export interface LadoDoEpisodio {
@@ -142,6 +154,8 @@ export interface EpisodioSimultaneo {
     forca: ForcaEpisodio;
     motivos: string[];
     ressalvas: string[];
+    /** O dono estava de plantão durante o episódio? E todos os aparelhos na rede do plantão? */
+    plantao: { rotulo: string; todosNaRedeDoPlantao: boolean; aparelhosFora: string[] } | null;
 }
 
 export interface DeslocamentoImprovavel {
@@ -170,6 +184,8 @@ export interface ResumoAparelho {
     redes: number;
     primeiraVez: Date;
     ultimaVez: Date | null;
+    /** Só usado na rede do plantão, durante turnos do dono (PC da Central): não conta em "muitos aparelhos". */
+    doPlantao: boolean;
 }
 
 export interface ResumoLugar {
@@ -178,6 +194,9 @@ export interface ResumoLugar {
     provedor: string | null;
     servidor: boolean;
     coletiva: boolean;
+    /** Rede do plantão: 2+ plantonistas vistos nela durante o próprio turno. */
+    plantao: boolean;
+    plantonistas: number;
     contas: number;
     sessoes: number;
     pedidos: number;
@@ -221,6 +240,13 @@ export interface AnaliseDaConta {
     entradasComSenha: EntradaComSenha[];
     abertaAgora: { sessoes: number; redes: number };
     ultimaAtividade: Date | null;
+    /** Escala do dono no período (null = conta sem médico vinculado). */
+    plantao: {
+        turnos: number;
+        agora: Plantao | null;
+        /** Minutos de uso na rede do plantão fora de qualquer turno do dono. */
+        minutosNaRedeForaDoTurno: number;
+    } | null;
 }
 
 const INTERACOES = new Set(["pagina", "acao"]);
@@ -234,11 +260,28 @@ export function redeColetiva(info: InfoDeRede) {
     return info.contas >= CONTAS_REDE_COLETIVA;
 }
 
-/** "rede 187.12.34.56 (Salvador-BA · Oi)" + aviso de rede coletiva. */
+/** Rede do plantão: 2+ plantonistas diferentes trabalhando nela durante o turno (Central, base com dupla). */
+export const PLANTONISTAS_REDE_DO_PLANTAO = 2;
+export function redeDoPlantao(info: InfoDeRede) {
+    return (info.plantonistas ?? 0) >= PLANTONISTAS_REDE_DO_PLANTAO;
+}
+
+/** Folga em volta do turno: chega antes, sai depois, a Mesa fica aberta um pouco. */
+export const FOLGA_DO_PLANTAO_MS = 30 * 60_000;
+
+export function plantaoEm(plantoes: Plantao[] | undefined, momento: Date, folgaMs = FOLGA_DO_PLANTAO_MS) {
+    if (!plantoes) return null;
+    const t = momento.getTime();
+    return plantoes.find((p) => t >= p.inicio.getTime() - folgaMs && t <= p.fim.getTime() + folgaMs) ?? null;
+}
+
+/** "rede 187.12.34.56 (Salvador-BA · Oi)" + aviso de rede do plantão ou coletiva. */
 export function descreverRede(chave: string, info: InfoDeRede = SEM_REDE) {
     const partes = [descreverLocal(info.geo), info.provedor?.nome].filter(Boolean);
     const detalhe = partes.length ? ` (${partes.join(" · ")})` : "";
-    const coletiva = redeColetiva(info) ? `, usada por ${info.contas} contas (rede coletiva)` : "";
+    const coletiva = redeDoPlantao(info)
+        ? `, rede do plantão (${info.plantonistas} plantonistas trabalhando nela)`
+        : redeColetiva(info) ? `, usada por ${info.contas} contas (rede coletiva)` : "";
     return `rede ${chave}${detalhe}${coletiva}`;
 }
 
@@ -467,6 +510,7 @@ function classificarEpisodio(
         forca,
         motivos,
         ressalvas,
+        plantao: null,
     };
 }
 
@@ -526,6 +570,63 @@ export function detectarEpisodios(
     }
     if (grupo.length > 0) episodios.push(classificarEpisodio(grupo, aparelhoDe, redes));
     return { episodios, janelasMesmaSessaoDuasRedes };
+}
+
+/* Plantão: quem está de plantão usa a Mesa o turno inteiro, às vezes em dois
+   PCs da Central — é trabalho, não senha emprestada. O turno do dono muda o
+   peso do episódio:
+   - de plantão e todos os aparelhos na rede do plantão → fraco (uso de trabalho);
+   - de plantão na rede do plantão e a conta em uso num COMPUTADOR fora dela →
+     forte (alguém usando o login enquanto o dono trabalha);
+   - de plantão e o aparelho de fora é celular → desce um nível (pode ser o dele, no 4G). */
+export function aplicarPlantao(episodio: EpisodioSimultaneo, plantoes: Plantao[] | undefined, redes: Map<string, InfoDeRede>): EpisodioSimultaneo {
+    if (!plantoes?.length) return episodio;
+    const meio = new Date((episodio.inicio.getTime() + episodio.fim.getTime()) / 2);
+    const plantao = plantaoEm(plantoes, meio) ?? plantaoEm(plantoes, episodio.inicio) ?? plantaoEm(plantoes, episodio.fim);
+    if (!plantao) return episodio;
+    const naRede = episodio.lados.filter((lado) => redeDoPlantao(infoDe(redes, lado.rede)));
+    const fora = episodio.lados.filter((lado) => !redeDoPlantao(infoDe(redes, lado.rede)));
+    const contexto = { rotulo: plantao.rotulo, todosNaRedeDoPlantao: fora.length === 0, aparelhosFora: fora.map((lado) => lado.aparelho.descricao) };
+    if (fora.length === 0) {
+        return {
+            ...episodio,
+            forca: "fraco",
+            plantao: contexto,
+            motivos: [`De plantão (${plantao.rotulo}), com todos os aparelhos na rede do plantão — a mesma dos outros plantonistas. Uso de trabalho.`],
+            ressalvas: [],
+        };
+    }
+    if (naRede.length === 0) {
+        return {
+            ...episodio,
+            plantao: contexto,
+            ressalvas: [...episodio.ressalvas, `O dono estava de plantão (${plantao.rotulo}), mas nenhum aparelho estava numa rede de plantão conhecida.`],
+        };
+    }
+    const descricaoFora = fora.map((lado) => `${lado.aparelho.descricao} na ${descreverRede(lado.rede, infoDe(redes, lado.rede))}`);
+    const motivos = [
+        `O dono estava de plantão (${plantao.rotulo}) na rede do plantão e, ao mesmo tempo, a conta estava aberta fora dela: ${lista(descricaoFora)}.`,
+        ...episodio.motivos,
+    ];
+    const computadorFora = fora.some((lado) => (lado.emUso > 0 || lado.interacoes > 0) && lado.aparelho.tipo === "computador");
+    if (computadorFora) {
+        return {
+            ...episodio,
+            forca: "forte",
+            plantao: contexto,
+            motivos: [...motivos, "Um computador fora da rede do plantão estava em uso enquanto o dono trabalhava — não é o celular dele."],
+            ressalvas: episodio.ressalvas.filter((r) => !/mesma pessoa/.test(r)),
+        };
+    }
+    const soCelular = fora.every((lado) => lado.aparelho.tipo === "celular" || lado.aparelho.tipo === "tablet");
+    if (!soCelular) return { ...episodio, plantao: contexto, motivos };
+    return {
+        ...episodio,
+        forca: episodio.forca === "forte" ? "moderado" : "fraco",
+        plantao: contexto,
+        motivos,
+        ressalvas: [...episodio.ressalvas, "O aparelho fora da rede do plantão é um celular: pode ser o do próprio plantonista, no 4G."],
+    };
 }
 
 /** Pontos consecutivos em cidades distantes com tempo curto demais entre eles. */
@@ -624,7 +725,9 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
         return aparelho;
     };
 
-    const { episodios, janelasMesmaSessaoDuasRedes } = detectarEpisodios(janelas, eventos, aparelhoDe, redes);
+    const detectados = detectarEpisodios(janelas, eventos, aparelhoDe, redes);
+    const episodios = detectados.episodios.map((episodio) => aplicarPlantao(episodio, entrada.plantoes, redes));
+    const { janelasMesmaSessaoDuasRedes } = detectados;
     const deslocamentos = detectarDeslocamentos(janelas, redes);
     const senhas = entradasComSenha(eventos, redes);
 
@@ -645,6 +748,8 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
                 provedor: info.provedor?.nome ?? null,
                 servidor: Boolean(info.provedor?.servidor),
                 coletiva: redeColetiva(info),
+                plantao: redeDoPlantao(info),
+                plantonistas: info.plantonistas ?? 0,
                 contas: info.contas,
                 sessoes: 0,
                 pedidos: janela.pedidos,
@@ -707,6 +812,13 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
         })
         .sort((a, b) => (b.ultimaVez?.getTime() ?? b.criadaEm.getTime()) - (a.ultimaVez?.getTime() ?? a.criadaEm.getTime()));
 
+    // Sessão "do plantão": toda a presença dela foi na rede do plantão, dentro de um turno do dono.
+    const foraDoPlantao = new Set<string>();
+    for (const janela of janelas) {
+        if (!redeDoPlantao(infoDe(redes, chaveDeRede(janela.ip))) || !plantaoEm(entrada.plantoes, janela.primeira)) foraDoPlantao.add(janela.sessaoId);
+    }
+    const sessaoDoPlantao = (sessaoId: string) => Boolean(entrada.plantoes?.length) && porSessao.has(sessaoId) && !foraDoPlantao.has(sessaoId);
+
     // Aparelhos = user-agents distintos (PCs iguais da Central viram um só).
     const aparelhos = new Map<string, ResumoAparelho & { redesSet: Set<string> }>();
     for (const sessao of sessoes) {
@@ -723,11 +835,13 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
                 redes: 0,
                 primeiraVez: sessao.criadaEm,
                 ultimaVez,
+                doPlantao: sessaoDoPlantao(sessao.id),
                 redesSet: new Set(uso?.redes ?? []),
             });
             continue;
         }
         atual.sessoes += 1;
+        atual.doPlantao &&= sessaoDoPlantao(sessao.id);
         for (const rede of uso?.redes ?? []) atual.redesSet.add(rede);
         if (sessao.criadaEm < atual.primeiraVez) atual.primeiraVez = sessao.criadaEm;
         if (ultimaVez && (!atual.ultimaVez || ultimaVez > atual.ultimaVez)) atual.ultimaVez = ultimaVez;
@@ -768,13 +882,24 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
             evidencias: moderados.slice(0, 6).map(evidenciaDe),
         });
     }
-    if (fracos.length > 0) {
+    const fracosDoPlantao = fracos.filter((e) => e.plantao?.todosNaRedeDoPlantao);
+    const fracosComuns = fracos.filter((e) => !e.plantao?.todosNaRedeDoPlantao);
+    if (fracosDoPlantao.length > 0) {
+        achados.push({
+            nivel: "info",
+            titulo: "Mais de um aparelho durante o plantão, todos na rede do plantão",
+            texto: `${plural(fracosDoPlantao.length, "vez", "vezes")} a conta esteve aberta em mais de um aparelho enquanto o dono estava de plantão, `
+                + "todos na rede onde os plantonistas trabalham — uso de trabalho (dois PCs da Central, por exemplo).",
+            evidencias: fracosDoPlantao.slice(0, 4).map((e) => `${e.plantao?.rotulo}: ${descreverEpisodio(e, redes)}`),
+        });
+    }
+    if (fracosComuns.length > 0) {
         achados.push({
             nivel: "info",
             titulo: "Sobreposições curtas",
-            texto: `${plural(fracos.length, "sobreposição curta", "sobreposições curtas")} entre aparelhos em redes diferentes, sem uso nos dois lados — `
+            texto: `${plural(fracosComuns.length, "sobreposição curta", "sobreposições curtas")} entre aparelhos em redes diferentes, sem uso nos dois lados — `
                 + "típico de trocar do computador para o celular com a aba ainda aberta.",
-            evidencias: fracos.slice(0, 4).map((e) => descreverEpisodio(e, redes)),
+            evidencias: fracosComuns.slice(0, 4).map((e) => descreverEpisodio(e, redes)),
         });
     }
     if (deslocamentos.length > 0) {
@@ -807,13 +932,46 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
         });
     }
     const aparelhosDeGente = resumoAparelhos.filter((a) => a.tipo !== "programa");
-    if (aparelhosDeGente.length >= LIMITES.aparelhosAtencao) {
+    // PCs usados só na rede do plantão durante o turno (a Central) não pesam: regulador troca de PC.
+    const aparelhosPessoais = aparelhosDeGente.filter((a) => !a.doPlantao);
+    if (aparelhosPessoais.length >= LIMITES.aparelhosAtencao) {
         achados.push({
             nivel: "atencao",
             titulo: "Muitos aparelhos",
-            texto: `${plural(aparelhosDeGente.length, "aparelho diferente", "aparelhos diferentes")} usaram esta conta no período. Uma pessoa costuma ter 2 ou 3 (celular, computador de casa, computador do trabalho).`,
-            evidencias: aparelhosDeGente.slice(0, 8).map((a) => `${a.descricao} — ${plural(a.sessoes, "entrada", "entradas")}, última vez ${a.ultimaVez ? quando(a.ultimaVez) : "sem uso registrado"}.`),
+            texto: `${plural(aparelhosPessoais.length, "aparelho diferente", "aparelhos diferentes")} usaram esta conta no período, fora os PCs da rede do plantão. `
+                + "Uma pessoa costuma ter 2 ou 3 (celular, computador de casa, computador do trabalho).",
+            evidencias: aparelhosPessoais.slice(0, 8).map((a) => `${a.descricao} — ${plural(a.sessoes, "entrada", "entradas")}, última vez ${a.ultimaVez ? quando(a.ultimaVez) : "sem uso registrado"}.`),
         });
+    }
+
+    // Na rede do plantão fora do turno do dono: um colega usando o login dele na Central?
+    // Só para quem é só médico (chefia e coordenação passam na Central fora de plantão).
+    let minutosNaRedeForaDoTurno = 0;
+    const papeisDeGestao = conta.papeis.some((papel) => papel === "chief" || papel === "admin");
+    if (entrada.plantoes && !papeisDeGestao) {
+        const trechos: Array<{ inicio: Date; fim: Date; sessaoId: string; rede: string }> = [];
+        const foraDoTurno = janelas
+            .filter((j) => j.emUso > 0 && redeDoPlantao(infoDe(redes, chaveDeRede(j.ip))) && !plantaoEm(entrada.plantoes, j.primeira, 60 * 60_000))
+            .sort((a, b) => a.primeira.getTime() - b.primeira.getTime());
+        for (const janela of foraDoTurno) {
+            const ultimo = trechos[trechos.length - 1];
+            if (ultimo && janela.primeira.getTime() - ultimo.fim.getTime() <= LIMITES.folgaEntreJanelasMs) {
+                if (janela.ultima > ultimo.fim) ultimo.fim = janela.ultima;
+            } else {
+                trechos.push({ inicio: janela.primeira, fim: janela.ultima, sessaoId: janela.sessaoId, rede: chaveDeRede(janela.ip) });
+            }
+        }
+        minutosNaRedeForaDoTurno = Math.round(trechos.reduce((total, t) => total + Math.max(60_000, t.fim.getTime() - t.inicio.getTime()), 0) / 60_000);
+        if (minutosNaRedeForaDoTurno >= 30) {
+            achados.push({
+                nivel: "atencao",
+                titulo: "Na rede do plantão fora do turno do dono",
+                texto: `A conta foi usada na rede onde os plantonistas trabalham por ${duracao(minutosNaRedeForaDoTurno * 60_000)} em horários em que o dono não estava de plantão. `
+                    + "Pode ser o dono na Central fora do turno, um turno que não foi registrado no bot, a sessão dele esquecida aberta num PC da Central "
+                    + "— ou um colega usando o login dele.",
+                evidencias: trechos.slice(-5).map((t) => `${intervalo(t.inicio, t.fim)} — ${aparelhoDe(t.sessaoId).descricao} na ${descreverRede(t.rede, infoDe(redes, t.rede))}.`),
+            });
+        }
     }
     const programas = resumoAparelhos.filter((a) => a.tipo === "programa");
     if (programas.length > 0) {
@@ -881,8 +1039,10 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
         resumo = `Pontos de atenção: ${lista(achados.filter((a) => a.nivel === "atencao").map((a) => a.titulo.toLowerCase()))}.`;
     } else {
         resumo = `Uso compatível com uma pessoa: ${plural(aparelhosDeGente.length, "aparelho", "aparelhos")} e ${plural(redesDePessoas, "rede", "redes")} no período, `
-            + "sem uso em lugares diferentes ao mesmo tempo.";
+            + "sem uso em lugares diferentes ao mesmo tempo."
+            + (fracosDoPlantao.length ? " Mais de um aparelho só durante o plantão, na rede do plantão." : "");
     }
+    const turnos = entrada.plantoes ?? null;
 
     return {
         conta,
@@ -898,5 +1058,8 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
         entradasComSenha: senhas,
         abertaAgora: { sessoes: abertasAgora.size, redes: redesAgora.size },
         ultimaAtividade,
+        plantao: turnos
+            ? { turnos: turnos.length, agora: plantaoEm(turnos, agora, 0), minutosNaRedeForaDoTurno }
+            : null,
     };
 }
