@@ -45,6 +45,12 @@ export function classifyTurnoPresence(positionedMinutes: number): TurnoOutcome {
     return "bank_only";
 }
 
+/**
+ * As três formas de divergência, na ordem em que resolveTurnoOutcomeShadow as
+ * testa. É o que o relatório da sombra (scripts/relatorio-sombra-turno.ts) conta.
+ */
+export type TurnoDivergenceKind = "corte_em_turno_inteiro" | "corte_fora_do_fim" | "turno_curto_sem_corte";
+
 export interface TurnoOutcomeShadow {
     positionedMinutes: number;
     turnoOutcome: TurnoOutcome;
@@ -52,6 +58,7 @@ export interface TurnoOutcomeShadow {
     isTail: boolean;
     /** Texto para o fechamento quando a régua por turno divergiria do pedaço; nulo se concordam. */
     divergence: string | null;
+    divergenceKind: TurnoDivergenceKind | null;
 }
 
 /**
@@ -77,13 +84,17 @@ export function resolveTurnoOutcomeShadow(params: {
     const h = `${Math.floor(positionedMinutes / 60)}h${String(positionedMinutes % 60).padStart(2, "0")}`;
 
     let divergence: string | null = null;
+    let divergenceKind: TurnoDivergenceKind | null = null;
     if (rowCut && turnoOutcome === "full_shift") {
+        divergenceKind = "corte_em_turno_inteiro";
         divergence = `Turno somou ${h} posicionadas em ${params.pieces.length} posições; por turno pagaria inteiro, não ${params.row.earlyDepartureOutcome}.`;
     } else if (rowCut && !isTail) {
+        divergenceKind = "corte_fora_do_fim";
         divergence = `Corte (${params.row.earlyDepartureOutcome}) gravado num pedaço que não é o fim do turno (${h} posicionadas).`;
     } else if (!rowCut && turnoOutcome === "bank_only" && positionedMinutes > 0) {
+        divergenceKind = "turno_curto_sem_corte";
         divergence = `Turno somou só ${h} posicionadas; por turno seria só banco.`;
     }
 
-    return { positionedMinutes, turnoOutcome, isTail, divergence };
+    return { positionedMinutes, turnoOutcome, isTail, divergence, divergenceKind };
 }

@@ -4,6 +4,7 @@ import { ChiefPaymentViewClient } from "@/app/admin/payment-attestation/chief-pa
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { toChiefPayableClientBoard, type DoctorFinancialExtras } from "@/modules/reporting/payable-shifts";
 import { loadChiefPayableBoardCore, loadChiefPayableFinancials } from "@/services/payable-shifts.service";
+import { loadContractPendencyQueue } from "@/services/contract-pendency-queue.service";
 
 export const dynamic = "force-dynamic";
 
@@ -58,8 +59,13 @@ export default async function AdminPaymentClosingPage({
             error: error instanceof Error ? error.message : "Falha ao carregar o financeiro.",
         }),
     );
-    const board = await loadChiefPayableBoardCore(month ?? null);
     const canManageClosing = Boolean(session.user.roles.includes("admin"));
+    // Contador da fila de pendências de contrato: leitura leve, só para quem
+    // corrige. Falha some com o contador, nunca derruba a grade.
+    const contractPendencies = canManageClosing
+        ? loadContractPendencyQueue().then((queue) => queue.total, () => null)
+        : Promise.resolve(null);
+    const board = await loadChiefPayableBoardCore(month ?? null);
     // Encaminhamento vindo da aba banco de horas: abre direto o modal do médico
     // para lançar o acerto (plantão verde/vermelho) aqui, onde ele de fato aparece.
     const initialDoctorId = doctor && board.doctors.some((entry) => entry.doctorId === doctor)
@@ -72,6 +78,7 @@ export default async function AdminPaymentClosingPage({
             financials={financials}
             canManageClosing={canManageClosing}
             initialDoctorId={initialDoctorId}
+            contractPendencyCount={await contractPendencies}
         />
     );
 }

@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { notifyDoctorMonthClosed } from "@/modules/telegram/fechamento-doctor-notice";
 import { setDoctorMonthAttestation } from "@/services/payment-closing-attestation.service";
 import { loadMonthConsumption, syncContractLedgerForMonth } from "@/services/contract-ledger.service";
 
@@ -70,6 +71,13 @@ export async function POST(request: NextRequest) {
                 ledgerDeltaCents: ledger.deltaCents,
             },
         });
+
+        // Aviso ao médico só depois do commit e fora da resposta: Telegram lento ou
+        // fora do ar nunca desfaz nem atrasa a assinatura (flag TELEGRAM_DM_FECHAMENTO).
+        if (parsed.data.attested) {
+            const { doctorId, monthKey } = parsed.data;
+            after(() => notifyDoctorMonthClosed({ doctorId, monthKey }));
+        }
 
         revalidatePath("/admin/payment-closing");
         return NextResponse.json({ attestedAt: result.attestedAt, ledger });

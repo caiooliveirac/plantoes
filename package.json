@@ -17,6 +17,8 @@
     "regulation:arrival": "tsx scripts/register-regulation-arrival.ts",
     "scheduled-windows:repair": "tsx scripts/repair-scheduled-windows.ts",
     "audit:extended-stay": "tsx scripts/audit-extended-stay-shifts.ts",
+    "audit:turno-sombra": "tsx scripts/relatorio-sombra-turno.ts",
+    "verificacao:pos-virada": "tsx scripts/verificacao-pos-virada.ts",
     "chief-extra:convert": "tsx scripts/convert-chief-bypass-extras.ts",
     "telegram:continuity:repair": "tsx scripts/repair-telegram-continuity.ts",
     "telegram:review-inputs": "tsx scripts/list-telegram-review-inputs.ts",
