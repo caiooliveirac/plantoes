@@ -12,7 +12,7 @@
  * inteiro) ou 'chief_half' (meio plantão, 0,5 unidade pagável) e unit +1 — a
  * fração de pagamento vem do kind, porque unit é coluna integer.
  */
-import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { adminExtraShifts, doctors } from "@/db/schema";
 import {
@@ -111,6 +111,39 @@ export async function loadChiefExtraShifts(
     }));
 }
 
+type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
+
+/**
+ * Um plantão de chefia por médico+dia+turno (inteiro OU meio): vale para criar e
+ * para mover. O advisory lock da transação serializa duas gravações no mesmo
+ * slot, que no READ COMMITTED passariam as duas pelo select (não há índice
+ * único). `exceptId` é o próprio plantão que está sendo alterado.
+ */
+async function assertChiefSlotFree(tx: Tx, params: {
+    doctorId: string;
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+    exceptId?: string;
+}) {
+    await tx.execute(sql`
+        select pg_advisory_xact_lock(hashtext(${`chief-extra:${params.doctorId}:${params.operationalDate}:${params.shiftLabel}`}))
+    `);
+    const [duplicate] = await tx
+        .select({ id: adminExtraShifts.id })
+        .from(adminExtraShifts)
+        .where(and(
+            eq(adminExtraShifts.doctorId, params.doctorId),
+            inArray(adminExtraShifts.kind, CHIEF_EXTRA_KINDS),
+            eq(adminExtraShifts.operationalDate, params.operationalDate),
+            eq(adminExtraShifts.shiftLabel, params.shiftLabel),
+            params.exceptId ? ne(adminExtraShifts.id, params.exceptId) : undefined,
+        ))
+        .limit(1);
+    if (duplicate) {
+        throw new Error("Este dia e turno já têm um plantão de chefia.");
+    }
+}
+
 /** Cria o plantão de chefia. Um por dia+turno (inteiro OU meio) — duplo clique cai no erro. */
 export async function createChiefExtraShift(params: {
     doctorId: string;
@@ -130,19 +163,7 @@ export async function createChiefExtraShift(params: {
     }
 
     return db.transaction(async (tx) => {
-        const [duplicate] = await tx
-            .select({ id: adminExtraShifts.id })
-            .from(adminExtraShifts)
-            .where(and(
-                eq(adminExtraShifts.doctorId, params.doctorId),
-                inArray(adminExtraShifts.kind, CHIEF_EXTRA_KINDS),
-                eq(adminExtraShifts.operationalDate, params.operationalDate),
-                eq(adminExtraShifts.shiftLabel, params.shiftLabel),
-            ))
-            .limit(1);
-        if (duplicate) {
-            throw new Error("Este dia e turno já têm um plantão de chefia.");
-        }
+        await assertChiefSlotFree(tx, params);
 
         const [row] = await tx
             .insert(adminExtraShifts)
@@ -193,19 +214,23 @@ export async function updateChiefExtraShift(params: {
     /** Omitido = mantém o inteiro/meio que já estava gravado. */
     coverage?: ChiefExtraShiftCoverage;
 }): Promise<{ coverage: ChiefExtraShiftCoverage }> {
-    const updated = await getDb()
-        .update(adminExtraShifts)
-        .set({
-            operationalDate: params.operationalDate,
-            shiftLabel: params.shiftLabel,
-            ...(params.coverage ? { kind: kindFromCoverage(params.coverage) } : {}),
-        })
-        .where(ownChiefExtraCondition(params))
-        .returning({ id: adminExtraShifts.id, kind: adminExtraShifts.kind });
-    if (updated.length === 0) {
-        throw new Error("Este plantão de chefia não pode mais ser alterado por aqui.");
-    }
-    return { coverage: coverageFromKind(updated[0].kind) };
+    return getDb().transaction(async (tx) => {
+        // Mesma regra do create: mover para um slot ocupado pagaria o slot em dobro.
+        await assertChiefSlotFree(tx, { ...params, exceptId: params.id });
+        const updated = await tx
+            .update(adminExtraShifts)
+            .set({
+                operationalDate: params.operationalDate,
+                shiftLabel: params.shiftLabel,
+                ...(params.coverage ? { kind: kindFromCoverage(params.coverage) } : {}),
+            })
+            .where(ownChiefExtraCondition(params))
+            .returning({ id: adminExtraShifts.id, kind: adminExtraShifts.kind });
+        if (updated.length === 0) {
+            throw new Error("Este plantão de chefia não pode mais ser alterado por aqui.");
+        }
+        return { coverage: coverageFromKind(updated[0].kind) };
+    });
 }
 
 /** Tira um plantão de chefia declarado no mês corrente. */

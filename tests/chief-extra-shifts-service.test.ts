@@ -18,8 +18,7 @@ import {
  * foco é: um por dia+turno, e o médico só mexe no que é dele, de chefia, no mês.
  *
  * Mesma trava do tests/payable-shifts-service: só roda com DATABASE_URL de um
- * banco de teste (nome contém "test") e apaga o que gravou. Testes `todo`
- * descrevem comportamento esperado que o service ainda não cumpre.
+ * banco de teste (nome contém "test") e apaga o que gravou.
  */
 
 const databaseName = (() => {
@@ -180,15 +179,39 @@ test("alterar/remover: só o próprio plantão de chefia, dentro do mês informa
     await assert.rejects(deleteChiefExtraShift({ id: row.id, doctorId: chefe, monthKey: MONTH }), /não pode mais ser removido/);
 });
 
-test("alterar: mover para dia+turno que já tem plantão de chefia é recusado", {
-    skip,
-    todo: "updateChiefExtraShift não repete a checagem de duplicata do create: dois plantões de chefia no mesmo dia+turno (pagamento em dobro)",
-}, async () => {
+test("alterar: mover para dia+turno que já tem plantão de chefia é recusado", { skip }, async () => {
     await createChiefExtraShift({ doctorId: chefe, operationalDate: `${MONTH}-12`, shiftLabel: "SD", coverage: "full", actorUserId: null });
     const other = await createChiefExtraShift({
         doctorId: chefe, operationalDate: `${MONTH}-13`, shiftLabel: "SD", coverage: "full", actorUserId: null,
     });
     await assert.rejects(
         updateChiefExtraShift({ id: other.id, doctorId: chefe, monthKey: MONTH, operationalDate: `${MONTH}-12`, shiftLabel: "SD" }),
+        /já têm um plantão de chefia/,
     );
+    // Meio plantão no slot ocupado também conta (um por dia+turno, inteiro OU meio).
+    await assert.rejects(
+        updateChiefExtraShift({ id: other.id, doctorId: chefe, monthKey: MONTH, operationalDate: `${MONTH}-12`, shiftLabel: "SD", coverage: "half" }),
+        /já têm um plantão de chefia/,
+    );
+    const moved = (await loadChiefExtraShifts(chefe, MONTH)).find((item) => item.id === other.id);
+    assert.equal(`${moved?.operationalDate} ${moved?.shiftLabel} ${moved?.coverage}`, `${MONTH}-13 SD full`, "recusa não mexe na linha");
+
+    // Ficar no próprio slot (só trocar inteiro/meio) continua valendo.
+    assert.deepEqual(
+        await updateChiefExtraShift({ id: other.id, doctorId: chefe, monthKey: MONTH, operationalDate: `${MONTH}-13`, shiftLabel: "SD", coverage: "half" }),
+        { coverage: "half" },
+    );
+});
+
+test("criar em paralelo no mesmo dia+turno: só um passa", { skip }, async () => {
+    for (let round = 0; round < 5; round += 1) {
+        const operationalDate = `${MONTH}-${String(20 + round).padStart(2, "0")}`;
+        const results = await Promise.allSettled([1, 2].map(() => createChiefExtraShift({
+            doctorId: chefe, operationalDate, shiftLabel: "SN", coverage: "full", actorUserId: null,
+        })));
+        assert.equal(results.filter((result) => result.status === "fulfilled").length, 1, `rodada ${round}`);
+        const inSlot = (await loadChiefExtraShifts(chefe, MONTH))
+            .filter((item) => item.operationalDate === operationalDate && item.shiftLabel === "SN");
+        assert.equal(inSlot.length, 1, `rodada ${round}`);
+    }
 });
