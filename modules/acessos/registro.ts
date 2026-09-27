@@ -16,6 +16,8 @@ export interface ClassificacaoDoPedido {
 /** Até quanto tempo parado a Mesa ainda conta como "em uso". */
 export const OCIOSO_EM_USO_SEG = 120;
 
+const RECURSO_ESTATICO = /(\/assets\/|\.(js|mjs|css|map|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|webmanifest|json)$)/i;
+
 export function classificarPedido(contexto: ContextoRequisicao, ultimaPaginaDaSessao: string | null): ClassificacaoDoPedido {
     const metodo = contexto.metodo ?? "GET";
     const caminho = contexto.caminho;
@@ -29,10 +31,13 @@ export function classificarPedido(contexto: ContextoRequisicao, ultimaPaginaDaSe
     if (!caminho) {
         return { evento: null, visivel: visivelPeloQuadro, emUso: emUsoPeloQuadro };
     }
-    if (caminho === "/api/board/stream") {
+    // Canal ao vivo: o stream do quadro e o WebSocket da Tabela (/tabela/ws).
+    if (caminho === "/api/board/stream" || /\/ws(\/|$)/.test(caminho)) {
         return { evento: "quadro_ao_vivo", visivel: visivelPeloQuadro, emUso: emUsoPeloQuadro };
     }
-    if (caminho.startsWith("/api/")) {
+    // Consulta de API (daqui ou de outro sistema do portal, /tabela/api/…) e
+    // arquivo estático (js, css, imagem) são presença, não página aberta.
+    if (caminho.startsWith("/api/") || caminho.includes("/api/") || RECURSO_ESTATICO.test(caminho)) {
         return { evento: null, visivel: visivelPeloQuadro, emUso: emUsoPeloQuadro };
     }
     // Página. Pré-carregamento de link não é ninguém olhando; router.refresh() da
@@ -60,6 +65,9 @@ export function mascararCaminho(caminho: string) {
 
 const PAGINAS: Array<[RegExp, string]> = [
     [/^\/$/, "abriu a Mesa operacional"],
+    [/^\/tabela\/?$/, "abriu a Tabela de vagas"],
+    [/^\/portal$/, "abriu o portal mnrs.com.br"],
+    [/^\/portal\/ir\//, "abriu um sistema pelo portal"],
     [/^\/historico-operacional/, "abriu o histórico operacional"],
     [/^\/historico\/turno-anterior/, "abriu o plantão anterior"],
     [/^\/admin\/acessos/, "abriu o monitor de acessos"],
@@ -75,6 +83,12 @@ const PAGINAS: Array<[RegExp, string]> = [
 ];
 
 const ACOES: Array<[RegExp, string]> = [
+    [/^\/tabela\/api\/cases/, "registrou ou alterou caso na Tabela"],
+    [/^\/tabela\/api\/upas/, "mexeu em restrição de UPA na Tabela"],
+    [/^\/tabela\/api\/chefia/, "mexeu em alerta da chefia na Tabela"],
+    [/^\/tabela\/api\/intel/, "mexeu em nota na Tabela"],
+    [/^\/tabela\/api\/reports/, "gerou relatório na Tabela"],
+    [/^\/tabela\/api\//, "fez uma ação na Tabela"],
     [/^\/api\/regulation\//, "mexeu em plantão ou ramal da regulação"],
     [/^\/api\/intervention\//, "mexeu em plantão ou base da intervenção"],
     [/^\/api\/operational\/undo/, "desfez uma ação no quadro"],
@@ -91,7 +105,7 @@ const ACOES: Array<[RegExp, string]> = [
 
 /** Frase para a linha do tempo: "abriu a Mesa operacional", "mexeu em plantão da regulação". */
 export function descreverPedido(tipo: string, metodo: string | null, caminho: string | null) {
-    if (tipo === "quadro_ao_vivo") return "ligou o quadro ao vivo";
+    if (tipo === "quadro_ao_vivo") return caminho?.startsWith("/tabela") ? "ligou a Tabela ao vivo" : "ligou o quadro ao vivo";
     if (!caminho) return tipo === "acao" ? `ação ${metodo ?? ""}`.trim() : "abriu uma página";
     const tabela = tipo === "acao" ? ACOES : PAGINAS;
     for (const [padrao, frase] of tabela) if (padrao.test(caminho)) return frase;
