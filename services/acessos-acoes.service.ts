@@ -19,7 +19,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, authSessionEvents, authSessions, users } from "@/db/schema";
 import { isEmailConfigured, sendEmail } from "@/lib/email";
-import { createPasswordResetTokenForUser, hashPassword } from "@/services/auth.service";
+import { REDEFINICAO_PELO_ADMIN, createPasswordResetTokenForUser, hashPassword } from "@/services/auth.service";
 
 /** Link de redefinição mandado pela coordenação: 24 h (o do "esqueci a senha" é 2 h). */
 const RESET_PELO_ADMIN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -47,7 +47,8 @@ type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
 async function registrar(tx: Tx, acao: AcaoNaConta | "encerrar_sessao", alvoId: string, adminId: string, motivo: string, extra: Record<string, unknown> = {}) {
     await tx.insert(auditLogs).values({
         actorUserId: adminId,
-        action: acao === "exigir_nova_senha" ? "auth.password_revoked_by_admin" : `acessos.${acao}`,
+        // Entra em SENHA_DEFINIDA_ACTIONS: o portal diz "sua senha foi alterada em…".
+        action: acao === "exigir_nova_senha" ? REDEFINICAO_PELO_ADMIN : `acessos.${acao}`,
         entityType: "user",
         entityId: alvoId,
         details: { motivo, ...extra },
