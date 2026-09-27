@@ -69,6 +69,13 @@ webhook → pendências abertas (tomada, nome, turno, PIAM…) → filtro almoç
 ```
 
 Hub: `processTelegramUpdate` e `applyParsedEntry` em `modules/telegram/service.ts`.
+Decisão (puro, sem banco): `modules/telegram/arrival-classification.ts` —
+`classifyArrivalRoute` (remanejo × chegada), `classifyTargetArrival` (continuar a
+ocupação aberta × nova, meio plantão, correção de rótulo), `shouldUseTelegramContinuitySource`,
+`resolveInitialArrivalShiftType`, `shouldAskTelegramShiftLabelMismatch` (D7) e os
+predicados de base. Mudou uma regra de chegada? Mude ali e prove em
+`tests/arrival-classification.test.ts`; o ponta a ponta fica travado em
+`tests/telegram-arrival-characterization.test.ts`.
 Gravação: `startRegulationOccupancy` / `startInterventionOccupancy`.
 
 ---
@@ -163,9 +170,15 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 
 ### Débito que atrapalha achar esses bugs
 
-- `modules/telegram/service.ts` tem ~14,7k linhas. A decisão "que tipo de chegada é
-  esta" está espalhada entre `applyParsedEntry`, o portão de tomada no handler e
-  `start*Occupancy`. Não existe uma função pura "classificar chegada" testável.
+- ~~A decisão "que tipo de chegada é esta" espalhada por `service.ts`~~ — FEITO
+  (27/09/2026): a decisão de `applyParsedEntry` saiu para funções puras em
+  `modules/telegram/arrival-classification.ts` (ver seção 3). Ficou fora, por
+  depender de I/O no meio: o portão de tomada e a pergunta SD/SN no handler (cada
+  leitura do banco é condicional à anterior; usam predicados puros), a escolha da
+  fonte de continuidade (`findTelegramContinuityContext`), PIAM (cadastro do
+  médico), a rendição forçada por conflito de continuação (decidida pelo erro de
+  `start*Occupancy`) e a re-chegada in-place/stale/junção (`resolveArrivalIdentity`,
+  já pura, dentro de `start*Occupancy`). `service.ts` segue com ~14,5k linhas.
 - Regulação e intervenção implementam a re-chegada de jeitos diferentes: a regulação
   fecha e recria (stale), a intervenção move o board. Detecção de sombra, marcador
   `[DESLOCADO]`, `resolveTurnoContinuityGroupId` e a janela de 3h existem em cópias.
@@ -184,7 +197,8 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 4. Rode `npm run test:deploy` e os testes da área: `telegram-arrival-time-rule`,
    `telegram-displaced`, `operational-shadow-marker`, `regulation-stale-occupancy`,
    `occupancy-identity`, `turno`, `telegram-reassignment-conflict`,
-   `telegram-half-shift-no-time`, `undeclared-continuation`.
+   `telegram-half-shift-no-time`, `undeclared-continuation`, `arrival-classification`,
+   `telegram-arrival-characterization` (ponta a ponta, precisa de banco de teste).
 5. Para investigar um caso real: `telegram_ingested_messages` (texto, status,
    `resolution_data`) + ocupações do médico no dia + `audit_logs` da ocupação.
    Leitura em produção via `ssh magalu` (ver `docs/agent-operations.md`).
