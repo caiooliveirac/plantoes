@@ -3009,9 +3009,22 @@ async function markTelegramProcessed(id: string, patch: Partial<typeof telegramI
     await db.update(telegramIngestedMessages)
         .set({
             ...normalizedPatch,
+            ...clampTelegramLogColumns(normalizedPatch),
             processedAt: new Date(),
         })
         .where(eq(telegramIngestedMessages.id, id));
+}
+
+// Anotações do log cabem nas colunas (varchar 32/64): um rótulo longo demais não pode
+// derrubar o registro da mensagem — era 22001 e "erro técnico" para o médico com a
+// ação já aplicada (auditoria 21/09/2026, "departure_justification_manual_review").
+export function clampTelegramLogColumns(patch: Partial<typeof telegramIngestedMessages.$inferInsert>) {
+    const clamped: Partial<typeof telegramIngestedMessages.$inferInsert> = {};
+    for (const [key, max] of [["parsedDomain", 32], ["parsedAction", 32], ["parsedTargetCode", 64]] as const) {
+        const value = patch[key];
+        if (typeof value === "string" && value.length > max) clamped[key] = value.slice(0, max);
+    }
+    return clamped;
 }
 
 function buildResolutionData(current: unknown, patch: Record<string, unknown>) {
@@ -11297,7 +11310,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             status: "accepted",
             parsedDomain: pending.resolutionData.parsed.sector,
             parsedTargetCode: pending.resolutionData.parsed.baseCode,
-            parsedAction: "departure_justification_cancelled",
+            parsedAction: "departure_justif_cancelled",
             parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
             errorMessage: null,
         });
@@ -11458,7 +11471,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 status: "accepted",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justification_manual_review",
+                parsedAction: "departure_justif_manual_review",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 relatedOccupancyId,
                 errorMessage: null,
@@ -11489,7 +11502,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 status: "error",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justification_manual_review",
+                parsedAction: "departure_justif_manual_review",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 errorMessage,
                 resolutionData: {
@@ -11560,7 +11573,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 status: "accepted",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justification_manual_review",
+                parsedAction: "departure_justif_manual_review",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 relatedOccupancyId,
                 errorMessage: null,
@@ -11583,7 +11596,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 status: "error",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justification_manual_review",
+                parsedAction: "departure_justif_manual_review",
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 errorMessage,
                 resolutionData: { justificationFromPending: true },
