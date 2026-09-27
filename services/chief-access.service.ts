@@ -136,6 +136,11 @@ export async function submitChiefAccessRequest(input: Omit<SubmitChiefAccessRequ
         throw new Error("Selected doctor was not found in the official directory.");
     }
 
+    const passwordPolicyError = getPasswordPolicyError(input.password);
+    if (passwordPolicyError) {
+        throw new Error(passwordPolicyError);
+    }
+
     const passwordHash = await hash(input.password, 10);
     const parsed = validateChiefAccessRequestInput({
         inviteId: invite.id,
@@ -355,54 +360,76 @@ export async function provisionChiefBootstrapAccess(input: BootstrapChiefAccessI
 export async function reviewChiefAccessRequest(input: ReviewChiefAccessRequestInput, reviewerUserId: string) {
     const db = getDb();
     const parsed = validateChiefAccessReviewInput(input);
-    const request = await db.query.chiefAccessRequests.findFirst({
-        where: eq(chiefAccessRequests.id, parsed.requestId),
-    });
 
-    if (!request) {
-        throw new Error("Chief access request not found.");
-    }
+    // Tudo numa transação com o pedido travado (FOR UPDATE): aprovar e rejeitar
+    // ao mesmo tempo passavam os dois pela checagem de 'pending'. O segundo agora
+    // espera o primeiro e cai no "Only pending".
+    return db.transaction(async (tx) => {
+        const [request] = await tx
+            .select()
+            .from(chiefAccessRequests)
+            .where(eq(chiefAccessRequests.id, parsed.requestId))
+            .for("update");
 
-    if (request.status !== "pending") {
-        throw new Error("Only pending chief access requests can be reviewed.");
-    }
+        if (!request) {
+            throw new Error("Chief access request not found.");
+        }
 
-    if (parsed.decision === "rejected") {
-        const [updated] = await db
-            .update(chiefAccessRequests)
-            .set({
-                status: "rejected",
-                reviewedByUserId: reviewerUserId,
-                reviewedAt: new Date(),
-                reviewNotes: parsed.reviewNotes ?? null,
-                updatedAt: new Date(),
-            })
-            .where(eq(chiefAccessRequests.id, request.id))
-            .returning();
+        if (request.status !== "pending") {
+            throw new Error("Only pending chief access requests can be reviewed.");
+        }
 
-        await db.insert(auditLogs).values({
-            actorUserId: reviewerUserId,
-            action: "chief_request.rejected",
-            entityType: "chief_access_request",
-            entityId: request.id,
-            details: { reviewNotes: parsed.reviewNotes ?? null },
-        });
+        if (parsed.decision === "rejected") {
+            const [updated] = await tx
+                .update(chiefAccessRequests)
+                .set({
+                    status: "rejected",
+                    reviewedByUserId: reviewerUserId,
+                    reviewedAt: new Date(),
+                    reviewNotes: parsed.reviewNotes ?? null,
+                    updatedAt: new Date(),
+                })
+                .where(eq(chiefAccessRequests.id, request.id))
+                .returning();
 
-        return updated;
-    }
+            await tx.insert(auditLogs).values({
+                actorUserId: reviewerUserId,
+                action: "chief_request.rejected",
+                entityType: "chief_access_request",
+                entityId: request.id,
+                details: { reviewNotes: parsed.reviewNotes ?? null },
+            });
 
-    const [approvedRequest] = await db.transaction(async (tx) => {
+            return updated;
+        }
+
         const existingUser = await tx.query.users.findFirst({
             where: eq(users.email, request.requestedEmail),
         });
+
+        // Mesmas recusas do bootstrap: o convite bearer deixa qualquer um pedir
+        // com qualquer e-mail, e aprovar gravaria a senha do pedido na conta.
+        if (existingUser) {
+            const existingRoles = await tx
+                .select({ role: userRoles.role })
+                .from(userRoles)
+                .where(eq(userRoles.userId, existingUser.id));
+
+            if (existingRoles.some((row) => row.role === "admin")) {
+                throw new Error("Este email ja pertence a uma conta admin. Rejeite o pedido e peca outro login para a chefia.");
+            }
+
+            if (existingUser.doctorId !== request.doctorId) {
+                throw new Error("Este email ja pertence a uma conta de outro medico. Rejeite o pedido e peca outro login para a chefia.");
+            }
+        }
 
         const [upsertedUser] = existingUser
             ? await tx
                 .update(users)
                 .set({
-                    doctorId: request.doctorId,
                     passwordHash: request.passwordHash,
-                    mustChangePassword: false,
+                    mustChangePassword: true,
                     isActive: true,
                     sessionVersion: sql`${users.sessionVersion} + 1`,
                     updatedAt: new Date(),
@@ -413,7 +440,7 @@ export async function reviewChiefAccessRequest(input: ReviewChiefAccessRequestIn
                 doctorId: request.doctorId,
                 email: request.requestedEmail,
                 passwordHash: request.passwordHash,
-                mustChangePassword: false,
+                mustChangePassword: true,
                 isActive: true,
             }).returning();
 
@@ -447,8 +474,6 @@ export async function reviewChiefAccessRequest(input: ReviewChiefAccessRequestIn
             },
         });
 
-        return [updatedRequest] as const;
+        return updatedRequest;
     });
-
-    return approvedRequest;
 }

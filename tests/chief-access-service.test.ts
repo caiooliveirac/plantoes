@@ -27,9 +27,6 @@ import {
  *
  * Mesma trava do tests/auth-service: só roda com DATABASE_URL de um banco de
  * teste (nome contém "test") e apaga o que gravou.
- *
- * Os testes marcados `todo` descrevem o comportamento esperado que o service
- * ainda NÃO cumpre (achados, sem correção neste PR).
  */
 
 const databaseName = (() => {
@@ -255,14 +252,17 @@ test("pedido: médico inexistente ou inativo é recusado sem queimar o convite",
     assert.ok(await getValidChiefInvite(invite.token));
 });
 
-test("pedido: senha de chefia passa pela política de senha", {
-    skip,
-    todo: "submitChiefAccessRequest aceita qualquer senha (a rota só exige 8 caracteres); aprovado, o chefe entra sem troca obrigatória",
-}, async () => {
+test("pedido: senha de chefia passa pela política de senha", { skip }, async () => {
     const invite = await bearerInvite();
     await assert.rejects(
         submitChiefAccessRequest(requestInput(invite.token, { requestedEmail: email("senha-fraca"), password: "12345678" })),
+        /pelo menos 10 caracteres/,
     );
+    await assert.rejects(
+        submitChiefAccessRequest(requestInput(invite.token, { requestedEmail: email("senha-fraca"), password: "senhasemgrupos" })),
+        /tres grupos/,
+    );
+    assert.ok(await getValidChiefInvite(invite.token), "senha recusada não queima o convite");
 });
 
 // ---------------------------------------------------------------------------
@@ -286,11 +286,11 @@ test("revisão: aprovar cria o usuário chefe com a senha do pedido", { skip }, 
     assert.equal(approved.approvedUserId, user.id);
     assert.equal(user.doctor_id, doctorA);
     assert.deepEqual(user.roles, ["chief"]);
-    assert.equal(user.must_change_password, false);
+    assert.equal(user.must_change_password, true, "chefe aprovado troca a senha no primeiro acesso");
     assert.equal(user.session_version, 0);
 
     const login = await authenticateWithPassword(email("aprovado"), "Senha-Do-Pedido-1");
-    assert.ok(login.status === "success");
+    assert.ok(login.status === "success" && login.user.mustChangePassword);
     assert.deepEqual(login.user.roles, ["chief"]);
 
     const listed = (await listChiefAccessRequests()).find((row) => row.id === request.id);
@@ -359,22 +359,23 @@ test("revisão: pedido já revisado não é revisado de novo", { skip }, async (
     );
 });
 
-test("revisão: aprovar pedido com e-mail de conta admin é recusado (como no bootstrap)", {
-    skip,
-    todo: "reviewChiefAccessRequest sobrescreve password_hash de conta existente sem checar papel admin: um convite bearer + aprovação desatenta troca a senha do admin",
-}, async () => {
+test("revisão: aprovar pedido com e-mail de conta admin é recusado (como no bootstrap)", { skip }, async () => {
     await insertUser("admin-alvo", ["admin"]);
     const invite = await bearerInvite();
     const request = await submitChiefAccessRequest(requestInput(invite.token, { requestedEmail: email("admin-alvo") }));
 
-    await assert.rejects(reviewChiefAccessRequest({ requestId: request.id, decision: "approved" }, adminId));
-    assert.equal((await authenticateWithPassword(email("admin-alvo"), SENHA)).status, "success");
+    await assert.rejects(reviewChiefAccessRequest({ requestId: request.id, decision: "approved" }, adminId), /conta admin/);
+    assert.equal((await authenticateWithPassword(email("admin-alvo"), SENHA)).status, "success", "senha do admin intacta");
+    const admin = await userRow(email("admin-alvo"));
+    assert.deepEqual(admin?.roles, ["admin"]);
+    assert.equal(admin?.session_version, 0);
+
+    // A recusa não consome o pedido: o admin ainda pode rejeitá-lo.
+    const rejected = await reviewChiefAccessRequest({ requestId: request.id, decision: "rejected" }, adminId);
+    assert.equal(rejected.status, "rejected");
 });
 
-test("revisão: aprovar pedido com e-mail já vinculado a outro médico é recusado (como no bootstrap)", {
-    skip,
-    todo: "reviewChiefAccessRequest reata users.doctor_id ao médico do pedido sem conferir o vínculo anterior",
-}, async () => {
+test("revisão: aprovar pedido com e-mail de conta de outro médico (ou sem médico) é recusado", { skip }, async () => {
     await insertUser("vinculado-b", ["doctor"], doctorB);
     const invite = await bearerInvite();
     const request = await submitChiefAccessRequest(requestInput(invite.token, {
@@ -382,8 +383,45 @@ test("revisão: aprovar pedido com e-mail já vinculado a outro médico é recus
         requestedEmail: email("vinculado-b"),
     }));
 
-    await assert.rejects(reviewChiefAccessRequest({ requestId: request.id, decision: "approved" }, adminId));
-    assert.equal((await userRow(email("vinculado-b")))?.doctor_id, doctorB);
+    await assert.rejects(reviewChiefAccessRequest({ requestId: request.id, decision: "approved" }, adminId), /outro medico/);
+    let user = await userRow(email("vinculado-b"));
+    assert.equal(user?.doctor_id, doctorB);
+    assert.deepEqual(user?.roles, ["doctor"]);
+    assert.equal((await authenticateWithPassword(email("vinculado-b"), SENHA)).status, "success");
+
+    // Conta sem médico vinculado também não é "do próprio médico": a senha dela não muda.
+    await insertUser("sem-medico", ["doctor"]);
+    const invite2 = await bearerInvite();
+    const request2 = await submitChiefAccessRequest(requestInput(invite2.token, { requestedEmail: email("sem-medico") }));
+    await assert.rejects(reviewChiefAccessRequest({ requestId: request2.id, decision: "approved" }, adminId), /outro medico/);
+    user = await userRow(email("sem-medico"));
+    assert.equal(user?.doctor_id, null);
+    assert.equal((await authenticateWithPassword(email("sem-medico"), SENHA)).status, "success");
+});
+
+test("revisão: aprovar e rejeitar o mesmo pedido ao mesmo tempo — só um vence", { skip }, async () => {
+    for (let round = 0; round < 5; round += 1) {
+        const invite = await bearerInvite();
+        const request = await submitChiefAccessRequest(requestInput(invite.token, { requestedEmail: email(`corrida-${round}`) }));
+
+        const results = await Promise.allSettled([
+            reviewChiefAccessRequest({ requestId: request.id, decision: "approved" }, adminId),
+            reviewChiefAccessRequest({ requestId: request.id, decision: "rejected" }, adminId),
+        ]);
+        const fulfilled = results.filter((result) => result.status === "fulfilled");
+        const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+        assert.equal(fulfilled.length, 1, `rodada ${round}`);
+        assert.match(String(rejected[0]?.reason), /Only pending/, `rodada ${round}`);
+
+        const winner = (fulfilled[0] as PromiseFulfilledResult<{ status: string }>).value.status;
+        const user = await userRow(email(`corrida-${round}`));
+        assert.equal(Boolean(user), winner === "approved", `rodada ${round}: conta só existe se a aprovação venceu`);
+        const audit = await getDb().execute(sql`
+            select action from operations_v2.audit_logs
+            where entity_id = ${request.id} and action <> 'chief_request.submitted'
+        `) as unknown as Array<{ action: string }>;
+        assert.deepEqual(audit.map((row) => row.action), [`chief_request.${winner}`], `rodada ${round}`);
+    }
 });
 
 // ---------------------------------------------------------------------------
