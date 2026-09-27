@@ -13577,9 +13577,122 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
     return { ok: true, ignored: true };
 }
 
+// D8 (docs/chegada.md): mensagem EDITADA no Telegram. O Telegram manda `edited_message`
+// com o MESMO message_id da original; `date` segue sendo a hora do envio original e
+// `edit_date` a da edição. Regra:
+// - a original não gerou efeito (status ignored/error) e a edição veio em até 2h
+//   (mesma janela da 1ª tentativa) → reprocessa o texto editado como aviso novo, com a
+//   hora da ORIGINAL (princípios 2 e 3: vale a primeira mensagem, vale a hora do aviso —
+//   o médico chegou quando mandou; a edição só corrige a digitação);
+// - a original já registrou ocupação → não reprocessa (não dá para desfazer o efeito com
+//   segurança); avisa uma vez que a edição não altera o registro;
+// - qualquer outro caso (pendência aberta, comando, original desconhecida, retry do mesmo
+//   update, edição tardia) → ignora em silêncio.
+export const TELEGRAM_EDIT_ALREADY_REGISTERED_REPLY =
+    "✏️ Edição de mensagem não altera um registro já feito. Para corrigir, envie uma nova mensagem com os dados certos.";
+
+export type TelegramEditedMessageDecision = "reprocess" | "notify_already_registered" | "ignore";
+
+export function decideTelegramEditedMessage(params: {
+    original: { status: string; relatedOccupancyId: string | null; errorMessage: string | null; resolutionData: unknown } | null;
+    updateId: number;
+    editedText: string;
+    sentAt: Date;
+    editedAt: Date;
+}): TelegramEditedMessageDecision {
+    const { original } = params;
+    if (!original) return "ignore";
+    const data = original.resolutionData && typeof original.resolutionData === "object"
+        ? original.resolutionData as Record<string, unknown>
+        : {};
+    // Retry do Telegram do mesmo update: já tratado.
+    if (data.lastEditUpdateId === params.updateId) return "ignore";
+    if (original.status === "accepted" && original.relatedOccupancyId) {
+        return data.editNoticeSentAt ? "ignore" : "notify_already_registered";
+    }
+    if (original.status !== "ignored" && original.status !== "error") return "ignore";
+    // Chat fora da lista: reprocessar só repetiria a recusa (e o tutorial no privado).
+    if (original.errorMessage === "chat_not_allowed") return "ignore";
+    if (params.editedText.trim().startsWith("/")) return "ignore";
+    if (params.editedAt.getTime() - params.sentAt.getTime() > FIRST_ARRIVAL_ATTEMPT_WINDOW_MS) return "ignore";
+    return "reprocess";
+}
+
+async function handleTelegramEditedMessage(update: TelegramUpdate) {
+    const edited = update.edited_message;
+    if (!edited?.text) {
+        return { ok: true, ignored: true };
+    }
+    const db = getDb();
+    const original = await db.query.telegramIngestedMessages.findFirst({
+        where: and(
+            eq(telegramIngestedMessages.chatId, String(edited.chat.id)),
+            eq(telegramIngestedMessages.telegramMessageId, edited.message_id),
+        ),
+    });
+    const decision = decideTelegramEditedMessage({
+        original: original ?? null,
+        updateId: update.update_id,
+        editedText: edited.text,
+        sentAt: new Date(edited.date * 1000),
+        editedAt: new Date((edited.edit_date ?? edited.date) * 1000),
+    });
+    if (!original || decision === "ignore") {
+        return { ok: true, ignored: true, edited: true };
+    }
+
+    const editMarkers = {
+        lastEditUpdateId: update.update_id,
+        lastEditedAt: new Date((edited.edit_date ?? edited.date) * 1000).toISOString(),
+    };
+
+    if (decision === "notify_already_registered") {
+        await db.update(telegramIngestedMessages)
+            .set({ resolutionData: buildResolutionData(original.resolutionData, { ...editMarkers, editNoticeSentAt: new Date().toISOString() }) })
+            .where(eq(telegramIngestedMessages.id, original.id));
+        await sendMessage(edited.chat.id, TELEGRAM_EDIT_ALREADY_REGISTERED_REPLY, edited.message_id);
+        return { ok: true, ignored: true, edited: true };
+    }
+
+    // Reprocessa na MESMA linha do log (índice único chat+message_id): o texto editado
+    // entra no lugar, o original fica em resolutionData, e o resultado anterior é limpo
+    // para não vazar parsed* do erro antigo.
+    const editedFromText = original.rawText;
+    await db.update(telegramIngestedMessages)
+        .set({
+            rawText: edited.text,
+            status: "pending",
+            errorMessage: null,
+            parsedDomain: null,
+            parsedTargetCode: null,
+            parsedAction: null,
+            parsedDoctorName: null,
+            relatedOccupancyId: null,
+            processedAt: null,
+            resolutionData: { ...editMarkers, editedFromText },
+        })
+        .where(eq(telegramIngestedMessages.id, original.id));
+
+    await processTelegramUpdate({ update_id: update.update_id, message: edited });
+
+    // O processamento reescreve resolutionData; recoloca as marcas da edição.
+    const after = await db.query.telegramIngestedMessages.findFirst({
+        columns: { resolutionData: true },
+        where: eq(telegramIngestedMessages.id, original.id),
+    });
+    await db.update(telegramIngestedMessages)
+        .set({ resolutionData: buildResolutionData(after?.resolutionData, { ...editMarkers, editedFromText }) })
+        .where(eq(telegramIngestedMessages.id, original.id));
+    return { ok: true, edited: true, reprocessed: true };
+}
+
 export async function processTelegramUpdate(update: TelegramUpdate) {
     if (update.callback_query) {
         return handleTelegramCallbackQuery(update.callback_query);
+    }
+
+    if (update.edited_message) {
+        return handleTelegramEditedMessage(update);
     }
 
     const message = update.message;
