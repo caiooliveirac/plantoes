@@ -79,6 +79,7 @@ Gravação: `startRegulationOccupancy` / `startInterventionOccupancy`.
 |---|---|
 | Chegada genuína (fase 2) | `message.date` do aviso; HH:mm escrito é ignorado e a resposta avisa |
 | Chegada que só passou num reenvio | a da 1ª tentativa (`resolveFirstArrivalAttemptAt`): qualquer remetente, mesmo nome, mesmo alvo, status `error` ou `pending_takeover_confirmation`, até 2h, mesmo turno; HH:mm escrito não desliga isso na fase 2 |
+| Mensagem editada reprocessada (D8) | `date` da mensagem original (o Telegram mantém; `edit_date` é só a edição) |
 | Pendência respondida depois (nome, turno, ramal) | hora da mensagem original guardada na pendência |
 | Botão de tomada | hora da mensagem pendente (1ª tentativa) |
 | Re-chegada do mesmo médico no mesmo alvo, mesmo turno | `min(existente, nova)` — só recua |
@@ -117,7 +118,8 @@ até 15 min é zero.
 | Posto desativado | A chegada reativa o posto | Chegada é soberana |
 | Nome não resolvido | Pergunta com candidatos | Sem vínculo formal telegram↔médico |
 | Mensagem de almoço/descanso | Descartada com dica de `/almoco` | — |
-| Mensagem EDITADA no Telegram | **Ignorada** (não há handler de `edited_message`) | ver D8 |
+| Mensagem EDITADA no Telegram, aviso original sem efeito (ignorado/erro), edição em até 2h | Reprocessa o texto editado com a hora da mensagem ORIGINAL (`decideTelegramEditedMessage`) | Princípios 2 e 3: chegou quando mandou; a edição só corrige a digitação |
+| Mensagem EDITADA no Telegram, aviso original já registrou ocupação | Não reprocessa; responde uma vez "edição não altera registro, envie nova mensagem" | Desfazer o efeito da original às cegas é mais perigoso que pedir reenvio |
 
 ---
 
@@ -152,7 +154,7 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 | D5 | CORRIGIDO | Resposta do bot dizia "desde <hora deste aviso>" mesmo quando o banco preservou a 1ª chegada; o médico relia, achava que perdeu o horário e reenviava (alimentava D1). Agora mostra a chegada gravada + "chegada mantida pelo primeiro aviso" | PR #297, 23/09/2026 |
 | D6 | CORRIGIDO | Reenvio entre 11:10 e 17:00 de quem já estava no ramal desde antes das 11:10 virava meio plantão (fim 17:00, pago como meio). Agora só vira meio plantão quem chegou na janela | Jonas, 2154, 22/09/2026 (SD 07:16 → meio às 16:12); PR #302 |
 | D7 | VERIFICADO | "SD" declarado às 18:35 em outro ramal grava rótulo SD com janela SN (19:00) — rótulo e janela discordam | Gerardson, 2152, 03/09/2026 |
-| D8 | VERIFICADO | Mensagem editada no Telegram é ignorada; quem corrige a digitação editando não é ouvido | grep: nenhum handler de `edited_message` |
+| D8 | CORRIGIDO | Mensagem editada no Telegram era ignorada; quem corrigia a digitação editando não era ouvido. Agora `edited_message` reprocessa aviso que não gerou efeito (hora da original) e avisa quando a original já registrou. Pendência aberta, comando e edição após 2h seguem ignorados | grep: nenhum handler de `edited_message`; PR claude/bot-mensagem-editada |
 | D9 | CORRIGIDO | Intervenção: reenvio com âncora "vencida" movia o board e a janela para a hora nova; mesma regra da janela própria | PR #298 |
 | D10 | ABERTO | Quando quem tomou o posto é remanejado ou sai, o deslocado NÃO reassume sozinho; precisa reenviar | pedido do dono, 18/09 |
 | D11 | CORRIGIDO | Deslocado que reenviava no mesmo alvo nunca voltava ao quadro | PR #295, 23/09/2026 |

@@ -67,8 +67,11 @@ npm test         # suite de testes (não requer Telegram)
 # Instalar ngrok: https://ngrok.com/download
 ngrok http 3000
 
-# Registrar webhook:
-curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://SEU-URL-NGROK/api/telegram/webhook"
+# Registrar webhook (allowed_updates explícito: edited_message é tratado, ver D8 em
+# docs/chegada.md; sem o parâmetro o Telegram mantém a lista do registro anterior):
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  --data-urlencode "url=https://SEU-URL-NGROK/api/telegram/webhook" \
+  --data-urlencode 'allowed_updates=["message","edited_message","callback_query"]'
 ```
 
 ---
