@@ -314,6 +314,8 @@ export const SENHA_DEFINIDA_ACTIONS = [
     "doctor_signup_email_verified",
     "doctor_signup_rebound_account",
     "portal_account.created",
+    // Monitor de acessos: admin trocou a senha por uma aleatória e mandou o link de redefinição.
+    "auth.password_revoked_by_admin",
 ] as const;
 
 export interface SituacaoConta {

@@ -703,6 +703,84 @@ export const auditLogs = operationsV2.table(
     ],
 );
 
+/* Monitor de acessos (migration 0046, docs/monitor-acessos.md). Uma sessão por
+   login (o `sid` do cookie); `sessionVersion` é o `sv` gravado no cookie dela —
+   quando users.session_version sobe, ela morre mesmo sem revokedAt. `origin`:
+   login | portal | escala | cadastro | anterior (cookie de antes do monitor). */
+export const authSessions = operationsV2.table(
+    "auth_sessions",
+    {
+        id: uuid("id").primaryKey(),
+        userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+        origin: varchar("origin", { length: 24 }).notNull(),
+        sessionVersion: integer("session_version").notNull().default(0),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        createdIp: text("created_ip"),
+        createdUserAgent: text("created_user_agent"),
+        createdGeo: jsonb("created_geo").notNull().default({}),
+        lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+        lastIp: text("last_ip"),
+        revokedAt: timestamp("revoked_at", { withTimezone: true }),
+        revokedBy: uuid("revoked_by").references(() => users.id, { onDelete: "set null" }),
+        revokedReason: text("revoked_reason"),
+    },
+    (table) => [index("auth_sessions_user_seen_idx").on(table.userId, table.lastSeenAt)],
+);
+
+/** Linha do tempo de interações. A consulta periódica do quadro vai agregada em authSessionActivity. */
+export const authSessionEvents = operationsV2.table(
+    "auth_session_events",
+    {
+        id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+        occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+        sessionId: uuid("session_id").references(() => authSessions.id, { onDelete: "cascade" }),
+        userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+        kind: varchar("kind", { length: 40 }).notNull(),
+        method: varchar("method", { length: 8 }),
+        path: text("path"),
+        ip: text("ip"),
+        userAgent: text("user_agent"),
+        geo: jsonb("geo").notNull().default({}),
+        details: jsonb("details").notNull().default({}),
+    },
+    (table) => [
+        index("auth_session_events_user_idx").on(table.userId, table.occurredAt),
+        index("auth_session_events_session_idx").on(table.sessionId, table.occurredAt),
+        index("auth_session_events_occurred_idx").on(table.occurredAt),
+    ],
+);
+
+/** Presença por sessão × IP × janela de 5 min — a prova de "aberta ao mesmo tempo". */
+export const authSessionActivity = operationsV2.table(
+    "auth_session_activity",
+    {
+        sessionId: uuid("session_id").notNull().references(() => authSessions.id, { onDelete: "cascade" }),
+        userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+        ip: text("ip").notNull(),
+        windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+        firstAt: timestamp("first_at", { withTimezone: true }).notNull(),
+        lastAt: timestamp("last_at", { withTimezone: true }).notNull(),
+        requests: integer("requests").notNull().default(0),
+        visibleRequests: integer("visible_requests").notNull().default(0),
+        activeRequests: integer("active_requests").notNull().default(0),
+    },
+    (table) => [
+        primaryKey({ columns: [table.sessionId, table.ip, table.windowStart] }),
+        index("auth_session_activity_user_idx").on(table.userId, table.windowStart),
+        index("auth_session_activity_ip_idx").on(table.ip, table.windowStart),
+    ],
+);
+
+/** Localização (Cloudflare) e provedor (DNS reverso) de cada IP visto. */
+export const authNetworkInfo = operationsV2.table("auth_network_info", {
+    ip: text("ip").primaryKey(),
+    reverseDns: text("reverse_dns"),
+    provider: text("provider"),
+    geo: jsonb("geo").notNull().default({}),
+    geoSeenAt: timestamp("geo_seen_at", { withTimezone: true }),
+    reverseLookedUpAt: timestamp("reverse_looked_up_at", { withTimezone: true }),
+});
+
 // Preferências de base ordenadas do médico (só intervenção tem bases).
 export const doctorBasePreferences = operationsV2.table(
     "doctor_base_preferences",

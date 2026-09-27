@@ -1360,10 +1360,24 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const [startModalCard, setStartModalCard] = useState<BoardCard | null>(null);
     const [deactivateModalCard, setDeactivateModalCard] = useState<BoardCard | null>(null);
     const latestGeneratedAtRef = useRef(generatedAt);
+    // Monitor de acessos (docs/monitor-acessos.md): último toque/clique/tecla,
+    // mandado com cada consulta do quadro para separar "Mesa em uso" de aba esquecida.
+    const lastInteractionAtRef = useRef(Date.now());
 
     useEffect(() => {
         latestGeneratedAtRef.current = generatedAt;
     }, [generatedAt]);
+
+    useEffect(() => {
+        const marcar = () => {
+            lastInteractionAtRef.current = Date.now();
+        };
+        const eventos = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart", "scroll"] as const;
+        for (const evento of eventos) window.addEventListener(evento, marcar, { passive: true });
+        return () => {
+            for (const evento of eventos) window.removeEventListener(evento, marcar);
+        };
+    }, []);
 
     useEffect(() => {
         if (!selectedCard) {
@@ -1466,9 +1480,11 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         }
 
         try {
+            const visivel = document.visibilityState === "visible" ? 1 : 0;
+            const parado = Math.max(0, Math.round((Date.now() - lastInteractionAtRef.current) / 1000));
             const response = await fetch("/api/board", {
                 cache: "no-store",
-                headers: { "Accept": "application/json" },
+                headers: { "Accept": "application/json", "x-mesa-uso": `v=${visivel};o=${parado}` },
             });
 
             // Sessão expirou: recarregar deixa o servidor mandar ao login (portão).
@@ -3592,6 +3608,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         </a>
                                         <a className="ops-auth-inline-link" href="/admin/reports">
                                             Abrir auditoria mensal
+                                        </a>
+                                        <a className="ops-auth-inline-link" href="/admin/acessos">
+                                            Monitor de acessos (senha compartilhada)
                                         </a>
                                     </>
                                 )}

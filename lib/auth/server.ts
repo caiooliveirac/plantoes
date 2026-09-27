@@ -1,9 +1,20 @@
-import { cookies } from "next/headers";
+import { randomUUID } from "node:crypto";
+import { cookies, headers } from "next/headers";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { userRoles, users } from "@/db/schema";
+import { lerContextoRequisicao } from "@/lib/acessos/contexto";
+import { depoisDaResposta } from "@/lib/acessos/depois";
 import { rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
-import { createSessionToken, isSessionVersionCurrent, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
+import { createSessionToken, isSessionVersionCurrent, sessionIdOf, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
+import {
+    atualizarRedeDoContexto,
+    registrarAcesso,
+    registrarNovaSessao,
+    renovarVersaoDaSessao,
+    sessaoFoiEncerrada,
+    type OrigemSessao,
+} from "@/services/acessos.service";
 
 export const SESSION_COOKIE_NAME = "operations_v2_session";
 /* 30 dias, renovada a cada uso (proxy.ts). Com 12 h a sessão morria entre um
@@ -32,6 +43,8 @@ export interface AuthenticatedSession {
         mustChangePassword: boolean;
     };
     expiresAt: string;
+    /** Id da sessão no monitor de acessos (auth_sessions). Vazio só em loadUserSession sem id. */
+    sessionId: string;
 }
 
 export function getAuthSecret() {
@@ -42,22 +55,41 @@ export function getAuthSecret() {
     return secret;
 }
 
+/** Como a sessão nasce: um login/SSO/cadastro abre sessão nova (sid novo, linha
+    em auth_sessions); a troca de senha continua a sessão de quem trocou, só com
+    a versão nova — os outros aparelhos caem pela session_version. */
+export type SessaoDoCookie =
+    | { origem: OrigemSessao; detalhes?: Record<string, unknown> }
+    | { continuarSessao: string };
+
 /** Lê a session_version atual do banco: login, SSO, cadastro e troca de senha
     são raros, a consulta a mais só acontece neles. */
-export async function writeSessionCookie(userId: string, expiresAt = new Date(Date.now() + SESSION_TTL_MS)) {
+export async function writeSessionCookie(userId: string, sessao: SessaoDoCookie, expiresAt = new Date(Date.now() + SESSION_TTL_MS)) {
     const [row] = await getDb()
         .select({ sessionVersion: users.sessionVersion })
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
+    const versao = row?.sessionVersion ?? 0;
+    const sessionId = "continuarSessao" in sessao ? sessao.continuarSessao : randomUUID();
     const token = createSessionToken(
         {
             sub: userId,
             exp: expiresAt.getTime(),
-            sv: row?.sessionVersion ?? 0,
+            sv: versao,
+            sid: sessionId,
         },
         getAuthSecret(),
     );
+
+    const contexto = lerContextoRequisicao(await headers());
+    if ("continuarSessao" in sessao) {
+        depoisDaResposta(() => renovarVersaoDaSessao(sessionId, userId, versao, contexto));
+    } else {
+        // Antes de responder: o próximo pedido deste navegador já acha a sessão (monitor de acessos).
+        await registrarNovaSessao({ sessaoId: sessionId, userId, origem: sessao.origem, versao, contexto, detalhes: sessao.detalhes });
+        depoisDaResposta(() => atualizarRedeDoContexto(contexto));
+    }
 
     const cookieStore = await cookies();
     cookieStore.set(SESSION_COOKIE_NAME, token, {
@@ -82,8 +114,9 @@ export async function clearSessionCookie() {
     });
 }
 
-/** Exportada para os testes (tests/contas-portal-db.test.ts); a app usa readAuthenticatedSession. */
-export async function loadUserSession(token: SessionTokenPayload): Promise<AuthenticatedSession | null> {
+/** Exportada para os testes (tests/contas-portal-db.test.ts); a app usa readAuthenticatedSession.
+    Com `sessionId`, sessão encerrada pelo admin ou por "Sair" (auth_sessions.revoked_at) não vale. */
+export async function loadUserSession(token: SessionTokenPayload, sessionId?: string): Promise<AuthenticatedSession | null> {
     const db = getDb();
     const [user] = await db
         .select({
@@ -99,6 +132,10 @@ export async function loadUserSession(token: SessionTokenPayload): Promise<Authe
         .limit(1);
 
     if (!user || !user.isActive || !isSessionVersionCurrent(token, user.sessionVersion)) {
+        return null;
+    }
+
+    if (sessionId && await sessaoFoiEncerrada(sessionId)) {
         return null;
     }
 
@@ -124,8 +161,13 @@ export async function loadUserSession(token: SessionTokenPayload): Promise<Authe
             mustChangePassword: user.mustChangePassword,
         },
         expiresAt: new Date(token.exp).toISOString(),
+        sessionId: sessionId ?? "",
     };
 }
+
+/* Um pedido chama o portão às vezes mais de uma vez (página + componente); o
+   registro de acesso sai uma vez só por pedido — o objeto de headers é o mesmo. */
+const pedidosRegistrados = new WeakSet<object>();
 
 export async function readAuthenticatedSession(): Promise<AuthenticatedSession | null> {
     const cookieStore = await cookies();
@@ -139,7 +181,21 @@ export async function readAuthenticatedSession(): Promise<AuthenticatedSession |
         return null;
     }
 
-    return loadUserSession(parsed);
+    const sessionId = sessionIdOf(parsed, rawToken);
+    const session = await loadUserSession(parsed, sessionId);
+    if (!session) {
+        return null;
+    }
+
+    // Monitor de acessos (docs/monitor-acessos.md): o contexto é lido agora — em
+    // Server Component, headers() não pode ser chamado dentro do after().
+    const requestHeaders = await headers();
+    if (!pedidosRegistrados.has(requestHeaders)) {
+        pedidosRegistrados.add(requestHeaders);
+        const contexto = lerContextoRequisicao(requestHeaders);
+        depoisDaResposta(() => registrarAcesso({ sessaoId: sessionId, userId: session.user.id, versao: parsed.sv ?? 0, contexto }));
+    }
+    return session;
 }
 
 export async function requireAuthenticatedSession(requiredRoles?: UserRole[], options?: { allowPasswordChange?: boolean }) {

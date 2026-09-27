@@ -30,8 +30,8 @@ export async function POST(request: NextRequest) {
     try {
         await changeOwnPassword(session.user.id, parsed.data.currentPassword, parsed.data.nextPassword);
         // A troca subiu session_version: os outros aparelhos caem, este recebe
-        // cookie novo com a versão atual.
-        await writeSessionCookie(session.user.id);
+        // cookie novo com a versão atual — mesma sessão do monitor de acessos.
+        await writeSessionCookie(session.user.id, { continuarSessao: session.sessionId });
         return NextResponse.json({ ok: true });
     } catch (error) {
         return NextResponse.json(

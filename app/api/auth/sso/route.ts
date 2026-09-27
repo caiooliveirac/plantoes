@@ -3,9 +3,13 @@ import { eq } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { userRoles, users } from "@/db/schema";
 import { temAcessoAoPlantoes } from "@/modules/auth/contracts";
+import { lerContextoRequisicao } from "@/lib/acessos/contexto";
+import { depoisDaResposta } from "@/lib/acessos/depois";
 import { writeSessionCookie } from "@/lib/auth/server";
-import { federacaoConfigurada, lerTokenHandoff } from "@/lib/auth/federacao";
+import { federacaoConfigurada, ID_PLANTOES, lerTokenHandoff } from "@/lib/auth/federacao";
 import { destinoInterno } from "@/lib/auth/destino-interno";
+import { destinoSemSessao } from "@/lib/auth/portao";
+import { registrarEvento } from "@/services/acessos.service";
 
 /* Troca de serviço — lado do DESTINO (quem vem do escala entra aqui).
 
@@ -14,7 +18,13 @@ import { destinoInterno } from "@/lib/auth/destino-interno";
    (`portal` não conta — modules/auth/contracts.ts). Existindo,
    emite a sessão daqui sem senha: a identidade já foi autenticada pelo
    escala. Sem conta = sem acesso, com a frase na tela — quem decide quem
-   opera aqui é a chefia, criando/liberando a conta como sempre. */
+   opera aqui é a chefia, criando/liberando a conta como sempre.
+
+   Versão da sessão (`sv`): o porteiro do portal manda a session_version de
+   quando conferiu a senha. Diferente da atual = o login do portal é de antes
+   de uma troca de senha ou de "encerrar sessões" (monitor de acessos): recusa
+   e manda ao portal, que pede a senha de novo (a trava de laço de lá mostra o
+   formulário). Handoff sem `sv` (escala, porteiro antigo) segue valendo. */
 
 function base(req: NextRequest): string {
     return (process.env.AUTH_URL?.trim() || req.url).replace(/\/+$/, "");
@@ -30,7 +40,7 @@ export async function GET(req: NextRequest) {
 
     const db = getDb();
     const [user] = await db
-        .select({ id: users.id, isActive: users.isActive })
+        .select({ id: users.id, isActive: users.isActive, sessionVersion: users.sessionVersion })
         .from(users)
         .where(eq(users.email, handoff.email))
         .limit(1);
@@ -43,7 +53,22 @@ export async function GET(req: NextRequest) {
         return NextResponse.redirect(new URL("/?sso=sem-acesso", base(req)));
     }
 
-    await writeSessionCookie(user.id);
+    const contexto = lerContextoRequisicao(req.headers);
+    if (handoff.sv !== undefined && handoff.sv !== user.sessionVersion) {
+        console.log(`[sso-escala] ${new Date().toISOString()} versao_antiga ${JSON.stringify({ email: handoff.email, origem: handoff.origem })}`);
+        depoisDaResposta(() => registrarEvento({
+            tipo: "sso_recusado",
+            userId: user.id,
+            contexto,
+            detalhes: { motivo: "login do portal anterior à troca de senha ou ao encerramento das sessões", origem: handoff.origem },
+        }));
+        const destino = destinoSemSessao();
+        return NextResponse.redirect(destino.startsWith("http") ? destino : new URL(destino, base(req)));
+    }
+
+    // origem "plantoes" = porteiro do portal (a senha foi conferida aqui); "samu-salvador" = app do escala.
+    const origem = handoff.origem === ID_PLANTOES ? "portal" : "escala";
+    await writeSessionCookie(user.id, { origem, detalhes: { handoffOrigem: handoff.origem } });
     console.log(`[sso-escala] ${new Date().toISOString()} ok ${JSON.stringify({ email: handoff.email, origem: handoff.origem })}`);
     // ?proximo=: o portal mnrs.com.br leva direto a /medico, /medico/folha-ponto…
     return NextResponse.redirect(new URL(destinoInterno(req.nextUrl.searchParams.get("proximo")), base(req)));

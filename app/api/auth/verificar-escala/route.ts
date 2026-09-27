@@ -23,6 +23,14 @@
    Por isso o escopo aqui é "portal": o papel `portal` (conta que só entra no
    portal, sem acesso ao app Plantões) vale nesta rota e em nenhum outro lugar.
 
+   Monitor de acessos (docs/monitor-acessos.md): cada senha conferida aqui —
+   certa ou errada — vira evento `senha_portal_*` da conta, com o IP/aparelho/
+   localização que o porteiro repassar (cf-connecting-ip, user-agent e os
+   cf-ip* do visitante; x-forwarded-for se só vier ele). O sucesso devolve
+   também `sessionVersion`: o porteiro guarda no cookie do portal e manda no
+   handoff, e o /api/auth/sso recusa o login de portal de antes de uma troca de
+   senha ou de "encerrar sessões".
+
    Motivo da recusa (401 invalid_credentials): além do `error`, a resposta diz
    `conta: "inexistente" | "existente"` e, se existe, `senhaAlteradaEm` (ISO ou
    null). TROCA CONSCIENTE (decisão do Caio, 09/2026): isto deixa quem tem o
@@ -38,7 +46,10 @@ import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { doctors } from "@/db/schema";
+import { doctors, users } from "@/db/schema";
+import { lerContextoRequisicao } from "@/lib/acessos/contexto";
+import { depoisDaResposta } from "@/lib/acessos/depois";
+import { registrarTentativaDeSenha } from "@/services/acessos.service";
 import { authenticateWithPassword, consultarSituacaoConta, type SituacaoConta } from "@/services/auth.service";
 
 const schema = z.object({
@@ -103,6 +114,10 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await authenticateWithPassword(email, parsed.data.password, { escopo: "portal" });
+    const contexto = lerContextoRequisicao(request.headers);
+    const userIdDaSenha = result.status === "success" ? result.user.id : null;
+    const motivoDaRecusa = result.status === "success" ? undefined : result.status;
+    depoisDaResposta(() => registrarTentativaDeSenha({ email, ok: userIdDaSenha !== null, via: "portal", contexto, userId: userIdDaSenha, motivo: motivoDaRecusa }));
     if (result.status !== "success") {
         registrarFalha(email, agora);
         let situacao: SituacaoConta | null = null;
@@ -139,6 +154,12 @@ export async function POST(request: NextRequest) {
         }
     }
 
+    const [versao] = await getDb()
+        .select({ sessionVersion: users.sessionVersion })
+        .from(users)
+        .where(eq(users.id, result.user.id))
+        .limit(1);
+
     console.log(`[verificar-escala] ${new Date().toISOString()} ok ${JSON.stringify({ email, vinculado: Boolean(normalizedName) })}`);
     return NextResponse.json({
         ok: true,
@@ -149,5 +170,6 @@ export async function POST(request: NextRequest) {
         normalizedName,
         roles: result.user.roles,
         mustChangePassword: result.user.mustChangePassword,
+        sessionVersion: versao?.sessionVersion ?? 0,
     });
 }
