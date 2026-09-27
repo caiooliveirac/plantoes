@@ -71,11 +71,11 @@
 **Recurrence:** Session 5 (19 historical overlaps from ramal switches).
 **Prevention:** Always close all active occupancies for a doctor before opening a new one. Test with multi-target scenarios.
 
-### Pattern 4: Read-Model Calling Mutations
+### Pattern 4: Read-Model Calling Mutations — CLOSED for deactivations (2026-09-27)
 **Files:** `board.service.ts`
-**Root cause:** `getOperationalBoard()` and `getPaymentAllocationBoard()` call `expireInterventionBaseDeactivations()` as side-effect.
-**Risk:** Makes read queries non-idempotent. Complicates testing and caching. Could cause unexpected state changes during read operations.
-**Prevention:** Move expiry to a scheduled job or explicit pre-read step.
+**Root cause:** `getOperationalBoard()` and `getPaymentAllocationBoard()` called `expireInterventionBaseDeactivations()` / `expireRegulationPostDeactivations()` as side-effect.
+**Fix:** the reapers now run in `plantoes-telegram-worker` every cycle (`scripts/telegram-reminder-worker.ts`, 30s). Reads are pure and hide an open window from a previous shift on their own (`list*Board`: `deactivated_at >= current shift start`; payment/slot/history source: `reactivated_at is not null or deactivated_at >= request.startedAt`), so the visible result doesn't depend on the worker having run. Test: `tests/quadro-leitura-sem-escrita.test.ts`.
+**Still open (separate change):** `getOperationalBoard()` still runs `expireStaleShadowInterventionOccupancies()` / `expireStaleRegulationOccupancies()` (close occupancies + bank hours + board event), and `loadPaymentAllocationSourceData()` runs the shadow one. The Telegram flows (arrival, meal breaks) rely on that before deciding, so moving them needs its own read-side filter and tests.
 
 ### Pattern 5: Continuation Semantics Confusion
 **Files:** `telegram/service.ts` (multiple functions)

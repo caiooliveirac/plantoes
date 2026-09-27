@@ -111,7 +111,7 @@ export function isRegulationPostDeactivationActive(params: {
 
 // Reaper simétrico ao de intervenção: fecha janelas de desativação de posto que já
 // passaram da virada do turno, gravando reactivatedAt = fronteira. Chamado a cada
-// montagem do quadro. Idempotente; também sana janelas antigas abertas antes desta regra.
+// ciclo do plantoes-telegram-worker (a leitura do quadro não grava). Idempotente; também sana janelas antigas abertas antes desta regra.
 export async function expireRegulationPostDeactivations(referenceAt: Date, updatedByUserId?: string | null) {
     const db = getDb();
     const open = await db.query.regulationPostDeactivations.findMany({

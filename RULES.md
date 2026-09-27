@@ -577,7 +577,7 @@ Abrir ocupação nova sem fechar a antiga → dados corrompidos.
 
 ### Padrão 4: Read-model chamando mutations
 
-`board.service.ts` chama `expireInterventionBaseDeactivations()` e `expireStaleRegulationOccupancies()` dentro de funções de leitura.
+Desativações de base/posto: fechado em 2026-09-27 — o reaper roda no `plantoes-telegram-worker` e a leitura esconde a janela vencida sozinha. Ainda aberto: `getOperationalBoard()` chama `expireStaleShadowInterventionOccupancies()` e `expireStaleRegulationOccupancies()` antes de ler.
 
 **Impacto**: Side-effects inesperados durante consultas "inocentes".
 

@@ -12,6 +12,8 @@ import { sendSelfDeclaredExtraCycle } from "@/modules/telegram/self-declared-ext
 import { sendVerificacaoPosViradaCycle } from "@/modules/telegram/verificacao-pos-virada-cycle";
 import { syncTelegramAdminCommandMenus } from "@/modules/telegram/admin-menu";
 import { expireResidenteOccupancies } from "@/modules/operational/residente-auto-close";
+import { expireInterventionBaseDeactivations } from "@/modules/intervention/service";
+import { expireRegulationPostDeactivations } from "@/modules/regulation/service";
 
 let running = false;
 
@@ -35,6 +37,8 @@ async function runCycle() {
             checklistDigest,
             occurrenceHandoff,
             verificacaoPosVirada,
+            expiredBaseDeactivations,
+            expiredPostDeactivations,
         ] = await Promise.all([
             sendTelegramReminderCycle(referenceDate),
             sendTelegramMealBreakCycle(referenceDate),
@@ -53,6 +57,11 @@ async function runCycle() {
             sendOccurrenceHandoffCycle(referenceDate),
             // Roteiro de docs/verificacao-saidas-continuidade.md após cada virada (flag VERIFICACAO_POS_VIRADA).
             sendVerificacaoPosViradaCycle(referenceDate),
+            // Desativação de base/posto vence na virada do turno: grava reactivated_at =
+            // virada. O quadro já esconde a vencida na leitura; aqui só o registro
+            // (antes era feito dentro de getOperationalBoard — leitura que gravava).
+            expireInterventionBaseDeactivations(referenceDate),
+            expireRegulationPostDeactivations(referenceDate),
         ]);
         const evaluated = reminders.evaluated + mealBreak.evaluated + mealBreakNudges.evaluated
             + paymentDigest.evaluated + contractBalance.evaluated + bankHoursPending.evaluated
@@ -64,6 +73,9 @@ async function runCycle() {
             + verificacaoPosVirada.sent;
         if (evaluated > 0 || sent > 0) {
             console.log(`[telegram-reminder-worker] evaluated=${evaluated} sent=${sent}`);
+        }
+        if (expiredBaseDeactivations > 0 || expiredPostDeactivations > 0) {
+            console.log(`[telegram-reminder-worker] desativações vencidas: bases=${expiredBaseDeactivations} postos=${expiredPostDeactivations}`);
         }
         if (residenteAutoClose.closed > 0) {
             console.log(`[telegram-reminder-worker] residente auto-close: evaluated=${residenteAutoClose.evaluated} closed=${residenteAutoClose.closed}`);
