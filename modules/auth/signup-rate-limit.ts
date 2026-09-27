@@ -1,3 +1,5 @@
+import { getLoginClientIp } from "@/modules/auth/login-rate-limit";
+
 // ponytail: rate limit em memória por IP (10 tentativas/15min) — suficiente para
 // um único processo PM2; migrar para tabela se o app virar multi-instância.
 const WINDOW_MS = 15 * 60 * 1000;
@@ -23,6 +25,8 @@ export function isSignupRateLimited(ip: string, now = Date.now()) {
     return entry.count > LIMIT;
 }
 
+// Mesma extração do login (cf-connecting-ip → x-real-ip): x-forwarded-for é
+// forjável e deixava o cliente girar de "IP" a cada tentativa.
 export function getRequestIp(headers: Headers) {
-    return headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+    return getLoginClientIp(headers) || "unknown";
 }

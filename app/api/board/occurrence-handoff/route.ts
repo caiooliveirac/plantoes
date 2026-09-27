@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireSessionForRead } from "@/lib/auth/server";
 import { publishBoardUpdate } from "@/lib/board-live";
+import { getLoginClientIp } from "@/modules/auth/login-rate-limit";
 import {
     OccurrenceHandoffError,
     getOccurrenceHandoffState,
@@ -57,9 +58,8 @@ export async function POST(request: NextRequest) {
     }
     const denied = await sessionError();
     if (denied) return denied;
-    // Cloudflare na frente: cf-connecting-ip é o cliente; x-real-ip (nginx) é o
-    // fallback. x-forwarded-for não entra — o cliente pode forjá-lo.
-    const ip = request.headers.get("cf-connecting-ip")?.trim() || request.headers.get("x-real-ip")?.trim() || "local";
+    // Mesma extração do login: cf-connecting-ip → x-real-ip, nunca x-forwarded-for.
+    const ip = getLoginClientIp(request.headers) || "local";
     if (rateLimited(ip, Date.now())) {
         return NextResponse.json({ error: "Muitas tentativas. Espere um minuto." }, { status: 429 });
     }
