@@ -77,6 +77,20 @@ function formatMinutes(value: number | null) {
     return `${sign}${hours} h ${String(minutes).padStart(2, "0")}`;
 }
 
+// datetime-local no fuso do navegador (a administração opera em São Paulo),
+// mesmo padrão do painel de histórico operacional.
+function toLocalDateTimeValue(value: string | null) {
+    const date = value ? new Date(value) : new Date();
+    if (Number.isNaN(date.getTime())) {
+        return "";
+    }
+
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+
+type FixShiftLabel = "SD" | "SN" | "P";
+
 function domainLabel(domain: PaymentAllocationRow["domain"]) {
     return domain === "regulation" ? "Regulação" : "Intervenção";
 }
@@ -256,6 +270,11 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
     const [isRefreshing, startRefreshTransition] = useTransition();
     const [isSaving, startSaveTransition] = useTransition();
     const [isDeleting, startDeleteTransition] = useTransition();
+    const [fixShiftLabel, setFixShiftLabel] = useState<FixShiftLabel>("SD");
+    const [fixDepartureAt, setFixDepartureAt] = useState("");
+    const [fixReason, setFixReason] = useState("");
+    const [fixError, setFixError] = useState<string | null>(null);
+    const [isFixing, startFixTransition] = useTransition();
 
     const combinedRows = useMemo(
         () => [...board.regulation, ...board.intervention],
@@ -293,7 +312,11 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
         setRemovalNote("");
         setSaveError(null);
         setDeleteError(null);
-    }, [selectedRow?.doctorId, selectedRow?.occupancyId]);
+        setFixShiftLabel(selectedRow?.shiftLabel ?? "SD");
+        setFixDepartureAt(toLocalDateTimeValue(selectedRow?.actualEndedAt ?? selectedRow?.endedAt ?? null));
+        setFixReason("");
+        setFixError(null);
+    }, [selectedRow?.doctorId, selectedRow?.occupancyId, selectedRow?.shiftLabel, selectedRow?.actualEndedAt, selectedRow?.endedAt]);
 
     const loadBoard = useEffectEvent(async (params?: { date?: string | null; shift?: "SD" | "SN" | null }) => {
         setLoadError(null);
@@ -405,12 +428,64 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
         setFeedbackMessage(`Plantão de ${selectedRow.targetCode} apagado com auditoria e quadro recalculado.`);
     });
 
+    const submitShiftDepartureFix = useEffectEvent(async () => {
+        if (!selectedRow?.occupancyId || !fixDepartureAt) {
+            return;
+        }
+
+        const reason = fixReason.trim();
+        if (reason.length < 8) {
+            throw new Error("Explique o motivo com pelo menos 8 caracteres antes de corrigir.");
+        }
+
+        const departureAt = new Date(fixDepartureAt);
+        const doctor = selectedRow.doctorName ?? selectedRow.displayName ?? "médico";
+        const confirmed = window.confirm([
+            `Corrigir o plantão de ${doctor} em ${selectedRow.targetCode}?`,
+            "",
+            `Turno: ${selectedRow.shiftLabel ?? "--"} → ${fixShiftLabel}`,
+            `Saída: ${formatDateTime(selectedRow.actualEndedAt ?? selectedRow.endedAt)} → ${formatDateTime(departureAt.toISOString())}`,
+            "",
+            "A janela prevista e o banco de horas são recalculados, a saída fica validada pela chefia e o motivo vai para a auditoria.",
+        ].join("\n"));
+        if (!confirmed) {
+            return;
+        }
+
+        setSaveError(null);
+        setDeleteError(null);
+        setFixError(null);
+        setFeedbackMessage(null);
+
+        const response = await fetch("/api/admin/occupancies/shift-departure", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                domain: selectedRow.domain,
+                occupancyId: selectedRow.occupancyId,
+                shiftLabel: fixShiftLabel,
+                departureAt: departureAt.toISOString(),
+                reason,
+            }),
+        });
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        if (!response.ok) {
+            throw new Error(body?.error || "Não foi possível corrigir turno e saída.");
+        }
+
+        await loadBoard({ date: dateInput, shift: shiftInput });
+        setFeedbackMessage(`Turno e saída de ${selectedRow.targetCode} corrigidos com auditoria e banco de horas recalculado.`);
+    });
+
     const canSubmitCorrection = Boolean(
         selectedRow?.occupancyId
         && selectedDoctorId
         && selectedDoctorId !== selectedRow.doctorId,
     );
     const canSubmitRemoval = Boolean(selectedRow?.occupancyId && removalNote.trim().length >= 8);
+    const canSubmitFix = Boolean(selectedRow?.occupancyId && fixDepartureAt && fixReason.trim().length >= 8);
 
     return (
         <div className="pagina-kairos">
@@ -675,9 +750,80 @@ export function PaymentAllocationClient({ initialBoard, doctors }: Props) {
                                         </div>
                                     </>
                                 ) : (
-                                    <p>Sem occupancy identificada. Este alvo ainda não pode ser corrigido por aqui porque o problema está antes da etapa de pagamento.</p>
+                                    <p>Sem occupancy identificada. Este alvo ainda não pode ser corrigido por aqui porque o problema está antes da etapa de pagamento. Se o plantão existe mas caiu no turno errado (ex.: virou SD e era P), abra a linha do turno em que ele aparece e use &quot;Corrigir turno e saída&quot;.</p>
                                 )}
                             </section>
+
+                            {selectedRow.occupancyId && (
+                                <section className="payment-detail-card correction enabled">
+                                    <div className="payment-correction-header">
+                                        <div>
+                                            <span className="payment-eyebrow">Correção auditada</span>
+                                            <strong>Corrigir turno e saída</strong>
+                                        </div>
+                                        <span className="reports-badge neutral">admin</span>
+                                    </div>
+
+                                    <p>
+                                        Use quando o plantão ficou com o turno errado (SD tocado por engano num P, &quot;NÃO SAIU&quot; que reabriu quem só mudou de posto) ou com a saída errada. A janela prevista é refeita pelo turno escolhido, a saída entra validada pela chefia e o banco de horas é recalculado.
+                                    </p>
+
+                                    <label className="payment-field">
+                                        <span>Turno correto</span>
+                                        <select
+                                            value={fixShiftLabel}
+                                            onChange={(event) => setFixShiftLabel(event.target.value as FixShiftLabel)}
+                                            disabled={isFixing || isRefreshing}
+                                        >
+                                            <option value="SD">SD (dia)</option>
+                                            <option value="SN">SN (noite)</option>
+                                            <option value="P">P (24h)</option>
+                                        </select>
+                                    </label>
+
+                                    <label className="payment-field">
+                                        <span>Saída efetiva</span>
+                                        <input
+                                            type="datetime-local"
+                                            value={fixDepartureAt}
+                                            onChange={(event) => setFixDepartureAt(event.target.value)}
+                                            disabled={isFixing || isRefreshing}
+                                        />
+                                    </label>
+
+                                    <label className="payment-field">
+                                        <span>Motivo obrigatório</span>
+                                        <textarea
+                                            value={fixReason}
+                                            onChange={(event) => setFixReason(event.target.value)}
+                                            rows={3}
+                                            placeholder="Ex.: botão SD tocado por engano; coordenador confirmou P com saída às 08:27 por ocorrência"
+                                            disabled={isFixing || isRefreshing}
+                                        />
+                                    </label>
+
+                                    {fixError && (
+                                        <div className="payment-inline-note danger">{fixError}</div>
+                                    )}
+
+                                    <div className="payment-actions">
+                                        <button
+                                            type="button"
+                                            className="payment-button primary"
+                                            disabled={!canSubmitFix || isFixing || isRefreshing}
+                                            onClick={() => {
+                                                startFixTransition(() => {
+                                                    void submitShiftDepartureFix().catch((error) => {
+                                                        setFixError(error instanceof Error ? error.message : "Falha ao corrigir turno e saída.");
+                                                    });
+                                                });
+                                            }}
+                                        >
+                                            {isFixing ? "Corrigindo..." : "Corrigir turno e saída"}
+                                        </button>
+                                    </div>
+                                </section>
+                            )}
 
                             <section className={`payment-detail-card correction ${selectedRow.occupancyId ? "enabled" : "disabled"}`.trim()}>
                                 <div className="payment-correction-header">
