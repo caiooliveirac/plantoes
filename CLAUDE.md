@@ -225,7 +225,9 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   feito por checagem manual em cada rota, não por um role dedicado.
 - **Controle de acesso**: **não há `middleware.ts`**. Cada Server Component/Route
   Handler chama `requireAuthenticatedSession(requiredRoles?)` explicitamente (ex.:
-  `requireAuthenticatedSession(["admin"])` nas rotas `/admin/*` e `/api/chief/*`).
+  `requireAuthenticatedSession(["admin"])` nas rotas `/admin/*` e `/api/chief/*`). Rota
+  sem sessão só entrando na lista pública de
+  [tests/route-auth-guard-coverage.test.ts](tests/route-auth-guard-coverage.test.ts).
 - **Quadro fechado**: `/`, `/api/board`, `/api/board/stream` e a passagem de
   ocorrências exigem sessão (qualquer papel). Sem sessão, `/` vai ao login único do
   portal (mnrs.com.br → porteiro → `/api/auth/sso`); `/entrar` é a porta de
