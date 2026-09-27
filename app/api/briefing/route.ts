@@ -19,6 +19,7 @@ import { inArray } from "drizzle-orm";
 
 import { getDb, hasDatabaseUrl } from "@/db";
 import { doctors } from "@/db/schema";
+import { acompanantesDoQuadro } from "@/lib/briefing/acompanhantes";
 import { loadBriefingBankHours } from "@/lib/briefing/bank-hours";
 import { guardBriefingRequest } from "@/lib/briefing/token";
 import { findPendingRenewals } from "@/lib/contracts/renewal";
@@ -126,6 +127,11 @@ export async function GET(request: NextRequest) {
             .map((row) => ({ code: row.postCode, label: row.postLabel, motivo: row.disabledReason ?? null })),
     };
 
+    // Sombra = segundo médico na mesma vaga, sem tomar o lugar do titular.
+    // Deslocado = ocupação que perdeu o board e segue ativa fora do quadro.
+    // P (meio plantão) não entra aqui: é turno do titular, outra coisa.
+    const { sombras, deslocados } = acompanantesDoQuadro(board, regulacao);
+
     // Um registro por contrato ativo, com o que responde "quanto o fulano ainda
     // pode dar de plantão". Sai inteiro porque quem consome guarda em cache e
     // responde de lá: refazer a apuração a cada pergunta custa segundos.
@@ -152,6 +158,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
         generatedAt: asOf.toISOString(),
         bases: { semMedico, desativadas, ocupadas },
+        sombras,
+        deslocados,
         postos,
         bancoDeHoras,
         medicos,
