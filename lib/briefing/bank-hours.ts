@@ -76,7 +76,7 @@ export async function loadBriefingBankHours(): Promise<BriefingBankHours> {
             left join operations_v2.regulation_occupancies ro on ro.id = e.regulation_occupancy_id
             left join operations_v2.regulation_posts rp on rp.id = ro.post_id
             where e.arrival_delay_minutes >= ${ATRASO_MINIMO_MINUTOS}
-              and e.scheduled_start_at >= now() - ${sql.raw(`interval '${ATRASO_JANELA_DIAS} days'`)}
+              and e.scheduled_start_at >= now() - make_interval(days => ${ATRASO_JANELA_DIAS})
             order by e.scheduled_start_at desc
         `),
     ]);
