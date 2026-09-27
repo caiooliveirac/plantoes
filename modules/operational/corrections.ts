@@ -106,6 +106,9 @@ export interface TransferOperationalOccupancyInput {
         strategy: TransferConflictStrategy;
         relocationTarget?: OperationalTransferTargetInput | null;
     } | null;
+    // Hora do remanejo. Omitida = agora (tela da chefia). O bot passa a hora do AVISO
+    // (docs/chegada.md §1.3): processado tarde, o remanejo não pode usar o relógio.
+    transferredAt?: Date | null;
 }
 
 // O que a chefia decide quando o destino já tem titular:
@@ -1556,11 +1559,11 @@ export async function transferOperationalOccupancy(
     input: TransferOperationalOccupancyInput,
     updatedByUserId?: string | null,
 ) {
-    await expireStaleRegulationOccupancies(new Date());
     // Momento real do remanejamento — vira o fechamento de toda ocupação de
     // origem e o started_at de toda ocupação nova criada nesta chamada. Nunca
     // herdar o started_at antigo pro destino: ver cloneOccupancyIntoTarget.
-    const transferredAt = new Date();
+    const transferredAt = input.transferredAt ?? new Date();
+    await expireStaleRegulationOccupancies(transferredAt);
 
     const db = getDb();
     const result = await db.transaction(async (tx) => {
