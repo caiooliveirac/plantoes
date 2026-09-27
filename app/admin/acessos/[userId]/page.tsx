@@ -6,6 +6,8 @@ import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { descreverRede, type EpisodioSimultaneo, type InfoDeRede } from "@/modules/acessos/analise";
 import { montarLinhaDoTempo, rotuloDaSessao, type LinhaDoTempo } from "@/modules/acessos/linha-do-tempo";
+import { escalaDoPeriodo, faixasPorAparelho, riscoDaConta } from "@/modules/acessos/painel";
+import { LegendaDoCalor, RaiasPorAparelho } from "@/app/admin/acessos/calor";
 import { duracao, horaComSegundos, intervalo, plural, quando } from "@/modules/acessos/texto";
 import { carregarMonitor, lerPeriodo, PERIODOS, type ChavePeriodo } from "@/services/acessos-relatorio.service";
 import { AcoesDaConta, AtualizacaoAutomatica, EncerrarSessao, ImprimirRelatorio } from "@/app/admin/acessos/acessos-client";
@@ -143,6 +145,10 @@ export default async function RelatorioDaContaPage({
     if (!analise) notFound();
     const bruto = dados.brutos.get(userId) ?? { sessoes: [], janelas: [], eventos: [] };
     const { conta } = analise;
+    const risco = riscoDaConta(analise);
+    const faixaDeRisco = risco >= 70 ? "forte" : risco >= 40 ? "alto" : risco >= 20 ? "atencao" : "calmo";
+    const escala = escalaDoPeriodo(dados.desde, dados.geradoEm);
+    const raias = faixasPorAparelho(bruto.sessoes, bruto.janelas, analise.episodios, dados.redes, escala, 8);
 
     // Mesmo rótulo (A, B, C…) para o mesmo aparelho no relatório inteiro.
     const rotulos = new Map<string, string>();
@@ -181,7 +187,10 @@ export default async function RelatorioDaContaPage({
                                     {conta.email} · {papeisDaConta(conta.papeis)} · conta {conta.ativa ? "ativa" : "SUSPENSA"}
                                 </p>
                             </div>
-                            <span className={`ac-nivel ${analise.nivel}`}>{NOME_DO_NIVEL[analise.nivel]}</span>
+                            <span className="ac-foco-quem">
+                                <span className={`ac-nivel ${analise.nivel}`}>{NOME_DO_NIVEL[analise.nivel]}</span>
+                                <span className={`ac-risco ${faixaDeRisco}`} aria-label={`Risco ${risco} de 100`}><b>{risco}</b></span>
+                            </span>
                         </div>
                         <p className="ac-resumo">{analise.resumo}</p>
                         <p className="ac-sub">
@@ -201,6 +210,18 @@ export default async function RelatorioDaContaPage({
                             <ImprimirRelatorio />
                         </div>
                         <AtualizacaoAutomatica geradoEm={dados.geradoEm.toISOString()} />
+                    </section>
+
+                    <section className="ac-card">
+                        <div className="ac-ranking-topo">
+                            <h2>Quem está onde</h2>
+                            <LegendaDoCalor />
+                        </div>
+                        <p className="ac-sub" style={{ marginTop: 6, marginBottom: 14 }}>
+                            Uma raia por aparelho, com a cidade (ou a rede) de onde ele mais usa. Vermelho na raia: aquele aparelho estava num
+                            uso simultâneo forte. Passe o mouse num trecho para ver a hora.
+                        </p>
+                        <RaiasPorAparelho faixas={raias} escala={escala} />
                     </section>
 
                     <section className="ac-card ac-nao-imprimir">
