@@ -576,6 +576,9 @@ function trimToNull(value: string) {
 }
 
 function translateAuthError(code?: string) {
+    if (code === "too_many_attempts") {
+        return "Muitas tentativas de login. Aguarde 15 minutos e tente de novo.";
+    }
     if (code === "invalid_credentials") {
         return "Email ou senha invalidos.";
     }

@@ -1,6 +1,6 @@
 import { createHmac, randomInt } from "node:crypto";
 import { hash } from "bcryptjs";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, doctorSignupEmailVerifications, doctors, userRoles, users } from "@/db/schema";
 import { getPasswordPolicyError } from "@/modules/auth/password-policy";
@@ -195,7 +195,7 @@ export async function completeDoctorSignup(
             // codinome + código no email valem como prova (decisão do coordenador).
             await tx
                 .update(users)
-                .set({ email, passwordHash, isActive: true, mustChangePassword: false, updatedAt: new Date() })
+                .set({ email, passwordHash, isActive: true, mustChangePassword: false, sessionVersion: sql`${users.sessionVersion} + 1`, updatedAt: new Date() })
                 .where(eq(users.id, account.id));
             userId = account.id;
         } else {
