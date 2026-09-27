@@ -9,6 +9,7 @@ import { sendContractBalanceCycle } from "@/modules/telegram/contract-balance-al
 import { sendTelegramPaymentDigestCycle } from "@/modules/telegram/payment-digest";
 import { sendTelegramReminderCycle } from "@/modules/telegram/reminders";
 import { sendSelfDeclaredExtraCycle } from "@/modules/telegram/self-declared-extra-alerts";
+import { sendVerificacaoPosViradaCycle } from "@/modules/telegram/verificacao-pos-virada-cycle";
 import { syncTelegramAdminCommandMenus } from "@/modules/telegram/admin-menu";
 import { expireResidenteOccupancies } from "@/modules/operational/residente-auto-close";
 
@@ -33,6 +34,7 @@ async function runCycle() {
             selfDeclaredExtra,
             checklistDigest,
             occurrenceHandoff,
+            verificacaoPosVirada,
         ] = await Promise.all([
             sendTelegramReminderCycle(referenceDate),
             sendTelegramMealBreakCycle(referenceDate),
@@ -49,13 +51,17 @@ async function runCycle() {
             sendChecklistDigestCycle(referenceDate),
             // Passagem de ocorrências no almoço/descanso: aviso, cobrança com @, divisão.
             sendOccurrenceHandoffCycle(referenceDate),
+            // Roteiro de docs/verificacao-saidas-continuidade.md após cada virada (flag VERIFICACAO_POS_VIRADA).
+            sendVerificacaoPosViradaCycle(referenceDate),
         ]);
         const evaluated = reminders.evaluated + mealBreak.evaluated + mealBreakNudges.evaluated
             + paymentDigest.evaluated + contractBalance.evaluated + bankHoursPending.evaluated
-            + selfDeclaredExtra.evaluated + checklistDigest.evaluated + occurrenceHandoff.evaluated;
+            + selfDeclaredExtra.evaluated + checklistDigest.evaluated + occurrenceHandoff.evaluated
+            + verificacaoPosVirada.evaluated;
         const sent = reminders.sent + mealBreak.sent + mealBreakNudges.sent
             + paymentDigest.sent + contractBalance.sent + bankHoursPending.sent
-            + selfDeclaredExtra.sent + checklistDigest.sent + occurrenceHandoff.sent;
+            + selfDeclaredExtra.sent + checklistDigest.sent + occurrenceHandoff.sent
+            + verificacaoPosVirada.sent;
         if (evaluated > 0 || sent > 0) {
             console.log(`[telegram-reminder-worker] evaluated=${evaluated} sent=${sent}`);
         }

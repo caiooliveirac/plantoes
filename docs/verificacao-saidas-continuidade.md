@@ -15,6 +15,14 @@ O que subiu (PRs [#235](https://github.com/caiooliveirac/plantoes/pull/235) e
 5. `/corrigir` deixou de reescrever o titular vivo e de contaminar a evidência da saída;
 6. card e modal abrem com `CHEGOU → SAIU`, com marca `+1d` quando atravessa o dia.
 
+> **Automatizado.** Os itens 1 a 6 (os que o banco responde) rodam sozinhos no
+> worker, uma hora depois de cada virada, sobre as 12h anteriores
+> (`services/verificacao-pos-virada.service.ts`). Com a flag
+> `VERIFICACAO_POS_VIRADA=on`, os admins recebem o resumo no privado **só quando
+> há achado**. À mão, sem enviar nada:
+> `DATABASE_URL="$PLANTOES_RO_URL" npm run verificacao:pos-virada -- [--horas 48] [--json]`.
+> Itens 0, 7 e 8 (deploy, logs, tela) continuam manuais.
+
 > **Quando rodar.** Depois de pelo menos uma virada (07:00 ou 19:00) com movimento
 > real. Antes disso não há o que medir — as regras só agem sobre mensagens novas.
 
