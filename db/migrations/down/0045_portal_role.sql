@@ -1,0 +1,11 @@
+-- Reversão de 0045_portal_role.sql.
+--
+-- O Postgres não remove valor de enum (seria recriar o tipo e reescrever
+-- user_roles). O valor 'portal' fica no tipo, inofensivo: o código anterior
+-- filtra papéis pela lista USER_ROLES e ignora o que não conhece.
+--
+-- O que se desfaz é a concessão: some o papel 'portal' de todas as contas. As
+-- contas criadas por /api/servicos/contas-portal continuam existindo, sem papel
+-- (verificar-escala passa a responder no_roles_assigned para elas). Apagar as
+-- contas é decisão humana — consulte audit_logs action 'portal_account.created'.
+delete from operations_v2.user_roles where role = 'portal';

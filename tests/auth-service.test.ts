@@ -57,6 +57,7 @@ before(async () => {
     users.semPapel = await insertUser("sem-papel", { roles: [] });
     users.primeiroAcesso = await insertUser("primeiro-acesso", { mustChangePassword: true });
     users.reset = await insertUser("reset");
+    users.soPortal = await insertUser("so-portal", { roles: ["portal"] });
 });
 
 after(async () => {
@@ -126,9 +127,21 @@ test("reset de senha: só para conta ativa, token de uso único", { skip }, asyn
     assert.equal((await getPasswordResetToken(token))?.userId, users.reset!.id);
 
     await assert.rejects(consumePasswordReset(token, "curta"), /pelo menos 10 caracteres/);
-    assert.deepEqual(await consumePasswordReset(token, "Resetada-123"), { ok: true });
+    // somentePortal: false — conta com papel do app; a tela manda para o login daqui.
+    assert.deepEqual(await consumePasswordReset(token, "Resetada-123"), { ok: true, somentePortal: false });
     assert.equal(await getPasswordResetToken(token), null);
     await assert.rejects(consumePasswordReset(token, "Outra-Senha-123"), /invalid or expired/);
 
     assert.equal((await authenticateWithPassword(users.reset!.email, "Resetada-123")).status, "success");
+});
+
+test("reset de senha: conta só com papel portal volta somentePortal (tela manda para mnrs.com.br)", { skip }, async () => {
+    const { created, token } = await createPasswordReset(users.soPortal!.email);
+    assert.equal(created, true);
+    assert.ok(token);
+    assert.equal((await getPasswordResetToken(token))?.somentePortal, true);
+    assert.deepEqual(await consumePasswordReset(token, "Resetada-123"), { ok: true, somentePortal: true });
+    // Senha nova vale no portal, não no app.
+    assert.equal((await authenticateWithPassword(users.soPortal!.email, "Resetada-123", { escopo: "portal" })).status, "success");
+    assert.deepEqual(await authenticateWithPassword(users.soPortal!.email, "Resetada-123"), { status: "no_roles_assigned" });
 });

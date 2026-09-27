@@ -19,7 +19,8 @@ export async function GET(_request: NextRequest, context: RouteContext<"/api/aut
         return NextResponse.json({ error: "invalid_token" }, { status: 404 });
     }
 
-    return NextResponse.json({ email: resetToken.email });
+    // somentePortal: conta só com o papel `portal` — a tela manda para o mnrs.com.br.
+    return NextResponse.json({ email: resetToken.email, somentePortal: Boolean(resetToken.somentePortal) });
 }
 
 export async function POST(request: NextRequest, context: RouteContext<"/api/auth/password-reset/[token]">) {
@@ -40,8 +41,8 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/aut
     const { token } = await context.params;
 
     try {
-        await consumePasswordReset(token, parsed.data.password);
-        return NextResponse.json({ ok: true });
+        const result = await consumePasswordReset(token, parsed.data.password);
+        return NextResponse.json({ ok: true, somentePortal: result.somentePortal });
     } catch (error) {
         return NextResponse.json(
             { error: error instanceof Error ? error.message : "Unable to reset password." },

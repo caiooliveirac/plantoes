@@ -222,9 +222,12 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em
   [services/auth.service.ts](services/auth.service.ts). Trata contas inativas, sem
   role atribuída, e o fluxo de `chiefAccessRequests` pendente/rejeitado.
-- **Papéis**: `admin`, `chief`, `doctor` e `payment_closing_limited` (enum
+- **Papéis**: `admin`, `chief`, `doctor`, `payment_closing_limited` e `portal` (enum
   `userRoleEnum`, tabela `userRoles`, many-to-many; lista em
-  [modules/auth/contracts.ts](modules/auth/contracts.ts)). Controle mais granular é
+  [modules/auth/contracts.ts](modules/auth/contracts.ts)). `portal` só vale no
+  `POST /api/auth/verificar-escala` (login do mnrs.com.br): no app, conta só com
+  ele é tratada como sem papel (`rolesDoPlantoes`/`temAcessoAoPlantoes`). Nasce
+  por `POST /api/servicos/contas-portal` (x-portal-token = `PORTAL_CONTAS_TOKEN`). Controle mais granular é
   feito por checagem manual em cada rota, não por um role dedicado.
 - **Controle de acesso**: **não há `middleware.ts`**. Cada Server Component/Route
   Handler chama `requireAuthenticatedSession(requiredRoles?)` explicitamente (ex.:
@@ -298,7 +301,8 @@ Sem ESLint/Prettier configurados no repo — a única verificação estática au
   `operations_v2`, ver connection string de exemplo em `.env.example`).
 - **CI de PR** ([.github/workflows/ci-pr.yml](.github/workflows/ci-pr.yml)), runner
   `ubuntu-latest` do GitHub com Postgres 16 de serviço: `npm ci` → `db:migrate`
-  (valida que as migrations aplicam limpas; os testes não tocam o banco) →
+  (valida que as migrations aplicam limpas; os testes não tocam o banco, exceto
+  `tests/contas-portal-db.test.ts`, que só roda com DATABASE_URL num banco `*_test`) →
   `npm run typecheck` → `npm run test:deploy` → meal-breaks isolado (bloqueante,
   `--experimental-test-isolation=none` no Node 22) → `npm run build`. Todos os
   passos são bloqueantes; ~2min no total.
