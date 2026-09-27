@@ -68,7 +68,10 @@ npm test         # suite de testes (não requer Telegram)
 ngrok http 3000
 
 # Registrar webhook:
-curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url=https://SEU-URL-NGROK/api/telegram/webhook"
+# (TELEGRAM_WEBHOOK_SECRET é obrigatório: sem ele o webhook responde 503)
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d url=https://SEU-URL-NGROK/api/telegram/webhook \
+  -d secret_token=$TELEGRAM_WEBHOOK_SECRET
 ```
 
 ---

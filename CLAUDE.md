@@ -239,8 +239,8 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   `TELEGRAM_ADMIN_IDS`/`TELEGRAM_CHIEF_IDS` no `.env`; acesso a pagamento usa
   codinome com HMAC (`doctorPaymentAccess`), não o ID do Telegram.
 - Webhook do bot ([app/api/telegram/webhook/route.ts](app/api/telegram/webhook/route.ts))
-  valida `x-telegram-bot-api-secret-token` contra `TELEGRAM_WEBHOOK_SECRET` (fallback
-  `AUTH_SECRET`).
+  valida `x-telegram-bot-api-secret-token` contra `TELEGRAM_WEBHOOK_SECRET` (tempo
+  constante; sem a variável responde 503 — nunca cai para `AUTH_SECRET`).
 
 ## Comandos (rodar no LOCAL)
 
