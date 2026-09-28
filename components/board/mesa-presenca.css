@@ -1,0 +1,48 @@
+/* Presença na Mesa (components/board/MesaPresenca.tsx). Tokens do globals.css. */
+
+.mp-aviso {
+    position: fixed;
+    left: 50%;
+    bottom: clamp(16px, 4vh, 32px);
+    transform: translateX(-50%);
+    z-index: 1000;
+    display: grid;
+    gap: 4px;
+    width: min(520px, calc(100vw - 32px));
+    padding: 14px 18px;
+    border-radius: 14px;
+    border: 1px solid var(--accent-warn-soft);
+    background: var(--surface-elevated);
+    box-shadow: var(--shadow-elevated);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.mp-aviso strong {
+    color: var(--accent-warn);
+    font-size: 15px;
+}
+
+.mp-espera {
+    color: var(--muted-strong);
+}
+
+.mp-espera strong {
+    color: var(--ice);
+}
+
+.mp-nota {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.mp-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ice);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}

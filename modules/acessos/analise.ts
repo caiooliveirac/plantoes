@@ -47,6 +47,11 @@ export const LIMITES = {
     falhasDeSenhaAtencao: 5,
     /** Mesma sessão em duas redes da mesma família ao mesmo tempo, em N janelas: cookie copiado? */
     janelasMesmaSessaoDuasRedes: 3,
+    /** Presença na Mesa (docs/presenca-mesa.md): a vez trocando de aparelho N vezes em 30 min = ping-pong. */
+    trocasDeAparelhoPingPong: 4,
+    janelaPingPongMs: 30 * 60_000,
+    /** Mesa negada a um aparelho com gente mexendo nos dois lados há no máximo isto. */
+    humanoSimultaneoSeg: 120,
 } as const;
 
 export type Nivel = "forte" | "atencao" | "normal";
@@ -1050,6 +1055,7 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
             evidencias: barrados.slice(-10).map((e) => `${quando(e.em)} — ${e.detalhes.sistema === "tabela" ? "Tabela" : "Mesa operacional"}.`),
         });
     }
+    achados.push(...achadosDaPresenca(eventos));
     const acoesDoAdmin = eventos.filter((e) => e.tipo.startsWith("admin_") || e.tipo.startsWith("auto_"));
     if (acoesDoAdmin.length > 0) {
         achados.push({
@@ -1100,4 +1106,53 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
             ? { turnos: turnos.length, agora: plantaoEm(turnos, agora, 0), minutosNaRedeForaDoTurno }
             : null,
     };
+}
+
+/* Presença na Mesa (docs/presenca-mesa.md). Duas pessoas na mesma conta
+   aparecem de dois jeitos: disputando a vez com gente mexendo nos dois
+   aparelhos (simultâneo), ou revezando — a vez indo e voltando entre aparelhos
+   em minutos (ping-pong). Um único revezamento é normal (PC → celular). */
+export function achadosDaPresenca(eventos: readonly EventoDeSessao[]): Achado[] {
+    const achados: Achado[] = [];
+    const negadas = eventos.filter((e) => e.tipo === "mesa_ocupada_negada" || e.tipo === "mesa_ocupada_negada_sombra");
+    const segundos = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const simultaneas = negadas.filter((e) => {
+        const aqui = segundos(e.detalhes.humanoAqui);
+        const la = segundos(e.detalhes.humanoLa);
+        return aqui !== null && la !== null && aqui <= LIMITES.humanoSimultaneoSeg && la <= LIMITES.humanoSimultaneoSeg;
+    });
+    if (simultaneas.length > 0) {
+        achados.push({
+            nivel: "forte",
+            titulo: "Mesa aberta em dois aparelhos com gente mexendo nos dois",
+            texto: `${plural(simultaneas.length, "vez", "vezes")} um aparelho tentou abrir a Mesa enquanto outro estava com ela, `
+                + `e havia toque, clique ou rolagem nos dois nos ${LIMITES.humanoSimultaneoSeg / 60} minutos anteriores. Uma pessoa não opera duas telas ao mesmo tempo.`,
+            evidencias: simultaneas.slice(-10).map((e) => `${quando(e.em)} — mexeram aqui há ${String(e.detalhes.humanoAqui)} s e no outro aparelho há ${String(e.detalhes.humanoLa)} s.`),
+        });
+    } else if (negadas.length >= 2) {
+        achados.push({
+            nivel: "atencao",
+            titulo: "Mesa disputada entre aparelhos",
+            texto: `${negadas.length} tentativas de abrir a Mesa com ela aberta em outro aparelho (registro de 10 em 10 minutos). Pode ser o próprio dono no PC e no celular.`,
+            evidencias: negadas.slice(-10).map((e) => `${quando(e.em)}${e.tipo.endsWith("_sombra") ? " (sombra: não bloqueou)" : ""}.`),
+        });
+    }
+
+    const trocas = eventos.filter((e) => e.tipo === "mesa_troca_de_aparelho").map((e) => e.em.getTime()).sort((a, b) => a - b);
+    let maiorSequencia = 0;
+    let inicio = 0;
+    for (let fim = 0; fim < trocas.length; fim += 1) {
+        while (trocas[fim] - trocas[inicio] > LIMITES.janelaPingPongMs) inicio += 1;
+        maiorSequencia = Math.max(maiorSequencia, fim - inicio + 1);
+    }
+    if (maiorSequencia >= LIMITES.trocasDeAparelhoPingPong) {
+        achados.push({
+            nivel: "atencao",
+            titulo: "A Mesa revezando entre aparelhos",
+            texto: `A Mesa trocou de aparelho ${maiorSequencia} vezes em ${LIMITES.janelaPingPongMs / 60_000} minutos. `
+                + "Revezar a tela entre dois aparelhos a cada poucos minutos é o jeito de dividir a conta sem abrir as duas juntas.",
+            evidencias: [],
+        });
+    }
+    return achados;
 }

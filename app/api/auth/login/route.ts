@@ -5,7 +5,7 @@ import { lerContextoRequisicao } from "@/lib/acessos/contexto";
 import { depoisDaResposta } from "@/lib/acessos/depois";
 import { authenticateWithPassword } from "@/services/auth.service";
 import { registrarTentativaDeSenha } from "@/services/acessos.service";
-import { writeSessionCookie } from "@/lib/auth/server";
+import { senhaDigitadaNesteAparelho, writeSessionCookie } from "@/lib/auth/server";
 import {
     LOGIN_RATE_LIMIT_MESSAGE,
     clearLoginFailures,
@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
 
     clearLoginFailures(parsed.data.email);
     const expiresAt = await writeSessionCookie(result.user.id, { origem: "login" });
+    await senhaDigitadaNesteAparelho(result.user.id, result.user.roles);
     return NextResponse.json({
         session: {
             user: result.user,

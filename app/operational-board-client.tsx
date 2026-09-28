@@ -1545,10 +1545,21 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 void refreshIfBoardChanged();
             });
 
-            // O servidor reconfere sessão e portão com o stream aberto (fim do
-            // turno, sessão encerrada): recarregar deixa a página decidir.
+            // O servidor reconfere sessão, portão e presença com o stream aberto
+            // (fim do turno, sessão encerrada, outro aparelho com a vez):
+            // recarregar deixa a página decidir. Aba escondida espera voltar à
+            // vista — recarregar escondida pegaria a vez de quem está usando.
             eventSource.addEventListener("acesso-encerrado", () => {
-                window.location.reload();
+                if (document.visibilityState === "visible") {
+                    window.location.reload();
+                    return;
+                }
+                const aoVoltar = () => {
+                    if (document.visibilityState !== "visible") return;
+                    document.removeEventListener("visibilitychange", aoVoltar);
+                    window.location.reload();
+                };
+                document.addEventListener("visibilitychange", aoVoltar);
             });
 
             eventSource.onerror = () => {

@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { hasDatabaseUrl } from "@/db";
-import { mesaLiberadaPara, readAuthenticatedSession } from "@/lib/auth/server";
+import { mesaLiberadaPara, presencaDaPagina, readAuthenticatedSession } from "@/lib/auth/server";
+import { MesaPresenca } from "@/components/board/MesaPresenca";
+import { limiteOciosoSeg } from "@/modules/acessos/presenca";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
 import { getPreviousOperationalBoard, listPendingDepartureConfirmations } from "@/services/board.service";
 import { PreviousShiftGanttPage } from "@/app/historico/turno-anterior/client";
@@ -25,6 +27,19 @@ export default async function HistoricoTurnoAnteriorPage({
         redirect("/");
     }
 
+    // Mesma presença da Mesa: é o mesmo dado, pelo mesmo aparelho (docs/presenca-mesa.md).
+    const presenca = await presencaDaPagina(session!);
+    const propsPresenca = {
+        estadoInicial: presenca.estado,
+        modo: "modo" in presenca ? presenca.modo : null,
+        limiteOciosoSeg: limiteOciosoSeg(),
+        tenteEmSeg: "tenteEmSeg" in presenca ? presenca.tenteEmSeg : undefined,
+        email: session!.user.email,
+    };
+    if (presenca.estado === "ocupada" || presenca.estado === "bloqueada") {
+        return <MesaPresenca {...propsPresenca} />;
+    }
+
     const params = searchParams ? await searchParams : undefined;
     const wantsBack = params?.back === "1";
 
@@ -41,9 +56,11 @@ export default async function HistoricoTurnoAnteriorPage({
     ]);
 
     return (
-        <PreviousShiftGanttPage
-            board={board}
-            pending={pending}
-        />
+        <MesaPresenca {...propsPresenca}>
+            <PreviousShiftGanttPage
+                board={board}
+                pending={pending}
+            />
+        </MesaPresenca>
     );
 }
