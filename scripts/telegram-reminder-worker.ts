@@ -61,7 +61,7 @@ async function runCycle() {
             sendOccurrenceHandoffCycle(referenceDate),
             // Roteiro de docs/verificacao-saidas-continuidade.md após cada virada (flag VERIFICACAO_POS_VIRADA).
             sendVerificacaoPosViradaCycle(referenceDate),
-            // Monitor de acessos: alerta forte na hora + resumo 8h (flag ACESSOS_ALERTAS_ENABLED) e poda de 180 dias.
+            // Monitor de acessos: risco alto derruba (e se insistir, troca a senha); alerta no Telegram (ACESSOS_ALERTAS_ENABLED); poda de 180 dias.
             sendAcessosCycle(referenceDate),
             // Aviso no privado do regulador às 07:00/19:00: turno acabou, avise a saída (flag TELEGRAM_AVISO_FIM_TURNO).
             sendAvisoFimTurnoCycle(referenceDate),
