@@ -29,6 +29,16 @@ function Indisponivel({ titulo, texto }: { titulo: string; texto: string }) {
 
 const plural = (n: number, um: string, varios: string) => `${n} ${n === 1 ? um : varios}`;
 
+/** 42P01 relação ausente, 42703 coluna ausente — o texto genérico de migration só nesse caso. */
+function erroDeMigration(error: unknown, profundidade = 0): boolean {
+    if (!error || profundidade > 3) return false;
+    if (typeof error !== "object") return false;
+    const atual = error as { code?: unknown; message?: unknown; cause?: unknown };
+    const texto = `${typeof atual.code === "string" ? atual.code : ""} ${typeof atual.message === "string" ? atual.message : ""}`;
+    if (/42P01|42703|does not exist/.test(texto)) return true;
+    return erroDeMigration(atual.cause, profundidade + 1);
+}
+
 export default async function MonitorDeAcessosPage({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
     if (!hasDatabaseUrl()) {
         return <Indisponivel titulo="Banco indisponível" texto="Sem DATABASE_URL não há registro de acessos para mostrar." />;
@@ -50,19 +60,22 @@ export default async function MonitorDeAcessosPage({ searchParams }: { searchPar
     const params = searchParams ? await searchParams : undefined;
     const periodo = lerPeriodo(params?.periodo);
     let dados;
+    let painel;
     try {
         dados = await carregarMonitor({ desde: new Date(Date.now() - PERIODOS[periodo].ms) });
+        painel = montarPainel({ ...dados, ate: dados.geradoEm, plantoes: dados.plantoes });
     } catch (error) {
         console.error("[acessos] monitor indisponível", error);
+        const faltouTabela = erroDeMigration(error);
         return (
             <Indisponivel
                 titulo="Registro de acessos indisponível"
-                texto="As tabelas do monitor ainda não existem neste banco (migration 0046_monitor_acessos) ou o banco falhou. Nada foi perdido: aplique a migration e recarregue."
+                texto={faltouTabela
+                    ? "As tabelas do monitor ainda não existem neste banco (migration 0046_monitor_acessos) ou o banco falhou. Nada foi perdido: aplique a migration e recarregue."
+                    : "O monitor falhou ao montar o registro. O erro ficou no log do servidor. Recarregue; se continuar, é defeito de código, não de migration."}
             />
         );
     }
-
-    const painel = montarPainel({ ...dados, ate: dados.geradoEm, plantoes: dados.plantoes });
     const operadores = await listarOperadoresDaCentral().catch(() => []);
     const fortes = painel.contas.filter((c) => c.nivel === "forte").length;
     const atencao = painel.contas.filter((c) => c.nivel === "atencao").length;

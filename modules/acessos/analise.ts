@@ -1076,10 +1076,15 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
 
     const redesDePessoas = resumoLugares.length;
     let resumo: string;
-    if (nivel === "forte") {
-        const maior = fortes[0];
+    const maior = fortes[0];
+    if (maior) {
         resumo = `Forte indício de senha compartilhada: ${plural(fortes.length, "vez", "vezes")} a conta foi usada em lugares diferentes ao mesmo tempo, `
             + `com gente mexendo nos dois aparelhos. A maior durou ${duracao(maior.duracaoMs)} (${intervalo(maior.inicio, maior.fim)}).`;
+    } else if (nivel === "forte") {
+        // Presença na Mesa (achadosDaPresenca) marca forte sem episódio de redes.
+        // Sem este ramo, fortes[0] é undefined e /admin/acessos cai inteiro.
+        const titulo = achados.find((a) => a.nivel === "forte")?.titulo.toLowerCase() ?? "uso simultâneo na Mesa";
+        resumo = `Forte indício de senha compartilhada: ${titulo}.`;
     } else if (nivel === "atencao") {
         resumo = `Pontos de atenção: ${lista(achados.filter((a) => a.nivel === "atencao").map((a) => a.titulo.toLowerCase()))}.`;
     } else {
