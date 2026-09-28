@@ -68,6 +68,7 @@ for (const rota of ["app/api/board", "app/api/regulation", "app/api/intervention
     test(`portão: ${rota} usa requireMesaSession`, () => {
         const fonte = readFileSync(rota, "utf8");
         assert.doesNotMatch(fonte, /\b(requireAuthenticatedSession|requireSessionForRead|readAuthenticatedSession)\s*\(/, "rota da Mesa sem portão de turno");
-        assert.match(fonte, /\brequireMesaSession(ForRead)?\s*\(/);
+        // abrirVigiaDaMesa (SSE) chama requireMesaSessionForRead e reconfere depois.
+        assert.match(fonte, /\b(requireMesaSession(ForRead)?|abrirVigiaDaMesa)\s*\(/);
     });
 }
