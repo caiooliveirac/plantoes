@@ -19,8 +19,10 @@
    o mesmo texto.)
    - trabalho: só dentro do turno.
 
-   Rede "coletiva fora do plantão" = 2+ contas usando fora do turno, fora da
-   Central. É o desenho de um lugar onde logins emprestados são usados.
+   Rede "coletiva fora do plantão" = 3+ contas usando fora do turno, fora da
+   Central. É o desenho de um lugar onde logins emprestados são usados. Com 2
+   é casa de casal de médicos ou um celular com duas contas: aparece no painel,
+   não vira aviso.
    ========================================================================== */
 import { JANELA_MS, PLANTONISTAS_REDE_DO_PLANTAO } from "@/modules/acessos/analise";
 import { faixaDeRede } from "@/modules/acessos/rede";
@@ -114,6 +116,10 @@ const MIN_POR_JANELA = JANELA_MS / 60_000;
 export const VAZOU_COM_CENTRAL = 2;
 /** Mínimo de janelas simultâneas com outra rede para "suspeita". */
 export const SUSPEITA_OUTRA_REDE = 3;
+/** Contas fora do turno para a rede ser "coletiva fora do plantão". */
+export const CONTAS_REDE_COLETIVA_FORA = 3;
+/** Plantonistas no PC para a faixa não reconhecida virar "possível Central" (o COI na SSP tinha 2). */
+export const PLANTONISTAS_POSSIVEL_CENTRAL = 2;
 
 function horaNaBahia(data: Date) {
     return (data.getUTCHours() + 21) % 24; // America/Bahia = UTC−3, sem horário de verão
@@ -263,7 +269,7 @@ export function analisarRedes(entrada: EntradaDeRedes): RedeAnalisada[] {
         const contasFora = contas.filter((c) => c.minutosFora > 0 || c.barrados > 0).length;
         const minutosFora = contas.reduce((t, c) => t + c.minutosFora, 0);
         const vazamentos = contas.filter((c) => c.veredito === "vazou").length;
-        const coletivaFora = central === null && contasFora >= 2;
+        const coletivaFora = central === null && contasFora >= CONTAS_REDE_COLETIVA_FORA;
         redes.push({
             faixa,
             ips: [...a.ips].sort(),
