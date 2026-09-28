@@ -680,6 +680,20 @@ test("painel: banda de plantão e raia do plantão", async () => {
     assert.equal(raiaDoPlantao([turno(30, 70), turno(90, 100, "Intervenção BR60")], escala)?.rotulo, "Regulação 1363 · Intervenção BR60");
 });
 
+test("análise: Mesa disputada com gente nos dois aparelhos é forte mesmo sem episódio de redes", () => {
+    const analise = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("a", UA.windows, "200.1.1.1")],
+        janelas: presenca("a", "200.1.1.1", 0, 20, "uso"),
+        eventos: [evento("mesa_ocupada_negada", min(10), { detalhes: { humanoAqui: 30, humanoLa: 40 } })],
+        redes: redes([]),
+        agora: min(30),
+    });
+    assert.equal(analise.nivel, "forte");
+    assert.equal(analise.episodios.filter((e) => e.forca === "forte").length, 0);
+    assert.match(analise.resumo, /mesa aberta em dois aparelhos/i);
+});
+
 test("plantão: aba parada na rede do plantão fora do turno (sem toque) não vira achado", () => {
     const analise = analisarConta({
         conta: conta(),
