@@ -102,9 +102,18 @@ diferença.
   `ended_at`, senão aberta (no máximo 24 h — ocupação esquecida aberta não deixa
   ninguém de plantão para sempre). Tolerância de 30 min antes e depois. Conta sem médico
   vinculado não tem turno para comparar e segue a regra geral.
-- **Rede do plantão** = rede onde **2 ou mais plantonistas** diferentes usaram a
-  Mesa *dentro do próprio turno* (Central, base com dupla). Uma rede só vira
-  rede do plantão pelo comportamento de quem trabalha — nada é cadastrado à mão.
+- **Rede do plantão** = faixa de endereços (**/24** no IPv4, /64 no IPv6) onde
+  **3 ou mais plantonistas** diferentes usaram a Mesa **num computador** *dentro
+  do próprio turno*. Nada é cadastrado à mão: a faixa vira rede do plantão pelo
+  comportamento de quem trabalha.
+  - Por que faixa e não IP: a Central sai para a internet por um **pool de IPs**
+    da mesma /24 — cada PC aparece com um IP diferente (medido em 27/09/2026: 9
+    IPs, 8 contas, 5 plantonistas numa só /24). Por IP exato ninguém dividiria
+    rede com ninguém.
+  - Por que só computador: faixa de operadora 4G junta desconhecidos; dois
+    plantonistas no celular na mesma /24 da Vivo não fazem dela a Central.
+    Depois de formada, a faixa vale para qualquer aparelho (celular no Wi-Fi da
+    Central também está na rede do plantão).
 
 | Situação no meio do episódio | Resultado |
 |---|---|
@@ -112,7 +121,8 @@ diferença.
 | De plantão na rede do plantão + **computador em uso fora dela** | **forte** — alguém usa o login enquanto o dono trabalha; não é o celular dele |
 | De plantão na rede do plantão + só **celular/tablet** fora | desce um nível — pode ser o celular do próprio plantonista, no 4G |
 | De plantão, nenhum aparelho em rede do plantão | regra geral, com ressalva |
-| Fora do turno | regra geral |
+| Fora do turno, **todos** os aparelhos na rede do plantão | é o mesmo lugar (IPs do pool): chefia/admin **fraco**; os demais descem um nível |
+| Fora do turno, algum aparelho fora | regra geral |
 
 Também muda: "Muitos aparelhos" não conta os PCs usados só na rede do plantão
 durante o turno; sobreposições curtas repetidas só pesam fora do turno; e o
@@ -222,9 +232,11 @@ Central é uso simultâneo em redes diferentes.
   `cf-connecting-ip` (o nginx não restringe às faixas do Cloudflare).
 - A Central com mais de um IP de saída aparece como duas redes coletivas — o
   episódio é rebaixado e a ressalva diz isso.
-- Rede do plantão depende de haver 2+ plantonistas com conta vinculada ao médico
-  usando a Mesa na mesma rede durante o turno. Base com um médico só, ou médico
-  sem conta vinculada, não forma rede do plantão — o episódio segue a regra geral.
+- Rede do plantão depende de 3+ plantonistas com conta vinculada ao médico
+  usando a Mesa num PC na mesma faixa durante o turno. Base de ambulância (médico
+  no celular) não forma rede do plantão — o episódio segue a regra geral.
+- A faixa /24 pode incluir vizinhos do mesmo provedor da Central; o risco é
+  pequeno porque só pesa junto com o turno do dono.
 - Turno vem do quadro: plantão registrado com atraso (chegada tardia) ou saída
   sem registro distorcem a janela; a folga de 30 min absorve o comum.
 

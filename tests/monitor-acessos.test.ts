@@ -575,18 +575,44 @@ test("plantão: dono na Central e um COMPUTADOR em uso em outra rede ao mesmo te
     assert.ok(celular.episodios[0].ressalvas.some((r) => /pode ser o do próprio plantonista/.test(r)));
 });
 
-test("plantão: fora do turno, dois lugares ao mesmo tempo seguem a regra normal", () => {
+test("plantão: fora do turno, Central + computador de casa ao mesmo tempo segue a regra normal", () => {
     const analise = analisarConta({
         conta: conta(),
-        sessoes: [sessao("pc1", UA.windows, CENTRAL), sessao("pc2", UA.windowsEdge, "200.1.1.9")],
-        janelas: [...presenca("pc1", CENTRAL, 0, 60, "uso"), ...presenca("pc2", "200.1.1.9", 0, 60, "uso")],
+        sessoes: [sessao("pc1", UA.windows, CENTRAL), sessao("casa", UA.windowsEdge, "177.2.2.2")],
+        janelas: [...presenca("pc1", CENTRAL, 0, 60, "uso"), ...presenca("casa", "177.2.2.2", 0, 60, "uso")],
         eventos: [],
-        redes: redesComCentral([["200.1.1.9", { geo: SALVADOR, contas: 14, plantonistas: 6 }]]),
+        redes: redesComCentral([["177.2.2.2", { geo: FEIRA }]]),
         agora: min(70),
         plantoes: [turno(-1440, -720)],
     });
+    assert.equal(analise.episodios[0].forca, "forte");
     assert.equal(analise.episodios[0].plantao, null);
     assert.equal(analise.plantao?.agora, null);
+});
+
+test("plantão: dois IPs do pool da Central fora do turno são o mesmo lugar (chefia: fraco; médico: desce um nível)", () => {
+    const entrada = {
+        sessoes: [sessao("pc1", UA.windows, CENTRAL), sessao("pc2", UA.windowsEdge, "200.1.1.9")],
+        janelas: [...presenca("pc1", CENTRAL, 0, 60, "uso"), ...presenca("pc2", "200.1.1.9", 0, 60, "uso")],
+        eventos: [],
+        redes: redesComCentral([["200.1.1.9", { geo: SALVADOR, contas: 2, plantonistas: 9 }]]),
+        agora: min(70),
+    };
+    const chefe = analisarConta({ ...entrada, conta: conta({ papeis: ["chief"] }) });
+    assert.equal(chefe.episodios[0].forca, "fraco");
+    assert.match(chefe.episodios[0].motivos[0], /Chefia\/coordenação.*mesmo lugar/);
+    assert.equal(chefe.nivel, "normal");
+    const medico = analisarConta({ ...entrada, conta: conta(), plantoes: [turno(-1440, -720)] });
+    assert.equal(medico.episodios[0].forca, "moderado", "forte (2 PCs em uso) desce um nível");
+    assert.ok(medico.episodios[0].ressalvas.some((r) => /fora do turno do dono/.test(r)));
+});
+
+test("rede: faixa /24 junta o pool de IPs da Central; IPv6 fica no /64", async () => {
+    const { faixaDeRede } = await import("@/modules/acessos/rede");
+    assert.equal(faixaDeRede("200.1.1.9"), "200.1.1.0/24");
+    assert.equal(faixaDeRede("200.1.1.200"), faixaDeRede("200.1.1.9"));
+    assert.equal(faixaDeRede("2804:14c:65:1:aaaa::5"), "2804:14c:65:1::/64");
+    assert.equal(faixaDeRede("2804:14c:65:1::/64"), "2804:14c:65:1::/64");
 });
 
 test("plantão: conta na rede do plantão fora do turno do dono vira atenção (mas não para a chefia)", () => {

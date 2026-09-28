@@ -31,6 +31,7 @@ const IP_CENTRAL = "192.0.2.10";
 const IP_CASA = "198.51.100.20";
 const IP_TERCEIRO = "203.0.113.30";
 const WINDOWS = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+const ANDROID_DB = "Mozilla/5.0 (Linux; Android 13; SM-A536E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36";
 const EDGE = `${WINDOWS} Edg/128.0.0.0`;
 
 async function modulos() {
@@ -230,7 +231,7 @@ test("monitor (banco): o porteiro confere o login do portal — vale, senha troc
     assert.ok(recusas.length >= 2, "cada recusa fica na linha do tempo da conta");
 });
 
-test("monitor (banco): turnos das ocupações e rede do plantão (2+ plantonistas trabalhando nela)", { skip }, async () => {
+test("monitor (banco): turnos das ocupações e rede do plantão (faixa /24 com 3+ plantonistas no PC)", { skip }, async () => {
     const { getDb, schema, gravacao, relatorio } = await modulos();
     gravacao.limparMemoriaDoMonitor();
     const db = getDb();
@@ -239,7 +240,9 @@ test("monitor (banco): turnos das ocupações e rede do plantão (2+ plantonista
     const medicos: string[] = [];
     const contas: Array<{ id: string; email: string }> = [];
     try {
-        for (let i = 0; i < 2; i += 1) {
+        // Três no PC, cada um saindo por um IP do pool da Central (mesma /24), e um
+        // quarto no celular — celular não forma rede do plantão.
+        for (let i = 0; i < 4; i += 1) {
             const [medico] = await db.insert(schema.doctors).values({ fullName: `Medico Teste ${marca} ${i}`, normalizedName: `medico teste ${marca.toLowerCase()} ${i}` }).returning({ id: schema.doctors.id });
             medicos.push(medico.id);
             const conta = await criarConta("doctor");
@@ -253,14 +256,14 @@ test("monitor (banco): turnos das ocupações e rede do plantão (2+ plantonista
                 ramalLabel: `13${i}${i}`,
                 source: "manual",
             });
-            // Os dois trabalhando na mesma rede durante o turno: é a rede do plantão.
             const sessaoId = randomUUID();
+            const contexto = i < 3 ? ctx(`192.0.2.${20 + i}`, WINDOWS) : ctx("192.0.2.23", ANDROID_DB);
             for (let minuto = 0; minuto < 20; minuto += 5) {
-                await gravacao.registrarAcesso({ sessaoId, userId: conta.id, versao: 0, contexto: ctx(IP_CENTRAL, WINDOWS), agora: new Date(Date.now() - (60 - minuto) * 60_000) });
+                await gravacao.registrarAcesso({ sessaoId, userId: conta.id, versao: 0, contexto, agora: new Date(Date.now() - (60 - minuto) * 60_000) });
             }
         }
         const dados = await relatorio.carregarMonitor({ desde: new Date(Date.now() - 6 * 3_600_000), userId: contas[0].id });
-        assert.equal(dados.redes.get(IP_CENTRAL)?.plantonistas, 2, "rede com 2 plantonistas no turno");
+        assert.equal(dados.redes.get("192.0.2.20")?.plantonistas, 3, "3 plantonistas no PC na faixa; o do celular não conta");
         const analise = dados.analises.find((a) => a.conta.userId === contas[0].id)!;
         assert.equal(analise.plantao?.turnos, 1);
         assert.equal(analise.plantao?.agora?.rotulo, "Regulação 1300", "turno aberto (sem saída) = de plantão agora");

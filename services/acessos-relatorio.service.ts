@@ -27,7 +27,8 @@ import {
     type Plantao,
     type SessaoMonitorada,
 } from "@/modules/acessos/analise";
-import { chaveDeRede, provedorPorDnsReverso } from "@/modules/acessos/rede";
+import { descreverAparelho } from "@/modules/acessos/aparelho";
+import { chaveDeRede, faixaDeRede, provedorPorDnsReverso } from "@/modules/acessos/rede";
 
 export const PERIODOS = {
     "24h": { rotulo: "últimas 24 horas", ms: 24 * 3_600_000 },
@@ -58,8 +59,9 @@ const comoObjeto = (valor: unknown): Record<string, unknown> => (valor && typeof
 /* Turnos no período (ocupações de regulação e intervenção, inclusive sombra):
    da chegada (started_at) à saída real, ou à prevista; sem nenhuma das duas,
    no máximo 24 h — ocupação esquecida aberta não deixa ninguém "de plantão"
-   para sempre. E, por rede, quantos plantonistas diferentes foram vistos nela
-   durante o próprio turno — 2+ é a "rede do plantão" (Central, base com dupla). */
+   para sempre. E, por faixa (/24), quantos plantonistas diferentes usaram a
+   Mesa num computador durante o próprio turno — 3+ é a "rede do plantão" (a
+   Central sai por um pool de IPs da mesma /24; cada PC aparece com um IP). */
 async function carregarPlantoes(desde: Date, ate: Date) {
     const db = getDb();
     const de = desde.toISOString();
@@ -107,17 +109,19 @@ async function carregarPlantoes(desde: Date, ate: Date) {
             ) o
             join ${users} u on u.doctor_id = o.doctor_id
         )
-        select distinct a.ip, a.user_id
+        select distinct a.ip, a.user_id, s.created_user_agent as user_agent
         from ${authSessionActivity} a
+        join ${authSessions} s on s.id = a.session_id
         join turnos t on t.user_id = a.user_id and a.window_start between t.ini and t.fim
         where a.window_start >= ${de}::timestamptz and a.window_start <= ${ateIso}::timestamptz
-    `) as unknown as Array<{ ip: string; user_id: string }>;
-    const plantonistasPorRede = new Map<string, Set<string>>();
+    `) as unknown as Array<{ ip: string; user_id: string; user_agent: string | null }>;
+    const porFaixa = new Map<string, Set<string>>();
     for (const par of pares) {
-        const chave = chaveDeRede(par.ip);
-        plantonistasPorRede.set(chave, (plantonistasPorRede.get(chave) ?? new Set()).add(par.user_id));
+        if (descreverAparelho(par.user_agent).tipo !== "computador") continue;
+        const faixa = faixaDeRede(par.ip);
+        porFaixa.set(faixa, (porFaixa.get(faixa) ?? new Set()).add(par.user_id));
     }
-    return { porConta, plantonistasPorRede: new Map([...plantonistasPorRede].map(([chave, set]) => [chave, set.size])) };
+    return { porConta, plantonistasPorFaixa: new Map([...porFaixa].map(([faixa, contas]) => [faixa, contas.size])) };
 }
 
 async function carregarRedes(ips: Set<string>, desde: Date, ate: Date): Promise<Map<string, InfoDeRede>> {
@@ -214,11 +218,7 @@ export async function carregarMonitor(opcoes: { desde: Date; ate?: Date; userId?
         ...linhasEventos.map((e) => e.ip).filter((ip): ip is string => Boolean(ip)),
     ]);
     const [redes, plantoes] = await Promise.all([carregarRedes(ips, desde, ate), carregarPlantoes(desde, ate)]);
-    for (const [chave, plantonistas] of plantoes.plantonistasPorRede) {
-        const info = redes.get(chave);
-        if (info) info.plantonistas = plantonistas;
-        else redes.set(chave, { geo: {}, provedor: null, contas: plantonistas, plantonistas });
-    }
+    for (const [chave, info] of redes) info.plantonistas = plantoes.plantonistasPorFaixa.get(faixaDeRede(chave)) ?? 0;
 
     const papeisPorConta = new Map<string, string[]>();
     for (const papel of papeis) papeisPorConta.set(papel.userId, [...(papeisPorConta.get(papel.userId) ?? []), papel.role]);

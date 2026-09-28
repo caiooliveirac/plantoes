@@ -265,7 +265,7 @@ export function PainelDeAcessos({ painel, periodo }: { painel: Painel; periodo: 
                                     </span>
                                     <span className="ac-lugares-tags">
                                         {lugar.detalhe ? <span>{lugar.detalhe}</span> : null}
-                                        {lugar.plantonistas >= 2 ? <span className="plantao">rede do plantão · {lugar.plantonistas} plantonistas</span> : lugar.coletiva ? <span>rede coletiva</span> : null}
+                                        {lugar.plantao ? <span className="plantao">rede do plantão · {lugar.plantonistas} plantonistas</span> : lugar.coletiva ? <span>rede coletiva</span> : null}
                                         {lugar.servidor ? <span className="alerta">servidor/VPN</span> : null}
                                         {lugar.estrangeiro ? <span className="alerta">fora do Brasil</span> : null}
                                         {lugar.contasComSinal ? <span className="sinal">{plural(lugar.contasComSinal, "conta com sinal", "contas com sinal")}</span> : null}
