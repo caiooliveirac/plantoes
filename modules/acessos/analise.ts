@@ -194,7 +194,7 @@ export interface ResumoLugar {
     provedor: string | null;
     servidor: boolean;
     coletiva: boolean;
-    /** Rede do plantão: 2+ plantonistas vistos nela durante o próprio turno. */
+    /** Na rede do plantão (faixa onde os plantonistas trabalham, ver redeDoPlantao). */
     plantao: boolean;
     plantonistas: number;
     contas: number;
@@ -260,8 +260,10 @@ export function redeColetiva(info: InfoDeRede) {
     return info.contas >= CONTAS_REDE_COLETIVA;
 }
 
-/** Rede do plantão: 2+ plantonistas diferentes trabalhando nela durante o turno (Central, base com dupla). */
-export const PLANTONISTAS_REDE_DO_PLANTAO = 2;
+/** Rede do plantão: faixa (/24) onde 3+ plantonistas diferentes usaram a Mesa num
+    computador durante o próprio turno — a Central, que sai por vários IPs.
+    Celular não conta para formar a rede: faixa de operadora 4G junta estranhos. */
+export const PLANTONISTAS_REDE_DO_PLANTAO = 3;
 export function redeDoPlantao(info: InfoDeRede) {
     return (info.plantonistas ?? 0) >= PLANTONISTAS_REDE_DO_PLANTAO;
 }
@@ -280,7 +282,7 @@ export function descreverRede(chave: string, info: InfoDeRede = SEM_REDE) {
     const partes = [descreverLocal(info.geo), info.provedor?.nome].filter(Boolean);
     const detalhe = partes.length ? ` (${partes.join(" · ")})` : "";
     const coletiva = redeDoPlantao(info)
-        ? `, rede do plantão (${info.plantonistas} plantonistas trabalhando nela)`
+        ? `, rede do plantão (faixa onde ${info.plantonistas} plantonistas trabalharam)`
         : redeColetiva(info) ? `, usada por ${info.contas} contas (rede coletiva)` : "";
     return `rede ${chave}${detalhe}${coletiva}`;
 }
@@ -578,14 +580,39 @@ export function detectarEpisodios(
    - de plantão e todos os aparelhos na rede do plantão → fraco (uso de trabalho);
    - de plantão na rede do plantão e a conta em uso num COMPUTADOR fora dela →
      forte (alguém usando o login enquanto o dono trabalha);
-   - de plantão e o aparelho de fora é celular → desce um nível (pode ser o dele, no 4G). */
-export function aplicarPlantao(episodio: EpisodioSimultaneo, plantoes: Plantao[] | undefined, redes: Map<string, InfoDeRede>): EpisodioSimultaneo {
-    if (!plantoes?.length) return episodio;
-    const meio = new Date((episodio.inicio.getTime() + episodio.fim.getTime()) / 2);
-    const plantao = plantaoEm(plantoes, meio) ?? plantaoEm(plantoes, episodio.inicio) ?? plantaoEm(plantoes, episodio.fim);
-    if (!plantao) return episodio;
+   - de plantão e o aparelho de fora é celular → desce um nível (pode ser o dele, no 4G).
+   Fora do turno, todos os aparelhos na rede do plantão = o mesmo lugar (a Central
+   sai por vários IPs): chefia/coordenação trabalha lá → fraco; os demais descem
+   um nível e o achado "Na rede do plantão fora do turno do dono" fala por eles. */
+export function aplicarPlantao(
+    episodio: EpisodioSimultaneo,
+    plantoes: Plantao[] | undefined,
+    redes: Map<string, InfoDeRede>,
+    gestao = false,
+): EpisodioSimultaneo {
     const naRede = episodio.lados.filter((lado) => redeDoPlantao(infoDe(redes, lado.rede)));
     const fora = episodio.lados.filter((lado) => !redeDoPlantao(infoDe(redes, lado.rede)));
+    const meio = new Date((episodio.inicio.getTime() + episodio.fim.getTime()) / 2);
+    const plantao = plantaoEm(plantoes, meio) ?? plantaoEm(plantoes, episodio.inicio) ?? plantaoEm(plantoes, episodio.fim);
+    if (!plantao) {
+        if (fora.length > 0) return episodio;
+        if (gestao) {
+            return {
+                ...episodio,
+                forca: "fraco",
+                motivos: ["Chefia/coordenação com todos os aparelhos na rede do plantão — a Central sai por vários IPs; é o mesmo lugar."],
+                ressalvas: [],
+            };
+        }
+        return {
+            ...episodio,
+            forca: episodio.forca === "forte" ? "moderado" : "fraco",
+            ressalvas: [
+                ...episodio.ressalvas,
+                "Todos os aparelhos estavam na rede do plantão (a Central sai por vários IPs), mas fora do turno do dono.",
+            ],
+        };
+    }
     const contexto = { rotulo: plantao.rotulo, todosNaRedeDoPlantao: fora.length === 0, aparelhosFora: fora.map((lado) => lado.aparelho.descricao) };
     if (fora.length === 0) {
         return {
@@ -726,7 +753,9 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
     };
 
     const detectados = detectarEpisodios(janelas, eventos, aparelhoDe, redes);
-    const episodios = detectados.episodios.map((episodio) => aplicarPlantao(episodio, entrada.plantoes, redes));
+    // Chefia e coordenação passam na Central fora de qualquer escala.
+    const papeisDeGestao = conta.papeis.some((papel) => papel === "chief" || papel === "admin");
+    const episodios = detectados.episodios.map((episodio) => aplicarPlantao(episodio, entrada.plantoes, redes, papeisDeGestao));
     const { janelasMesmaSessaoDuasRedes } = detectados;
     const deslocamentos = detectarDeslocamentos(janelas, redes);
     const senhas = entradasComSenha(eventos, redes);
@@ -947,7 +976,6 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
     // Na rede do plantão fora do turno do dono: um colega usando o login dele na Central?
     // Só para quem é só médico (chefia e coordenação passam na Central fora de plantão).
     let minutosNaRedeForaDoTurno = 0;
-    const papeisDeGestao = conta.papeis.some((papel) => papel === "chief" || papel === "admin");
     if (entrada.plantoes && !papeisDeGestao) {
         const trechos: Array<{ inicio: Date; fim: Date; sessaoId: string; rede: string }> = [];
         const foraDoTurno = janelas

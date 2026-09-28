@@ -35,6 +35,13 @@ export function chaveDeRede(ip: string): string {
     return grupos ? `${grupos.slice(0, 4).join(":")}::/64` : ip;
 }
 
+/** Faixa de endereços: /24 no IPv4, /64 no IPv6. A Central sai por um pool de
+    IPs da mesma /24 — cada PC aparece com um IP; a faixa junta todos. */
+export function faixaDeRede(ip: string): string {
+    if (familiaDoIp(ip) === 6) return ip.includes("/") ? ip : chaveDeRede(ip);
+    return `${ip.split(".").slice(0, 3).join(".")}.0/24`;
+}
+
 /** Distância em km entre dois pontos (haversine). */
 export function distanciaKm(a: { lat: number; lon: number }, b: { lat: number; lon: number }) {
     const rad = (graus: number) => (graus * Math.PI) / 180;

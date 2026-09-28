@@ -227,8 +227,10 @@ export interface LugarNoPainel {
     coletiva: boolean;
     servidor: boolean;
     estrangeiro: boolean;
-    /** Plantonistas vistos nela durante o próprio turno (2+ = rede do plantão). */
+    /** Plantonistas que usaram a Mesa num PC, no próprio turno, na faixa desta rede. */
     plantonistas: number;
+    /** Rede do plantão (redeDoPlantao): a Central. */
+    plantao: boolean;
 }
 
 export interface Painel {
@@ -340,6 +342,7 @@ export function lugaresDoPainel(analises: AnaliseDaConta[], redes: Map<string, I
                     servidor: false,
                     estrangeiro: false,
                     plantonistas: 0,
+                    plantao: false,
                     contasSet: new Set(),
                     comSinal: new Set(),
                 };
@@ -350,6 +353,7 @@ export function lugaresDoPainel(analises: AnaliseDaConta[], redes: Map<string, I
             grupo.coletiva ||= lugar.coletiva || (info?.contas ?? 0) >= CONTAS_REDE_COLETIVA;
             grupo.servidor ||= lugar.servidor;
             grupo.plantonistas = Math.max(grupo.plantonistas, info?.plantonistas ?? 0);
+            grupo.plantao ||= Boolean(info && redeDoPlantao(info));
             grupo.estrangeiro ||= Boolean(pais && pais !== "BR");
         }
     }
