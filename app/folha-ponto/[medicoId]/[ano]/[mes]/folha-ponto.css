@@ -198,7 +198,9 @@
 
 .fp-meta-grid {
     display: grid;
-    grid-template-columns: 2fr 1fr;
+    /* Coluna da direita (Função/Unidade) só com a largura do próprio texto:
+       com 2fr/1fr nome e empresa longos quebravam em duas linhas cada. */
+    grid-template-columns: 1fr auto;
     gap: 6mm;
 }
 
@@ -260,8 +262,11 @@
     font-size: 9pt;
 }
 
+/* 4,7mm por dia: a pg. 1 precisa caber também quando o navegador ignora o
+   @page (Safari/iOS ao exportar PDF, compartilhar ou imprimir), que usa papel
+   Carta e margens próprias com cabeçalho/rodapé — área útil de ~228mm. */
 .fp-tabela-freq tbody td {
-    height: 5.2mm;
+    height: 4.7mm;
     padding: 0 2mm;
     font-size: 9pt;
     vertical-align: middle;
