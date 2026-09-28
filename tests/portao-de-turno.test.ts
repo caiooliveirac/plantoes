@@ -72,3 +72,10 @@ for (const rota of ["app/api/board", "app/api/regulation", "app/api/intervention
         assert.match(fonte, /\b(requireMesaSession(ForRead)?|abrirVigiaDaMesa)\s*\(/);
     });
 }
+
+test("portão: operadores da Central (rádio, TARM — sem escala aqui) só abrem a Mesa na rede da Central", () => {
+    for (const papel of ["radio_operador", "tarm"]) {
+        assert.deepEqual(decidirPortao({ roles: [papel], emTurno: false, naCentral: true }), { liberado: true, motivo: "central" });
+        assert.deepEqual(decidirPortao({ roles: [papel], emTurno: false, naCentral: false }), { liberado: false, motivo: "fora_do_plantao" });
+    }
+});

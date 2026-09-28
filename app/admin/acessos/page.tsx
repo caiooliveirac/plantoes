@@ -5,7 +5,8 @@ import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
 import { montarPainel } from "@/modules/acessos/painel";
 import { carregarMonitor, lerPeriodo, PERIODOS, type ChavePeriodo } from "@/services/acessos-relatorio.service";
-import { AtualizacaoAutomatica } from "@/app/admin/acessos/acessos-client";
+import { AtualizacaoAutomatica, OperadoresDaCentral } from "@/app/admin/acessos/acessos-client";
+import { listarOperadoresDaCentral } from "@/services/acessos-acoes.service";
 import { PainelDeAcessos } from "@/app/admin/acessos/painel-client";
 
 export const dynamic = "force-dynamic";
@@ -62,6 +63,7 @@ export default async function MonitorDeAcessosPage({ searchParams }: { searchPar
     }
 
     const painel = montarPainel({ ...dados, ate: dados.geradoEm, plantoes: dados.plantoes });
+    const operadores = await listarOperadoresDaCentral().catch(() => []);
     const fortes = painel.contas.filter((c) => c.nivel === "forte").length;
     const atencao = painel.contas.filter((c) => c.nivel === "atencao").length;
     const agoraEmVarias = painel.contas.filter((c) => c.metricas.agoraRedes >= 2).length;
@@ -102,6 +104,8 @@ export default async function MonitorDeAcessosPage({ searchParams }: { searchPar
                     </section>
 
                     <PainelDeAcessos painel={painel} periodo={periodo} />
+
+                    <OperadoresDaCentral contas={operadores} />
 
                     <section className="ac-card ac-como-ler">
                         <details>

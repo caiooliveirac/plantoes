@@ -1,4 +1,4 @@
-export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal"] as const;
+export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -9,6 +9,23 @@ export type UserRole = (typeof USER_ROLES)[number];
  * `no_roles_assigned` — login recusado, sessão nula, SSO sem acesso.
  */
 export const PORTAL_ROLE = "portal" as const satisfies UserRole;
+
+/**
+ * Operadores da Central: `radio_operador` (despacha unidades) e `tarm`
+ * (telefonista, Técnico Auxiliar de Regulação Médica). Sem médico vinculado,
+ * logo nunca "em turno" para o portão: veem a Mesa só para ler (toda escrita
+ * da Mesa exige admin/chief) e só da rede da Central. Lá são isentos da
+ * presença na Mesa — sem vez única, sem bloqueio por ociosidade
+ * (docs/presenca-mesa.md). Dados e tirados pelo admin em /admin/acessos.
+ */
+export const RADIO_OPERADOR_ROLE = "radio_operador" as const satisfies UserRole;
+export const TARM_ROLE = "tarm" as const satisfies UserRole;
+export const OPERADORES_DA_CENTRAL = [RADIO_OPERADOR_ROLE, TARM_ROLE] as const;
+export type OperadorDaCentral = (typeof OPERADORES_DA_CENTRAL)[number];
+
+export function ehOperadorDaCentral(roles: readonly string[]): boolean {
+    return roles.some((role) => (OPERADORES_DA_CENTRAL as readonly string[]).includes(role));
+}
 
 /** Papéis que abrem alguma coisa no app Plantões (tudo menos `portal`). */
 export type PlantoesRole = Exclude<UserRole, typeof PORTAL_ROLE>;

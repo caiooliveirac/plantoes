@@ -20,6 +20,7 @@ import type { GeoAcesso } from "@/lib/acessos/contexto";
 import { descreverAparelho, type Aparelho, type TipoAparelho } from "@/modules/acessos/aparelho";
 import { chaveDeRede, descreverLocal, distanciaKm, familiaDoIp, temPosicaoDeCidade, type Provedor } from "@/modules/acessos/rede";
 import { duracao, intervalo, lista, plural, quando } from "@/modules/acessos/texto";
+import { ehOperadorDaCentral } from "@/modules/auth/contracts";
 
 export const JANELA_MS = 5 * 60_000;
 /** Sessão com pedido nos últimos 5 minutos = aberta agora. */
@@ -605,7 +606,7 @@ export function aplicarPlantao(
             return {
                 ...episodio,
                 forca: "fraco",
-                motivos: ["Chefia/coordenação com todos os aparelhos na rede do plantão — a Central sai por vários IPs; é o mesmo lugar."],
+                motivos: ["Chefia/coordenação/operador da Central com todos os aparelhos na rede do plantão — a Central sai por vários IPs; é o mesmo lugar."],
                 ressalvas: [],
             };
         }
@@ -758,8 +759,8 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
     };
 
     const detectados = detectarEpisodios(janelas, eventos, aparelhoDe, redes);
-    // Chefia e coordenação passam na Central fora de qualquer escala.
-    const papeisDeGestao = conta.papeis.some((papel) => papel === "chief" || papel === "admin");
+    // Chefia, coordenação e operadores da Central (rádio, TARM) passam na Central fora de qualquer escala.
+    const papeisDeGestao = conta.papeis.some((papel) => papel === "chief" || papel === "admin") || ehOperadorDaCentral(conta.papeis);
     const episodios = detectados.episodios.map((episodio) => aplicarPlantao(episodio, entrada.plantoes, redes, papeisDeGestao));
     const { janelasMesmaSessaoDuasRedes } = detectados;
     const deslocamentos = detectarDeslocamentos(janelas, redes);

@@ -600,7 +600,7 @@ test("plantão: dois IPs do pool da Central fora do turno são o mesmo lugar (ch
     };
     const chefe = analisarConta({ ...entrada, conta: conta({ papeis: ["chief"] }) });
     assert.equal(chefe.episodios[0].forca, "fraco");
-    assert.match(chefe.episodios[0].motivos[0], /Chefia\/coordenação.*mesmo lugar/);
+    assert.match(chefe.episodios[0].motivos[0], /Chefia\/coordenação\/operador da Central.*mesmo lugar/);
     assert.equal(chefe.nivel, "normal");
     const medico = analisarConta({ ...entrada, conta: conta(), plantoes: [turno(-1440, -720)] });
     assert.equal(medico.episodios[0].forca, "moderado", "forte (2 PCs em uso) desce um nível");
@@ -633,6 +633,32 @@ test("plantão: conta na rede do plantão fora do turno do dono vira atenção (
     assert.equal(chefe.achados.some((a) => a.titulo === "Na rede do plantão fora do turno do dono"), false);
     const semMedico = analisarConta({ ...entrada, conta: conta(), plantoes: undefined });
     assert.equal(semMedico.plantao, null, "conta sem médico vinculado não tem escala para comparar");
+});
+
+test("rádio-operador: trabalha na Central sem escala — tratado como a chefia no monitor", () => {
+    const naCentral = {
+        sessoes: [sessao("pc", UA.windows, CENTRAL)],
+        janelas: presenca("pc", CENTRAL, 0, 90, "uso"),
+        eventos: [],
+        redes: redesComCentral(),
+        agora: min(95),
+        plantoes: [turno(-2000, -1300)],
+    };
+    const radio = analisarConta({ ...naCentral, conta: conta({ papeis: ["radio_operador"] }) });
+    assert.equal(radio.achados.some((a) => a.titulo === "Na rede do plantão fora do turno do dono"), false);
+
+    const doisPcsNaCentral = {
+        sessoes: [sessao("pc1", UA.windows, CENTRAL), sessao("pc2", UA.windowsEdge, "200.1.1.9")],
+        janelas: [...presenca("pc1", CENTRAL, 0, 60, "uso"), ...presenca("pc2", "200.1.1.9", 0, 60, "uso")],
+        eventos: [],
+        redes: redesComCentral([["200.1.1.9", { geo: SALVADOR, contas: 2, plantonistas: 9 }]]),
+        agora: min(70),
+    };
+    const radio2 = analisarConta({ ...doisPcsNaCentral, conta: conta({ papeis: ["radio_operador"] }) });
+    assert.equal(radio2.episodios[0].forca, "fraco");
+    assert.equal(radio2.nivel, "normal");
+    const tarm = analisarConta({ ...doisPcsNaCentral, conta: conta({ papeis: ["tarm"] }) });
+    assert.equal(tarm.nivel, "normal");
 });
 
 test("plantão: PCs usados só na rede do plantão durante o turno não contam em muitos aparelhos", () => {

@@ -110,6 +110,18 @@ async function faixasDaCentral(agora: Date): Promise<Set<string>> {
     return faixas;
 }
 
+/** O IP está numa faixa da Central (medida ou rotulada)? Erro de banco = não
+    (quem depende disto para ganhar folga não ganha às cegas). Nunca lança. */
+export async function naRedeDaCentral(ip: string | null, agora = new Date()): Promise<boolean> {
+    if (!ip) return false;
+    try {
+        return (await faixasDaCentral(agora)).has(faixaDeRede(ip));
+    } catch (erro) {
+        logarErro("rede da Central", erro);
+        return false;
+    }
+}
+
 export interface ContaNoPortao {
     userId: string;
     doctorId: string | null;
