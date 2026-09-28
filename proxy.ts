@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { CABECALHO_ROTA } from "@/lib/acessos/contexto";
+import { mutacaoDeOutroSite } from "@/lib/auth/origem";
 import { createSessionToken, sessionIdOf, verifySessionToken } from "@/lib/auth/token";
 import { SESSION_COOKIE_NAME, SESSION_RENEW_AFTER_MS, SESSION_TTL_MS } from "@/lib/auth/server";
 
@@ -14,8 +15,14 @@ import { SESSION_COOKIE_NAME, SESSION_RENEW_AFTER_MS, SESSION_TTL_MS } from "@/l
    (Server Component não sabe a própria rota; o portão registra o pedido). O
    valor é sempre sobrescrito aqui — o do cliente nunca passa. A renovação
    mantém o `sid` da sessão; cookie de antes do monitor ganha o id derivado
-   dele (lib/auth/token.ts), o mesmo que o portão já usava para ele. */
+   dele (lib/auth/token.ts), o mesmo que o portão já usava para ele.
+
+   CSRF: POST/PUT/PATCH/DELETE em /api vindo de outro site (inclusive
+   subdomínio irmão de mnrs.com.br) morre aqui com 403 (lib/auth/origem.ts). */
 export function proxy(request: NextRequest) {
+    if (request.nextUrl.pathname.startsWith("/api/") && mutacaoDeOutroSite(request.method, request.headers)) {
+        return NextResponse.json({ error: "Pedido de outro site recusado." }, { status: 403 });
+    }
     const requestHeaders = new Headers(request.headers);
     requestHeaders.set(CABECALHO_ROTA, `${request.method} ${request.nextUrl.pathname}`);
     const res = NextResponse.next({ request: { headers: requestHeaders } });

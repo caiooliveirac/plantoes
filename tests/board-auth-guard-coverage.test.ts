@@ -23,7 +23,7 @@ const GUARDED_ROUTES = [
     "app/api/board/occurrence-handoff/route.ts",
 ];
 
-const GUARD = /\b(requireAuthenticatedSession|requireSessionForRead|requireMesaSession|requireMesaSessionForRead)\s*\(/;
+const GUARD = /\b(requireAuthenticatedSession|requireSessionForRead|requireMesaSession|requireMesaSessionForRead|abrirVigiaDaMesa)\s*\(/;
 
 /** Corpo de uma função top-level: do cabeçalho até a próxima declaração top-level. */
 function topLevelBody(source: string, header: RegExp) {

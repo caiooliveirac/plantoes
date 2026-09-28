@@ -246,3 +246,31 @@ export async function requireMesaSession(requiredRoles?: UserRole[], options?: {
 export async function requireMesaSessionForRead() {
     return requireMesaSession(undefined, { allowPasswordChange: true });
 }
+
+/* Conexão longa (SSE do quadro): o portão roda na abertura e depois de novo a
+   cada consulta desta função, sem cookies()/headers() — que não valem fora do
+   pedido. Pega o fim do turno, "Sair", sessão encerrada pelo admin, senha
+   trocada e conta suspensa com o stream já aberto. Erro de banco deixa passar,
+   como no portão. */
+export async function abrirVigiaDaMesa(): Promise<() => Promise<boolean>> {
+    const session = await requireMesaSessionForRead();
+    const rawToken = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? "";
+    const contexto = lerContextoRequisicao(await headers());
+    return async () => {
+        try {
+            const parsed = verifySessionToken(rawToken, getAuthSecret());
+            if (!parsed) return false;
+            const atual = await loadUserSession(parsed, session.sessionId);
+            if (!atual) return false;
+            const portao = await conferirPortaoDeTurno(
+                { userId: atual.user.id, doctorId: atual.user.doctorId, roles: atual.user.roles },
+                contexto,
+                "mesa",
+            );
+            return portao.liberado;
+        } catch (erro) {
+            console.error("[acessos] vigia do stream", erro);
+            return true;
+        }
+    };
+}

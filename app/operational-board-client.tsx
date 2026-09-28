@@ -1545,6 +1545,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 void refreshIfBoardChanged();
             });
 
+            // O servidor reconfere sessão e portão com o stream aberto (fim do
+            // turno, sessão encerrada): recarregar deixa a página decidir.
+            eventSource.addEventListener("acesso-encerrado", () => {
+                window.location.reload();
+            });
+
             eventSource.onerror = () => {
                 eventSource?.close();
                 eventSource = null;
