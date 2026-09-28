@@ -17,12 +17,13 @@
    ========================================================================== */
 
 import { randomBytes } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, userRoles, users } from "@/db/schema";
 import { isEmailConfigured, sendEmail } from "@/lib/email";
-import { PORTAL_ROLE } from "@/modules/auth/contracts";
+import { PORTAL_ROLE, type OperadorDaCentral } from "@/modules/auth/contracts";
 import { createPasswordResetTokenForUser, hashPassword } from "@/services/auth.service";
+import { getPasswordPolicyError } from "@/modules/auth/password-policy";
 
 /** Prazo do link de boas-vindas (o "esqueci a senha" vale 2 h). */
 export const PORTAL_WELCOME_TTL_MS = 1000 * 60 * 60 * 24 * 7;
@@ -151,4 +152,86 @@ export async function provisionarContaPortal(pedido: PedidoContaPortal): Promise
     }
 
     return { ok: true, situacao: "criada", emailEnviado };
+}
+
+/* ==========================================================================
+   Conta de operador da Central aprovada no Escalas (TARM, rádio-operador e
+   quem coordena essas categorias) — POST /api/servicos/contas-escala.
+
+   O Escalas aprova o cadastro, sorteia a senha temporária e a manda por
+   e-mail com o endereço do portal (mnrs.com.br). O portal confere a senha
+   AQUI; por isso a conta nasce aqui com essa mesma senha e
+   `mustChangePassword`: no primeiro acesso o portal pede a senha definitiva
+   (porteiro, fluxo de "nova senha"), que passa a valer nos dois sistemas.
+
+   Conta que já existe nunca tem a senha tocada: só ganha os papéis que
+   faltam. Só dá papéis de operador da Central (Mesa só leitura, só na
+   Central) — nunca admin/chief/doctor. Tudo em audit_logs.
+   ========================================================================== */
+export type SituacaoContaDoEscala =
+    | { situacao: "criada"; papeis: OperadorDaCentral[] }
+    | { situacao: "existente"; papeisNovos: OperadorDaCentral[]; ativa: boolean };
+
+export class ContaDoEscalaError extends Error {}
+
+export async function provisionarContaDoEscala(pedido: {
+    email: string;
+    nome: string;
+    senhaTemporaria: string;
+    papeis: OperadorDaCentral[];
+}): Promise<SituacaoContaDoEscala> {
+    const email = pedido.email.trim().toLowerCase();
+    const papeis = [...new Set(pedido.papeis)];
+    if (papeis.length === 0) throw new ContaDoEscalaError("Informe ao menos um papel.");
+    const politica = getPasswordPolicyError(pedido.senhaTemporaria);
+    if (politica) throw new ContaDoEscalaError(`Senha temporária fraca: ${politica}`);
+
+    const acrescentarPapeis = async (userId: string, ativa: boolean): Promise<SituacaoContaDoEscala> => {
+        const db = getDb();
+        const atuais = await db.select({ role: userRoles.role }).from(userRoles)
+            .where(and(eq(userRoles.userId, userId), inArray(userRoles.role, papeis)));
+        const novos = papeis.filter((p) => !atuais.some((a) => a.role === p));
+        if (novos.length > 0) {
+            await db.transaction(async (tx) => {
+                await tx.insert(userRoles).values(novos.map((role) => ({ userId, role }))).onConflictDoNothing();
+                await tx.insert(auditLogs).values({
+                    actorUserId: null,
+                    action: "escala_account.roles_added",
+                    entityType: "user",
+                    entityId: userId,
+                    details: { email, papeis: novos, origem: "escala" },
+                });
+            });
+        }
+        return { situacao: "existente", papeisNovos: novos, ativa };
+    };
+
+    const [existente] = await getDb().select({ id: users.id, isActive: users.isActive }).from(users).where(eq(users.email, email)).limit(1);
+    if (existente) return acrescentarPapeis(existente.id, existente.isActive);
+
+    const passwordHash = await hashPassword(pedido.senhaTemporaria);
+    try {
+        await getDb().transaction(async (tx) => {
+            const [user] = await tx
+                .insert(users)
+                .values({ email, passwordHash, mustChangePassword: true, isActive: true, doctorId: null })
+                .returning({ id: users.id });
+            await tx.insert(userRoles).values([PORTAL_ROLE, ...papeis].map((role) => ({ userId: user.id, role })));
+            await tx.insert(auditLogs).values({
+                actorUserId: null, // pedido servidor↔servidor: quem aprovou está no Escalas
+                action: "escala_account.created",
+                entityType: "user",
+                entityId: user.id,
+                details: { email, nome: pedido.nome, papeis, origem: "escala" },
+            });
+        });
+    } catch (error) {
+        // Corrida: dois pedidos para o mesmo e-mail — o segundo vira "existente".
+        if (isUniqueViolation(error)) {
+            const [corrida] = await getDb().select({ id: users.id, isActive: users.isActive }).from(users).where(eq(users.email, email)).limit(1);
+            if (corrida) return acrescentarPapeis(corrida.id, corrida.isActive);
+        }
+        throw error;
+    }
+    return { situacao: "criada", papeis };
 }

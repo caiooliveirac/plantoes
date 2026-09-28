@@ -50,6 +50,14 @@ para criar a senha) e ganha o papel; conta existente só ganha o papel. A mesma
 conta pode ter os dois. Tirar/dar: relatório da conta, com motivo. Tudo em
 `audit_logs` e na linha do tempo.
 
+**Pelo Escalas (caminho normal):** convite de categoria TARM/rádio, ou de
+coordenação dessas categorias → cadastro → aprovação. Na aprovação o Escalas
+chama `POST /api/servicos/contas-escala` (x-escala-token): conta nova nasce
+aqui com papel `portal` + os papéis, senha temporária forte e troca
+obrigatória; o Escalas manda um e-mail só, com a senha e `https://mnrs.com.br`,
+e a conta de lá passa a usar a senha daqui. No primeiro acesso o portal pede a
+senha definitiva. Conta existente só ganha os papéis (senha intocada).
+
 Limite conhecido: a isenção depende do IP. Enquanto a origem aceitar pedido que
 não vem do Cloudflare, dá para forjar `cf-connecting-ip` e parecer estar na
 Central — com a senha de um operador da Central, isso abre a Mesa sem bloqueio

@@ -35,6 +35,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "app/api/briefing/historico/route.ts": "x-briefing-token (BRIEFING_TOKEN, guardBriefingRequest).",
     "app/api/telegram/webhook/route.ts": "x-telegram-bot-api-secret-token (TELEGRAM_WEBHOOK_SECRET).",
     "app/api/servicos/contas-portal/route.ts": "x-portal-token (PORTAL_CONTAS_TOKEN); cria só conta com papel portal, nunca altera conta existente.",
+    "app/api/servicos/contas-escala/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); só dá papéis de operador da Central (tarm, radio_operador), nunca troca senha de conta existente.",
     "app/api/servicos/portal/acesso/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o porteiro confere a sessão do portal e reporta o uso (monitor de acessos).",
     // Convite: o token do link é a credencial.
     "app/api/chief/invites/[token]/route.ts": "convite de chefia válido (getValidChiefInvite).",
