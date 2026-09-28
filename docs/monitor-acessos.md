@@ -12,9 +12,10 @@ aponta quando **a mesma conta estava em uso em lugares diferentes ao mesmo
 tempo** — com a linha do tempo que prova isso, em português, pronta para
 imprimir.
 
-**Heurística nunca bloqueia; regra bloqueia** (decisão do Caio, 28/09/2026 —
-substitui "nada bloqueia sozinho" de 27/09). Episódios e achados avisam e
-documentam; cortar por eles é um clique do admin. Duas regras objetivas agem
+**Heurística de risco alto age; admin não** (decisão do Caio, 28/09/2026).
+Episódio forte derruba as sessões e avisa. Se a conta voltar a aparecer em
+lugares diferentes dentro de 24 h, a senha é trocada. Papel `admin` não recebe
+nenhuma das duas. Atenção só documenta. Além disso, duas regras objetivas agem
 sozinhas — ver [Portão de turno e limite de lugares](#portão-de-turno-e-limite-de-lugares).
 
 ## O que é registrado
@@ -228,6 +229,21 @@ Por que lugar e não sessão: em 7 dias até 28/09/2026, contando sessões (cook
 10 contas passariam de 3 — todas em 1–2 redes (o portal gera vários `sid` por
 navegador; cada navegador tem cookie da Mesa e do portal). Contando lugares, o
 máximo visto foi 3.
+
+### Risco alto: derruba, e se insistir troca a senha
+
+No mesmo ciclo do alerta (a cada 2 min, olhando 3 h). Regra em
+`modules/acessos/atitude.ts`; efeito em `aplicarAtitudeDeRisco`. Ligada desde o
+deploy. Desligar: `ACESSOS_ATITUDE_RISCO=0` no `.env.production` + `pm2 delete/start plantoes-telegram-worker`.
+
+| Situação | Atitude |
+|---|---|
+| papel `admin` | nenhuma |
+| episódio **forte** nos últimos 20 min, ou forte nas últimas 3 h com sessão ainda aberta em 2+ redes | encerra todas as sessões (`session_version` + 1), e-mail ao dono, Telegram aos admins. A senha fica |
+| novo episódio forte depois dessa derrubada, dentro de 24 h | troca a senha (link de 24 h no e-mail) e avisa de novo |
+| já derrubada neste episódio, ou senha já trocada nele | espera |
+
+Quem entra de novo sozinho, sem reeditar o uso em dois lugares, não troca a senha.
 
 ### Uma tela da Mesa por conta e tela parada que expira
 

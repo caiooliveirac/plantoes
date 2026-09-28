@@ -1,8 +1,8 @@
 /* Ações da coordenação no monitor de acessos (docs/monitor-acessos.md). Cada
    ação é um clique do admin, com motivo obrigatório, linha em audit_logs e
-   evento na linha do tempo da conta. A única automática é
-   derrubarPorLugaresDemais (conta em mais de 3 lugares ao mesmo tempo,
-   services/acessos-portao.service.ts): a mesma troca de senha, sem admin.
+   evento na linha do tempo da conta. Automáticas, sem admin e nunca contra
+   papel admin: derrubarPorLugaresDemais (4+ lugares — troca a senha na hora) e
+   aplicarAtitudeDeRisco (risco alto — derruba; se insistir, troca a senha).
 
    O que cada uma corta de verdade:
    - encerrar uma sessão: aquele aparelho cai. Se ele tem login do portal
@@ -266,6 +266,89 @@ export async function derrubarPorLugaresDemais(userId: string, lugares: number, 
         }
     }
     return resultado;
+}
+
+async function avisarAdmins(linhas: string[]) {
+    if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) return;
+    const texto = linhas.join("\n");
+    for (const chatId of new Set(getTelegramAdminUserIds().filter(Boolean))) {
+        await sendMessage(chatId, texto).catch((erro) => console.error("[acessos] aviso de atitude falhou", erro));
+    }
+}
+
+/** Risco alto, primeira vez neste episódio: sobe session_version, encerra as
+    sessões, avisa o dono por e-mail e os admins no Telegram. A senha fica. */
+async function derrubarPorRiscoAlto(conta: { id: string; email: string }, resumo: string) {
+    const motivo = "uso simultâneo em lugares diferentes (risco alto)";
+    const sessoesEncerradas = await getDb().transaction(async (tx) => {
+        await tx.update(users).set({ sessionVersion: sql`${users.sessionVersion} + 1`, updatedAt: new Date() }).where(eq(users.id, conta.id));
+        const total = await encerrarAbertas(tx, conta.id, null, motivo);
+        await registrar(tx, "encerrar_sessoes", conta.id, null, motivo, { sessoesEncerradas: total });
+        return total;
+    });
+
+    if (isEmailConfigured()) {
+        try {
+            await sendEmail({
+                to: conta.email,
+                subject: "Seus acessos do Plantões SAMU foram encerrados",
+                text: [
+                    "Sua conta estava em uso em lugares diferentes ao mesmo tempo.",
+                    "Encerramos todos os acessos. A senha ainda é a mesma: entre de novo só você.",
+                    "Se a conta voltar a aparecer em lugares diferentes, a senha será trocada e você recebe um link para criar outra.",
+                    "",
+                    "A senha é pessoal. Não passe para ninguém.",
+                ].join("\n"),
+            });
+        } catch (erro) {
+            console.error("[acessos] e-mail de derrubada falhou", erro);
+        }
+    }
+
+    const app = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
+    await avisarAdmins([
+        "Acesso derrubado — risco alto",
+        `${conta.email}: sessões encerradas (${sessoesEncerradas}). A senha ainda vale.`,
+        "Se voltar a usar em lugares diferentes, a senha será trocada.",
+        resumo,
+        `${app}/admin/acessos/${conta.id}?periodo=24h`,
+    ]);
+    return { sessoesEncerradas };
+}
+
+/** Segunda vez em 24 h: a mesma troca de senha do limite de lugares. */
+async function trocarSenhaPorRiscoAlto(conta: { id: string; email: string }, resumo: string) {
+    const motivo = "voltou a usar a conta em lugares diferentes depois de ter os acessos encerrados";
+    const resultado = await trocarSenhaEMandarLink(conta.id, conta.email, null, motivo, `automático: ${motivo}`, [
+        "Sua conta voltou a ser usada em lugares diferentes depois que os acessos foram encerrados.",
+        "Por segurança, todos os acessos foram encerrados de novo e a senha antiga não vale mais, em nenhum aparelho.",
+    ]);
+    const app = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
+    await avisarAdmins([
+        "Senha trocada — a conta insistiu depois de derrubada",
+        `${conta.email}: sessões encerradas (${resultado.sessoesEncerradas}). Senha trocada; link ${resultado.emailEnviado ? "enviado ao e-mail da conta" : "NÃO saiu por e-mail — repasse pelo relatório"}.`,
+        resumo,
+        `${app}/admin/acessos/${conta.id}?periodo=24h`,
+    ]);
+    return resultado;
+}
+
+/** Confere o papel admin de novo no banco antes de agir. Conta inativa: nada. */
+export async function aplicarAtitudeDeRisco(
+    atitude: "derrubar" | "trocar_senha",
+    conta: { userId: string; email: string },
+    resumo: string,
+) {
+    const db = getDb();
+    const papeis = await db.select({ role: userRoles.role }).from(userRoles).where(eq(userRoles.userId, conta.userId));
+    if (papeis.some((papel) => papel.role === "admin")) return null;
+    const [usuario] = await db
+        .select({ id: users.id, email: users.email, isActive: users.isActive })
+        .from(users)
+        .where(eq(users.id, conta.userId))
+        .limit(1);
+    if (!usuario?.isActive) return null;
+    return atitude === "derrubar" ? derrubarPorRiscoAlto(usuario, resumo) : trocarSenhaPorRiscoAlto(usuario, resumo);
 }
 
 // ── Operadores da Central (rádio-operador, TARM) ─────────────────────────────

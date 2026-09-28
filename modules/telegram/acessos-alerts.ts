@@ -25,11 +25,13 @@
 import { and, eq, gt, like } from "drizzle-orm";
 import { getDb } from "@/db";
 import { telegramBotNotices } from "@/db/schema";
+import { atitudeDeRiscoLigada, decidirAtitude } from "@/modules/acessos/atitude";
 import { mensagemDeUsoSimultaneo, mensagemDoResumoDiario } from "@/modules/acessos/mensagens";
 import { diaIso } from "@/modules/acessos/texto";
 import { getSaoPauloParts } from "@/modules/operational/board-rules";
 import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
+import { aplicarAtitudeDeRisco } from "@/services/acessos-acoes.service";
 import { podarRegistrosAntigos } from "@/services/acessos.service";
 import { carregarMonitor } from "@/services/acessos-relatorio.service";
 import { carregarRedes } from "@/services/acessos-redes.service";
@@ -102,11 +104,13 @@ export async function sendAcessosCycle(referenceDate = new Date()) {
         }
     }
 
-    if (!isAcessosAlertasEnabled() || !process.env.TELEGRAM_BOT_TOKEN?.trim()) return resultado;
-    const admins = [...new Set(getTelegramAdminUserIds().filter(Boolean))];
-    if (admins.length === 0) return resultado;
+    const alertasLigados = isAcessosAlertasEnabled() && Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
+    const admins = alertasLigados ? [...new Set(getTelegramAdminUserIds().filter(Boolean))] : [];
+    const alertas = alertasLigados && admins.length > 0;
+    // A atitude de risco alto não depende do aviso no Telegram.
+    if (!alertas && !atitudeDeRiscoLigada()) return resultado;
     try {
-        await enviarAvisos(referenceDate, admins, dia, resultado);
+        await enviarAvisos(referenceDate, admins, dia, resultado, alertas);
     } catch (error) {
         // Sem a migration 0046 (ou banco fora) o ciclo falha a cada 30 s: loga de 10 em 10 min.
         if (referenceDate.getTime() - ultimoErro > 10 * 60_000) {
@@ -119,10 +123,10 @@ export async function sendAcessosCycle(referenceDate = new Date()) {
 
 let ultimoErro = 0;
 
-async function enviarAvisos(referenceDate: Date, admins: string[], dia: string, resultado: { sent: number; evaluated: number }) {
+async function enviarAvisos(referenceDate: Date, admins: string[], dia: string, resultado: { sent: number; evaluated: number }, alertas: boolean) {
     const app = urlDoApp();
 
-    if (isJanelaDoResumoDiario(referenceDate)) {
+    if (alertas && isJanelaDoResumoDiario(referenceDate)) {
         const dados = await carregarMonitor({ desde: new Date(referenceDate.getTime() - 24 * 60 * 60_000), ate: referenceDate });
         resultado.evaluated += dados.analises.length;
         const texto = mensagemDoResumoDiario(dados.analises, referenceDate, `${app}/admin/acessos?periodo=24h`);
@@ -131,7 +135,7 @@ async function enviarAvisos(referenceDate: Date, admins: string[], dia: string, 
         }
     }
 
-    if (referenceDate.getTime() - ultimaChecagemDeRedes >= CHECAR_REDES_A_CADA_MS) {
+    if (alertas && referenceDate.getTime() - ultimaChecagemDeRedes >= CHECAR_REDES_A_CADA_MS) {
         ultimaChecagemDeRedes = referenceDate.getTime();
         try {
             await avisarRedes(referenceDate, admins, app, resultado);
@@ -146,10 +150,29 @@ async function enviarAvisos(referenceDate: Date, admins: string[], dia: string, 
     const dados = await carregarMonitor({ desde: new Date(referenceDate.getTime() - OLHAR_PARA_TRAS_MS), ate: referenceDate });
     resultado.evaluated += dados.analises.length;
     for (const analise of dados.analises) {
+        if (atitudeDeRiscoLigada()) {
+            const bruto = dados.brutos.get(analise.conta.userId);
+            const atitude = decidirAtitude({
+                papeis: analise.conta.papeis,
+                nivel: analise.nivel,
+                episodios: analise.episodios,
+                eventos: bruto?.eventos ?? [],
+                agora: referenceDate,
+                aindaAberto: analise.abertaAgora.redes >= 2,
+            });
+            if (atitude === "derrubar" || atitude === "trocar_senha") {
+                try {
+                    await aplicarAtitudeDeRisco(atitude, analise.conta, analise.resumo);
+                    console.log(`[acessos] ${atitude} ${analise.conta.email}`);
+                } catch (error) {
+                    console.error(`[acessos] atitude ${atitude} falhou ${analise.conta.email}`, error);
+                }
+            }
+        }
         const recente = analise.episodios.find((episodio) => (
             episodio.forca === "forte" && referenceDate.getTime() - episodio.fim.getTime() <= JANELA_DO_ALERTA_MS
         ));
-        if (!recente) continue;
+        if (!recente || !alertas) continue;
         const texto = mensagemDeUsoSimultaneo(analise, recente, dados.redes, `${app}/admin/acessos/${analise.conta.userId}?periodo=24h`);
         for (const chatId of admins) {
             const prefixo = `${chatId}:acessos-forte:${analise.conta.userId}:`;

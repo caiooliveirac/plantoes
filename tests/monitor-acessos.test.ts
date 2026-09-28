@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
 import { corrigirUtf8, geoDoCliente, ipDoCliente, lerContextoRequisicao, lerRota, lerUsoDaMesa, normalizarIp, type ContextoRequisicao } from "@/lib/acessos/contexto";
 import { createSessionToken, legacySessionId, sessionIdOf, verifySessionToken } from "@/lib/auth/token";
+import { decidirAtitude } from "@/modules/acessos/atitude";
 import {
     analisarConta,
     type ContaMonitorada,
@@ -692,6 +693,41 @@ test("análise: Mesa disputada com gente nos dois aparelhos é forte mesmo sem e
     assert.equal(analise.nivel, "forte");
     assert.equal(analise.episodios.filter((e) => e.forca === "forte").length, 0);
     assert.match(analise.resumo, /mesa aberta em dois aparelhos/i);
+});
+
+test("atitude: admin não é derrubado; risco alto derruba; insistência troca a senha", () => {
+    const agora = min(100);
+    const episodio = { forca: "forte", inicio: min(10), fim: min(90) };
+    const base = { nivel: "forte", episodios: [episodio], eventos: [] as Array<{ tipo: string; em: Date }>, agora, aindaAberto: false };
+    assert.equal(decidirAtitude({ ...base, papeis: ["admin", "chief"] }), "isento");
+    assert.equal(decidirAtitude({ ...base, papeis: ["chief", "doctor"] }), "derrubar");
+    assert.equal(decidirAtitude({ ...base, papeis: ["doctor"], nivel: "atencao" }), "nada");
+    assert.equal(decidirAtitude({
+        ...base,
+        papeis: ["doctor"],
+        eventos: [{ tipo: "auto_encerrar_sessoes", em: min(40) }],
+    }), "nada", "já derrubada neste episódio");
+    assert.equal(decidirAtitude({
+        papeis: ["doctor"],
+        nivel: "forte",
+        episodios: [{ forca: "forte", inicio: min(80), fim: min(95) }],
+        eventos: [{ tipo: "auto_encerrar_sessoes", em: min(30) }],
+        agora,
+        aindaAberto: false,
+    }), "trocar_senha");
+    assert.equal(decidirAtitude({
+        papeis: ["doctor"],
+        nivel: "forte",
+        episodios: [{ forca: "forte", inicio: min(0), fim: min(10) }],
+        eventos: [],
+        agora,
+        aindaAberto: true,
+    }), "derrubar", "forte nas últimas 3 h e ainda aberta em 2 redes");
+    assert.equal(decidirAtitude({
+        ...base,
+        papeis: ["doctor"],
+        eventos: [{ tipo: "auto_exigir_nova_senha", em: min(50) }],
+    }), "nada");
 });
 
 test("plantão: aba parada na rede do plantão fora do turno (sem toque) não vira achado", () => {
