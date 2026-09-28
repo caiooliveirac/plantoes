@@ -11,7 +11,7 @@ import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
 import { MENSAGEM_BLOQUEADA, MENSAGEM_OCUPADA, modoPresenca } from "@/modules/acessos/presenca";
 import { lerCookieAparelho, nomeCookieAparelho } from "@/lib/auth/aparelho";
 import { baterPresenca, conferirPresenca, desbloquearAparelho, type ContaNaMesa, type RespostaPresenca } from "@/services/mesa-presenca.service";
-import { conferirPortaoDeTurno, vigiarLugares } from "@/services/acessos-portao.service";
+import { conferirPortaoDeTurno, naRedeDaCentral, vigiarLugares } from "@/services/acessos-portao.service";
 import {
     atualizarRedeDoContexto,
     registrarAcesso,
@@ -241,10 +241,13 @@ export async function mesaLiberadaPara(session: AuthenticatedSession) {
 }
 
 /* Presença na Mesa (docs/presenca-mesa.md): uma tela por conta e bloqueio por
-   ociosidade. Admin é isento. O aparelho vem do cookie assinado (proxy.ts) —
-   nunca de algo que o cliente mande no corpo. */
+   ociosidade. Isentos: admin, e rádio-operador na rede da Central (console de
+   despacho aberto o turno todo; fora da Central o portão já o barra). O
+   aparelho vem do cookie assinado (proxy.ts) — nunca do corpo do pedido. */
 export async function contaNaMesa(session: AuthenticatedSession): Promise<ContaNaMesa | null> {
     if (session.user.roles.includes("admin")) return null;
+    const contexto = lerContextoRequisicao(await headers());
+    if (session.user.roles.includes("radio_operador") && await naRedeDaCentral(contexto.ip)) return null;
     const cookieStore = await cookies();
     const aparelhoId = lerCookieAparelho(cookieStore.get(nomeCookieAparelho())?.value, getAuthSecret());
     return {
@@ -252,7 +255,7 @@ export async function contaNaMesa(session: AuthenticatedSession): Promise<ContaN
         // Sem cookie de aparelho (o proxy sempre põe um; só cliente que não guarda cookie): nunca pega a vez.
         aparelhoId: aparelhoId ?? "",
         sessaoId: session.sessionId,
-        contexto: lerContextoRequisicao(await headers()),
+        contexto,
     };
 }
 

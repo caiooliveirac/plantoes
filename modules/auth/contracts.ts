@@ -1,4 +1,4 @@
-export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal"] as const;
+export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -9,6 +9,15 @@ export type UserRole = (typeof USER_ROLES)[number];
  * `no_roles_assigned` — login recusado, sessão nula, SSO sem acesso.
  */
 export const PORTAL_ROLE = "portal" as const satisfies UserRole;
+
+/**
+ * `radio_operador`: despacha unidades na Central; não tem escala nem médico
+ * vinculado. Vê a Mesa só para ler (toda escrita da Mesa exige admin/chief)
+ * e só da rede da Central (o portão de turno barra fora dela). Na Central é
+ * isento da presença na Mesa — sem vez única, sem bloqueio por ociosidade
+ * (docs/presenca-mesa.md). Dado e tirado pelo admin em /admin/acessos.
+ */
+export const RADIO_OPERADOR_ROLE = "radio_operador" as const satisfies UserRole;
 
 /** Papéis que abrem alguma coisa no app Plantões (tudo menos `portal`). */
 export type PlantoesRole = Exclude<UserRole, typeof PORTAL_ROLE>;

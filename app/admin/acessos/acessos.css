@@ -233,7 +233,8 @@
     padding: 14px;
 }
 
-.pagina-kairos .ac-dialogo textarea {
+.pagina-kairos .ac-dialogo textarea,
+.pagina-kairos .ac-dialogo input {
     background: var(--superficie);
     border: 1px solid var(--borda);
     border-radius: 8px;
@@ -242,6 +243,13 @@
     min-height: 70px;
     padding: 8px 10px;
     resize: vertical;
+}
+
+.pagina-kairos .ac-dialogo input {
+    display: block;
+    margin-top: 4px;
+    min-height: 0;
+    width: 100%;
 }
 
 .pagina-kairos .ac-aviso {

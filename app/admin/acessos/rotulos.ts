@@ -6,6 +6,7 @@ const NOME_DO_PAPEL: Record<string, string> = {
     doctor: "médico",
     payment_closing_limited: "fechamento",
     portal: "só portal",
+    radio_operador: "rádio-operador",
 };
 
 export const NOME_DO_NIVEL = { forte: "Forte", atencao: "Atenção", normal: "Normal" } as const;

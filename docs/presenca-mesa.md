@@ -20,9 +20,37 @@ Duas regras fecham isso:
    `MESA_OCIOSO_MIN` (padrão 15 min), a Mesa fecha **naquele aparelho** e
    pede a senha ("Você saiu deste computador?"). Aviso 60 s antes.
 
-Admin é isento das duas (decisão do Caio, 28/09/2026). O resto do app (escala,
+Admin é isento das duas (decisão do Caio, 28/09/2026). Rádio-operador também,
+mas **só na rede da Central** — ver abaixo. O resto do app (escala,
 folha de ponto, banco de horas, `/medico`) não é afetado: várias sessões em
 vários aparelhos continuam normais.
+
+## Rádio-operador (papel `radio_operador`)
+
+Quem despacha unidades na Central. Não tem escala nem médico vinculado; o
+console fica aberto o turno todo, muitas vezes sem ninguém mexer na Mesa.
+Decisão do Caio (28/09/2026):
+
+| | |
+|---|---|
+| Mesa | só leitura (toda escrita da Mesa exige admin/chief) |
+| Na rede da Central | abre; **isento** da vez única e do bloqueio por ociosidade |
+| Fora da Central | fechada — o portão de turno barra (sem escala = nunca "em turno") |
+| Monitor | tratado como chefia: sem "na Central fora do turno"; dois PCs da Central = mesmo lugar |
+
+"Rede da Central" = faixa medida (3+ plantonistas no PC) ou rotulada `central`
+em `/admin/acessos/redes` (`naRedeDaCentral`, `services/acessos-portao.service.ts`).
+Se a faixa não puder ser conferida (erro de banco), **não** isenta.
+
+Cadastro: `/admin/acessos` → "Rádio-operadores" (nome + e-mail). Conta nova
+nasce como a do Huddle (papel `portal`, e-mail com link de 7 dias para criar a
+senha) e ganha `radio_operador`; conta existente só ganha o papel. Tirar/dar de
+novo: relatório da conta, com motivo. Tudo em `audit_logs` e na linha do tempo.
+
+Limite conhecido: a isenção depende do IP. Enquanto a origem aceitar pedido que
+não vem do Cloudflare, dá para forjar `cf-connecting-ip` e parecer estar na
+Central — com a senha de um rádio-operador, isso abre a Mesa sem bloqueio fora
+de lá.
 
 ## Aparelho
 

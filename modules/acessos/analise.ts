@@ -605,7 +605,7 @@ export function aplicarPlantao(
             return {
                 ...episodio,
                 forca: "fraco",
-                motivos: ["Chefia/coordenação com todos os aparelhos na rede do plantão — a Central sai por vários IPs; é o mesmo lugar."],
+                motivos: ["Chefia/coordenação/rádio-operador com todos os aparelhos na rede do plantão — a Central sai por vários IPs; é o mesmo lugar."],
                 ressalvas: [],
             };
         }
@@ -758,8 +758,8 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
     };
 
     const detectados = detectarEpisodios(janelas, eventos, aparelhoDe, redes);
-    // Chefia e coordenação passam na Central fora de qualquer escala.
-    const papeisDeGestao = conta.papeis.some((papel) => papel === "chief" || papel === "admin");
+    // Chefia, coordenação e rádio-operador passam na Central fora de qualquer escala.
+    const papeisDeGestao = conta.papeis.some((papel) => papel === "chief" || papel === "admin" || papel === "radio_operador");
     const episodios = detectados.episodios.map((episodio) => aplicarPlantao(episodio, entrada.plantoes, redes, papeisDeGestao));
     const { janelasMesmaSessaoDuasRedes } = detectados;
     const deslocamentos = detectarDeslocamentos(janelas, redes);

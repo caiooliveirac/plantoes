@@ -8,7 +8,7 @@ import { AcaoDeAcessoError, agirNaConta } from "@/services/acessos-acoes.service
    nova senha, suspender, reativar). Motivo obrigatório — vai para audit_logs. */
 const ID_VALIDO = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const schema = z.object({
-    acao: z.enum(["encerrar_sessoes", "exigir_nova_senha", "suspender", "reativar"]),
+    acao: z.enum(["encerrar_sessoes", "exigir_nova_senha", "suspender", "reativar", "dar_radio_operador", "tirar_radio_operador"]),
     motivo: z.string().max(500),
 });
 

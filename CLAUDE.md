@@ -231,7 +231,9 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em
   [services/auth.service.ts](services/auth.service.ts). Trata contas inativas, sem
   role atribuída, e o fluxo de `chiefAccessRequests` pendente/rejeitado.
-- **Papéis**: `admin`, `chief`, `doctor`, `payment_closing_limited` e `portal` (enum
+- **Papéis**: `admin`, `chief`, `doctor`, `payment_closing_limited`, `portal` e
+  `radio_operador` (Mesa só leitura, só na Central, isento da presença — ver
+  docs/presenca-mesa.md) (enum
   `userRoleEnum`, tabela `userRoles`, many-to-many; lista em
   [modules/auth/contracts.ts](modules/auth/contracts.ts)). `portal` só vale no
   `POST /api/auth/verificar-escala` (login do mnrs.com.br): no app, conta só com
