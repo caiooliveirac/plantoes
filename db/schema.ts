@@ -784,6 +784,18 @@ export const authNetworkInfo = operationsV2.table("auth_network_info", {
     reverseLookedUpAt: timestamp("reverse_looked_up_at", { withTimezone: true }),
 });
 
+// Rótulo de rede do monitor de acessos (migration 0048): `central` entra na rede
+// do plantão do portão de turno; `suspeita`/`conhecida` só nomeiam a faixa.
+export const authNetworkLabels = operationsV2.table("auth_network_labels", {
+    faixa: text("faixa").primaryKey(),
+    kind: text("kind").$type<"central" | "suspeita" | "conhecida">().notNull(),
+    label: text("label").notNull(),
+    note: text("note"),
+    updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Preferências de base ordenadas do médico (só intervenção tem bases).
 export const doctorBasePreferences = operationsV2.table(
     "doctor_base_preferences",

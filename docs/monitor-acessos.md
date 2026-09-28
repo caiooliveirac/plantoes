@@ -229,6 +229,48 @@ Por que lugar e não sessão: em 7 dias até 28/09/2026, contando sessões (cook
 navegador; cada navegador tem cookie da Mesa e do portal). Contando lugares, o
 máximo visto foi 3.
 
+## Redes (`/admin/acessos/redes`)
+
+Visão por **faixa** (/24, /64) em vez de por conta: onde as contas são usadas
+fora do plantão, quem provavelmente emprestou a senha, e o que o portão trata
+como Central. Regras em `modules/acessos/redes.ts`, carga em
+`services/acessos-redes.service.ts`. "Fora do plantão" usa a mesma folga do
+portão (30 min antes, 1 h depois).
+
+**Veredito por conta numa rede que não é a Central:**
+
+| Veredito | Quando |
+|---|---|
+| vazou (provável) | em uso ali em 2+ janelas de 5 min em que o dono estava na Central |
+| suspeita | em uso ali e noutra rede na mesma janela 3+ vezes (pode ser 4G + PC da mesma pessoa) |
+| uso próprio | fora do turno, mas no mesmo navegador (mesma sessão) que o dono usou no plantão |
+| aparelho estranho | fora do turno, navegador que nunca apareceu no plantão do dono |
+| trabalho | só dentro do turno |
+
+User-agent não serve para "mesmo aparelho" (todo Chrome de Windows manda o
+mesmo texto); a sessão (cookie) serve.
+
+**Rede coletiva fora do plantão** = 2+ contas com uso fora do turno (ou
+barradas), fora da Central. Ordenadas por pontuação (minutos fora + contas² +
+barrados + vazamentos). O histograma por hora mostra o padrão: horário
+comercial = local de trabalho.
+
+**Rótulos** (tabela `auth_network_labels`, migration 0048), com audit_log:
+- `central` — a faixa entra na rede do plantão do portão **na hora**, mesmo sem
+  3 plantonistas medidos. É a garantia de que um PC da Central abre Mesa e
+  Tabela. Ex.: `COI (SSP)`, a central da polícia (ssp.ba.gov.br), 1 IP, onde
+  só 1–2 plantonistas trabalham — a medida nunca chegaria a 3.
+- `suspeita` / `conhecida` — só nomeiam (Vitalmed, hospital). `conhecida` não
+  gera aviso.
+
+A seção "Central — o que o portão reconhece" lista as faixas Central (medida ou
+rótulo) e as que têm plantonista no PC mas **não** são reconhecidas.
+
+**Vigia no Telegram** (`modules/telegram/acessos-alerts.ts`, a cada 30 min,
+olhando 7 dias): rede coletiva fora do plantão ou com vazamento provável (de
+novo quando cresce, máx. 1×/24 h por rede); e "possível Central não
+reconhecida" — faixa com plantonista no PC que já teve barrado (1×/dia).
+
 ## Ações do admin (e o que cada uma corta de verdade)
 
 No relatório da conta, cada uma com motivo obrigatório (vai para `audit_logs` e

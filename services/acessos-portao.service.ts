@@ -33,6 +33,7 @@ import {
 import { faixaDeRede } from "@/modules/acessos/rede";
 import { derrubarPorLugaresDemais } from "@/services/acessos-acoes.service";
 import { registrarEvento } from "@/services/acessos.service";
+import { listarRotulosDeRede } from "@/services/acessos-redes.service";
 import { carregarPlantoes } from "@/services/acessos-relatorio.service";
 
 const TURNO_VALE_MS = 60_000;
@@ -62,6 +63,11 @@ const vistosPorConta = new Map<string, Visto[]>();
 const derrubadaEm = new Map<string, number>();
 
 /** Só para os testes. */
+/** Rótulo novo/alterado vale na hora, sem esperar os 15 min do cache. */
+export function esquecerCentralDoPortao() {
+    central = null;
+}
+
 export function limparMemoriaDoPortao() {
     turnos.clear();
     central = null;
@@ -92,6 +98,14 @@ async function faixasDaCentral(agora: Date): Promise<Set<string>> {
     if (central && central.ate > agora.getTime()) return central.faixas;
     const { plantonistasPorFaixa } = await carregarPlantoes(new Date(agora.getTime() - CENTRAL_OLHA_DIAS * 24 * 3_600_000), agora);
     const faixas = new Set([...plantonistasPorFaixa].filter(([, n]) => n >= PLANTONISTAS_REDE_DO_PLANTAO).map(([faixa]) => faixa));
+    // Faixas rotuladas "Central" pelo admin (/admin/acessos/redes): valem mesmo sem
+    // 3 plantonistas medidos — segunda saída de internet, PC novo, rede recém-trocada.
+    // Sem a migration 0048 o portão segue só com a medida.
+    try {
+        for (const rotulo of await listarRotulosDeRede()) if (rotulo.kind === "central") faixas.add(rotulo.faixa);
+    } catch (erro) {
+        logarErro("rótulos de rede", erro);
+    }
     central = { ate: agora.getTime() + CENTRAL_VALE_MS, faixas };
     return faixas;
 }

@@ -78,7 +78,9 @@ export default async function MonitorDeAcessosPage({ searchParams }: { searchPar
                                 <h1>Monitor de acessos</h1>
                                 <p className="ac-sub">
                                     Quem entrou, de onde, em qual aparelho — e quando a mesma conta esteve em uso em lugares diferentes ao
-                                    mesmo tempo. Mesa, Tabela e portal. Nada bloqueia sozinho: as ações ficam no relatório de cada conta.
+                                    mesmo tempo. Mesa, Tabela e portal. Mesa e Tabela só abrem de plantão (ou na Central); 4+ lugares ao mesmo tempo
+                                    troca a senha sozinho; o resto das ações fica no relatório de cada conta.{" "}
+                                    <Link href={`/admin/acessos/redes?periodo=${periodo}`}>Ver redes (fora do plantão, Central, vazamentos)</Link>
                                 </p>
                             </div>
                             <nav className="ac-chips ac-nao-imprimir" aria-label="Período">
