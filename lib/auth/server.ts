@@ -5,7 +5,7 @@ import { getDb } from "@/db";
 import { userRoles, users } from "@/db/schema";
 import { lerContextoRequisicao } from "@/lib/acessos/contexto";
 import { depoisDaResposta } from "@/lib/acessos/depois";
-import { rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
+import { ehOperadorDaCentral, rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
 import { createSessionToken, isSessionVersionCurrent, sessionIdOf, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
 import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
 import { MENSAGEM_BLOQUEADA, MENSAGEM_OCUPADA, modoPresenca } from "@/modules/acessos/presenca";
@@ -241,13 +241,13 @@ export async function mesaLiberadaPara(session: AuthenticatedSession) {
 }
 
 /* Presença na Mesa (docs/presenca-mesa.md): uma tela por conta e bloqueio por
-   ociosidade. Isentos: admin, e rádio-operador na rede da Central (console de
-   despacho aberto o turno todo; fora da Central o portão já o barra). O
+   ociosidade. Isentos: admin, e operador da Central (rádio, TARM) na rede da
+   Central (console aberto o turno todo; fora da Central o portão já barra). O
    aparelho vem do cookie assinado (proxy.ts) — nunca do corpo do pedido. */
 export async function contaNaMesa(session: AuthenticatedSession): Promise<ContaNaMesa | null> {
     if (session.user.roles.includes("admin")) return null;
     const contexto = lerContextoRequisicao(await headers());
-    if (session.user.roles.includes("radio_operador") && await naRedeDaCentral(contexto.ip)) return null;
+    if (ehOperadorDaCentral(session.user.roles) && await naRedeDaCentral(contexto.ip)) return null;
     const cookieStore = await cookies();
     const aparelhoId = lerCookieAparelho(cookieStore.get(nomeCookieAparelho())?.value, getAuthSecret());
     return {

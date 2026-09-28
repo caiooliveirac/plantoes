@@ -45,12 +45,13 @@ function withEnv(env: Record<string, string | undefined>, fn: () => Promise<void
 test("papel portal existe no contrato e fica fora dos papéis do app", () => {
     assert.ok(USER_ROLES.includes("portal"));
     assert.ok(!(PLANTOES_ROLES as readonly string[]).includes("portal"));
-    assert.deepEqual([...PLANTOES_ROLES].sort(), ["admin", "chief", "doctor", "payment_closing_limited", "radio_operador"]);
+    assert.deepEqual([...PLANTOES_ROLES].sort(), ["admin", "chief", "doctor", "payment_closing_limited", "radio_operador", "tarm"]);
 });
 
-test("rádio-operador abre o Plantões mesmo com a conta nascida como portal", () => {
+test("operadores da Central (rádio, TARM) abrem o Plantões mesmo com a conta nascida como portal", () => {
     assert.equal(temAcessoAoPlantoes(["portal", "radio_operador"]), true);
-    assert.deepEqual(rolesDoPlantoes(["portal", "radio_operador"]), ["radio_operador"]);
+    assert.equal(temAcessoAoPlantoes(["portal", "tarm"]), true);
+    assert.deepEqual(rolesDoPlantoes(["portal", "tarm"]), ["tarm"]);
 });
 
 test("só portal = sem acesso ao Plantões; portal junto de outro papel não tira nada", () => {

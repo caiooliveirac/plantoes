@@ -73,7 +73,9 @@ for (const rota of ["app/api/board", "app/api/regulation", "app/api/intervention
     });
 }
 
-test("portão: rádio-operador (sem escala) só abre a Mesa na rede da Central", () => {
-    assert.deepEqual(decidirPortao({ roles: ["radio_operador"], emTurno: false, naCentral: true }), { liberado: true, motivo: "central" });
-    assert.deepEqual(decidirPortao({ roles: ["radio_operador"], emTurno: false, naCentral: false }), { liberado: false, motivo: "fora_do_plantao" });
+test("portão: operadores da Central (rádio, TARM — sem escala aqui) só abrem a Mesa na rede da Central", () => {
+    for (const papel of ["radio_operador", "tarm"]) {
+        assert.deepEqual(decidirPortao({ roles: [papel], emTurno: false, naCentral: true }), { liberado: true, motivo: "central" });
+        assert.deepEqual(decidirPortao({ roles: [papel], emTurno: false, naCentral: false }), { liberado: false, motivo: "fora_do_plantao" });
+    }
 });

@@ -239,7 +239,7 @@ export default async function RelatorioDaContaPage({
                         <p className="ac-sub" style={{ marginTop: 0, marginBottom: 10 }}>
                             Nada é feito sozinho. Cada ação pede um motivo, fica na auditoria e aparece na linha do tempo desta conta.
                         </p>
-                        <AcoesDaConta userId={userId} email={conta.email} ativa={conta.ativa} ehVoceMesmo={userId === adminId} radioOperador={conta.papeis.includes("radio_operador")} />
+                        <AcoesDaConta userId={userId} email={conta.email} ativa={conta.ativa} ehVoceMesmo={userId === adminId} papeis={conta.papeis} />
                     </section>
 
                     <section className="ac-card">

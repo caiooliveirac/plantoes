@@ -17,11 +17,11 @@
    - suspender: conta desativada (is_active=false) — ninguém entra, nem o dono,
      até reativar. */
 import { randomBytes } from "node:crypto";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, authSessionEvents, authSessions, userRoles, users } from "@/db/schema";
 import { isEmailConfigured, sendEmail } from "@/lib/email";
-import { RADIO_OPERADOR_ROLE } from "@/modules/auth/contracts";
+import { OPERADORES_DA_CENTRAL, type OperadorDaCentral } from "@/modules/auth/contracts";
 import { sendMessage } from "@/modules/telegram/api";
 import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import { REDEFINICAO_PELO_ADMIN, createPasswordResetTokenForUser, hashPassword } from "@/services/auth.service";
@@ -38,7 +38,17 @@ export class AcaoDeAcessoError extends Error {
     }
 }
 
-export type AcaoNaConta = "encerrar_sessoes" | "exigir_nova_senha" | "suspender" | "reativar" | "dar_radio_operador" | "tirar_radio_operador";
+export type AcaoNaConta = "encerrar_sessoes" | "exigir_nova_senha" | "suspender" | "reativar"
+    | "dar_radio_operador" | "tirar_radio_operador" | "dar_tarm" | "tirar_tarm";
+
+/** Ação de dar/tirar papel de operador da Central → papel e nome. */
+const ACAO_DE_PAPEL: Partial<Record<AcaoNaConta, { papel: OperadorDaCentral; dar: boolean }>> = {
+    dar_radio_operador: { papel: "radio_operador", dar: true },
+    tirar_radio_operador: { papel: "radio_operador", dar: false },
+    dar_tarm: { papel: "tarm", dar: true },
+    tirar_tarm: { papel: "tarm", dar: false },
+};
+export const NOME_DO_OPERADOR: Record<OperadorDaCentral, string> = { radio_operador: "rádio-operador", tarm: "TARM" };
 
 const DESCRICAO: Record<AcaoNaConta | "encerrar_sessao", string> = {
     encerrar_sessao: "encerrou uma sessão",
@@ -48,6 +58,8 @@ const DESCRICAO: Record<AcaoNaConta | "encerrar_sessao", string> = {
     reativar: "reativou a conta",
     dar_radio_operador: "deu o papel de rádio-operador (Mesa só leitura, na Central, sem bloqueio por ociosidade)",
     tirar_radio_operador: "tirou o papel de rádio-operador",
+    dar_tarm: "deu o papel de TARM (Mesa só leitura, na Central, sem bloqueio por ociosidade)",
+    tirar_tarm: "tirou o papel de TARM",
 };
 
 type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
@@ -116,16 +128,18 @@ export async function agirNaConta(acao: AcaoNaConta, userId: string, adminId: st
     if (!conta) throw new AcaoDeAcessoError(404, "Conta não encontrada.");
 
     // Papel lido a cada pedido (loadUserSession): vale no próximo clique, sem derrubar sessão.
-    if (acao === "dar_radio_operador" || acao === "tirar_radio_operador") {
+    const dePapel = ACAO_DE_PAPEL[acao];
+    if (dePapel) {
+        const { papel, dar } = dePapel;
         const papeis = await db.select({ role: userRoles.role }).from(userRoles).where(eq(userRoles.userId, userId));
-        const tem = papeis.some((p) => p.role === RADIO_OPERADOR_ROLE);
-        if (acao === "dar_radio_operador" && tem) throw new AcaoDeAcessoError(409, "A conta já é de rádio-operador.");
-        if (acao === "tirar_radio_operador" && !tem) throw new AcaoDeAcessoError(409, "A conta não é de rádio-operador.");
+        const tem = papeis.some((p) => p.role === papel);
+        if (dar && tem) throw new AcaoDeAcessoError(409, `A conta já é de ${NOME_DO_OPERADOR[papel]}.`);
+        if (!dar && !tem) throw new AcaoDeAcessoError(409, `A conta não é de ${NOME_DO_OPERADOR[papel]}.`);
         await db.transaction(async (tx) => {
-            if (acao === "dar_radio_operador") {
-                await tx.insert(userRoles).values({ userId, role: RADIO_OPERADOR_ROLE }).onConflictDoNothing();
+            if (dar) {
+                await tx.insert(userRoles).values({ userId, role: papel }).onConflictDoNothing();
             } else {
-                await tx.delete(userRoles).where(and(eq(userRoles.userId, userId), eq(userRoles.role, RADIO_OPERADOR_ROLE)));
+                await tx.delete(userRoles).where(and(eq(userRoles.userId, userId), eq(userRoles.role, papel)));
             }
             await registrar(tx, acao, userId, adminId, motivo);
         });
@@ -254,12 +268,12 @@ export async function derrubarPorLugaresDemais(userId: string, lugares: number, 
     return resultado;
 }
 
-// ── Rádio-operador ───────────────────────────────────────────────────────────
-/* Quem despacha unidades na Central não tem escala nem médico vinculado: a
-   conta nasce aqui, pelo admin. Conta nova vem igual à do Huddle (papel
-   `portal`, senha que ninguém sabe, e-mail com link de 7 dias para criar a
-   senha) e ganha `radio_operador`. Conta que já existe só ganha o papel. */
-export interface CadastroDeRadioOperador {
+// ── Operadores da Central (rádio-operador, TARM) ─────────────────────────────
+/* Quem despacha unidades (rádio) ou atende o telefone (TARM) na Central não tem
+   médico vinculado: a conta nasce aqui, pelo admin. Conta nova vem igual à do
+   Huddle (papel `portal`, senha que ninguém sabe, e-mail com link de 7 dias
+   para criar a senha) e ganha o papel. Conta que já existe só ganha o papel. */
+export interface CadastroDeOperador {
     userId: string;
     situacao: "criada" | "existente";
     emailEnviado?: boolean;
@@ -267,11 +281,20 @@ export interface CadastroDeRadioOperador {
     ativa: boolean;
 }
 
-export async function cadastrarRadioOperador(pedido: { email: string; nome: string }, adminId: string): Promise<CadastroDeRadioOperador> {
+export function ehPapelDeOperador(valor: unknown): valor is OperadorDaCentral {
+    return typeof valor === "string" && (OPERADORES_DA_CENTRAL as readonly string[]).includes(valor);
+}
+
+export async function cadastrarOperadorDaCentral(
+    pedido: { email: string; nome: string; papel: OperadorDaCentral },
+    adminId: string,
+): Promise<CadastroDeOperador> {
     const email = pedido.email.trim().toLowerCase();
     const nome = pedido.nome.trim();
+    const { papel } = pedido;
+    if (!ehPapelDeOperador(papel)) throw new AcaoDeAcessoError(400, "Função inválida.");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AcaoDeAcessoError(400, "E-mail inválido.");
-    if (nome.length < 2) throw new AcaoDeAcessoError(400, "Escreva o nome do rádio-operador.");
+    if (nome.length < 2) throw new AcaoDeAcessoError(400, "Escreva o nome.");
 
     const provisionada = await provisionarContaPortal({ email, nome: nome.slice(0, 160), origem: "SAMU Salvador" });
     const db = getDb();
@@ -279,13 +302,12 @@ export async function cadastrarRadioOperador(pedido: { email: string; nome: stri
     if (!conta) throw new AcaoDeAcessoError(500, "A conta não foi encontrada depois de criada.");
 
     const papeis = await db.select({ role: userRoles.role }).from(userRoles).where(eq(userRoles.userId, conta.id));
-    const jaEra = papeis.some((p) => p.role === RADIO_OPERADOR_ROLE);
+    const jaEra = papeis.some((p) => p.role === papel);
     if (!jaEra) {
         await db.transaction(async (tx) => {
-            await tx.insert(userRoles).values({ userId: conta.id, role: RADIO_OPERADOR_ROLE }).onConflictDoNothing();
-            await registrar(tx, "dar_radio_operador", conta.id, adminId, `cadastro de rádio-operador: ${nome.slice(0, 160)}`, {
-                contaNova: provisionada.situacao === "criada",
-            });
+            await tx.insert(userRoles).values({ userId: conta.id, role: papel }).onConflictDoNothing();
+            await registrar(tx, papel === "tarm" ? "dar_tarm" : "dar_radio_operador", conta.id, adminId,
+                `cadastro de ${NOME_DO_OPERADOR[papel]}: ${nome.slice(0, 160)}`, { contaNova: provisionada.situacao === "criada" });
         });
     }
     return {
@@ -297,12 +319,12 @@ export async function cadastrarRadioOperador(pedido: { email: string; nome: stri
     };
 }
 
-/** Contas com o papel, para a lista em /admin/acessos. */
-export async function listarRadioOperadores() {
+/** Contas com papel de operador da Central, para a lista em /admin/acessos. */
+export async function listarOperadoresDaCentral() {
     return getDb()
-        .select({ userId: users.id, email: users.email, ativa: users.isActive })
+        .select({ userId: users.id, email: users.email, ativa: users.isActive, papel: userRoles.role })
         .from(userRoles)
         .innerJoin(users, eq(users.id, userRoles.userId))
-        .where(eq(userRoles.role, RADIO_OPERADOR_ROLE))
-        .orderBy(users.email);
+        .where(inArray(userRoles.role, [...OPERADORES_DA_CENTRAL]))
+        .orderBy(userRoles.role, users.email);
 }

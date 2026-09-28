@@ -600,7 +600,7 @@ test("plantão: dois IPs do pool da Central fora do turno são o mesmo lugar (ch
     };
     const chefe = analisarConta({ ...entrada, conta: conta({ papeis: ["chief"] }) });
     assert.equal(chefe.episodios[0].forca, "fraco");
-    assert.match(chefe.episodios[0].motivos[0], /Chefia\/coordenação\/rádio-operador.*mesmo lugar/);
+    assert.match(chefe.episodios[0].motivos[0], /Chefia\/coordenação\/operador da Central.*mesmo lugar/);
     assert.equal(chefe.nivel, "normal");
     const medico = analisarConta({ ...entrada, conta: conta(), plantoes: [turno(-1440, -720)] });
     assert.equal(medico.episodios[0].forca, "moderado", "forte (2 PCs em uso) desce um nível");
@@ -657,6 +657,8 @@ test("rádio-operador: trabalha na Central sem escala — tratado como a chefia 
     const radio2 = analisarConta({ ...doisPcsNaCentral, conta: conta({ papeis: ["radio_operador"] }) });
     assert.equal(radio2.episodios[0].forca, "fraco");
     assert.equal(radio2.nivel, "normal");
+    const tarm = analisarConta({ ...doisPcsNaCentral, conta: conta({ papeis: ["tarm"] }) });
+    assert.equal(tarm.nivel, "normal");
 });
 
 test("plantão: PCs usados só na rede do plantão durante o turno não contam em muitos aparelhos", () => {

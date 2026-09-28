@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { eq, inArray, like } from "drizzle-orm";
 
 /**
- * Rádio-operador contra Postgres de verdade (migrations 0048–0050): cadastro
+ * Operadores da Central (rádio-operador, TARM) contra Postgres de verdade (migrations 0048–0050): cadastro
  * pelo admin (conta nova ou existente), tirar o papel, e a rede da Central que
  * decide a isenção da presença na Mesa. Só roda com DATABASE_URL num banco
  * `*_test`. Contas @radio-teste.invalid e a faixa de documentação 192.0.2.0/24
@@ -66,23 +66,23 @@ test("rádio-operador (banco): cadastro cria a conta de portal com o papel; repe
     const adminId = await admin();
     const email = `radio-${Date.now()}@radio-teste.invalid`;
 
-    const criado = await acoes.cadastrarRadioOperador({ email: email.toUpperCase(), nome: "Rádio Teste" }, adminId);
+    const criado = await acoes.cadastrarOperadorDaCentral({ email: email.toUpperCase(), nome: "Rádio Teste", papel: "radio_operador" }, adminId);
     assert.equal(criado.situacao, "criada");
     assert.equal(criado.jaEra, false);
     assert.deepEqual(await papeisDe(criado.userId), ["portal", "radio_operador"]);
 
-    const repetido = await acoes.cadastrarRadioOperador({ email, nome: "Rádio Teste" }, adminId);
+    const repetido = await acoes.cadastrarOperadorDaCentral({ email, nome: "Rádio Teste", papel: "radio_operador" }, adminId);
     assert.equal(repetido.userId, criado.userId);
     assert.equal(repetido.jaEra, true);
 
-    assert.ok((await acoes.listarRadioOperadores()).some((c) => c.userId === criado.userId));
+    assert.ok((await acoes.listarOperadoresDaCentral()).some((c) => c.userId === criado.userId && c.papel === "radio_operador"));
     await acoes.agirNaConta("tirar_radio_operador", criado.userId, adminId, "saiu da função de rádio");
     assert.deepEqual(await papeisDe(criado.userId), ["portal"]);
     await assert.rejects(acoes.agirNaConta("tirar_radio_operador", criado.userId, adminId, "de novo por engano"), /não é de rádio-operador/);
     await acoes.agirNaConta("dar_radio_operador", criado.userId, adminId, "voltou para o rádio");
     assert.deepEqual(await papeisDe(criado.userId), ["portal", "radio_operador"]);
 
-    await assert.rejects(acoes.cadastrarRadioOperador({ email: "sem-arroba", nome: "X Y" }, adminId), /E-mail inválido/);
+    await assert.rejects(acoes.cadastrarOperadorDaCentral({ email: "sem-arroba", nome: "X Y", papel: "tarm" }, adminId), /E-mail inválido/);
 });
 
 test("rádio-operador (banco): conta de médico já existente só ganha o papel", { skip }, async () => {
@@ -94,10 +94,24 @@ test("rádio-operador (banco): conta de médico já existente só ganha o papel"
         .returning({ id: schema.users.id });
     await getDb().insert(schema.userRoles).values({ userId: medico.id, role: "doctor" });
 
-    const r = await acoes.cadastrarRadioOperador({ email, nome: "Médico e Rádio" }, adminId);
+    const r = await acoes.cadastrarOperadorDaCentral({ email, nome: "Médico e Rádio", papel: "radio_operador" }, adminId);
     assert.equal(r.situacao, "existente");
     assert.equal(r.userId, medico.id);
     assert.deepEqual(await papeisDe(medico.id), ["doctor", "radio_operador"]);
+});
+
+test("TARM (banco): cadastro dá o papel tarm; a mesma conta pode ser rádio também; tirar um não tira o outro", { skip }, async () => {
+    const { acoes } = await modulos();
+    const adminId = await admin();
+    const email = `tarm-${Date.now()}@radio-teste.invalid`;
+    const criado = await acoes.cadastrarOperadorDaCentral({ email, nome: "Telefonista Teste", papel: "tarm" }, adminId);
+    assert.equal(criado.situacao, "criada");
+    assert.deepEqual(await papeisDe(criado.userId), ["portal", "tarm"]);
+    await acoes.agirNaConta("dar_radio_operador", criado.userId, adminId, "cobre o rádio também");
+    assert.deepEqual(await papeisDe(criado.userId), ["portal", "radio_operador", "tarm"]);
+    await acoes.agirNaConta("tirar_tarm", criado.userId, adminId, "saiu do telefone");
+    assert.deepEqual(await papeisDe(criado.userId), ["portal", "radio_operador"]);
+    await assert.rejects(acoes.agirNaConta("tirar_tarm", criado.userId, adminId, "de novo por engano"), /não é de TARM/);
 });
 
 test("rádio-operador (banco): a isenção só vale na faixa da Central (rótulo ou medida)", { skip }, async () => {
