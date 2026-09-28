@@ -3,7 +3,7 @@ import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs } from "@/db/schema";
-import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { AuthError, requireMesaSession } from "@/lib/auth/server";
 import { correctRegulationOccupancy } from "@/modules/operational/corrections";
 
 /**
@@ -71,7 +71,7 @@ export async function GET() {
         return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
     }
     try {
-        await requireAuthenticatedSession(["admin"]);
+        await requireMesaSession(["admin"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });
@@ -87,7 +87,7 @@ export async function POST(request: Request) {
 
     let session;
     try {
-        session = await requireAuthenticatedSession(["admin"]);
+        session = await requireMesaSession(["admin"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

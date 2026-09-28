@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
-import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { AuthError, requireMesaSession } from "@/lib/auth/server";
 import { avisarSecretario } from "@/lib/avisos/secretario";
 import { buildChiefExitUnknownNotice } from "@/modules/operational/chief-arrival-guard";
 
@@ -21,7 +21,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
 
     let session;
     try {
-        session = await requireAuthenticatedSession(["admin", "chief"]);
+        session = await requireMesaSession(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

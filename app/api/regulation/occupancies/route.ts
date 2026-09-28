@@ -5,7 +5,7 @@ import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
 import { conferirChegada } from "@/modules/operational/arrival-check";
 import { resolveFixedOperationalRole } from "@/modules/operational/roles";
-import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { AuthError, requireMesaSession } from "@/lib/auth/server";
 import {
     describeConflicts,
     describeMergeable,
@@ -45,7 +45,7 @@ export async function GET() {
     }
 
     try {
-        await requireAuthenticatedSession(["admin", "chief"]);
+        await requireMesaSession(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });
@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
 
     let session;
     try {
-        session = await requireAuthenticatedSession(["admin", "chief"]);
+        session = await requireMesaSession(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

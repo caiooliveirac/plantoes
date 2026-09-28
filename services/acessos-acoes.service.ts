@@ -1,6 +1,8 @@
-/* Ações da coordenação no monitor de acessos (docs/monitor-acessos.md). Nada
-   aqui é automático: cada ação é um clique do admin, com motivo obrigatório,
-   linha em audit_logs e evento na linha do tempo da conta.
+/* Ações da coordenação no monitor de acessos (docs/monitor-acessos.md). Cada
+   ação é um clique do admin, com motivo obrigatório, linha em audit_logs e
+   evento na linha do tempo da conta. A única automática é
+   derrubarPorLugaresDemais (conta em mais de 3 lugares ao mesmo tempo,
+   services/acessos-portao.service.ts): a mesma troca de senha, sem admin.
 
    O que cada uma corta de verdade:
    - encerrar uma sessão: aquele aparelho cai. Se ele tem login do portal
@@ -19,6 +21,8 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, authSessionEvents, authSessions, users } from "@/db/schema";
 import { isEmailConfigured, sendEmail } from "@/lib/email";
+import { sendMessage } from "@/modules/telegram/api";
+import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import { REDEFINICAO_PELO_ADMIN, createPasswordResetTokenForUser, hashPassword } from "@/services/auth.service";
 
 /** Link de redefinição mandado pela coordenação: 24 h (o do "esqueci a senha" é 2 h). */
@@ -44,7 +48,8 @@ const DESCRICAO: Record<AcaoNaConta | "encerrar_sessao", string> = {
 
 type Tx = Parameters<Parameters<ReturnType<typeof getDb>["transaction"]>[0]>[0];
 
-async function registrar(tx: Tx, acao: AcaoNaConta | "encerrar_sessao", alvoId: string, adminId: string, motivo: string, extra: Record<string, unknown> = {}) {
+/** adminId null = o próprio monitor (derrubada automática). */
+async function registrar(tx: Tx, acao: AcaoNaConta | "encerrar_sessao", alvoId: string, adminId: string | null, motivo: string, extra: Record<string, unknown> = {}) {
     await tx.insert(auditLogs).values({
         actorUserId: adminId,
         // Entra em SENHA_DEFINIDA_ACTIONS: o portal diz "sua senha foi alterada em…".
@@ -56,12 +61,12 @@ async function registrar(tx: Tx, acao: AcaoNaConta | "encerrar_sessao", alvoId: 
     await tx.insert(authSessionEvents).values({
         userId: alvoId,
         sessionId: typeof extra.sessaoId === "string" ? extra.sessaoId : null,
-        kind: `admin_${acao}`,
+        kind: adminId ? `admin_${acao}` : `auto_${acao}`,
         details: { descricao: DESCRICAO[acao], motivo, adminId, ...extra },
     });
 }
 
-async function encerrarAbertas(tx: Tx, userId: string, adminId: string, motivo: string) {
+async function encerrarAbertas(tx: Tx, userId: string, adminId: string | null, motivo: string) {
     const encerradas = await tx
         .update(authSessions)
         .set({ revokedAt: new Date(), revokedBy: adminId, revokedReason: motivo })
@@ -140,6 +145,22 @@ export async function agirNaConta(acao: AcaoNaConta, userId: string, adminId: st
     }
 
     // exigir_nova_senha: senha aleatória que ninguém conhece + link por e-mail.
+    return trocarSenhaEMandarLink(userId, conta.email, adminId, motivo, `senha trocada pela coordenação: ${motivo}`, [
+        "A coordenação encerrou todos os acessos da sua conta e trocou a sua senha.",
+        "A senha antiga não vale mais, em nenhum aparelho.",
+    ]);
+}
+
+async function trocarSenhaEMandarLink(
+    userId: string,
+    email: string,
+    adminId: string | null,
+    motivo: string,
+    motivoDaRevogacao: string,
+    abertura: string[],
+    extra: Record<string, unknown> = {},
+): Promise<ResultadoDaAcao> {
+    const db = getDb();
     const passwordHash = await hashPassword(randomBytes(32).toString("base64url"));
     const { sessoesEncerradas, token } = await db.transaction(async (tx) => {
         await tx
@@ -151,9 +172,9 @@ export async function agirNaConta(acao: AcaoNaConta, userId: string, adminId: st
                 updatedAt: new Date(),
             })
             .where(eq(users.id, userId));
-        const total = await encerrarAbertas(tx, userId, adminId, `senha trocada pela coordenação: ${motivo}`);
+        const total = await encerrarAbertas(tx, userId, adminId, motivoDaRevogacao);
         const novoToken = await createPasswordResetTokenForUser(userId, RESET_PELO_ADMIN_TTL_MS, tx);
-        await registrar(tx, acao, userId, adminId, motivo, { sessoesEncerradas: total });
+        await registrar(tx, "exigir_nova_senha", userId, adminId, motivo, { sessoesEncerradas: total, ...extra });
         return { sessoesEncerradas: total, token: novoToken };
     });
 
@@ -163,11 +184,10 @@ export async function agirNaConta(acao: AcaoNaConta, userId: string, adminId: st
     if (isEmailConfigured()) {
         try {
             await sendEmail({
-                to: conta.email,
-                subject: "Sua senha do Plantões SAMU foi redefinida pela coordenação",
+                to: email,
+                subject: "Sua senha do Plantões SAMU foi redefinida",
                 text: [
-                    "A coordenação encerrou todos os acessos da sua conta e trocou a sua senha.",
-                    "A senha antiga não vale mais, em nenhum aparelho.",
+                    ...abertura,
                     "",
                     "Escolha uma senha nova por este link (vale por 24 horas):",
                     link,
@@ -177,8 +197,38 @@ export async function agirNaConta(acao: AcaoNaConta, userId: string, adminId: st
             });
             emailEnviado = true;
         } catch (erro) {
-            console.error("[acessos] e-mail de redefinição pelo admin falhou", erro);
+            console.error("[acessos] e-mail de redefinição falhou", erro);
         }
     }
     return emailEnviado ? { sessoesEncerradas, emailEnviado } : { sessoesEncerradas, emailEnviado, linkDeRedefinicao: link };
+}
+
+/** Conta em mais de 3 lugares ao mesmo tempo (services/acessos-portao.service.ts):
+    tudo cai, senha trocada, link no e-mail da conta, aviso aos admins no Telegram. */
+export async function derrubarPorLugaresDemais(userId: string, lugares: number, faixas: string[]) {
+    const [conta] = await getDb()
+        .select({ id: users.id, email: users.email, isActive: users.isActive })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+    if (!conta || !conta.isActive) return null;
+    const motivo = `uso em ${lugares} lugares ao mesmo tempo (limite: 3)`;
+    const resultado = await trocarSenhaEMandarLink(userId, conta.email, null, motivo, `automático: ${motivo}`, [
+        `Sua conta foi usada em ${lugares} lugares diferentes ao mesmo tempo. O limite é 3.`,
+        "Por segurança, todos os acessos foram encerrados e a senha antiga não vale mais, em nenhum aparelho.",
+    ], { lugares, faixas });
+
+    if (process.env.TELEGRAM_BOT_TOKEN?.trim()) {
+        const app = (process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br").replace(/\/$/, "");
+        const texto = [
+            "Acesso derrubado automaticamente",
+            `${conta.email}: em uso em ${lugares} lugares ao mesmo tempo (limite 3).`,
+            `Sessões encerradas: ${resultado.sessoesEncerradas}. Senha trocada; link ${resultado.emailEnviado ? "enviado ao e-mail da conta" : "NÃO saiu por e-mail — repasse pelo relatório"}.`,
+            `${app}/admin/acessos/${userId}?periodo=24h`,
+        ].join("\n");
+        for (const chatId of new Set(getTelegramAdminUserIds().filter(Boolean))) {
+            await sendMessage(chatId, texto).catch((erro) => console.error("[acessos] aviso de derrubada falhou", erro));
+        }
+    }
+    return resultado;
 }

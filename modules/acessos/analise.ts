@@ -1040,13 +1040,23 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
             evidencias: [],
         });
     }
-    const acoesDoAdmin = eventos.filter((e) => e.tipo.startsWith("admin_"));
+    // Portão de turno (modules/acessos/portao.ts): registrado no máximo 1× a cada 10 min por sistema.
+    const barrados = eventos.filter((e) => e.tipo === "barrado_fora_do_plantao");
+    if (barrados.length > 0) {
+        achados.push({
+            nivel: "atencao",
+            titulo: "Tentou abrir a Mesa ou a Tabela fora do plantão",
+            texto: `${barrados.length} ${barrados.length === 1 ? "tentativa barrada" : "tentativas barradas"} fora do turno e fora da Central (registro de 10 em 10 minutos).`,
+            evidencias: barrados.slice(-10).map((e) => `${quando(e.em)} — ${e.detalhes.sistema === "tabela" ? "Tabela" : "Mesa operacional"}.`),
+        });
+    }
+    const acoesDoAdmin = eventos.filter((e) => e.tipo.startsWith("admin_") || e.tipo.startsWith("auto_"));
     if (acoesDoAdmin.length > 0) {
         achados.push({
             nivel: "info",
             titulo: "Ações da coordenação nesta conta",
-            texto: "Registro do que já foi feito por aqui.",
-            evidencias: acoesDoAdmin.map((e) => `${quando(e.em)} — ${String(e.detalhes.descricao ?? e.tipo)}${e.detalhes.motivo ? `: ${String(e.detalhes.motivo)}` : ""}.`),
+            texto: "Registro do que já foi feito por aqui (inclusive as automáticas).",
+            evidencias: acoesDoAdmin.map((e) => `${quando(e.em)} — ${e.tipo.startsWith("auto_") ? "automático: " : ""}${String(e.detalhes.descricao ?? e.tipo)}${e.detalhes.motivo ? `: ${String(e.detalhes.motivo)}` : ""}.`),
         });
     }
 

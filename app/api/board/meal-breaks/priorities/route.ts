@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs } from "@/db/schema";
-import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { AuthError, requireMesaSession } from "@/lib/auth/server";
 import { getCurrentMealBreakPriorityView, updateMealBreakPriorityOrder } from "@/modules/telegram/meal-breaks";
 
 const patchSchema = z.object({
@@ -13,7 +13,7 @@ const patchSchema = z.object({
 });
 
 async function requireChiefSession() {
-    return requireAuthenticatedSession(["admin", "chief"]);
+    return requireMesaSession(["admin", "chief"]);
 }
 
 export async function GET(request: NextRequest) {

@@ -12,9 +12,10 @@ aponta quando **a mesma conta estava em uso em lugares diferentes ao mesmo
 tempo** — com a linha do tempo que prova isso, em português, pronta para
 imprimir.
 
-**Nada bloqueia sozinho** (decisão do Caio, 27/09/2026). O monitor avisa e
-documenta; cortar acesso é sempre um clique do admin, com motivo, no relatório
-da conta.
+**Heurística nunca bloqueia; regra bloqueia** (decisão do Caio, 28/09/2026 —
+substitui "nada bloqueia sozinho" de 27/09). Episódios e achados avisam e
+documentam; cortar por eles é um clique do admin. Duas regras objetivas agem
+sozinhas — ver [Portão de turno e limite de lugares](#portão-de-turno-e-limite-de-lugares).
 
 ## O que é registrado
 
@@ -172,6 +173,61 @@ no `.env.production`** (e `pm2 delete/start` do worker — o PM2 não relê o en
 
 Deduplicação em `telegram_bot_notices` (reserva idempotente; falha de envio
 solta a reserva para o próximo ciclo tentar).
+
+## Portão de turno e limite de lugares
+
+Regras em `modules/acessos/portao.ts`; banco, cache e ação em
+`services/acessos-portao.service.ts`. Ligadas desde o deploy (sem sombra, decisão
+do Caio). Desligar em emergência: `ACESSOS_PORTAO_TURNO=0` /
+`ACESSOS_LIMITE_LUGARES=0` no `.env.production` + `pm2 delete/start plantoes`.
+
+### Mesa e Tabela só de plantão
+
+| Quem | Mesa (`/`, `/api/board*`, regulação, intervenção, operacional, turno anterior) e Tabela (abas Tabela, Casos, Destino, UPAs) |
+|---|---|
+| admin | sempre |
+| qualquer outra conta (chefia inclusive) em turno | sim, de qualquer lugar |
+| fora do turno, **na rede do plantão** (faixa da Central) | sim — quem chegou e ainda não declarou no bot não fica sem a Mesa |
+| fora do turno, fora da Central | **não**: Mesa mostra "Mesa fechada fora do plantão"; API 403; Tabela 403 |
+
+- **Turno** = ocupação (regulação ou intervenção) do médico da conta, de 30 min
+  antes da chegada até 1 h depois da saída real (senão prevista, senão 24 h).
+  Conta sem médico vinculado nunca está em turno: só admin ou Central.
+- **Rede do plantão** = a mesma de "Plantão: uso de trabalho" acima, olhando 14
+  dias, recalculada a cada 15 min.
+- Checado **a cada pedido**, não no login: trocar ou emprestar a senha não abre
+  nada fora do turno do dono. Resposta guardada 60 s por conta.
+- Erro de banco deixa passar (a Mesa é operação de emergência) e vira log
+  `[acessos] portão`.
+- Folha de ponto, banco de horas, `/medico`, troca de senha seguem abertos.
+- Barrado vira evento `barrado_fora_do_plantao` (de 10 em 10 min por sistema) e
+  o achado de atenção "Tentou abrir a Mesa ou a Tabela fora do plantão".
+- Tabela: `POST /api/servicos/portal/acesso` com `sistema = "tabela"` recusa com
+  `motivo: "fora_do_plantao"`; o porteiro (kairos) responde **403** no `/portao`
+  (401 mandaria ao login do portal, que está logado — laço). O cache do
+  porteiro é por sessão × IP × sistema, para a recusa da Tabela não derrubar o
+  portal. **Deploy do porteiro antes do plantões.**
+- WebSocket da Tabela já aberto não é reconferido até reconectar (limitação do
+  `auth_request`, igual à revogação).
+
+### Mais de 3 lugares ao mesmo tempo: derruba tudo
+
+**Lugar** = faixa de rede (/24 IPv4, /64 IPv6). Faixas usadas pela mesma sessão
+contam como um lugar (4G trocando de IP, IPv4/IPv6 no mesmo aparelho); vários
+PCs da Central são um lugar. "Ao mesmo tempo" = visto nos últimos 5 min. Conta
+em memória, a cada pedido da Mesa e do portal.
+
+Com **4+ lugares**: senha trocada por uma aleatória, `session_version` + 1, todas
+as sessões encerradas (Mesa, portal, Tabela em até 1 min), link de redefinição
+de 24 h no e-mail da conta, aviso aos `TELEGRAM_ADMIN_IDS`. Evento
+`auto_exigir_nova_senha`, `audit_logs` com ator nulo. Uma vez a cada 15 min por
+conta. **Admin não cai**: só evento `lugares_demais_admin` (o alerta de episódio
+forte já avisa).
+
+Por que lugar e não sessão: em 7 dias até 28/09/2026, contando sessões (cookies)
+10 contas passariam de 3 — todas em 1–2 redes (o portal gera vários `sid` por
+navegador; cada navegador tem cookie da Mesa e do portal). Contando lugares, o
+máximo visto foi 3.
 
 ## Ações do admin (e o que cada uma corta de verdade)
 
