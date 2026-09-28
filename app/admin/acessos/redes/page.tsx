@@ -3,7 +3,7 @@ import "@/app/admin/acessos/acessos.css";
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { NOME_DO_VEREDITO, type RedeAnalisada, type Veredito } from "@/modules/acessos/redes";
+import { NOME_DO_VEREDITO, PLANTONISTAS_POSSIVEL_CENTRAL, type RedeAnalisada, type Veredito } from "@/modules/acessos/redes";
 import { carregarRedes, type ContaResumida } from "@/services/acessos-redes.service";
 import { lerPeriodo, PERIODOS, type ChavePeriodo } from "@/services/acessos-relatorio.service";
 import { RotuloDaRede } from "@/app/admin/acessos/redes/rotulo-client";
@@ -50,7 +50,7 @@ function HorasFora({ horasFora }: { horasFora: number[] }) {
 }
 
 function Rede({ rede, contas }: { rede: RedeAnalisada; contas: Map<string, ContaResumida> }) {
-    const quaseCentral = !rede.central && rede.plantonistas > 0;
+    const quaseCentral = !rede.central && rede.plantonistas >= PLANTONISTAS_POSSIVEL_CENTRAL;
     return (
         <section className={`ac-card ac-rede${rede.coletivaFora ? " suspeita" : ""}`} id={rede.faixa}>
             <div className="ac-topo">
@@ -139,7 +139,7 @@ export default async function RedesPage({ searchParams }: { searchParams?: Promi
     const dados = await carregarRedes({ desde: new Date(Date.now() - PERIODOS[periodo].ms) });
 
     const centrais = dados.redes.filter((r) => r.central);
-    const quase = dados.redes.filter((r) => !r.central && r.plantonistas > 0);
+    const quase = dados.redes.filter((r) => !r.central && r.plantonistas >= PLANTONISTAS_POSSIVEL_CENTRAL);
     const suspeitas = dados.redes.filter((r) => r.coletivaFora || r.vazamentos > 0 || r.rotulo?.kind === "suspeita");
     const demais = dados.redes.filter((r) => !r.central && !suspeitas.includes(r) && (r.minutosFora > 0 || r.barrados > 0));
     const vazamentos = dados.redes.reduce((t, r) => t + r.vazamentos, 0);
@@ -180,8 +180,8 @@ export default async function RedesPage({ searchParams }: { searchParams?: Promi
                         <p className="ac-sub">
                             Computador numa destas faixas abre Mesa e Tabela mesmo sem chegada registrada. Reconhecida por medida (3+
                             plantonistas usaram a Mesa num PC dentro do turno, últimos 14 dias no portão) ou por rótulo do admin — que
-                            garante a faixa mesmo se a medida cair. Faixas com 1–2 plantonistas no PC aparecem abaixo: se forem da
-                            Central, rotule como <b>Central</b>.
+                            garante a faixa mesmo se a medida cair. Faixas com 2+ plantonistas no PC que não são reconhecidas aparecem
+                            abaixo: se forem da Central, rotule como <b>Central</b>. (Com 1 só, costuma ser o notebook de um médico.)
                         </p>
                         <div className="ac-tabela-wrap">
                             <table className="ac-tabela">

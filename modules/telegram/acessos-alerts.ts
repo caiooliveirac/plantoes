@@ -10,10 +10,10 @@
  *    forte e de atenção nas últimas 24 h. Sai mesmo sem nada — é a prova de
  *    que o monitor está vivo.
  * 3. Redes (a cada 30 min, olhando 7 dias — services/acessos-redes.service.ts):
- *    rede coletiva fora do plantão (2+ contas fora do turno, fora da Central)
+ *    rede coletiva fora do plantão (3+ contas fora do turno, fora da Central)
  *    ou com vazamento provável; avisa de novo quando cresce (mais contas ou
- *    mais vazamentos), no máximo 1× a cada 24 h por rede. E faixa com
- *    plantonista no PC que o portão NÃO trata como Central e já barrou alguém
+ *    mais vazamentos), no máximo 1× a cada 24 h por rede. E faixa com 2+
+ *    plantonistas no PC que o portão NÃO trata como Central e já barrou alguém
  *    (segunda saída da Central? posto noutro prédio?) — 1× por dia.
  *    Rede rotulada "conhecida" ou "Central" não gera aviso de suspeita.
  * 4. Poda da retenção (180 dias), uma vez por dia na mesma janela das 8h.
@@ -33,7 +33,7 @@ import { getTelegramAdminUserIds } from "@/modules/telegram/config";
 import { podarRegistrosAntigos } from "@/services/acessos.service";
 import { carregarMonitor } from "@/services/acessos-relatorio.service";
 import { carregarRedes } from "@/services/acessos-redes.service";
-import type { RedeAnalisada } from "@/modules/acessos/redes";
+import { PLANTONISTAS_POSSIVEL_CENTRAL, type RedeAnalisada } from "@/modules/acessos/redes";
 
 const STAGE = "acessos";
 const CHECAR_A_CADA_MS = 2 * 60_000;
@@ -211,7 +211,7 @@ async function avisarRedes(referenceDate: Date, admins: string[], app: string, r
                 if (await enviarUmaVez(chatId, noticeKey, texto, { faixa: rede.faixa })) resultado.sent += 1;
             }
         }
-        if (rede.plantonistas > 0 && rede.barrados > 0) {
+        if (rede.plantonistas >= PLANTONISTAS_POSSIVEL_CENTRAL && rede.barrados > 0) {
             const texto = [
                 `Possível Central não reconhecida: ${nomeDaRede(rede)} (${rede.faixa})`,
                 `${rede.plantonistas} plantonista(s) usaram a Mesa num PC ali dentro do turno, e o portão já barrou ${rede.barrados} acesso(s) fora do turno.`,

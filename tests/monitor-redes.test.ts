@@ -16,13 +16,19 @@ test("redes: conta em uso fora enquanto o dono está na Central = vazou", () => 
     assert.equal(fora.vazamentos, 1);
 });
 
-test("redes: duas contas fora do turno no mesmo escritório = coletiva; navegador estranho", () => {
-    const janelas = [j("a", "sa", "45.6.7.8", 0, false), j("b", "sb", "45.6.7.9", 0, false)];
+test("redes: três contas fora do turno no mesmo escritório = coletiva; navegador estranho", () => {
+    const janelas = [j("a", "sa", "45.6.7.8", 0, false), j("b", "sb", "45.6.7.9", 0, false), j("c", "sc", "45.6.7.10", 0, false)];
     const [rede] = analisarRedes({ ...base, janelas });
     assert.equal(rede.coletivaFora, true);
+    assert.equal(rede.contasFora, 3);
+    assert.deepEqual(rede.contas.map((c) => c.veredito), ["aparelho_estranho", "aparelho_estranho", "aparelho_estranho"]);
+    assert.equal(rede.horasFora[10], 3);
+});
+
+test("redes: duas contas fora do turno na mesma casa não é coletiva (casal de médicos)", () => {
+    const [rede] = analisarRedes({ ...base, janelas: [j("a", "sa", "177.1.1.8", 0, false), j("b", "sb", "177.1.1.8", 0, false)] });
     assert.equal(rede.contasFora, 2);
-    assert.deepEqual(rede.contas.map((c) => c.veredito), ["aparelho_estranho", "aparelho_estranho"]);
-    assert.equal(rede.horasFora[10], 2);
+    assert.equal(rede.coletivaFora, false);
 });
 
 test("redes: mesmo navegador usado no plantão e depois em casa = uso próprio", () => {

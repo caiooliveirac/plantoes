@@ -250,8 +250,10 @@ portão (30 min antes, 1 h depois).
 User-agent não serve para "mesmo aparelho" (todo Chrome de Windows manda o
 mesmo texto); a sessão (cookie) serve.
 
-**Rede coletiva fora do plantão** = 2+ contas com uso fora do turno (ou
-barradas), fora da Central. Ordenadas por pontuação (minutos fora + contas² +
+**Rede coletiva fora do plantão** = 3+ contas com uso fora do turno (ou
+barradas), fora da Central. Com 2 é quase sempre casa de casal de médicos ou
+celular com duas contas (1º ciclo em 28/09: 5 faixas de 2 contas, todas
+residenciais/4G) — aparece no painel, não avisa. Ordenadas por pontuação (minutos fora + contas² +
 barrados + vazamentos). O histograma por hora mostra o padrão: horário
 comercial = local de trabalho.
 
@@ -269,7 +271,8 @@ rótulo) e as que têm plantonista no PC mas **não** são reconhecidas.
 **Vigia no Telegram** (`modules/telegram/acessos-alerts.ts`, a cada 30 min,
 olhando 7 dias): rede coletiva fora do plantão ou com vazamento provável (de
 novo quando cresce, máx. 1×/24 h por rede); e "possível Central não
-reconhecida" — faixa com plantonista no PC que já teve barrado (1×/dia).
+reconhecida" — faixa com 2+ plantonistas no PC que já teve barrado (1×/dia;
+com 1 só costuma ser o notebook de um médico).
 
 ## Ações do admin (e o que cada uma corta de verdade)
 
