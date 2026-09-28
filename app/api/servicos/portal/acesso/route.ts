@@ -14,7 +14,9 @@
 
    Recusa: conta inexistente, suspensa, sem papel, ou `sv` do cookie diferente
    de users.session_version (troca de senha, "encerrar sessões"). O porteiro
-   trata a recusa como "sem sessão": manda ao login do portal.
+   trata a recusa como "sem sessão": manda ao login do portal. Exceção:
+   `fora_do_plantao` (portão de turno, só na Tabela) — a sessão vale, o
+   porteiro responde 403 e o portal continua aberto.
 
    Registro (docs/monitor-acessos.md): o login do portal vira uma sessão de
    origem `portal_cookie` com o `sid` que o porteiro gravou no cookie; o IP,
@@ -30,6 +32,7 @@ import { lerContextoRequisicao } from "@/lib/acessos/contexto";
 import { depoisDaResposta } from "@/lib/acessos/depois";
 import { registrarAcesso, registrarEvento } from "@/services/acessos.service";
 import { conferirSessaoDoPortal } from "@/services/acessos-portal.service";
+import { vigiarLugares } from "@/services/acessos-portao.service";
 
 const schema = z.object({
     email: z.string().email(),
@@ -65,7 +68,6 @@ export async function POST(request: NextRequest) {
     }
 
     const { email, sid, sv, pedidos, sistema, metodo, caminho } = parsed.data;
-    const conferencia = await conferirSessaoDoPortal(email, sv);
     const contexto = {
         ...lerContextoRequisicao(request.headers),
         metodo: metodo ?? "GET",
@@ -74,19 +76,24 @@ export async function POST(request: NextRequest) {
         prefetch: false,
         usoMesa: null,
     };
+    const conferencia = await conferirSessaoDoPortal(email, sv, { sistema, contexto });
 
     if (conferencia.ok && conferencia.userId) {
         const userId = conferencia.userId;
-        depoisDaResposta(() => registrarAcesso({
-            sessaoId: sid,
-            userId,
-            versao: sv ?? 0,
-            contexto,
-            pedidos,
-            origemSeNova: "portal_cookie",
-            sistema,
-        }));
-    } else if (conferencia.userId) {
+        depoisDaResposta(async () => {
+            await registrarAcesso({
+                sessaoId: sid,
+                userId,
+                versao: sv ?? 0,
+                contexto,
+                pedidos,
+                origemSeNova: "portal_cookie",
+                sistema,
+            });
+            await vigiarLugares(userId, sid, contexto.ip);
+        });
+    } else if (conferencia.userId && conferencia.motivo !== "fora_do_plantao") {
+        // fora_do_plantao já vira "barrado_fora_do_plantao" (de 10 em 10 min) no portão.
         const userId = conferencia.userId;
         depoisDaResposta(() => registrarEvento({
             tipo: "portal_recusado",

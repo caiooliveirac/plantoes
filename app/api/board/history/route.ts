@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasDatabaseUrl } from "@/db";
-import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { AuthError, requireMesaSession } from "@/lib/auth/server";
 import { getHistoricalOperationalBoard } from "@/services/operational-history.service";
 
 export async function GET(request: NextRequest) {
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        await requireAuthenticatedSession(["admin", "chief"]);
+        await requireMesaSession(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

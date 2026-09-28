@@ -62,7 +62,7 @@ const comoObjeto = (valor: unknown): Record<string, unknown> => (valor && typeof
    para sempre. E, por faixa (/24), quantos plantonistas diferentes usaram a
    Mesa num computador durante o próprio turno — 3+ é a "rede do plantão" (a
    Central sai por um pool de IPs da mesma /24; cada PC aparece com um IP). */
-async function carregarPlantoes(desde: Date, ate: Date) {
+export async function carregarPlantoes(desde: Date, ate: Date) {
     const db = getDb();
     const de = desde.toISOString();
     const ateIso = ate.toISOString();

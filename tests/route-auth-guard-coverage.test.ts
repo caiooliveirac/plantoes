@@ -16,7 +16,7 @@ import { join, relative } from "node:path";
 const root = process.cwd();
 
 // Guards de sessão (lib/auth/server.ts; autorizarPainelDoMedico em lib/medico/painel-acesso.ts).
-const GUARD = /\b(requireAuthenticatedSession|requireSessionForRead|readAuthenticatedSession|autorizarPainelDoMedico)\s*\(/;
+const GUARD = /\b(requireAuthenticatedSession|requireSessionForRead|requireMesaSession|requireMesaSessionForRead|readAuthenticatedSession|autorizarPainelDoMedico)\s*\(/;
 
 /** Rotas sem sessão de propósito. Cada uma tem outro portão (ou não expõe nada). */
 const PUBLIC_ROUTES: Record<string, string> = {

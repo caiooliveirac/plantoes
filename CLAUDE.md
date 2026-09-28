@@ -221,7 +221,7 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
 - **Monitor de acessos** (`/admin/acessos`): cada login é uma sessão (`sid` no cookie,
   tabela `auth_sessions`) e cada pedido autenticado é registrado depois da resposta
   (`after()` em `readAuthenticatedSession`) para provar uso simultâneo da mesma conta
-  em lugares diferentes. Nada bloqueia sozinho. Critérios, alertas e limites em
+  em lugares diferentes. Heurística só avisa; Mesa e Tabela só de plantão (admin e Central à parte) e 4+ lugares ao mesmo tempo troca a senha sozinho. Critérios, alertas e limites em
   [docs/monitor-acessos.md](docs/monitor-acessos.md).
 - **Login**: `POST /api/auth/login` (email+senha, bcrypt) em
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em

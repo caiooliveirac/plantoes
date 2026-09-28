@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs } from "@/db/schema";
-import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
+import { AuthError, requireMesaSession } from "@/lib/auth/server";
 import { maybeReconcileLiveMealBreakSession } from "@/modules/telegram/meal-breaks";
 
 export async function POST(request: NextRequest) {
@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
 
     let session;
     try {
-        session = await requireAuthenticatedSession(["admin", "chief"]);
+        session = await requireMesaSession(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

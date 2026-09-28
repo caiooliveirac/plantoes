@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasDatabaseUrl } from "@/db";
-import { AuthError, requireSessionForRead } from "@/lib/auth/server";
+import { AuthError, requireMesaSessionForRead } from "@/lib/auth/server";
 import { getOperationalBoard } from "@/services/board.service";
 
 export async function GET() {
@@ -15,7 +15,7 @@ export async function GET() {
 
     // Quadro fechado (lib/auth/portao.ts): nomes por ramal/base só com sessão.
     try {
-        await requireSessionForRead();
+        await requireMesaSessionForRead();
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 401;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

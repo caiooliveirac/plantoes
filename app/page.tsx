@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { hasDatabaseUrl } from "@/db";
 import { KairosTopo } from "@/components/kairos-topo";
-import { readAuthenticatedSession } from "@/lib/auth/server";
+import { mesaLiberadaPara, readAuthenticatedSession } from "@/lib/auth/server";
+import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
 import { PORTAL_LOGIN_URL, destinoSemSessao } from "@/lib/auth/portao";
 import { escalaUrl, federacaoConfigurada } from "@/lib/auth/federacao";
 import { OperationalBoardClient } from "@/app/operational-board-client";
@@ -57,6 +58,25 @@ function SsoFalhou({ motivo }: { motivo: string }) {
     );
 }
 
+/* Portão de turno (docs/monitor-acessos.md): conta logada, mas fora do
+   plantão e fora da Central. O resto do que é do médico segue aberto. */
+function ForaDoPlantao() {
+    return (
+        <div className="pagina-kairos">
+        <KairosTopo titulo="Mesa operacional" />
+        <main className="et-shell" style={{ alignItems: "center", justifyContent: "center" }}>
+            <section className="et-panel" style={{ width: "min(480px, 100%)" }}>
+                <div className="et-panel-head"><h2>Mesa fechada fora do plantão</h2></div>
+                <div className="et-empty-state">
+                    <strong>{MENSAGEM_FORA_DO_PLANTAO}</strong>
+                    <p><Link href="/medico">Folha de ponto, banco de horas e dados</Link></p>
+                </div>
+            </section>
+        </main>
+        </div>
+    );
+}
+
 export default async function HomePage({ searchParams }: { searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
     const params = searchParams ? await searchParams : undefined;
     const initialViewMode = params?.view === "history" ? "history" : "live";
@@ -71,6 +91,9 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         const sso = typeof params?.sso === "string" ? params.sso : null;
         if (sso) return <SsoFalhou motivo={sso} />;
         redirect(destinoSemSessao());
+    }
+    if (!(await mesaLiberadaPara(session))) {
+        return <ForaDoPlantao />;
     }
     const canManage = Boolean(
         session.user.roles.some((role) => role === "admin" || role === "chief")

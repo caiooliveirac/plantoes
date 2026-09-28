@@ -63,6 +63,26 @@ function ctx(ip: string, userAgent: string, parcial: Partial<ContextoRequisicao>
 }
 
 const criados: string[] = [];
+const plantoesCriados: Array<{ medicoId: string; postoId: number }> = [];
+
+/** Vincula a conta a um médico com ocupação aberta (chegou há 1 h): de plantão agora. */
+async function darPlantao(userId: string) {
+    const { getDb, schema } = await modulos();
+    const db = getDb();
+    const marca = randomUUID().slice(0, 6).toUpperCase();
+    const [posto] = await db.insert(schema.regulationPosts).values({ code: `P${marca}`, label: `Plantão ${marca}` }).returning({ id: schema.regulationPosts.id });
+    const [medico] = await db.insert(schema.doctors).values({ fullName: `Plantonista ${marca}`, normalizedName: `plantonista ${marca.toLowerCase()}` }).returning({ id: schema.doctors.id });
+    plantoesCriados.push({ medicoId: medico.id, postoId: posto.id });
+    await db.update(schema.users).set({ doctorId: medico.id }).where(eq(schema.users.id, userId));
+    await db.insert(schema.regulationOccupancies).values({
+        doctorId: medico.id,
+        continuityGroupId: randomUUID(),
+        postId: posto.id,
+        startedAt: new Date(Date.now() - 3_600_000),
+        ramalLabel: "1300",
+        source: "manual",
+    });
+}
 async function criarConta(papel: "doctor" | "admin") {
     const { getDb, schema, auth } = await modulos();
     const [user] = await getDb()
@@ -79,6 +99,12 @@ after(async () => {
     const { getDb, closeDb, schema } = await modulos();
     const db = getDb();
     const doTeste = await db.select({ id: schema.users.id }).from(schema.users).where(like(schema.users.email, "%@acessos-teste.invalid"));
+    for (const { medicoId, postoId } of plantoesCriados) {
+        await db.delete(schema.regulationOccupancies).where(eq(schema.regulationOccupancies.postId, postoId));
+        await db.delete(schema.regulationPosts).where(eq(schema.regulationPosts.id, postoId));
+        await db.update(schema.users).set({ doctorId: null }).where(eq(schema.users.doctorId, medicoId));
+        await db.delete(schema.doctors).where(eq(schema.doctors.id, medicoId));
+    }
     const ids = [...new Set([...criados, ...doTeste.map((r) => r.id)])];
     if (ids.length > 0) {
         await db.delete(schema.auditLogs).where(inArray(schema.auditLogs.entityId, ids));
@@ -200,6 +226,13 @@ test("monitor (banco): o porteiro confere o login do portal — vale, senha troc
     };
 
     assert.equal((await chamar({ email: medico.email, sid, sv: 0 }, "token-errado")).status, 401);
+    // Portão de turno: sem plantão e fora da Central, a Tabela recusa; o portal (sem sistema de plantão) vale.
+    const { limparMemoriaDoPortao } = await import("@/services/acessos-portao.service");
+    limparMemoriaDoPortao();
+    assert.deepEqual((await chamar({ email: medico.email, sid, sv: 0, sistema: "tabela" })).dados, { ok: false, motivo: "fora_do_plantao" });
+    assert.deepEqual((await chamar({ email: medico.email, sid: randomUUID(), sv: 0 })).dados, { ok: true });
+    await darPlantao(medico.id);
+    limparMemoriaDoPortao();
     const valendo = await chamar({ email: medico.email, sid, sv: 0, pedidos: 7, sistema: "tabela", metodo: "GET", caminho: "/tabela/?tab=destino&local=Rua%20X" });
     assert.deepEqual(valendo, { status: 200, dados: { ok: true } });
     assert.deepEqual((await chamar({ email: "ninguem@acessos-teste.invalid", sid, sv: 0 })).dados, { ok: false, motivo: "sem_conta" });

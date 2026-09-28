@@ -30,6 +30,7 @@ const FRASES: Record<string, string> = {
     senha_login_falhou: "errou a senha no login do Plantões",
     senha_portal_ok: "digitou a senha certa no portal",
     senha_portal_falhou: "errou a senha no portal",
+    lugares_demais_admin: "em uso em mais de 3 lugares ao mesmo tempo (admin: só registrado)",
 };
 
 const ORIGENS: Record<string, string> = {
@@ -50,6 +51,10 @@ function fraseDoEvento(evento: EventoDeSessao) {
         return `entrou ${origem}`.trim();
     }
     if (evento.tipo.startsWith("admin_")) return `coordenação: ${String(evento.detalhes.descricao ?? evento.tipo)}`;
+    if (evento.tipo.startsWith("auto_")) return `automático: ${String(evento.detalhes.motivo ?? evento.tipo)} — ${String(evento.detalhes.descricao ?? "")}`;
+    if (evento.tipo === "barrado_fora_do_plantao") {
+        return `barrado fora do plantão (${evento.detalhes.sistema === "tabela" ? "Tabela" : "Mesa operacional"})`;
+    }
     return FRASES[evento.tipo] ?? evento.tipo;
 }
 

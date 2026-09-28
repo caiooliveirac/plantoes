@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { hasDatabaseUrl } from "@/db";
-import { readAuthenticatedSession } from "@/lib/auth/server";
+import { mesaLiberadaPara, readAuthenticatedSession } from "@/lib/auth/server";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
 import { getPreviousOperationalBoard, listPendingDepartureConfirmations } from "@/services/board.service";
 import { PreviousShiftGanttPage } from "@/app/historico/turno-anterior/client";
@@ -20,7 +20,8 @@ export default async function HistoricoTurnoAnteriorPage({
         session?.user.roles.some((role) => role === "admin" || role === "chief")
         && !session.user.mustChangePassword,
     );
-    if (!canManage) {
+    // Portão de turno: fora do plantão, "/" explica por quê.
+    if (!canManage || !(await mesaLiberadaPara(session!))) {
         redirect("/");
     }
 

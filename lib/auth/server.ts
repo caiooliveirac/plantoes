@@ -7,6 +7,8 @@ import { lerContextoRequisicao } from "@/lib/acessos/contexto";
 import { depoisDaResposta } from "@/lib/acessos/depois";
 import { rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
 import { createSessionToken, isSessionVersionCurrent, sessionIdOf, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
+import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
+import { conferirPortaoDeTurno, vigiarLugares } from "@/services/acessos-portao.service";
 import {
     atualizarRedeDoContexto,
     registrarAcesso,
@@ -193,7 +195,10 @@ export async function readAuthenticatedSession(): Promise<AuthenticatedSession |
     if (!pedidosRegistrados.has(requestHeaders)) {
         pedidosRegistrados.add(requestHeaders);
         const contexto = lerContextoRequisicao(requestHeaders);
-        depoisDaResposta(() => registrarAcesso({ sessaoId: sessionId, userId: session.user.id, versao: parsed.sv ?? 0, contexto }));
+        depoisDaResposta(async () => {
+            await registrarAcesso({ sessaoId: sessionId, userId: session.user.id, versao: parsed.sv ?? 0, contexto });
+            await vigiarLugares(session.user.id, sessionId, contexto.ip);
+        });
     }
     return session;
 }
@@ -218,4 +223,26 @@ export async function requireAuthenticatedSession(requiredRoles?: UserRole[], op
     precisa ver a tela para trocar a senha no popover. */
 export async function requireSessionForRead() {
     return requireAuthenticatedSession(undefined, { allowPasswordChange: true });
+}
+
+/* Mesa operacional (quadro, ações do quadro, histórico): só de plantão, na
+   Central ou admin — portão de turno, docs/monitor-acessos.md. Folha de
+   ponto, banco de horas, dados do médico e senha seguem abertos. */
+export async function mesaLiberadaPara(session: AuthenticatedSession) {
+    const portao = await conferirPortaoDeTurno(
+        { userId: session.user.id, doctorId: session.user.doctorId, roles: session.user.roles },
+        lerContextoRequisicao(await headers()),
+        "mesa",
+    );
+    return portao.liberado;
+}
+
+export async function requireMesaSession(requiredRoles?: UserRole[], options?: { allowPasswordChange?: boolean }) {
+    const session = await requireAuthenticatedSession(requiredRoles, options);
+    if (!(await mesaLiberadaPara(session))) throw new AuthError(403, MENSAGEM_FORA_DO_PLANTAO);
+    return session;
+}
+
+export async function requireMesaSessionForRead() {
+    return requireMesaSession(undefined, { allowPasswordChange: true });
 }

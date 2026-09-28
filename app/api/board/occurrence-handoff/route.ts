@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasDatabaseUrl } from "@/db";
-import { AuthError, requireSessionForRead } from "@/lib/auth/server";
+import { AuthError, requireMesaSessionForRead } from "@/lib/auth/server";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { getLoginClientIp } from "@/modules/auth/login-rate-limit";
 import {
@@ -18,7 +18,7 @@ import {
 
 async function sessionError() {
     try {
-        await requireSessionForRead();
+        await requireMesaSessionForRead();
         return null;
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 401;
