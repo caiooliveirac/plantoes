@@ -31,6 +31,12 @@ const FRASES: Record<string, string> = {
     senha_portal_ok: "digitou a senha certa no portal",
     senha_portal_falhou: "errou a senha no portal",
     lugares_demais_admin: "em uso em mais de 3 lugares ao mesmo tempo (admin: só registrado)",
+    mesa_troca_de_aparelho: "a Mesa passou para este aparelho (saiu do anterior)",
+    mesa_ocupada_negada: "tentou abrir a Mesa com ela aberta em outro aparelho — esperou a vez",
+    mesa_ocupada_negada_sombra: "abriu a Mesa com ela aberta em outro aparelho (sombra: não bloqueou)",
+    mesa_bloqueada_ociosa: "Mesa fechada neste aparelho por falta de uso",
+    mesa_bloqueada_ociosa_sombra: "a Mesa teria sido fechada por falta de uso (sombra)",
+    mesa_desbloqueada: "digitou a senha e reabriu a Mesa neste aparelho",
 };
 
 const ORIGENS: Record<string, string> = {

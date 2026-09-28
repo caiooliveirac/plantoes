@@ -8,6 +8,9 @@ import { depoisDaResposta } from "@/lib/acessos/depois";
 import { rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
 import { createSessionToken, isSessionVersionCurrent, sessionIdOf, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
 import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
+import { MENSAGEM_BLOQUEADA, MENSAGEM_OCUPADA, modoPresenca } from "@/modules/acessos/presenca";
+import { lerCookieAparelho, nomeCookieAparelho } from "@/lib/auth/aparelho";
+import { baterPresenca, conferirPresenca, desbloquearAparelho, type ContaNaMesa, type RespostaPresenca } from "@/services/mesa-presenca.service";
 import { conferirPortaoDeTurno, vigiarLugares } from "@/services/acessos-portao.service";
 import {
     atualizarRedeDoContexto,
@@ -237,9 +240,59 @@ export async function mesaLiberadaPara(session: AuthenticatedSession) {
     return portao.liberado;
 }
 
+/* Presença na Mesa (docs/presenca-mesa.md): uma tela por conta e bloqueio por
+   ociosidade. Admin é isento. O aparelho vem do cookie assinado (proxy.ts) —
+   nunca de algo que o cliente mande no corpo. */
+export async function contaNaMesa(session: AuthenticatedSession): Promise<ContaNaMesa | null> {
+    if (session.user.roles.includes("admin")) return null;
+    const cookieStore = await cookies();
+    const aparelhoId = lerCookieAparelho(cookieStore.get(nomeCookieAparelho())?.value, getAuthSecret());
+    return {
+        userId: session.user.id,
+        // Sem cookie de aparelho (o proxy sempre põe um; só cliente que não guarda cookie): nunca pega a vez.
+        aparelhoId: aparelhoId ?? "",
+        sessaoId: session.sessionId,
+        contexto: lerContextoRequisicao(await headers()),
+    };
+}
+
+export type PresencaDaPagina = RespostaPresenca | { estado: "isento" };
+
+/** Página da Mesa: abertura por navegação pega/renova a vez e conta como
+    interação; o refresh automático (RSC) e o prefetch só conferem. */
+export async function presencaDaPagina(session: AuthenticatedSession): Promise<PresencaDaPagina> {
+    const modo = modoPresenca();
+    const conta = await contaNaMesa(session);
+    if (!conta || modo === "desligado") return { estado: "isento" };
+    if (conta.contexto?.rsc || conta.contexto?.prefetch) {
+        const { estado } = await conferirPresenca(conta, modo);
+        return { estado, modo, limiteOciosoSeg: 0 };
+    }
+    return baterPresenca(conta, { visivel: true, paradoSeg: 0, humanoAgora: true }, modo);
+}
+
+/** Login com e-mail e senha: senha digitada neste aparelho zera o relógio de
+    ociosidade e desfaz o bloqueio dele (o SSO do portal, que não pede senha,
+    não passa por aqui). */
+export async function senhaDigitadaNesteAparelho(userId: string, roles: readonly UserRole[]) {
+    if (roles.includes("admin") || modoPresenca() === "desligado") return;
+    const aparelhoId = lerCookieAparelho((await cookies()).get(nomeCookieAparelho())?.value, getAuthSecret());
+    if (!aparelhoId) return;
+    await desbloquearAparelho({ userId, aparelhoId, sessaoId: "", contexto: lerContextoRequisicao(await headers()) });
+}
+
+async function exigirPresenca(session: AuthenticatedSession) {
+    const conta = await contaNaMesa(session);
+    if (!conta) return;
+    const { estado } = await conferirPresenca(conta, modoPresenca());
+    if (estado === "bloqueada") throw new AuthError(401, MENSAGEM_BLOQUEADA);
+    if (estado === "ocupada") throw new AuthError(423, MENSAGEM_OCUPADA);
+}
+
 export async function requireMesaSession(requiredRoles?: UserRole[], options?: { allowPasswordChange?: boolean }) {
     const session = await requireAuthenticatedSession(requiredRoles, options);
     if (!(await mesaLiberadaPara(session))) throw new AuthError(403, MENSAGEM_FORA_DO_PLANTAO);
+    await exigirPresenca(session);
     return session;
 }
 
@@ -256,6 +309,7 @@ export async function abrirVigiaDaMesa(): Promise<() => Promise<boolean>> {
     const session = await requireMesaSessionForRead();
     const rawToken = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? "";
     const contexto = lerContextoRequisicao(await headers());
+    const conta = await contaNaMesa(session);
     return async () => {
         try {
             const parsed = verifySessionToken(rawToken, getAuthSecret());
@@ -267,7 +321,9 @@ export async function abrirVigiaDaMesa(): Promise<() => Promise<boolean>> {
                 contexto,
                 "mesa",
             );
-            return portao.liberado;
+            if (!portao.liberado) return false;
+            // Outro aparelho pegou a vez, ou este foi bloqueado por ociosidade.
+            return !conta || (await conferirPresenca(conta, modoPresenca())).estado === "ok";
         } catch (erro) {
             console.error("[acessos] vigia do stream", erro);
             return true;

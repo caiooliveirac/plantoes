@@ -136,6 +136,8 @@ export interface NovoEvento {
     contexto?: ContextoRequisicao | null;
     detalhes?: Record<string, unknown>;
     em?: Date;
+    /** Aparelho (cookie plantoes_aparelho), quando o evento é da presença na Mesa. */
+    aparelhoId?: string | null;
 }
 
 async function inserirEvento(evento: NovoEvento) {
@@ -151,6 +153,7 @@ async function inserirEvento(evento: NovoEvento) {
         userAgent: contexto?.userAgent ?? null,
         geo: contexto?.geo ?? {},
         details: evento.detalhes ?? {},
+        ...(evento.aparelhoId ? { deviceId: evento.aparelhoId } : {}),
     });
 }
 

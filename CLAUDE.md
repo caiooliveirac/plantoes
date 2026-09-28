@@ -223,6 +223,10 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   (`after()` em `readAuthenticatedSession`) para provar uso simultâneo da mesma conta
   em lugares diferentes. Heurística só avisa; Mesa e Tabela só de plantão (admin e Central à parte) e 4+ lugares ao mesmo tempo troca a senha sozinho. Critérios, alertas e limites em
   [docs/monitor-acessos.md](docs/monitor-acessos.md).
+- **Presença na Mesa**: uma tela da Mesa por conta (lease por aparelho, cookie
+  `plantoes_aparelho`; 423 no outro) e bloqueio por ociosidade com senha. Vale no
+  `requireMesaSession`; admin isento; `MESA_PRESENCA` sombra/1/0. Regras em
+  [docs/presenca-mesa.md](docs/presenca-mesa.md).
 - **Login**: `POST /api/auth/login` (email+senha, bcrypt) em
   [app/api/auth/login/route.ts](app/api/auth/login/route.ts), lógica em
   [services/auth.service.ts](services/auth.service.ts). Trata contas inativas, sem

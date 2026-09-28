@@ -726,6 +726,8 @@ export const authSessions = operationsV2.table(
         revokedAt: timestamp("revoked_at", { withTimezone: true }),
         revokedBy: uuid("revoked_by").references(() => users.id, { onDelete: "set null" }),
         revokedReason: text("revoked_reason"),
+        /** Aparelho (cookie plantoes_aparelho) visto nesta sessão — migration 0049. */
+        deviceId: uuid("device_id"),
     },
     (table) => [index("auth_sessions_user_seen_idx").on(table.userId, table.lastSeenAt)],
 );
@@ -745,6 +747,7 @@ export const authSessionEvents = operationsV2.table(
         userAgent: text("user_agent"),
         geo: jsonb("geo").notNull().default({}),
         details: jsonb("details").notNull().default({}),
+        deviceId: uuid("device_id"),
     },
     (table) => [
         index("auth_session_events_user_idx").on(table.userId, table.occurredAt),
@@ -772,6 +775,39 @@ export const authSessionActivity = operationsV2.table(
         index("auth_session_activity_user_idx").on(table.userId, table.windowStart),
         index("auth_session_activity_ip_idx").on(table.ip, table.windowStart),
     ],
+);
+
+/* Presença na Mesa (migration 0049, docs/presenca-mesa.md). Uma tela da Mesa
+   por conta: o aparelho com o lease só o perde quando para de renovar. */
+export const viewLeases = operationsV2.table(
+    "view_leases",
+    {
+        userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+        resource: varchar("resource", { length: 24 }).notNull(),
+        deviceId: uuid("device_id").notNull(),
+        sessionId: uuid("session_id"),
+        epoch: bigint("epoch", { mode: "number" }).notNull().default(1),
+        acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow(),
+        heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }).notNull().defaultNow(),
+        expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    },
+    (table) => [primaryKey({ columns: [table.userId, table.resource] })],
+);
+
+/** Presença por conta × aparelho: última interação humana e bloqueio por ociosidade (do aparelho, não da sessão). */
+export const viewPresence = operationsV2.table(
+    "view_presence",
+    {
+        userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+        deviceId: uuid("device_id").notNull(),
+        lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+        lastHumanAt: timestamp("last_human_at", { withTimezone: true }),
+        lockedAt: timestamp("locked_at", { withTimezone: true }),
+        lockReason: varchar("lock_reason", { length: 24 }),
+        unlockedAt: timestamp("unlocked_at", { withTimezone: true }),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (table) => [primaryKey({ columns: [table.userId, table.deviceId] })],
 );
 
 /** Localização (Cloudflare) e provedor (DNS reverso) de cada IP visto. */

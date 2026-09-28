@@ -2,7 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { hasDatabaseUrl } from "@/db";
 import { KairosTopo } from "@/components/kairos-topo";
-import { mesaLiberadaPara, readAuthenticatedSession } from "@/lib/auth/server";
+import { mesaLiberadaPara, presencaDaPagina, readAuthenticatedSession } from "@/lib/auth/server";
+import { MesaPresenca } from "@/components/board/MesaPresenca";
+import { limiteOciosoSeg } from "@/modules/acessos/presenca";
 import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
 import { PORTAL_LOGIN_URL, destinoSemSessao } from "@/lib/auth/portao";
 import { escalaUrl, federacaoConfigurada } from "@/lib/auth/federacao";
@@ -95,6 +97,19 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
     if (!(await mesaLiberadaPara(session))) {
         return <ForaDoPlantao />;
     }
+    // Presença (docs/presenca-mesa.md): outro aparelho com a vez, ou este
+    // bloqueado por ociosidade → nenhum dado do quadro sai desta página.
+    const presenca = await presencaDaPagina(session);
+    const propsPresenca = {
+        estadoInicial: presenca.estado,
+        modo: "modo" in presenca ? presenca.modo : null,
+        limiteOciosoSeg: limiteOciosoSeg(),
+        tenteEmSeg: "tenteEmSeg" in presenca ? presenca.tenteEmSeg : undefined,
+        email: session.user.email,
+    };
+    if (presenca.estado === "ocupada" || presenca.estado === "bloqueada") {
+        return <MesaPresenca {...propsPresenca} />;
+    }
     const canManage = Boolean(
         session.user.roles.some((role) => role === "admin" || role === "chief")
         && !session.user.mustChangePassword,
@@ -117,6 +132,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
     ]);
 
     return (
+        <MesaPresenca {...propsPresenca}>
         <OperationalBoardClient
             generatedAt={board.generatedAt}
             shiftLabel={resolveOperationalShiftLabel(new Date())}
@@ -150,5 +166,6 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
                 doctorId: session.user.doctorId,
             }}
         />
+        </MesaPresenca>
     );
 }

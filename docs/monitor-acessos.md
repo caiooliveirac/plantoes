@@ -229,6 +229,12 @@ Por que lugar e não sessão: em 7 dias até 28/09/2026, contando sessões (cook
 navegador; cada navegador tem cookie da Mesa e do portal). Contando lugares, o
 máximo visto foi 3.
 
+### Uma tela da Mesa por conta e tela parada que expira
+
+Dentro do turno, a Mesa só fica à vista num aparelho por conta, e tela sem
+interação fecha e pede a senha. Regras, eventos e achados em
+[presenca-mesa.md](presenca-mesa.md).
+
 ## Redes (`/admin/acessos/redes`)
 
 Visão por **faixa** (/24, /64) em vez de por conta: onde as contas são usadas
