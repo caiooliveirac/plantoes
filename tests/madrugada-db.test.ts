@@ -1,6 +1,6 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
 
 /**
@@ -64,7 +64,8 @@ async function modulos() {
 
 async function criarMedico(nome: string) {
     const { getDb, schema } = await modulos();
-    const sufixo = randomUUID().slice(0, 8).toUpperCase();
+    // Só letras: dígito no nome vira ramal ou horário para o parser do bot.
+    const sufixo = Array.from(randomBytes(8), (b) => String.fromCharCode(65 + (b % 26))).join("");
     const [doctor] = await getDb()
         .insert(schema.doctors)
         .values({ fullName: `${nome} ${sufixo}`, normalizedName: `MADRUGADA TESTE ${nome} ${sufixo}` })
