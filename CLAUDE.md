@@ -98,6 +98,9 @@ telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
   aparece no quadro e fica de plantão, mas fora do pagamento e do banco de horas;
   o coberto some do quadro sem perder nada. Ramais eventuais 2266–2270. Regras e
   onde a exclusão está aplicada em [docs/madrugada.md](docs/madrugada.md).
+- **Retirar** (quadro): a chefia escolhe sem saldo / banco / meio / inteiro; a
+  régua de saída antecipada só sugere. Limites e leitores do desfecho em
+  [docs/retirar.md](docs/retirar.md).
 - **Passagem de ocorrências** no almoço/descanso (quem sai passa para quem, faixa
   acima do quadro + bot): regras e janela em [docs/passagem-ocorrencias.md](docs/passagem-ocorrencias.md).
 - `modules/bank-hours/` — cálculo de banco de horas (atraso, hora extra, continuidade)

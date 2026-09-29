@@ -1,7 +1,9 @@
 import {
     classifyEarlyDeparture,
     isEarlyDepartureEligible,
+    validateChiefWithdrawalChoice,
     type EarlyDepartureClassification,
+    type StoredEarlyDepartureOutcome,
 } from "@/modules/operational/early-departure";
 import {
     classifyExtendedStay,
@@ -103,6 +105,30 @@ export const OVERRIDE_NOTE_MIN_LENGTH = 8;
 
 export function isValidOverrideNote(note: string | null | undefined): boolean {
     return typeof note === "string" && note.trim().length >= OVERRIDE_NOTE_MIN_LENGTH;
+}
+
+/**
+ * Desfecho que o Retirar grava: a escolha da chefia, validada contra a régua
+ * (validateChiefWithdrawalChoice), ou a sugestão da régua quando não houve
+ * escolha (bot, chamadas antigas). Lança com a frase para a chefia quando a
+ * escolha não vale — os serviços devolvem isso como 400.
+ */
+export function resolveChiefWithdrawalOutcome(params: {
+    classification: EarlyDepartureClassification;
+    chosen?: StoredEarlyDepartureOutcome | null;
+    note?: string | null;
+}): StoredEarlyDepartureOutcome {
+    if (!params.chosen) {
+        return params.classification.outcome;
+    }
+    const verdict = validateChiefWithdrawalChoice(params.chosen, params.classification);
+    if (!verdict.allowed) {
+        throw new Error("Essa saída não é antecipada: só cabe o plantão inteiro. Corrija a hora se ele saiu antes.");
+    }
+    if (verdict.requiresNote && !isValidOverrideNote(params.note)) {
+        throw new Error(`Pagar acima da régua exige justificativa com pelo menos ${OVERRIDE_NOTE_MIN_LENGTH} caracteres.`);
+    }
+    return params.chosen;
 }
 
 function formatHoursShort(minutes: number) {

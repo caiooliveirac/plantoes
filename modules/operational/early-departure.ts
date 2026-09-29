@@ -13,8 +13,13 @@ import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
  *     assina MEIO plantão; o que passar de 6h trabalhadas vira crédito.
  *   - saiu faltando 2h ou menos para o fim  -> "full_shift": assina inteiro.
  *
- * "Horas trabalhadas" começam em max(chegada, início da janela): chegar muito
- * cedo não infla o crédito, e chegar atrasado só credita o que foi cumprido.
+ * "Horas trabalhadas" começam no início da janela: chegar muito cedo não
+ * infla o crédito. Chegar atrasado credita só o que foi cumprido — mas atraso
+ * dentro da tolerância do banco (15 min) não prejudica, igual ao banco de horas.
+ *
+ * A régua SUGERE. No Retirar do quadro a chefia escolhe o desfecho — inclusive
+ * "no_balance" (sem saldo: não assina e não gera banco), que a régua nunca
+ * sugere: é para quem nem estava no plantão (ver validateChiefWithdrawalChoice).
  *
  * Este conceito é INDEPENDENTE do meio plantão declarado na chegada
  * (roleLabel MEIO_PLANTAO, janela 11:30–17:00): aquele é uma função com janela
@@ -22,7 +27,10 @@ import { isHalfShiftRoleLabel } from "@/modules/operational/half-shift";
  * meio plantão nunca entra nesta régua (isEarlyDepartureEligible).
  */
 
+/** O que a régua sugere. */
 export type EarlyDepartureOutcome = "bank_only" | "half_shift" | "full_shift";
+/** O que pode estar gravado na ocupação: a régua ou a escolha da chefia. */
+export type StoredEarlyDepartureOutcome = EarlyDepartureOutcome | "no_balance";
 
 export const EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES = 6 * 60;
 export const EARLY_DEPARTURE_FULL_REMAINING_MINUTES = 2 * 60;
@@ -32,6 +40,11 @@ export const EARLY_DEPARTURE_FULL_REMAINING_MINUTES = 2 * 60;
  * seguinte.
  */
 export const DEPARTURE_GRACE_MINUTES = 15;
+/**
+ * Tolerância de chegada (mesma do banco de horas, que a reexporta): atraso até
+ * isto conta como chegada no horário, sem prejuízo.
+ */
+export const ARRIVAL_GRACE_MINUTES = 15;
 
 export interface EarlyDepartureClassification {
     outcome: EarlyDepartureOutcome;
@@ -108,7 +121,8 @@ export function classifyEarlyDeparture(params: {
     const elapsedMinutes = Math.max(0, diffMinutes(windowStartAt, departureAt));
     const remainingMinutes = Math.max(0, diffMinutes(departureAt, windowEndAt));
 
-    const workedFrom = startedAt && startedAt.getTime() > windowStartAt.getTime() ? startedAt : windowStartAt;
+    const lateBeyondGrace = startedAt !== null && diffMinutes(windowStartAt, startedAt) > ARRIVAL_GRACE_MINUTES;
+    const workedFrom = lateBeyondGrace ? startedAt : windowStartAt;
     const workedMinutes = Math.max(0, diffMinutes(workedFrom, departureAt));
 
     // Saída fora (depois) da janela agendada da ocupação: encerramento normal,
@@ -161,23 +175,54 @@ export function classifyEarlyDeparture(params: {
     };
 }
 
-export function isStoredEarlyDepartureOutcome(value: string | null | undefined): value is EarlyDepartureOutcome {
-    return value === "bank_only" || value === "half_shift" || value === "full_shift";
+export function isStoredEarlyDepartureOutcome(value: string | null | undefined): value is StoredEarlyDepartureOutcome {
+    return value === "no_balance" || value === "bank_only" || value === "half_shift" || value === "full_shift";
 }
 
 /** Desfechos que alteram pagamento/banco (full_shift é só registro de auditoria). */
 export function isPaymentAffectingEarlyDepartureOutcome(
     value: string | null | undefined,
-): value is "bank_only" | "half_shift" {
-    return value === "bank_only" || value === "half_shift";
+): value is "no_balance" | "bank_only" | "half_shift" {
+    return value === "no_balance" || value === "bank_only" || value === "half_shift";
 }
 
 export function resolveEarlyDeparturePaymentUnit(value: string | null | undefined): number | null {
-    if (value === "bank_only") {
+    if (value === "no_balance" || value === "bank_only") {
         return 0;
     }
     if (value === "half_shift") {
         return 0.5;
     }
     return null;
+}
+
+const CHIEF_CHOICE_PAYMENT_UNIT: Record<StoredEarlyDepartureOutcome, number> = {
+    no_balance: 0,
+    bank_only: 0,
+    half_shift: 0.5,
+    full_shift: 1,
+};
+
+/**
+ * Retirar do quadro: a chefia escolhe o desfecho e a régua só sugere.
+ *
+ * - Saída que já não é antecipada (no fim da janela ou depois) só aceita o
+ *   plantão inteiro: o pagamento ignora desfecho fora do slot, e um "sem saldo"
+ *   ali seria pago calado.
+ * - Pagar ACIMA da régua pede justificativa escrita, como na fila de saídas —
+ *   exceto inteiro na faixa de meio, decisão corriqueira da chefia.
+ * - Pagar abaixo (sem saldo, só banco) não pede nada: tirar do plantão quem nem
+ *   estava nele tem de ser um clique.
+ */
+export function validateChiefWithdrawalChoice(
+    chosen: StoredEarlyDepartureOutcome,
+    classification: Pick<EarlyDepartureClassification, "outcome" | "remainingMinutes">,
+): { allowed: boolean; requiresNote: boolean } {
+    const notEarly = classification.outcome === "full_shift" && classification.remainingMinutes === 0;
+    if (notEarly) {
+        return { allowed: chosen === "full_shift", requiresNote: false };
+    }
+    const aboveRule = CHIEF_CHOICE_PAYMENT_UNIT[chosen] > CHIEF_CHOICE_PAYMENT_UNIT[classification.outcome];
+    const routine = classification.outcome === "half_shift" && chosen === "full_shift";
+    return { allowed: true, requiresNote: aboveRule && !routine };
 }

@@ -8,8 +8,14 @@ import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { modalBackdrop, modalPanel } from "@/lib/board/motion";
 import { useModalPortalContainer } from "@/lib/board/use-modal-portal-container";
-import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
-import { buildEarlyDepartureCreditNote, buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
+import {
+    EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES,
+    classifyEarlyDeparture,
+    isEarlyDepartureEligible,
+    validateChiefWithdrawalChoice,
+    type StoredEarlyDepartureOutcome,
+} from "@/modules/operational/early-departure";
+import { OVERRIDE_NOTE_MIN_LENGTH, isValidOverrideNote } from "@/modules/operational/departure-triage";
 
 interface DepartureDialogProps {
     open: boolean;
@@ -66,6 +72,41 @@ function localToIso(value: string): string {
     return new Date(value).toISOString();
 }
 
+function formatWorked(minutes: number) {
+    const safe = Math.max(0, minutes);
+    const hours = Math.floor(safe / 60);
+    const rest = safe % 60;
+    if (hours === 0) return `${rest} min`;
+    return rest === 0 ? `${hours}h` : `${hours}h${String(rest).padStart(2, "0")}`;
+}
+
+// Ordem de leitura: do que menos paga para o que mais paga. "Sem saldo" em
+// primeiro — é o caso de quem nem estava no plantão (erro de chefia, madrugada
+// antes de existir o comando) e tem de ser um clique.
+const WITHDRAWAL_CHOICES: Array<{ outcome: StoredEarlyDepartureOutcome; title: string }> = [
+    { outcome: "no_balance", title: "Remover sem saldo" },
+    { outcome: "bank_only", title: "Saldo para o banco de horas" },
+    { outcome: "half_shift", title: "Pagar meio plantão" },
+    { outcome: "full_shift", title: "Pagar plantão inteiro" },
+];
+
+function describeWithdrawalChoice(outcome: StoredEarlyDepartureOutcome, workedMinutes: number) {
+    switch (outcome) {
+        case "no_balance":
+            return "Não recebe este plantão e não gera banco de horas.";
+        case "bank_only":
+            return `Não recebe o plantão; crédito de ${formatWorked(workedMinutes)} no banco.`;
+        case "half_shift": {
+            const credit = workedMinutes - EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES;
+            return credit > 0
+                ? `Recebe meio plantão e crédito de ${formatWorked(credit)} no banco.`
+                : "Recebe meio plantão.";
+        }
+        case "full_shift":
+            return "Recebe o plantão inteiro.";
+    }
+}
+
 export function DepartureDialog({
     open,
     onOpenChange,
@@ -85,15 +126,15 @@ export function DepartureDialog({
     const portalContainer = useModalPortalContainer();
     const [endedAt, setEndedAt] = useState(() => defaultEndedAtLocal(scheduledEndAt));
     const [reason, setReason] = useState("");
+    const [chosenOutcome, setChosenOutcome] = useState<StoredEarlyDepartureOutcome | null>(null);
     const [submitting, setSubmitting] = useState(false);
     const scheduledEndIsPast = Boolean(
         scheduledEndAt && !Number.isNaN(new Date(scheduledEndAt).getTime()) && new Date(scheduledEndAt).getTime() < Date.now(),
     );
 
-    // Preview da régua de retirada antecipada: mesma classificação que o servidor
-    // vai aplicar (modules/operational/early-departure.ts), recalculada a cada
-    // mudança do horário. O texto é o oficial da coordenação.
-    const earlyDeparturePreview = useMemo(() => {
+    // Retirar: a chefia escolhe o desfecho; a régua (a mesma do servidor,
+    // modules/operational/early-departure.ts) só sugere e pré-seleciona.
+    const withdrawal = useMemo(() => {
         if (!chiefKick || !endedAt || !isEarlyDepartureEligible({ roleLabel })) {
             return null;
         }
@@ -107,17 +148,24 @@ export function DepartureDialog({
             scheduledEndAt,
             startedAt,
         });
-        return {
-            summary: buildEarlyDepartureSummary(classification.outcome, { name: doctorName }),
-            creditNote: buildEarlyDepartureCreditNote(classification),
-            outcome: classification.outcome,
-        };
-    }, [chiefKick, endedAt, roleLabel, scheduledStartAt, scheduledEndAt, startedAt, doctorName]);
+        const choices = WITHDRAWAL_CHOICES.map((choice) => ({
+            ...choice,
+            hint: describeWithdrawalChoice(choice.outcome, classification.workedMinutes),
+            suggested: choice.outcome === classification.outcome,
+            ...validateChiefWithdrawalChoice(choice.outcome, classification),
+        }));
+        const chosen = choices.find((choice) => choice.outcome === chosenOutcome && choice.allowed)
+            ?? choices.find((choice) => choice.suggested)!;
+        return { choices, chosen, notEarly: choices.some((choice) => !choice.allowed) };
+    }, [chiefKick, endedAt, roleLabel, scheduledStartAt, scheduledEndAt, startedAt, chosenOutcome]);
+
+    const justificationMissing = Boolean(withdrawal?.chosen.requiresNote) && !isValidOverrideNote(reason);
 
     useEffect(() => {
         if (open) {
             setEndedAt(defaultEndedAtLocal(scheduledEndAt));
             setReason("");
+            setChosenOutcome(null);
         }
     }, [open, occupancyId, scheduledEndAt]);
 
@@ -140,6 +188,7 @@ export function DepartureDialog({
                     actualEndedAt: iso,
                     notes: reason.trim() || (chiefKick ? CHIEF_KICK_DEFAULT_NOTE : null),
                     ...(chiefKick ? { chiefKick: true } : {}),
+                    ...(withdrawal ? { earlyDepartureOutcome: withdrawal.chosen.outcome, justification: reason.trim() || null } : {}),
                 }),
             });
             const body = await response.json().catch(() => null) as { error?: string } | null;
@@ -195,16 +244,16 @@ export function DepartureDialog({
                                     </div>
                                 </header>
 
-                                <div className="board-modal-warning danger">
-                                    <strong>Hora vai para o banco{chiefKick ? " e para o grupo" : ""}</strong>
-                                    <p>
-                                        {displaced
-                                            ? `${doctorName} está fora do quadro neste posto. Encerrar fecha a ocupação deslocada — não tira o titular. Se o plantão já virou, use o horário real da saída, não agora.`
-                                            : chiefKick
-                                                ? `Essa hora conta para o banco de horas de ${doctorName} e é a que o grupo do Telegram vai ver no aviso de retirada. Confirme com cuidado.`
+                                {!chiefKick && (
+                                    <div className="board-modal-warning danger">
+                                        <strong>Hora vai para o banco</strong>
+                                        <p>
+                                            {displaced
+                                                ? `${doctorName} está fora do quadro neste posto. Encerrar fecha a ocupação deslocada — não tira o titular. Se o plantão já virou, use o horário real da saída, não agora.`
                                                 : `Essa hora é a que vai contar para o banco de horas de ${doctorName}. Confirme com cuidado antes de salvar.`}
-                                    </p>
-                                </div>
+                                        </p>
+                                    </div>
+                                )}
 
                                 {(displaced || scheduledEndIsPast) && (
                                     <div className="board-modal-warning">
@@ -212,41 +261,68 @@ export function DepartureDialog({
                                         <p>
                                             {scheduledEndIsPast
                                                 ? "O horário padrão é o fim previsto do plantão, não o instante atual. Ajuste se a saída real foi outra."
-                                                : "A chegada original fica no histórico; esta ação só tira a linha de deslocado do painel."}
+                                                : "Está fora do quadro. Retirar tira só esta ocupação — o titular do ramal fica."}
                                         </p>
                                     </div>
                                 )}
 
-                                {earlyDeparturePreview && (
-                                    <div className="board-modal-warning">
-                                        <strong>O que esta retirada significa</strong>
-                                        <p>
-                                            {earlyDeparturePreview.summary}
-                                            {earlyDeparturePreview.creditNote ? ` ${earlyDeparturePreview.creditNote}` : ""}
-                                        </p>
-                                    </div>
+                                <label className="board-modal-field">
+                                    <span>{chiefKick ? "Hora da saída — vai no aviso do grupo" : "Hora da saída"}</span>
+                                    <input
+                                        type="datetime-local"
+                                        value={endedAt}
+                                        onChange={(event) => setEndedAt(event.target.value)}
+                                        step={60}
+                                    />
+                                </label>
+
+                                {withdrawal && (
+                                    <fieldset className="board-modal-choices" disabled={submitting}>
+                                        <legend>Pagamento e banco de horas</legend>
+                                        {withdrawal.choices.map((choice) => (
+                                            <label
+                                                key={choice.outcome}
+                                                className={choice.outcome === withdrawal.chosen.outcome ? "board-modal-choice selected" : "board-modal-choice"}
+                                            >
+                                                <input
+                                                    type="radio"
+                                                    name="withdrawal-outcome"
+                                                    value={choice.outcome}
+                                                    checked={choice.outcome === withdrawal.chosen.outcome}
+                                                    disabled={!choice.allowed}
+                                                    onChange={() => setChosenOutcome(choice.outcome)}
+                                                />
+                                                <span className="board-modal-choice-body">
+                                                    <span className="board-modal-choice-title">
+                                                        {choice.title}
+                                                        {choice.suggested ? <em className="board-modal-choice-tag">régua</em> : null}
+                                                    </span>
+                                                    <span className="board-modal-choice-hint">
+                                                        {choice.hint}
+                                                        {choice.allowed && choice.requiresNote ? " Pede justificativa." : ""}
+                                                    </span>
+                                                </span>
+                                            </label>
+                                        ))}
+                                        {withdrawal.notEarly && (
+                                            <p className="board-modal-choice-hint">Saída no fim do turno: só cabe o plantão inteiro.</p>
+                                        )}
+                                    </fieldset>
                                 )}
 
-                                <div className="board-modal-fields">
-                                    <label className="board-modal-field">
-                                        <span>Hora da saída</span>
-                                        <input
-                                            type="datetime-local"
-                                            value={endedAt}
-                                            onChange={(event) => setEndedAt(event.target.value)}
-                                            step={60}
-                                        />
-                                    </label>
-                                    <label className="board-modal-field">
-                                        <span>Observação (opcional)</span>
-                                        <textarea
-                                            value={reason}
-                                            onChange={(event) => setReason(event.target.value)}
-                                            rows={2}
-                                            placeholder="Ex.: saiu antes para resolver continuidade"
-                                        />
-                                    </label>
-                                </div>
+                                <label className="board-modal-field">
+                                    <span>
+                                        {withdrawal?.chosen.requiresNote
+                                            ? `Justificativa — obrigatória (mín. ${OVERRIDE_NOTE_MIN_LENGTH} caracteres)`
+                                            : "Observação (opcional)"}
+                                    </span>
+                                    <textarea
+                                        value={reason}
+                                        onChange={(event) => setReason(event.target.value)}
+                                        rows={2}
+                                        placeholder={chiefKick ? "Ex.: não estava no plantão; madrugada" : "Ex.: saiu antes para resolver continuidade"}
+                                    />
+                                </label>
 
                                 <footer className="board-modal-actions">
                                     <Dialog.Close asChild>
@@ -258,7 +334,7 @@ export function DepartureDialog({
                                         type="button"
                                         className="board-modal-confirm danger"
                                         onClick={submit}
-                                        disabled={submitting}
+                                        disabled={submitting || justificationMissing}
                                     >
                                         {submitting
                                             ? (chiefKick ? "Retirando…" : "Registrando…")

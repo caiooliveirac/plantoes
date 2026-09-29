@@ -12884,6 +12884,88 @@ button.chief-payable-tag:focus-visible {
 .board-modal-field textarea:focus { border-color: var(--accent-confirm); }
 .board-modal-field textarea { resize: vertical; }
 
+/* Retirar: desfecho escolhido pela chefia (DepartureDialog). Lista de rádios
+   em cartões — alvo de toque inteiro, uma decisão por linha. */
+.board-modal-choices {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.board-modal-choices > legend {
+    padding: 0;
+    margin-bottom: 6px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+}
+
+.board-modal-choice {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border: 1px solid var(--surface-elevated-border);
+    border-radius: 10px;
+    background: var(--surface-glass);
+    cursor: pointer;
+    transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+
+.board-modal-choice:has(input:disabled) {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.board-modal-choice.selected {
+    border-color: var(--accent-confirm);
+    background: var(--accent-confirm-soft);
+}
+
+.board-modal-choice input {
+    margin: 3px 0 0;
+    accent-color: var(--accent-confirm);
+    flex-shrink: 0;
+}
+
+.board-modal-choice-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.board-modal-choice-title {
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--text);
+}
+
+.board-modal-choice-tag {
+    margin-left: 8px;
+    padding: 1px 6px;
+    border-radius: 5px;
+    border: 1px solid var(--surface-elevated-border);
+    font-style: normal;
+    font-weight: 600;
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    vertical-align: 1px;
+}
+
+.board-modal-choice-hint {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--muted);
+}
+
 .board-modal-actions {
     display: flex;
     flex-wrap: wrap;

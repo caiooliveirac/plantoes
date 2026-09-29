@@ -12,6 +12,10 @@ const schema = z.object({
     actualEndedAt: z.string().datetime().optional().nullable(),
     notes: z.string().optional().nullable(),
     chiefKick: z.boolean().optional(),
+    // Retirar: desfecho escolhido pela chefia e o que ela escreveu (a nota
+    // padrão do modal não conta como justificativa).
+    earlyDepartureOutcome: z.enum(["no_balance", "bank_only", "half_shift", "full_shift"]).optional().nullable(),
+    justification: z.string().optional().nullable(),
 });
 
 export async function POST(request: NextRequest, context: RouteContext<"/api/intervention/occupancies/[id]/end">) {
@@ -41,6 +45,8 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
             actualEndedAt: parsed.data.actualEndedAt ? new Date(parsed.data.actualEndedAt) : null,
             chiefConfirmed: true,
             chiefWithdrawal: parsed.data.chiefKick === true,
+            chiefOutcome: parsed.data.chiefKick ? (parsed.data.earlyDepartureOutcome ?? null) : null,
+            chiefNote: parsed.data.justification ?? null,
         }, session.user.id);
         await db.insert(auditLogs).values({
             actorUserId: session.user.id,
@@ -52,6 +58,7 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
                 actualEndedAt: updated.actualEndedAt,
                 notes: parsed.data.notes ?? null,
                 earlyDepartureOutcome: updated.earlyDepartureOutcome ?? null,
+                chiefChoice: parsed.data.chiefKick ? (parsed.data.earlyDepartureOutcome ?? null) : null,
             },
         });
         if (parsed.data.chiefKick) {
