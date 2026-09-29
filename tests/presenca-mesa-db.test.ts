@@ -45,11 +45,19 @@ async function criarConta() {
 const conta = (userId: string, aparelhoId: string) => ({ userId, aparelhoId, sessaoId: "", contexto: null });
 const visivel = { visivel: true, paradoSeg: 3, humanoAgora: false };
 
+/* registrarEvento é disparado sem await: espera a linha chegar (até 3 s) em
+   vez de um intervalo fixo — 50 ms às vezes não bastava no CI (0 !== 1). */
 async function eventos(userId: string, tipo: string) {
     const { getDb, schema } = await modulos();
-    await new Promise((r) => setTimeout(r, 50)); // registrarEvento é disparado sem await
-    return getDb().select().from(schema.authSessionEvents)
+    const buscar = () => getDb().select().from(schema.authSessionEvents)
         .where(and(eq(schema.authSessionEvents.userId, userId), eq(schema.authSessionEvents.kind, tipo)));
+    const limite = Date.now() + 3_000;
+    let linhas = await buscar();
+    while (linhas.length === 0 && Date.now() < limite) {
+        await new Promise((r) => setTimeout(r, 25));
+        linhas = await buscar();
+    }
+    return linhas;
 }
 
 after(async () => {
