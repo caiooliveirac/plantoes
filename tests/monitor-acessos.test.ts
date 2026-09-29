@@ -728,6 +728,14 @@ test("atitude: admin não é derrubado; risco alto derruba; insistência troca a
         papeis: ["doctor"],
         eventos: [{ tipo: "auto_exigir_nova_senha", em: min(50) }],
     }), "nada");
+    assert.equal(decidirAtitude({
+        papeis: ["doctor"],
+        nivel: "forte",
+        episodios: [],
+        eventos: [{ tipo: "auto_exigir_nova_senha", em: min(40) }, { tipo: "auto_encerrar_sessoes", em: min(20) }],
+        agora,
+        aindaAberto: true,
+    }), "nada", "senha já trocada nas últimas 24 h não roda de novo");
 });
 
 test("plantão: aba parada na rede do plantão fora do turno (sem toque) não vira achado", () => {
