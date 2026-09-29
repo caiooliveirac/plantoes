@@ -2457,6 +2457,12 @@ export function reconcileMealBreakSessionRamalsWithBoard(params: {
     return remapped.mode === "night" ? syncNightSessionState(remapped) : syncDaySessionState(remapped);
 }
 
+/** Linhas da regulação como a divisão de refeição deve vê-las: cada cobertura
+    de madrugada troca-se pelas ocupações reais que ela esconde do quadro. */
+export function resolveMealBreakRegulationRows(board: OperationalBoard) {
+    return board.regulation.flatMap((row) => (row.madrugadaCobertura ? (row.madrugadaOcultos ?? []) : [row]));
+}
+
 export function reconcileNightMealBreakSessionWithBoard(params: {
     session: MealBreakSession;
     board: OperationalBoard;
@@ -2466,10 +2472,10 @@ export function reconcileNightMealBreakSessionWithBoard(params: {
     }
 
     const boardArrivalByRamal = new Map(
-        params.board.regulation
-            // Cobertura de madrugada é temporária: não reescreve a chegada de
-            // quem é dono do ramal na divisão (docs/madrugada.md).
-            .filter((row) => row.status === "active" && Boolean(row.startedAt) && !row.madrugadaCobertura)
+        // Cobertura de madrugada é temporária: não reescreve a chegada de
+        // quem é dono do ramal na divisão (docs/madrugada.md).
+        resolveMealBreakRegulationRows(params.board)
+            .filter((row) => row.status === "active" && Boolean(row.startedAt))
             .map((row) => [normalizeRamal(row.postCode), row.startedAt as string]),
     );
 
@@ -2512,10 +2518,10 @@ function buildMealBreakRosterEntries(
         throw new MealBreakUserError("Fluxo de jantar vale apenas no plantão noturno.");
     }
 
-    // Cobertura de madrugada é temporária e não entra na divisão: não herda
-    // horário de trabalho/refeição do titular (docs/madrugada.md).
-    const boardEntries = board.regulation
-        .filter((row) => !row.madrugadaCobertura)
+    // Cobertura de madrugada é temporária e não entra na divisão: no lugar
+    // dela entram as ocupações reais que ela esconde do quadro (o coberto e
+    // quem já estava no ramal) — docs/madrugada.md.
+    const boardEntries = resolveMealBreakRegulationRows(board)
         .map((row) => mapRegulationBoardEntry(row, mode, referenceAt));
     const regulation = boardEntries
         .map((entry) => (entry.kind === "doctor" ? entry.doctor : null))

@@ -300,7 +300,7 @@ test("madrugada pelo bot: mensagem pergunta por quem, botão grava a cobertura",
 
         const [log] = await getDb().select().from(schema.telegramIngestedMessages)
             .where(eq(schema.telegramIngestedMessages.chatId, String(chatId)));
-        assert.equal(log.status, "pending_madrugada_cover");
+        assert.equal(log.status, "pending_madrugada_cover", `motivo: ${log.errorMessage} · respostas: ${JSON.stringify(enviados.map((body) => body.text))}`);
         const pergunta = enviados.find((body) => typeof body.text === "string" && String(body.text).includes("Por quem"));
         assert.ok(pergunta, "bot pergunta por quem a pessoa está");
         assert.ok(JSON.stringify(pergunta.reply_markup).includes(helo.fullName), "titular aparece como botão");
@@ -375,4 +375,62 @@ test("madrugada: chegada comum de quem cobre encerra a cobertura (vira plantão 
     assert.ok(!JSON.stringify(pendentes).includes(occupancy.id), "cobertura fora da fila de saída");
     const rows = await board.listRegulationBoard();
     assert.equal(rows.find((row) => row.postCode === "2032")?.doctorId, mara.id, "coberto volta ao quadro");
+});
+
+test("madrugada: lançamento de plantão passado (correção) não encerra a cobertura ao vivo", { skip }, async () => {
+    const { getDb, schema, cobertura } = await modulos();
+    await garantirTabelasLegadas();
+    const { startRegulationOccupancy } = await import("@/modules/regulation/service");
+    const otto = await criarMedico("OTTO");
+    const paty = await criarMedico("PATY");
+    const coberta = await titular(otto.id, "1321");
+
+    const now = Date.now();
+    const { occupancy } = await cobertura.startMadrugadaCoverage({
+        covererDoctorId: paty.id,
+        coveredOccupancyId: coberta.id,
+        postCode: "2270",
+        startedAt: new Date(now - 10 * 60_000),
+        scheduledStartAt: new Date(now - HOUR),
+        scheduledEndAt: new Date(now + 3 * HOUR),
+    });
+    await startRegulationOccupancy({
+        doctorId: paty.id,
+        postId: await postId("1322"),
+        startedAt: new Date("2026-01-05T07:00:00-03:00"),
+        shiftLabel: "SD",
+        source: "admin_correction",
+    });
+    const viva = await getDb().query.regulationOccupancies.findFirst({ where: eq(schema.regulationOccupancies.id, occupancy.id) });
+    assert.equal(viva?.endedAt, null, "cobertura ao vivo segue aberta");
+});
+
+test("madrugada: a divisão da noite vê o titular e o dono do ramal, não quem cobre", { skip }, async () => {
+    const { cobertura, board } = await modulos();
+    await garantirTabelasLegadas();
+    const { resolveMealBreakRegulationRows } = await import("@/modules/telegram/meal-breaks");
+    const rita = await criarMedico("RITA");
+    const saul = await criarMedico("SAUL");
+    const tais = await criarMedico("TAIS");
+    const coberta = await titular(rita.id, "1323");
+    await titular(saul.id, "1324");
+
+    const now = Date.now();
+    await cobertura.startMadrugadaCoverage({
+        covererDoctorId: tais.id,
+        coveredOccupancyId: coberta.id,
+        postCode: "1324",
+        startedAt: new Date(now),
+        scheduledStartAt: new Date(now - HOUR),
+        scheduledEndAt: new Date(now + 3 * HOUR),
+    });
+    const regulation = await board.listRegulationBoard();
+    assert.equal(regulation.find((row) => row.postCode === "1324")?.doctorId, tais.id);
+
+    const vistos = resolveMealBreakRegulationRows({ regulation } as never)
+        .filter((row) => row.status === "active")
+        .map((row) => `${row.postCode}:${row.doctorId}`);
+    assert.ok(vistos.includes(`1323:${rita.id}`), "titular coberto volta à divisão no ramal dele");
+    assert.ok(vistos.includes(`1324:${saul.id}`), "dono do ramal volta à divisão");
+    assert.ok(!vistos.some((entry) => entry.endsWith(tais.id)), "quem cobre fica fora da divisão");
 });

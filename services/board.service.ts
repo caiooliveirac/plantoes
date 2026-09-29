@@ -111,6 +111,12 @@ export interface RegulationBoardRow {
    */
   madrugadaCobertura?: boolean;
   madrugadaCobreNome?: string | null;
+  /**
+   * Só em linha de cobertura: as ocupações que ela esconde do quadro (o
+   * coberto e quem já estava no ramal). Quem precisa do escalonamento REAL
+   * da noite (divisão de refeição) usa estas no lugar da cobertura.
+   */
+  madrugadaOcultos?: RegulationBoardRow[];
 }
 
 /** Ramal eventual oferecido nos seletores (chegada manual / remanejamento) mesmo
@@ -1795,6 +1801,59 @@ function turnoArrivalSql(alias: "ro" | "io", withBoardAnchor = false) {
   )`;
 }
 
+// Madrugada (docs/madrugada.md): para cada cobertura visível, as ocupações que
+// ela esconde — a coberta e quem já estava no ramal quando ela chegou — com a
+// mesma forma de linha do quadro. Uma consulta só, e nenhuma sem cobertura.
+async function attachMadrugadaHiddenRows(rows: RegulationBoardRow[]): Promise<RegulationBoardRow[]> {
+  const coverageIds = rows.filter((row) => row.madrugadaCobertura && row.occupancyId).map((row) => row.occupancyId as string);
+  if (coverageIds.length === 0) {
+    return rows;
+  }
+  const result = await getDb().execute(sql`
+    select
+      cob.id as "coverageId",
+      rp.id as "postId",
+      o.id as "occupancyId",
+      rp.code as "postCode",
+      rp.label as "postLabel",
+      rp.default_role as "defaultRole",
+      rp.on_demand as "onDemand",
+      d.id as "doctorId",
+      d.full_name as "doctorName",
+      d.display_name as "displayName",
+      o.started_at as "startedAt",
+      o.board_started_at as "boardStartedAt",
+      o.scheduled_end_at as "scheduledEndAt",
+      o.shift_label as "shiftLabel",
+      o.role_label as "roleLabel",
+      coalesce(o.ramal_label, rp.code) as "ramalLabel",
+      'active' as "status",
+      'operations_v2' as "liveSource"
+    from operations_v2.regulation_occupancies cob
+    join operations_v2.regulation_occupancies o
+      on o.ended_at is null
+     and o.board_started_at is not null
+     and not o.madrugada_cobertura
+     and (
+       o.id = cob.madrugada_cobre_ocupacao_id
+       or (o.post_id = cob.post_id and o.started_at <= cob.started_at)
+     )
+    join operations_v2.regulation_posts rp on rp.id = o.post_id
+    join operations_v2.doctors d on d.id = o.doctor_id
+    where cob.id in (${sql.join(coverageIds.map((id) => sql`${id}::uuid`), sql`, `)})
+  `);
+  const hiddenByCoverage = new Map<string, RegulationBoardRow[]>();
+  for (const raw of result as unknown as Record<string, unknown>[]) {
+    const coverageId = String(raw.coverageId);
+    const list = hiddenByCoverage.get(coverageId) ?? [];
+    list.push(mapRegulationRow(raw));
+    hiddenByCoverage.set(coverageId, list);
+  }
+  return rows.map((row) => (row.madrugadaCobertura && row.occupancyId
+    ? { ...row, madrugadaOcultos: hiddenByCoverage.get(row.occupancyId) ?? [] }
+    : row));
+}
+
 export async function listRegulationBoard() {
   const db = getDb();
   // Janela aberta de turno anterior já venceu na virada, mesmo que o reaper do
@@ -1954,7 +2013,7 @@ export async function listRegulationBoard() {
     order by rp.sort_order asc, rp.code asc
   `);
 
-  const rows = (result as unknown as Record<string, unknown>[]).map(mapRegulationRow);
+  const rows = await attachMadrugadaHiddenRows((result as unknown as Record<string, unknown>[]).map(mapRegulationRow));
   const reference = new Date();
   const shadowByPost = await listOpenRegulationShadowOccupantsByPost();
   const displacedByPost = await listOpenRegulationDisplacedOccupantsByPost();

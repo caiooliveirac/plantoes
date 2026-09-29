@@ -816,17 +816,21 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
         // numa cobertura encerra a cobertura — nunca a reaproveita, senão o
         // plantão real herdaria a marca de "sem pagamento". Já confirmada: não
         // vai para a fila de saída da chefia.
-        const openCoverages = await tx.query.regulationOccupancies.findMany({
-            where: and(
-                eq(regulationOccupancies.doctorId, input.doctorId),
-                eq(regulationOccupancies.madrugadaCobertura, true),
-                isNull(regulationOccupancies.endedAt),
-            ),
-        });
+        // Correção histórica (lançamento de plantão passado) e coberturas que
+        // começaram DEPOIS desta chegada não são tocadas.
+        const openCoverages = historicalCorrectionEndAt
+            ? []
+            : await tx.query.regulationOccupancies.findMany({
+                where: and(
+                    eq(regulationOccupancies.doctorId, input.doctorId),
+                    eq(regulationOccupancies.madrugadaCobertura, true),
+                    isNull(regulationOccupancies.endedAt),
+                    lte(regulationOccupancies.startedAt, input.startedAt),
+                ),
+            });
         for (const coverage of openCoverages) {
-            const closeAt = coverage.startedAt.getTime() > input.startedAt.getTime() ? coverage.startedAt : input.startedAt;
             await tx.update(regulationOccupancies)
-                .set({ endedAt: closeAt, actualEndedAt: closeAt, departureConfirmedAt: now, updatedAt: now })
+                .set({ endedAt: input.startedAt, actualEndedAt: input.startedAt, departureConfirmedAt: now, updatedAt: now })
                 .where(eq(regulationOccupancies.id, coverage.id));
         }
 
