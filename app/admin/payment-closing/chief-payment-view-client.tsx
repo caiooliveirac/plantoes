@@ -174,6 +174,14 @@ function resolveAmountCentsByDayKind(params: { profile: DoctorProfile; isWeekend
     return Math.round((rateCents * unitMilli) / 1000);
 }
 
+/** Nome que o médico escolheu para os painéis; sem ele, primeiro + último nome. */
+function doctorShortName(doctor: { doctorName: string; displayName?: string | null }) {
+    const escolhido = doctor.displayName?.trim();
+    if (escolhido) return escolhido;
+    const partes = doctor.doctorName.trim().split(/\s+/);
+    return partes.length > 2 ? `${partes[0]} ${partes[partes.length - 1]}` : doctor.doctorName;
+}
+
 function employmentTypeLabel(employmentType: string | null | undefined) {
     return employmentType === "estatutario" ? "Estatutário" : "PJ";
 }
@@ -2107,7 +2115,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                 >
                                     <td className="sticky-col doctor">
                                         <strong>Desativadas</strong>
-                                        <span>Fontes sem médico por desativação do turno</span>
+                                        <span className="chief-payable-extenso">Fontes sem médico por desativação do turno</span>
                                     </td>
 
                                     {board.days.map((day) => {
@@ -2145,7 +2153,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                 >
                                     <td className="sticky-col doctor">
                                         <strong>Sem médico</strong>
-                                        <span>Sem cobertura e sem desativação no turno</span>
+                                        <span className="chief-payable-extenso">Sem cobertura e sem desativação no turno</span>
                                     </td>
 
                                     {board.days.map((day) => {
@@ -2197,8 +2205,13 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                         type="button"
                                                         className="chief-payable-doctor-button"
                                                         onClick={() => setSelectedDoctorId(doctor.doctorId)}
+                                                        title={doctor.doctorName}
                                                     >
-                                                        <strong>{doctor.doctorName}</strong>
+                                                        {/* celular: o nome curto, quebrando linha (a coluna fixa estreita) */}
+                                                        <strong>
+                                                            <span className="chief-payable-nome-completo">{doctor.doctorName}</span>
+                                                            <span className="chief-payable-nome-curto">{doctorShortName(doctor)}</span>
+                                                        </strong>
                                                     </button>
                                                     {profileBadge ? (
                                                         <span className={`chief-payable-profile-badge ${doctorProfile}`.trim()}>{profileBadge}</span>
@@ -2232,7 +2245,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                         <span>{isDoctorAttested(doctor) ? "assinado" : "assinar"}</span>
                                                     </label>
                                                 ) : (
-                                                    <span className="chief-payable-idle-badge" title={`Sem plantão em ${board.monthLabel} — a linha está aqui para abrir o modal (contrato, banco de horas, NF).`}>
+                                                    <span className="chief-payable-idle-badge chief-payable-extenso" title={`Sem plantão em ${board.monthLabel} — a linha está aqui para abrir o modal (contrato, banco de horas, NF).`}>
                                                         sem plantão no mês
                                                     </span>
                                                 )}
@@ -2275,7 +2288,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                             title={title}
                                                         >
                                                             <strong>{formatSignedMinutesAsHours(shown)}</strong>
-                                                            <span>
+                                                            <span className="chief-payable-extenso">
                                                                 {atPositive
                                                                     ? "acerto +1 plantão"
                                                                     : atNegative
@@ -2285,7 +2298,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                                             : "banco"}
                                                             </span>
                                                             {doctor.bankHoursSettlement ? (
-                                                                <em title="Acerto de 12h já lançado neste mês">✓ acerto no mês</em>
+                                                                <em title="Acerto de 12h já lançado neste mês">✓<span className="chief-payable-extenso"> acerto no mês</span></em>
                                                             ) : null}
                                                         </button>
                                                     );
@@ -2327,7 +2340,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                             title={title}
                                                         >
                                                             <strong>contrato</strong>
-                                                            <span>{label}</span>
+                                                            <span className="chief-payable-extenso">{label}</span>
                                                         </button>
                                                     );
                                                 })()}
