@@ -80,7 +80,9 @@ export function resolveTurnoOutcomeShadow(params: {
     const turnoOutcome = classifyTurnoPresence(positionedMinutes);
     const rowEnd = toMs(params.row.endedAt) ?? Number.POSITIVE_INFINITY;
     const isTail = params.pieces.every((p) => (toMs(p.endedAt) ?? Number.POSITIVE_INFINITY) <= rowEnd);
-    const rowCut = params.row.earlyDepartureOutcome === "bank_only" || params.row.earlyDepartureOutcome === "half_shift";
+    const rowCut = params.row.earlyDepartureOutcome === "no_balance"
+        || params.row.earlyDepartureOutcome === "bank_only"
+        || params.row.earlyDepartureOutcome === "half_shift";
     const h = `${Math.floor(positionedMinutes / 60)}h${String(positionedMinutes % 60).padStart(2, "0")}`;
 
     let divergence: string | null = null;

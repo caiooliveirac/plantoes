@@ -210,7 +210,7 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
     // Retirada/saída antecipada decidida pela chefia: o desfecho gravado no
     // ÚLTIMO membro do grupo substitui a matemática padrão — o saldo passa a
     // ser o crédito da faixa (bank_only: horas trabalhadas; half_shift:
-    // excedente de 6h). Turnos anteriores da cadeia já são plantões completos;
+    // excedente de 6h; no_balance: nada). Turnos anteriores da cadeia já são plantões completos;
     // a régua mede só o segmento da janela em que a saída ocorreu.
     const tailOccupancyId = span.memberOccupancyIds[span.memberOccupancyIds.length - 1];
     const tailOccupancy = meaningful.find((o) => o.occupancyId === tailOccupancyId) ?? null;
@@ -229,13 +229,15 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
             if (classification.outcome === "full_shift" && classification.remainingMinutes === 0) {
                 return null;
             }
-            const outcome = tailOccupancy.earlyDepartureOutcome as "bank_only" | "half_shift";
+            const outcome = tailOccupancy.earlyDepartureOutcome as "no_balance" | "bank_only" | "half_shift";
             return buildEarlyDepartureBankHours({
                 outcome,
                 workedMinutes: classification.workedMinutes,
-                bankCreditMinutes: outcome === "bank_only"
-                    ? classification.workedMinutes
-                    : Math.max(0, classification.workedMinutes - EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES),
+                bankCreditMinutes: outcome === "no_balance"
+                    ? 0
+                    : outcome === "bank_only"
+                        ? classification.workedMinutes
+                        : Math.max(0, classification.workedMinutes - EARLY_DEPARTURE_HALF_THRESHOLD_MINUTES),
                 arrivalDelayMinutes: rawCalculation.arrivalDelayMinutes,
             });
         })()

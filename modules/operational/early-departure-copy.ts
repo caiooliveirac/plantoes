@@ -1,4 +1,4 @@
-import type { EarlyDepartureClassification, EarlyDepartureOutcome } from "@/modules/operational/early-departure";
+import type { EarlyDepartureClassification, StoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 
 /**
  * Textos oficiais dos desfechos de retirada/saída antecipada.
@@ -8,17 +8,21 @@ import type { EarlyDepartureClassification, EarlyDepartureOutcome } from "@/modu
  * este arquivo, nada é gerado dinamicamente além das interpolações de nome/hora.
  */
 
-const OUTCOME_SUMMARIES: Record<EarlyDepartureOutcome, string> = {
-    bank_only: "Saída antes de 6h de janela: {name} não assina este plantão. As horas trabalhadas viram crédito no banco de horas.",
-    half_shift: "Saída entre 6h e 10h de janela: {name} assina MEIO plantão. O que passar de 6h vira crédito no banco de horas.",
-    full_shift: "Faltam menos de 2h para o fim da janela: {name} assina o plantão inteiro.",
+// Descrevem a DECISÃO, não a faixa da régua: no Retirar a chefia escolhe o
+// desfecho, e "saída antes de 6h de janela" num meio plantão pago acima da
+// régua sairia falso no grupo.
+const OUTCOME_SUMMARIES: Record<StoredEarlyDepartureOutcome, string> = {
+    no_balance: "{name} foi retirado sem saldo: não assina este plantão e não gera banco de horas.",
+    bank_only: "{name} não assina este plantão. As horas trabalhadas viram crédito no banco de horas.",
+    half_shift: "{name} assina MEIO plantão. O que passar de 6h trabalhadas vira crédito no banco de horas.",
+    full_shift: "{name} assina o plantão inteiro.",
 };
 
 function interpolate(template: string, params: Record<string, string>) {
     return template.replace(/\{(\w+)\}/g, (_, key: string) => params[key] ?? "");
 }
 
-export function buildEarlyDepartureSummary(outcome: EarlyDepartureOutcome, params: { name: string }) {
+export function buildEarlyDepartureSummary(outcome: StoredEarlyDepartureOutcome, params: { name: string }) {
     return interpolate(OUTCOME_SUMMARIES[outcome], params);
 }
 

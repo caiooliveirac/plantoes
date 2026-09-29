@@ -14,6 +14,8 @@ const MIN_SEGMENT_MINUTES = 45;
 export const EARLY_DEPARTURE_BANK_ONLY_DISPLAY_LABEL = "Retirada antecipada — só banco de horas";
 export const EARLY_DEPARTURE_HALF_DISPLAY_LABEL = "Retirada antecipada — meio plantão";
 export const EARLY_DEPARTURE_BANK_ONLY_TAG_LABEL = "BANCO";
+export const EARLY_DEPARTURE_NO_BALANCE_DISPLAY_LABEL = "Retirado sem saldo — sem pagamento e sem banco";
+export const EARLY_DEPARTURE_NO_BALANCE_TAG_LABEL = "SEM SALDO";
 
 export type DoctorPaymentProfile = "generalist" | "specialist" | "psychiatry";
 
@@ -129,7 +131,7 @@ export interface PayableShift {
      * que exportações e folha usam por extenso). */
     extraKind?: string | null;
     /** Desfecho da régua de retirada antecipada aplicado a ESTE slot (ou null). */
-    earlyDepartureOutcome: "bank_only" | "half_shift" | null;
+    earlyDepartureOutcome: "no_balance" | "bank_only" | "half_shift" | null;
     /**
      * ADR-007 R4 em sombra: presente só quando a régua por turno divergiria
      * desta linha. Não muda pagamento; é o que o relatório da sombra lê
@@ -792,11 +794,13 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
         && rowEndedAtMs < new Date(board.endedAt).getTime()
         ? row.earlyDepartureOutcome
         : null;
-    const earlyOutcomeLabel = earlyOutcome === "bank_only"
-        ? EARLY_DEPARTURE_BANK_ONLY_DISPLAY_LABEL
-        : earlyOutcome === "half_shift"
-            ? EARLY_DEPARTURE_HALF_DISPLAY_LABEL
-            : null;
+    const earlyOutcomeLabel = earlyOutcome === "no_balance"
+        ? EARLY_DEPARTURE_NO_BALANCE_DISPLAY_LABEL
+        : earlyOutcome === "bank_only"
+            ? EARLY_DEPARTURE_BANK_ONLY_DISPLAY_LABEL
+            : earlyOutcome === "half_shift"
+                ? EARLY_DEPARTURE_HALF_DISPLAY_LABEL
+                : null;
 
     // ADR-007 R4 em SOMBRA: régua por turno (presença posicionada somada do
     // médico no slot, todas as posições dos dois domínios) calculada em
@@ -853,9 +857,11 @@ function mapAllocationRowToPayableShift(board: PaymentAllocationBoard, row: Paym
             ? HALF_SHIFT_TAG_LABEL
             : earlyOutcome === "bank_only"
                 ? EARLY_DEPARTURE_BANK_ONLY_TAG_LABEL
-                : isHalfShift
-                    ? HALF_SHIFT_TAG_LABEL
-                    : null,
+                : earlyOutcome === "no_balance"
+                    ? EARLY_DEPARTURE_NO_BALANCE_TAG_LABEL
+                    : isHalfShift
+                        ? HALF_SHIFT_TAG_LABEL
+                        : null,
         earlyDepartureOutcome: earlyOutcome,
         ...(turnoShadow?.divergence ? { turnoShadow } : {}),
     } satisfies PayableShift;

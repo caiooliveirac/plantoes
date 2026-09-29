@@ -3,8 +3,12 @@ import test from "node:test";
 import {
     classifyEarlyDeparture,
     isEarlyDepartureEligible,
+    isPaymentAffectingEarlyDepartureOutcome,
+    isStoredEarlyDepartureOutcome,
     resolveEarlyDeparturePaymentUnit,
+    validateChiefWithdrawalChoice,
 } from "@/modules/operational/early-departure";
+import { resolveChiefWithdrawalOutcome } from "@/modules/operational/departure-triage";
 import { buildEarlyDepartureBankHours } from "@/modules/bank-hours/calculator";
 
 function iso(value: string) {
@@ -169,7 +173,8 @@ test("sem janela agendada, cai na janela operacional 07/19", () => {
 
     assert.equal(result.outcome, "bank_only");
     assert.equal(result.elapsedMinutes, 300);
-    assert.equal(result.workedMinutes, 290);
+    // 10 min de atraso estão na tolerância do banco: sem prejuízo.
+    assert.equal(result.workedMinutes, 300);
 });
 
 // ── Elegibilidade e fração de pagamento ─────────────────────────────────────
@@ -255,4 +260,88 @@ test("ocupação de um turno só que sai 7 min depois do previsto segue sem rég
 
     assert.equal(result.outcome, "full_shift");
     assert.equal(result.remainingMinutes, 0);
+});
+
+// ── Tolerância de chegada: a mesma do banco de horas ────────────────────────
+
+test("atraso até 15 min não tira crédito: conta da janela, como no banco de horas", () => {
+    const tolerado = classifyEarlyDeparture({
+        departureAt: iso("2026-08-03T12:00:00-03:00"),
+        scheduledStartAt: iso("2026-08-03T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-08-03T19:00:00-03:00"),
+        startedAt: iso("2026-08-03T07:15:00-03:00"),
+    });
+    assert.equal(tolerado.workedMinutes, 300);
+    assert.equal(tolerado.bankCreditMinutes, 300);
+
+    const atrasado = classifyEarlyDeparture({
+        departureAt: iso("2026-08-03T12:00:00-03:00"),
+        scheduledStartAt: iso("2026-08-03T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-08-03T19:00:00-03:00"),
+        startedAt: iso("2026-08-03T07:16:00-03:00"),
+    });
+    assert.equal(atrasado.workedMinutes, 284, "passou da tolerância: conta da chegada");
+});
+
+// ── Retirar: a chefia escolhe, a régua sugere ──────────────────────────────
+
+test("sem saldo: não paga, não credita, e conta como desfecho gravado", () => {
+    assert.equal(resolveEarlyDeparturePaymentUnit("no_balance"), 0);
+    assert.ok(isStoredEarlyDepartureOutcome("no_balance"));
+    assert.ok(isPaymentAffectingEarlyDepartureOutcome("no_balance"));
+
+    const bank = buildEarlyDepartureBankHours({
+        outcome: "no_balance",
+        workedMinutes: 225,
+        bankCreditMinutes: 225,
+        arrivalDelayMinutes: 0,
+    });
+    assert.equal(bank.balanceMinutes, 0);
+    assert.equal(bank.creditedOvertimeMinutes, 0);
+    assert.equal(bank.ruleCode, "EARLY_DEPARTURE_NO_BALANCE");
+});
+
+test("escolha abaixo da régua (sem saldo, banco) nunca pede justificativa", () => {
+    const meio = { outcome: "half_shift" as const, remainingMinutes: 300 };
+    assert.deepEqual(validateChiefWithdrawalChoice("no_balance", meio), { allowed: true, requiresNote: false });
+    assert.deepEqual(validateChiefWithdrawalChoice("bank_only", meio), { allowed: true, requiresNote: false });
+    const inteiro = { outcome: "full_shift" as const, remainingMinutes: 60 };
+    assert.deepEqual(validateChiefWithdrawalChoice("no_balance", inteiro), { allowed: true, requiresNote: false });
+});
+
+test("pagar acima da régua pede justificativa, exceto inteiro na faixa de meio", () => {
+    const banco = { outcome: "bank_only" as const, remainingMinutes: 600 };
+    assert.equal(validateChiefWithdrawalChoice("half_shift", banco).requiresNote, true);
+    assert.equal(validateChiefWithdrawalChoice("full_shift", banco).requiresNote, true);
+    const meio = { outcome: "half_shift" as const, remainingMinutes: 300 };
+    assert.equal(validateChiefWithdrawalChoice("full_shift", meio).requiresNote, false);
+});
+
+test("saída que já não é antecipada só aceita o plantão inteiro", () => {
+    const fim = { outcome: "full_shift" as const, remainingMinutes: 0 };
+    assert.equal(validateChiefWithdrawalChoice("no_balance", fim).allowed, false);
+    assert.equal(validateChiefWithdrawalChoice("bank_only", fim).allowed, false);
+    assert.equal(validateChiefWithdrawalChoice("half_shift", fim).allowed, false);
+    assert.deepEqual(validateChiefWithdrawalChoice("full_shift", fim), { allowed: true, requiresNote: false });
+});
+
+test("caso 1362 29/09: madrugada declarada SD às 03:17, retirada 07:02 sem saldo, um clique", () => {
+    const classification = classifyEarlyDeparture({
+        departureAt: iso("2026-09-29T07:02:30-03:00"),
+        scheduledStartAt: iso("2026-09-29T07:00:00-03:00"),
+        scheduledEndAt: iso("2026-09-29T19:15:00-03:00"),
+        startedAt: iso("2026-09-29T03:17:29-03:00"),
+    });
+    // A régua sugere só banco com 2 min: as 3h45 da madrugada são do SN de
+    // outro médico e nunca entram no SD.
+    assert.equal(classification.outcome, "bank_only");
+    assert.equal(classification.workedMinutes, 2);
+
+    assert.equal(resolveChiefWithdrawalOutcome({ classification, chosen: "no_balance" }), "no_balance");
+    assert.equal(resolveChiefWithdrawalOutcome({ classification }), "bank_only", "sem escolha vale a régua");
+    assert.throws(() => resolveChiefWithdrawalOutcome({ classification, chosen: "half_shift", note: "ok" }), /justificativa/);
+    assert.equal(
+        resolveChiefWithdrawalOutcome({ classification, chosen: "half_shift", note: "combinado com a coordenação" }),
+        "half_shift",
+    );
 });

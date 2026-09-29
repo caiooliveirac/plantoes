@@ -102,7 +102,9 @@ export function HalfShiftDecision({ shift }: { shift: PayableShift }) {
         ? "MEIO plantão"
         : shift.earlyDepartureOutcome === "bank_only"
             ? "só banco de horas (não assinado)"
-            : "plantão INTEIRO";
+            : shift.earlyDepartureOutcome === "no_balance"
+                ? "sem saldo (sem pagamento e sem banco)"
+                : "plantão INTEIRO";
 
     const confirm = async () => {
         if (!preview) return;

@@ -9,7 +9,8 @@ import { syncInterventionBankHours, syncRegulationBankHours } from "@/modules/ba
 import { applyOperationalRoleShiftPolicy } from "@/modules/operational/roles";
 import { resolveRearrivalNotes, shouldPromoteShadowToBoardOnRearrival } from "@/modules/operational/shadow";
 import { isRearrivalWithinOwnWindow, resolveArrivalShiftLabel, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, shouldDisplaceInsteadOfRelieve } from "@/modules/operational/board-rules";
-import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
+import { classifyEarlyDeparture, isEarlyDepartureEligible, type StoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
+import { resolveChiefWithdrawalOutcome } from "@/modules/operational/departure-triage";
 import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operational/occupancy-identity";
 import { describeContestBlockedByLaterArrival, describeContestedDeparture, isContestedDepartureNotes, resolveContestedBoardDecision, type ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
@@ -1427,6 +1428,10 @@ export async function endInterventionOccupancy(
         /** Retirada decidida pela chefia: aplica a régua de saída antecipada
          *  (modules/operational/early-departure.ts) e grava o desfecho. */
         chiefWithdrawal?: boolean;
+        /** Desfecho escolhido pela chefia no Retirar (sem ele vale a régua). */
+        chiefOutcome?: StoredEarlyDepartureOutcome | null;
+        /** Justificativa, exigida quando a escolha paga acima da régua. */
+        chiefNote?: string | null;
     },
     updatedByUserId?: string | null,
 ) {
@@ -1465,14 +1470,22 @@ export async function endInterventionOccupancy(
             ? (updatedByUserId ?? null)
             : existing.departureConfirmedByUserId;
 
-        const earlyDepartureOutcome = input.chiefWithdrawal
-            && isEarlyDepartureEligible({ roleLabel: existing.roleLabel })
-            ? classifyEarlyDeparture({
-                departureAt: actualEndedAt ?? input.endedAt,
-                scheduledStartAt: existing.scheduledStartAt,
-                scheduledEndAt: departureTrim?.scheduledEndAt ?? existing.scheduledEndAt,
-                startedAt: existing.startedAt,
-            }).outcome
+        const withdrawalEligible = input.chiefWithdrawal && isEarlyDepartureEligible({ roleLabel: existing.roleLabel });
+        if (input.chiefOutcome && !withdrawalEligible) {
+            // Escolha ignorada calada pagaria o que a chefia mandou não pagar.
+            throw new Error("Meio plantão declarado não entra na régua de retirada.");
+        }
+        const earlyDepartureOutcome = withdrawalEligible
+            ? resolveChiefWithdrawalOutcome({
+                classification: classifyEarlyDeparture({
+                    departureAt: actualEndedAt ?? input.endedAt,
+                    scheduledStartAt: existing.scheduledStartAt,
+                    scheduledEndAt: departureTrim?.scheduledEndAt ?? existing.scheduledEndAt,
+                    startedAt: existing.startedAt,
+                }),
+                chosen: input.chiefOutcome,
+                note: input.chiefNote,
+            })
             : existing.earlyDepartureOutcome;
 
         const [updated] = await tx

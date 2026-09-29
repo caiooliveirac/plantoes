@@ -1178,6 +1178,21 @@ test("desfecho bank_only só zera o slot quando a saída caiu DENTRO dele", () =
     assert.equal(inside.paymentTag, "BANCO");
 });
 
+test("desfecho no_balance (retirado sem saldo) zera o slot e marca SEM SALDO", () => {
+    const board = makeBoard({
+        intervention: [{
+            ...makeBoard().intervention[0],
+            endedAt: "2026-04-10T14:00:00.000Z",
+            actualEndedAt: "2026-04-10T14:00:00.000Z",
+            earlyDepartureOutcome: "no_balance",
+        }],
+    });
+    const [shift] = buildPayableShiftsFromBoards([board]);
+    assert.equal(shift.paymentUnit, 0);
+    assert.equal(shift.paymentTag, "SEM SALDO");
+    assert.equal(shift.earlyDepartureOutcome, "no_balance");
+});
+
 test("applyDoctorFinancials produz exatamente o board que buildChiefPayableBoard monta com doctorFinancials", () => {
     const payableShifts = buildPayableShiftsFromBoards([makeBoard()]);
     const base = {

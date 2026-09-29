@@ -6,9 +6,9 @@ import {
 } from "@/modules/operational/extended-stay";
 
 export const BANK_HOURS_RULE_VERSION = 10;
-export const ARRIVAL_GRACE_MINUTES = 15;
-export { DEPARTURE_GRACE_MINUTES } from "@/modules/operational/early-departure";
-import { DEPARTURE_GRACE_MINUTES } from "@/modules/operational/early-departure";
+// Tolerâncias moram na régua de saída (que também as aplica); o banco reexporta.
+export { ARRIVAL_GRACE_MINUTES, DEPARTURE_GRACE_MINUTES } from "@/modules/operational/early-departure";
+import { ARRIVAL_GRACE_MINUTES, DEPARTURE_GRACE_MINUTES } from "@/modules/operational/early-departure";
 
 /**
  * Atraso máximo crível. Acima disso a janela agendada é que está errada (P
@@ -98,6 +98,7 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
 
 export const EARLY_DEPARTURE_BANK_ONLY_RULE_CODE = "EARLY_DEPARTURE_BANK_ONLY";
 export const EARLY_DEPARTURE_HALF_CREDIT_RULE_CODE = "EARLY_DEPARTURE_HALF_CREDIT";
+export const EARLY_DEPARTURE_NO_BALANCE_RULE_CODE = "EARLY_DEPARTURE_NO_BALANCE";
 
 function formatMinutesAsHours(minutes: number) {
     const hours = Math.floor(minutes / 60);
@@ -114,21 +115,24 @@ function formatMinutesAsHours(minutes: number) {
  * atraso/excedente: o saldo é exatamente o crédito do desfecho —
  * 'bank_only' credita as horas trabalhadas dentro da janela (o plantão não é
  * assinado); 'half_shift' credita o que passar de 6h trabalhadas (meio plantão
- * assinado). Não existe débito nesta régua e a tolerância de 15 min não se
- * aplica: a hora é a que a chefia confirmou.
+ * assinado); 'no_balance' (sem saldo, escolha da chefia para quem nem estava
+ * no plantão) não assina e não credita nada. Não existe débito nesta régua; o
+ * atraso dentro da tolerância de 15 min não reduz o trabalhado.
  */
 export function buildEarlyDepartureBankHours(params: {
-    outcome: "bank_only" | "half_shift";
+    outcome: "no_balance" | "bank_only" | "half_shift";
     workedMinutes: number;
     bankCreditMinutes: number;
     arrivalDelayMinutes: number;
 }): BankHoursCalculationResult {
-    const credit = Math.max(0, params.bankCreditMinutes);
+    const credit = params.outcome === "no_balance" ? 0 : Math.max(0, params.bankCreditMinutes);
     const worked = formatMinutesAsHours(Math.max(0, params.workedMinutes));
 
-    const explanation = params.outcome === "bank_only"
-        ? `Retirada antes de 6h de janela: o plantao nao e assinado. Trabalhou ${worked} dentro da janela; ${credit} min creditados no banco de horas.`
-        : `Retirada entre 6h e 10h de janela: assina MEIO plantao. Trabalhou ${worked} dentro da janela; o excedente de 6h (${credit} min) creditado no banco de horas.`;
+    const explanation = params.outcome === "no_balance"
+        ? "Retirado sem saldo pela chefia: o plantao nao e assinado e nao gera banco de horas."
+        : params.outcome === "bank_only"
+            ? `Retirada sem assinar o plantao: trabalhou ${worked} dentro da janela; ${credit} min creditados no banco de horas.`
+            : `Retirada com MEIO plantao assinado: trabalhou ${worked} dentro da janela; o excedente de 6h (${credit} min) creditado no banco de horas.`;
 
     return {
         arrivalDelayMinutes: params.arrivalDelayMinutes,
@@ -136,9 +140,11 @@ export function buildEarlyDepartureBankHours(params: {
         overtimeMultiplier: 1,
         creditedOvertimeMinutes: credit,
         balanceMinutes: credit,
-        ruleCode: params.outcome === "bank_only"
-            ? EARLY_DEPARTURE_BANK_ONLY_RULE_CODE
-            : EARLY_DEPARTURE_HALF_CREDIT_RULE_CODE,
+        ruleCode: params.outcome === "no_balance"
+            ? EARLY_DEPARTURE_NO_BALANCE_RULE_CODE
+            : params.outcome === "bank_only"
+                ? EARLY_DEPARTURE_BANK_ONLY_RULE_CODE
+                : EARLY_DEPARTURE_HALF_CREDIT_RULE_CODE,
         explanation,
         extendedStay: null,
     };
