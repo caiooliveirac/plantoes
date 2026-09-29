@@ -110,7 +110,7 @@ export async function startMadrugadaCoverage(input: {
         // Reenvio de quem já cobre: a cobertura anterior dá lugar à nova.
         const now = new Date();
         await tx.update(regulationOccupancies)
-            .set({ endedAt: input.startedAt, actualEndedAt: input.startedAt, updatedAt: now })
+            .set({ endedAt: input.startedAt, actualEndedAt: input.startedAt, departureConfirmedAt: now, updatedAt: now })
             .where(and(
                 eq(regulationOccupancies.doctorId, input.covererDoctorId),
                 eq(regulationOccupancies.madrugadaCobertura, true),

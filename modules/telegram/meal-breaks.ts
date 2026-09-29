@@ -2512,7 +2512,11 @@ function buildMealBreakRosterEntries(
         throw new MealBreakUserError("Fluxo de jantar vale apenas no plantão noturno.");
     }
 
-    const boardEntries = board.regulation.map((row) => mapRegulationBoardEntry(row, mode, referenceAt));
+    // Cobertura de madrugada é temporária e não entra na divisão: não herda
+    // horário de trabalho/refeição do titular (docs/madrugada.md).
+    const boardEntries = board.regulation
+        .filter((row) => !row.madrugadaCobertura)
+        .map((row) => mapRegulationBoardEntry(row, mode, referenceAt));
     const regulation = boardEntries
         .map((entry) => (entry.kind === "doctor" ? entry.doctor : null))
         .filter((doctor): doctor is MealBreakRosterDoctor => Boolean(doctor));

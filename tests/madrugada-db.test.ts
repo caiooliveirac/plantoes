@@ -338,3 +338,41 @@ test("madrugada pelo bot: mensagem pergunta por quem, botão grava a cobertura",
         await getDb().delete(schema.telegramIngestedMessages).where(eq(schema.telegramIngestedMessages.chatId, String(chatId)));
     }
 });
+
+test("madrugada: chegada comum de quem cobre encerra a cobertura (vira plantão pagável) e nada vai para a fila de saída", { skip }, async () => {
+    const { getDb, schema, cobertura, board } = await modulos();
+    await garantirTabelasLegadas();
+    const { startRegulationOccupancy } = await import("@/modules/regulation/service");
+    const mara = await criarMedico("MARA");
+    const nina = await criarMedico("NINA");
+    const coberta = await titular(mara.id, "2032");
+
+    const now = Date.now();
+    const { occupancy } = await cobertura.startMadrugadaCoverage({
+        covererDoctorId: nina.id,
+        coveredOccupancyId: coberta.id,
+        postCode: "2269",
+        startedAt: new Date(now - 30 * 60_000),
+        scheduledStartAt: new Date(now - HOUR),
+        scheduledEndAt: new Date(now + 3 * HOUR),
+    });
+
+    const real = await startRegulationOccupancy({
+        doctorId: nina.id,
+        postId: await postId("2269"),
+        startedAt: new Date(now),
+        shiftLabel: "SN",
+        source: "telegram",
+    });
+    assert.notEqual(real.id, occupancy.id, "plantão real é linha nova, não a cobertura");
+    assert.equal(real.madrugadaCobertura, false);
+
+    const encerrada = await getDb().query.regulationOccupancies.findFirst({ where: eq(schema.regulationOccupancies.id, occupancy.id) });
+    assert.ok(encerrada?.endedAt, "cobertura encerrada");
+    assert.ok(encerrada?.departureConfirmedAt, "cobertura não pede confirmação de saída");
+
+    const pendentes = await board.listPendingDepartureConfirmations();
+    assert.ok(!JSON.stringify(pendentes).includes(occupancy.id), "cobertura fora da fila de saída");
+    const rows = await board.listRegulationBoard();
+    assert.equal(rows.find((row) => row.postCode === "2032")?.doctorId, mara.id, "coberto volta ao quadro");
+});
