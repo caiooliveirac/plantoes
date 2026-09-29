@@ -405,6 +405,8 @@ function buildHeadline(params: {
     saldoMinutes: number;
     bonusEligibleMinutes: number;
     penaltyEligibleMinutes: number;
+    /** PJ: dívida até 30/04/2025 (≤ 0). Fora do saldo mostrado, mas amortizada antes da troca. */
+    oldDebtMinutes: number;
     competenciaAberta: boolean;
     payrollThisMonthMinutes: number;
     monthLabel: string;
@@ -442,11 +444,23 @@ function buildHeadline(params: {
             actionLabel: competenciaAberta ? "Escolher o plantão" : null,
         };
     }
+    const divida = params.oldDebtMinutes < 0 ? formatDuration(params.oldDebtMinutes) : null;
     if (be >= 0) {
         return {
             tone: "neutra",
             title: `Faltam ${formatDuration(TROCA_MINUTOS - be)} para você poder trocar por 1 plantão extra.`,
-            detail: "A troca abre quando o saldo chega a +12h.",
+            detail: divida
+                ? `A troca abre quando o saldo, descontada a dívida de ${divida} até 30/04/2025, chega a +12h.`
+                : "A troca abre quando o saldo chega a +12h.",
+            showAction: false,
+            actionLabel: null,
+        };
+    }
+    if (divida && params.saldoMinutes >= 0) {
+        return {
+            tone: "neutra",
+            title: `Faltam ${formatDuration(-be)} para quitar a dívida até 30/04/2025.`,
+            detail: "Depois disso, a troca por plantão extra abre quando o saldo chegar a +12h.",
             showAction: false,
             actionLabel: null,
         };
@@ -477,11 +491,13 @@ export function buildDoctorBankHoursView(params: {
     const isStatutory = doctor.employmentType === "estatutario";
     const legacyOld = doctor.legacy?.preMay2025Minutes ?? 0;
     const legacyPeriod = doctor.legacy?.spreadsheetPeriodMinutes ?? 0;
-    // PJ: crédito anterior a mai/2025 não paga nada (fora da régua) e sai da
-    // visão para não inflar expectativa. Dívida antiga continua na conta. No
-    // estatutário ele entra na régua do extra, então fica.
+    // PJ: o saldo mostrado é só o formado de mai/2025 em diante. Crédito
+    // anterior não paga nada e sai da visão; dívida anterior vira aviso abaixo
+    // da régua (e ainda é amortizada antes da troca — ver buildHeadline). No
+    // estatutário o saldo antigo entra na troca, então fica.
     const hiddenOldCreditMinutes = isStatutory ? 0 : Math.max(legacyOld, 0);
-    const saldoMinutes = doctor.balanceMinutes - hiddenOldCreditMinutes;
+    const oldDebtMinutes = isStatutory ? 0 : Math.min(legacyOld, 0);
+    const saldoMinutes = doctor.balanceMinutes - hiddenOldCreditMinutes - oldDebtMinutes;
 
     // Estatutário: o que passa do zero vai à folha e nunca entra no banco.
     const payrollByMonth = new Map<string, number>();
@@ -517,8 +533,6 @@ export function buildDoctorBankHoursView(params: {
     const add = (term: DoctorCompositionTerm) => { if (term.minutes !== 0) composition.push(term); };
     if (isStatutory) {
         add({ key: "antigo", label: "Saldo até abr/2025", detail: "planilha da coordenação", minutes: legacyOld, filter: null });
-    } else if (legacyOld < 0) {
-        add({ key: "antigo", label: "Dívida até abr/2025", detail: "planilha da coordenação", minutes: legacyOld, filter: null });
     }
     add({ key: "planilha", label: "Saldo de mai/2025 a mai/2026", detail: "planilha da coordenação", minutes: legacyPeriod, filter: null });
     add({ key: "alem", label: "Tempo além do horário", detail: `${plural(nAlem, "plantão", "plantões")} · toque para ver`, minutes: alem, filter: "alem" });
@@ -572,6 +586,7 @@ export function buildDoctorBankHoursView(params: {
         saldoMinutes,
         bonusEligibleMinutes: params.bonusEligibleMinutes,
         penaltyEligibleMinutes: params.penaltyEligibleMinutes,
+        oldDebtMinutes,
         competenciaAberta: params.competenciaAberta,
         payrollThisMonthMinutes: payrollByMonth.get(params.monthKey) ?? 0,
         monthLabel: formatMonthLabel(params.monthKey).split(" ")[0],
@@ -581,8 +596,8 @@ export function buildDoctorBankHoursView(params: {
         isStatutory,
         saldoMinutes,
         hiddenOldCreditMinutes,
-        reguaMinutes: isStatutory ? saldoMinutes : saldoMinutes - Math.min(legacyOld, 0),
-        oldDebtMinutes: isStatutory ? 0 : Math.min(legacyOld, 0),
+        reguaMinutes: saldoMinutes,
+        oldDebtMinutes,
         headline,
         composition,
         months,

@@ -215,11 +215,28 @@ describe("conta do saldo", () => {
             }),
             bonusEligibleMinutes: 300, penaltyEligibleMinutes: 600, competenciaAberta: true, monthKey: "2026-09", now: DEPOIS_DE_12H,
         });
-        assert.equal(view.saldoMinutes, 300);
+        // Saldo grande, régua e conta: só de mai/2025 em diante (+10h).
+        assert.equal(view.saldoMinutes, 600);
         assert.equal(view.reguaMinutes, 600);
         assert.equal(view.oldDebtMinutes, -300);
+        assert.ok(!view.composition.some((term) => term.key === "antigo"));
+        assert.equal(view.composition.reduce((t, term) => t + term.minutes, 0), 600);
+        // A troca ainda amortiza a dívida antes: faltam 7h, e a frase diz por quê.
         assert.equal(view.headline.title, "Faltam 7h para você poder trocar por 1 plantão extra.");
-        assert.doesNotMatch(view.headline.detail, /dívida/);
+        assert.match(view.headline.detail, /descontada a dívida de 5h até 30\/04\/2025/);
+    });
+
+    it("PJ com dívida antiga maior que o saldo novo: falta quitar a dívida", () => {
+        // −5h antes de mai/2025, +3h depois: saldo mostrado +3h, faltam 2h para quitar.
+        const view = buildDoctorBankHoursView({
+            doctor: medico({
+                legacy: { preMay2025Minutes: -300, spreadsheetPeriodMinutes: 180, totalMinutes: -120 } as BankHoursDoctorHistory["legacy"],
+                balanceMinutes: -120,
+            }),
+            bonusEligibleMinutes: -120, penaltyEligibleMinutes: 180, competenciaAberta: true, monthKey: "2026-09", now: DEPOIS_DE_12H,
+        });
+        assert.equal(view.saldoMinutes, 180);
+        assert.equal(view.headline.title, "Faltam 2h para quitar a dívida até 30/04/2025.");
     });
 
     it("PJ com +12h elegível: pode trocar", () => {
