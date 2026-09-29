@@ -798,6 +798,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 eq(regulationOccupancies.doctorId, input.doctorId),
                 eq(regulationOccupancies.startedAt, input.startedAt),
                 isNull(regulationOccupancies.endedAt),
+                eq(regulationOccupancies.madrugadaCobertura, false),
             ),
         });
 
@@ -811,11 +812,34 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
         // update in place). Looked up explicitly by doctor so that a coexisting shadow
         // sitting "on top" of the post (most recent startedAt) can't shadow-hide the
         // titular's own record and cause a duplicate insert.
+        // Madrugada (docs/madrugada.md): chegada comum (pagável) de quem está
+        // numa cobertura encerra a cobertura — nunca a reaproveita, senão o
+        // plantão real herdaria a marca de "sem pagamento". Já confirmada: não
+        // vai para a fila de saída da chefia.
+        // Correção histórica (lançamento de plantão passado) e coberturas que
+        // começaram DEPOIS desta chegada não são tocadas.
+        const openCoverages = historicalCorrectionEndAt
+            ? []
+            : await tx.query.regulationOccupancies.findMany({
+                where: and(
+                    eq(regulationOccupancies.doctorId, input.doctorId),
+                    eq(regulationOccupancies.madrugadaCobertura, true),
+                    isNull(regulationOccupancies.endedAt),
+                    lte(regulationOccupancies.startedAt, input.startedAt),
+                ),
+            });
+        for (const coverage of openCoverages) {
+            await tx.update(regulationOccupancies)
+                .set({ endedAt: input.startedAt, actualEndedAt: input.startedAt, departureConfirmedAt: now, updatedAt: now })
+                .where(eq(regulationOccupancies.id, coverage.id));
+        }
+
         const sameDoctorActive = await tx.query.regulationOccupancies.findFirst({
             where: and(
                 eq(regulationOccupancies.postId, input.postId),
                 eq(regulationOccupancies.doctorId, input.doctorId),
                 isNull(regulationOccupancies.endedAt),
+                eq(regulationOccupancies.madrugadaCobertura, false),
             ),
             orderBy: [desc(regulationOccupancies.startedAt)],
         });
@@ -829,6 +853,10 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 eq(regulationOccupancies.postId, input.postId),
                 ne(regulationOccupancies.doctorId, input.doctorId),
                 isNull(regulationOccupancies.endedAt),
+                // Cobertura de madrugada de outro médico não é rendida nem
+                // deslocada: quem chega depois dela assume o quadro por cima e
+                // ela termina sozinha no fim da janela (docs/madrugada.md).
+                eq(regulationOccupancies.madrugadaCobertura, false),
             ),
             orderBy: [desc(regulationOccupancies.startedAt)],
         });
