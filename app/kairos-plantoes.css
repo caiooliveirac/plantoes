@@ -4892,3 +4892,17 @@
         max-height: calc(100vh - 24px);
     }
 }
+
+/* Ação da tela no cabeçalho da casca (fundo claro): o .k-topo-acao foi
+   desenhado para a barra navy (texto claro sobre véu branco) e sumia aqui. */
+[data-casca] header .k-topo-acao {
+    background: var(--superficie);
+    color: var(--texto-forte);
+    border: 1px solid var(--borda-forte);
+    box-shadow: none;
+}
+[data-casca] header .k-topo-acao:hover {
+    background: var(--superficie-alt);
+    border-color: var(--texto-medio);
+    color: var(--texto-forte);
+}
