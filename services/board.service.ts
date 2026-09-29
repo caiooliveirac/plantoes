@@ -2466,6 +2466,9 @@ const MESSAGES_SHOWN_PER_CARD = 5;
 const NON_DEPARTURE_EVIDENCE_ACTIONS = new Set([
   "arrival",
   "batch_arrival",
+  // "Continua" é o contrário de sair: contava como aviso de saída (36 em 30
+  // dias) e mandava a janela vencida para a rotina "avisada pelo médico".
+  "continuation",
   "corrigir",
   "hoje",
   "ontem",
