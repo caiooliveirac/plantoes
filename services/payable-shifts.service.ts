@@ -167,6 +167,7 @@ async function loadTargets(startIso: string, endIso: string) {
                                 select 1
                                 from operations_v2.regulation_occupancies ro
                                 where ro.post_id = rp.id
+                                    and not ro.madrugada_cobertura
                                     and ro.started_at >= ${startIso}::timestamptz
                                     and ro.started_at < ${endIso}::timestamptz
                      )
@@ -344,7 +345,9 @@ async function loadRawRows(startIso: string, endIso: string) {
             inner join operations_v2.doctors d on d.id = ro.doctor_id
             inner join operations_v2.regulation_posts rp on rp.id = ro.post_id
             left join operations_v2.bank_hours_entries bhe on bhe.regulation_occupancy_id = ro.id
-            where ro.started_at >= ${startIso}::timestamptz
+            -- Cobertura de madrugada não é plantão pagável (docs/madrugada.md).
+            where not ro.madrugada_cobertura
+                and ro.started_at >= ${startIso}::timestamptz
                 and ro.started_at < ${endIso}::timestamptz
         ),
         monthly_intervention as (

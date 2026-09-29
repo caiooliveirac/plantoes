@@ -489,7 +489,8 @@ export type ExpiredPendingKind =
     | "takeover"
     | "departure_justification"
     | "destination_selection"
-    | "reset_all";
+    | "reset_all"
+    | "madrugada";
 
 /** Alert de expiração (toque em botão de pendência morta). */
 export function buildExpiredPendingAlertText(kind: ExpiredPendingKind) {
@@ -510,6 +511,8 @@ export function buildExpiredPendingAlertText(kind: ExpiredPendingKind) {
             return "⏰ Esse pedido expirou. Reenvie a chegada com o código correto do ramal ou base.";
         case "reset_all":
             return "⏰ Essa confirmação expirou (5 min). Envie /pagamento resetar-todos de novo.";
+        case "madrugada":
+            return "⏰ Essa pergunta expirou. Avise de novo: nome + ramal + madrugada.";
     }
 }
 

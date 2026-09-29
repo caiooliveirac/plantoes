@@ -270,6 +270,13 @@ export const regulationOccupancies = operationsV2.table(
         // (assina inteiro — só auditoria). NULL = sem decisão. Independente do
         // role_label MEIO_PLANTAO. Régua: modules/operational/early-departure.ts.
         earlyDepartureOutcome: varchar("early_departure_outcome", { length: 10 }),
+        // Madrugada (migration 0051, docs/madrugada.md): true = ocupação de quem
+        // COBRE o horário de outro médico na noite. Aparece no quadro e deixa o
+        // médico de plantão, mas fica FORA do pagamento e do banco de horas.
+        // madrugada_cobre_ocupacao_id aponta a ocupação coberta, que some do
+        // quadro enquanto a cobertura está aberta (pagamento dela não muda).
+        madrugadaCobertura: boolean("madrugada_cobertura").notNull().default(false),
+        madrugadaCobreOcupacaoId: uuid("madrugada_cobre_ocupacao_id"),
     },
     (table) => [
         index("regulation_occupancies_doctor_idx").on(table.doctorId),

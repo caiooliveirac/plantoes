@@ -104,6 +104,13 @@ export interface RegulationBoardRow {
   liveUpdatedAt: string | null;
   shadowOccupants?: BoardShadowOccupant[];
   displacedOccupants?: BoardShadowOccupant[];
+  /**
+   * Madrugada (docs/madrugada.md): o ocupante cobre temporariamente o horário
+   * de outro médico — fora do pagamento e do banco de horas. `madrugadaCobreNome`
+   * é quem ele cobre (esse sumiu do quadro). Opcionais pelos fixtures de teste.
+   */
+  madrugadaCobertura?: boolean;
+  madrugadaCobreNome?: string | null;
 }
 
 /** Ramal eventual oferecido nos seletores (chegada manual / remanejamento) mesmo
@@ -810,6 +817,8 @@ function mapRegulationRow(row: Record<string, unknown>): RegulationBoardRow {
     disabledReason: (row.disabledReason ?? row.disabled_reason ?? null) as string | null,
     liveSource: (row.liveSource ?? row.live_source ?? "none") as RegulationBoardRow["liveSource"],
     liveUpdatedAt: (row.liveUpdatedAt ?? row.live_updated_at ?? null) as string | null,
+    madrugadaCobertura: Boolean(row.madrugadaCobertura ?? false),
+    madrugadaCobreNome: (row.madrugadaCobreNome ?? null) as string | null,
   };
 }
 
@@ -1844,7 +1853,7 @@ export async function listRegulationBoard() {
       case when ro.id is not null or lr.post_code is not null then coalesce(d.full_name, lr.doctor_name) else null end as "doctorName",
       case when ro.id is not null or lr.post_code is not null then coalesce(d.display_name, lr.display_name) else null end as "displayName",
       case when ro.id is not null or lr.post_code is not null then coalesce(${turnoArrivalSql("ro")}, ro.started_at, lr.started_at) else null end as "startedAt",
-      case when ro.id is not null or lr.post_code is not null then coalesce(case when ro.board_started_at is null then null else least(ro.board_started_at, ${turnoArrivalSql("ro", true)}) end, lr.board_started_at) else null end as "boardStartedAt",
+      case when ro.id is not null or lr.post_code is not null then coalesce(case when ro.board_started_at is null then (case when ro.madrugada_cobertura then ro.started_at end) else least(ro.board_started_at, ${turnoArrivalSql("ro", true)}) end, lr.board_started_at) else null end as "boardStartedAt",
       case when ro.id is not null or lr.post_code is not null then coalesce(ro.scheduled_end_at, lr.scheduled_end_at) else null end as "scheduledEndAt",
       case when ro.id is not null or lr.post_code is not null then ro.shift_label else null end as "shiftLabel",
       case
@@ -1866,14 +1875,27 @@ export async function listRegulationBoard() {
         when ro.id is not null then 'operations_v2'
         else 'none'
       end as "liveSource",
-      lr.updated_at as "liveUpdatedAt"
+      lr.updated_at as "liveUpdatedAt",
+      coalesce(ro.madrugada_cobertura, false) as "madrugadaCobertura",
+      coalesce(coberto_d.display_name, coberto_d.full_name) as "madrugadaCobreNome"
     from operations_v2.regulation_posts rp
     left join operations_v2.regulation_occupancies ro
       on ro.id = (
         select ro2.id
         from operations_v2.regulation_occupancies ro2
         where ro2.post_id = rp.id
-          and ro2.board_started_at is not null
+          -- Madrugada (docs/madrugada.md): a cobertura entra sem board (fica
+          -- fora do índice de um-titular-por-ramal) e mesmo assim é o ocupante
+          -- visível; quem ela cobre sai do quadro enquanto ela está aberta.
+          and (ro2.board_started_at is not null or ro2.madrugada_cobertura)
+          and not exists (
+            select 1
+            from operations_v2.regulation_occupancies cob
+            where cob.madrugada_cobre_ocupacao_id = ro2.id
+              and cob.madrugada_cobertura
+              and cob.ended_at is null
+              and (cob.scheduled_end_at is null or cob.scheduled_end_at > now())
+          )
           and (
             ro2.ended_at is null
             or (
@@ -1886,6 +1908,9 @@ export async function listRegulationBoard() {
           )
         order by
           (ro2.ended_at is null) desc,
+          -- Titular com board vence a cobertura de madrugada no mesmo ramal
+          -- (quem chegou depois num ramal eventual assume de fato).
+          (ro2.board_started_at is not null) desc,
           -- Prefer the titular over a coexisting "sombra": a shadow occupies the same
           -- ramal as the active doctor but must never be shown in its place. Without
           -- this, the shadow (which usually arrives later) would win started_at desc
@@ -1898,6 +1923,10 @@ export async function listRegulationBoard() {
       )
     left join operations_v2.doctors d
       on d.id = ro.doctor_id
+    left join operations_v2.regulation_occupancies coberto
+      on coberto.id = ro.madrugada_cobre_ocupacao_id
+    left join operations_v2.doctors coberto_d
+      on coberto_d.id = coberto.doctor_id
     left join legacy_regulation lr
       on lr.post_code = rp.code
      and lr.row_rank = 1
@@ -4767,7 +4796,9 @@ async function loadPaymentAllocationSourceData(
       inner join operations_v2.regulation_posts rp on rp.id = ro.post_id
       inner join operations_v2.doctors d on d.id = ro.doctor_id
       left join operations_v2.bank_hours_entries bhe on bhe.regulation_occupancy_id = ro.id
-      where ro.started_at >= ${queryStart}::timestamptz
+      -- Cobertura de madrugada não é plantão pagável (docs/madrugada.md).
+      where not ro.madrugada_cobertura
+        and ro.started_at >= ${queryStart}::timestamptz
         and ro.started_at < ${queryEnd}::timestamptz
     ),
     allocation_intervention as (

@@ -322,6 +322,22 @@ import {
     requiresTelegramDepartureAdjustmentJustification,
 } from "@/modules/telegram/departure-flow";
 import { compareTelegramInterventionCodes } from "@/modules/telegram/presentation-order";
+import {
+    buildMadrugadaConfirmation,
+    buildMadrugadaKeyboard,
+    buildMadrugadaMissingPartsReply,
+    buildMadrugadaOutsideWindowReply,
+    buildMadrugadaQuestion,
+    isMadrugadaMessage,
+    isMadrugadaPendingData,
+    MADRUGADA_PENDING_STATUS,
+    parseMadrugadaCallbackData,
+    resolveMadrugadaWindow,
+    selectMadrugadaCandidates,
+    stripMadrugadaWord,
+    type MadrugadaPendingData,
+} from "@/modules/telegram/madrugada";
+import { MadrugadaCoverageError, startMadrugadaCoverage } from "@/modules/regulation/madrugada-cobertura";
 
 // Re-export from departure-flow so existing imports from "@/modules/telegram/service" keep working
 export {
@@ -6418,6 +6434,7 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "  1321–1329 · 1361–1368 · 1476",
             "  2031–2035 · 2151–2154 · 2262 · 2263 · 2377 · NUCLEO · PIAM",
             "  4091 (eventual: só entra no quadro quando alguém avisa chegada nele)",
+            "  2266–2270 (eventuais, madrugada: \"Nome 2266 madrugada\")",
             "",
             "ℹ️ 2031 entra como CP; 2262/2263 entram como COI (função automática).",
         );
@@ -7832,6 +7849,7 @@ async function expireAllStalePendingsGlobal() {
                 "pending_shift_selection",
                 "pending_piam_shift",
                 "pending_payment_profile",
+                "pending_madrugada_cover",
             ]),
             lt(telegramIngestedMessages.createdAt, cutoff),
         ));
@@ -12495,6 +12513,180 @@ async function handlePiamShiftCallback(
     });
 }
 
+// Madrugada (docs/madrugada.md): "Nome ramal madrugada" → pergunta por quem
+// a pessoa está, com botões dos médicos daquele horário da noite.
+async function tryHandleMadrugadaMessage(update: TelegramUpdate, logId: string) {
+    const message = update.message;
+    if (!message?.text || !message.from?.id || message.text.trim().startsWith("/") || !isMadrugadaMessage(message.text)) {
+        return null;
+    }
+    const parsed = parseMessage(stripMadrugadaWord(message.text));
+    // Base de intervenção não tem madrugada: segue o caminho comum.
+    if (parsed.sector === "INTERVENTION") {
+        return null;
+    }
+    const referenceAt = new Date(message.date * 1000);
+    const senderName = [message.from.first_name, message.from.last_name].filter(Boolean).join(" ") || null;
+    const ramal = parsed.sector === "REGULATION" ? parsed.baseCode : null;
+    const doctorQuery = resolveOperationalDoctorLookupQuery({
+        doctorQuery: parsed.extractedNames[0] ?? null,
+        senderName,
+        messageText: message.text,
+    });
+
+    const ignore = async (errorMessage: string, reply: string) => {
+        await markTelegramProcessed(logId, {
+            status: "ignored",
+            parsedDomain: "regulation",
+            parsedTargetCode: ramal,
+            parsedAction: "madrugada",
+            errorMessage,
+        });
+        await sendMessage(message.chat.id, reply, message.message_id, undefined, { parseMode: "Markdown" });
+        return { ok: true, ignored: true };
+    };
+
+    if (!ramal || !doctorQuery) {
+        return ignore("madrugada_missing_parts", buildMadrugadaMissingPartsReply({ hasName: Boolean(doctorQuery), hasRamal: Boolean(ramal) }));
+    }
+    const window = resolveMadrugadaWindow(referenceAt);
+    if (!window) {
+        return ignore("madrugada_outside_window", buildMadrugadaOutsideWindowReply());
+    }
+    const resolved = await resolveDoctorWithFallback(doctorQuery);
+    if (!resolved.doctor) {
+        const hint = resolved.candidates.length > 0
+            ? ` Quis dizer ${resolved.candidates.slice(0, 3).map((candidate) => `*${escapeTelegramMarkdown(candidate.displayName ?? candidate.fullName)}*`).join(", ")}?`
+            : "";
+        return ignore("madrugada_doctor_not_resolved", `🌙 Não achei *${escapeTelegramMarkdown(doctorQuery)}* no cadastro.${hint} Reenvie com nome e sobrenome + ramal + madrugada.`);
+    }
+
+    const board = await getOperationalBoard();
+    let nightWorkAssignments: Record<string, string> | null = null;
+    try {
+        const session = await getCurrentOperationalMealBreakSession(referenceAt);
+        nightWorkAssignments = session?.mode === "night" ? session.nightWorkAssignments : null;
+    } catch (error) {
+        console.warn("[madrugada] divisão da noite indisponível", error);
+    }
+    const candidates = selectMadrugadaCandidates({
+        rows: board.regulation,
+        slot: window.slot,
+        nightWorkAssignments,
+        covererDoctorId: resolved.doctor.id,
+    });
+    if (candidates.length === 0) {
+        return ignore("madrugada_no_candidates", "🌙 Não achei médicos da regulação no quadro para você cobrir agora. Fale com a chefia.");
+    }
+
+    const covererName = resolved.doctor.displayName ?? resolved.doctor.fullName;
+    const data: MadrugadaPendingData = {
+        kind: "madrugada_cover",
+        coverer: { id: resolved.doctor.id, fullName: resolved.doctor.fullName, displayName: resolved.doctor.displayName ?? null },
+        postCode: ramal,
+        slot: window.slot,
+        startedAt: referenceAt.toISOString(),
+        scheduledStartAt: window.scheduledStartAt.toISOString(),
+        scheduledEndAt: window.scheduledEndAt.toISOString(),
+        candidates,
+        originalText: message.text,
+    };
+    await markTelegramProcessed(logId, {
+        status: MADRUGADA_PENDING_STATUS,
+        parsedDomain: "regulation",
+        parsedTargetCode: ramal,
+        parsedAction: "madrugada",
+        parsedDoctorName: resolved.doctor.fullName,
+        errorMessage: null,
+        resolutionData: data,
+    });
+    await sendMessage(
+        message.chat.id,
+        buildMadrugadaQuestion({ covererName, postCode: ramal, slot: window.slot, candidates }),
+        message.message_id,
+        buildMadrugadaKeyboard(candidates, logId),
+        { parseMode: "Markdown" },
+    );
+    return { ok: true, ignored: true, pending: true };
+}
+
+async function handleMadrugadaCallback(
+    callbackQuery: TelegramCallbackQuery,
+    parsed: NonNullable<ReturnType<typeof parseMadrugadaCallbackData>>,
+) {
+    const chat = callbackQuery.message?.chat;
+    const promptMessageId = callbackQuery.message?.message_id;
+    if (!chat || !promptMessageId) {
+        await answerCallbackQuery(callbackQuery.id);
+        return { ok: true, ignored: true };
+    }
+    const loaded = await loadPendingForCallback({
+        logId: parsed.logId,
+        expectedStatus: MADRUGADA_PENDING_STATUS,
+        chatId: chat.id,
+        presserTelegramId: String(callbackQuery.from.id),
+    });
+    if (loaded.outcome !== "ok") {
+        return answerPendingCallbackShortfall(callbackQuery.id, loaded.outcome, "madrugada");
+    }
+    if (!isMadrugadaPendingData(loaded.pending.resolutionData)) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "madrugada");
+    }
+    const data = loaded.pending.resolutionData;
+    const covererName = data.coverer.displayName ?? data.coverer.fullName;
+
+    if (parsed.position === 0) {
+        await markTelegramProcessed(loaded.pending.id, {
+            status: "superseded",
+            errorMessage: "madrugada_cancelled_by_button",
+            resolutionData: buildResolutionData(data, { pressedByTelegramId: String(callbackQuery.from.id) }),
+        });
+        await editMessageText(chat.id, promptMessageId, `⛔ Madrugada de *${escapeTelegramMarkdown(covererName)}* cancelada — nada mudou no quadro.`, undefined, { parseMode: "Markdown" });
+        await answerCallbackQuery(callbackQuery.id, "Cancelado.");
+        return { ok: true, ignored: true };
+    }
+
+    const chosen = data.candidates[parsed.position - 1];
+    if (!chosen) {
+        return answerPendingCallbackShortfall(callbackQuery.id, "not_found", "madrugada");
+    }
+    try {
+        const created = await startMadrugadaCoverage({
+            covererDoctorId: data.coverer.id,
+            postCode: data.postCode,
+            coveredOccupancyId: chosen.occupancyId,
+            startedAt: new Date(data.startedAt),
+            scheduledStartAt: new Date(data.scheduledStartAt),
+            scheduledEndAt: new Date(data.scheduledEndAt),
+        });
+        await markTelegramProcessed(loaded.pending.id, {
+            status: "accepted",
+            relatedOccupancyId: created.occupancy.id,
+            errorMessage: null,
+            resolutionData: buildResolutionData(data, {
+                pressedByTelegramId: String(callbackQuery.from.id),
+                coveredOccupancyId: chosen.occupancyId,
+                coveredDoctorId: chosen.doctorId,
+            }),
+        });
+        await editMessageText(
+            chat.id,
+            promptMessageId,
+            buildMadrugadaConfirmation({ covererName, coveredName: created.coveredName, postCode: created.postCode, slot: data.slot }),
+            undefined,
+            { parseMode: "Markdown" },
+        );
+        await answerCallbackQuery(callbackQuery.id, `🌙 Por ${created.coveredName}.`);
+        return { ok: true, occupancyId: created.occupancy.id };
+    } catch (error) {
+        if (error instanceof MadrugadaCoverageError) {
+            await answerCallbackQuery(callbackQuery.id, `⚠️ ${error.message}`, true);
+            return { ok: true, ignored: true };
+        }
+        throw error;
+    }
+}
+
 async function handleCoiRamalCallback(
     callbackQuery: TelegramCallbackQuery,
     parsed: NonNullable<ReturnType<typeof parseCoiRamalCallbackData>>,
@@ -13213,8 +13405,9 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
     const departureJustification = parseDepartureJustificationCallbackData(callbackQuery.data);
     const destinationSelection = parseDestinationSelectionCallbackData(callbackQuery.data);
     const resetAll = parseResetAllCallbackData(callbackQuery.data);
+    const madrugada = parseMadrugadaCallbackData(callbackQuery.data);
     if (!shiftSelection && !nameSelection && !piamShift && !coiRamal
-        && !takeoverDecision && !departureJustification && !destinationSelection && !resetAll) {
+        && !takeoverDecision && !departureJustification && !destinationSelection && !resetAll && !madrugada) {
         // Callback desconhecido: encerra o "loading" do cliente e ignora.
         await answerCallbackQuery(callbackQuery.id);
         return { ok: true, ignored: true };
@@ -13246,6 +13439,9 @@ async function handleTelegramCallbackQuery(callbackQuery: TelegramCallbackQuery)
     }
     if (coiRamal) {
         return handleCoiRamalCallback(callbackQuery, coiRamal);
+    }
+    if (madrugada) {
+        return handleMadrugadaCallback(callbackQuery, madrugada);
     }
     if (takeoverDecision) {
         return handleTakeoverDecisionCallback(callbackQuery, takeoverDecision);
@@ -13581,6 +13777,14 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     );
                     return { ok: true, ignored: true, pending: true };
                 }
+            }
+
+            // Madrugada: "Nome ramal madrugada" — cobre o horário de outro médico
+            // (docs/madrugada.md). Antes do parser de chegada, que a trataria
+            // como plantão comum (pagável).
+            const madrugadaResult = await tryHandleMadrugadaMessage(update, log.id);
+            if (madrugadaResult) {
+                return madrugadaResult;
             }
 
             // Toque nos botões literais da divisão de refeição ("↩️ Desfazer" /

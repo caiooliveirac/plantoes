@@ -313,6 +313,23 @@ function formatBoardTime(value: string | null) {
     });
 }
 
+// Madrugada (docs/madrugada.md): o ocupante cobre o horário de outro médico,
+// que saiu do quadro. Só sinaliza — quem cobre não entra em pagamento/banco.
+function renderMadrugadaTag(card: BoardCard) {
+    if (card.domain !== "regulation" || !card.madrugadaCobertura) {
+        return null;
+    }
+    const coberto = card.madrugadaCobreNome?.trim();
+    return (
+        <span
+            className="ops-inline-flag madrugada"
+            title={coberto ? `Madrugada: cobrindo ${coberto} (sem pagamento nem banco de horas)` : "Madrugada (sem pagamento nem banco de horas)"}
+        >
+            {coberto ? `🌙 por ${coberto}` : "🌙 madrugada"}
+        </span>
+    );
+}
+
 // Sub-linhas de "sombra": médicos que acompanham o titular no mesmo ramal/base.
 // Renderizadas com arte própria (classe .shadow), abaixo da linha do titular,
 // nunca no lugar dele.
@@ -3167,6 +3184,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 <>
                                     {renderPrimaryDoctorLabel(card)}
                                     {renderCardIdentityTags(card)}
+                                    {renderMadrugadaTag(card)}
                                     {breakTag ? (
                                         <span className={`ops-inline-flag ${breakTag === "ALMOÇO" ? "break-almoco" : "break-descanso"}`}>{breakTag}</span>
                                     ) : null}

@@ -674,7 +674,12 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
         // Step 2: auto-resolve for continuity entries — find doctor's most recent occupancy
         if (input.isContinuityEntry && !resolvedContinuityGroupId) {
             const latestReg = await tx.query.regulationOccupancies.findFirst({
-                where: eq(regulationOccupancies.doctorId, input.doctorId),
+                // Cobertura de madrugada nunca é origem de continuidade: herdaria
+                // a chegada dela num plantão pagável (docs/madrugada.md).
+                where: and(
+                    eq(regulationOccupancies.doctorId, input.doctorId),
+                    eq(regulationOccupancies.madrugadaCobertura, false),
+                ),
                 orderBy: [desc(regulationOccupancies.startedAt)],
                 columns: { continuityGroupId: true, boardStartedAt: true, startedAt: true, endedAt: true },
             });
