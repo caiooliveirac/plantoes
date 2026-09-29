@@ -4662,8 +4662,8 @@
    caixa alta, médico em duas linhas, números à direita e tabulares. */
 .pagina-kairos .chief-payable-table { font-size: 12px; }
 .pagina-kairos .chief-payable-table thead th {
-    min-width: 38px;
-    padding: 8px 4px;
+    min-width: 30px;
+    padding: 8px 3px;
     font-size: 11.5px;
     font-weight: 700;
     letter-spacing: 0;
@@ -4673,8 +4673,8 @@
     vertical-align: bottom;
 }
 .pagina-kairos .chief-payable-table td {
-    min-width: 38px;
-    padding: 4px 3px;
+    min-width: 30px;
+    padding: 4px 2px;
     vertical-align: middle;
 }
 .pagina-kairos .chief-payable-table th.doctor,
@@ -4747,7 +4747,8 @@
     text-transform: none;
 }
 .pagina-kairos .chief-payable-bank-chip strong,
-.pagina-kairos .chief-payable-bank-chip em { text-transform: none; letter-spacing: 0; }
+.pagina-kairos .chief-payable-bank-chip em,
+.pagina-kairos .chief-payable-bank-chip span { text-transform: none; letter-spacing: 0; }
 
 /* ── Faixas de comando do Fechamento e do Banco de horas (29/09/2026) ──────
    Números no tamanho do texto (resumo, não vitrine) e rótulos, filtros e datas
