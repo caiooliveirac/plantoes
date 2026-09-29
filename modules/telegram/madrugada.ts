@@ -73,6 +73,31 @@ export function resolveMadrugadaWindow(referenceAt: Date): MadrugadaWindow | nul
     return null;
 }
 
+/** Aviso do SD até 1h depois do fim da madrugada ainda é "estava lá". */
+export const MADRUGADA_SD_ARRIVAL_GRACE_MS = HOUR_MS;
+
+/**
+ * Quem cobriu a madrugada até o fim (03:00–07:00) e avisa o SD até 08:00
+ * estava lá: o SD começa 07:00, sem atraso (docs/madrugada.md). Cobertura
+ * encerrada antes do fim (saída, outra cobertura) não conta, e aviso antes das
+ * 07:00 já não é atraso: nos dois casos vale a hora do aviso.
+ */
+export function resolveSdArrivalAfterMadrugada(params: {
+    eventAt: Date;
+    coverage: { scheduledEndAt: Date | null; endedAt: Date | null } | null | undefined;
+}): Date {
+    const end = params.coverage?.scheduledEndAt;
+    if (!end) return params.eventAt;
+    const local = new Date(end.getTime() + BAHIA_OFFSET_MINUTES * MINUTE_MS);
+    const endsAtSeven = local.getUTCHours() === 7 && local.getUTCMinutes() === 0;
+    const endedAt = params.coverage?.endedAt;
+    const ranToEnd = !endedAt || endedAt.getTime() >= end.getTime();
+    const lateMs = params.eventAt.getTime() - end.getTime();
+    return endsAtSeven && ranToEnd && lateMs > 0 && lateMs <= MADRUGADA_SD_ARRIVAL_GRACE_MS
+        ? end
+        : params.eventAt;
+}
+
 export function describeMadrugadaSlot(slot: MadrugadaSlot) {
     return slot === "23:00" ? "23:00 às 03:00" : "03:00 às 07:00";
 }

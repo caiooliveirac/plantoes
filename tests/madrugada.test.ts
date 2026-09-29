@@ -7,6 +7,7 @@ import {
     isMadrugadaPendingData,
     parseMadrugadaCallbackData,
     resolveMadrugadaWindow,
+    resolveSdArrivalAfterMadrugada,
     selectMadrugadaCandidates,
     stripMadrugadaWord,
 } from "@/modules/telegram/madrugada";
@@ -105,4 +106,28 @@ test("madrugada: valida a pendência", () => {
     assert.equal(isMadrugadaPendingData({ kind: "madrugada_cover", postCode: "2266", slot: "03:00", candidates: [], coverer: { id: "x" } }), true);
     assert.equal(isMadrugadaPendingData({ kind: "outro" }), false);
     assert.equal(isMadrugadaPendingData(null), false);
+});
+
+test("madrugada → SD: quem cobriu até 07:00 e avisa até 08:00 chegou 07:00", () => {
+    const coverage = { scheduledEndAt: local("2026-09-30T07:00"), endedAt: local("2026-09-30T07:00") };
+    const sd = (hhmm: string, cov: typeof coverage | { scheduledEndAt: Date; endedAt: Date | null } | null = coverage) =>
+        resolveSdArrivalAfterMadrugada({ eventAt: local(`2026-09-30T${hhmm}`), coverage: cov }).toISOString();
+
+    assert.equal(sd("07:40"), local("2026-09-30T07:00").toISOString());
+    assert.equal(sd("08:00"), local("2026-09-30T07:00").toISOString(), "até 08:00 inclusive");
+    assert.equal(sd("08:01"), local("2026-09-30T08:01").toISOString(), "depois das 08:00 vale a hora do aviso");
+    assert.equal(sd("06:40"), local("2026-09-30T06:40").toISOString(), "antes das 07:00 já não é atraso");
+    // Cobertura ainda aberta (varredura atrasada) conta como ida até o fim.
+    assert.equal(sd("07:20", { scheduledEndAt: coverage.scheduledEndAt, endedAt: null }), local("2026-09-30T07:00").toISOString());
+    // Saiu antes do fim: não emendou.
+    assert.equal(sd("07:20", { scheduledEndAt: coverage.scheduledEndAt, endedAt: local("2026-09-30T06:30") }), local("2026-09-30T07:20").toISOString());
+    // Madrugada 23:00–03:00 não emenda em SD.
+    assert.equal(
+        resolveSdArrivalAfterMadrugada({
+            eventAt: local("2026-09-30T03:30"),
+            coverage: { scheduledEndAt: local("2026-09-30T03:00"), endedAt: local("2026-09-30T03:00") },
+        }).toISOString(),
+        local("2026-09-30T03:30").toISOString(),
+    );
+    assert.equal(sd("07:40", null), local("2026-09-30T07:40").toISOString());
 });

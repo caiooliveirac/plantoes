@@ -99,6 +99,7 @@ Gravação: `startRegulationOccupancy` / `startInterventionOccupancy`.
 | Remanejo | destino grava a hora da troca = hora do aviso (`transferredAt` que o bot passa a `transferOperationalOccupancy`; a tela da chefia usa "agora"); a origem fecha nessa mesma hora; o quadro mostra a 1ª do turno |
 | Continuação | âncora da cadeia no `board_started_at`; bloco novo começa na virada |
 | PIAM | 07:00 / 19:00 fixos |
+| SD de quem cobriu a madrugada até 07:00 | 07:00 se o aviso vier até 08:00; senão a hora do aviso. Nunca a chegada da madrugada ([madrugada.md](madrugada.md)) |
 | Correção pela tela | `redirectTurnoArrivalEdit` manda a correção para a ocupação de ORIGEM do turno |
 
 Banco de horas: atraso = menor `started_at` do grupo − início da janela do carrier;
