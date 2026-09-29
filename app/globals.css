@@ -834,6 +834,13 @@ body > * { position: relative; z-index: 1; }
     color: #eedeff;
 }
 
+/* Madrugada: cobre temporariamente o horário de outro médico (docs/madrugada.md). */
+.ops-inline-flag.madrugada {
+    background: rgba(90, 130, 220, 0.24);
+    border-color: rgba(90, 130, 220, 0.44);
+    color: #dbe6ff;
+}
+
 .ops-doctor-line.shadow {
     display: inline-flex;
     align-items: center;

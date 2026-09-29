@@ -87,6 +87,10 @@ telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
 - **Declaração de chegada** (parser → tomada/deslocado → `start*Occupancy` → quadro):
   princípios, cenários e registro de defeitos em [docs/chegada.md](docs/chegada.md).
   **Leia antes de mexer** — regra dura: vale a primeira mensagem, chegada nunca avança.
+- **Madrugada** ("Nome 2266 madrugada"): cobre o horário de outro médico na noite —
+  aparece no quadro e fica de plantão, mas fora do pagamento e do banco de horas;
+  o coberto some do quadro sem perder nada. Ramais eventuais 2266–2270. Regras e
+  onde a exclusão está aplicada em [docs/madrugada.md](docs/madrugada.md).
 - **Passagem de ocorrências** no almoço/descanso (quem sai passa para quem, faixa
   acima do quadro + bot): regras e janela em [docs/passagem-ocorrencias.md](docs/passagem-ocorrencias.md).
 - `modules/bank-hours/` — cálculo de banco de horas (atraso, hora extra, continuidade)

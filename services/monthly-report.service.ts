@@ -276,7 +276,9 @@ export async function getMonthlyAdminReport(monthKey?: string | null): Promise<M
             left join operations_v2.users creator on creator.id = ro.created_by_user_id
             left join operations_v2.users updater on updater.id = ro.updated_by_user_id
             left join operations_v2.bank_hours_entries bhe on bhe.regulation_occupancy_id = ro.id
-            where ro.started_at >= ${auditStartIso}::timestamptz
+            -- Cobertura de madrugada não é plantão pagável (docs/madrugada.md).
+            where not ro.madrugada_cobertura
+                and ro.started_at >= ${auditStartIso}::timestamptz
                 and ro.started_at < ${auditEndIso}::timestamptz
         ),
         monthly_intervention as (

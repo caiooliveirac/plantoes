@@ -350,6 +350,12 @@
     color: var(--texto-forte);
 }
 
+.pagina-kairos .ops-inline-flag.madrugada {
+    background: var(--azul-50, #eef3ff);
+    border-color: var(--azul-200, #c6d5f5);
+    color: var(--azul-600, #2f55a8);
+}
+
 .pagina-kairos .ops-inline-flag.shadow {
     background: var(--roxo-50);
     border-color: var(--roxo-200);

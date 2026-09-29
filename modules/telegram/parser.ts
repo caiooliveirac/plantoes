@@ -9,6 +9,8 @@ const RAMAIS_REGULACAO = new Set([
     "2031", "2032", "2033", "2034", "2035",
     "2151", "2152", "2153", "2154",
     "2262", "2263",
+    // Ramais eventuais da madrugada (migration 0051, docs/madrugada.md).
+    "2266", "2267", "2268", "2269", "2270",
     "2376", "2377",
     // Ramal eventual (on_demand, migration 0043): só aparece no quadro com médico.
     "4091",

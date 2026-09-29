@@ -98,7 +98,9 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
     ]);
 
     return [
-        ...regulation.map((occupancy: typeof regulationOccupancies.$inferSelect) => ({
+        // Cobertura de madrugada (docs/madrugada.md) não gera banco de horas —
+        // nem entra no span de uma cadeia de continuidade que a tenha herdado.
+        ...regulation.filter((occupancy: typeof regulationOccupancies.$inferSelect) => !occupancy.madrugadaCobertura).map((occupancy: typeof regulationOccupancies.$inferSelect) => ({
             occupancyId: occupancy.id,
             domain: "regulation" as const,
             doctorId: occupancy.doctorId,
