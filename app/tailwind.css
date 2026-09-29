@@ -1,0 +1,70 @@
+/* ==========================================================================
+   Tailwind v4 — convivência com o CSS próprio (globals.css + Kairós).
+   Mesmo desenho do escala (escalas-e-trocas-samu/app/tailwind.css):
+
+   1. SEM preflight: o reset zeraria margem, lista e borda de botão em ~14 mil
+      linhas de CSS que contam com o padrão do navegador.
+   2. Utilitários gerados SÓ de components/ui e components/casca (source(none)
+      + @source). Pasta nova com Tailwind? Acrescente um @source aqui.
+   3. Tudo em @layer: o CSS antigo, sem camada, sempre vence.
+
+   A casca (barra lateral) é navy nos dois temas, como a barra do topo antiga.
+   ========================================================================== */
+
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme) theme(inline);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+
+@source "../components/ui";
+@source "../components/casca";
+
+@custom-variant dark (&:where([data-tema="escuro"], [data-tema="escuro"] *));
+
+@theme inline {
+    --font-sans: var(--fonte-sans);
+    --font-mono: var(--fonte-mono);
+    --color-fundo: var(--fundo-app);
+    --color-superficie: var(--superficie);
+    --color-superficie-alt: var(--superficie-alt);
+    --color-borda: var(--borda);
+    --color-texto: var(--texto);
+    --color-texto-forte: var(--texto-forte);
+    --color-texto-medio: var(--texto-medio);
+    --color-acao: var(--azul-acao);
+    --color-atencao: var(--ambar-500);
+    --color-alerta: var(--vermelho-600);
+}
+
+@layer base {
+    :where([data-casca]) :where(*, ::before, ::after) {
+        box-sizing: border-box;
+        border: 0 solid;
+        margin: 0;
+        padding: 0;
+    }
+    :where([data-casca] button) { background: transparent; font: inherit; color: inherit; cursor: pointer; }
+    :where([data-casca] a) { color: inherit; text-decoration: inherit; }
+    :where([data-casca] ul) { list-style: none; }
+}
+
+/* Casca navy (valores fixos: não mudam com o tema, como a barra antiga) e as
+   variáveis que a barra lateral do 21st lê. */
+:root {
+    --casca-fundo: #0c1628;
+}
+[data-tema="escuro"] {
+    --casca-fundo: #060b15;
+}
+.casca-lateral {
+    --background: var(--casca-fundo);
+    --foreground: #e2e8f0;
+    --muted-foreground: #a3b1c6;
+    --border: rgba(255, 255, 255, 0.08);
+    --primitive-text-secondary: #b6c2d3;
+    --primitive-surface-hover: rgba(255, 255, 255, 0.07);
+    --primitive-surface-selected: rgba(255, 255, 255, 0.12);
+    --primitive-icon-active: #93c5fd;
+    --primitive-ring: #93c5fd;
+    --primitive-dot: #f59e0b;
+}

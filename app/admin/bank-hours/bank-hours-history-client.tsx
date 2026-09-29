@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
+import { AbasContagem } from "@/components/ui/abas-contagem";
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import type {
     BankHoursDoctorHistory,
@@ -1205,65 +1206,62 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
             </section>
 
             {/* Filtros de cara: vínculo + pendência. Quem já formou múltiplos de ±12h, quem tem desconto em folha no mês. */}
+            {/* Vínculo e pendência em abas com contagem (21st · coss.com). A linha
+                de selos que repetia as mesmas contagens saiu: o detalhe (plantões
+                verdes/vermelhos, minutos de folha) vai na dica de cada aba. */}
             <section className="hours-settlements hours-pending-strip">
                 <div className="hours-filter-row">
                     <span className="hours-filter-label">Vínculo</span>
-                    <div className="hours-events-chips" role="group" aria-label="Filtrar médicos por vínculo">
-                        {([
-                            ["all", `Todos · ${history.summary.doctorCount}`],
-                            ["pj", `PJ · ${employmentCounts.pj}`],
-                            ["estatutario", `Estatutários · ${employmentCounts.estatutario}`],
-                        ] as Array<[EmploymentFilter, string]>).map(([value, label]) => (
-                            <button
-                                key={value}
-                                type="button"
-                                className={`admin-bar-filters-toggle ${employmentFilter === value ? "open" : ""}`.trim()}
-                                aria-pressed={employmentFilter === value}
-                                onClick={() => setEmploymentFilter(value)}
-                            >
-                                {label}
-                            </button>
-                        ))}
-                    </div>
+                    <AbasContagem<EmploymentFilter>
+                        rotulo="Filtrar médicos por vínculo"
+                        valor={employmentFilter}
+                        aoMudar={setEmploymentFilter}
+                        opcoes={[
+                            { valor: "all", rotulo: "Todos", contagem: history.summary.doctorCount },
+                            { valor: "pj", rotulo: "PJ", contagem: employmentCounts.pj },
+                            { valor: "estatutario", rotulo: "Estatutários", contagem: employmentCounts.estatutario },
+                        ]}
+                    />
                 </div>
                 <div className="hours-filter-row">
                     <span className="hours-filter-label">Pendência</span>
-                    <div className="hours-events-chips" role="group" aria-label="Filtrar médicos por pendência">
-                        {([
-                            ["all", "Todas"],
-                            ["bonus", `Pagar plantão · ${pendingTotals.bonusDoctors}`],
-                            ["penalty", `Descontar plantão (PJ) · ${pendingTotals.penaltyDoctors}`],
-                            ["payroll", `Folha (estatutário) · ${pendingTotals.payrollDoctors}`],
-                            ["inconsistency", `Revisão necessária · ${pendingTotals.inconsistencies}`],
-                            ["settled", "Já ajustados"],
-                        ] as Array<[PendingFilter, string]>).map(([value, label]) => (
-                            <button
-                                key={value}
-                                type="button"
-                                className={`admin-bar-filters-toggle ${pendingFilter === value ? "open" : ""}`.trim()}
-                                aria-pressed={pendingFilter === value}
-                                onClick={() => setPendingFilter(value)}
-                            >
-                                {label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-                <div className="hours-events-chips">
-                    <span className="reports-badge ok" title="Médicos com saldo elegível ≥ +12h">
-                        {pendingTotals.bonusDoctors} a pagar · {pendingTotals.bonusUnits} plantões verdes
-                    </span>
-                    <span className="reports-badge danger" title="PJ com saldo elegível ≤ -12h">
-                        {pendingTotals.penaltyDoctors} a descontar · {pendingTotals.penaltyUnits} plantões vermelhos
-                    </span>
-                    <span className="reports-badge warn" title={`Estatutários com desconto previsto na folha ${scopeLabel} (automático: só o atraso que passou do zero do banco)`}>
-                        {pendingTotals.payrollDoctors} com desconto em folha · {formatPayrollMinutes(pendingTotals.payrollMinutes)} {scopeLabel}
-                    </span>
-                    {pendingTotals.inconsistencies > 0 && (
-                        <span className="reports-badge warn" title="Saldo mudou na direção contrária a acertos já lançados">
-                            {pendingTotals.inconsistencies} para revisar
-                        </span>
-                    )}
+                    <AbasContagem<PendingFilter>
+                        rotulo="Filtrar médicos por pendência"
+                        valor={pendingFilter}
+                        aoMudar={setPendingFilter}
+                        opcoes={[
+                            { valor: "all", rotulo: "Todas" },
+                            {
+                                valor: "bonus",
+                                rotulo: "Pagar plantão",
+                                contagem: pendingTotals.bonusDoctors,
+                                tom: "atencao",
+                                title: `Saldo elegível ≥ +12h · ${pendingTotals.bonusUnits} plantões verdes a lançar`,
+                            },
+                            {
+                                valor: "penalty",
+                                rotulo: "Descontar plantão (PJ)",
+                                contagem: pendingTotals.penaltyDoctors,
+                                tom: "alerta",
+                                title: `PJ com saldo elegível ≤ −12h · ${pendingTotals.penaltyUnits} plantões vermelhos a lançar`,
+                            },
+                            {
+                                valor: "payroll",
+                                rotulo: "Folha (estatutário)",
+                                contagem: pendingTotals.payrollDoctors,
+                                tom: "atencao",
+                                title: `Desconto previsto na folha ${scopeLabel}: ${formatPayrollMinutes(pendingTotals.payrollMinutes)} (só o atraso que passou do zero do banco)`,
+                            },
+                            {
+                                valor: "inconsistency",
+                                rotulo: "Revisar",
+                                contagem: pendingTotals.inconsistencies,
+                                tom: "alerta",
+                                title: "Saldo mudou na direção contrária a acertos já lançados",
+                            },
+                            { valor: "settled", rotulo: "Já ajustados" },
+                        ]}
+                    />
                 </div>
             </section>
 

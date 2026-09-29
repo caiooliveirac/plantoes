@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AdminGlobalNavigationLinks, type AdminNavKey } from "@/components/admin-global-navigation-links";
+import { useDentroDaCasca } from "@/components/casca/casca-admin";
 
 interface AdminBarNavMenuProps {
     current?: AdminNavKey;
@@ -11,6 +12,7 @@ interface AdminBarNavMenuProps {
 
 /** Botão ••• da faixa de comando admin: dropdown com a navegação global. */
 export function AdminBarNavMenu({ current, children }: AdminBarNavMenuProps) {
+    const naCasca = useDentroDaCasca();
     const [open, setOpen] = useState(false);
     const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -36,6 +38,9 @@ export function AdminBarNavMenu({ current, children }: AdminBarNavMenuProps) {
         };
     }, [open]);
 
+    // na casca a navegação está na barra lateral; o ••• só sobra se a tela
+    // pendura itens próprios nele (ex.: auditoria técnica)
+    if (naCasca && !children) return null;
     return (
         <div className="admin-bar-menu" ref={rootRef}>
             <button

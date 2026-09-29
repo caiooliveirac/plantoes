@@ -2,6 +2,7 @@
 
 import { Moon, Sun } from "lucide-react";
 import Link from "next/link";
+import { CabecalhoDaCasca, useDentroDaCasca } from "@/components/casca/casca-admin";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -75,6 +76,10 @@ export function KairosTopo({
     extra?: React.ReactNode;
 }) {
     const pathname = usePathname();
+    const naCasca = useDentroDaCasca();
+    // dentro da casca do admin a navegação mora na barra lateral: aqui fica só
+    // o título da tela e as ações dela (o tema foi para o rodapé da lateral)
+    if (naCasca) return <CabecalhoDaCasca titulo={titulo} extra={extra} comoH1={tituloComoH1} />;
     return (
         <nav className="k-topo" aria-label="Navegação do plantões">
             <span className="k-topo-brand">
