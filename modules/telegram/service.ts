@@ -12672,7 +12672,7 @@ async function handleMadrugadaCallback(
         await editMessageText(
             chat.id,
             promptMessageId,
-            buildMadrugadaConfirmation({ covererName, coveredName: created.coveredName, postCode: created.postCode, slot: data.slot }),
+            buildMadrugadaConfirmation({ covererName, coveredName: created.coveredName, postCode: created.postCode, slot: data.slot, releasedName: created.releasedName }),
             undefined,
             { parseMode: "Markdown" },
         );

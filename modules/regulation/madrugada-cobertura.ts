@@ -8,6 +8,8 @@
 // - Não passa por startRegulationOccupancy de propósito: nada de continuidade,
 //   tomada, deslocamento, banco de horas nem pagamento. A ocupação coberta não
 //   é tocada — segue paga e no banco de horas do titular.
+// - Ramal ocupado por outro titular também vale: é temporário. Ele sai do
+//   quadro enquanto a cobertura vale e volta depois.
 // - Expira sozinha no fim da janela (expireStaleRegulationOccupancies), e aí o
 //   coberto volta ao quadro se ainda estiver aberto.
 
@@ -73,24 +75,26 @@ export async function startMadrugadaCoverage(input: {
             throw new MadrugadaCoverageError(`${coveredName} já tem alguém na madrugada por ele(a).`);
         }
 
-        // Ramal declarado com titular que NÃO é o coberto: a cobertura ficaria
-        // escondida atrás dele no quadro. Pede outro ramal (ex.: 2266–2270).
+        // Ramal declarado com outro titular: vale mesmo assim — é temporário
+        // (ele trabalha no outro horário da noite). Ele sai do quadro enquanto
+        // a cobertura vale (listRegulationBoard) e volta depois; a ocupação
+        // dele não é tocada.
         const holder = await tx.query.regulationOccupancies.findFirst({
             where: and(
                 eq(regulationOccupancies.postId, post.id),
                 isNull(regulationOccupancies.endedAt),
                 isNotNull(regulationOccupancies.boardStartedAt),
                 ne(regulationOccupancies.id, covered.id),
+                ne(regulationOccupancies.doctorId, input.covererDoctorId),
             ),
         });
-        if (holder && holder.doctorId !== input.covererDoctorId) {
-            const holderDoctor = await tx.query.doctors.findFirst({
+        const holderDoctor = holder
+            ? await tx.query.doctors.findFirst({
                 where: eq(doctors.id, holder.doctorId),
                 columns: { fullName: true, displayName: true },
-            });
-            const holderName = holderDoctor?.displayName || holderDoctor?.fullName || "outro médico";
-            throw new MadrugadaCoverageError(`O ramal ${post.code} está com ${holderName}. Avise de novo com um ramal livre (ex.: 2266–2270).`);
-        }
+            })
+            : null;
+        const releasedName = holder ? (holderDoctor?.displayName || holderDoctor?.fullName || "outro médico") : null;
         const otherCoverage = await tx.query.regulationOccupancies.findFirst({
             where: and(
                 eq(regulationOccupancies.postId, post.id),
@@ -131,7 +135,7 @@ export async function startMadrugadaCoverage(input: {
             madrugadaCobreOcupacaoId: covered.id,
         }).returning();
 
-        return { occupancy: created, coveredName, postCode: post.code };
+        return { occupancy: created, coveredName, postCode: post.code, releasedName };
     });
 
     publishBoardUpdate(`regulation:madrugada:${result.occupancy.id}`);

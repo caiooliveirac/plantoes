@@ -1896,6 +1896,20 @@ export async function listRegulationBoard() {
               and cob.ended_at is null
               and (cob.scheduled_end_at is null or cob.scheduled_end_at > now())
           )
+          -- Cobertura de madrugada num ramal ocupado: é temporária (quem está
+          -- nele descansa no outro horário da noite). Quem já estava no ramal
+          -- quando ela chegou sai do quadro enquanto ela vale; quem chegar
+          -- DEPOIS dela no ramal assume normalmente.
+          and (ro2.madrugada_cobertura or not exists (
+            select 1
+            from operations_v2.regulation_occupancies cob
+            where cob.post_id = ro2.post_id
+              and cob.id <> ro2.id
+              and cob.madrugada_cobertura
+              and cob.ended_at is null
+              and (cob.scheduled_end_at is null or cob.scheduled_end_at > now())
+              and cob.started_at >= ro2.started_at
+          ))
           and (
             ro2.ended_at is null
             or (

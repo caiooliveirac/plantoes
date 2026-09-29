@@ -160,33 +160,63 @@ test("madrugada: cobridor no quadro, coberto some; pagamento e banco só do titu
     assert.equal(depois.find((row) => row.postCode === "2151")?.doctorId, ana.id);
 });
 
-test("madrugada: ramal com outro titular é recusado; mesmo ramal do coberto vale", { skip }, async () => {
-    const { cobertura, board } = await modulos();
+test("madrugada: ramal de outro titular vale (temporário) — ele sai do quadro e volta no fim", { skip }, async () => {
+    const { getDb, schema, cobertura, board } = await modulos();
     await garantirTabelasLegadas();
     const caio = await criarMedico("CAIO");
     const dani = await criarMedico("DANI");
     const edu = await criarMedico("EDU");
     const coberta = await titular(caio.id, "2152");
-    await titular(dani.id, "2153");
+    const daDani = await titular(dani.id, "2153");
 
     const now = Date.now();
-    const base = {
+    const { occupancy, releasedName } = await cobertura.startMadrugadaCoverage({
         covererDoctorId: edu.id,
         coveredOccupancyId: coberta.id,
+        postCode: "2153",
         startedAt: new Date(now),
         scheduledStartAt: new Date(now - HOUR),
         scheduledEndAt: new Date(now + 3 * HOUR),
-    };
+    });
+    assert.equal(releasedName, dani.fullName);
+
+    const rows = await board.listRegulationBoard();
+    assert.equal(rows.find((row) => row.postCode === "2153")?.doctorId, edu.id, "quem cobre fica no ramal ocupado");
+    assert.ok(!rows.some((row) => row.doctorId === dani.id), "titular do ramal sai do quadro temporariamente");
+    assert.ok(!rows.some((row) => row.doctorId === caio.id), "coberto sai do quadro");
+
+    // Fim da madrugada: os dois voltam; a ocupação da Dani não foi tocada.
+    await getDb().update(schema.regulationOccupancies)
+        .set({ endedAt: new Date(now), actualEndedAt: new Date(now) })
+        .where(eq(schema.regulationOccupancies.id, occupancy.id));
+    const depois = await board.listRegulationBoard();
+    assert.equal(depois.find((row) => row.postCode === "2153")?.doctorId, dani.id);
+    assert.equal(depois.find((row) => row.postCode === "2152")?.doctorId, caio.id);
+    const intacta = await getDb().query.regulationOccupancies.findFirst({ where: eq(schema.regulationOccupancies.id, daDani.id) });
+    assert.equal(intacta?.endedAt, null);
+    assert.equal(intacta?.boardStartedAt?.toISOString(), daDani.boardStartedAt?.toISOString());
+});
+
+test("madrugada: cobrir no próprio ramal do coberto vale; duas coberturas no mesmo ramal não", { skip }, async () => {
+    const { cobertura, board } = await modulos();
+    await garantirTabelasLegadas();
+    const joao = await criarMedico("JOAO");
+    const kaka = await criarMedico("KAKA");
+    const lia = await criarMedico("LIA");
+    const leo = await criarMedico("LEO");
+    const coberta = await titular(joao.id, "2154");
+    const outra = await titular(lia.id, "2035");
+
+    const now = Date.now();
+    const base = { startedAt: new Date(now), scheduledStartAt: new Date(now - HOUR), scheduledEndAt: new Date(now + 3 * HOUR) };
+    await cobertura.startMadrugadaCoverage({ ...base, covererDoctorId: kaka.id, coveredOccupancyId: coberta.id, postCode: "2154" });
+    const rows = await board.listRegulationBoard();
+    assert.equal(rows.find((row) => row.postCode === "2154")?.doctorId, kaka.id);
+
     await assert.rejects(
-        cobertura.startMadrugadaCoverage({ ...base, postCode: "2153" }),
+        cobertura.startMadrugadaCoverage({ ...base, covererDoctorId: leo.id, coveredOccupancyId: outra.id, postCode: "2154" }),
         cobertura.MadrugadaCoverageError,
     );
-
-    await cobertura.startMadrugadaCoverage({ ...base, postCode: "2152" });
-    const rows = await board.listRegulationBoard();
-    const r2152 = rows.find((row) => row.postCode === "2152");
-    assert.equal(r2152?.doctorId, edu.id, "cobre no próprio ramal do coberto");
-    assert.equal(rows.find((row) => row.postCode === "2153")?.doctorId, dani.id);
 });
 
 test("madrugada: no fechamento do SN, só o titular é pago", { skip }, async () => {
@@ -198,13 +228,13 @@ test("madrugada: no fechamento do SN, só o titular é pago", { skip }, async ()
     const [coberta] = await getDb().insert(schema.regulationOccupancies).values({
         doctorId: fabi.id,
         continuityGroupId: randomUUID(),
-        postId: await postId("2154"),
+        postId: await postId("2034"),
         scheduledStartAt: local("2026-01-10T19:00"),
         scheduledEndAt: local("2026-01-11T07:00"),
         startedAt: local("2026-01-10T19:00"),
         boardStartedAt: local("2026-01-10T19:00"),
         shiftLabel: "SN",
-        ramalLabel: "2154",
+        ramalLabel: "2034",
         source: "telegram",
     }).returning();
     const { occupancy } = await cobertura.startMadrugadaCoverage({

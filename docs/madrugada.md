@@ -41,9 +41,18 @@ min, como as demais pendências (`pending_madrugada_cover`).
 
 Cinco ramais novos (migration `0051`), **eventuais** como o 4091: só aparecem no
 quadro com alguém dentro e nunca contam como vaga descoberta. São o lugar
-natural de quem cobre. Também vale declarar o **próprio ramal do coberto** — a
-cobertura toma o lugar dele no quadro. Ramal ocupado por um **terceiro** é
-recusado no toque do botão (pede outro ramal).
+natural de quem cobre.
+
+**Qualquer ramal vale**, inclusive ocupado — a madrugada é temporária:
+
+- o **próprio ramal do coberto**: a cobertura toma o lugar dele no quadro;
+- ramal de **outro titular** (ex.: chegou às 23:00 no ramal de quem só
+  trabalha às 03:00; ou chegou às 03:00 no ramal de quem trabalhou às 23:00):
+  esse titular **sai do quadro enquanto a cobertura vale** e volta no fim. A
+  ocupação dele não é tocada (pagamento e banco seguem iguais). A confirmação
+  do bot avisa quem saiu temporariamente;
+- quem **chegar depois** da cobertura naquele ramal assume normalmente;
+- só é recusada uma **segunda cobertura** no mesmo ramal ao mesmo tempo.
 
 ## Como é gravado
 

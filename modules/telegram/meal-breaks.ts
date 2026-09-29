@@ -2467,7 +2467,9 @@ export function reconcileNightMealBreakSessionWithBoard(params: {
 
     const boardArrivalByRamal = new Map(
         params.board.regulation
-            .filter((row) => row.status === "active" && Boolean(row.startedAt))
+            // Cobertura de madrugada é temporária: não reescreve a chegada de
+            // quem é dono do ramal na divisão (docs/madrugada.md).
+            .filter((row) => row.status === "active" && Boolean(row.startedAt) && !row.madrugadaCobertura)
             .map((row) => [normalizeRamal(row.postCode), row.startedAt as string]),
     );
 

@@ -209,10 +209,16 @@ export function buildMadrugadaConfirmation(params: {
     coveredName: string;
     postCode: string;
     slot: MadrugadaSlot;
+    /** Titular que estava no ramal declarado e sai do quadro temporariamente. */
+    releasedName?: string | null;
 }) {
+    const until = params.slot === "23:00" ? "03:00" : "07:00";
     return [
         `✅ 🌙 *${escapeTelegramMarkdown(params.covererName)}* no ramal *${escapeTelegramMarkdown(params.postCode)}* por *${escapeTelegramMarkdown(params.coveredName)}* (${describeMadrugadaSlot(params.slot)}).`,
         `${escapeTelegramMarkdown(params.coveredName)} sai do quadro até o fim da madrugada; pagamento e banco de horas seguem com ele(a).`,
+        ...(params.releasedName && params.releasedName !== params.coveredName
+            ? [`${escapeTelegramMarkdown(params.releasedName)} sai do quadro do ${escapeTelegramMarkdown(params.postCode)} até as ${until} (temporário) e volta depois.`]
+            : []),
     ].join("\n");
 }
 
