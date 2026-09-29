@@ -27,10 +27,42 @@ concurrency:
 
 permissions:
   contents: read
+  # Listar os artefatos "tested-tree-*" do CI de PR (job check).
+  actions: read
 
 jobs:
+  # Merge de PR cuja árvore é idêntica à que passou no CI do PR (typecheck,
+  # testes e build — ci-pr.yml, job tested-tree) não revalida: é o mesmo código
+  # byte a byte. Push direto na main, tag de migração ou main que andou entre o
+  # CI e o merge dão árvore nova, e o validate roda.
+  check:
+    name: Árvore já testada no PR?
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      tested: ${{ steps.tree.outputs.tested }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Procurar a árvore nos artefatos do CI de PR
+        id: tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=tested-tree-${tree}" --jq '[.artifacts[] | select(.expired == false)] | length' || echo 0)"
+          if [ "${count}" -gt 0 ]; then
+            echo "tested=true" >> "$GITHUB_OUTPUT"
+            echo "Árvore ${tree} já passou no CI do PR: validate pulado." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "tested=false" >> "$GITHUB_OUTPUT"
+            echo "Árvore ${tree} sem CI de PR: validate roda." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   validate:
     name: Typecheck e testes
+    needs: check
+    if: needs.check.outputs.tested != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -74,7 +106,9 @@ jobs:
 
   deploy:
     name: Deploy no magalu (git + build no servidor + pm2)
-    needs: validate
+    needs: [check, validate]
+    # validate pulado (árvore já testada) conta como aprovado; falho ou cancelado, não.
+    if: always() && needs.check.result == 'success' && (needs.validate.result == 'success' || needs.validate.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

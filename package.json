@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit -p tsconfig.json",
-    "test:deploy": "node --test --test-concurrency=1 --import tsx $(find tests -name '*.test.ts' ! -name 'telegram-meal-breaks.test.ts' -print)",
+    "test:deploy": "bash scripts/test-gate.sh",
     "test:full": "node --test --test-concurrency=1 --import tsx tests/**/*.test.ts",
     "test": "node --test --test-concurrency=1 --import tsx tests/**/*.test.ts",
     "bank-hours:rebuild": "tsx scripts/rebuild-bank-hours.ts",

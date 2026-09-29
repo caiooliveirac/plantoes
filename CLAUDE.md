@@ -288,9 +288,10 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
 npm install            # Node >= 20
 npm run dev            # Next dev server
 npm test               # suíte completa (node --test + tsx)
-npm run test:deploy    # suíte de gate de deploy (exclui meal-breaks, que trava sob isolamento)
-# Os arquivos de teste rodam um de cada vez (--test-concurrency=1): os testes com
-# banco dividem o mesmo DATABASE_URL e, em paralelo, um apagava/criava dado do outro.
+npm run test:deploy    # gate de deploy (scripts/test-gate.sh; exclui meal-breaks)
+# test-gate: arquivos que citam getDb(/DATABASE_URL rodam um de cada vez (dividem o
+# mesmo banco); o resto em paralelo e sem DATABASE_URL. Teste novo de banco tem de
+# citar um dos dois no arquivo, senão roda sem banco.
 npm run build          # build de produção (faça LOCAL, não no servidor)
 npm run telegram:worker   # roda o worker de lembretes localmente (loop contínuo)
 npm run db:migrate        # aplica migrations SQL pendentes
@@ -333,21 +334,20 @@ Sem ESLint/Prettier configurados no repo — a única verificação estática au
 
 - **Dev local**: `npm run dev`. `.env.local` para apontar num Postgres local (schema
   `operations_v2`, ver connection string de exemplo em `.env.example`).
-- **CI de PR** ([.github/workflows/ci-pr.yml](.github/workflows/ci-pr.yml)), runner
-  `ubuntu-latest` do GitHub com Postgres 16 de serviço: `npm ci` → `db:migrate`
-  (valida que as migrations aplicam limpas; os testes não tocam o banco, exceto
-  `tests/contas-portal-db.test.ts`, que só roda com DATABASE_URL num banco `*_test`) →
-  `npm run typecheck` → `npm run test:deploy` → meal-breaks isolado (bloqueante,
-  `--experimental-test-isolation=none` no Node 22) → `npm run build`. Todos os
-  passos são bloqueantes; ~2min no total.
+- **CI de PR** ([.github/workflows/ci-pr.yml](.github/workflows/ci-pr.yml)): dois
+  jobs em paralelo — `build` (`typecheck` → `npm run build`, sem banco) e `tests`
+  (Postgres 16: `db:migrate` → [scripts/test-gate.sh](scripts/test-gate.sh)
+  `--com-meal-breaks`). Passando os dois, `tested-tree` grava o hash da árvore
+  testada como artefato. ~2min.
 - **Deploy** ([.github/workflows/release-deploy.yml](.github/workflows/release-deploy.yml)),
-  em push a `main`: job `validate` (mesma bateria do CI de PR, sem meal-breaks e sem
-  build) e depois job `deploy`, que executa
+  em push a `main`: job `check` procura a árvore do commit nos artefatos do CI de PR;
+  achou (merge de PR com a `main` parada) → pula o `validate`; não achou (push
+  direto, `main` andou) → `validate` (typecheck + `test:deploy`). Depois o job
+  `deploy`, que executa
   [scripts/deploy-magalu.sh](scripts/deploy-magalu.sh) **no servidor via SSH** — o
   `next build` de produção acontece lá (build atômico com `.next.prev` para
   rollback, guard de memória), com restart dos dois processos PM2 (`plantoes`,
   `plantoes-telegram-worker`) e healthcheck de `/api/health`.
-  Não há mais self-hosted runner nem os jobs antigos `test_smoke`/`test_regression`.
 - **Migrations em produção são manuais**: aplicar `db/migrations/NNNN_*.sql` no
   servidor **antes** do merge (via `npm run db:migrate` com `.env.production`), não
   fazem parte do pipeline de deploy automático.
