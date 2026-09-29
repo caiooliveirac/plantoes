@@ -2259,7 +2259,7 @@ export async function listRecentHandoffs(
   options: { windowHours?: number; toleranceMinutes?: number; limit?: number } = {},
 ): Promise<RecentHandoff[]> {
   const db = getDb();
-  const windowHours = options.windowHours ?? 1;
+  const windowHours = options.windowHours ?? 2;
   const toleranceMinutes = options.toleranceMinutes ?? 90;
   const limit = options.limit ?? 100;
   const cutoffAt = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
