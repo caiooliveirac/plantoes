@@ -68,7 +68,8 @@ regulação/intervenção); `/historico-operacional` e `/historico/turno-anterio
 visões de auditoria; `/folha-ponto/[medicoId]/[ano]/[mes]` é o extrato individual
 (acessível também sem login via token assinado, ver Autenticação); `/admin/*` reúne
 telas de admin — `payment-closing` (+`/pendencias-contrato`), `bank-hours`,
-`acessos`. Alocação, atesto diário, auditorias (slots, atesto, relatório mensal),
+`acessos`, `extrator-caso` (caso desidentificado de um médico/mês para colar em
+sessão de IA — [docs/extrator-caso.md](docs/extrator-caso.md)). Alocação, atesto diário, auditorias (slots, atesto, relatório mensal),
 gestão de médicos e acesso de chefia saíram em 29/09/2026 (ninguém usava); os dados
 ficaram no banco.
 
