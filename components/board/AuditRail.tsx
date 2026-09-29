@@ -31,6 +31,10 @@ export interface AuditRailProps {
  * Visibility: caller must already have gated on session.canManage.
  */
 const AUDIT_RAIL_COLLAPSED_STORAGE_KEY = "board-audit-rail-collapsed";
+/** Recolhido com decisão pendente, o rail volta à frente depois disto. */
+const BRING_FORWARD_AFTER_MS = 20 * 60_000;
+/** Duração do destaque ao vir à frente. */
+const FORWARD_HIGHLIGHT_MS = 6_000;
 
 export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps) {
     const quickConfirm = useQuickConfirmDeparture();
@@ -48,6 +52,12 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
     // sem preferência salva, começa colapsado: expandido ele cobre a coluna de
     // intervenção inteira, e quem loga com a fila cheia não enxerga o quadro.
     const [collapsed, setCollapsed] = useState(true);
+    // Vir à frente: a chefia vinha ignorando a fila recolhida. Com saída que só
+    // ela decide, o rail se abre sozinho — ao chegar uma nova e de novo a cada
+    // 20 min recolhido. Recolher continua valendo até lá.
+    const [forward, setForward] = useState(false);
+    const collapsedSinceRef = useRef(Date.now());
+    const seenDecideIdsRef = useRef<Set<string>>(new Set());
 
     useEffect(() => {
         try {
@@ -62,8 +72,10 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
     }, []);
 
     function toggleCollapsed() {
+        setForward(false);
         setCollapsed((previous) => {
             const next = !previous;
+            if (next) collapsedSinceRef.current = Date.now();
             try {
                 window.localStorage.setItem(AUDIT_RAIL_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
             } catch {
@@ -161,6 +173,31 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
 
     const automatic = system?.mode === "on";
 
+    // Aberto, o que está em "Precisa de você" conta como visto.
+    useEffect(() => {
+        if (collapsed) return;
+        for (const item of decide) seenDecideIdsRef.current.add(item.occupancyId);
+    }, [collapsed, decide]);
+
+    useEffect(() => {
+        if (!collapsed || decide.length === 0) return;
+        const bringForward = () => {
+            const hasUnseen = decide.some((item) => !seenDecideIdsRef.current.has(item.occupancyId));
+            if (!hasUnseen && Date.now() - collapsedSinceRef.current < BRING_FORWARD_AFTER_MS) return;
+            setCollapsed(false);
+            setForward(true);
+        };
+        bringForward();
+        const handle = window.setInterval(bringForward, 60_000);
+        return () => window.clearInterval(handle);
+    }, [collapsed, decide]);
+
+    useEffect(() => {
+        if (!forward) return;
+        const handle = window.setTimeout(() => setForward(false), FORWARD_HIGHLIGHT_MS);
+        return () => window.clearTimeout(handle);
+    }, [forward]);
+
     const handleQuickConfirm = useCallback(async (pending: PendingDepartureConfirmation, outcome: "full_shift" | null = null) => {
         setBusyIds((current) => new Set(current).add(pending.occupancyId));
         // Optimistic removal — re-add on failure so the chefe doesn't lose the card.
@@ -194,7 +231,7 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
 
     return (
         <motion.aside
-            className={`board-audit-rail ${collapsed ? "collapsed" : ""}`.trim()}
+            className={`board-audit-rail ${collapsed ? "collapsed" : ""} ${forward ? "forward" : ""}`.trim()}
             variants={fadeRise}
             initial="initial"
             animate="animate"
@@ -212,7 +249,10 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                     Saídas a confirmar
                 </span>
                 <span className="board-audit-rail__header-end">
-                    <span className={`board-audit-rail__count ${visible.length === 0 ? "zero" : ""}`.trim()}>
+                    <span
+                        className={`board-audit-rail__count ${visible.length === 0 ? "zero" : decide.length > 0 ? "urgent" : ""}`.trim()}
+                        title={decide.length > 0 ? `${decide.length} precisa(m) de você` : undefined}
+                    >
                         {visible.length}
                     </span>
                     <span className="board-audit-rail__chevron" aria-hidden="true">{collapsed ? "▾" : "▴"}</span>
