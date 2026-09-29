@@ -138,6 +138,8 @@ async function callApi<T>(method: string, body: Record<string, unknown>) {
  */
 export interface TelegramFormatOptions {
     parseMode?: "Markdown" | "HTML";
+    /** Link no texto sem cartão de prévia (og:image). */
+    disableLinkPreview?: boolean;
 }
 
 function resolveParseMode(options?: TelegramFormatOptions): "Markdown" | "HTML" | undefined {
@@ -180,6 +182,7 @@ export async function sendMessage(
         text,
         ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
         ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        ...(options?.disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
     };
 
     const parseMode = resolveParseMode(options);
@@ -246,6 +249,7 @@ export async function editMessageText(
         message_id: messageId,
         text,
         ...(replyMarkup ? { reply_markup: replyMarkup } : { reply_markup: { inline_keyboard: [] } }),
+        ...(options?.disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
     };
 
     const parseMode = resolveParseMode(options);

@@ -8,11 +8,12 @@
 // Desliga com OCCURRENCE_HANDOFF_BOT_ENABLED=0 (o painel continua funcionando).
 
 import { editMessageText, sendMessage } from "@/modules/telegram/api";
-import { MEAL_BREAK_FORMAT_OPTIONS, resolveMealBreakDoctorMention } from "@/modules/telegram/meal-breaks";
+import { MEAL_BREAK_FORMAT_OPTIONS, resolveMealBreakDoctorTelegramUser } from "@/modules/telegram/meal-breaks";
 import {
     buildHandoffDivisionMessage,
     buildHandoffNoticeMessage,
     buildHandoffPendingMessage,
+    type HandoffMention,
 } from "@/modules/telegram/occurrence-handoff-messages";
 import {
     getOccurrenceHandoffState,
@@ -21,6 +22,8 @@ import {
 } from "@/services/occurrence-handoff.service";
 
 const PENDING_INTERVAL_MS = 3 * 60 * 1000;
+// Link do painel sem o cartão de prévia (og:image).
+const FORMAT = { ...MEAL_BREAK_FORMAT_OPTIONS, disableLinkPreview: true };
 
 export function isOccurrenceHandoffBotEnabled(env: NodeJS.ProcessEnv = process.env) {
     const raw = env.OCCURRENCE_HANDOFF_BOT_ENABLED?.trim().toLowerCase();
@@ -55,14 +58,14 @@ export async function sendOccurrenceHandoffCycle(reference = new Date()) {
     const { chatId, operationalDate, window } = state;
     const record = state.record ?? { counts: {}, transfers: [] };
     const link = publicLink();
-    const mentions = new Map<string, string | null>();
+    const mentions = new Map<string, HandoffMention | null>();
     const resolveMentions = async (ramals: string[]) => {
         await Promise.all(ramals.filter((r) => !mentions.has(r)).map(async (ramal) => {
             const doctorId = state.doctorIds[ramal];
-            let mention: string | null = null;
+            let mention: HandoffMention | null = null;
             if (doctorId) {
                 try {
-                    mention = await resolveMealBreakDoctorMention({ chatId, referenceAt: reference, doctorId });
+                    mention = await resolveMealBreakDoctorTelegramUser({ chatId, referenceAt: reference, doctorId });
                 } catch (error) {
                     console.warn(`[occurrence-handoff] mention failed for ${ramal}`, error);
                 }
@@ -75,7 +78,8 @@ export async function sendOccurrenceHandoffCycle(reference = new Date()) {
 
     try {
         if (!record.noticeSentAt && (window.phase === "aviso" || window.phase === "contagem")) {
-            await sendMessage(chatId, buildHandoffNoticeMessage({ plan, link }), undefined, undefined, MEAL_BREAK_FORMAT_OPTIONS);
+            await resolveMentions(plan.givers.map((g) => g.ramal));
+            await sendMessage(chatId, buildHandoffNoticeMessage({ plan, link, mention }), undefined, undefined, FORMAT);
             await patchOccurrenceHandoffRecord(chatId, operationalDate, window.slot, { noticeSentAt: reference.toISOString() });
             sent += 1;
         }
@@ -85,7 +89,7 @@ export async function sendOccurrenceHandoffCycle(reference = new Date()) {
             await resolveMentions(plan.pendingGivers);
             const text = buildHandoffPendingMessage({ plan, link, mention });
             if (text) {
-                await sendMessage(chatId, text, undefined, undefined, MEAL_BREAK_FORMAT_OPTIONS);
+                await sendMessage(chatId, text, undefined, undefined, FORMAT);
                 await patchOccurrenceHandoffRecord(chatId, operationalDate, window.slot, { pendingSentAt: reference.toISOString() });
                 sent += 1;
             }
@@ -97,7 +101,7 @@ export async function sendOccurrenceHandoffCycle(reference = new Date()) {
             await resolveMentions([...plan.givers.map((g) => g.ramal)]);
             const text = buildHandoffDivisionMessage({ plan, link, mention });
             if (!record.divisionMessageId) {
-                const message = await sendMessage(chatId, text, undefined, undefined, MEAL_BREAK_FORMAT_OPTIONS);
+                const message = await sendMessage(chatId, text, undefined, undefined, FORMAT);
                 await patchOccurrenceHandoffRecord(chatId, operationalDate, window.slot, {
                     divisionMessageId: message?.message_id,
                     divisionText: text,
@@ -106,7 +110,7 @@ export async function sendOccurrenceHandoffCycle(reference = new Date()) {
             } else if (text !== record.divisionText && window.editable) {
                 let edited = true;
                 try {
-                    await editMessageText(chatId, record.divisionMessageId, text, undefined, MEAL_BREAK_FORMAT_OPTIONS);
+                    await editMessageText(chatId, record.divisionMessageId, text, undefined, FORMAT);
                 } catch (error) {
                     if (!isSettledEditError(error)) throw error;
                     console.warn(`[occurrence-handoff] edit skipped for ${chatId} ${operationalDate} ${window.slot}`, error);
