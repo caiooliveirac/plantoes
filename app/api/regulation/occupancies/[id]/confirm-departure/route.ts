@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, regulationOccupancies } from "@/db/schema";
@@ -8,6 +8,7 @@ import { correctRegulationOccupancy } from "@/modules/operational/corrections";
 import { reopenContestedRegulationDeparture } from "@/modules/regulation/service";
 import { classifyEarlyDeparture, isEarlyDepartureEligible, isPaymentAffectingEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { isValidOverrideNote, OVERRIDE_NOTE_MIN_LENGTH } from "@/modules/operational/departure-triage";
+import { SYSTEM_DEPARTURE_CONFIRM_NOTE_PREFIX } from "@/modules/operational/departure-autonomy";
 
 const schema = z.object({
     actualEndedAt: z.string().datetime().optional(),
@@ -158,6 +159,12 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
             await db.update(regulationOccupancies)
                 .set({ departureConfirmedNote: parsed.data.note })
                 .where(eq(regulationOccupancies.id, id));
+        } else {
+            // O sistema pode ter confirmado segundos antes (docs/saidas-a-confirmar.md):
+            // confirmada agora pela chefia, a marca "Confirmada pelo sistema" sai.
+            await db.update(regulationOccupancies)
+                .set({ departureConfirmedNote: null })
+                .where(and(eq(regulationOccupancies.id, id), like(regulationOccupancies.departureConfirmedNote, `${SYSTEM_DEPARTURE_CONFIRM_NOTE_PREFIX}%`)));
         }
 
         await db.insert(auditLogs).values({

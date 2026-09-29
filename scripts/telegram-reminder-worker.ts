@@ -12,6 +12,7 @@ import { sendTelegramPaymentDigestCycle } from "@/modules/telegram/payment-diges
 import { sendTelegramReminderCycle } from "@/modules/telegram/reminders";
 import { sendSelfDeclaredExtraCycle } from "@/modules/telegram/self-declared-extra-alerts";
 import { sendVerificacaoPosViradaCycle } from "@/modules/telegram/verificacao-pos-virada-cycle";
+import { runSaidasAutonomasCycle } from "@/modules/telegram/saidas-autonomas-cycle";
 import { syncTelegramAdminCommandMenus } from "@/modules/telegram/admin-menu";
 import { expireResidenteOccupancies } from "@/modules/operational/residente-auto-close";
 import { expireInterventionBaseDeactivations } from "@/modules/intervention/service";
@@ -43,6 +44,7 @@ async function runCycle() {
             avisoFimTurno,
             expiredBaseDeactivations,
             expiredPostDeactivations,
+            saidasAutonomas,
         ] = await Promise.all([
             sendTelegramReminderCycle(referenceDate),
             sendTelegramMealBreakCycle(referenceDate),
@@ -70,15 +72,20 @@ async function runCycle() {
             // (antes era feito dentro de getOperationalBoard — leitura que gravava).
             expireInterventionBaseDeactivations(referenceDate),
             expireRegulationPostDeactivations(referenceDate),
+            // Saídas a confirmar: rotina confirma na virada, sugestão em 24h,
+            // decisão humana escala ao admin (flag SAIDAS_AUTONOMAS, docs/saidas-a-confirmar.md).
+            runSaidasAutonomasCycle(referenceDate),
         ]);
         const evaluated = reminders.evaluated + mealBreak.evaluated + mealBreakNudges.evaluated
             + paymentDigest.evaluated + contractBalance.evaluated + bankHoursPending.evaluated
             + selfDeclaredExtra.evaluated + checklistDigest.evaluated + occurrenceHandoff.evaluated
-            + verificacaoPosVirada.evaluated + acessos.evaluated + avisoFimTurno.evaluated;
+            + verificacaoPosVirada.evaluated + acessos.evaluated + avisoFimTurno.evaluated
+            + saidasAutonomas.evaluated;
         const sent = reminders.sent + mealBreak.sent + mealBreakNudges.sent
             + paymentDigest.sent + contractBalance.sent + bankHoursPending.sent
             + selfDeclaredExtra.sent + checklistDigest.sent + occurrenceHandoff.sent
-            + verificacaoPosVirada.sent + acessos.sent + avisoFimTurno.sent;
+            + verificacaoPosVirada.sent + acessos.sent + avisoFimTurno.sent
+            + saidasAutonomas.sent;
         if (evaluated > 0 || sent > 0) {
             console.log(`[telegram-reminder-worker] evaluated=${evaluated} sent=${sent}`);
         }

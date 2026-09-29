@@ -107,6 +107,19 @@ describe("resolveBankHoursApproval — validado", () => {
     });
 });
 
+describe("resolveBankHoursApproval — confirmado pelo sistema", () => {
+    it("não diz que a chefia olhou nem aponta chefe", () => {
+        const r = resolveBankHoursApproval(entrada({
+            departureConfirmedAt: "2026-07-11T07:00:00Z",
+            departureConfirmedNote: "Confirmada pelo sistema (rotina, na virada): Confirmar saída 19:30.",
+        }));
+        assert.equal(r.state, "validado");
+        assert.equal(r.label, "Confirmado automaticamente");
+        assert.equal(r.chiefName, null);
+        assert.doesNotMatch(r.detail, /chefia confirmou/);
+    });
+});
+
 describe("resolveBankHoursApproval — quem validou, com conta compartilhada", () => {
     // Os chefes avisam na 2031 quando chegam, justamente porque vale banco de
     // horas. O ramal sabe quem estava lá; a conta chefe@samu.local não.

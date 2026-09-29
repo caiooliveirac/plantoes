@@ -3,11 +3,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Shield } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { PendingDepartureCard } from "@/components/board/PendingDepartureCard";
 import { fadeRise, staggerList } from "@/lib/board/motion";
 import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
 import { resolveDepartureAutonomy, type DepartureAutonomyResult } from "@/modules/operational/departure-autonomy";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
+import type { SystemConfirmedDeparture } from "@/services/departure-autonomy.service";
+
+function hourMinute(iso: string) {
+    const date = new Date(iso);
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
 
 export interface AuditRailProps {
     pendingDepartures: PendingDepartureConfirmation[];
@@ -26,6 +34,11 @@ const AUDIT_RAIL_COLLAPSED_STORAGE_KEY = "board-audit-rail-collapsed";
 
 export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps) {
     const quickConfirm = useQuickConfirmDeparture();
+    const router = useRouter();
+    // O que o sistema confirmou sozinho (docs/saidas-a-confirmar.md) e se o
+    // automático está ligado — o rail só promete "confirma sozinho" quando está.
+    const [system, setSystem] = useState<{ mode: "on" | "sombra" | "off"; items: SystemConfirmedDeparture[] } | null>(null);
+    const [undoingId, setUndoingId] = useState<string | null>(null);
     const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
     const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
     const seenIdsRef = useRef<Set<string>>(new Set());
@@ -112,6 +125,41 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
     }, [visible]);
 
     const [confirmingAll, setConfirmingAll] = useState(false);
+
+    const loadSystem = useCallback(async () => {
+        try {
+            const response = await fetch("/api/operational/auto-confirmed-departures");
+            if (response.ok) setSystem(await response.json());
+        } catch {
+            // Sem a lista o rail segue funcionando; só não mostra o Desfazer.
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!collapsed) void loadSystem();
+    }, [collapsed, pendingDepartures, loadSystem]);
+
+    const undoSystemConfirmation = useCallback(async (item: SystemConfirmedDeparture) => {
+        setUndoingId(item.occupancyId);
+        try {
+            const response = await fetch("/api/operational/auto-confirmed-departures", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ domain: item.domain, occupancyId: item.occupancyId }),
+            });
+            const body = await response.json().catch(() => ({})) as { error?: string };
+            if (!response.ok) throw new Error(body.error || "Falha ao desfazer.");
+            toast.success(`${item.doctorName}: volta para a fila, agora com você.`);
+            router.refresh();
+            await loadSystem();
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Falha ao desfazer.");
+        } finally {
+            setUndoingId(null);
+        }
+    }, [router, loadSystem]);
+
+    const automatic = system?.mode === "on";
 
     const handleQuickConfirm = useCallback(async (pending: PendingDepartureConfirmation, outcome: "full_shift" | null = null) => {
         setBusyIds((current) => new Set(current).add(pending.occupancyId));
@@ -204,7 +252,12 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                     )}
                     {glance.length > 0 && (
                         <>
-                            <div className="board-audit-rail__section">Confira a sugestão · {glance.length}</div>
+                            <div className="board-audit-rail__section">
+                                <span>
+                                    Confira a sugestão · {glance.length}
+                                    {automatic ? <span className="board-audit-rail__section-hint">aplicada sozinha após 24h</span> : null}
+                                </span>
+                            </div>
                             <motion.ul
                                 className="board-audit-rail__list"
                                 variants={staggerList}
@@ -230,7 +283,10 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                     {routine.length > 0 && (
                         <>
                             <div className="board-audit-rail__section board-audit-rail__section--routine">
-                                <span>Rotina · {routine.length}</span>
+                                <span>
+                                    Rotina · {routine.length}
+                                    {automatic ? <span className="board-audit-rail__section-hint">confirma sozinha na virada</span> : null}
+                                </span>
                                 <button
                                     type="button"
                                     className="board-audit-rail__confirm-all"
@@ -264,6 +320,30 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                         </>
                     )}
                 </>
+            )}
+
+            {!collapsed && system && system.items.length > 0 && (
+                <details className="board-audit-rail__system">
+                    <summary>Confirmadas pelo sistema · {system.items.length}</summary>
+                    <ul className="board-audit-rail__system-list">
+                        {system.items.map((item) => (
+                            <li key={item.occupancyId}>
+                                <span>
+                                    <strong>{item.doctorName}</strong> · {item.targetCode} · saiu {hourMinute(item.actualEndedAt)}
+                                </span>
+                                <button
+                                    type="button"
+                                    className="board-audit-rail__system-undo"
+                                    onClick={() => { void undoSystemConfirmation(item); }}
+                                    disabled={undoingId === item.occupancyId}
+                                    title={item.note}
+                                >
+                                    {undoingId === item.occupancyId ? "Desfazendo…" : "Desfazer"}
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </details>
             )}
         </motion.aside>
     );

@@ -11421,6 +11421,65 @@ button.chief-payable-tag:focus-visible {
     padding: 2px 2px 0;
 }
 
+/* "confirma sozinha na virada" / "aplicada sozinha após 24h": só aparece
+   com o automático ligado (docs/saidas-a-confirmar.md). */
+.board-audit-rail__section-hint {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.7rem;
+    letter-spacing: normal;
+    text-transform: none;
+    color: var(--muted);
+}
+
+.board-audit-rail__system {
+    border-top: 1px solid var(--surface-elevated-border);
+    padding-top: 8px;
+    font-size: 0.78rem;
+    color: var(--muted-strong);
+}
+
+.board-audit-rail__system > summary {
+    cursor: pointer;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.board-audit-rail__system-list {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.board-audit-rail__system-list > li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.board-audit-rail__system-undo {
+    appearance: none;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--text);
+    padding: 3px 9px;
+    border-radius: 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.board-audit-rail__system-undo:disabled {
+    opacity: 0.55;
+    cursor: progress;
+}
+
 .board-audit-rail__confirm-all {
     appearance: none;
     background: var(--surface-elevated);
