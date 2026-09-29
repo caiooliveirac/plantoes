@@ -6,6 +6,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { modalBackdrop, modalPanel, tapFeedback } from "@/lib/board/motion";
+import { useModalPortalContainer } from "@/lib/board/use-modal-portal-container";
 import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import type { PendingChiefExit } from "@/services/board.service";
 
@@ -55,6 +56,7 @@ function formatSignedMinutes(minutes: number) {
  */
 export function ChiefExitGate({ pendingChiefExits }: ChiefExitGateProps) {
     const router = useRouter();
+    const portalContainer = useModalPortalContainer();
     const [, startTransition] = useTransition();
     const [submitting, setSubmitting] = useState(false);
     const [snoozedUntil, setSnoozedUntil] = useState<Record<string, number>>({});
@@ -145,7 +147,7 @@ export function ChiefExitGate({ pendingChiefExits }: ChiefExitGateProps) {
         <Dialog.Root open={target !== null}>
             <AnimatePresence>
                 {target && (
-                    <Dialog.Portal forceMount>
+                    <Dialog.Portal forceMount container={portalContainer}>
                         <Dialog.Overlay asChild>
                             <motion.div className="board-modal-backdrop" {...modalBackdrop} />
                         </Dialog.Overlay>

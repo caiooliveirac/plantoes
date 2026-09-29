@@ -2953,8 +2953,15 @@
     border-color: var(--verde-600);
 }
 
+/* O fundo do painel no globals.css é gradiente escuro literal; sem trocar aqui
+   o modal é uma caixa preta sobre o quadro claro. Portal dentro de
+   .pagina-kairos: lib/board/use-modal-portal-container.ts. */
 .pagina-kairos .board-modal-panel, .pagina-kairos .board-modal {
     border: 1px solid var(--azul-200);
+    background: var(--superficie);
+    box-shadow: var(--sombra-modal);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
 }
 
 .pagina-kairos .board-modal-button.confirm:hover:not(:disabled) {

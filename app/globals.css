@@ -12689,16 +12689,28 @@ button.chief-payable-tag:focus-visible {
         rgba(2, 6, 12, 0.62);
     backdrop-filter: blur(6px) saturate(110%);
     -webkit-backdrop-filter: blur(6px) saturate(110%);
-    z-index: 60;
+    /* Acima da barra Kairós (.k-topo, sticky z 80): o modal vive dentro de
+       .pagina-kairos e a barra tampava o topo dele no celular. */
+    z-index: 90;
 }
 
+/* Centrado SEM transform: o painel é um motion.div e o framer-motion grava
+   `transform` inline (none em repouso, translateY/scale na animação), apagando
+   um translate(-50%, -50%) daqui. Com ele o canto superior esquerdo caía no
+   meio da tela — metade do modal fora, botões inalcançáveis no celular, e
+   position: fixed não rola. inset + margin auto centra; max-height + overflow
+   deixam o painel rolar por dentro quando a tela é menor que ele. */
 .board-modal-panel,
 .board-modal {
     position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    inset: 0;
+    margin: auto;
     width: min(480px, calc(100vw - 32px));
+    height: fit-content;
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 24px;
     background: linear-gradient(180deg, rgba(11, 21, 33, 0.92) 0%, rgba(6, 12, 22, 0.96) 100%);
     border: 1px solid rgba(145, 170, 205, 0.18);
@@ -12706,7 +12718,7 @@ button.chief-payable-tag:focus-visible {
     box-shadow: 0 24px 80px -28px rgba(0, 0, 0, 0.75);
     backdrop-filter: saturate(140%) blur(28px);
     -webkit-backdrop-filter: saturate(140%) blur(28px);
-    z-index: 61;
+    z-index: 91;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -12874,8 +12886,24 @@ button.chief-payable-tag:focus-visible {
 
 .board-modal-actions {
     display: flex;
+    flex-wrap: wrap;
     justify-content: flex-end;
     gap: 8px;
+}
+
+/* Celular: menos respiro e botões de ação com a largura toda — alvo de toque
+   grande e texto longo ("Não sei dizer — avisar coordenação") sem espremer. */
+@media (max-width: 520px) {
+    .board-modal-panel,
+    .board-modal {
+        padding: 18px 16px;
+        border-radius: 16px;
+        gap: 14px;
+    }
+
+    .board-modal-actions > * {
+        flex: 1 1 auto;
+    }
 }
 
 .board-modal-cancel,

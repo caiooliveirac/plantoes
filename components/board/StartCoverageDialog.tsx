@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Power, UserPlus } from "lucide-react";
 import { modalBackdrop, modalPanel } from "@/lib/board/motion";
+import { useModalPortalContainer } from "@/lib/board/use-modal-portal-container";
 
 export interface StartCoverageDoctor {
     id: string;
@@ -69,6 +70,7 @@ export function StartCoverageDialog({
     onDeactivate,
 }: StartCoverageDialogProps) {
     const router = useRouter();
+    const portalContainer = useModalPortalContainer();
     const [query, setQuery] = useState("");
     const [doctorId, setDoctorId] = useState("");
     const [startedAt, setStartedAt] = useState(isoNowLocal());
@@ -157,7 +159,7 @@ export function StartCoverageDialog({
         <Dialog.Root open={open} onOpenChange={onOpenChange}>
             <AnimatePresence>
                 {open && (
-                    <Dialog.Portal forceMount>
+                    <Dialog.Portal forceMount container={portalContainer}>
                         <Dialog.Overlay asChild>
                             <motion.div
                                 className="board-modal-backdrop"
