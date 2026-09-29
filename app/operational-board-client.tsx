@@ -1,7 +1,7 @@
 "use client";
 
 import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { OperationalHistoryPanel } from "@/components/operational-history-panel";
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { CadastrarMedicoBotao } from "@/components/doctors/cadastrar-medico-botao";
@@ -1266,6 +1266,13 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const { generatedAt, shiftLabel, regulation, intervention, onDemandRegulationPosts = [], mealBreakSession, mealBreakEligibility, mealBreakEvaluation = null, previousShift, doctors, session, initialViewMode = "live", pendingDepartures = [], recentHandoffs = [], pendingChiefExits = [], expectedSchedule = null, escalaUrl = null } = props;
     const router = useRouter();
     const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
+    // A vista acompanha a URL: os links da barra lateral para "/" e
+    // "/?view=history" navegam sem remontar o quadro. A troca feita aqui
+    // dentro reescreve a URL (efeito abaixo) e volta por aqui sem mudar nada.
+    const vistaNaUrl: ViewMode = useSearchParams().get("view") === "history" ? "history" : "live";
+    useEffect(() => {
+        setViewMode(vistaNaUrl);
+    }, [vistaNaUrl]);
     const [authOpen, setAuthOpen] = useState(false);
     const authEmailRef = useRef<HTMLInputElement>(null);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);

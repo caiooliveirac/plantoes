@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { hasDatabaseUrl } from "@/db";
 import { mesaLiberadaPara, presencaDaPagina, readAuthenticatedSession } from "@/lib/auth/server";
 import { MesaPresenca } from "@/components/board/MesaPresenca";
+import { CascaDaSessao } from "@/components/casca/casca-da-sessao";
 import { limiteOciosoSeg } from "@/modules/acessos/presenca";
 import { resolveOperationalShiftLabel } from "@/modules/operational/board-rules";
 import { getPreviousOperationalBoard, listPendingDepartureConfirmations } from "@/services/board.service";
@@ -56,11 +57,13 @@ export default async function HistoricoTurnoAnteriorPage({
     ]);
 
     return (
-        <MesaPresenca {...propsPresenca}>
-            <PreviousShiftGanttPage
-                board={board}
-                pending={pending}
-            />
-        </MesaPresenca>
+        <CascaDaSessao email={session!.user.email} roles={session!.user.roles}>
+            <MesaPresenca {...propsPresenca}>
+                <PreviousShiftGanttPage
+                    board={board}
+                    pending={pending}
+                />
+            </MesaPresenca>
+        </CascaDaSessao>
     );
 }

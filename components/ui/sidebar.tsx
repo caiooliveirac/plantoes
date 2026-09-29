@@ -153,10 +153,8 @@ function RotuloQueSome({ show, className, children }: { show: boolean; className
 
 export function SidebarHeader({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
     const { collapsed } = useSidebarContext();
-    // recolhida, o botão de recolher não cabe: some, e a marca continua
-    const visiveis = collapsed
-        ? React.Children.toArray(children).filter((c) => !(React.isValidElement(c) && c.type === SidebarToggle))
-        : children;
+    // recolhida, o botão de abrir desce para baixo da marca: é a única porta
+    // para ver o nome de cada ícone
     return (
         <div
             data-slot="sidebar-header"
@@ -167,7 +165,7 @@ export function SidebarHeader({ className, children, ...props }: React.HTMLAttri
             )}
             {...props}
         >
-            {visiveis}
+            {children}
         </div>
     );
 }
@@ -330,6 +328,7 @@ export function SidebarToggle({ className, ...props }: Omit<React.ButtonHTMLAttr
                 "text-[var(--muted-foreground)] hover:bg-[color:var(--primitive-surface-hover)] hover:text-[var(--foreground)]",
                 "focus-visible:ring-2 focus-visible:ring-[color:var(--primitive-ring)]",
                 className,
+                collapsed && "ml-0",
             )}
             {...props}
         >

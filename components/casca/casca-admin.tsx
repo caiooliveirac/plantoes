@@ -11,7 +11,7 @@
 
    Mesma lógica do escala (escalas-e-trocas-samu/components/casca): navy nos
    dois temas, recolhe para trilho de ícones (lembrado no aparelho), tema e
-   sair no rodapé. Quem pode ver cada tela continua sendo a própria tela —
+   sair no rodapé. No celular fica no trilho e abre por cima da tela. Quem pode ver cada tela continua sendo a própria tela —
    aqui só se decide onde cada uma mora. */
 
 import {
@@ -33,7 +33,7 @@ import {
     Sun,
     type LucideIcon,
 } from "lucide-react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import {
     Sidebar,
@@ -90,8 +90,9 @@ const GRUPOS: { rotulo: string | null; itens: ItemNav[] }[] = [
 ];
 
 /** Item aceso: prefixo mais longo ("/admin/payment-closing/pendencias-contrato"
-    não acende "Fechamento"). A Mesa e o histórico ficam fora do /admin. */
-function hrefAtivo(pathname: string): string | undefined {
+    não acende "Fechamento"). Na raiz, a Mesa ou o histórico conforme ?view. */
+function hrefAtivo(pathname: string, vista: string | null): string | undefined {
+    if (pathname === "/") return vista === "history" ? "/?view=history" : "/";
     let melhor: string | undefined;
     for (const g of GRUPOS) {
         for (const { href } of g.itens) {
@@ -183,15 +184,16 @@ function Rodape({ email, papel }: { email: string; papel: string }) {
 
 export function CascaAdmin({ children, email, papel }: { children: ReactNode; email: string; papel: string }) {
     const pathname = usePathname();
-    const ativo = hrefAtivo(pathname);
+    const ativo = hrefAtivo(pathname, useSearchParams().get("view"));
     const [recolhida, setRecolhida] = useState(false);
     const [estreita, setEstreita] = useState(false);
+    const [abertaNoCelular, setAbertaNoCelular] = useState(false);
 
     useEffect(() => {
         try {
             setRecolhida(localStorage.getItem(CHAVE_RECOLHIDA) === "1");
         } catch {}
-        // celular: a lateral fica no trilho de ícones (não cabe aberta)
+        // celular: a lateral fica no trilho e abre por cima (não cabe ao lado)
         const mq = window.matchMedia("(max-width: 760px)");
         const aplicar = () => setEstreita(mq.matches);
         aplicar();
@@ -199,24 +201,39 @@ export function CascaAdmin({ children, email, papel }: { children: ReactNode; em
         return () => mq.removeEventListener("change", aplicar);
     }, []);
 
-    function lembrar(v: boolean) {
+    // aberta por cima no celular: fecha ao navegar e com Esc
+    useEffect(() => setAbertaNoCelular(false), [pathname]);
+    useEffect(() => {
+        if (!abertaNoCelular) return;
+        const aoTeclar = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setAbertaNoCelular(false);
+        };
+        window.addEventListener("keydown", aoTeclar);
+        return () => window.removeEventListener("keydown", aoTeclar);
+    }, [abertaNoCelular]);
+
+    function aoMudar(v: boolean) {
+        if (estreita) return setAbertaNoCelular(!v);
         setRecolhida(v);
         try {
             localStorage.setItem(CHAVE_RECOLHIDA, v ? "1" : "0");
         } catch {}
     }
+    const flutuando = estreita && abertaNoCelular;
 
     return (
         <DentroDaCasca.Provider value={true}>
             <div data-casca className="flex min-h-svh bg-[color:var(--casca-fundo)] print:block print:bg-transparent">
+                {/* no celular o trilho de 60px fica reservado e a barra aberta
+                    passa por cima da tela, sem empurrar o conteúdo */}
+                <div className={cn("sticky top-0 h-svh shrink-0 print:hidden", estreita && "w-[60px]", flutuando && "z-[95]")}>
                 <Sidebar
-                    variant={estreita ? "icon-rail" : "collapsible"}
-                    collapsed={recolhida}
-                    onCollapsedChange={lembrar}
+                    collapsed={estreita ? !abertaNoCelular : recolhida}
+                    onCollapsedChange={aoMudar}
                     width={244}
                     collapsedWidth={60}
                     aria-label="Navegação do plantões"
-                    className="casca-lateral sticky top-0 h-svh print:hidden"
+                    className={cn("casca-lateral h-svh", flutuando && "shadow-2xl")}
                 >
                     <SidebarHeader>
                         <Marca />
@@ -243,6 +260,15 @@ export function CascaAdmin({ children, email, papel }: { children: ReactNode; em
                         <Rodape email={email} papel={papel} />
                     </SidebarFooter>
                 </Sidebar>
+                </div>
+                {flutuando ? (
+                    <button
+                        type="button"
+                        aria-label="Fechar a barra lateral"
+                        className="fixed inset-0 z-[94] bg-slate-950/45 print:hidden"
+                        onClick={() => setAbertaNoCelular(false)}
+                    />
+                ) : null}
                 {/* folha: as telas antigas continuam como são, num bloco comum */}
                 <div
                     className={cn(
