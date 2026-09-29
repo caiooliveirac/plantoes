@@ -1,6 +1,7 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
+import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
@@ -646,6 +647,16 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     // Nenhum médico aberto por padrão: o histórico dilata muito a página, então
     // ele só abre por clique e pode ser fechado em vários pontos (X, fim, Esc).
     const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
+    // meses de cada médico abrem sob demanda na tabela (seta da linha)
+    const [monthsOpenFor, setMonthsOpenFor] = useState<Set<string>>(() => new Set());
+    function toggleMonthsFor(doctorId: string) {
+        setMonthsOpenFor((atual) => {
+            const proximo = new Set(atual);
+            if (proximo.has(doctorId)) proximo.delete(doctorId);
+            else proximo.add(doctorId);
+            return proximo;
+        });
+    }
     // Histórico completo por médico, carregado da API ao abrir e esquecido quando
     // a lista é recarregada (router.refresh após ajuste/estorno).
     const [detailByDoctor, setDetailByDoctor] = useState<Record<string, BankHoursDoctorHistory>>({});
@@ -1271,102 +1282,130 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                             <strong>Nenhum médico encontrado.</strong>
                             <span>Ajuste a busca ou os filtros para abrir outro histórico.</span>
                         </article>
-                    ) : filteredDoctors.map((doctor) => {
-                        const bonusShifts = countBonusShifts(doctor);
-                        const pending = pendingByDoctor.get(doctor.doctorId);
-                        const rows = rowsByDoctor.get(doctor.doctorId);
-                        const isSelected = selectedDoctorId === doctor.doctorId;
-                        return (
-                            <article
-                                key={doctor.doctorId}
-                                className={`hours-doctor-card ${isSelected ? "selected" : ""} ${doctor.employmentType}`.trim()}
-                            >
-                                <button
-                                    type="button"
-                                    className="hours-doctor-card-open"
-                                    onClick={() => selectDoctor(doctor.doctorId)}
-                                    aria-expanded={isSelected}
-                                    title={isSelected ? "Fechar histórico" : "Abrir histórico completo"}
-                                >
-                                    <div className="hours-doctor-card-head">
-                                        <div>
-                                            <strong>{doctor.doctorName}</strong>
-                                            {doctor.displayName && doctor.displayName !== doctor.doctorName ? (
-                                                <span>{doctor.displayName}</span>
-                                            ) : null}
-                                        </div>
-                                        <span className={`hours-balance-pill ${shiftBalanceClass(doctor.balanceMinutes)}`} title="Saldo total do banco (efetivo)">
-                                            {formatSignedMinutes(doctor.balanceMinutes)}
-                                        </span>
-                                    </div>
-
-                                    <div className="hours-doctor-badges">
-                                        <span className={`reports-badge ${doctor.employmentType === "estatutario" ? "warn" : "neutral"}`}>
-                                            {formatEmploymentType(doctor.employmentType)}
-                                        </span>
-                                        <span className="reports-badge neutral">{doctor.shiftCount} plantões</span>
-                                        {doctor.lateArrivalCount > 0 && (
-                                            <span className="reports-badge danger">{doctor.lateArrivalCount} {doctor.lateArrivalCount === 1 ? "atraso" : "atrasos"}</span>
-                                        )}
-                                        {bonusShifts > 0 && (
-                                            <span className="reports-badge ok">{bonusShifts} bônus</span>
-                                        )}
-                                        {doctor.correctionCount > 0 && (
-                                            <span className="reports-badge warn">{doctor.correctionCount} {doctor.correctionCount === 1 ? "correção" : "correções"}</span>
-                                        )}
-                                        {pending?.direction === "bonus" && (
-                                            <span className="reports-badge ok">pagar {pending.pendingUnits}×12h</span>
-                                        )}
-                                        {pending?.direction === "penalty" && (
-                                            <span className="reports-badge danger">descontar {pending.pendingUnits}×12h</span>
-                                        )}
-                                        {rows && rows.payrollPendingMinutes > 0 && (
-                                            <span className="reports-badge warn" title={`Meses com desconto em folha: ${rows.payrollPendingMonths.map(formatMonthShort).join(", ")}`}>
-                                                folha {formatPayrollMinutes(rows.payrollPendingMinutes)}
-                                            </span>
-                                        )}
-                                        {pending?.inconsistency && (
-                                            <span className="reports-badge warn">revisar</span>
-                                        )}
-                                    </div>
-                                </button>
-
-                                {/* Um resumo por mês (crescente): plantões · atrasos · bônus · saldo.
-                                    O plantão a plantão fica no histórico do médico — clicar no mês
-                                    abre o detalhe já naquele mês. Renderizar as milhares de linhas
-                                    de plantão aqui era o que pesava a página. */}
-                                <div className="hours-month-strip">
-                                    {!rows || rows.groups.length === 0 ? (
-                                        <p className="hours-month-strip-empty">
-                                            {focusedMonth ? `Sem plantão em ${monthLabel}.` : "Sem plantão apurado pela aplicação."}
-                                        </p>
-                                    ) : (
-                                        <ul className="hours-month-shifts">
-                                            {rows.groups.map((group) => (
-                                                <li key={group.monthKey}>
+                    ) : (
+                        /* Tabela, não 188 cartões abertos: a página tinha 63 mil px.
+                           Uma linha por médico; os meses abrem sob demanda na seta
+                           e o plantão a plantão segue no painel ao lado (nome). */
+                        <table className="hours-directory-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col" className="medico">Médico</th>
+                                    <th scope="col" className="extra">Vínculo</th>
+                                    <th scope="col" className="num extra">Plantões</th>
+                                    <th scope="col" className="num extra">Atrasos</th>
+                                    <th scope="col" className="num extra" title="Plantões com crédito de hora — não é o plantão verde pago">Bônus</th>
+                                    <th scope="col" className="num extra">Correções</th>
+                                    <th scope="col">Pendência</th>
+                                    <th scope="col" className="num">Saldo</th>
+                                    <th scope="col" className="meses"><span className="sr-only">Meses</span></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredDoctors.map((doctor) => {
+                                    const bonusShifts = countBonusShifts(doctor);
+                                    const pending = pendingByDoctor.get(doctor.doctorId);
+                                    const rows = rowsByDoctor.get(doctor.doctorId);
+                                    const isSelected = selectedDoctorId === doctor.doctorId;
+                                    const mesesAbertos = monthsOpenFor.has(doctor.doctorId);
+                                    return (
+                                        <Fragment key={doctor.doctorId}>
+                                            <tr className={`hours-directory-row ${isSelected ? "selected" : ""} ${doctor.employmentType}`.trim()}>
+                                                <th scope="row" className="medico">
                                                     <button
                                                         type="button"
-                                                        className={`hours-month-shift-row ${shiftBalanceClass(group.balanceMinutes)}`}
-                                                        onClick={() => openDoctorAtShift(doctor.doctorId, monthAnchorId(doctor.doctorId, group.monthKey))}
-                                                        title={`${group.shiftCount} ${group.shiftCount === 1 ? "plantão" : "plantões"}${group.delayCount > 0 ? ` · ${group.delayCount} ${group.delayCount === 1 ? "atraso" : "atrasos"}` : ""}${group.bonusCount > 0 ? ` · ${group.bonusCount} bônus` : ""}${group.payrollMinutes > 0 ? ` · folha ${formatPayrollMinutes(group.payrollMinutes)}` : ""} — abrir no histórico`}
+                                                        className="hours-directory-open"
+                                                        onClick={() => selectDoctor(doctor.doctorId)}
+                                                        aria-expanded={isSelected}
+                                                        title={isSelected ? "Fechar histórico" : "Abrir histórico completo"}
                                                     >
-                                                        <span className="hours-month-shift-date">{formatMonthShort(group.monthKey)}</span>
-                                                        <span className="hours-month-shift-turn">{group.shiftCount} {group.shiftCount === 1 ? "plantão" : "plantões"}</span>
-                                                        <span className="hours-month-shift-place">
-                                                            {group.delayCount > 0 ? `${group.delayCount} atr.` : ""}{group.delayCount > 0 && group.bonusCount > 0 ? " · " : ""}{group.bonusCount > 0 ? `${group.bonusCount} bônus` : ""}
-                                                        </span>
-                                                        <span className={`hours-balance-pill ${shiftBalanceClass(group.balanceMinutes)}`} title="Saldo dos plantões do mês">
-                                                            {formatSignedMinutes(group.balanceMinutes)}
-                                                        </span>
+                                                        <strong>{doctor.doctorName}</strong>
+                                                        {doctor.displayName && doctor.displayName !== doctor.doctorName ? (
+                                                            <span>{doctor.displayName}</span>
+                                                        ) : null}
                                                     </button>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
-                                </div>
-                            </article>
-                        );
-                    })}
+                                                </th>
+                                                <td className="extra">
+                                                    <span className={`reports-badge ${doctor.employmentType === "estatutario" ? "warn" : "neutral"}`}>
+                                                        {formatEmploymentType(doctor.employmentType)}
+                                                    </span>
+                                                </td>
+                                                <td className="num extra">{doctor.shiftCount}</td>
+                                                <td className={`num extra ${doctor.lateArrivalCount > 0 ? "atencao" : "zero"}`}>{doctor.lateArrivalCount}</td>
+                                                <td className={`num extra ${bonusShifts > 0 ? "" : "zero"}`}>{bonusShifts}</td>
+                                                <td className={`num extra ${doctor.correctionCount > 0 ? "" : "zero"}`}>{doctor.correctionCount}</td>
+                                                <td className="pendencia">
+                                                    {pending?.direction === "bonus" && (
+                                                        <span className="reports-badge ok">pagar {pending.pendingUnits}×12h</span>
+                                                    )}
+                                                    {pending?.direction === "penalty" && (
+                                                        <span className="reports-badge danger">descontar {pending.pendingUnits}×12h</span>
+                                                    )}
+                                                    {rows && rows.payrollPendingMinutes > 0 && (
+                                                        <span className="reports-badge warn" title={`Meses com desconto em folha: ${rows.payrollPendingMonths.map(formatMonthShort).join(", ")}`}>
+                                                            folha {formatPayrollMinutes(rows.payrollPendingMinutes)}
+                                                        </span>
+                                                    )}
+                                                    {pending?.inconsistency && (
+                                                        <span className="reports-badge warn">revisar</span>
+                                                    )}
+                                                </td>
+                                                <td className="num">
+                                                    <span className={`hours-balance-pill ${shiftBalanceClass(doctor.balanceMinutes)}`} title="Saldo total do banco (efetivo)">
+                                                        {formatSignedMinutes(doctor.balanceMinutes)}
+                                                    </span>
+                                                </td>
+                                                <td className="meses">
+                                                    <button
+                                                        type="button"
+                                                        className="hours-directory-meses"
+                                                        onClick={() => toggleMonthsFor(doctor.doctorId)}
+                                                        aria-expanded={mesesAbertos}
+                                                        aria-label={mesesAbertos ? "Esconder os meses" : "Ver mês a mês"}
+                                                        title={mesesAbertos ? "Esconder os meses" : "Ver mês a mês"}
+                                                    >
+                                                        {mesesAbertos ? <ChevronUp size={16} aria-hidden /> : <ChevronDown size={16} aria-hidden />}
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                            {mesesAbertos ? (
+                                                <tr className="hours-directory-months">
+                                                    <td colSpan={9}>
+                                                        {!rows || rows.groups.length === 0 ? (
+                                                            <p className="hours-month-strip-empty">
+                                                                {focusedMonth ? `Sem plantão em ${monthLabel}.` : "Sem plantão apurado pela aplicação."}
+                                                            </p>
+                                                        ) : (
+                                                            <ul className="hours-month-shifts">
+                                                                    {rows.groups.map((group) => (
+                                                                        <li key={group.monthKey}>
+                                                                            <button
+                                                                                type="button"
+                                                                                className={`hours-month-shift-row ${shiftBalanceClass(group.balanceMinutes)}`}
+                                                                                onClick={() => openDoctorAtShift(doctor.doctorId, monthAnchorId(doctor.doctorId, group.monthKey))}
+                                                                                title={`${group.shiftCount} ${group.shiftCount === 1 ? "plantão" : "plantões"}${group.delayCount > 0 ? ` · ${group.delayCount} ${group.delayCount === 1 ? "atraso" : "atrasos"}` : ""}${group.bonusCount > 0 ? ` · ${group.bonusCount} bônus` : ""}${group.payrollMinutes > 0 ? ` · folha ${formatPayrollMinutes(group.payrollMinutes)}` : ""} — abrir no histórico`}
+                                                                            >
+                                                                                <span className="hours-month-shift-date">{formatMonthShort(group.monthKey)}</span>
+                                                                                <span className="hours-month-shift-turn">{group.shiftCount} {group.shiftCount === 1 ? "plantão" : "plantões"}</span>
+                                                                                <span className="hours-month-shift-place">
+                                                                                    {group.delayCount > 0 ? `${group.delayCount} atr.` : ""}{group.delayCount > 0 && group.bonusCount > 0 ? " · " : ""}{group.bonusCount > 0 ? `${group.bonusCount} bônus` : ""}
+                                                                                </span>
+                                                                                <span className={`hours-balance-pill ${shiftBalanceClass(group.balanceMinutes)}`} title="Saldo dos plantões do mês">
+                                                                                    {formatSignedMinutes(group.balanceMinutes)}
+                                                                                </span>
+                                                                            </button>
+                                                                        </li>
+                                                                    ))}
+                                                                </ul>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ) : null}
+                                        </Fragment>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    )}
                 </div>
 
                 {selectedDoctorId && !selectedDoctor ? (
