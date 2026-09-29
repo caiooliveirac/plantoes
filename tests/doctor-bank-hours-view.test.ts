@@ -206,6 +206,22 @@ describe("conta do saldo", () => {
         assert.match(view.headline.title, /^Faltam 3h22 para você poder trocar/);
     });
 
+    it("PJ com dívida até abr/2025: régua só com o saldo de mai/2025 em diante", () => {
+        // −5h antes de mai/2025, +10h depois: saldo +5h, régua +10h, troca a 7h.
+        const view = buildDoctorBankHoursView({
+            doctor: medico({
+                legacy: { preMay2025Minutes: -300, spreadsheetPeriodMinutes: 600, totalMinutes: 300 } as BankHoursDoctorHistory["legacy"],
+                balanceMinutes: 300,
+            }),
+            bonusEligibleMinutes: 300, penaltyEligibleMinutes: 600, competenciaAberta: true, monthKey: "2026-09", now: DEPOIS_DE_12H,
+        });
+        assert.equal(view.saldoMinutes, 300);
+        assert.equal(view.reguaMinutes, 600);
+        assert.equal(view.oldDebtMinutes, -300);
+        assert.equal(view.headline.title, "Faltam 7h para você poder trocar por 1 plantão extra.");
+        assert.doesNotMatch(view.headline.detail, /dívida/);
+    });
+
     it("PJ com +12h elegível: pode trocar", () => {
         const view = buildDoctorBankHoursView({
             doctor: medico({ balanceMinutes: 800 }),

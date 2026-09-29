@@ -148,7 +148,13 @@ export function BancoDeHorasMedico({ view, troca }: { view: DoctorBankHoursView;
                     <p className={`bhm-num bhm-saldo-valor ${tom(view.saldoMinutes)}`}>{formatSignedDuration(view.saldoMinutes)}</p>
                     <p className="bhm-nota">Somado desde o início, não só deste mês.</p>
                 </div>
-                <Regua saldo={view.saldoMinutes} estatutario={view.isStatutory} />
+                <Regua saldo={view.reguaMinutes} estatutario={view.isStatutory} />
+                {view.oldDebtMinutes < 0 ? (
+                    <p className="bhm-nota">
+                        Lembre que até 30/04/2025 você tinha acumulado dívida de {formatDuration(view.oldDebtMinutes)} com
+                        o serviço e, para ter de fato hora extra, precisa abater esse saldo negativo.
+                    </p>
+                ) : null}
                 <div className={`bhm-frase ${view.headline.tone}`}>
                     <p><strong>{view.headline.title}</strong></p>
                     <p className="bhm-frase-sub">{view.headline.detail}</p>
