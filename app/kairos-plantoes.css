@@ -4249,6 +4249,42 @@
 .pagina-kairos .chief-payable-bank-chip em,
 .pagina-kairos .chief-payable-bank-chip span { text-transform: none; letter-spacing: 0; }
 
+/* nome curto (o que o médico escolheu para os painéis): só no celular */
+.pagina-kairos .chief-payable-nome-curto { display: none; }
+
+/* ── Celular: coluna Médico estreita (29/09/2026) ─────────────────────────
+   A coluna fixa é a largura que sobra para percorrer os dias. Fica o nome
+   curto, quebrando linha passado de ~12 caracteres; sai o selo de vínculo,
+   o "assinar" (está no modal, ao tocar no nome) e as palavras por extenso
+   dos chips — ficam os números. "só CRU/USA" desce para baixo do nome. */
+@media (max-width: 760px) {
+    .pagina-kairos .chief-payable-table th.doctor,
+    .pagina-kairos .chief-payable-table td.doctor {
+        width: 104px;
+        min-width: 104px;
+        max-width: 104px;
+        padding: 6px;
+    }
+    .pagina-kairos .chief-payable-table .chief-payable-nome-completo,
+    .pagina-kairos .chief-payable-table .chief-payable-extenso,
+    .pagina-kairos .chief-payable-table .chief-payable-attest-toggle,
+    .pagina-kairos .chief-payable-table .chief-payable-profile-badge.pj,
+    .pagina-kairos .chief-payable-table .chief-payable-profile-badge.estatutario {
+        display: none;
+    }
+    .pagina-kairos .chief-payable-table .chief-payable-nome-curto { display: inline; }
+    .pagina-kairos .chief-payable-doctor-cell { gap: 3px 4px; }
+    .pagina-kairos .chief-payable-doctor-main { flex-wrap: wrap; gap: 3px 4px; }
+    .pagina-kairos .chief-payable-doctor-button { flex-basis: 100%; overflow: visible; }
+    .pagina-kairos .chief-payable-table td.doctor strong {
+        font-size: 12.5px;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+    }
+}
+
 /* ── Faixas de comando do Fechamento e do Banco de horas (29/09/2026) ──────
    Números no tamanho do texto (resumo, não vitrine) e rótulos, filtros e datas
    em frase normal: a caixa alta com tracking largo e o capitalize ("Abr De
