@@ -69,3 +69,33 @@ test("toda classe da fila de saídas usada no JSX tem regra no globals.css", () 
 
     assert.deepEqual(missing, [], `classes da fila de saídas sem CSS: ${missing.join(", ")}`);
 });
+
+/**
+ * O painel é um motion.div: o framer-motion grava `transform` inline (none em
+ * repouso) e apaga qualquer transform do CSS. Centrado com translate(-50%,-50%)
+ * o canto superior esquerdo caía no meio da tela — no celular os botões de
+ * "Registrar saída" e "Retirar" ficavam fora, sem zoom nem rolagem que salvasse.
+ */
+test("painel de modal do quadro centra sem transform e rola por dentro", () => {
+    const rule = /^\.board-modal-panel,\s*\n\.board-modal\s*\{([^}]*)\}/m.exec(css);
+    assert.ok(rule, "regra .board-modal-panel, .board-modal não encontrada");
+    assert.doesNotMatch(rule[1], /(^|[\s;])transform\s*:/, "transform no CSS é sobrescrito pelo framer-motion");
+    assert.match(rule[1], /max-height\s*:/);
+    assert.match(rule[1], /overflow-y\s*:\s*auto/);
+});
+
+/**
+ * Portal sem container vai para o <body>, fora de .pagina-kairos: o modal perde
+ * os tokens do tema e nasce preto sobre o quadro claro.
+ */
+test("modal do quadro com motion monta o portal dentro de .pagina-kairos", () => {
+    const semContainer = collectTsx(join(root, "components"))
+        .filter((file) => {
+            const source = readFileSync(file, "utf8");
+            return /className="board-modal(-panel)?[\s"]/.test(source) && source.includes("<Dialog.Portal");
+        })
+        .filter((file) => !/<Dialog\.Portal[^>]*container=\{portalContainer\}/.test(readFileSync(file, "utf8")))
+        .map((file) => file.slice(root.length + 1));
+
+    assert.deepEqual(semContainer, [], `portal de modal fora de .pagina-kairos: ${semContainer.join(", ")}`);
+});

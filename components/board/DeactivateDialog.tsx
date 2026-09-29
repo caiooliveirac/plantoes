@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { modalBackdrop, modalPanel } from "@/lib/board/motion";
+import { useModalPortalContainer } from "@/lib/board/use-modal-portal-container";
 import { classifyEarlyDeparture, isEarlyDepartureEligible } from "@/modules/operational/early-departure";
 import { buildEarlyDepartureCreditNote, buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 
@@ -53,6 +54,7 @@ export function DeactivateDialog({
     onSaved,
 }: DeactivateDialogProps) {
     const router = useRouter();
+    const portalContainer = useModalPortalContainer();
     const [effectiveAt, setEffectiveAt] = useState(isoNowLocal());
     const [reason, setReason] = useState("");
     const [submitting, setSubmitting] = useState(false);
@@ -137,7 +139,7 @@ export function DeactivateDialog({
         <Dialog.Root open={open} onOpenChange={onOpenChange}>
             <AnimatePresence>
                 {open && (
-                    <Dialog.Portal forceMount>
+                    <Dialog.Portal forceMount container={portalContainer}>
                         <Dialog.Overlay asChild>
                             <motion.div
                                 className="board-modal-backdrop"
