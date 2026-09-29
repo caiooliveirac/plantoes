@@ -331,8 +331,10 @@ import {
     isMadrugadaMessage,
     isMadrugadaPendingData,
     MADRUGADA_PENDING_STATUS,
+    MADRUGADA_SD_ARRIVAL_GRACE_MS,
     parseMadrugadaCallbackData,
     resolveMadrugadaWindow,
+    resolveSdArrivalAfterMadrugada,
     selectMadrugadaCandidates,
     stripMadrugadaWord,
     type MadrugadaPendingData,
@@ -1249,7 +1251,9 @@ async function listTelegramDoctorOperationalOccupancies(doctorId: string) {
     const db = getDb();
     const [regulation, intervention] = await Promise.all([
         db.query.regulationOccupancies.findMany({
-            where: eq(regulationOccupancies.doctorId, doctorId),
+            // Cobertura de madrugada não é plantão: nunca é fonte de continuidade
+            // (o SD seguinte herdaria a chegada das 03:00) — docs/madrugada.md.
+            where: and(eq(regulationOccupancies.doctorId, doctorId), eq(regulationOccupancies.madrugadaCobertura, false)),
         }),
         db.query.interventionOccupancies.findMany({
             where: eq(interventionOccupancies.doctorId, doctorId),
@@ -1966,7 +1970,26 @@ export function resolveActiveOccupancyCoverageFloor(referenceAt: Date): Date {
     return new Date(referenceAt.getTime() - ACTIVE_OCCUPANCY_GRACE_MS);
 }
 
-async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new Date()): Promise<{
+// Madrugada (docs/madrugada.md): a cobertura de quem avisa, se ainda vale ou
+// terminou há no máximo 1h — decide a chegada do SD (07:00) e o ramal de
+// "Fulana continua".
+async function findRecentMadrugadaCoverage(doctorId: string, eventAt: Date) {
+    return getDb().query.regulationOccupancies.findFirst({
+        where: and(
+            eq(regulationOccupancies.doctorId, doctorId),
+            eq(regulationOccupancies.madrugadaCobertura, true),
+            lte(regulationOccupancies.startedAt, eventAt),
+            gte(regulationOccupancies.scheduledEndAt, new Date(eventAt.getTime() - MADRUGADA_SD_ARRIVAL_GRACE_MS)),
+        ),
+        orderBy: [desc(regulationOccupancies.scheduledEndAt)],
+        columns: { postId: true, scheduledEndAt: true, endedAt: true },
+    });
+}
+
+async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new Date(), options: {
+    /** Chegada: cobertura de madrugada não é plantão de origem (docs/madrugada.md). */
+    ignoreMadrugada?: boolean;
+} = {}): Promise<{
     sector: "REGULATION" | "INTERVENTION";
     baseCode: string;
     occupancyId: string;
@@ -1994,6 +2017,7 @@ async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new
             eq(regulationOccupancies.doctorId, doctorId),
             isNull(regulationOccupancies.endedAt),
             gte(regulationOccupancies.scheduledEndAt, coverageFloor),
+            options.ignoreMadrugada ? eq(regulationOccupancies.madrugadaCobertura, false) : undefined,
         ))
         .orderBy(desc(regulationOccupancies.startedAt))
         .limit(1);
@@ -2180,7 +2204,7 @@ async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageT
     }
 
     const eventAt = resolveTelegramEventTime(referenceAt, rawParsed.arrivalTime);
-    const activeOcc = await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt);
+    const activeOcc = await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt, { ignoreMadrugada: true });
     let recoveredSector: "REGULATION" | "INTERVENTION" | null = activeOcc?.sector ?? null;
     let recoveredBaseCode: string | null = activeOcc?.baseCode ?? null;
     let recoveredShiftLabel: string | null = activeOcc?.shiftLabel ?? null;
@@ -2192,11 +2216,16 @@ async function resolveContinuationWithoutBase(rawParsed: ParsedMessage, messageT
             eventAt,
         });
         const source = continuityContext?.source;
-        if (!source) {
+        // Madrugada (docs/madrugada.md): "Fulana continua" de quem cobria — o
+        // ramal é o da cobertura, e vira SD ali (sem herdar o rótulo dela).
+        const madrugada = source ? null : await findRecentMadrugadaCoverage(resolvedDoctor.id, eventAt);
+        if (madrugada) {
+            const post = await getDb().query.regulationPosts.findFirst({ where: eq(regulationPosts.id, madrugada.postId) });
+            recoveredSector = "REGULATION";
+            recoveredBaseCode = post?.code ?? null;
+        } else if (!source) {
             return null;
-        }
-
-        if (source.domain === "regulation") {
+        } else if (source.domain === "regulation") {
             const sourceReg = await getDb().query.regulationOccupancies.findFirst({
                 where: eq(regulationOccupancies.id, source.occupancyId),
             });
@@ -9334,9 +9363,21 @@ async function applyParsedEntry(params: {
     // Back-correction guard: HH:mm > 4h no futuro em chegadas vira HH:mm de
     // ontem (ver normalizeArrivalEventTime). Saidas e continuacoes/reassignments
     // mantem o evento como veio porque preannouncement de saida noturna e legitimo.
-    const eventAt = parsed.isDeparture || parsed.isContinuation || parsed.isReassignment
+    const messageEventAt = parsed.isDeparture || parsed.isContinuation || parsed.isReassignment
         ? params.eventAt
         : normalizeArrivalEventTime(params.eventAt, referenceAt);
+    const activeOcc = !parsed.isDeparture
+        ? await findActiveOccupancyByDoctorId(resolvedDoctor.id, messageEventAt, { ignoreMadrugada: true })
+        : null;
+    // Madrugada (docs/madrugada.md): quem cobriu até 07:00 e avisa até 08:00
+    // estava lá — a chegada é 07:00. Só a 1ª chegada (sem plantão aberto):
+    // remanejo e reenvio seguem a hora do aviso.
+    const eventAt = parsed.isDeparture || activeOcc
+        ? messageEventAt
+        : resolveSdArrivalAfterMadrugada({
+            eventAt: messageEventAt,
+            coverage: await findRecentMadrugadaCoverage(resolvedDoctor.id, messageEventAt),
+        });
 
     // PIAM auto-routing: doctors marked with preferredOperationalRole=PIAM are always
     // allocated to the PIAM regulation slot on arrival, regardless of the code they typed.
@@ -9356,10 +9397,6 @@ async function applyParsedEntry(params: {
             originalCode: piamRouting.originalCode,
         });
     }
-
-    const activeOcc = !parsed.isDeparture
-        ? await findActiveOccupancyByDoctorId(resolvedDoctor.id, eventAt)
-        : null;
 
     // Decisão pura: arrival-classification.ts (classifyArrivalRoute).
     const route = classifyArrivalRoute({ parsed, activeOcc, eventAt });
@@ -9516,6 +9553,10 @@ async function applyParsedEntry(params: {
                     eq(regulationOccupancies.postId, post.id),
                     eq(regulationOccupancies.doctorId, resolvedDoctor.id),
                     isNull(regulationOccupancies.endedAt),
+                    // "SD"/"continua" no ramal da própria madrugada não estica a
+                    // cobertura (sairia sem pagamento): é chegada do SD, que a
+                    // encerra (startRegulationOccupancy) — docs/madrugada.md.
+                    eq(regulationOccupancies.madrugadaCobertura, false),
                 ),
                 orderBy: [desc(regulationOccupancies.boardStartedAt), desc(regulationOccupancies.startedAt)],
             });
@@ -10114,6 +10155,7 @@ async function applyParsedEntry(params: {
         piamAutoAllocated: piamRouting.applied,
         piamOriginalCode: piamRouting.originalCode,
         forwardContinuityPrompt,
+        madrugadaSdArrival: eventAt.getTime() !== messageEventAt.getTime(),
     };
 }
 
@@ -10462,6 +10504,8 @@ async function sendSuccessReply(
     // de chegada genuína (não-PIAM) usa o texto fixo que avisa/aplica a hora do aviso.
     messageReferenceAt?: Date,
     declaredArrivalTime?: string | null,
+    // Madrugada (docs/madrugada.md): a chegada gravada é 07:00 porque ela emendou.
+    madrugadaSdArrival = false,
 ) {
     const time = (replyTimeAt ?? eventAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Sao_Paulo" });
     const replyKind = resolveTelegramSuccessReplyKind({
@@ -10488,6 +10532,7 @@ async function sendSuccessReply(
             declaredArrivalTime,
             isPcoverage: replyKind === "arrival_p_recorded",
             recordedArrivalAt: replyTimeAt ?? null,
+            keptEarlierReason: madrugadaSdArrival ? "emendou a madrugada, sem atraso" : undefined,
         })
         : pickTelegramReply(
             replyKind,
@@ -10644,6 +10689,7 @@ export function buildArrivalRuleReply(params: {
     // Chegada efetivamente gravada. Quando é anterior a este aviso (reenvio, 1ª
     // tentativa), é ela que a resposta mostra.
     recordedArrivalAt?: Date | null;
+    keptEarlierReason?: string;
 }) {
     const msgTime = formatTelegramReplyTime(params.messageReferenceAt);
     const recordedTime = params.recordedArrivalAt ? formatTelegramReplyTime(params.recordedArrivalAt) : null;
@@ -10666,7 +10712,7 @@ export function buildArrivalRuleReply(params: {
     }
 
     if (keptEarlier) {
-        return `✅ ${params.name} na ${params.base} desde ${recordedTime} — chegada mantida pelo primeiro aviso${pNote}`;
+        return `✅ ${params.name} na ${params.base} desde ${recordedTime} — ${params.keptEarlierReason ?? "chegada mantida pelo primeiro aviso"}${pNote}`;
     }
 
     // FASE 2 — confirmação direta, sem sermão: vale a hora do aviso e ponto.
@@ -14559,6 +14605,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     messageText: message.text,
                 });
                 const { occupancyId, successKind, treatedAsContinuation, replyTimeAt, autoReactivated, effectiveShiftType, reassignedFrom, assumedHalfShift, continuationFrom, extendedLongShift, piamAutoAllocated, piamOriginalCode, displacedDoctorName, forwardContinuityPrompt } = applyResult;
+                const madrugadaSdArrival = (applyResult as { madrugadaSdArrival?: boolean }).madrugadaSdArrival ?? false;
                 const alreadyPresent = (applyResult as { alreadyPresent?: PiamAlreadyPresentInfo | null }).alreadyPresent ?? null;
 
                 if (message.from?.id) {
@@ -14615,6 +14662,7 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     displacedDoctorName,
                     messageReferenceAt,
                     firstParsed.arrivalTime,
+                    madrugadaSdArrival,
                 );
                 await maybeSendContinuityForwardPrompt(message.chat.id, message.message_id, forwardContinuityPrompt);
 

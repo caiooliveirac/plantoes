@@ -613,7 +613,13 @@ async function resolveTurnoContinuityGroupId(tx: Executor, params: {
     const since = new Date(params.arrivalAt.getTime() - 36 * 60 * 60 * 1000);
     const [reg, intv] = await Promise.all([
         tx.query.regulationOccupancies.findMany({
-            where: and(eq(regulationOccupancies.doctorId, params.doctorId), gte(regulationOccupancies.startedAt, since)),
+            // Cobertura de madrugada não é turno do médico: o SD seguinte não
+            // entra no grupo dela (docs/madrugada.md).
+            where: and(
+                eq(regulationOccupancies.doctorId, params.doctorId),
+                gte(regulationOccupancies.startedAt, since),
+                eq(regulationOccupancies.madrugadaCobertura, false),
+            ),
             columns: { id: true, startedAt: true, endedAt: true, continuityGroupId: true },
             orderBy: [desc(regulationOccupancies.startedAt)],
             limit: 5,

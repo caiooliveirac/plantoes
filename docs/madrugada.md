@@ -54,6 +54,32 @@ natural de quem cobre.
 - quem **chegar depois** da cobertura naquele ramal assume normalmente;
 - só é recusada uma **segunda cobertura** no mesmo ramal ao mesmo tempo.
 
+## Quem cobre e segue no SD
+
+Quem veio cobrir a madrugada pode continuar no plantão diurno. Basta o aviso
+comum do SD — no ramal que for, inclusive o da madrugada — ou "continua" (com
+ou sem ramal; sem ramal, fica no ramal da madrugada). Regra do dono, 29/09/2026
+(caso 1362):
+
+- a madrugada **se encerra** e nasce um **SD pagável**, com banco de horas pela
+  régua normal e o papel do SD daquele ramal; a marca de madrugada não passa
+  para ele;
+- **chegada do SD**: a hora do aviso; se a madrugada foi até o fim (07:00) e o
+  aviso vem até **08:00**, é **07:00** — ela estava lá. Depois das 08:00 vale
+  a hora do aviso (com atraso). **Nunca** a chegada das 03:00;
+- a madrugada **não é continuidade**: o bot não a usa como plantão de origem
+  (remanejo, "continua", âncora de chegada) e o SD não entra no grupo dela;
+- coberto e dono do ramal seguem as regras de sempre: o coberto não perde o SN;
+  se ela ficar no ramal de outro titular do dia, vale a tomada normal quando
+  ele chegar;
+- **sem aviso, sem SD**: a madrugada expira 07:00 e nada nasce — o app não
+  conhece a escala.
+
+Onde: `applyParsedEntry` e `resolveContinuationWithoutBase`
+(`modules/telegram/service.ts`, filtros de madrugada + `findRecentMadrugadaCoverage`),
+`resolveSdArrivalAfterMadrugada` (`modules/telegram/madrugada.ts`, regra das
+07:00) e `resolveTurnoContinuityGroupId` (`modules/regulation/service.ts`).
+
 ## Como é gravado
 
 `regulation_occupancies` ganhou duas colunas (migration `0051`):
@@ -79,5 +105,6 @@ Onde a exclusão está aplicada (e onde mexer se nascer leitor novo de pagamento
 - `modules/regulation/service.ts` — a cobertura nunca é origem de continuidade
   implícita de um plantão pagável.
 
-Guardas: `tests/madrugada.test.ts` (regras puras) e `tests/madrugada-db.test.ts`
-(quadro, pagamento, banco de horas e o fluxo do bot contra Postgres real).
+Guardas: `tests/madrugada.test.ts` (regras puras), `tests/madrugada-db.test.ts`
+(quadro, pagamento, banco de horas e o fluxo do bot contra Postgres real) e
+`tests/madrugada-sd-db.test.ts` (madrugada que segue no SD, pelo bot).
