@@ -1,5 +1,6 @@
 "use client";
 
+import { Moon, Sun } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -50,10 +51,10 @@ function ChaveTema() {
     return (
         <span className="chave-tema" role="group" aria-label="Tema da interface">
             <button type="button" aria-pressed={tema === "claro"} onClick={() => aplicar("claro")}>
-                ☀️ Claro
+                <Sun size={13} aria-hidden /> Claro
             </button>
             <button type="button" aria-pressed={tema === "escuro"} onClick={() => aplicar("escuro")}>
-                🌙 Escuro
+                <Moon size={13} aria-hidden /> Escuro
             </button>
         </span>
     );
@@ -63,8 +64,11 @@ export function KairosTopo({
     titulo,
     abas,
     extra,
+    tituloComoH1 = false,
 }: {
     titulo: string;
+    /** O título da barra é o h1 da página — para telas que não têm outro. */
+    tituloComoH1?: boolean;
     /** Sem abas (painel do médico via link do bot) a barra mostra só marca + tema. */
     abas?: KairosAba[];
     /** Conteúdo extra encostado à direita (ex.: menu ⋯ existente da tela). */
@@ -75,7 +79,11 @@ export function KairosTopo({
         <nav className="k-topo" aria-label="Navegação do plantões">
             <span className="k-topo-brand">
                 <span className="k-topo-eyebrow">Plantões · SAMU 192 Salvador</span>
-                <span className="k-topo-titulo">{titulo}</span>
+                {tituloComoH1 ? (
+                    <h1 className="k-topo-titulo">{titulo}</h1>
+                ) : (
+                    <span className="k-topo-titulo">{titulo}</span>
+                )}
             </span>
             {abas && abas.length > 0 ? (
                 <div className="k-topo-abas">

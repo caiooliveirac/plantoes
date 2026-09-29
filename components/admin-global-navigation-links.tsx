@@ -13,15 +13,15 @@ export type AdminNavKey =
     | "board";
 
 const ADMIN_NAV_ITEMS: Array<{ key: AdminNavKey; href: string; label: string }> = [
-    { key: "payment-attestation", href: "/admin/payment-attestation", label: "Abrir atesto diario" },
+    { key: "payment-attestation", href: "/admin/payment-attestation", label: "Abrir atesto diário" },
     { key: "payment-closing", href: "/admin/payment-closing", label: "Abrir fechamento mensal" },
-    { key: "payment-allocation", href: "/admin/payment-allocation", label: "Ajustar alocacao" },
+    { key: "payment-allocation", href: "/admin/payment-allocation", label: "Ajustar alocação" },
     { key: "reports", href: "/admin/reports", label: "Abrir auditoria mensal" },
     { key: "slot-audit", href: "/admin/slot-audit", label: "Abrir auditoria de slots" },
     { key: "bank-hours", href: "/admin/bank-hours", label: "Abrir banco de horas" },
     { key: "chief-access", href: "/admin/chief-access", label: "Abrir acesso de chefia" },
     { key: "acessos", href: "/admin/acessos", label: "Abrir monitor de acessos" },
-    { key: "history", href: "/?view=history", label: "Abrir historico operacional" },
+    { key: "history", href: "/?view=history", label: "Abrir histórico operacional" },
     { key: "board", href: "/", label: "Voltar ao quadro" },
 ];
 

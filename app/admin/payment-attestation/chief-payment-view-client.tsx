@@ -1630,6 +1630,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
         <KairosTopo
             titulo="Fechamento de pagamento"
             abas={ABAS_ADMIN}
+            tituloComoH1
             extra={canManageClosing ? <CadastrarMedicoBotao /> : undefined}
         />
         {financialsPromise ? (
@@ -2111,12 +2112,12 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                             <tr>
                                 <th className="sticky-col doctor">Médico</th>
                                 {board.days.map((day) => <th key={day}>{day}</th>)}
-                                <th>Dia útil</th>
-                                <th>Fim de semana / feriado</th>
-                                <th>Total</th>
-                                <th>Valor semana</th>
-                                <th>Valor fim de semana / feriado</th>
-                                <th>Valor final</th>
+                                <th className="num">Dia útil</th>
+                                <th className="num">Fim de semana / feriado</th>
+                                <th className="num">Total</th>
+                                <th className="num" title="Valor dos plantões em dia útil">Valor dia útil</th>
+                                <th className="num">Valor fim de semana / feriado</th>
+                                <th className="num">Valor final</th>
                             </tr>
                         </thead>
 
@@ -2124,11 +2125,6 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                             <AnimatePresence mode="popLayout">
                                 <motion.tr
                                     key="disabled-row"
-                                    layout
-                                    initial={{ opacity: 0, y: 6 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -6 }}
-                                    transition={{ duration: 0.16 }}
                                     className="chief-payable-disabled-row"
                                 >
                                     <td className="sticky-col doctor">
@@ -2156,23 +2152,17 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                         );
                                     })}
 
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>{visibleDisabledTargets.length}</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>-</td>
+                                    <td className="num">-</td>
+                                    <td className="num">-</td>
+                                    <td className="num">{visibleDisabledTargets.length}</td>
+                                    <td className="num">-</td>
+                                    <td className="num">-</td>
+                                    <td className="num">-</td>
                                 </motion.tr>
 
                                 <motion.tr
                                     key="uncovered-row"
                                     ref={uncoveredRowRef}
-                                    layout
-                                    initial={{ opacity: 0, y: 6 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, y: -6 }}
-                                    transition={{ duration: 0.16 }}
                                     className="chief-payable-uncovered-row"
                                 >
                                     <td className="sticky-col doctor">
@@ -2198,13 +2188,12 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                         );
                                     })}
 
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>{visibleUncoveredTargets.length}</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>-</td>
-                                    <td>-</td>
+                                    <td className="num">-</td>
+                                    <td className="num">-</td>
+                                    <td className="num">{visibleUncoveredTargets.length}</td>
+                                    <td className="num">-</td>
+                                    <td className="num">-</td>
+                                    <td className="num">-</td>
                                 </motion.tr>
 
                                 {filteredDoctors.map((doctor, index) => {
@@ -2217,11 +2206,6 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                     return (
                                     <motion.tr
                                         key={doctor.doctorId}
-                                        layout
-                                        initial={{ opacity: 0, y: 6 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -6 }}
-                                        transition={{ duration: 0.2, delay: Math.min(index * 0.018, 0.18) }}
                                         className={[
                                             isDoctorAttested(doctor) ? "chief-payable-row-attested" : "",
                                             singleFunction ? "chief-payable-row-single-function" : "",
@@ -2267,7 +2251,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                             }}
                                                             disabled={!canManageClosing || attestBusyDoctorId === doctor.doctorId}
                                                         />
-                                                        <span>{isDoctorAttested(doctor) ? "✓ assinado" : "assinar"}</span>
+                                                        <span>{isDoctorAttested(doctor) ? "assinado" : "assinar"}</span>
                                                     </label>
                                                 ) : (
                                                     <span className="chief-payable-idle-badge" title={`Sem plantão em ${board.monthLabel} — a linha está aqui para abrir o modal (contrato, banco de horas, NF).`}>
@@ -2386,10 +2370,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                             className={`chief-payable-tag ${shift.shiftLabel === "SD" ? "sd" : "sn"} ${shift.source === "admin_extra" ? (shift.isChiefExtra ? "admin-chief" : shift.paymentUnit < 0 ? "admin-penalty" : "admin-extra") : ""} ${shift.paymentTag ? "half" : ""} ${isFlashTarget ? "flash" : ""}`.trim()}
                                                             title={shift.source === "admin_extra"
                                                                 ? `${shift.isChiefExtra ? "Plantão de chefia (não mexe no banco de horas)" : shift.paymentUnit < 0 ? "Punição banco de horas" : "Plantão extra (admin)"} · ${shift.tagCode} · ${shift.shiftLabel} · ${shift.doctorName}`
-                                                                : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · Meio Plantao" : ""}`}
-                                                            initial={{ opacity: 0, scale: 0.92 }}
-                                                            animate={{ opacity: 1, scale: 1 }}
-                                                            transition={{ duration: 0.15 }}
+                                                                : `${shift.targetCode}${shift.shiftLabel} · ${shift.doctorName}${shift.paymentTag ? " · meio plantão" : ""}`}
                                                             onClick={() => {
                                                                 setShiftActionError(null);
                                                                 setShiftActionDraft({
@@ -2413,7 +2394,8 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                                 const code = shift.source === "admin_extra"
                                                                     ? resolveExtraShiftChipCode(shift.extraKind)
                                                                     : shift.tagCode;
-                                                                return shift.paymentTag ? `${shift.paymentTag} ${code}` : code;
+                                                                // meio plantão: "½ CRU" — "MEIO CRU" alargava a coluna do dia
+                                                                return shift.paymentTag ? `½ ${code}` : code;
                                                             })()}
                                                         </motion.button>
                                                         );
@@ -2422,12 +2404,12 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                             </td>
                                         ))}
 
-                                        <td>{formatUnits(doctor.weekdayShiftCount)}</td>
-                                        <td>{formatUnits(doctor.weekendShiftCount)}</td>
-                                        <td>{formatUnits(doctor.total)}</td>
-                                        <td>{formatCurrency(doctor.weekdayDue)}</td>
-                                        <td>{formatCurrency(doctor.weekendDue)}</td>
-                                        <td className="chief-payable-final-value">{formatCurrency(doctor.totalDue)}</td>
+                                        <td className="num">{formatUnits(doctor.weekdayShiftCount)}</td>
+                                        <td className="num">{formatUnits(doctor.weekendShiftCount)}</td>
+                                        <td className="num">{formatUnits(doctor.total)}</td>
+                                        <td className="num">{formatCurrency(doctor.weekdayDue)}</td>
+                                        <td className="num">{formatCurrency(doctor.weekendDue)}</td>
+                                        <td className="num chief-payable-final-value">{formatCurrency(doctor.totalDue)}</td>
                                     </motion.tr>
                                     );
                                 })}
@@ -2435,11 +2417,8 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                 {filteredDoctors.length === 0 ? (
                                     <motion.tr
                                         key="empty"
-                                        initial={{ opacity: 0 }}
-                                        animate={{ opacity: 1 }}
-                                        exit={{ opacity: 0 }}
                                     >
-                                        <td className="chief-payable-empty" colSpan={board.days.length + 8}>
+                                        <td className="chief-payable-empty" colSpan={board.days.length + 7}>
                                             Nenhum médico encontrado com os filtros atuais.
                                         </td>
                                     </motion.tr>
