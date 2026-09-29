@@ -7,11 +7,12 @@ import { Command } from "cmdk";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Calendar, Check, Search, Shield } from "lucide-react";
 import { modalBackdrop } from "@/lib/board/motion";
+import { resolveDepartureAutonomy } from "@/modules/operational/departure-autonomy";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
 
 export interface CommandPaletteProps {
     pendingDepartures: PendingDepartureConfirmation[];
-    onConfirm: (pending: PendingDepartureConfirmation) => Promise<unknown> | void;
+    onConfirm: (pending: PendingDepartureConfirmation, outcome: "full_shift" | null) => Promise<unknown> | void;
     onOpenVerifier: (pending: PendingDepartureConfirmation) => void;
 }
 
@@ -22,11 +23,6 @@ function isFromInputElement(target: EventTarget | null): boolean {
     return target.isContentEditable;
 }
 
-function formatLocalHourMinute(iso: string) {
-    const date = new Date(iso);
-    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
-
 /**
  * Cmd+K palette. Surfaces high-value actions for the chefe in one keystroke:
  *   - confirm next pending departure
@@ -35,7 +31,10 @@ function formatLocalHourMinute(iso: string) {
  *
  * Hotkeys outside the palette:
  *   - j / ↓: open verifier for first pending
- *   - Enter (while no input focused): quick-confirm first pending
+ *   - Enter (while no input focused): aceita a sugestão do primeiro pendente;
+ *     se ele pede decisão humana (dinheiro/contradição), abre o verificador —
+ *     antes o Enter confirmava qualquer um sem desfecho, e saída antecipada
+ *     confirmada assim sai paga inteira.
  *
  * All hotkeys are no-ops when the focused element is text input — protects the
  * existing monolith forms from accidental triggers.
@@ -74,7 +73,13 @@ export function CommandPalette({ pendingDepartures, onConfirm, onOpenVerifier }:
             }
             if (event.key === "Enter") {
                 event.preventDefault();
-                void onConfirmRef.current(pendingDepartures[0]);
+                const first = pendingDepartures[0];
+                const suggestion = resolveDepartureAutonomy(first).suggestion;
+                if (suggestion) {
+                    void onConfirmRef.current(first, suggestion.outcome);
+                } else {
+                    onOpenVerifierRef.current(first);
+                }
                 return;
             }
             if (event.key === "e" || event.key === "E") {
@@ -92,6 +97,13 @@ export function CommandPalette({ pendingDepartures, onConfirm, onOpenVerifier }:
     }, []);
 
     const groupedPending = useMemo(() => pendingDepartures.slice(0, 8), [pendingDepartures]);
+    // Só o que tem sugestão pronta confirma daqui; decisão humana vai pelo "Auditar".
+    const confirmable = useMemo(
+        () => groupedPending
+            .map((pending) => ({ pending, suggestion: resolveDepartureAutonomy(pending).suggestion }))
+            .filter((entry): entry is { pending: PendingDepartureConfirmation; suggestion: NonNullable<typeof entry.suggestion> } => entry.suggestion !== null),
+        [groupedPending],
+    );
 
     return (
         <Dialog.Root open={open} onOpenChange={(next) => { if (!next) close(); else setOpen(true); }}>
@@ -132,17 +144,17 @@ export function CommandPalette({ pendingDepartures, onConfirm, onOpenVerifier }:
 
                                             {groupedPending.length > 0 && (
                                                 <Command.Group heading="Saídas pendentes">
-                                                    {groupedPending.map((pending) => (
+                                                    {confirmable.map(({ pending, suggestion }) => (
                                                         <Command.Item
                                                             key={`confirm-${pending.occupancyId}`}
                                                             value={`confirmar ${pending.displayName ?? pending.doctorName} ${pending.targetCode}`}
                                                             onSelect={() => {
                                                                 close();
-                                                                void onConfirm(pending);
+                                                                void onConfirm(pending, suggestion.outcome);
                                                             }}
                                                         >
                                                             <Check size={14} strokeWidth={2.4} />
-                                                            <span>Confirmar saída — <strong>{pending.displayName ?? pending.doctorName}</strong> · {pending.targetCode} · {formatLocalHourMinute(pending.actualEndedAt)}</span>
+                                                            <span>{suggestion.label} — <strong>{pending.displayName ?? pending.doctorName}</strong> · {pending.targetCode}</span>
                                                         </Command.Item>
                                                     ))}
                                                     {groupedPending.map((pending) => (

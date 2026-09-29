@@ -3,11 +3,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Shield } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { PendingDepartureCard } from "@/components/board/PendingDepartureCard";
 import { fadeRise, staggerList } from "@/lib/board/motion";
 import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
-import { triagePendingDeparture } from "@/modules/operational/departure-triage";
+import { resolveDepartureAutonomy, type DepartureAutonomyResult } from "@/modules/operational/departure-autonomy";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
+import type { SystemConfirmedDeparture } from "@/services/departure-autonomy.service";
+
+function hourMinute(iso: string) {
+    const date = new Date(iso);
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
 
 export interface AuditRailProps {
     pendingDepartures: PendingDepartureConfirmation[];
@@ -26,6 +34,11 @@ const AUDIT_RAIL_COLLAPSED_STORAGE_KEY = "board-audit-rail-collapsed";
 
 export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps) {
     const quickConfirm = useQuickConfirmDeparture();
+    const router = useRouter();
+    // O que o sistema confirmou sozinho (docs/saidas-a-confirmar.md) e se o
+    // automático está ligado — o rail só promete "confirma sozinho" quando está.
+    const [system, setSystem] = useState<{ mode: "on" | "sombra" | "off"; items: SystemConfirmedDeparture[] } | null>(null);
+    const [undoingId, setUndoingId] = useState<string | null>(null);
     const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
     const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
     const seenIdsRef = useRef<Set<string>>(new Set());
@@ -96,36 +109,64 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
         [pendingDepartures, hiddenIds],
     );
 
-    // Triagem: casos com decisão de pagamento/banco em jogo vêm primeiro; o
-    // resto é rotina, confirmável em lote.
-    const { attention, routine } = useMemo(() => {
-        const attention: PendingDepartureConfirmation[] = [];
+    // Três classes (modules/operational/departure-autonomy.ts): o que precisa
+    // do chefe vem primeiro; depois o que tem sugestão pronta; a rotina por último.
+    const { assessments, decide, glance, routine } = useMemo(() => {
+        const assessments = new Map<string, DepartureAutonomyResult>();
+        const decide: PendingDepartureConfirmation[] = [];
+        const glance: PendingDepartureConfirmation[] = [];
         const routine: PendingDepartureConfirmation[] = [];
         for (const item of visible) {
-            const triage = triagePendingDeparture({
-                actualEndedAt: item.actualEndedAt,
-                scheduledStartAt: item.scheduledStartAt,
-                scheduledEndAt: item.scheduledEndAt,
-                startedAt: item.startedAt,
-                roleLabel: item.roleLabel,
-                delayMinutes: item.delayMinutes,
-                reasonCode: item.reasonCode,
-                occurrenceNumberMissing: item.occurrenceNumberMissing,
-                reasonOccurrenceCount30d: item.reasonOccurrenceCount30d,
-            });
-            (triage.attention ? attention : routine).push(item);
+            const assessment = resolveDepartureAutonomy(item);
+            assessments.set(item.occupancyId, assessment);
+            (assessment.autonomy === "decide" ? decide : assessment.autonomy === "glance" ? glance : routine).push(item);
         }
-        return { attention, routine };
+        return { assessments, decide, glance, routine };
     }, [visible]);
 
     const [confirmingAll, setConfirmingAll] = useState(false);
 
-    const handleQuickConfirm = useCallback(async (pending: PendingDepartureConfirmation) => {
+    const loadSystem = useCallback(async () => {
+        try {
+            const response = await fetch("/api/operational/auto-confirmed-departures");
+            if (response.ok) setSystem(await response.json());
+        } catch {
+            // Sem a lista o rail segue funcionando; só não mostra o Desfazer.
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!collapsed) void loadSystem();
+    }, [collapsed, pendingDepartures, loadSystem]);
+
+    const undoSystemConfirmation = useCallback(async (item: SystemConfirmedDeparture) => {
+        setUndoingId(item.occupancyId);
+        try {
+            const response = await fetch("/api/operational/auto-confirmed-departures", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ domain: item.domain, occupancyId: item.occupancyId }),
+            });
+            const body = await response.json().catch(() => ({})) as { error?: string };
+            if (!response.ok) throw new Error(body.error || "Falha ao desfazer.");
+            toast.success(`${item.doctorName}: volta para a fila, agora com você.`);
+            router.refresh();
+            await loadSystem();
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Falha ao desfazer.");
+        } finally {
+            setUndoingId(null);
+        }
+    }, [router, loadSystem]);
+
+    const automatic = system?.mode === "on";
+
+    const handleQuickConfirm = useCallback(async (pending: PendingDepartureConfirmation, outcome: "full_shift" | null = null) => {
         setBusyIds((current) => new Set(current).add(pending.occupancyId));
         // Optimistic removal — re-add on failure so the chefe doesn't lose the card.
         setHiddenIds((current) => new Set(current).add(pending.occupancyId));
 
-        const result = await quickConfirm(pending);
+        const result = await quickConfirm(pending, outcome);
         if (!result.ok) {
             setHiddenIds((current) => {
                 const next = new Set(current);
@@ -180,13 +221,13 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
 
             {collapsed ? null : visible.length === 0 ? (
                 <div className="board-audit-rail__empty">
-                    Nenhuma saída verbalizada aguardando revisão. Crédito flui automaticamente quando o sistema fecha por boundary ou você encerra direto.
+                    Nenhuma saída aguardando revisão.
                 </div>
             ) : (
                 <>
-                    {attention.length > 0 && (
+                    {decide.length > 0 && (
                         <>
-                            <div className="board-audit-rail__section">Precisa de decisão · {attention.length}</div>
+                            <div className="board-audit-rail__section">Precisa de você · {decide.length}</div>
                             <motion.ul
                                 className="board-audit-rail__list"
                                 variants={staggerList}
@@ -194,10 +235,41 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                                 animate="animate"
                             >
                                 <AnimatePresence initial={false}>
-                                    {attention.map((pending) => (
+                                    {decide.map((pending) => (
                                         <PendingDepartureCard
                                             key={pending.occupancyId}
                                             pending={pending}
+                                            assessment={assessments.get(pending.occupancyId)!}
+                                            onOpenVerifier={onOpenVerifier}
+                                            onQuickConfirm={handleQuickConfirm}
+                                            isFresh={freshIds.has(pending.occupancyId)}
+                                            busy={busyIds.has(pending.occupancyId)}
+                                        />
+                                    ))}
+                                </AnimatePresence>
+                            </motion.ul>
+                        </>
+                    )}
+                    {glance.length > 0 && (
+                        <>
+                            <div className="board-audit-rail__section">
+                                <span>
+                                    Confira a sugestão · {glance.length}
+                                    {automatic ? <span className="board-audit-rail__section-hint">aplicada sozinha após 24h</span> : null}
+                                </span>
+                            </div>
+                            <motion.ul
+                                className="board-audit-rail__list"
+                                variants={staggerList}
+                                initial="initial"
+                                animate="animate"
+                            >
+                                <AnimatePresence initial={false}>
+                                    {glance.map((pending) => (
+                                        <PendingDepartureCard
+                                            key={pending.occupancyId}
+                                            pending={pending}
+                                            assessment={assessments.get(pending.occupancyId)!}
                                             onOpenVerifier={onOpenVerifier}
                                             onQuickConfirm={handleQuickConfirm}
                                             isFresh={freshIds.has(pending.occupancyId)}
@@ -211,13 +283,16 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                     {routine.length > 0 && (
                         <>
                             <div className="board-audit-rail__section board-audit-rail__section--routine">
-                                <span>Rotina · {routine.length}</span>
+                                <span>
+                                    Rotina · {routine.length}
+                                    {automatic ? <span className="board-audit-rail__section-hint">confirma sozinha na virada</span> : null}
+                                </span>
                                 <button
                                     type="button"
                                     className="board-audit-rail__confirm-all"
                                     onClick={() => { void handleConfirmAllRoutine(); }}
                                     disabled={confirmingAll}
-                                    title="Confirma todas as saídas sem impacto em pagamento ou banco de horas."
+                                    title="Confirma todas as saídas de rotina (avisadas pelo médico ou explicadas pela chegada de quem assumiu)."
                                 >
                                     {confirmingAll ? "Confirmando…" : `Confirmar todas (${routine.length})`}
                                 </button>
@@ -233,6 +308,7 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                                         <PendingDepartureCard
                                             key={pending.occupancyId}
                                             pending={pending}
+                                            assessment={assessments.get(pending.occupancyId)!}
                                             onOpenVerifier={onOpenVerifier}
                                             onQuickConfirm={handleQuickConfirm}
                                             isFresh={freshIds.has(pending.occupancyId)}
@@ -244,6 +320,30 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
                         </>
                     )}
                 </>
+            )}
+
+            {!collapsed && system && system.items.length > 0 && (
+                <details className="board-audit-rail__system">
+                    <summary>Confirmadas pelo sistema · {system.items.length}</summary>
+                    <ul className="board-audit-rail__system-list">
+                        {system.items.map((item) => (
+                            <li key={item.occupancyId}>
+                                <span>
+                                    <strong>{item.doctorName}</strong> · {item.targetCode} · saiu {hourMinute(item.actualEndedAt)}
+                                </span>
+                                <button
+                                    type="button"
+                                    className="board-audit-rail__system-undo"
+                                    onClick={() => { void undoSystemConfirmation(item); }}
+                                    disabled={undoingId === item.occupancyId}
+                                    title={item.note}
+                                >
+                                    {undoingId === item.occupancyId ? "Desfazendo…" : "Desfazer"}
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </details>
             )}
         </motion.aside>
     );

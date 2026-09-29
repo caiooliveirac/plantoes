@@ -18,12 +18,16 @@ export function useQuickConfirmDeparture() {
     const router = useRouter();
     const [, startTransition] = useTransition();
 
-    return useCallback(async (pending: PendingDepartureConfirmation): Promise<{ ok: boolean }> => {
+    return useCallback(async (
+        pending: PendingDepartureConfirmation,
+        // Sugestão aceita com desfecho (saída faltando ≤2h → plantão inteiro).
+        outcome: "full_shift" | null = null,
+    ): Promise<{ ok: boolean }> => {
         try {
             const response = await fetch(`/api/${pending.domain}/occupancies/${pending.occupancyId}/confirm-departure`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({}),
+                body: JSON.stringify(outcome ? { outcome } : {}),
             });
             if (!response.ok) {
                 const body = await response.json().catch(() => ({})) as { error?: string };

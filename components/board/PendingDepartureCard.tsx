@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Check, PencilLine, Scale } from "lucide-react";
 import { PatternBadge } from "@/components/board/PatternBadge";
 import { staggerChild, pulseAttention, tapFeedback } from "@/lib/board/motion";
-import { triagePendingDeparture } from "@/modules/operational/departure-triage";
+import type { DepartureAutonomyResult } from "@/modules/operational/departure-autonomy";
 import { describeDepartureOrigin } from "@/modules/operational/departure-origin";
 import { resolveDayOffsetLabel } from "@/lib/board/day-offset";
 import type { PendingDepartureConfirmation, TelegramLateDepartureReasonCode } from "@/services/board.service";
@@ -47,29 +47,21 @@ function formatDelay(minutes: number | null) {
 
 export interface PendingDepartureCardProps {
     pending: PendingDepartureConfirmation;
+    /** Classe, sugestão e prazo (modules/operational/departure-autonomy.ts). */
+    assessment: DepartureAutonomyResult;
     onOpenVerifier: (pending: PendingDepartureConfirmation) => void;
-    onQuickConfirm: (pending: PendingDepartureConfirmation) => Promise<void> | void;
+    onQuickConfirm: (pending: PendingDepartureConfirmation, outcome: "full_shift" | null) => Promise<void> | void;
     /** Pulses (attention loop) for items that arrived after first render. */
     isFresh?: boolean;
     busy?: boolean;
 }
 
-export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, isFresh, busy }: PendingDepartureCardProps) {
+export function PendingDepartureCard({ pending, assessment, onOpenVerifier, onQuickConfirm, isFresh, busy }: PendingDepartureCardProps) {
     const delay = formatDelay(pending.delayMinutes);
     // "chegou 07:00 → saiu 07:00" em dias diferentes não se lê sem esta marca.
     const dayOffset = resolveDayOffsetLabel(pending.startedAt, pending.actualEndedAt);
     const suspect = (pending.delayMinutes ?? 0) >= 60 || pending.reasonOccurrenceCount30d >= 3;
-    const triage = triagePendingDeparture({
-        actualEndedAt: pending.actualEndedAt,
-        scheduledStartAt: pending.scheduledStartAt,
-        scheduledEndAt: pending.scheduledEndAt,
-        startedAt: pending.startedAt,
-        roleLabel: pending.roleLabel,
-        delayMinutes: pending.delayMinutes,
-        reasonCode: pending.reasonCode,
-        occurrenceNumberMissing: pending.occurrenceNumberMissing,
-        reasonOccurrenceCount30d: pending.reasonOccurrenceCount30d,
-    });
+    const { triage, suggestion } = assessment;
 
     return (
         <motion.li
@@ -119,76 +111,74 @@ export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, 
                 )}
             </div>
 
-            <div className="pending-departure-card__meta">
-                {pending.reasonCode && (
-                    <span className="pending-departure-card__reason">
-                        {REASON_SHORT[pending.reasonCode]}
-                        {pending.reasonCode === "occurrence" && pending.occurrenceNumber ? ` Nº ${pending.occurrenceNumber}` : ""}
-                    </span>
-                )}
-                {pending.occurrenceNumberMissing && (
-                    <span className="pending-departure-card__reason-warn" title="O médico alegou ocorrência mas não informou o número (4 dígitos).">
-                        SEM Nº DE OCORRÊNCIA
-                    </span>
-                )}
-                <PatternBadge count={pending.reasonOccurrenceCount30d} reasonCode={pending.reasonCode} />
-            </div>
-
-            {pending.sourceMessage ? (
-                <figure className="pending-departure-card__source">
-                    <figcaption className="pending-departure-card__source-meta">
-                        Telegram · {formatDayHourMinute(pending.sourceMessage.createdAt)}
-                    </figcaption>
-                    <blockquote className="pending-departure-card__source-text">
-                        “{pending.sourceMessage.rawText.trim()}”
-                    </blockquote>
-                </figure>
+            {suggestion ? (
+                // Rotina e "só olhar": a sugestão já diz o que acontece. O resto
+                // (mensagem, origem, motivo) fica no Revisar.
+                <p className="pending-departure-card__suggestion">
+                    <strong>{suggestion.label}</strong> · {suggestion.effect}
+                </p>
             ) : (
-                <p className="pending-departure-card__source pending-departure-card__source--empty">
-                    Sem mensagem de Telegram vinculada a esta saída.
-                </p>
-            )}
+                <>
+                    <div className="pending-departure-card__meta">
+                        {pending.reasonCode && (
+                            <span className="pending-departure-card__reason">
+                                {REASON_SHORT[pending.reasonCode]}
+                                {pending.reasonCode === "occurrence" && pending.occurrenceNumber ? ` Nº ${pending.occurrenceNumber}` : ""}
+                            </span>
+                        )}
+                        {pending.occurrenceNumberMissing && (
+                            <span className="pending-departure-card__reason-warn" title="O médico alegou ocorrência mas não informou o número (4 dígitos).">
+                                SEM Nº DE OCORRÊNCIA
+                            </span>
+                        )}
+                        <PatternBadge count={pending.reasonOccurrenceCount30d} reasonCode={pending.reasonCode} />
+                    </div>
 
-            <p className="pending-departure-card__headline" data-attention={triage.attention} data-kind={triage.kind}>
-                {triage.kind === "short_anomaly" ? "⚠︎ Provável erro de registro — " : ""}{triage.headline}
-            </p>
-            {pending.origin !== "verbalized" && (
-                <p className="pending-departure-card__origin">
-                    {describeDepartureOrigin({
-                        origin: pending.origin,
-                        doctorName: pending.displayName ?? pending.doctorName,
-                        targetCode: pending.targetCode,
-                        actualEndedAt: pending.actualEndedAt,
-                        successorName: pending.successorName,
-                    })}
-                </p>
+                    {pending.sourceMessage ? (
+                        <figure className="pending-departure-card__source">
+                            <figcaption className="pending-departure-card__source-meta">
+                                Telegram · {formatDayHourMinute(pending.sourceMessage.createdAt)}
+                            </figcaption>
+                            <blockquote className="pending-departure-card__source-text">
+                                “{pending.sourceMessage.rawText.trim()}”
+                            </blockquote>
+                        </figure>
+                    ) : (
+                        <p className="pending-departure-card__source pending-departure-card__source--empty">
+                            Sem mensagem de Telegram vinculada a esta saída.
+                        </p>
+                    )}
+
+                    <p className="pending-departure-card__headline" data-attention={triage.attention} data-kind={triage.kind}>
+                        {triage.kind === "short_anomaly" ? "⚠︎ Provável erro de registro — " : ""}{triage.headline}
+                    </p>
+                    {pending.origin !== "verbalized" && (
+                        <p className="pending-departure-card__origin">
+                            {describeDepartureOrigin({
+                                origin: pending.origin,
+                                doctorName: pending.displayName ?? pending.doctorName,
+                                targetCode: pending.targetCode,
+                                actualEndedAt: pending.actualEndedAt,
+                                successorName: pending.successorName,
+                            })}
+                        </p>
+                    )}
+                </>
             )}
 
             <div className="pending-departure-card__actions">
-                {triage.attention ? (
-                    <motion.button
-                        type="button"
-                        className="pending-departure-card__btn primary"
-                        onClick={(event) => { event.stopPropagation(); onOpenVerifier(pending); }}
-                        whileTap={tapFeedback}
-                        disabled={busy}
-                        aria-label={`Decidir pagamento e banco de horas de ${pending.displayName ?? pending.doctorName}`}
-                    >
-                        <Scale size={14} strokeWidth={2.4} style={{ marginRight: 6, verticalAlign: "-2px" }} />
-                        Decidir
-                    </motion.button>
-                ) : (
+                {suggestion ? (
                     <>
                         <motion.button
                             type="button"
                             className="pending-departure-card__btn primary"
-                            onClick={(event) => { event.stopPropagation(); void onQuickConfirm(pending); }}
+                            onClick={(event) => { event.stopPropagation(); void onQuickConfirm(pending, suggestion.outcome); }}
                             whileTap={tapFeedback}
                             disabled={busy}
-                            aria-label={`Confirmar saída às ${formatHourMinute(pending.actualEndedAt)}`}
+                            aria-label={`${suggestion.label} — ${pending.displayName ?? pending.doctorName}`}
                         >
                             <Check size={14} strokeWidth={2.6} style={{ marginRight: 6, verticalAlign: "-2px" }} />
-                            Confirmar {formatHourMinute(pending.actualEndedAt)}
+                            Aceitar
                         </motion.button>
                         <motion.button
                             type="button"
@@ -202,6 +192,18 @@ export function PendingDepartureCard({ pending, onOpenVerifier, onQuickConfirm, 
                             Revisar
                         </motion.button>
                     </>
+                ) : (
+                    <motion.button
+                        type="button"
+                        className="pending-departure-card__btn primary"
+                        onClick={(event) => { event.stopPropagation(); onOpenVerifier(pending); }}
+                        whileTap={tapFeedback}
+                        disabled={busy}
+                        aria-label={`Decidir pagamento e banco de horas de ${pending.displayName ?? pending.doctorName}`}
+                    >
+                        <Scale size={14} strokeWidth={2.4} style={{ marginRight: 6, verticalAlign: "-2px" }} />
+                        Decidir
+                    </motion.button>
                 )}
             </div>
         </motion.li>
