@@ -10405,7 +10405,10 @@ button.chief-payable-tag:focus-visible {
     background: #161c26;
     border: 1px solid var(--surface-elevated-border);
     box-shadow: var(--shadow-elevated);
-    overflow: hidden;
+    /* O rail inteiro rola, não cada seção: com "Precisa de você" e "Confira a
+       sugestão" juntos, cada lista ficava com meio card visível. */
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .board-audit-rail__header {
@@ -10474,12 +10477,46 @@ button.chief-payable-tag:focus-visible {
     color: var(--muted);
 }
 
+/* Há saída que só a chefia decide (dinheiro ou contradição). */
+.board-audit-rail__count.urgent {
+    background: color-mix(in oklab, var(--accent-fraud, #ff4d57) 16%, transparent);
+    color: var(--accent-fraud, #ff4d57);
+}
+
+/* O rail vem à frente sozinho quando há decisão pendente — ao chegar item
+   novo e de novo a cada 20 min recolhido (AuditRail). Destaque de poucos
+   segundos, sem bloquear o quadro. */
+.board-audit-rail.forward {
+    border-color: var(--accent-fraud, #ff4d57);
+    box-shadow:
+        0 0 0 4px color-mix(in oklab, var(--accent-fraud, #ff4d57) 18%, transparent),
+        var(--shadow-elevated);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .board-audit-rail.forward {
+        animation: board-audit-rail-forward 420ms var(--ease-emph) both;
+    }
+}
+
+@keyframes board-audit-rail-forward {
+    from {
+        opacity: 0.4;
+        transform: translateY(-10px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
 .board-audit-rail__list {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    overflow-y: auto;
-    padding-right: 4px;
+    flex-shrink: 0;
+    /* Sem o recuo padrão de <ul>: os cards andavam 40px para dentro. */
+    padding: 0 4px 0 0;
     margin: 0;
     list-style: none;
     scrollbar-width: thin;
@@ -10876,7 +10913,8 @@ button.chief-payable-tag:focus-visible {
 .departure-verifier-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 60;
+    /* Acima da barra Kairós (.k-topo, z 80): o portal vive em .pagina-kairos. */
+    z-index: 90;
     background: rgba(4, 6, 8, 0.62);
     backdrop-filter: blur(10px) saturate(120%);
     -webkit-backdrop-filter: blur(10px) saturate(120%);
@@ -10885,7 +10923,7 @@ button.chief-payable-tag:focus-visible {
 .departure-verifier-shell {
     position: fixed;
     inset: 0;
-    z-index: 61;
+    z-index: 91;
     display: grid;
     place-items: center;
     padding: 24px;
@@ -11652,9 +11690,13 @@ button.chief-payable-tag:focus-visible {
     .departure-verifier-footer {
         grid-template-columns: 1fr;
     }
+    /* No celular a barra Kairós (sticky, z 80) cobria o topo do rail — e com
+       ele o cabeçalho, que é onde se recolhe. Embaixo, à esquerda do botão do
+       dock (50px no canto inferior direito). */
     .board-audit-rail {
-        top: 12px;
-        right: 12px;
+        top: auto;
+        bottom: 12px;
+        right: 74px;
         left: 12px;
         width: auto;
         max-height: 60vh;

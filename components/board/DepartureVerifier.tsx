@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { EventTimeline } from "@/components/board/EventTimeline";
 import { modalBackdrop, modalPanel, tapFeedback } from "@/lib/board/motion";
+import { useModalPortalContainer } from "@/lib/board/use-modal-portal-container";
 import type { PendingDepartureConfirmation } from "@/services/board.service";
 import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { resolveDayOffsetLabel } from "@/lib/board/day-offset";
@@ -94,6 +95,7 @@ interface DecisionButton {
  */
 export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
     const router = useRouter();
+    const portalContainer = useModalPortalContainer();
     const [, startTransition] = useTransition();
     const open = target !== null;
 
@@ -383,7 +385,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
         <Dialog.Root open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
             <AnimatePresence>
                 {open && target && triage && (
-                    <Dialog.Portal forceMount>
+                    <Dialog.Portal forceMount container={portalContainer}>
                         <Dialog.Overlay asChild>
                             <motion.div
                                 className="departure-verifier-backdrop"

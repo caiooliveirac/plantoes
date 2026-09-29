@@ -2873,8 +2873,23 @@
     color: var(--texto-medio);
 }
 
+/* Véu, não folha: com o portal dentro de .pagina-kairos uma superfície opaca
+   aqui escondia o quadro inteiro atrás do verificador. */
 .pagina-kairos .departure-verifier-backdrop {
+    background: var(--veu-modal);
+}
+
+/* Rail "Saídas a confirmar": o fundo do globals.css é escuro literal — no
+   tema claro era a caixa preta no canto, com os cards brancos dentro. */
+.pagina-kairos .board-audit-rail {
     background: var(--superficie);
+    border-color: var(--borda);
+    box-shadow: var(--sombra-modal);
+}
+
+.pagina-kairos .pending-departure-card {
+    background: var(--superficie-recuada);
+    border-color: var(--borda);
 }
 
 .pagina-kairos .departure-verifier-close:hover {
