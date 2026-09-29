@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Pre-push hook: protecao client-side de main, ja' que repo privado free
-# nao tem branch protection. Quem clonar precisa rodar:
+# Pre-push hook: protege o HISTORICO de main (sem force-push). Push direto
+# na main e' permitido desde 29/09/2026 — deploy vai direto ao LIVE, sem
+# exigir PR. Quem clonar precisa rodar:
 #   git config core.hooksPath .githooks
 set -euo pipefail
 
@@ -10,14 +11,6 @@ protected_branch="main"
 while read -r local_ref local_sha remote_ref remote_sha; do
     if [[ "${remote_ref}" != "refs/heads/${protected_branch}" ]]; then
         continue
-    fi
-
-    # Bloqueia push direto para main: forca uso de PR.
-    if [[ -z "${PRE_PUSH_ALLOW_DIRECT_MAIN:-}" ]]; then
-        echo "[pre-push] Push direto para '${protected_branch}' bloqueado." >&2
-        echo "[pre-push] Use PR: gh pr create --base main --head <branch> && gh pr merge --merge" >&2
-        echo "[pre-push] Override de emergencia: PRE_PUSH_ALLOW_DIRECT_MAIN=1 git push ..." >&2
-        exit 1
     fi
 
     # Bloqueia force-push (detecta se nao e' fast-forward).
