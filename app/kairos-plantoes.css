@@ -42,16 +42,15 @@
 
 .pagina-kairos .k-topo-eyebrow {
     color: var(--texto-sobre-escuro-medio);
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
+    font-size: 11.5px;
+    font-weight: 600;
 }
 
 .pagina-kairos .k-topo-titulo {
+    margin: 0;
     color: var(--branco);
     font-size: 17px;
-    font-weight: 900;
+    font-weight: 800;
     letter-spacing: -0.01em;
     line-height: 1.15;
 }
@@ -4654,3 +4653,134 @@
         align-items: flex-start;
     }
 }
+
+/* ── Fechamento compacto (29/09/2026) ─────────────────────────────────────
+   A planilha media 4.643px de largura numa tela de 1.100 (cada coluna de dia
+   com 139px: o selo mais largo do mês ditava a largura de todas) e 145px por
+   médico (selos empilhados sob o nome) — 188 médicos, 27 mil px de página.
+   Agora: coluna de dia estreita com os plantões EMPILHADOS, selo curto sem
+   caixa alta, médico em duas linhas, números à direita e tabulares. */
+.pagina-kairos .chief-payable-table { font-size: 12px; }
+.pagina-kairos .chief-payable-table thead th {
+    min-width: 38px;
+    padding: 8px 4px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+    line-height: 1.2;
+    white-space: normal;
+    vertical-align: bottom;
+}
+.pagina-kairos .chief-payable-table td {
+    min-width: 38px;
+    padding: 4px 3px;
+    vertical-align: middle;
+}
+.pagina-kairos .chief-payable-table th.doctor,
+.pagina-kairos .chief-payable-table td.doctor {
+    min-width: 248px;
+    max-width: 248px;
+    padding: 6px 10px;
+}
+.pagina-kairos .chief-payable-table th.num,
+.pagina-kairos .chief-payable-table td.num {
+    min-width: 64px;
+    max-width: 96px;
+    padding: 4px 8px;
+    text-align: right;
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.pagina-kairos .chief-payable-table th.num { white-space: normal; }
+
+/* médico: nome na 1ª linha; vínculo, assinar, banco e contrato na 2ª */
+.pagina-kairos .chief-payable-doctor-cell {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+}
+.pagina-kairos .chief-payable-doctor-main {
+    flex-basis: 100%;
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: 0;
+}
+.pagina-kairos .chief-payable-doctor-button { min-width: 0; overflow: hidden; }
+.pagina-kairos .chief-payable-table td.doctor strong {
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* dia: plantões um sobre o outro, nunca lado a lado */
+.pagina-kairos .chief-payable-cell-tags {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 2px;
+}
+.pagina-kairos .chief-payable-tag {
+    min-width: 0;
+    min-height: 20px;
+    padding: 0 5px;
+    border-radius: 6px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0;
+}
+.pagina-kairos button.chief-payable-tag:hover { transform: none; filter: brightness(0.96); }
+
+/* selos da linha do médico: frase normal, sem caixa alta espaçada */
+.pagina-kairos .chief-payable-profile-badge,
+.pagina-kairos .chief-payable-single-function-badge,
+.pagina-kairos .chief-payable-idle-badge,
+.pagina-kairos .chief-payable-attest-toggle,
+.pagina-kairos .chief-payable-bank-chip {
+    min-height: 20px;
+    padding: 0 6px;
+    font-size: 11px;
+    letter-spacing: 0;
+    text-transform: none;
+}
+.pagina-kairos .chief-payable-bank-chip strong,
+.pagina-kairos .chief-payable-bank-chip em { text-transform: none; letter-spacing: 0; }
+
+/* ── Faixas de comando do Fechamento e do Banco de horas (29/09/2026) ──────
+   Números no tamanho do texto (resumo, não vitrine) e rótulos, filtros e datas
+   em frase normal: a caixa alta com tracking largo e o capitalize ("Abr De
+   2026", "Toda A Vida") saem. */
+.pagina-kairos .admin-bar-kpi strong,
+.pagina-kairos .admin-bar-kpi-button strong {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0;
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+}
+.pagina-kairos .admin-bar-kpi span,
+.pagina-kairos .admin-bar-kpi-button span {
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+}
+.pagina-kairos .chief-payable-chip,
+.pagina-kairos .admin-bar-filters-toggle,
+.pagina-kairos .admin-bar-pending-label,
+.pagina-kairos .hours-filter-label,
+.pagina-kairos .hours-chip {
+    font-size: 12.5px;
+    letter-spacing: 0;
+    text-transform: none;
+}
+.pagina-kairos .admin-bar-pending-label,
+.pagina-kairos .hours-filter-label { font-weight: 600; color: var(--texto-medio); }
+.pagina-kairos .hours-month-shift-date,
+.pagina-kairos .hours-directory-month,
+.pagina-kairos .hours-month-group-header h3,
+.pagina-kairos .hours-event-when strong { text-transform: none; }
+.pagina-kairos .chave-tema button { display: inline-flex; align-items: center; gap: 5px; }

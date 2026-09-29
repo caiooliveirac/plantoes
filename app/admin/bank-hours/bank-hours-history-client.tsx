@@ -1047,7 +1047,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         });
         const body = await response.json().catch(() => null) as { error?: string } | null;
         if (!response.ok) {
-            throw new Error(body?.error || "Nao foi possivel salvar o ajuste manual.");
+            throw new Error(body?.error || "Não foi possível salvar o ajuste manual.");
         }
 
         router.refresh();
@@ -1085,12 +1085,11 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     return (
         // Tela migrada ao Kairós: o wrapper dá tokens, fundo e tema (docs/kairos.md).
         <div className="pagina-kairos">
-        <KairosTopo titulo="Banco de horas" abas={ABAS_ADMIN} />
+        <KairosTopo titulo="Banco de horas" abas={ABAS_ADMIN} tituloComoH1 />
         <main className="hours-shell">
             {/* Faixa de comando compacta: mês + busca + KPIs do mês + gaveta "Como ler" + navegação ••• */}
             <section className="admin-bar-frame standalone">
                 <header className="admin-bar">
-                    <span className="admin-bar-kicker">Banco de horas</span>
                     <div className="hours-month-picker" role="group" aria-label="Mês em foco">
                         <button
                             type="button"
