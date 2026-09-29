@@ -176,11 +176,13 @@ test("listRecentHandoffs: sucessor 80 min antes do fim entra com tolerância 90 
     const doPosto = (rows: Awaited<ReturnType<typeof listRecentHandoffs>>) =>
         rows.filter((row) => row.targetCode === `T${tag}`.slice(0, 32));
 
-    const com90 = doPosto(await listRecentHandoffs({ toleranceMinutes: 90 }));
+    // A janela padrão caiu para 1h (#387) e o fim do plantão aqui fica a 60 min
+    // de agora, na borda: a janela explícita mantém o teste sobre a tolerância.
+    const com90 = doPosto(await listRecentHandoffs({ windowHours: 12, toleranceMinutes: 90 }));
     assert.equal(com90.length, 1);
     assert.equal(com90[0].predecessorName, `Rendido ${tag}`);
     assert.equal(com90[0].successorName, `Rendeu ${tag}`);
-    assert.equal(doPosto(await listRecentHandoffs({ toleranceMinutes: 60 })).length, 0);
+    assert.equal(doPosto(await listRecentHandoffs({ windowHours: 12, toleranceMinutes: 60 })).length, 0);
 });
 
 test("loadBriefingBankHours: janela de 14 dias parametrizada pega 13 dias e deixa 15 de fora", { skip }, async () => {
