@@ -43,7 +43,6 @@ export async function POST(request: NextRequest) {
             actorUserId: session.user.id,
         });
         revalidatePath("/admin/payment-closing");
-        revalidatePath("/admin/medicos");
         return NextResponse.json({ doctorId: doctor.id, contractId }, { status: 201 });
     } catch (error) {
         return NextResponse.json(

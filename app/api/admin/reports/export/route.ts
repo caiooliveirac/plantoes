@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { exportMonthlyAdminReportCsv } from "@/services/monthly-report.service";
 import { exportChiefPayableShiftsXlsx } from "@/services/payable-shifts.service";
 
 export async function GET(request: NextRequest) {
@@ -17,20 +16,8 @@ export async function GET(request: NextRequest) {
     }
 
     const month = request.nextUrl.searchParams.get("month");
-    const format = request.nextUrl.searchParams.get("format") === "csv" ? "csv" : "xlsx";
-    const fileName = `relatorio-mensal-${month || "atual"}.${format}`;
-
-    if (format === "csv") {
-        const csv = await exportMonthlyAdminReportCsv(month);
-
-        return new Response(csv, {
-            status: 200,
-            headers: {
-                "content-type": "text/csv; charset=utf-8",
-                "content-disposition": `attachment; filename="${fileName}"`,
-            },
-        });
-    }
+    // O CSV da antiga tela "Relatório mensal" saiu com ela; fica o XLSX do fechamento.
+    const fileName = `relatorio-mensal-${month || "atual"}.xlsx`;
 
     const workbook = await exportChiefPayableShiftsXlsx(month);
 

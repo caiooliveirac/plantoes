@@ -3642,15 +3642,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                         <a className="ops-auth-inline-link" href="/admin/payment-closing">
                                             Abrir fechamento de pagamento
                                         </a>
-                                        <a className="ops-auth-inline-link" href="/admin/slot-audit">
-                                            Auditar slots historicos
-                                        </a>
-                                        <a className="ops-auth-inline-link" href="/admin/chief-access">
-                                            Provisionar chief
-                                        </a>
-                                        <a className="ops-auth-inline-link" href="/admin/reports">
-                                            Abrir auditoria mensal
-                                        </a>
                                         <a className="ops-auth-inline-link" href="/admin/acessos">
                                             Monitor de acessos (senha compartilhada)
                                         </a>
