@@ -61,8 +61,10 @@ function SsoFalhou({ motivo }: { motivo: string }) {
 }
 
 /* Portão de turno (docs/monitor-acessos.md): conta logada, mas fora do
-   plantão e fora da Central. O resto do que é do médico segue aberto. */
-function ForaDoPlantao() {
+   plantão e fora da Central. Só a Mesa fecha — a conta segue entrando. Quem
+   não é médico (coordenação, rádio, TARM) não tem folha de ponto: sem as
+   saídas abaixo, "Mesa fechada" logo depois do login parecia login recusado. */
+function ForaDoPlantao({ medico }: { medico: boolean }) {
     return (
         <div className="pagina-kairos">
         <KairosTopo titulo="Mesa operacional" />
@@ -71,7 +73,9 @@ function ForaDoPlantao() {
                 <div className="et-panel-head"><h2>Mesa fechada fora do plantão</h2></div>
                 <div className="et-empty-state">
                     <strong>{MENSAGEM_FORA_DO_PLANTAO}</strong>
-                    <p><Link href="/medico">Folha de ponto, banco de horas e dados</Link></p>
+                    {medico && <p><Link href="/medico">Folha de ponto, banco de horas e dados</Link></p>}
+                    {federacaoConfigurada() && <p><a href="/api/auth/handoff?para=samu-salvador">Abrir o Escalas &amp; Trocas</a></p>}
+                    <p><a href="https://mnrs.com.br/">Voltar ao portal</a></p>
                 </div>
             </section>
         </main>
@@ -95,7 +99,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         redirect(destinoSemSessao());
     }
     if (!(await mesaLiberadaPara(session))) {
-        return <ForaDoPlantao />;
+        return <ForaDoPlantao medico={Boolean(session.user.doctorId)} />;
     }
     // Presença (docs/presenca-mesa.md): outro aparelho com a vez, ou este
     // bloqueado por ociosidade → nenhum dado do quadro sai desta página.
