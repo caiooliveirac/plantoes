@@ -4883,3 +4883,12 @@
     white-space: nowrap;
     border: 0;
 }
+
+/* Dentro da casca (barra lateral) não existe mais a barra navy de ~84px no
+   topo: a lista do banco de horas gruda perto do topo. */
+@media (min-width: 1181px) {
+    [data-casca] .hours-grid.detail-open .hours-directory-column {
+        top: 12px;
+        max-height: calc(100vh - 24px);
+    }
+}

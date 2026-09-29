@@ -4,6 +4,7 @@ import { Suspense, use, useCallback, useEffect, useMemo, useRef, useState, useTr
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { AdminBarNavMenu } from "@/components/admin-bar-nav-menu";
+import { AbasContagem } from "@/components/ui/abas-contagem";
 import { ABAS_ADMIN, KairosTopo } from "@/components/kairos-topo";
 import { CadastrarMedicoBotao } from "@/components/doctors/cadastrar-medico-botao";
 import { ContractBalanceCard } from "@/components/payment-closing/contract-balance-card";
@@ -1940,36 +1941,23 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                 contrato defeituoso. Some quando o mês não tem nenhuma pendência. */}
             {pendencyTotals.size > 0 ? (
                 <div className="admin-bar-pending-strip">
-                    <span className="admin-bar-pending-label">Antecipar</span>
-                    <div className="chief-payable-chip-row" role="group" aria-label="Filtrar médicos por pendência">
-                        <button
-                            type="button"
-                            className={`chief-payable-chip ${pendencyFilter === "all" ? "active" : ""}`.trim()}
-                            aria-pressed={pendencyFilter === "all"}
-                            onClick={() => setPendencyFilter("all")}
-                        >
-                            Todos ({board.summary.doctorCount})
-                        </button>
-                        {PENDENCY_CHIPS.map((chip) => {
-                            const count = pendencyTotals.get(chip.value) ?? 0;
-                            if (count === 0) {
-                                return null;
-                            }
-
-                            return (
-                                <button
-                                    key={chip.value}
-                                    type="button"
-                                    className={`chief-payable-chip ${chip.tone} ${pendencyFilter === chip.value ? "active" : ""}`.trim()}
-                                    aria-pressed={pendencyFilter === chip.value}
-                                    title={chip.title}
-                                    onClick={() => setPendencyFilter(pendencyFilter === chip.value ? "all" : chip.value)}
-                                >
-                                    {chip.label} ({count})
-                                </button>
-                            );
-                        })}
-                    </div>
+                    {/* abas com contagem (21st · coss.com): a pendência filtra a
+                        planilha; só aparece o tipo que tem médico no mês */}
+                    <AbasContagem<PaymentClosingPendency | "all">
+                        rotulo="Filtrar médicos por pendência"
+                        valor={pendencyFilter}
+                        aoMudar={(v) => setPendencyFilter(v === pendencyFilter ? "all" : v)}
+                        opcoes={[
+                            { valor: "all", rotulo: "Todos", contagem: board.summary.doctorCount },
+                            ...PENDENCY_CHIPS.filter((chip) => (pendencyTotals.get(chip.value) ?? 0) > 0).map((chip) => ({
+                                valor: chip.value,
+                                rotulo: chip.label,
+                                contagem: pendencyTotals.get(chip.value) ?? 0,
+                                tom: chip.tone === "danger" ? ("alerta" as const) : chip.tone === "warning" ? ("atencao" as const) : ("neutro" as const),
+                                title: chip.title,
+                            })),
+                        ]}
+                    />
                 </div>
             ) : null}
 

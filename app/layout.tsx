@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { DM_Mono, DM_Sans, Manrope, Space_Grotesk } from "next/font/google";
 import ogImage from "@/components/og.jpg";
 import { Toaster } from "@/components/board/Toaster";
+import "./tailwind.css";
 import "./globals.css";
 
 const metadataBase = new URL(process.env.AUTH_URL?.trim() || "https://plantoes.mnrs.com.br");
