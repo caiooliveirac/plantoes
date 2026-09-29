@@ -1,3 +1,5 @@
+import { isSystemDepartureConfirmNote } from "@/modules/operational/departure-autonomy";
+
 /**
  * Estado de aprovação da saída tardia, do ponto de vista do médico.
  *
@@ -147,6 +149,21 @@ export function resolveBankHoursApproval(input: BankHoursApprovalInput): BankHou
                 + " e o crédito foi retido até alguém da coordenação revisar à mão. Ele não foi recusado — está parado.",
             chiefName: identificaQuemValidou(input),
             at: input.departureConfirmedAt ?? input.actualEndedAt,
+            note: input.departureConfirmedNote,
+        };
+    }
+
+    // Confirmada pelo sistema (rotina ou sugestão vencida, docs/saidas-a-confirmar.md):
+    // vale como validação, mas não pode dizer que a chefia olhou.
+    if (input.departureConfirmedAt && isSystemDepartureConfirmNote(input.departureConfirmedNote)) {
+        return {
+            state: "validado",
+            tone: "ok",
+            label: "Confirmado automaticamente",
+            detail: "Sua saída bateu com o registro (seu aviso ou a chegada de quem assumiu) e o sistema confirmou."
+                + " A chefia pode revisar.",
+            chiefName: null,
+            at: input.departureConfirmedAt,
             note: input.departureConfirmedNote,
         };
     }

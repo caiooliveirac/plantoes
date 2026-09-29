@@ -46,6 +46,8 @@ export interface DepartureAutonomyResult {
      * sugestão, "decide" escala para os admins.
      */
     dueAt: Date;
+    /** 24h de fila: prazo do chefe (é o dueAt de "glance" e "decide"). */
+    deadlineAt: Date;
 }
 
 export interface DepartureAutonomyInput extends DepartureTriageInput {
@@ -63,6 +65,17 @@ export interface DepartureAutonomyInput extends DepartureTriageInput {
 export const AUTO_CONFIRM_MIN_QUEUE_MINUTES = 60;
 /** Prazo para o chefe olhar antes de o sistema aplicar a sugestão / escalar. */
 export const GLANCE_DEADLINE_HOURS = 24;
+
+/**
+ * Nota gravada em departure_confirmed_note quando quem confirmou foi o
+ * sistema. É a marca que separa "validado pela chefia" de "confirmado
+ * sozinho" na tela do médico e que o Desfazer exige.
+ */
+export const SYSTEM_DEPARTURE_CONFIRM_NOTE_PREFIX = "Confirmada pelo sistema";
+
+export function isSystemDepartureConfirmNote(note: string | null | undefined) {
+    return typeof note === "string" && note.startsWith(SYSTEM_DEPARTURE_CONFIRM_NOTE_PREFIX);
+}
 
 const DECIDE_KINDS = new Set<DepartureTriageResult["kind"]>([
     "short_anomaly",
@@ -118,7 +131,7 @@ export function resolveDepartureAutonomy(input: DepartureAutonomyInput): Departu
     const deadline = new Date(queuedAtMs + GLANCE_DEADLINE_HOURS * 3_600_000);
 
     if (DECIDE_KINDS.has(triage.kind) || input.origin === "system") {
-        return { autonomy: "decide", triage, suggestion: null, dueAt: deadline };
+        return { autonomy: "decide", triage, suggestion: null, dueAt: deadline, deadlineAt: deadline };
     }
 
     const hora = hourMinute(input.actualEndedAt);
@@ -133,6 +146,7 @@ export function resolveDepartureAutonomy(input: DepartureAutonomyInput): Departu
                 effect: `saiu ${formatSignedMinutes(triage.classification?.remainingMinutes ?? 0).slice(1)} antes do fim`,
             },
             dueAt: deadline,
+            deadlineAt: deadline,
         };
     }
 
@@ -142,6 +156,7 @@ export function resolveDepartureAutonomy(input: DepartureAutonomyInput): Departu
             triage,
             suggestion: { outcome: null, label: `Creditar saída ${hora}`, effect: describeBankEffect(input) },
             dueAt: deadline,
+            deadlineAt: deadline,
         };
     }
 
@@ -153,6 +168,7 @@ export function resolveDepartureAutonomy(input: DepartureAutonomyInput): Departu
             triage,
             suggestion: { outcome: null, label: `Saiu no fim da janela, ${hora}`, effect: describeBankEffect(input) },
             dueAt: deadline,
+            deadlineAt: deadline,
         };
     }
 
@@ -164,5 +180,6 @@ export function resolveDepartureAutonomy(input: DepartureAutonomyInput): Departu
         triage,
         suggestion: { outcome: null, label: `Confirmar saída ${hora}`, effect: describeBankEffect(input) },
         dueAt: resolveOperationalShiftWindow(earliest).nextBoundaryAt,
+        deadlineAt: deadline,
     };
 }

@@ -101,6 +101,10 @@ telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
 - **Retirar** (quadro): a chefia escolhe sem saldo / banco / meio / inteiro; a
   régua de saída antecipada só sugere. Limites e leitores do desfecho em
   [docs/retirar.md](docs/retirar.md).
+- **Saídas a confirmar**: três classes; rotina confirma sozinha na virada,
+  sugestão aplicada em 24h, decisão humana escala ao admin; chefia desfaz.
+  Regras, flag `SAIDAS_AUTONOMAS` e marca da confirmação em
+  [docs/saidas-a-confirmar.md](docs/saidas-a-confirmar.md).
 - **Passagem de ocorrências** no almoço/descanso (quem sai passa para quem, faixa
   acima do quadro + bot): regras e janela em [docs/passagem-ocorrencias.md](docs/passagem-ocorrencias.md).
 - `modules/bank-hours/` — cálculo de banco de horas (atraso, hora extra, continuidade)
