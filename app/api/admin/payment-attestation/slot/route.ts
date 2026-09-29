@@ -31,52 +31,6 @@ const actionSchema = z.object({
     occupancyId: z.string().uuid().optional(),
 });
 
-function getRequestParams(request: NextRequest) {
-    const date = request.nextUrl.searchParams.get("date");
-    const shift = request.nextUrl.searchParams.get("shift");
-
-    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        throw new Error("date must use YYYY-MM-DD.");
-    }
-
-    if (shift && shift !== "SD" && shift !== "SN") {
-        throw new Error("shift must be SD or SN.");
-    }
-
-    if (date && !shift) {
-        throw new Error("shift is required when date is informed.");
-    }
-
-    return {
-        operationalDate: date,
-        shiftLabel: (shift as "SD" | "SN" | null) ?? null,
-    };
-}
-
-export async function GET(request: NextRequest) {
-    if (!hasDatabaseUrl()) {
-        return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
-    }
-
-    try {
-        await requireAuthenticatedSession(["admin"]);
-    } catch (error) {
-        const status = error instanceof AuthError ? error.status : 500;
-        return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });
-    }
-
-    try {
-        const params = getRequestParams(request);
-        const view = await getPaymentAttestationSlotView(params);
-        return NextResponse.json(view);
-    } catch (error) {
-        return NextResponse.json(
-            { error: error instanceof Error ? error.message : "Unable to load payment attestation slot." },
-            { status: 400 },
-        );
-    }
-}
-
 export async function POST(request: NextRequest) {
     if (!hasDatabaseUrl()) {
         return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
@@ -191,7 +145,6 @@ export async function POST(request: NextRequest) {
                 details: result,
             });
             revalidatePath("/admin/payment-closing");
-            revalidatePath("/admin/payment-attestation");
             return NextResponse.json({ ok: true, ...result });
         }
 
@@ -238,7 +191,6 @@ export async function POST(request: NextRequest) {
             shiftLabel: slot.shiftLabel,
         });
         revalidatePath("/admin/payment-closing");
-        revalidatePath("/admin/payment-attestation");
         return NextResponse.json(view);
     } catch (error) {
         return NextResponse.json(

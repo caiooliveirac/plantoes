@@ -4,10 +4,9 @@
    do 21st) no lugar da barra navy de 6 abas + menu ••• com 10 links.
 
      (topo)      Mesa · Histórico operacional
-     Pagamento   Atesto diário · Fechamento mensal · Pendências de contrato · Alocação
+     Pagamento   Fechamento mensal · Pendências de contrato
      Horas       Banco de horas
-     Auditoria   Relatório mensal · Auditoria de slots · Auditoria do atesto
-     Pessoas     Médicos · Acesso de chefia · Monitor de acessos
+     Pessoas     Monitor de acessos
 
    Mesma lógica do escala (escalas-e-trocas-samu/components/casca): navy nos
    dois temas, recolhe para trilho de ícones (lembrado no aparelho), tema e
@@ -16,20 +15,13 @@
 
 import {
     Activity,
-    BarChart3,
-    ClipboardCheck,
     FileSpreadsheet,
     FileWarning,
     History,
     Hourglass,
-    KeyRound,
     LayoutDashboard,
-    ListChecks,
     LogOut,
     Moon,
-    ScanSearch,
-    Split,
-    Stethoscope,
     Sun,
     type LucideIcon,
 } from "lucide-react";
@@ -64,29 +56,12 @@ const GRUPOS: { rotulo: string | null; itens: ItemNav[] }[] = [
     {
         rotulo: "Pagamento",
         itens: [
-            { href: "/admin/payment-attestation", nome: "Atesto diário", icone: ClipboardCheck },
             { href: "/admin/payment-closing", nome: "Fechamento mensal", icone: FileSpreadsheet },
             { href: "/admin/payment-closing/pendencias-contrato", nome: "Pendências de contrato", icone: FileWarning },
-            { href: "/admin/payment-allocation", nome: "Alocação", icone: Split },
         ],
     },
     { rotulo: "Horas", itens: [{ href: "/admin/bank-hours", nome: "Banco de horas", icone: Hourglass }] },
-    {
-        rotulo: "Auditoria",
-        itens: [
-            { href: "/admin/reports", nome: "Relatório mensal", icone: BarChart3 },
-            { href: "/admin/slot-audit", nome: "Auditoria de slots", icone: ListChecks },
-            { href: "/admin/payment-attestation/audit", nome: "Auditoria do atesto", icone: ScanSearch },
-        ],
-    },
-    {
-        rotulo: "Pessoas",
-        itens: [
-            { href: "/admin/medicos", nome: "Médicos", icone: Stethoscope },
-            { href: "/admin/chief-access", nome: "Acesso de chefia", icone: KeyRound },
-            { href: "/admin/acessos", nome: "Monitor de acessos", icone: Activity },
-        ],
-    },
+    { rotulo: "Pessoas", itens: [{ href: "/admin/acessos", nome: "Monitor de acessos", icone: Activity }] },
 ];
 
 /** Item aceso: prefixo mais longo ("/admin/payment-closing/pendencias-contrato"

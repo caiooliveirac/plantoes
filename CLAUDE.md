@@ -67,13 +67,15 @@ docs/                   # Runbooks, regras de negócio, ADRs, auditorias
 regulação/intervenção); `/historico-operacional` e `/historico/turno-anterior` são
 visões de auditoria; `/folha-ponto/[medicoId]/[ano]/[mes]` é o extrato individual
 (acessível também sem login via token assinado, ver Autenticação); `/admin/*` reúne
-telas de admin — `payment-allocation`, `payment-attestation` (+`/audit`),
-`payment-closing`, `reports`, `bank-hours`, `chief-access`, `slot-audit`.
+telas de admin — `payment-closing` (+`/pendencias-contrato`), `bank-hours`,
+`acessos`. Alocação, atesto diário, auditorias (slots, atesto, relatório mensal),
+gestão de médicos e acesso de chefia saíram em 29/09/2026 (ninguém usava); os dados
+ficaram no banco.
 
 **API routes** (`app/api/`, todas sob Route Handlers, sem `middleware.ts`):
 - `auth/*` — login, session, logout, change-password, password-reset
 - `board/*` — `GET /api/board` (estado ao vivo), `board/stream` (Server-Sent Events),
-  `board/history`, `board/payment-allocation`, `board/meal-breaks/priorities/[ramal]`
+  `board/history`, `board/meal-breaks/priorities/[ramal]`
 - `regulation/occupancies/*`, `intervention/occupancies/*`,
   `intervention/bases/[id]/state`, `regulation/posts/[id]/state` — CRUD de plantões e
   ativação/desativação de postos/bases
@@ -197,8 +199,8 @@ Tabelas por domínio:
   > que é consumo acumulado, célula vazia que não é zero, coluna CH que discorda do teto
   > real. Já produziu uma lista de alertas falsos enviada à chefia. O README traz o
   > registro de quem ainda está sem teto vigiado e os defeitos de carga em aberto.
-- **Payment attestation slots** — o que alimenta a auditoria de presença por turno
-  (`/admin/payment-attestation`, `/admin/slot-audit`): `paymentAttestationSlots`
+- **Payment attestation slots** — o que alimenta o atesto por turno (hoje editado
+  no modal do fechamento e pelo bot): `paymentAttestationSlots`
   (snapshot de um turno num dia — `operationalDate`+`shiftLabel` únicos, status
   `draft`/`approved`) e `paymentAttestationSlotEntries` (uma linha por ramal/base
   dentro do slot, com ocupante, métricas de banco de horas e `issues` jsonb).

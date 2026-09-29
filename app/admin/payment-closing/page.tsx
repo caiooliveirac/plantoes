@@ -1,6 +1,6 @@
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireAuthenticatedSession } from "@/lib/auth/server";
-import { ChiefPaymentViewClient } from "@/app/admin/payment-attestation/chief-payment-view-client";
+import { ChiefPaymentViewClient } from "@/app/admin/payment-closing/chief-payment-view-client";
 import { AdminGlobalNavigationLinks } from "@/components/admin-global-navigation-links";
 import { toChiefPayableClientBoard, type DoctorFinancialExtras } from "@/modules/reporting/payable-shifts";
 import { loadChiefPayableBoardCore, loadChiefPayableFinancials } from "@/services/payable-shifts.service";

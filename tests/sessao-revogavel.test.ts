@@ -130,7 +130,8 @@ test("todo update de users que grava senha também sobe session_version", () => 
             assert.match(match[1], /sessionVersion: sql`\$\{users\.sessionVersion\} \+ 1`/, `${file.slice(root.length + 1)} grava senha sem derrubar as sessões antigas`);
         }
     }
-    assert.ok(achados >= 6, `esperava ao menos 6 gravações de senha, achei ${achados}`);
+    // eram 6 até 29/09/2026; as duas do fluxo de chefia saíram com a tela "Acesso de chefia"
+    assert.ok(achados >= 5, `esperava ao menos 5 gravações de senha, achei ${achados}`);
 });
 
 test("sessão confere a versão e a troca de senha reemite o cookie deste aparelho", () => {

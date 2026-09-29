@@ -107,7 +107,7 @@ Ingests messages from Telegram groups; renders a real-time board via Next.js; ge
 **Problem:** 3.7K lines mixing data fetching, state management, drawer logic, grid rendering, and domain rules.
 
 ### 18. UI — Admin Pages
-**Files:** `app/admin/payment-allocation/`, `app/admin/payment-attestation/`, `app/admin/bank-hours/`, `app/admin/reports/`, `app/admin/chief-access/`, `app/admin/slot-audit/`
+**Files:** `app/admin/payment-closing/`, `app/admin/bank-hours/`, `app/admin/acessos/` (as demais telas de admin saíram em 29/09/2026)
 **Responsibility:** Admin-only views for payment, attestation, bank hours, reports.
 
 ---

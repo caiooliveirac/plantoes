@@ -81,13 +81,13 @@ describe("classifyContractPendencies — a fila de 02-pendencias-pos-deploy", ()
         assert.deepEqual(kinds([doctor({ metadata: { isNaoPlantonista: true } })], []), []);
     });
 
-    it("o link leva ao modal do médico no mês do último plantão; sem plantão, ao cadastro", () => {
+    it("o link leva ao modal do médico no mês do último plantão; sem plantão, sem link", () => {
         assert.equal(
             contractPendencyHref({ kind: "sem_contrato", doctorId: "d-1", lastShiftMonth: "2026-09" }),
             "/admin/payment-closing?month=2026-09&doctor=d-1",
         );
-        assert.equal(contractPendencyHref({ kind: "sem_plantao_recente", doctorId: "d-1", lastShiftMonth: "2026-01" }), "/admin/medicos");
-        assert.equal(contractPendencyHref({ kind: "vencido", doctorId: "d-1", lastShiftMonth: null }), "/admin/medicos");
+        assert.equal(contractPendencyHref({ kind: "sem_plantao_recente", doctorId: "d-1", lastShiftMonth: "2026-01" }), null);
+        assert.equal(contractPendencyHref({ kind: "vencido", doctorId: "d-1", lastShiftMonth: null }), null);
     });
 
     it("contador por tipo soma o total", () => {

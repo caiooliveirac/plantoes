@@ -43,18 +43,23 @@ export function ContractPendencyQueueView({ queue }: { queue: ContractPendencyQu
                             {group.title} <span className={`reports-badge ${group.tone}`}>{queue.counts[kind]}</span>
                         </h2>
                         <ul>
-                            {queue.items.filter((item) => item.kind === kind).map((item) => (
+                            {queue.items.filter((item) => item.kind === kind).map((item) => {
+                                const href = contractPendencyHref(item);
+                                return (
                                 <li key={`${kind}-${item.doctorId}`}>
                                     <div>
                                         <strong>{item.doctorName}</strong>
                                         {item.contractNumber ? <small> · contrato {item.contractNumber}</small> : null}
                                         <p>{item.detail}</p>
                                     </div>
-                                    <a className="payment-button subtle" href={contractPendencyHref(item)}>
-                                        {group.action}
-                                    </a>
+                                    {href ? (
+                                        <a className="payment-button subtle" href={href}>
+                                            {group.action}
+                                        </a>
+                                    ) : null}
                                 </li>
-                            ))}
+                                );
+                            })}
                         </ul>
                     </section>
                 );

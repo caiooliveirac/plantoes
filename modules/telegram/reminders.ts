@@ -244,7 +244,7 @@ export function buildTakeoverConflictPlan(params: {
         },
         text: [
             `⚠️ Tomada pendente em ${domainLabel} *${md(code)}*: *${arrivingName}* × *${occupantName}* há *${elapsedMinutes} min*.`,
-            `Quem assume confirma no grupo: ${codeSpan(`confirmo ${code}`)} — ou ajuste em /admin/payment-attestation/audit.`,
+            `Quem assume confirma no grupo: ${codeSpan(`confirmo ${code}`)} — ou ajuste no fechamento mensal.`,
         ].join("\n"),
     };
 }
@@ -1197,7 +1197,7 @@ function buildPaymentConflictAlertPlan(params: {
             `⚠️ Conflito de alocação p/ pagamento (${params.paymentBoard.shiftLabel} ${formatHour(bucket)}): entrada por cima de outro titular no mesmo alvo/turno.`,
             ...lines,
             ...(conflictRows.length > lines.length ? [`- ... e mais ${conflictRows.length - lines.length} conflito(s)`] : []),
-            "🔎 Revise em /admin/payment-attestation/audit ou no modal do fechamento.",
+            "🔎 Revise no modal do fechamento mensal.",
         ].join("\n"),
     };
 }

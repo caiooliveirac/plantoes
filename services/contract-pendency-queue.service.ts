@@ -221,10 +221,10 @@ export function classifyContractPendencies(params: {
 /**
  * Onde se resolve cada pendência. O modal do fechamento só abre médico que tem
  * plantão no mês pedido — por isso o mês do último plantão. Quem não tem
- * plantão nenhum vai para o cadastro de médicos.
+ * plantão nenhum fica sem link (o cadastro de médicos saiu em 29/09/2026).
  */
-export function contractPendencyHref(item: Pick<ContractPendencyItem, "kind" | "doctorId" | "lastShiftMonth">): string {
-    if (item.kind === "sem_plantao_recente" || item.lastShiftMonth === null) return "/admin/medicos";
+export function contractPendencyHref(item: Pick<ContractPendencyItem, "kind" | "doctorId" | "lastShiftMonth">): string | null {
+    if (item.kind === "sem_plantao_recente" || item.lastShiftMonth === null) return null;
     return `/admin/payment-closing?month=${item.lastShiftMonth}&doctor=${item.doctorId}`;
 }
 

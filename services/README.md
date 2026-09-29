@@ -9,11 +9,10 @@ Application-level services that compose domain modules into higher-level operati
 | `board.service.ts` | ~2496 | Operational board read model, payment allocation | `operational-board-display.test.ts`, `payment-allocation.test.ts` |
 | `auth.service.ts` | — | User authentication, session management | `auth-token.test.ts` |
 | `bank-hours-history.service.ts` | — | Bank hours historical log queries | `bank-hours-history.test.ts` |
-| `chief-access.service.ts` | — | Chief UI operations (correct, transfer, remove) | — |
-| `monthly-report.service.ts` | — | Monthly shift report generation | `monthly-report.test.ts` |
+| `chief-access.service.ts` | — | Lista de médicos ativos da Mesa (o fluxo de chefia saiu em 29/09/2026) | — |
 | `operational-history.service.ts` | — | Operation history timeline queries | `operational-history.test.ts` |
 | `payment-attestation.service.ts` | — | Payment attestation management | `payment-attestation.test.ts` |
-| `slot-audit.service.ts` | — | Slot audit report generation | `slot-audit.test.ts` |
+| `slot-audit.service.ts` | — | Relatório de presença por slot do bot do Telegram | `slot-audit.test.ts` |
 
 ## board.service.ts
 

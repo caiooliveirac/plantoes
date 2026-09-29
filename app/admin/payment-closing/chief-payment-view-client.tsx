@@ -238,10 +238,6 @@ function formatUnits(value: number | null | undefined) {
     return Number.isInteger(safeValue) ? String(safeValue) : safeValue.toFixed(1).replace(".", ",");
 }
 
-function cellAuditLink(monthKey: string, day: string, shift: "SD" | "SN") {
-    return `/admin/payment-attestation/audit?date=${monthKey}-${day}&shift=${shift}`;
-}
-
 const WEEKDAY_LABELS_PT = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"] as const;
 
 function formatOperationalDate(operationalDate: string) {
@@ -1752,13 +1748,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                             Exportar XLSX
                         </a>
                     ) : null}
-                    <AdminBarNavMenu current="payment-closing">
-                        {canManageClosing ? (
-                            <a className="admin-nav-menu-link" href="/admin/payment-attestation/audit" role="menuitem">
-                                Abrir auditoria técnica
-                            </a>
-                        ) : null}
-                    </AdminBarNavMenu>
+                    <AdminBarNavMenu current="payment-closing" />
                 </div>
             </header>
 
@@ -2525,14 +2515,6 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                     {shiftActionBusy ? "Removendo..." : `Remover ${shiftActionDraft.doctorName} deste plantão`}
                                 </button>
                             ) : null}
-                            {shiftActionDraft.source === "admin_extra" ? null : (
-                                <a
-                                    className="payment-button"
-                                    href={cellAuditLink(board.monthKey, shiftActionDraft.day, shiftActionDraft.shiftLabel)}
-                                >
-                                    Abrir auditoria detalhada
-                                </a>
-                            )}
                             <button
                                 type="button"
                                 className="payment-button"
@@ -2636,9 +2618,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                                 const month = segment.operationalDate.slice(5, 7);
                                                 return (
                                                     <li key={segment.segmentId}>
-                                                        <a href={cellAuditLink(board.monthKey, day, segment.shiftLabel)}>
-                                                            {day}/{month} {segment.shiftLabel} {segment.targetCode}
-                                                        </a>{" "}
+                                                        {day}/{month} {segment.shiftLabel} {segment.targetCode}{" "}
                                                         - escolhido no slot: {segment.chosenDoctorName}
                                                     </li>
                                                 );
@@ -2646,14 +2626,11 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                         </ul>
                                         {selectedDoctorDisplacedConflictSegments.length > 6 ? (
                                             <small>
-                                                +{selectedDoctorDisplacedConflictSegments.length - 6} ocorrência(s). Abra a auditoria técnica para ver todas.
+                                                +{selectedDoctorDisplacedConflictSegments.length - 6} ocorrência(s).
                                             </small>
                                         ) : null}
                                     </div>
                                 ) : null}
-                                <p className="chief-payable-attest-hint">
-                                    Revise no detalhe para não perder pagamento por sobreposição: <a href="/admin/payment-attestation/audit">abrir auditoria técnica</a>.
-                                </p>
                             </section>
                         ) : null}
 
