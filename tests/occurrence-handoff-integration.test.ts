@@ -65,9 +65,13 @@ test("mensagens do bot: aviso, cobrança com @, divisão com plural de Regulado"
     assert.match(notice, /MRV: só amarelas/);
     assert.match(notice, /PSIQ distribui entre os colegas/);
 
-    const pending = buildHandoffPendingMessage({ plan, link, mention: (r) => (r === "2052" ? "@mr\\_b" : null) });
+    const mention = (r: string) => (r === "2052" ? { telegramId: "11", username: "mr_bb" } : r === "2032" ? { telegramId: "22", username: "" } : null);
+    const pending = buildHandoffPendingMessage({ plan, link, mention });
     assert.ok(pending);
-    assert.match(pending!, /@mr\\_b/);
+    // Nome sempre junto do @; sem username, o nome vira link tg://user.
+    assert.match(pending!, /\*[^*\n]+\* @mr\\_bb/);
+    const noticeWithMention = buildHandoffNoticeMessage({ plan, link, mention });
+    assert.match(noticeWithMention, /\[[^\]]+\]\(tg:\/\/user\?id=22\) \(2032\)/);
 
     const division = buildHandoffDivisionMessage({ plan, link });
     assert.match(division, /12 Aguardando → Recip \(RECIP\)/);

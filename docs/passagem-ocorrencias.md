@@ -34,7 +34,7 @@ no grupo do Telegram. Regras definidas pela chefia em 2026-09-24.
 
 | Momento | Painel | Bot |
 |---|---|---|
-| −15 min | faixa acima do quadro, linha de quem sai expande | aviso: quem sai, quem volta, link |
+| −15 min | faixa acima do quadro, linha de quem sai expande | aviso: quem sai (nome + @), quem volta, link sem prévia |
 | −10 min | contagem abre (sem login) | cobrança com @ de quem falta, a cada 3 min |
 | saída / todos informaram | divisão | divisão (uma mensagem) |
 | até +10 min | correções recalculam | a mesma mensagem é **editada** |

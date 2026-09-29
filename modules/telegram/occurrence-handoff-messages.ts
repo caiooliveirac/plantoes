@@ -2,21 +2,31 @@
 // Puro: quem chama resolve menções e decide quando enviar.
 //
 // Três mensagens por saída:
-// - aviso: 15 min antes — quem sai, quem volta, link para informar;
+// - aviso: 15 min antes — quem sai (com @), quem volta, link para informar;
 // - cobranca: a partir de 10 min antes, repetida enquanto faltar contagem, com
 //   @ de quem falta;
 // - divisao: a divisão calculada, assim que todos informam (ou na hora da saída,
 //   marcando quem ficou de fora).
+//
+// Marcação: sempre o nome, mais o @username quando existe; sem username, o nome
+// vira link tg://user?id (marca igual). O link do painel vai sem prévia
+// (quem envia passa disableLinkPreview).
 
 import { escapeTelegramMarkdown } from "./api";
 import { handoffKindLabel, type OccurrenceHandoffPlan } from "../operational/occurrence-handoff";
+
+export interface HandoffMention {
+    telegramId: string;
+    /** Vazio quando a pessoa não tem @username. */
+    username: string;
+}
 
 export interface HandoffMessageContext {
     plan: OccurrenceHandoffPlan;
     /** Link público para informar a contagem. */
     link: string;
-    /** Menção pronta (formatMealBreakTelegramMention) ou null para cair no nome. */
-    mention?: (ramal: string) => string | null;
+    /** Quem é o ramal no grupo, ou null para cair só no nome. */
+    mention?: (ramal: string) => HandoffMention | null;
 }
 
 function minusMinutes(hhmm: string, minutes: number) {
@@ -31,7 +41,11 @@ function nameOf(plan: OccurrenceHandoffPlan, ramal: string) {
 }
 
 function who(ctx: HandoffMessageContext, ramal: string) {
-    return ctx.mention?.(ramal) ?? `*${escapeTelegramMarkdown(nameOf(ctx.plan, ramal))}*`;
+    const name = escapeTelegramMarkdown(nameOf(ctx.plan, ramal));
+    const m = ctx.mention?.(ramal);
+    if (m && /^[A-Za-z0-9_]{5,32}$/.test(m.username)) return `*${name}* @${escapeTelegramMarkdown(m.username)}`;
+    if (m && /^\d+$/.test(m.telegramId)) return `[${name}](tg://user?id=${m.telegramId})`;
+    return `*${name}*`;
 }
 
 function list(names: string[]) {
@@ -43,7 +57,7 @@ export function buildHandoffNoticeMessage(ctx: HandoffMessageContext): string {
     const esc = (ramal: string) => escapeTelegramMarkdown(nameOf(plan, ramal));
     const lines = [
         `🍽 *Saída das ${plan.slot} em 15 min — passagem de ocorrências*`,
-        `Saem: ${list(plan.givers.map((g) => `${esc(g.ramal)} (${g.ramal})`))}`,
+        `Saem: ${list(plan.givers.map((g) => `${who(ctx, g.ramal)} (${g.ramal})`))}`,
         `Voltam: ${list(plan.returning.map((p) => esc(p.ramal)))}`,
         plan.recip
             ? `RECIP (${esc(plan.recip.ramal)}) recebe até 15, Aguardando primeiro.`

@@ -5915,14 +5915,17 @@ export async function getCurrentDayMealBreakSessionWithChat(referenceAt = new Da
     return resolveCurrentOperationalMealBreakState(referenceAt, "day");
 }
 
-/** @ do médico no grupo (mesma resolução do lembrete de vez), pronto para Markdown. */
-export async function resolveMealBreakDoctorMention(params: { chatId: string; referenceAt: Date; doctorId: string }) {
-    const mention = await resolveMealBreakTargetMention({
+/**
+ * Quem é o médico no grupo (mesma resolução do lembrete de vez): telegramId e,
+ * se houver, @username. Sem username ainda marca, por link tg://user?id.
+ */
+export async function resolveMealBreakDoctorTelegramUser(params: { chatId: string; referenceAt: Date; doctorId: string }) {
+    return resolveMealBreakTargetMention({
         chatId: params.chatId,
         referenceAt: params.referenceAt,
         targetDoctorId: params.doctorId,
+        allowMissingUsername: true,
     });
-    return formatMealBreakTelegramMention(mention);
 }
 
 type MealBreakRewindStageKey = "lunch" | "rest_choice" | "night_work" | "dinner_choice";
@@ -7385,13 +7388,17 @@ function formatMealBreakTelegramMention(
 function resolveMealBreakTelegramMention(
     member: Awaited<ReturnType<typeof getChatMember>> | null,
     telegramId: string,
+    allowMissingUsername = false,
 ) {
     if (!member || member.status === "left" || member.status === "kicked" || member.user.is_bot) {
         return null;
     }
     const username = member.user.username?.trim() ?? "";
-    return /^[A-Za-z0-9_]{5,32}$/.test(username)
-        ? { telegramId, username } satisfies MealBreakTelegramMention
+    if (/^[A-Za-z0-9_]{5,32}$/.test(username)) {
+        return { telegramId, username } satisfies MealBreakTelegramMention;
+    }
+    return allowMissingUsername && /^\d+$/.test(telegramId)
+        ? { telegramId, username: "" } satisfies MealBreakTelegramMention
         : null;
 }
 
@@ -7399,6 +7406,8 @@ async function resolveMealBreakTargetMention(params: {
     chatId: string;
     referenceAt: Date;
     targetDoctorId: string;
+    /** Aceita membro sem @username (username vazio): marca pelo id. */
+    allowMissingUsername?: boolean;
 }) {
     const db = getDb();
     const shift = resolveOperationalShiftWindow(params.referenceAt);
@@ -7442,7 +7451,7 @@ async function resolveMealBreakTargetMention(params: {
     }));
 
     for (const [index, member] of members.entries()) {
-        const mention = resolveMealBreakTelegramMention(member, candidateIds[index]!);
+        const mention = resolveMealBreakTelegramMention(member, candidateIds[index]!, params.allowMissingUsername);
         if (mention && `@${mention.username}`.toLowerCase() !== MEAL_BREAK_CHIEF_USERNAME.toLowerCase()) {
             return mention;
         }
