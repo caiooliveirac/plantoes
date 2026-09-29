@@ -1,0 +1,245 @@
+/* Banco de horas do Painel do médico (components/doctor-panel/banco-de-horas-medico.tsx).
+   Só tokens do Kairós (app/kairos.css): o tema escuro vem de graça. */
+
+.pagina-kairos .bhm { display: grid; gap: 16px; font-size: 15px; line-height: 1.45; color: var(--texto); }
+.pagina-kairos .bhm h2 { margin: 0; font-size: 16px; color: var(--texto-forte); }
+.pagina-kairos .bhm p { margin: 0; }
+.pagina-kairos .bhm-num { font-family: var(--fonte-mono); font-variant-numeric: tabular-nums; }
+.pagina-kairos .bhm .pos { color: var(--verde-700); }
+.pagina-kairos .bhm .neg { color: var(--vermelho-700); }
+.pagina-kairos .bhm .zero { color: var(--texto-medio); }
+
+.pagina-kairos .bhm-cartao {
+    background: var(--superficie);
+    border: 1px solid var(--borda);
+    border-radius: 12px;
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+}
+.pagina-kairos .bhm-nota { font-size: 12.5px; color: var(--texto-medio); }
+
+/* saldo */
+.pagina-kairos .bhm-saldo-rotulo { font-size: 13px; color: var(--texto-medio); }
+.pagina-kairos .bhm-saldo-valor { font-size: 40px; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; margin-top: 2px; }
+
+.pagina-kairos .bhm-frase { border-radius: 10px; padding: 12px 14px; display: grid; gap: 8px; color: var(--texto-forte); }
+.pagina-kairos .bhm-frase.verde { background: var(--verde-50); border: 1px solid var(--verde-200); }
+.pagina-kairos .bhm-frase.neutra { background: var(--superficie-alt); border: 1px solid var(--borda); }
+.pagina-kairos .bhm-frase.ambar { background: var(--ambar-50); border: 1px solid var(--ambar-200); }
+.pagina-kairos .bhm-frase-sub { font-size: 13px; color: var(--texto); }
+.pagina-kairos .bhm-botao {
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 14px;
+    background: var(--verde-600);
+    color: var(--branco);
+    text-decoration: none;
+}
+
+/* régua −12h … +12h */
+.pagina-kairos .bhm-regua { display: grid; gap: 6px; }
+.pagina-kairos .bhm-regua-trilho {
+    position: relative;
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid var(--borda);
+    background: linear-gradient(to right, var(--vermelho-50) 0 25%, var(--superficie-alt) 25% 75%, var(--verde-50) 75% 100%);
+}
+.pagina-kairos .bhm-regua-marco { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--borda-forte); }
+.pagina-kairos .bhm-regua-ponto {
+    position: absolute;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    border: 3px solid var(--superficie);
+    box-shadow: 0 0 0 1px var(--borda-forte);
+    background: var(--texto-medio);
+}
+.pagina-kairos .bhm-regua-ponto.pos { background: var(--verde-600); }
+.pagina-kairos .bhm-regua-ponto.neg { background: var(--vermelho-600); }
+.pagina-kairos .bhm-regua-legenda { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--texto-medio); }
+.pagina-kairos .bhm-regua-legenda span { width: 33%; }
+.pagina-kairos .bhm-regua-legenda span:nth-child(2) { text-align: center; }
+.pagina-kairos .bhm-regua-legenda span:last-child { text-align: right; }
+
+/* conta */
+.pagina-kairos .bhm-conta { list-style: none; margin: 0; padding: 0; display: grid; }
+.pagina-kairos .bhm-conta li + li { border-top: 1px solid var(--borda); }
+.pagina-kairos .bhm-conta-linha {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 12px;
+    align-items: baseline;
+    padding: 10px 0;
+    background: none;
+    border: 0;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+}
+.pagina-kairos button.bhm-conta-linha { cursor: pointer; }
+.pagina-kairos .bhm-conta-linha .rot { color: var(--texto-forte); }
+.pagina-kairos .bhm-conta-linha .det { grid-column: 1; font-size: 12.5px; color: var(--texto-medio); }
+.pagina-kairos .bhm-conta-linha .val { grid-column: 2; grid-row: 1 / span 2; font-weight: 600; }
+.pagina-kairos .bhm-conta-linha[aria-pressed="true"] .rot { color: var(--azul-acao); text-decoration: underline; }
+.pagina-kairos .bhm-conta li.total { border-top: 2px solid var(--texto-forte); }
+.pagina-kairos .bhm-conta li.total .rot { font-weight: 700; }
+
+/* mês a mês */
+.pagina-kairos .bhm-filtro {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    background: var(--azul-50);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+}
+.pagina-kairos .bhm-filtro button { background: none; border: 0; color: var(--azul-acao); font-weight: 600; cursor: pointer; font: inherit; }
+.pagina-kairos .bhm-meses { display: grid; gap: 8px; }
+.pagina-kairos .bhm-mes { border: 1px solid var(--borda); border-radius: 10px; overflow: hidden; background: var(--superficie); }
+.pagina-kairos .bhm-mes-cab {
+    width: 100%;
+    background: none;
+    border: 0;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 12px;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+}
+.pagina-kairos .bhm-mes-cab .nome { font-weight: 600; color: var(--texto-forte); }
+.pagina-kairos .bhm-mes-cab .resumo { grid-column: 1; font-size: 12.5px; color: var(--texto-medio); }
+.pagina-kairos .bhm-mes-cab .valores { grid-column: 2; grid-row: 1 / span 2; display: grid; gap: 2px; text-align: right; align-content: center; }
+.pagina-kairos .bhm-mes-cab .acum { font-size: 12px; color: var(--texto-medio); }
+.pagina-kairos .bhm-mes-corpo { border-top: 1px solid var(--borda); display: grid; }
+
+.pagina-kairos .bhm-plantao,
+.pagina-kairos .bhm-acerto {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    gap: 2px 10px;
+    align-items: baseline;
+    padding: 10px 14px;
+    border: 0;
+    border-bottom: 1px solid var(--borda);
+    background: none;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+}
+.pagina-kairos .bhm-plantao { cursor: pointer; }
+.pagina-kairos .bhm-plantao.destaque { background: var(--azul-50); }
+.pagina-kairos .bhm-plantao-quando { font-weight: 600; color: var(--texto-forte); }
+.pagina-kairos .bhm-plantao-quando small { display: block; font-weight: 400; font-size: 12px; color: var(--texto-medio); }
+.pagina-kairos .bhm-plantao-oque,
+.pagina-kairos .bhm-acerto-oque { font-size: 13.5px; color: var(--texto-forte); min-width: 0; }
+.pagina-kairos .bhm-plantao-resumo { display: block; font-size: 12.5px; color: var(--texto-medio); }
+.pagina-kairos .bhm-acerto-oque small { display: block; font-size: 12px; color: var(--texto-medio); }
+.pagina-kairos .bhm-acerto.estornado .bhm-acerto-oque,
+.pagina-kairos .bhm-acerto.estornado .bhm-num { text-decoration: line-through; color: var(--texto-medio); }
+.pagina-kairos .bhm-plantao-valor { font-weight: 600; }
+
+.pagina-kairos .bhm-selos { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.pagina-kairos .bhm-selo {
+    font-size: 11.5px;
+    border-radius: 999px;
+    padding: 1px 8px;
+    border: 1px solid var(--borda);
+    background: var(--superficie-alt);
+    color: var(--texto);
+}
+.pagina-kairos .bhm-selo.verde { background: var(--verde-50); border-color: var(--verde-200); color: var(--verde-700); }
+.pagina-kairos .bhm-selo.ambar { background: var(--ambar-50); border-color: var(--ambar-200); color: var(--ambar-700); }
+.pagina-kairos .bhm-selo.azul { background: var(--azul-50); border-color: transparent; color: var(--azul-acao); }
+
+.pagina-kairos .bhm-explica {
+    padding: 12px 14px 14px;
+    background: var(--superficie-alt);
+    border-bottom: 1px solid var(--borda);
+    display: grid;
+    gap: 10px;
+    font-size: 14px;
+}
+.pagina-kairos .bhm-horarios { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.pagina-kairos .bhm-horarios div { background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 8px 10px; }
+.pagina-kairos .bhm-horarios div.final { border-color: var(--borda-forte); }
+.pagina-kairos .bhm-horarios dt { font-size: 11.5px; color: var(--texto-medio); }
+.pagina-kairos .bhm-horarios dd { margin: 0; font-weight: 600; color: var(--texto-forte); }
+.pagina-kairos .bhm-validacao { font-size: 13px; }
+.pagina-kairos .bhm-validacao.ok { color: var(--verde-700); }
+.pagina-kairos .bhm-validacao.warn { color: var(--ambar-700); }
+.pagina-kairos .bhm-validacao.neutral { color: var(--texto); }
+
+.pagina-kairos .bhm-sem-mudanca { padding: 10px 14px; font-size: 13px; color: var(--texto-medio); display: grid; gap: 6px; }
+.pagina-kairos .bhm-sem-mudanca button { justify-self: start; background: none; border: 0; padding: 0; color: var(--azul-acao); cursor: pointer; font: inherit; font-size: 13px; }
+.pagina-kairos .bhm-dias { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* troca por plantão extra / retirada (components/doctor-panel/self-service-bank-hours.tsx) */
+.pagina-kairos .bhm-troca-linha { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.pagina-kairos .bhm-campo { display: grid; gap: 4px; font-size: 12.5px; color: var(--texto-medio); }
+.pagina-kairos .bhm-campo input,
+.pagina-kairos .bhm-campo select {
+    font: inherit;
+    font-size: 15px;
+    padding: 9px 10px;
+    border: 1px solid var(--borda-forte);
+    border-radius: 8px;
+    background: var(--superficie);
+    color: var(--texto-forte);
+    min-width: 0;
+}
+.pagina-kairos button.bhm-botao { border: 0; cursor: pointer; font-family: inherit; }
+.pagina-kairos .bhm-botao.alerta { background: var(--vermelho-600); }
+.pagina-kairos .bhm-botao:disabled { opacity: 0.5; cursor: not-allowed; }
+.pagina-kairos .bhm-erro { font-size: 13px; color: var(--vermelho-700); }
+.pagina-kairos .bhm-declarados ul { list-style: none; margin: 0; padding: 0; display: grid; }
+.pagina-kairos .bhm-declarados li + li { border-top: 1px solid var(--borda); }
+.pagina-kairos .bhm-declarado { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding: 8px 0; }
+.pagina-kairos .bhm-declarado .bhm-num { font-weight: 600; color: var(--texto-forte); margin-right: auto; }
+.pagina-kairos .bhm-declarado-edicao { display: grid; gap: 8px; padding: 8px 0; }
+.pagina-kairos .bhm-acoes { display: flex; align-items: center; gap: 12px; }
+.pagina-kairos .bhm-link { background: none; border: 0; padding: 0; color: var(--azul-acao); cursor: pointer; font: inherit; font-size: 13px; }
+.pagina-kairos .bhm-link.perigo { color: var(--vermelho-700); }
+.pagina-kairos .bhm-link:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.pagina-kairos .bhm button:focus-visible,
+.pagina-kairos .bhm a:focus-visible { outline: 2px solid var(--azul-acao); outline-offset: 2px; }
+
+@media (max-width: 420px) {
+    .pagina-kairos .bhm-saldo-valor { font-size: 34px; }
+    .pagina-kairos .bhm-plantao,
+    .pagina-kairos .bhm-acerto { grid-template-columns: 54px minmax(0, 1fr) auto; }
+    .pagina-kairos .bhm-troca-linha { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: no-preference) {
+    .pagina-kairos .bhm-regua-ponto { transition: left 0.3s ease; }
+}
+
+/* abas do painel (components/doctor-panel/painel-abas.tsx) */
+.pagina-kairos .painel-abas { display: flex; gap: 4px; border-bottom: 1px solid var(--borda); overflow-x: auto; }
+.pagina-kairos .painel-abas a {
+    padding: 10px 12px;
+    font-size: 14px;
+    color: var(--texto-medio);
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+}
+.pagina-kairos .painel-abas a[aria-current="page"] { color: var(--texto-forte); border-bottom-color: var(--azul-acao); font-weight: 600; }
+.pagina-kairos .painel-aba { display: grid; gap: 16px; }
+.pagina-kairos .painel-aba[hidden] { display: none; }

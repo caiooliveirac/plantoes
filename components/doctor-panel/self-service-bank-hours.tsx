@@ -27,6 +27,11 @@ interface Props {
     shiftOptions: SelfServiceShiftOption[];
     /** Extras que ele mesmo declarou no mês — pode trocar dia/turno ou tirar. */
     declaredExtras: SelfDeclaredExtra[];
+    /**
+     * Dia+turno ("AAAA-MM-DD|SD") em que ele já tem plantão pagável no mês —
+     * trabalhado, extra ou chefia. O extra não pode cair em cima (a API também barra).
+     */
+    takenSlots: string[];
 }
 
 function formatDia(operationalDate: string) {
@@ -47,6 +52,7 @@ export function SelfServiceBankHours({
     canPenalty,
     shiftOptions,
     declaredExtras,
+    takenSlots,
 }: Props) {
     const router = useRouter();
     const [bonusDate, setBonusDate] = useState("");
@@ -134,80 +140,104 @@ export function SelfServiceBankHours({
         await call("DELETE", { settlementId: extra.settlementId }, extra.settlementId);
     }
 
+    const ocupado = (data: string, turno: "SD" | "SN", ignorar?: SelfDeclaredExtra) =>
+        takenSlots.includes(`${data}|${turno}`)
+        && !(ignorar && ignorar.operationalDate === data && ignorar.shiftLabel === turno);
+    // Ao trocar o dia, o turno pula para um livre; sem turno livre, nada a registrar.
+    const turnoLivre = (data: string, preferido: "SD" | "SN", ignorar?: SelfDeclaredExtra): "SD" | "SN" | null => {
+        if (!data) return preferido;
+        if (!ocupado(data, preferido, ignorar)) return preferido;
+        const outro = preferido === "SD" ? "SN" : "SD";
+        return ocupado(data, outro, ignorar) ? null : outro;
+    };
+    const bonusDiaCheio = Boolean(bonusDate) && turnoLivre(bonusDate, bonusShift) === null;
+    const editando = declaredExtras.find((extra) => extra.settlementId === editing);
+    const editDiaCheio = Boolean(editDate) && turnoLivre(editDate, editShift, editando) === null;
+
+    const turnoSelect = ({ id, data, valor, aoMudar, ignorar }: {
+        id: string;
+        data: string;
+        valor: "SD" | "SN";
+        aoMudar: (turno: "SD" | "SN") => void;
+        ignorar?: SelfDeclaredExtra;
+    }) => (
+        <select id={id} value={valor} onChange={(event) => aoMudar(event.target.value === "SN" ? "SN" : "SD")}>
+            <option value="SD" disabled={Boolean(data) && ocupado(data, "SD", ignorar)}>
+                Diurno (SD){data && ocupado(data, "SD", ignorar) ? " · você já tem plantão" : ""}
+            </option>
+            <option value="SN" disabled={Boolean(data) && ocupado(data, "SN", ignorar)}>
+                Noturno (SN){data && ocupado(data, "SN", ignorar) ? " · você já tem plantão" : ""}
+            </option>
+        </select>
+    );
+
+    const titulo = canBonus
+        ? "Trocar 12h por 1 plantão extra"
+        : canPenalty
+            ? "Retirar 1 plantão da folha"
+            : "Plantões extra que você declarou";
+
     return (
-        <section className="panel-section panel-bank-extra">
-            <div className="panel-bank-extra-head">
-                <span className="panel-bank-extra-badge">BANCO DE HORAS</span>
-                <h2>Trocar saldo por plantão</h2>
-            </div>
-            <p className="panel-bank-extra-warning">
-                {canBonus
-                    ? <>Seu saldo passou de <strong>+12h</strong>: você pode registrar um plantão extra em dia livre — ele entra na folha valendo um plantão e <strong>desconta 12h do seu saldo</strong>. </>
-                    : null}
-                {canPenalty
-                    ? <>Seu saldo passou de <strong>−12h</strong>: um plantão do mês é retirado da folha e <strong>devolve 12h ao seu saldo</strong>. </>
-                    : null}
-                {!canBonus && !canPenalty
-                    ? <>Aqui ficam os plantões extra que você declarou trocando saldo do banco de horas. </>
-                    : null}
-                Plantão de chefia não passa por aqui — ele tem o bloco roxo próprio e não mexe em saldo.
-            </p>
-            <div className="panel-self-service">
-                {canBonus ? (
-                    <div className="panel-self-service-row bonus">
-                        <label className="panel-field">
-                            <span className="panel-field-label">Dia do plantão extra</span>
+        <section className="bhm-cartao" id="troca" aria-labelledby="bhm-t-troca">
+            <h2 id="bhm-t-troca">{titulo}</h2>
+            {canBonus ? (
+                <>
+                    <p className="bhm-nota">
+                        Escolha um dia e turno em que você não tem plantão. O extra entra na folha valendo um plantão e o saldo cai 12h.
+                    </p>
+                    <div className="bhm-troca-linha">
+                        <label className="bhm-campo" htmlFor="bhm-dia-extra">
+                            Dia livre
                             <input
+                                id="bhm-dia-extra"
                                 type="date"
                                 value={bonusDate}
                                 min={minDate}
                                 max={maxDate}
-                                onChange={(event) => setBonusDate(event.target.value)}
+                                onChange={(event) => {
+                                    const dia = event.target.value;
+                                    setBonusDate(dia);
+                                    setBonusShift((atual) => turnoLivre(dia, atual) ?? atual);
+                                }}
                             />
                         </label>
-                        <label className="panel-field">
-                            <span className="panel-field-label">Turno</span>
-                            <select
-                                value={bonusShift}
-                                onChange={(event) => setBonusShift(event.target.value === "SN" ? "SN" : "SD")}
-                            >
-                                <option value="SD">Diurno (SD)</option>
-                                <option value="SN">Noturno (SN)</option>
-                            </select>
+                        <label className="bhm-campo" htmlFor="bhm-turno-extra">
+                            Turno
+                            {turnoSelect({ id: "bhm-turno-extra", data: bonusDate, valor: bonusShift, aoMudar: setBonusShift })}
                         </label>
-                        <button
-                            type="button"
-                            className="panel-action-btn bonus"
-                            disabled={!bonusDate || busy !== null}
-                            onClick={() => void submit("bonus")}
-                        >
-                            {busy === "bonus"
-                                ? "Registrando…"
-                                : confirming === "bonus" && bonusDate
-                                    ? `Confirmar ${formatDia(bonusDate)} (${bonusShift})? Desconta 12h`
-                                    : "Registrar plantão extra (12h)"}
-                        </button>
                     </div>
-                ) : null}
+                    {bonusDiaCheio ? (
+                        <p className="bhm-erro">Você já tem plantão nos dois turnos desse dia. Escolha outro dia.</p>
+                    ) : null}
+                    <button
+                        type="button"
+                        className="bhm-botao"
+                        disabled={!bonusDate || bonusDiaCheio || busy !== null}
+                        onClick={() => void submit("bonus")}
+                    >
+                        {busy === "bonus"
+                            ? "Registrando…"
+                            : confirming === "bonus" && bonusDate
+                                ? `Confirmar ${formatDia(bonusDate)} (${bonusShift})? O saldo cai 12h`
+                                : "Registrar plantão extra"}
+                    </button>
+                </>
+            ) : null}
 
-                {canPenalty && shiftOptions.length === 0 ? (
-                    // Sem isto a seção renderizava como caixa vazia: elegível a
-                    // punição, mas nenhum plantão pagável no mês para retirar.
-                    <p className="panel-self-service-note">
-                        A retirada tira um plantão da folha deste mês — e você ainda não tem
-                        plantão pagável em {monthKey.split("-").reverse().join("/")}. Assim que
-                        um plantão seu entrar na folha, a opção de retirada aparece aqui.
-                    </p>
-                ) : null}
+            {canPenalty && shiftOptions.length === 0 ? (
+                // Elegível à retirada, mas nenhum plantão pagável no mês para retirar.
+                <p className="bhm-nota">
+                    A retirada tira um plantão da folha deste mês, e você ainda não tem plantão pagável em{" "}
+                    {monthKey.split("-").reverse().join("/")}. Assim que um plantão seu entrar na folha, a opção aparece aqui.
+                </p>
+            ) : null}
 
-                {canPenalty && shiftOptions.length > 0 ? (
-                    <div className="panel-self-service-row penalty">
-                        <label className="panel-field">
-                            <span className="panel-field-label">Plantão a retirar da folha</span>
-                            <select
-                                value={penaltyPick}
-                                onChange={(event) => setPenaltyPick(event.target.value)}
-                            >
+            {canPenalty && shiftOptions.length > 0 ? (
+                <>
+                    <p className="bhm-nota">O plantão escolhido sai da folha deste mês e o saldo volta 12h.</p>
+                    <label className="bhm-campo" htmlFor="bhm-retirada">
+                        Plantão a retirar da folha
+                        <select id="bhm-retirada" value={penaltyPick} onChange={(event) => setPenaltyPick(event.target.value)}>
                             <option value="">Escolher plantão…</option>
                             {shiftOptions.map((shift) => (
                                 <option
@@ -217,105 +247,102 @@ export function SelfServiceBankHours({
                                     {shift.label}
                                 </option>
                             ))}
-                            </select>
-                        </label>
-                        <button
-                            type="button"
-                            className="panel-action-btn penalty"
-                            disabled={!penaltyPick || busy !== null}
-                            onClick={() => void submit("penalty")}
-                        >
-                            {busy === "penalty"
-                                ? "Retirando…"
-                                : confirming === "penalty" && penaltyPick
-                                    ? `Confirmar retirada de ${formatDia(penaltyPick.split("|")[0])}? Devolve 12h`
-                                    : "Retirar este plantão (12h)"}
-                        </button>
-                    </div>
-                ) : null}
+                        </select>
+                    </label>
+                    <button
+                        type="button"
+                        className="bhm-botao alerta"
+                        disabled={!penaltyPick || busy !== null}
+                        onClick={() => void submit("penalty")}
+                    >
+                        {busy === "penalty"
+                            ? "Retirando…"
+                            : confirming === "penalty" && penaltyPick
+                                ? `Confirmar retirada de ${formatDia(penaltyPick.split("|")[0])}? O saldo volta 12h`
+                                : "Retirar este plantão"}
+                    </button>
+                </>
+            ) : null}
 
-                {declaredExtras.length > 0 ? (
-                    <div className="panel-declared-extras">
-                        <p className="panel-declared-extras-head">
-                            Plantões extra que você declarou neste mês
-                        </p>
-                        <ul>
-                            {declaredExtras.map((extra) => (
-                                <li key={extra.settlementId}>
-                                    {editing === extra.settlementId ? (
-                                        <div className="panel-self-service-row">
-                                            <label className="panel-field">
-                                                <span className="panel-field-label">Novo dia</span>
+            {declaredExtras.length > 0 ? (
+                <div className="bhm-declarados">
+                    {canBonus || canPenalty ? <p className="bhm-nota">Plantões extra que você declarou neste mês</p> : null}
+                    <ul>
+                        {declaredExtras.map((extra) => (
+                            <li key={extra.settlementId}>
+                                {editing === extra.settlementId ? (
+                                    <div className="bhm-declarado-edicao">
+                                        <div className="bhm-troca-linha">
+                                            <label className="bhm-campo" htmlFor={`bhm-dia-${extra.settlementId}`}>
+                                                Novo dia
                                                 <input
+                                                    id={`bhm-dia-${extra.settlementId}`}
                                                     type="date"
                                                     value={editDate}
                                                     min={minDate}
                                                     max={maxDate}
-                                                    onChange={(event) => setEditDate(event.target.value)}
+                                                    onChange={(event) => {
+                                                        const dia = event.target.value;
+                                                        setEditDate(dia);
+                                                        setEditShift((atual) => turnoLivre(dia, atual, extra) ?? atual);
+                                                    }}
                                                 />
                                             </label>
-                                            <label className="panel-field">
-                                                <span className="panel-field-label">Novo turno</span>
-                                                <select
-                                                    value={editShift}
-                                                    onChange={(event) => setEditShift(event.target.value === "SN" ? "SN" : "SD")}
-                                                >
-                                                    <option value="SD">Diurno (SD)</option>
-                                                    <option value="SN">Noturno (SN)</option>
-                                                </select>
+                                            <label className="bhm-campo" htmlFor={`bhm-turno-${extra.settlementId}`}>
+                                                Novo turno
+                                                {turnoSelect({ id: `bhm-turno-${extra.settlementId}`, data: editDate, valor: editShift, aoMudar: setEditShift, ignorar: extra })}
                                             </label>
+                                        </div>
+                                        {editDiaCheio ? (
+                                            <p className="bhm-erro">Você já tem plantão nos dois turnos desse dia. Escolha outro dia.</p>
+                                        ) : null}
+                                        <div className="bhm-acoes">
                                             <button
                                                 type="button"
-                                                className="panel-action-btn"
-                                                disabled={!editDate || busy !== null}
+                                                className="bhm-botao"
+                                                disabled={!editDate || editDiaCheio || busy !== null}
                                                 onClick={() => void saveEdit(extra.settlementId)}
                                             >
                                                 {busy === extra.settlementId ? "Salvando…" : "Salvar"}
                                             </button>
-                                            <button
-                                                type="button"
-                                                className="panel-link-btn"
-                                                onClick={() => setEditing(null)}
-                                            >
+                                            <button type="button" className="bhm-link" onClick={() => setEditing(null)}>
                                                 Cancelar
                                             </button>
                                         </div>
-                                    ) : (
-                                        <>
-                                            <span className="panel-declared-extra-when">
-                                                {formatDia(extra.operationalDate)} · {extra.shiftLabel}
-                                            </span>
-                                            <button
-                                                type="button"
-                                                className="panel-link-btn"
-                                                disabled={busy !== null}
-                                                onClick={() => {
-                                                    setEditing(extra.settlementId);
-                                                    setEditDate(extra.operationalDate);
-                                                    setEditShift(extra.shiftLabel);
-                                                    setError(null);
-                                                }}
-                                            >
-                                                Trocar dia/turno
-                                            </button>
-                                            <button
-                                                type="button"
-                                                className="panel-link-btn danger"
-                                                disabled={busy !== null}
-                                                onClick={() => void remove(extra)}
-                                            >
-                                                {confirming === `rm:${extra.settlementId}` ? "Confirmar remoção?" : "Tirar"}
-                                            </button>
-                                        </>
-                                    )}
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                ) : null}
+                                    </div>
+                                ) : (
+                                    <div className="bhm-declarado">
+                                        <span className="bhm-num">{formatDia(extra.operationalDate)} · {extra.shiftLabel}</span>
+                                        <button
+                                            type="button"
+                                            className="bhm-link"
+                                            disabled={busy !== null}
+                                            onClick={() => {
+                                                setEditing(extra.settlementId);
+                                                setEditDate(extra.operationalDate);
+                                                setEditShift(extra.shiftLabel);
+                                                setError(null);
+                                            }}
+                                        >
+                                            Trocar dia/turno
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="bhm-link perigo"
+                                            disabled={busy !== null}
+                                            onClick={() => void remove(extra)}
+                                        >
+                                            {confirming === `rm:${extra.settlementId}` ? "Confirmar remoção?" : "Tirar"}
+                                        </button>
+                                    </div>
+                                )}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            ) : null}
 
-                {error ? <p className="panel-self-service-error">{error}</p> : null}
-            </div>
+            {error ? <p className="bhm-erro">{error}</p> : null}
         </section>
     );
 }
