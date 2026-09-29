@@ -42,13 +42,23 @@ export function decidirAtitude(entrada: {
     if (entrada.nivel !== "forte") return "nada";
 
     const agora = entrada.agora.getTime();
+    // Uma troca de senha segura o dia. Sem este teto, conta que segue aberta em
+    // duas redes virava "episódio novo" a cada ciclo e a senha rodava de 2 em 2 min.
+    const jaTrocou = entrada.eventos.some((evento) => (
+        (evento.tipo === "auto_exigir_nova_senha" || evento.tipo === "admin_exigir_nova_senha")
+        && agora - evento.em.getTime() <= INSISTENCIA_MS
+    ));
+    if (jaTrocou) return "nada";
+
     const fortes = entrada.episodios.filter((episodio) => episodio.forca === "forte" && (
         agora - episodio.fim.getTime() <= JANELA_ATITUDE_MS
         || (entrada.aindaAberto && agora - episodio.fim.getTime() <= AINDA_ABERTO_MS)
     ));
     let recente = fortes.sort((a, b) => b.fim.getTime() - a.fim.getTime())[0];
     if (!recente && entrada.aindaAberto) {
-        recente = { forca: "forte", inicio: entrada.agora, fim: entrada.agora };
+        // Início estável (a janela de 3 h), não "agora": a derrubada deste
+        // intervalo conta como já feita.
+        recente = { forca: "forte", inicio: new Date(agora - AINDA_ABERTO_MS), fim: entrada.agora };
     }
     if (!recente) return "nada";
 

@@ -240,7 +240,7 @@ deploy. Desligar: `ACESSOS_ATITUDE_RISCO=0` no `.env.production` + `pm2 delete/s
 |---|---|
 | papel `admin` | nenhuma |
 | episódio **forte** nos últimos 20 min, ou forte nas últimas 3 h com sessão ainda aberta em 2+ redes | encerra todas as sessões (`session_version` + 1), e-mail ao dono, Telegram aos admins. A senha fica |
-| novo episódio forte depois dessa derrubada, dentro de 24 h | troca a senha (link de 24 h no e-mail) e avisa de novo |
+| novo episódio forte depois dessa derrubada, dentro de 24 h | troca a senha uma vez (link de 24 h no e-mail) e avisa. Outra troca só no dia seguinte |
 | já derrubada neste episódio, ou senha já trocada nele | espera |
 
 Quem entra de novo sozinho, sem reeditar o uso em dois lugares, não troca a senha.
