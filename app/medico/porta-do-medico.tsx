@@ -13,9 +13,9 @@ import "@/app/auth-pages.css";
  * aqui já logada.
  */
 /* Para onde cada porta leva, dentro do Painel do médico (o link do /pagamento
-   do bot): "painel" = topo (pagamento do mês e, logo abaixo, a folha de ponto
-   para gerar — o médico confere antes de emitir); "banco-de-horas" = o mesmo
-   painel já na seção dos extras e do saldo. O PDF da folha
+   do bot): "painel" = aba "Pagamento e folha" (pagamento do mês e, logo abaixo,
+   a folha de ponto para gerar — o médico confere antes de emitir);
+   "banco-de-horas" = aba do saldo e dos extras. O PDF da folha
    (/folha-ponto/<médico>/<ano>/<mês>) sai do botão "Gerar" do painel. */
 export type PortaDoMedico = "painel" | "banco-de-horas";
 
@@ -55,6 +55,6 @@ export async function portaDoMedico(destino: PortaDoMedico) {
         month: "2-digit",
     }).format(new Date());
     const [ano, mes] = spNow.split("-");
-    const ancora = destino === "banco-de-horas" ? "#banco-de-horas" : "";
+    const ancora = destino === "banco-de-horas" ? "#banco-de-horas" : "#pagamento";
     redirect(`/banco-de-horas/${session.user.doctorId}/${ano}/${Number(mes)}${ancora}`);
 }

@@ -18,13 +18,15 @@ import {
     deleteSelfDeclaredExtra,
     isSelfServiceSettlementNote,
     loadBankHoursSettlementsForMonth,
+    loadSelfDeclaredExtras,
     SELF_DECLARED_EXTRA_LABEL,
     settleBankHours,
     updateSelfDeclaredExtra,
 } from "@/services/bank-hours-settlements.service";
 import { syncContractLedgerForMonth } from "@/services/contract-ledger.service";
-import { hasWorkedSlot } from "@/services/self-declared-extra-slots.service";
+import { hasTakenSlot } from "@/services/self-declared-extra-slots.service";
 import { getChiefPayableShiftsBoard } from "@/services/payable-shifts.service";
+import { resolveDoctorEmploymentType } from "@/modules/reporting/payable-shifts";
 
 const payloadSchema = z.object({
     medicoId: z.string().uuid(),
@@ -99,9 +101,10 @@ export async function POST(request: NextRequest) {
         let shiftLabel: "SD" | "SN" = parsed.data.shiftLabel ?? "SD";
 
         if (action === "bonus") {
-            // Extra em cima de turno já trabalhado pagaria o mesmo slot duas vezes.
-            const jaTrabalhou = await hasWorkedSlot({ monthKey, doctorId: medicoId, operationalDate, shiftLabel });
-            if (jaTrabalhou) {
+            // Extra em cima de turno já tomado (trabalhado, outro extra ou chefia)
+            // pagaria o mesmo slot duas vezes.
+            const ocupado = await hasTakenSlot({ monthKey, doctorId: medicoId, operationalDate, shiftLabel });
+            if (ocupado) {
                 return NextResponse.json(
                     { error: "Você já tem plantão nesse dia e turno. Escolha outro dia ou turno." },
                     { status: 409 },
@@ -113,6 +116,16 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ error: "Sem saldo disponível." }, { status: 409 });
             }
         } else {
+            // Estatutário não tem plantão retirado: o atraso dele vai à folha
+            // (modules/bank-hours/payroll.ts). Vínculo lido do banco, nunca do cliente.
+            const [doctorRow] = await getDb()
+                .select({ metadata: doctors.metadata })
+                .from(doctors)
+                .where(eq(doctors.id, medicoId))
+                .limit(1);
+            if (resolveDoctorEmploymentType(doctorRow?.metadata) === "estatutario") {
+                return NextResponse.json({ error: "Estatutário não retira plantão: o atraso vai para a folha de ponto." }, { status: 409 });
+            }
             if (balance.penaltyEligibleMinutes > -BANK_HOURS_SETTLEMENT_THRESHOLD_MINUTES) {
                 return NextResponse.json({ error: "Sem saldo negativo a compensar." }, { status: 409 });
             }
@@ -281,13 +294,17 @@ export async function PATCH(request: NextRequest) {
     }
 
     try {
-        const jaTrabalhou = await hasWorkedSlot({
+        // O próprio extra ocupa o slot de origem: "mover" para o mesmo lugar não conflita.
+        const proprio = (await loadSelfDeclaredExtras(data.medicoId, monthKey))
+            .find((extra) => extra.settlementId === data.settlementId);
+        const mesmoSlot = proprio?.operationalDate === operationalDate && proprio?.shiftLabel === shiftLabel;
+        const ocupado = !mesmoSlot && await hasTakenSlot({
             monthKey,
             doctorId: data.medicoId,
             operationalDate,
             shiftLabel,
         });
-        if (jaTrabalhou) {
+        if (ocupado) {
             return NextResponse.json(
                 { error: "Você já tem plantão nesse dia e turno. Escolha outro dia ou turno." },
                 { status: 409 },

@@ -33,6 +33,25 @@ export async function loadWorkedSlotsByDoctor(monthKey: string): Promise<Map<str
     return byDoctor;
 }
 
+/**
+ * Dia+turno já tomado por QUALQUER plantão pagável do médico — trabalhado,
+ * outro extra ou plantão de chefia. Guard da criação/edição do extra pelo
+ * próprio médico: dois pagamentos no mesmo slot é o que o ADR-006 proíbe.
+ */
+export async function hasTakenSlot(params: {
+    monthKey: string;
+    doctorId: string;
+    operationalDate: string;
+    shiftLabel: "SD" | "SN";
+}): Promise<boolean> {
+    const board = await getChiefPayableShiftsBoard(params.monthKey);
+    return board.payableShifts.some((shift) =>
+        shift.doctorId === params.doctorId
+        && shift.paymentUnit > 0
+        && shift.operationalDate === params.operationalDate
+        && shift.shiftLabel === params.shiftLabel);
+}
+
 /** O médico já trabalhou nesse dia+turno? (guard da criação/edição do extra) */
 export async function hasWorkedSlot(params: {
     monthKey: string;
