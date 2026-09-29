@@ -111,6 +111,14 @@ export interface DoctorBankHoursView {
     saldoMinutes: number;
     /** PJ: crédito anterior a mai/2025 fica fora do saldo mostrado (não vira troca). */
     hiddenOldCreditMinutes: number;
+    /**
+     * Posição na régua ±12h: só o saldo formado de mai/2025 em diante. No PJ a
+     * dívida anterior fica fora da régua (vira aviso); no estatutário o saldo
+     * antigo entra na troca, então a régua é o saldo inteiro.
+     */
+    reguaMinutes: number;
+    /** PJ: dívida acumulada até 30/04/2025 (≤ 0), mostrada como aviso abaixo da régua. */
+    oldDebtMinutes: number;
     headline: DoctorHeadline;
     composition: DoctorCompositionTerm[];
     months: DoctorMonthView[];
@@ -397,7 +405,6 @@ function buildHeadline(params: {
     saldoMinutes: number;
     bonusEligibleMinutes: number;
     penaltyEligibleMinutes: number;
-    oldDebtMinutes: number;
     competenciaAberta: boolean;
     payrollThisMonthMinutes: number;
     monthLabel: string;
@@ -435,14 +442,11 @@ function buildHeadline(params: {
             actionLabel: competenciaAberta ? "Escolher o plantão" : null,
         };
     }
-    const dividaAntiga = !isStatutory && params.oldDebtMinutes < 0
-        ? ` A dívida até abr/2025 (${formatSignedDuration(params.oldDebtMinutes)}) já está nessa conta.`
-        : "";
     if (be >= 0) {
         return {
             tone: "neutra",
             title: `Faltam ${formatDuration(TROCA_MINUTOS - be)} para você poder trocar por 1 plantão extra.`,
-            detail: `A troca abre quando o saldo chega a +12h.${dividaAntiga}`,
+            detail: "A troca abre quando o saldo chega a +12h.",
             showAction: false,
             actionLabel: null,
         };
@@ -452,7 +456,7 @@ function buildHeadline(params: {
         title: `Faltam ${formatDuration(-params.saldoMinutes)} para zerar seu saldo.`,
         detail: isStatutory
             ? "O atraso que passa do zero é descontado na folha de ponto."
-            : `Se o saldo passar de −12h, um plantão do mês pode ser retirado da folha.${dividaAntiga}`,
+            : "Se o saldo passar de −12h, um plantão do mês pode ser retirado da folha.",
         showAction: false,
         actionLabel: null,
     };
@@ -568,7 +572,6 @@ export function buildDoctorBankHoursView(params: {
         saldoMinutes,
         bonusEligibleMinutes: params.bonusEligibleMinutes,
         penaltyEligibleMinutes: params.penaltyEligibleMinutes,
-        oldDebtMinutes: legacyOld,
         competenciaAberta: params.competenciaAberta,
         payrollThisMonthMinutes: payrollByMonth.get(params.monthKey) ?? 0,
         monthLabel: formatMonthLabel(params.monthKey).split(" ")[0],
@@ -578,6 +581,8 @@ export function buildDoctorBankHoursView(params: {
         isStatutory,
         saldoMinutes,
         hiddenOldCreditMinutes,
+        reguaMinutes: isStatutory ? saldoMinutes : saldoMinutes - Math.min(legacyOld, 0),
+        oldDebtMinutes: isStatutory ? 0 : Math.min(legacyOld, 0),
         headline,
         composition,
         months,
