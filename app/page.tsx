@@ -4,6 +4,7 @@ import { hasDatabaseUrl } from "@/db";
 import { KairosTopo } from "@/components/kairos-topo";
 import { mesaLiberadaPara, presencaDaPagina, readAuthenticatedSession } from "@/lib/auth/server";
 import { MesaPresenca } from "@/components/board/MesaPresenca";
+import { CascaDaSessao } from "@/components/casca/casca-da-sessao";
 import { limiteOciosoSeg } from "@/modules/acessos/presenca";
 import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
 import { PORTAL_LOGIN_URL, destinoSemSessao } from "@/lib/auth/portao";
@@ -135,7 +136,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         canManage ? listOnDemandRegulationPostOptions() : Promise.resolve([]),
     ]);
 
-    return (
+    const mesa = (
         <MesaPresenca {...propsPresenca}>
         <OperationalBoardClient
             generatedAt={board.generatedAt}
@@ -171,5 +172,13 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
             }}
         />
         </MesaPresenca>
+    );
+    // Coordenação: a Mesa mora na mesma casca do admin (a barra lateral troca
+    // as abas do topo). Médico, rádio e TARM seguem com o quadro puro.
+    if (!canManage) return mesa;
+    return (
+        <CascaDaSessao email={session.user.email} roles={session.user.roles}>
+            {mesa}
+        </CascaDaSessao>
     );
 }
