@@ -24,6 +24,12 @@ Fluxo correto:
 3. **Deploy**: merge na `main` dispara o workflow que valida e aplica o commit
    final no servidor (git reset + build + pm2). Detalhes em [DEPLOY.md](DEPLOY.md).
 
+**Deploy = LIVE direto** (regra global desde 29/09/2026): quando o usuário pede
+deploy, abrir o PR e mergear na `main` no mesmo fluxo — sem parar no LAB, sem
+pedir segunda confirmação — e conferir `/api/health` depois. Voltar atrás =
+revert na `main`. LAB só quando o usuário pedir explicitamente. Migration
+continua manual e antes do merge; destrutiva exige autorização.
+
 Um agente rodando **no Mac** pode fazer quase tudo sem tocar no servidor: alterar código,
 rodar a suíte de testes, e até **consultar logs e banco de produção remotamente**
 (read-only via túnel SSH) — ver o runbook.
