@@ -11390,6 +11390,19 @@ button.chief-payable-tag:focus-visible {
     color: var(--accent-warn);
 }
 
+/* Sugestão pronta (rotina e "só olhar"): o que o Aceitar faz e o que muda. */
+.pending-departure-card__suggestion {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--muted);
+}
+
+.pending-departure-card__suggestion strong {
+    color: var(--text);
+    font-weight: 600;
+}
+
 /* Anomalia (saída minutos após a chegada): alerta de ERRO, não de decisão. */
 .pending-departure-card__headline[data-kind="short_anomaly"] {
     color: var(--accent-fraud);
