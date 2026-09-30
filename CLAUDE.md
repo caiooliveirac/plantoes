@@ -346,7 +346,8 @@ Sem ESLint/Prettier configurados no repo — a única verificação estática au
   `deploy`, que executa
   [scripts/deploy-magalu.sh](scripts/deploy-magalu.sh) **no servidor via SSH** — o
   `next build` de produção acontece lá (build atômico com `.next.prev` para
-  rollback, guard de memória), com restart dos dois processos PM2 (`plantoes`,
+  rollback, guard de memória, cache do compilador herdado do build no ar e sem
+  rechecar tipos — `NEXT_SKIP_TYPECHECK`, ver `next.config.ts`), com restart dos dois processos PM2 (`plantoes`,
   `plantoes-telegram-worker`) e healthcheck de `/api/health`.
 - **Migrations em produção são manuais**: aplicar `db/migrations/NNNN_*.sql` no
   servidor **antes** do merge (via `npm run db:migrate` com `.env.production`), não

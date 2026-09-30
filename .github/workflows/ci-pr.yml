@@ -36,6 +36,9 @@ jobs:
         run: npm run typecheck
 
       - name: Build
+        # Tipos já checados no passo anterior (next.config.ts).
+        env:
+          NEXT_SKIP_TYPECHECK: "1"
         run: npm run build
 
   tests:
