@@ -4022,8 +4022,17 @@ function buildAdditionalShadowPaymentAllocationRows(params: {
   // como titular de ALGUMA posição do slot não ganha linha extra por um registro
   // sem titularidade em outra — o caso real é o médico que aparece no ramal onde
   // ficou e, sombra, no ramal de onde saiu (Gerardson, 1367 + 2154, 18/08/2026).
+  // Escolha suprimida por desativação do alvo (base "SEM ENFERMEIRO" que caiu
+  // com o médico dentro) vira linha desativada, sem pagamento: não conta como
+  // "já pago", senão a sombra dele em outro alvo também some (Stephane, 25/09/2026).
   const doctorsWithChosenRow = new Set(
     params.targetChoices
+      .filter((choice) => choice.chosenCandidate && !resolveChosenCandidateDeactivationOutcome({
+        target: choice.target,
+        chosenCandidate: choice.chosenCandidate,
+        slotStartIso: params.slotStartIso,
+        shiftLabel: params.shiftLabel,
+      }).shouldSuppressChosenCoverage)
       .map((choice) => choice.chosenCandidate?.doctorId)
       .filter((doctorId): doctorId is string => Boolean(doctorId)),
   );
