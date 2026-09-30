@@ -106,7 +106,16 @@ rm -rf .next.build
 # typecheck do build novo quebra ("Cannot find module .../route.js"). São só
 # tipos (nada que o processo no ar leia): apagar antes de buildar.
 rm -rf .next/types .next/dev/types
-if ! NEXT_DIST_DIR=.next.build nice -n 10 npm run build; then
+# Cache do compilador (Turbopack, ver next.config.ts) herdado do build no ar:
+# com ele, mudança pequena recompila só o que mudou. É só cache — manifestos e
+# páginas continuam nascendo do zero. Cópia (não mv): o processo no ar usa
+# .next/cache em runtime.
+mkdir -p .next.build
+if [ -d .next/cache ]; then
+  cp -a .next/cache .next.build/cache
+fi
+# Tipos já checados no CI de PR ou no validate (o deploy só roda depois deles).
+if ! NEXT_DIST_DIR=.next.build NEXT_SKIP_TYPECHECK=1 nice -n 10 npm run build; then
   echo "ERRO: build falhou. Nada foi trocado — a produção segue com o build anterior."
   rm -rf .next.build
   exit 1

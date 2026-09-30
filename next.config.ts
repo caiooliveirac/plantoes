@@ -15,6 +15,21 @@ const nextConfig: NextConfig = {
      * Em runtime a variável não é definida e o valor volta ao padrão .next.
      */
     distDir: process.env.NEXT_DIST_DIR || ".next",
+    /**
+     * O deploy (scripts/deploy-magalu.sh) só roda depois do typecheck do CI de
+     * PR ou do validate, então lá o next build não checa tipos de novo (~20s
+     * no servidor). Build local e do CI continuam checando.
+     */
+    typescript: { ignoreBuildErrors: process.env.NEXT_SKIP_TYPECHECK === "1" },
+    experimental: {
+        /**
+         * Cache do compilador em <distDir>/cache/turbopack, reaproveitado no
+         * próximo build (desligado por padrão no Next 16.2). O deploy copia o
+         * .next/cache do build no ar para o .next.build limpo: é só cache do
+         * compilador, sem os manifestos de rota que ficavam órfãos.
+         */
+        turbopackFileSystemCacheForBuild: true,
+    },
 };
 
 export default nextConfig;
