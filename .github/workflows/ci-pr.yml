@@ -7,9 +7,39 @@ on:
 permissions:
   contents: read
 
+# Dois jobs em paralelo (typecheck+build num, testes no outro) e, se os dois
+# passarem, o registro da árvore testada: o deploy do merge pula a revalidação
+# quando a árvore do merge commit é idêntica (release-deploy.yml, job "check").
+
 jobs:
-  validate:
-    name: Typecheck, tests and build
+  build:
+    name: Typecheck e build
+    runs-on: ubuntu-latest
+    env:
+      AUTH_SECRET: ci-local-auth-secret-not-for-production
+      AUTH_URL: http://127.0.0.1:3000
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (next typegen + tsc, produção e tests)
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  tests:
+    name: Testes
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -46,17 +76,28 @@ jobs:
       - name: Apply migrations in CI database
         run: npm run db:migrate
 
-      - name: Typecheck (next typegen + tsc, produção e tests)
-        run: npm run typecheck
+      - name: Tests (puros em paralelo, banco em série, meal-breaks)
+        run: bash scripts/test-gate.sh --com-meal-breaks
 
-      - name: Tests
-        run: npm run test:deploy
+  tested-tree:
+    name: Typecheck, tests and build
+    needs: [build, tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Tests (meal-breaks regression)
-        # Node 22 chama a flag de --experimental-test-isolation; ela virou
-        # --test-isolation (estável) só no Node 23+. Se subir o major do Node
-        # acima, revisar esta flag.
-        run: node --test --import tsx --experimental-test-isolation=none tests/telegram-meal-breaks.test.ts
+      # A árvore do checkout (refs/pull/N/merge) é o código exato que passou.
+      # Se o merge na main produzir a mesma árvore, o deploy não revalida.
+      - name: Hash da árvore testada
+        id: tree
+        run: |
+          echo "sha=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+          git rev-parse 'HEAD^{tree}' > tested-tree.txt
 
-      - name: Build
-        run: npm run build
+      - name: Registrar árvore testada
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-tree-${{ steps.tree.outputs.sha }}
+          path: tested-tree.txt
+          retention-days: 14
