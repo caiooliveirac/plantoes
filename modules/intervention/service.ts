@@ -16,6 +16,7 @@ import { describeMergedArrival, resolveArrivalIdentity } from "@/modules/operati
 import { describeContestBlockedByLaterArrival, describeContestedDeparture, isContestedDepartureNotes, resolveContestedBoardDecision, type ContestedDepartureContinuation } from "@/modules/operational/contested-departure";
 import { findLaterArrivalForDoctor } from "@/modules/operational/later-arrival";
 import { shouldJoinDoctorTurnoGroup } from "@/modules/operational/turno";
+import { resolveTurnoArrivalPostCodeTx } from "@/modules/operational/posto-de-chegada";
 import { inferInterventionCoverageWindow, inferOperationalScheduledStartAt, resolveContinuationInPlaceShiftLabel, resolveInterventionContinuationScheduledEndAt } from "@/modules/operational/rules";
 
 type Executor = any;
@@ -1057,6 +1058,17 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
 
             const windowRef = keptBoardStartedAt && keptBoardStartedAt.getTime() > keptStartedAt.getTime()
                 ? keptBoardStartedAt : keptStartedAt;
+            // Reenvio numa base que não é a primeira posição do turno: a hora de
+            // chegada segue o posto onde o médico chegou (posto-de-chegada.ts).
+            const rearrivalArrivalPostCode = await resolveTurnoArrivalPostCodeTx(tx, {
+                domain: "intervention",
+                targetCode: String(input.baseId),
+                doctorId: input.doctorId,
+                continuityGroupId: keptContinuityGroupId,
+                startedAt: keptStartedAt,
+                notes: existingSameDoctor.notes,
+                excludeOccupancyId: existingSameDoctor.id,
+            });
             const {
                 baseShiftLabel: recalcBaseShiftLabel,
                 scheduledStartAt: recalcStart,
@@ -1066,6 +1078,7 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
                 shiftLabel: input.shiftLabel ?? existingSameDoctor.shiftLabel,
                 explicitScheduledStartAt: null,
                 explicitScheduledEndAt: null,
+                arrivalPostCode: rearrivalArrivalPostCode,
             });
             const requestedRoleLabel = input.roleLabel !== undefined ? input.roleLabel : existingSameDoctor.roleLabel;
             const nextRoleLabel = applyOperationalRoleShiftPolicy({
@@ -1282,11 +1295,35 @@ export async function startInterventionOccupancy(input: StartInterventionOccupan
             });
         }
 
+        // Posição posterior de um turno já aberto: a hora prevista de chegada é a
+        // do posto onde o médico CHEGOU (NUCLEO → ambulância mantém 08:00). O fim
+        // fica o da base. Ver posto-de-chegada.ts.
+        let insertScheduledStartAt = inferredScheduledStartAt;
+        if (resolvedContinuityGroupId && !input.scheduledStartAt) {
+            const arrivalPostCode = await resolveTurnoArrivalPostCodeTx(tx, {
+                domain: "intervention",
+                targetCode: String(input.baseId),
+                doctorId: input.doctorId,
+                continuityGroupId: resolvedContinuityGroupId,
+                startedAt: input.startedAt,
+                notes: input.notes ?? null,
+            });
+            if (arrivalPostCode !== null) {
+                insertScheduledStartAt = inferInterventionCoverageWindow({
+                    startedAt: windowReferenceAt,
+                    shiftLabel: normalizedShiftLabel,
+                    explicitScheduledStartAt: null,
+                    explicitScheduledEndAt: null,
+                    arrivalPostCode,
+                }).scheduledStartAt;
+            }
+        }
+
         const [created] = await tx.insert(interventionOccupancies).values({
             doctorId: input.doctorId,
             baseId: input.baseId,
             continuityGroupId: resolvedContinuityGroupId ?? randomUUID(),
-            scheduledStartAt: inferredScheduledStartAt,
+            scheduledStartAt: insertScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
             boardStartedAt: shouldTakeBoardImmediately && !currentBoardCarrier ? effectiveBoardStartedAt : null,

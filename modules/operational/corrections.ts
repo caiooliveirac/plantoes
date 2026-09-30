@@ -48,6 +48,7 @@ import { applyShadowMarkerToOccupancyNotes } from "@/modules/operational/shadow"
 import { restoreDisplacedOnVacatedTargetTx } from "@/modules/operational/displaced-restore";
 import { resolveArrivalShiftLabel, resolveOccupantCoverageEndAt, resolveOperationalShiftWindow, shouldDisplaceInsteadOfRelieve } from "@/modules/operational/board-rules";
 import { inferInterventionCoverageWindow, inferRegulationCoverageWindow } from "@/modules/operational/rules";
+import { resolveTurnoArrivalPostCodeTx } from "@/modules/operational/posto-de-chegada";
 import { resolveMultiSegmentDepartureTrim } from "@/modules/operational/multi-segment-departure";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 import { REGULATION_DISPLACED_NOTE_MARKER, expireStaleRegulationOccupancies, isRegulationPostDeactivationActive } from "@/modules/regulation/service";
@@ -1178,6 +1179,19 @@ export async function correctRegulationOccupancy(
         const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
             ? boardStartedAt
             : startedAt;
+        // A hora prevista de chegada é do posto onde o médico CHEGOU no turno, não
+        // do ramal atual: quem chegou 07:50 no NUCLEO (08:00) e foi remanejado
+        // para a CRU não pode passar a dever 50 min porque a correção reinferiu a
+        // janela pelo destino (docs/remanejamento-nucleo-banco-horas.md).
+        const arrivalPostCode = await resolveTurnoArrivalPostCodeTx(tx, {
+            domain: "regulation",
+            targetCode: targetPost.code,
+            doctorId: existing.doctorId,
+            continuityGroupId: existing.continuityGroupId,
+            startedAt,
+            notes: existing.notes,
+            excludeOccupancyId: existing.id,
+        });
         const {
             roleLabel: nextRoleLabel,
             scheduledStartAt: newScheduledStart,
@@ -1193,7 +1207,7 @@ export async function correctRegulationOccupancy(
             inferFullShiftWindow: () => inferRegulationCoverageWindow({
                 startedAt: windowReferenceAt,
                 shiftLabel: nextShiftLabel,
-                postCode: targetPost.code,
+                postCode: arrivalPostCode,
                 explicitScheduledStartAt: null,
                 explicitScheduledEndAt: null,
             }),
@@ -1365,6 +1379,21 @@ export async function correctInterventionOccupancy(
         const windowReferenceAt = boardStartedAt && boardStartedAt.getTime() > startedAt.getTime()
             ? boardStartedAt
             : startedAt;
+        // Mesma regra da regulação: chegada do turno é do posto de chegada
+        // (NUCLEO → ambulância mantém 08:00). Ver posto-de-chegada.ts.
+        const baseRow = await tx.query.interventionBases.findFirst({
+            where: eq(interventionBases.id, existing.baseId),
+            columns: { code: true },
+        });
+        const arrivalPostCode = await resolveTurnoArrivalPostCodeTx(tx, {
+            domain: "intervention",
+            targetCode: baseRow?.code ?? String(existing.baseId),
+            doctorId: existing.doctorId,
+            continuityGroupId: existing.continuityGroupId,
+            startedAt,
+            notes: existing.notes,
+            excludeOccupancyId: existing.id,
+        });
         const {
             roleLabel: nextRoleLabel,
             scheduledStartAt: newScheduledStart,
@@ -1382,6 +1411,7 @@ export async function correctInterventionOccupancy(
                 shiftLabel: nextShiftLabel,
                 explicitScheduledStartAt: null,
                 explicitScheduledEndAt: null,
+                arrivalPostCode,
             }),
         });
 
