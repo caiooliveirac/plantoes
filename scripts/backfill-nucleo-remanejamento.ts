@@ -30,7 +30,11 @@
  *      audit_logs) e roda syncBankHoursByContinuityGroup — o mesmo caminho da
  *      aplicação, que respeita override manual e desfecho de saída antecipada.
  *
- * Só toca a janela 07:00 → 08:00 do turno identificado. Meia jornada (11:30),
+ * Override manual de saldo: a prévia já mostra o saldo do override como "depois";
+ao unir turno partido o override migra para o grupo do NUCLEO na mesma transação,
+e se os dois grupos tiverem override o turno é recusado (alguém decide antes).
+
+Só toca a janela 07:00 → 08:00 do turno identificado. Meia jornada (11:30),
  * SN e qualquer outra janela ficam como estão. Não mexe em chegada nem saída.
  *
  * Uso (LOCAL, no notebook, com DATABASE_URL apontando para o alvo — ver
@@ -61,7 +65,7 @@ import {
 } from "@/db/schema";
 import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { buildContinuityBankHoursSpan, buildContinuityGroups, type ContinuityOccupancy } from "@/modules/bank-hours/continuity";
-import { syncBankHoursByContinuityGroup } from "@/modules/bank-hours/service";
+import { MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE, syncBankHoursByContinuityGroup } from "@/modules/bank-hours/service";
 import { isNucleoRegulationPost } from "@/modules/operational/board-display";
 import { toAuditSnapshot } from "@/modules/operational/corrections";
 import { parseReassignmentOriginCode, pickTurnoArrivalPostCode } from "@/modules/operational/posto-de-chegada";
@@ -102,12 +106,36 @@ interface Candidate {
     legsToFix: Leg[];
     /** E4: posições de outro grupo a trazer para este (só com --unir-grupos). */
     legsToMerge: Leg[];
-    bankEntry: typeof bankHoursEntries.$inferSelect | null;
+    /** Lançamentos gravados hoje para todas as posições (E4: um por grupo, que a união colapsa num só). */
+    bankEntries: Array<typeof bankHoursEntries.$inferSelect>;
     hasManualOverride: boolean;
+    /** Override manual do grupo-alvo (o que o sync vai manter como saldo). */
+    targetOverrideBalance: number | null;
+    /** E4: override manual do grupo partido que será unido — precisa migrar para o alvo. */
+    sourceOverrideBalance: number | null;
+    /** E4: grupos partidos que trazem override (mais de um, ou um com o alvo já tendo, é conflito). */
+    sourceOverrideGroupIds: string[];
+    /** Override em mais de um dos grupos que viram um só: não se une sozinho, alguém decide. */
+    overrideConflict: boolean;
     tailEarlyDepartureOutcome: string | null;
     before: { balanceMinutes: number; arrivalDelayMinutes: number; ruleCode: string } | null;
     after: { balanceMinutes: number; arrivalDelayMinutes: number; ruleCode: string } | null;
     open: boolean;
+}
+
+type RawCandidate = Pick<Candidate,
+    | "continuityGroupId" | "doctorId" | "doctorName" | "turnoDate" | "monthKey" | "attested" | "evidence"
+    | "expectedStartAt" | "wrongStartAt" | "legs" | "legsToFix" | "legsToMerge" | "bankEntries" | "sourceOverrideGroupIds"
+>;
+
+function uniqueLegs(legs: Leg[]) {
+    const seen = new Set<string>();
+    return legs.filter((leg) => (seen.has(leg.occupancyId) ? false : (seen.add(leg.occupancyId), true)));
+}
+
+function uniqueEntries(entries: Array<typeof bankHoursEntries.$inferSelect | null>) {
+    const seen = new Set<string>();
+    return entries.filter((entry): entry is typeof bankHoursEntries.$inferSelect => Boolean(entry && !seen.has(entry.id) && seen.add(entry.id)));
 }
 
 const AUDIT_SOURCE = "backfill NUCLEO remanejado (scripts/backfill-nucleo-remanejamento.ts)";
@@ -265,12 +293,12 @@ async function collectCandidates(): Promise<{ candidates: Candidate[]; brokenTur
         loadNucleoTransfers(),
         db.query.doctors.findMany({ columns: { id: true, fullName: true, displayName: true } }),
         db.query.paymentClosingAttestations.findMany(),
-        db.query.bankHoursBalanceOverrides.findMany({ columns: { continuityGroupId: true } }),
+        db.query.bankHoursBalanceOverrides.findMany({ columns: { continuityGroupId: true, balanceMinutes: true } }),
         db.query.bankHoursEntries.findMany(),
     ]);
     const doctorNameById = new Map(doctorRows.map((doctor) => [doctor.id, doctor.displayName?.trim() || doctor.fullName]));
     const attestedKeys = new Set(attestations.map((row) => `${row.doctorId}:${row.monthKey}`));
-    const overrideGroups = new Set(overrides.map((row) => row.continuityGroupId));
+    const overrideByGroup = new Map(overrides.map((row) => [row.continuityGroupId, row.balanceMinutes]));
     const entryByOccupancy = new Map<string, typeof bankHoursEntries.$inferSelect>();
     for (const entry of entries as Array<typeof bankHoursEntries.$inferSelect>) {
         const key = entry.regulationOccupancyId ?? entry.interventionOccupancyId;
@@ -291,6 +319,7 @@ async function collectCandidates(): Promise<{ candidates: Candidate[]; brokenTur
     }
 
     const candidates: Candidate[] = [];
+    const rawByTarget = new Map<string, RawCandidate>();
     let brokenTurnos = 0;
     for (const group of groups) {
         const carrier = group.carrier;
@@ -359,8 +388,8 @@ async function collectCandidates(): Promise<{ candidates: Candidate[]; brokenTur
             ? [...(groups.find((candidate) => candidate.continuityGroupId === targetGroupId)?.members ?? []), ...legsToMerge.map((leg) => ({ ...leg, continuityGroupId: targetGroupId }))]
             : group.members;
         const legsToFix = allLegs.filter((leg) => sameMinute(leg.scheduledStartAt, wrongStartAt));
-        const bankEntry = allLegs.map((leg) => entryByOccupancy.get(leg.occupancyId) ?? null).find(Boolean) ?? null;
-        const bankWrong = bankEntry ? sameMinute(bankEntry.scheduledStartAt, wrongStartAt) : false;
+        const bankEntries = uniqueEntries(allLegs.map((leg) => entryByOccupancy.get(leg.occupancyId) ?? null));
+        const bankWrong = bankEntries.some((entry) => sameMinute(entry.scheduledStartAt, wrongStartAt));
         if (legsToFix.length === 0 && !bankWrong && legsToMerge.length === 0) continue;
 
         if (only) {
@@ -368,30 +397,81 @@ async function collectCandidates(): Promise<{ candidates: Candidate[]; brokenTur
             if (![...ids].some((id) => only.has(id))) continue;
         }
 
-        const repairedLegs = allLegs.map((leg) => legsToFix.includes(leg) ? { ...leg, scheduledStartAt: expectedStartAt } : leg);
-        const orderedRepaired = buildContinuityGroups(repairedLegs)[0]!;
-        const tail = orderedRepaired.tail as Leg;
-        const monthKey = monthKeyOf(expectedStartAt);
-        const beforeStored = bankEntry
-            ? { balanceMinutes: bankEntry.balanceMinutes, arrivalDelayMinutes: bankEntry.arrivalDelayMinutes, ruleCode: bankEntry.ruleCode }
-            : previewBalance(allLegs);
-        const after = previewBalance(repairedLegs);
-
-        candidates.push({
+        const sourceOverrideGroupIds = evidence.includes("E4") && overrideByGroup.has(group.continuityGroupId)
+            ? [group.continuityGroupId]
+            : [];
+        pushCandidate({
             continuityGroupId: targetGroupId,
             doctorId: effectiveCarrier.doctorId,
             doctorName: doctorNameById.get(effectiveCarrier.doctorId) ?? effectiveCarrier.doctorId,
             turnoDate: dateKey(expectedStartAt),
-            monthKey,
-            attested: attestedKeys.has(`${effectiveCarrier.doctorId}:${monthKey}`),
+            monthKey: monthKeyOf(expectedStartAt),
+            attested: attestedKeys.has(`${effectiveCarrier.doctorId}:${monthKeyOf(expectedStartAt)}`),
             evidence,
             expectedStartAt,
             wrongStartAt,
             legs: allLegs,
             legsToFix,
             legsToMerge,
-            bankEntry,
-            hasManualOverride: overrideGroups.has(targetGroupId) || overrideGroups.has(group.continuityGroupId),
+            bankEntries,
+            sourceOverrideGroupIds,
+        });
+    }
+
+    // Um turno = um candidato. Com --unir-grupos, o grupo do NUCLEO (E1) e cada
+    // grupo partido (E4) apontam para o MESMO alvo: aqui viram um só, para a
+    // prévia somar todos os lançamentos que a união colapsa e para o conflito de
+    // override enxergar todos os grupos que vão virar um.
+    function pushCandidate(raw: RawCandidate) {
+        const existing = rawByTarget.get(raw.continuityGroupId);
+        if (!existing) {
+            rawByTarget.set(raw.continuityGroupId, raw);
+            return;
+        }
+        const legs = uniqueLegs([...existing.legs, ...raw.legs]);
+        rawByTarget.set(raw.continuityGroupId, {
+            ...existing,
+            evidence: [...new Set([...existing.evidence, ...raw.evidence])] as Evidence[],
+            legs,
+            legsToFix: uniqueLegs([...existing.legsToFix, ...raw.legsToFix]),
+            legsToMerge: uniqueLegs([...existing.legsToMerge, ...raw.legsToMerge]),
+            bankEntries: uniqueEntries([...existing.bankEntries, ...raw.bankEntries]),
+            sourceOverrideGroupIds: [...new Set([...existing.sourceOverrideGroupIds, ...raw.sourceOverrideGroupIds])],
+        });
+    }
+
+    for (const raw of rawByTarget.values()) {
+        const repairedLegs = raw.legs.map((leg) => raw.legsToFix.some((fix) => fix.occupancyId === leg.occupancyId) ? { ...leg, scheduledStartAt: raw.expectedStartAt } : leg);
+        const tail = buildContinuityGroups(repairedLegs)[0]!.tail as Leg;
+        // ANTES = a soma do que está gravado hoje (E4: um lançamento por grupo, que
+        // a união colapsa num só). DEPOIS = o que o sync grava para o grupo unido.
+        const beforeStored = raw.bankEntries.length > 0
+            ? {
+                balanceMinutes: raw.bankEntries.reduce((sum, entry) => sum + entry.balanceMinutes, 0),
+                arrivalDelayMinutes: Math.max(...raw.bankEntries.map((entry) => entry.arrivalDelayMinutes)),
+                ruleCode: [...new Set(raw.bankEntries.map((entry) => entry.ruleCode))].join(" + "),
+            }
+            : previewBalance(raw.legs);
+        // O sync mantém o override manual como saldo: a prévia tem de mostrar isso,
+        // senão o delta e os totais mentem justamente nos casos que a coordenação revisa.
+        const targetOverrideBalance = overrideByGroup.get(raw.continuityGroupId) ?? null;
+        const sourceOverrideBalance = raw.sourceOverrideGroupIds.length === 1
+            ? (overrideByGroup.get(raw.sourceOverrideGroupIds[0]!) ?? null)
+            : null;
+        const overrideConflict = raw.sourceOverrideGroupIds.length > 1
+            || (targetOverrideBalance !== null && raw.sourceOverrideGroupIds.length > 0);
+        const effectiveOverride = overrideConflict ? targetOverrideBalance : (targetOverrideBalance ?? sourceOverrideBalance);
+        const automaticAfter = previewBalance(repairedLegs);
+        const after = automaticAfter && effectiveOverride !== null
+            ? { ...automaticAfter, balanceMinutes: effectiveOverride, ruleCode: MANUAL_BANK_HOURS_OVERRIDE_RULE_CODE }
+            : automaticAfter;
+
+        candidates.push({
+            ...raw,
+            hasManualOverride: effectiveOverride !== null || overrideConflict,
+            targetOverrideBalance,
+            sourceOverrideBalance,
+            overrideConflict,
             tailEarlyDepartureOutcome: tail.earlyDepartureOutcome,
             before: beforeStored,
             after,
@@ -412,8 +492,13 @@ function describeCandidate(candidate: Candidate) {
         const merge = candidate.legsToMerge.some((other) => other.occupancyId === leg.occupancyId) ? "  ← entra no grupo do NUCLEO" : "";
         lines.push(`  [${leg.domain === "regulation" ? "reg" : "int"}] ${leg.targetCode.padEnd(6)} ${leg.occupancyId} chegada ${fmt(leg.startedAt)} saída ${fmt(leg.actualEndedAt ?? leg.endedAt)} janela ${fmt(leg.scheduledStartAt)}→${fmt(leg.scheduledEndAt)} ${leg.shiftLabel ?? "—"}${fix}${merge}`);
     }
-    if (candidate.bankEntry) {
-        lines.push(`  banco gravado: janela ${fmt(candidate.bankEntry.scheduledStartAt)}→${fmt(candidate.bankEntry.scheduledEndAt)} atraso ${candidate.bankEntry.arrivalDelayMinutes} min · x${candidate.bankEntry.overtimeMultiplier} · saldo ${signed(candidate.bankEntry.balanceMinutes)} (${candidate.bankEntry.ruleCode})`);
+    if (candidate.bankEntries.length > 0) {
+        for (const entry of candidate.bankEntries) {
+            lines.push(`  banco gravado: janela ${fmt(entry.scheduledStartAt)}→${fmt(entry.scheduledEndAt)} atraso ${entry.arrivalDelayMinutes} min · x${entry.overtimeMultiplier} · saldo ${signed(entry.balanceMinutes)} (${entry.ruleCode})`);
+        }
+        if (candidate.bankEntries.length > 1) {
+            lines.push(`  (${candidate.bankEntries.length} lançamentos que a união vai colapsar num só; o "antes" abaixo é a soma)`);
+        }
     } else {
         lines.push("  banco gravado: nenhum lançamento (plantão aberto ou saída sem confirmação)");
     }
@@ -423,8 +508,16 @@ function describeCandidate(candidate: Candidate) {
     } else {
         lines.push("  saldo   plantão ainda aberto/sem confirmação: o cálculo roda no fechamento, só a janela é corrigida agora");
     }
-    if (candidate.hasManualOverride) {
-        lines.push("  ⚠ override manual de saldo neste grupo: o saldo gravado é o do override, só a explicação muda");
+    if (candidate.overrideConflict) {
+        const parts = [
+            ...(candidate.targetOverrideBalance !== null ? [`alvo ${signed(candidate.targetOverrideBalance)}`] : []),
+            ...candidate.sourceOverrideGroupIds.map((groupId) => `partido ${groupId.slice(0, 8)}`),
+        ];
+        lines.push(`  ⛔ override manual em mais de um dos grupos que virariam um só (${parts.join(", ")}): não uno sozinho — decida qual vale e ajuste pelo /admin/bank-hours antes`);
+    } else if (candidate.sourceOverrideBalance !== null) {
+        lines.push(`  ⚠ override manual (${signed(candidate.sourceOverrideBalance)}) no grupo partido: migra para o grupo do NUCLEO e continua sendo o saldo`);
+    } else if (candidate.hasManualOverride) {
+        lines.push(`  ⚠ override manual de saldo (${signed(candidate.targetOverrideBalance!)}) neste grupo: o saldo gravado continua o do override, só a explicação muda`);
     }
     if (candidate.tailEarlyDepartureOutcome) {
         lines.push(`  ⚠ desfecho de saída antecipada gravado (${candidate.tailEarlyDepartureOutcome}): o sync usa a régua da chefia, prévia acima é aproximada`);
@@ -433,8 +526,44 @@ function describeCandidate(candidate: Candidate) {
 }
 
 async function applyCandidate(candidate: Candidate) {
+    if (candidate.overrideConflict) {
+        throw new Error("override manual em mais de um dos grupos que virariam um só: decida qual vale antes de unir (veja o dry-run)");
+    }
     const db = getDb();
     await db.transaction(async (tx) => {
+        // O override manual é chaveado por grupo: se ficasse no grupo partido (que
+        // esvazia), o sync do alvo recalcularia sozinho e apagaria a decisão do
+        // admin. Migra junto com as posições, na mesma transação.
+        if (candidate.sourceOverrideBalance !== null && candidate.targetOverrideBalance === null) {
+            const sourceGroupId = candidate.sourceOverrideGroupIds[0];
+            // Recheca dentro da transação: o índice único por grupo derrubaria a migração
+            // se o alvo ganhou override depois da leitura (outra rodada, o admin na tela).
+            const targetOverrideNow = await tx.query.bankHoursBalanceOverrides.findFirst({
+                where: eq(bankHoursBalanceOverrides.continuityGroupId, candidate.continuityGroupId),
+                columns: { id: true },
+            });
+            if (targetOverrideNow) {
+                throw new Error("o grupo do NUCLEO ganhou override manual depois da prévia: rode o dry-run de novo e decida qual vale");
+            }
+            if (sourceGroupId) {
+                await tx.update(bankHoursBalanceOverrides)
+                    .set({ continuityGroupId: candidate.continuityGroupId, updatedAt: new Date() })
+                    .where(eq(bankHoursBalanceOverrides.continuityGroupId, sourceGroupId));
+                await tx.insert(auditLogs).values({
+                    actorUserId: null,
+                    action: "bank_hours_override.regrouped",
+                    entityType: "bank_hours_balance_override",
+                    entityId: candidate.continuityGroupId,
+                    details: {
+                        source: AUDIT_SOURCE,
+                        reason: "turno partido unido ao grupo do NUCLEO: override manual segue o turno (E4)",
+                        previousContinuityGroupId: sourceGroupId,
+                        nextContinuityGroupId: candidate.continuityGroupId,
+                        balanceMinutes: candidate.sourceOverrideBalance,
+                    },
+                });
+            }
+        }
         for (const leg of candidate.legsToMerge) {
             const table = leg.domain === "regulation" ? regulationOccupancies : interventionOccupancies;
             await tx.update(table)
@@ -503,7 +632,13 @@ async function main() {
     let devolvido = 0;
     let debitado = 0;
     let semPrevia = 0;
+    let conflitos = 0;
     for (const candidate of candidates) {
+        // Turno com conflito de override não é aplicado: fica fora dos totais.
+        if (candidate.overrideConflict) {
+            conflitos += 1;
+            continue;
+        }
         if (candidate.before && candidate.after) {
             const delta = candidate.after.balanceMinutes - candidate.before.balanceMinutes;
             if (delta > 0) devolvido += delta;
@@ -519,6 +654,7 @@ async function main() {
             total: all.length,
             skippedAttested,
             brokenTurnosNotMerged: brokenTurnos,
+            overrideConflicts: conflitos,
             devolvidoMinutos: devolvido,
             debitadoMinutos: debitado,
             candidates: candidates.map((candidate) => ({
@@ -543,6 +679,11 @@ async function main() {
                 before: candidate.before,
                 after: candidate.after,
                 hasManualOverride: candidate.hasManualOverride,
+                targetOverrideBalance: candidate.targetOverrideBalance,
+                sourceOverrideBalance: candidate.sourceOverrideBalance,
+                sourceOverrideGroupIds: candidate.sourceOverrideGroupIds,
+                overrideConflict: candidate.overrideConflict,
+                bankEntries: candidate.bankEntries.map((entry) => ({ id: entry.id, balanceMinutes: entry.balanceMinutes, arrivalDelayMinutes: entry.arrivalDelayMinutes, ruleCode: entry.ruleCode })),
                 tailEarlyDepartureOutcome: candidate.tailEarlyDepartureOutcome,
             })),
         }, null, 2));
@@ -565,7 +706,7 @@ async function main() {
         for (const candidate of candidates) {
             const current = porMedico.get(candidate.doctorName) ?? { turnos: 0, delta: 0 };
             current.turnos += 1;
-            if (candidate.before && candidate.after) current.delta += candidate.after.balanceMinutes - candidate.before.balanceMinutes;
+            if (candidate.before && candidate.after && !candidate.overrideConflict) current.delta += candidate.after.balanceMinutes - candidate.before.balanceMinutes;
             porMedico.set(candidate.doctorName, current);
         }
         if (porMedico.size > 0) {
@@ -575,7 +716,7 @@ async function main() {
             }
             console.log("");
         }
-        console.log(`Devolvido a médicos: ${signed(devolvido)}. Débito novo: ${signed(debitado)}. ${semPrevia} sem prévia (plantão aberto/sem confirmação).\n`);
+        console.log(`Devolvido a médicos: ${signed(devolvido)}. Débito novo: ${signed(debitado)}. ${semPrevia} sem prévia (plantão aberto/sem confirmação). ${conflitos} com conflito de override (não aplicados, fora dos totais).\n`);
     }
 
     if (!apply) {

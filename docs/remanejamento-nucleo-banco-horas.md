@@ -101,8 +101,11 @@ contra 07:00. Por grupo de continuidade:
 
 Só toca a janela **07:00 → 08:00 do dia do turno** nas posições gravadas assim
 e recalcula pelo mesmo caminho da aplicação (`syncBankHoursByContinuityGroup`):
-override manual de saldo continua valendo, desfecho de saída antecipada gravado
-continua valendo, mês já atestado fica fora por padrão. Não mexe em chegada nem
+override manual de saldo continua valendo (a prévia já mostra o override como
+"depois"; ao unir turno partido ele migra para o grupo do NUCLEO na mesma
+transação, e override nos dois grupos recusa a união até alguém decidir),
+desfecho de saída antecipada gravado continua valendo, mês já atestado fica
+fora por padrão. Não mexe em chegada nem
 em saída. Cada posição alterada ganha uma linha em `audit_logs`
 (`source = backfill NUCLEO remanejado …`, com `beforeSnapshot`/`afterSnapshot`)
 — o undo do quadro reconhece o formato.
