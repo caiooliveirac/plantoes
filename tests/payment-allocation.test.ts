@@ -314,6 +314,69 @@ test("buildPaymentAllocationBoardModel suppresses payable occupancy when deactiv
     assert.equal(board.intervention[0]?.disabledDuringShift, true);
 });
 
+test("sombra paga quando o mesmo médico só tinha sido 'escolhido' numa base desativada com ele dentro (caso Stephane, PR03 → CB02, 25/09/2026)", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: [
+            makeTarget({
+                targetCode: "PR03",
+                targetLabel: "PR03",
+                sortOrder: 3,
+                disabledAt: "2026-03-28T11:14:00.000Z",
+                disabledReason: "SEM ENFERMEIRO",
+                disabledDuringShift: true,
+                disabledEntireShift: false,
+            }),
+            makeTarget({ targetCode: "CB02", targetLabel: "CB02", sortOrder: 2 }),
+        ],
+        rawRows: [
+            // Chegou na PR03; a base caiu às 08:14 e ela foi remanejada.
+            makeRow({
+                occupancyId: "occ-pr03",
+                targetCode: "PR03",
+                targetLabel: "PR03",
+                doctorId: "doc-stephane",
+                doctorName: "Stephane Izabor",
+                startedAt: "2026-03-28T09:43:52.000Z",
+                boardStartedAt: "2026-03-28T09:43:52.000Z",
+                endedAt: "2026-03-28T11:14:46.000Z",
+                actualEndedAt: "2026-03-28T11:14:46.000Z",
+                continuityGroupId: "cg-stephane",
+                notes: "Stephane chegando PR03",
+            }),
+            // Titular da CB02 e, depois, Stephane de sombra até o fim do turno.
+            makeRow({
+                occupancyId: "occ-cb02-titular",
+                targetCode: "CB02",
+                targetLabel: "CB02",
+                doctorId: "doc-taiane",
+                doctorName: "Taiane Pinto",
+                continuityGroupId: "cg-taiane",
+                notes: "Taiane cb02 sd",
+            }),
+            makeRow({
+                occupancyId: "occ-cb02-sombra",
+                targetCode: "CB02",
+                targetLabel: "CB02",
+                doctorId: "doc-stephane",
+                doctorName: "Stephane Izabor",
+                startedAt: "2026-03-28T11:30:34.000Z",
+                boardStartedAt: null,
+                continuityGroupId: "cg-stephane",
+                notes: "[telegram sombra] STEPHANE SOMBRA NA CB02 SD",
+            }),
+        ],
+        operationalDate: "2026-03-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-03-28T10:00:00.000Z",
+        endedAt: "2026-03-28T22:00:00.000Z",
+        generatedAt: "2026-03-28T23:00:00.000Z",
+    });
+
+    const paid = board.intervention.filter((row) => row.doctorId === "doc-stephane" && row.occupancyId);
+    assert.equal(paid.length, 1);
+    assert.equal(paid[0]?.targetCode, "CB02");
+});
+
 test("buildPaymentAllocationBoardModel conta ramal desativado como categoria propria na regulacao", () => {
     const board = buildPaymentAllocationBoardModel({
         targets: [makeTarget({
