@@ -104,6 +104,11 @@ ficaram no banco.
 - **Retirar** (quadro): a chefia escolhe sem saldo / banco / meio / inteiro; a
   régua de saída antecipada só sugere. Limites e leitores do desfecho em
   [docs/retirar.md](docs/retirar.md).
+- **Remanejo e hora de chegada**: a hora prevista de chegada do turno é a do
+  posto onde o médico CHEGOU (só o NUCLEO abre às 08:00). Remanejar para a CRU
+  ou uma base não a muda; toda reinferência de janela passa por
+  `modules/operational/posto-de-chegada.ts`. Defeito, backfill do banco de horas
+  e runbook em [docs/remanejamento-nucleo-banco-horas.md](docs/remanejamento-nucleo-banco-horas.md).
 - **Saídas a confirmar**: três classes; rotina confirma sozinha na virada,
   sugestão aplicada em 24h, decisão humana escala ao admin; chefia desfaz.
   Regras, flag `SAIDAS_AUTONOMAS` e marca da confirmação em

@@ -14,6 +14,7 @@
     "test:full": "node --test --test-concurrency=1 --import tsx tests/**/*.test.ts",
     "test": "node --test --test-concurrency=1 --import tsx tests/**/*.test.ts",
     "bank-hours:rebuild": "tsx scripts/rebuild-bank-hours.ts",
+    "bank-hours:backfill-nucleo": "tsx scripts/backfill-nucleo-remanejamento.ts",
     "regulation:arrival": "tsx scripts/register-regulation-arrival.ts",
     "scheduled-windows:repair": "tsx scripts/repair-scheduled-windows.ts",
     "audit:extended-stay": "tsx scripts/audit-extended-stay-shifts.ts",

@@ -19,6 +19,7 @@ import { resolveOperationalRoleLabel } from "@/modules/operational/roles";
 import { isRearrivalWithinOwnWindow, resolveOperationalShiftWindow } from "@/modules/operational/board-rules";
 import { restoreDisplacedOnVacatedTargetTx } from "@/modules/operational/displaced-restore";
 import { inferOperationalScheduledStartAt, inferRegulationCoverageWindow, inferRegulationScheduledEndAt, resolveContinuationInPlaceShiftLabel, resolveContinuationReferenceBoundary, resolveRegulationBoardEndAt } from "@/modules/operational/rules";
+import { resolveTurnoArrivalPostCodeTx } from "@/modules/operational/posto-de-chegada";
 import { normalizeRegulationRamalLabel } from "@/modules/regulation/ramal-label";
 import { hookMealBreakAfterBoardChange } from "@/modules/telegram/meal-break-board-hook";
 
@@ -967,6 +968,18 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 // scheduledEndAt original em vez de recalcular como SD/P (19:15).
                 const preserveHalfShiftEnd = isHalfShiftRoleLabel(requestedRoleLabel)
                     && Boolean(input.scheduledEndAt ?? existing.scheduledEndAt);
+                // Reenvio numa posição que não é a primeira do turno (remanejo
+                // NUCLEO → CRU e o médico reconfirma a CRU): a hora de chegada
+                // segue o posto onde ele chegou (posto-de-chegada.ts).
+                const rearrivalArrivalPostCode = await resolveTurnoArrivalPostCodeTx(tx, {
+                    domain: "regulation",
+                    targetCode: targetPostCode,
+                    doctorId: input.doctorId,
+                    continuityGroupId: keptContinuityGroupId,
+                    startedAt: keptStartedAt,
+                    notes: existing.notes,
+                    excludeOccupancyId: existing.id,
+                });
                 const {
                     baseShiftLabel: recalcBaseShiftLabel,
                     scheduledStartAt: recalcStart,
@@ -974,7 +987,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
                 } = inferRegulationCoverageWindow({
                     startedAt: windowRef,
                     shiftLabel: input.shiftLabel ?? existing.shiftLabel,
-                    postCode: targetPostCode,
+                    postCode: rearrivalArrivalPostCode,
                     explicitScheduledStartAt: null,
                     explicitScheduledEndAt: preserveHalfShiftEnd
                         ? (input.scheduledEndAt ?? existing.scheduledEndAt ?? null)
@@ -1186,6 +1199,31 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             });
         }
 
+        // Posição posterior de um turno já aberto (grupo herdado): a hora prevista
+        // de chegada é a do posto onde o médico CHEGOU, não a deste ramal — quem
+        // chegou no NUCLEO (08:00) e depois abre a CRU não vira atrasado. O fim
+        // fica como inferido para este ramal. Ver posto-de-chegada.ts.
+        let insertScheduledStartAt = inferredScheduledStartAt;
+        if (resolvedContinuityGroupId && !input.scheduledStartAt) {
+            const arrivalPostCode = await resolveTurnoArrivalPostCodeTx(tx, {
+                domain: "regulation",
+                targetCode: targetPostCode,
+                doctorId: input.doctorId,
+                continuityGroupId: resolvedContinuityGroupId,
+                startedAt: input.startedAt,
+                notes: input.notes ?? null,
+            });
+            if (arrivalPostCode !== targetPostCode) {
+                insertScheduledStartAt = inferRegulationCoverageWindow({
+                    startedAt: windowReferenceAt,
+                    shiftLabel: input.shiftLabel ?? null,
+                    postCode: arrivalPostCode,
+                    explicitScheduledStartAt: null,
+                    explicitScheduledEndAt: null,
+                }).scheduledStartAt;
+            }
+        }
+
         // When this arrival takes the board, it must be the only board carrier on
         // the post (one-active-board-per-post unique index). A real handoff already
         // closed the predecessor, but a coexisting shadow that previously held the
@@ -1206,7 +1244,7 @@ export async function startRegulationOccupancy(input: StartRegulationOccupancyIn
             doctorId: input.doctorId,
             postId: input.postId,
             continuityGroupId: resolvedContinuityGroupId ?? randomUUID(),
-            scheduledStartAt: inferredScheduledStartAt,
+            scheduledStartAt: insertScheduledStartAt,
             scheduledEndAt: inferredScheduledEndAt,
             startedAt: input.startedAt,
             boardStartedAt: insertBoardStartedAt,

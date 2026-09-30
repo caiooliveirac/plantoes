@@ -115,6 +115,13 @@ export function inferInterventionCoverageWindow(params: {
     shiftLabel?: string | null;
     explicitScheduledStartAt?: Date | null;
     explicitScheduledEndAt?: Date | null;
+    /**
+     * Posto da regulação onde o TURNO começou, quando esta base é uma posição
+     * posterior do mesmo turno (remanejo NUCLEO → ambulância). A hora prevista
+     * de chegada é do posto de chegada (modules/operational/posto-de-chegada.ts);
+     * o fim segue o da base (19:00/07:00).
+     */
+    arrivalPostCode?: string | null;
 }) {
     const normalized = params.shiftLabel?.trim().toUpperCase() ?? null;
     const baseShiftLabel = resolvePShiftAwareBaseShiftLabel(params.startedAt, normalized);
@@ -122,6 +129,7 @@ export function inferInterventionCoverageWindow(params: {
         params.startedAt,
         baseShiftLabel,
         params.explicitScheduledStartAt ?? null,
+        params.arrivalPostCode ?? null,
     );
     let scheduledEndAt = inferInterventionScheduledEndAt(
         params.startedAt,
@@ -146,6 +154,11 @@ export function inferInterventionCoverageWindow(params: {
 export function inferRegulationCoverageWindow(params: {
     startedAt: Date;
     shiftLabel?: string | null;
+    /**
+     * Posto que define a hora de chegada: o posto onde o médico CHEGOU no turno,
+     * não necessariamente o posto desta ocupação (remanejo NUCLEO → CRU mantém
+     * 08:00). Ver modules/operational/posto-de-chegada.ts.
+     */
     postCode?: string | null;
     explicitScheduledStartAt?: Date | null;
     explicitScheduledEndAt?: Date | null;
