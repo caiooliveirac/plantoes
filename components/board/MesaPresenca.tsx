@@ -27,12 +27,14 @@ interface Props {
     limiteOciosoSeg: number;
     tenteEmSeg?: number;
     email: string;
+    /** Nome do médico da conta (sem médico, vem o e-mail). */
+    nome: string;
     children?: ReactNode;
 }
 
 const EVENTOS_HUMANOS = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"] as const;
 
-export function MesaPresenca({ estadoInicial, modo, limiteOciosoSeg, tenteEmSeg, email, children }: Props) {
+export function MesaPresenca({ estadoInicial, modo, limiteOciosoSeg, tenteEmSeg, email, nome, children }: Props) {
     const router = useRouter();
     const valendo = modo === "valendo";
     const [estado, setEstado] = useState<Estado>(estadoInicial);
@@ -159,7 +161,7 @@ export function MesaPresenca({ estadoInicial, modo, limiteOciosoSeg, tenteEmSeg,
     }, [estado]);
 
     if (!valendo || estado === "isento") return <>{children}</>;
-    if (estado === "bloqueada") return <TelaBloqueada email={email} />;
+    if (estado === "bloqueada") return <TelaBloqueada email={email} nome={nome} />;
     if (estado === "ocupada") return <TelaOcupada espera={espera} />;
     if (!children) return <TelaAbrindo />;
     return (
@@ -211,7 +213,7 @@ function TelaOcupada({ espera }: { espera: number }) {
     );
 }
 
-function TelaBloqueada({ email }: { email: string }) {
+function TelaBloqueada({ email, nome }: { email: string; nome: string }) {
     const [senha, setSenha] = useState("");
     const [ocupado, setOcupado] = useState(false);
     const [erro, setErro] = useState<string | null>(null);
@@ -251,9 +253,9 @@ function TelaBloqueada({ email }: { email: string }) {
     }
 
     return (
-        <Moldura titulo="Você saiu deste computador?">
+        <Moldura titulo={`Ainda é ${nome}?`}>
             <form className="et-form" onSubmit={desbloquear}>
-                <p>A Mesa ficou sem nenhum movimento na tela e foi fechada neste aparelho para ninguém ver os dados de outra pessoa.</p>
+                <p>A Mesa ficou parada e foi fechada neste aparelho: quem está aqui agora pode não ser {nome}. Para continuar, digite a senha desta conta.</p>
                 <p>Conta: <strong>{email}</strong></p>
                 <label>
                     Senha
@@ -263,7 +265,7 @@ function TelaBloqueada({ email }: { email: string }) {
                 <button type="submit" className="et-btn primary" disabled={ocupado}>
                     {ocupado ? "Conferindo…" : "Voltar à Mesa"}
                 </button>
-                <p><button type="button" className="mp-link" onClick={() => void outraConta()}>Não é você? Entrar com outra conta</button></p>
+                <p><button type="button" className="mp-link" onClick={() => void outraConta()}>Não sou {nome} — entrar com a minha conta</button></p>
             </form>
         </Moldura>
     );

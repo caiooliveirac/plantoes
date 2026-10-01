@@ -9,6 +9,10 @@ export const AINDA_ABERTO_MS = 3 * 60 * 60 * 1000;
 /** Segunda vez dentro deste prazo é insistência, não um caso novo. */
 export const INSISTENCIA_MS = 24 * 60 * 60 * 1000;
 
+/** Contas compartilhadas de propósito (só-leitura no portal, ver mnrs-portal
+    `CONTAS_SOMENTE_PAINEL`): várias pessoas ao mesmo tempo é o uso normal. */
+export const CONTAS_COMPARTILHADAS: ReadonlySet<string> = new Set(["interno.samu@samu.local"]);
+
 export type AtitudeDeRisco = "isento" | "nada" | "derrubar" | "trocar_senha";
 
 export function atitudeDeRiscoLigada() {
@@ -27,9 +31,10 @@ interface Marca {
     em: Date;
 }
 
-/** Admin nunca. Risco alto recente: derruba. Novo episódio forte depois de uma
+/** Admin e conta compartilhada nunca. Risco alto recente: derruba. Novo episódio forte depois de uma
     derrubada, dentro de 24 h: troca a senha. Já derrubada neste episódio: espera. */
 export function decidirAtitude(entrada: {
+    email?: string;
     papeis: readonly string[];
     nivel: string;
     episodios: readonly Episodio[];
@@ -39,6 +44,7 @@ export function decidirAtitude(entrada: {
     aindaAberto: boolean;
 }): AtitudeDeRisco {
     if (entrada.papeis.includes("admin")) return "isento";
+    if (entrada.email && CONTAS_COMPARTILHADAS.has(entrada.email.toLowerCase())) return "isento";
     if (entrada.nivel !== "forte") return "nada";
 
     const agora = entrada.agora.getTime();

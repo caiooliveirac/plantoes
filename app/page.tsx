@@ -131,6 +131,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         limiteOciosoSeg: limiteOciosoSeg(),
         tenteEmSeg: "tenteEmSeg" in presenca ? presenca.tenteEmSeg : undefined,
         email: session.user.email,
+        nome: (await nomeDoMedicoDaSessao(session.user.doctorId)) ?? session.user.email,
     };
     if (presenca.estado === "ocupada" || presenca.estado === "bloqueada") {
         return <MesaPresenca {...propsPresenca} />;

@@ -292,17 +292,17 @@ test("análise: três redes ao mesmo tempo é forte mesmo sem sinal de toque", (
         agora: min(40),
     });
     assert.equal(analise.episodios[0].forca, "forte");
-    assert.ok(analise.episodios[0].motivos.some((m) => /3 redes diferentes/.test(m)));
+    assert.ok(analise.episodios[0].motivos.some((m) => /3 lugares diferentes/.test(m)));
 });
 
 test("análise: redes todas coletivas ou IPv4 × IPv6 sem distância rebaixam o episódio", () => {
-    const janelas = [...presenca("a", "200.1.1.1", 0, 40, "uso"), ...presenca("b", "200.1.1.9", 0, 40, "uso")];
+    const janelas = [...presenca("a", "200.1.1.1", 0, 40, "uso"), ...presenca("b", "200.1.2.9", 0, 40, "uso")];
     const coletivas = analisarConta({
         conta: conta(),
-        sessoes: [sessao("a", UA.windows, "200.1.1.1"), sessao("b", UA.windowsEdge, "200.1.1.9")],
+        sessoes: [sessao("a", UA.windows, "200.1.1.1"), sessao("b", UA.windowsEdge, "200.1.2.9")],
         janelas,
         eventos: [],
-        redes: redes([["200.1.1.1", { contas: 20 }], ["200.1.1.9", { contas: 12 }]]),
+        redes: redes([["200.1.1.1", { contas: 20 }], ["200.1.2.9", { contas: 12 }]]),
         agora: min(50),
     });
     assert.equal(coletivas.episodios[0].forca, "moderado");
@@ -541,11 +541,10 @@ test("plantão: dois PCs na rede do plantão durante o turno é trabalho — vir
         agora: min(70),
         plantoes: [turno(-60, 600)],
     });
-    assert.equal(analise.episodios[0].forca, "fraco");
-    assert.equal(analise.episodios[0].plantao?.todosNaRedeDoPlantao, true);
-    assert.match(analise.episodios[0].motivos[0], /De plantão \(Regulação 1363\).*Uso de trabalho/);
+    // Mesma faixa (pool da Central) é um lugar só: nem episódio. Dois PCs com a
+    // Mesa aberta quem pega é a vez única (docs/presenca-mesa.md).
+    assert.equal(analise.episodios.length, 0);
     assert.equal(analise.nivel, "normal");
-    assert.ok(analise.achados.some((a) => a.titulo === "Mais de um aparelho durante o plantão, todos na rede do plantão"));
     assert.equal(analise.plantao?.agora?.rotulo, "Regulação 1363");
     assert.equal(analise.lugares.find((l) => l.rede === CENTRAL)?.plantao, true);
 });
@@ -591,7 +590,7 @@ test("plantão: fora do turno, Central + computador de casa ao mesmo tempo segue
     assert.equal(analise.plantao?.agora, null);
 });
 
-test("plantão: dois IPs do pool da Central fora do turno são o mesmo lugar (chefia: fraco; médico: desce um nível)", () => {
+test("plantão: dois IPs do pool da Central são o mesmo lugar: sem episódio, para chefia e médico", () => {
     const entrada = {
         sessoes: [sessao("pc1", UA.windows, CENTRAL), sessao("pc2", UA.windowsEdge, "200.1.1.9")],
         janelas: [...presenca("pc1", CENTRAL, 0, 60, "uso"), ...presenca("pc2", "200.1.1.9", 0, 60, "uso")],
@@ -600,12 +599,10 @@ test("plantão: dois IPs do pool da Central fora do turno são o mesmo lugar (ch
         agora: min(70),
     };
     const chefe = analisarConta({ ...entrada, conta: conta({ papeis: ["chief"] }) });
-    assert.equal(chefe.episodios[0].forca, "fraco");
-    assert.match(chefe.episodios[0].motivos[0], /Chefia\/coordenação\/operador da Central.*mesmo lugar/);
+    assert.equal(chefe.episodios.length, 0);
     assert.equal(chefe.nivel, "normal");
     const medico = analisarConta({ ...entrada, conta: conta(), plantoes: [turno(-1440, -720)] });
-    assert.equal(medico.episodios[0].forca, "moderado", "forte (2 PCs em uso) desce um nível");
-    assert.ok(medico.episodios[0].ressalvas.some((r) => /fora do turno do dono/.test(r)));
+    assert.equal(medico.episodios.length, 0, "mesma faixa = mesmo lugar; a vez única da Mesa cuida de dois PCs");
 });
 
 test("rede: faixa /24 junta o pool de IPs da Central; IPv6 fica no /64", async () => {
@@ -656,7 +653,7 @@ test("rádio-operador: trabalha na Central sem escala — tratado como a chefia 
         agora: min(70),
     };
     const radio2 = analisarConta({ ...doisPcsNaCentral, conta: conta({ papeis: ["radio_operador"] }) });
-    assert.equal(radio2.episodios[0].forca, "fraco");
+    assert.equal(radio2.episodios.length, 0);
     assert.equal(radio2.nivel, "normal");
     const tarm = analisarConta({ ...doisPcsNaCentral, conta: conta({ papeis: ["tarm"] }) });
     assert.equal(tarm.nivel, "normal");
@@ -750,4 +747,81 @@ test("plantão: aba parada na rede do plantão fora do turno (sem toque) não vi
     });
     assert.equal(analise.achados.some((a) => a.titulo === "Na rede do plantão fora do turno do dono"), false);
     assert.equal(analise.plantao?.minutosNaRedeForaDoTurno, 0);
+});
+
+test("lugar: celular pulando de IP no 4G, Retransmissão Privada e serviço interno não viram \"3 lugares\"", () => {
+    // 29/09/2026: PC parado na Central + o mesmo iPhone em IPv4 e IPv6 da operadora derrubou a conta.
+    const celularTrocandoIp = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("pc", UA.windows, "177.20.86.170"), sessao("cel", UA.iphone, "191.15.37.242")],
+        janelas: [
+            ...presenca("pc", "177.20.86.170", 0, 30, "fundo"),
+            ...presenca("cel", "191.15.37.242", 0, 15, "uso"),
+            ...presenca("cel", "2804:18:6877:2a7e:9148:af5b:ef79:b0b", 15, 30, "uso"),
+        ],
+        eventos: [],
+        redes: redes([]),
+        agora: min(35),
+    });
+    assert.ok(celularTrocandoIp.episodios.every((e) => e.forca !== "forte"));
+
+    // Mesmo iPhone em duas sessões, IPs diferentes da mesma operadora (CGNAT).
+    const duasSessoesMesmoCelular = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("pc", UA.windows, "177.20.86.166"), sessao("c1", UA.iphone, "177.50.102.87"), sessao("c2", UA.iphone, "177.50.106.205")],
+        janelas: [...presenca("pc", "177.20.86.166", 0, 10, "uso"), ...presenca("c1", "177.50.102.87", 0, 10, "uso"), ...presenca("c2", "177.50.106.205", 0, 10, "uso")],
+        eventos: [],
+        redes: redes([]),
+        agora: min(15),
+    });
+    assert.ok(duasSessoesMesmoCelular.episodios.every((e) => !e.motivos.some((m) => /3 lugares/.test(m))));
+
+    // Retransmissão Privada do iCloud: IPs da Cloudflare/Akamai a cada pedido.
+    const retransmissao = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("r1", UA.iphone, "2a09:bac2:1::1"), sessao("r2", UA.iphone, "2a09:bac3:2::1"), sessao("r3", UA.iphone, "2a02:26f7:3::1")],
+        janelas: [...presenca("r1", "2a09:bac2:1::1", 0, 10, "uso"), ...presenca("r2", "2a09:bac3:2::1", 0, 10, "uso"), ...presenca("r3", "2a02:26f7:3::1", 0, 10, "uso")],
+        eventos: [],
+        redes: redes([]),
+        agora: min(15),
+    });
+    assert.equal(retransmissao.episodios.length, 0);
+
+    // Pedido do próprio servidor (127.0.0.1, user-agent node) não é lugar.
+    const servidor = analisarConta({
+        conta: conta(),
+        sessoes: [sessao("pc", UA.windows, "200.1.1.1"), sessao("srv", "node", "127.0.0.1")],
+        janelas: [...presenca("pc", "200.1.1.1", 0, 10, "uso"), ...presenca("srv", "127.0.0.1", 0, 10, "uso")],
+        eventos: [],
+        redes: redes([]),
+        agora: min(10),
+    });
+    assert.equal(servidor.episodios.length, 0);
+    assert.equal(servidor.abertaAgora.redes, 1);
+});
+
+test("lugar: o mesmo aparelho (cookie) em duas redes é um lugar; dois aparelhos em três lugares seguem fortes", () => {
+    const comCookie = (id: string, ua: string, ip: string, aparelhoId: string) => ({ ...sessao(id, ua, ip), aparelhoId });
+    const mesmoNotebook = analisarConta({
+        conta: conta(),
+        sessoes: [comCookie("a", UA.windows, "200.1.1.1", "ap-1"), comCookie("b", UA.windows, "177.2.2.2", "ap-1")],
+        janelas: [...presenca("a", "200.1.1.1", 0, 30, "uso"), ...presenca("b", "177.2.2.2", 0, 30, "uso")],
+        eventos: [],
+        redes: redes([]),
+        agora: min(35),
+    });
+    assert.equal(mesmoNotebook.episodios.length, 0);
+});
+
+test("atitude: conta compartilhada de propósito nunca é derrubada", () => {
+    const agora = new Date("2026-10-01T15:50:00Z");
+    assert.equal(decidirAtitude({
+        email: "interno.samu@samu.local",
+        papeis: ["portal"],
+        nivel: "forte",
+        episodios: [{ forca: "forte", inicio: new Date("2026-10-01T15:45:00Z"), fim: new Date("2026-10-01T15:49:00Z") }],
+        eventos: [],
+        agora,
+        aindaAberto: true,
+    }), "isento");
 });

@@ -13,17 +13,18 @@
 
 export type ModoPresenca = "desligado" | "sombra" | "valendo";
 
-/** MESA_PRESENCA: "0" desliga, "1" vale, qualquer outra coisa (inclusive vazio) é sombra — registra sem bloquear. */
+/** MESA_PRESENCA: "0" desliga, "sombra" registra sem bloquear, qualquer outra coisa (inclusive vazio) vale.
+    Valendo por padrão desde 01/10/2026 (decisão do Caio, depois de 4 dias em sombra). */
 export function modoPresenca(env: Record<string, string | undefined> = process.env): ModoPresenca {
     const valor = env.MESA_PRESENCA?.trim().toLowerCase();
     if (valor === "0" || valor === "desligado") return "desligado";
-    if (valor === "1" || valor === "valendo") return "valendo";
-    return "sombra";
+    if (valor === "sombra") return "sombra";
+    return "valendo";
 }
 
-export const OCIOSO_MIN_PADRAO = 15;
+export const OCIOSO_MIN_PADRAO = 30;
 
-/** Minutos sem interação até bloquear (MESA_OCIOSO_MIN, 5 a 240; padrão 15). */
+/** Minutos sem interação até bloquear (MESA_OCIOSO_MIN, 5 a 240; padrão 30). */
 export function limiteOciosoSeg(env: Record<string, string | undefined> = process.env): number {
     const minutos = Number(env.MESA_OCIOSO_MIN);
     const valido = Number.isFinite(minutos) && minutos >= 5 && minutos <= 240 ? minutos : OCIOSO_MIN_PADRAO;

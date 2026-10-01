@@ -17,8 +17,8 @@ Duas regras fecham isso:
    vê "Este painel está aberto em outro dispositivo" e tenta de novo sozinho.
    **Não existe botão de assumir**: com um, duas pessoas revezariam no clique.
 2. **Tela parada expira.** Sem mexer o mouse, rolar, tocar ou teclar por
-   `MESA_OCIOSO_MIN` (padrão 15 min), a Mesa fecha **naquele aparelho** e
-   pede a senha ("Você saiu deste computador?"). Aviso 60 s antes.
+   `MESA_OCIOSO_MIN` (padrão 30 min), a Mesa fecha **naquele aparelho** e
+   pede a senha ("Ainda é Fulano?", com o nome do médico da conta). Aviso 60 s antes.
 
 Admin é isento das duas (decisão do Caio, 28/09/2026). Operadores da Central
 (rádio-operador e TARM) também, mas **só na rede da Central** — ver abaixo. O resto do app (escala,
@@ -143,7 +143,7 @@ registrado. A ociosidade protege contra tela esquecida; contra senha
 compartilhada quem protege é a vez + portão + monitor.
 
 Efeito na Central: Mesa num segundo monitor enquanto o médico trabalha em outro
-sistema fecha em 15 min se ninguém passar o mouse por ela. Ajuste em
+sistema fecha em 30 min se ninguém passar o mouse por ela. Ajuste em
 `MESA_OCIOSO_MIN` (5–240).
 
 ## O que o monitor passa a ver
@@ -173,17 +173,19 @@ nessas regras.
 
 | `MESA_PRESENCA` | Efeito |
 |---|---|
-| vazio (padrão) ou `sombra` | batidas e eventos `*_sombra`; **ninguém é bloqueado** |
-| `1` | vale |
+| `sombra` | batidas e eventos `*_sombra`; **ninguém é bloqueado** |
+| vazio (padrão desde 01/10/2026) ou `1` | vale |
 | `0` | nada roda |
 
-`MESA_OCIOSO_MIN` = minutos até bloquear (padrão 15). Mudou o `.env.production`:
+`MESA_OCIOSO_MIN` = minutos até bloquear (padrão 30). Mudou o `.env.production`:
 `pm2 delete plantoes && pm2 start` (o PM2 não relê o env).
 
 Rollout: migration 0049 **antes** do merge → deploy em sombra → uma semana
 olhando `mesa_ocupada_negada_sombra` e `mesa_bloqueada_ociosa_sombra` por conta
 (quantos legítimos seriam barrados; quantos avisos de ociosidade por turno) →
-`MESA_PRESENCA=1`. Emergência: `MESA_PRESENCA=0`. Erro de banco deixa passar
+`MESA_PRESENCA=1`. Feito em 01/10/2026 com 4 dias de sombra, virando o padrão
+no código (decisão do Caio; histórico em [conta-emprestada.md](conta-emprestada.md)).
+Emergência: `MESA_PRESENCA=0` (ou `sombra`). Erro de banco deixa passar
 (log `[presenca]`), como o portão.
 
 ## Próximos passos (não feitos)
