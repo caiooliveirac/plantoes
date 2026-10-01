@@ -28,3 +28,14 @@ test("token com cv cai no corte mesmo com exp maior; sem cv (admin) segue", () =
     const semCorte = createSessionToken({ sub: "u2", exp: agora + 30 * 86_400_000, iat: agora }, secret);
     assert.ok(verifySessionToken(semCorte, secret, agora + 86_400_000));
 });
+
+test("cookie de antes do corte (sem iat nem cv) cai no corte seguinte à última renovação", async () => {
+    const { corteDoCookieAntigo } = await import("@/lib/auth/corte-virada");
+    const TTL = 30 * 24 * 3_600_000;
+    // Renovado às 09:00 de 01/10 (Bahia, UTC−3): cai às 19:15 do mesmo dia.
+    const renovadoEm = Date.parse("2026-10-01T12:00:00Z");
+    assert.equal(corteDoCookieAntigo({ exp: renovadoEm + TTL }, TTL)?.toISOString(), "2026-10-01T22:15:00.000Z");
+    // Cookie novo não entra: com cv, o próprio token corta; com iat e sem cv é admin.
+    assert.equal(corteDoCookieAntigo({ exp: renovadoEm + TTL, iat: renovadoEm }, TTL), null);
+    assert.equal(corteDoCookieAntigo({ exp: renovadoEm + TTL, cv: renovadoEm + 3_600_000 }, TTL), null);
+});

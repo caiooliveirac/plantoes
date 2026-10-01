@@ -48,6 +48,9 @@ export function proxy(request: NextRequest) {
     if (!secret || !raw) return res;
     const parsed = verifySessionToken(raw, secret);
     if (!parsed) return res;
+    // Cookie de antes do corte da virada (sem iat): não renova — renovar
+    // empurraria o "login" para frente e ele escaparia do corte (server.ts).
+    if (parsed.iat === undefined && parsed.cv === undefined) return res;
     const emitidoEm = parsed.iat ?? parsed.exp - SESSION_TTL_MS;
     if (Date.now() - emitidoEm < SESSION_RENEW_AFTER_MS) return res;
     // Renovação nunca passa do corte da virada (lib/auth/corte-virada.ts).

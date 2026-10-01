@@ -140,7 +140,12 @@ test("proxy: repassa a rota e a renovação diária mantém o sid (ou grava o de
     process.env.AUTH_SECRET = "segredo-proxy";
     const { proxy } = await import("@/proxy");
     const velho = Date.now() - 2 * 24 * 3_600_000 + 30 * 24 * 3_600_000; // emitido há 2 dias
-    const semSid = createSessionToken({ sub: "u1", exp: velho, sv: 1 }, "segredo-proxy");
+    // Cookie de antes do corte da virada (sem iat): não renova — cai no corte (lib/auth/corte-virada.ts).
+    const antigo = createSessionToken({ sub: "u1", exp: velho, sv: 1 }, "segredo-proxy");
+    const semRenovar = proxy(new NextRequest("https://plantoes.mnrs.com.br/", { headers: { cookie: `operations_v2_session=${antigo}` } }));
+    assert.equal(semRenovar.cookies.get("operations_v2_session"), undefined);
+
+    const semSid = createSessionToken({ sub: "u1", exp: velho, sv: 1, iat: Date.now() - 2 * 24 * 3_600_000 }, "segredo-proxy");
     const req = new NextRequest("https://plantoes.mnrs.com.br/admin/acessos", {
         headers: { cookie: `operations_v2_session=${semSid}`, "x-plantoes-rota": "FORJADO /x" },
     });

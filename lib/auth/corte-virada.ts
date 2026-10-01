@@ -26,6 +26,15 @@ export function proximoCorte(login: Date): Date {
     return new Date(proximaVirada(login).getTime() + CORTE_APOS_VIRADA_MS);
 }
 
+/** Cookie de antes do corte (sem `iat` nem `cv`, emitido até 01/10/2026 09:20):
+    o login vale como exp − validade (a última renovação) e ele cai no corte
+    seguinte a isso. Sem esta regra, a renovação diária o mantinha vivo por
+    30 dias — 11 sessões passaram pelo corte das 19:15 de 01/10/2026. */
+export function corteDoCookieAntigo(token: { iat?: number; cv?: number; exp: number }, validadeMs: number): Date | null {
+    if (typeof token.cv === "number" || typeof token.iat === "number") return null;
+    return proximoCorte(new Date(token.exp - validadeMs));
+}
+
 export function corteLigado(env: Record<string, string | undefined> = process.env) {
     return env.SESSAO_CORTE_VIRADA !== "0";
 }

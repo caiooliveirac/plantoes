@@ -12,7 +12,7 @@ import { MENSAGEM_BLOQUEADA, MENSAGEM_OCUPADA, modoPresenca } from "@/modules/ac
 import { deveBarrarEscritaDaMesa, mensagemChefeDePlantaoOutro, travaChefeDePlantaoLigada } from "@/modules/operational/chefe-de-plantao";
 import { chefeDePlantaoAtual } from "@/services/chefe-de-plantao.service";
 import { lerCookieAparelho, nomeCookieAparelho } from "@/lib/auth/aparelho";
-import { corteLigado, proximoCorte } from "@/lib/auth/corte-virada";
+import { corteDoCookieAntigo, corteLigado, proximoCorte } from "@/lib/auth/corte-virada";
 import { baterPresenca, conferirPresenca, desbloquearAparelho, type ContaNaMesa, type RespostaPresenca } from "@/services/mesa-presenca.service";
 import { conferirPortaoDeTurno, naRedeDaCentral, vigiarLugares } from "@/services/acessos-portao.service";
 import {
@@ -165,6 +165,12 @@ export async function loadUserSession(token: SessionTokenPayload, sessionId?: st
     const roles: UserRole[] = rolesDoPlantoes(rolesRows.map((row) => row.role));
 
     if (roles.length === 0) {
+        return null;
+    }
+
+    // Cookie de antes do corte da virada: cai no corte seguinte (admin isento).
+    const corteAntigo = corteLigado() && !roles.includes("admin") ? corteDoCookieAntigo(token, SESSION_TTL_MS) : null;
+    if (corteAntigo && corteAntigo.getTime() <= Date.now()) {
         return null;
     }
 
