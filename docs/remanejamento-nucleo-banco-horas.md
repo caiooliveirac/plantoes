@@ -97,6 +97,7 @@ contra 07:00. Por grupo de continuidade:
 | **E1** | a posição mais antiga do grupo é no NUCLEO (SD) | sim |
 | **E2** | as notas da posição mais antiga dizem `Remanejado … de NUCLEO para …` (origem apagada) | sim |
 | **E3** | `audit_logs` de `operational_occupancy.transferred` tem origem NUCLEO para uma posição do grupo, e essa origem começou antes/junto da posição mais antiga que sobrou | sim |
+| **E5** | a mensagem do bot que criou a posição diz "remanejado do NUCLEO" (aceita; origem apagada, sem audit nem nota — caso Luiz, 26/04) | sim |
 | **E4** | NUCLEO SD do mesmo médico, mesmo turno, em **outro** grupo (turno partido) | só com `--unir-grupos` (junta ao grupo do NUCLEO, o que a R1 faria hoje) |
 
 Só toca a janela **07:00 → 08:00 do dia do turno** nas posições gravadas assim
@@ -186,4 +187,4 @@ Cole numa sessão Claude Code aberta na raiz do repo, no Mac com SSH ao magalu:
 | Data | O quê | Onde |
 |---|---|---|
 | 30/09/2026 | Defeito reproduzido em banco local (4 cenários), correção no código, testes, backfill escrito e validado com fixtures | este doc; `modules/operational/posto-de-chegada.ts`; `tests/remanejamento-nucleo-janela.test.ts`; `scripts/backfill-nucleo-remanejamento.ts` |
-| pendente | Backfill rodado em produção — registrar aqui quantos turnos/minutos e o mês mais antigo tocado | — |
+| 01/10/2026 | Backfill rodado em produção (com `--unir-grupos --include-attested`): 12 turnos, **+190 min** devolvidos (Luiz Eduardo +145 em 4 turnos, Ana Luiza Alves +45), 0 débito novo; mês mais antigo 04/2026. Adicionada a evidência E5. Segunda rodada: zero. Backup `~/plantoes_pre_backfill_nucleo_2026-10-01.dump` (schema operations_v2); desfazer turno a turno pelo `beforeSnapshot` em `audit_logs` | este doc; `scripts/backfill-nucleo-remanejamento.ts` |

@@ -19,6 +19,8 @@
  *        E3  o audit log de remanejo (operational_occupancy.transferred) tem
  *            origem NUCLEO para uma posição do grupo, e essa origem começou
  *            antes ou junto da posição mais antiga que sobrou;
+ *        E5  a mensagem do bot que criou a posição diz "remanejado do NUCLEO"
+ *            (origem apagada, sem audit log nem nota)
  *        E4  o médico tem um NUCLEO SD do MESMO turno em OUTRO grupo (turno
  *            partido). Só listado; com --unir-grupos as posições entram no
  *            grupo do NUCLEO antes do recálculo (é o que ADR-007 R1 faria hoje).
@@ -59,6 +61,7 @@ import {
     interventionBases,
     interventionOccupancies,
     doctors,
+    telegramIngestedMessages,
     paymentClosingAttestations,
     regulationOccupancies,
     regulationPosts,
@@ -90,7 +93,7 @@ interface Leg extends ContinuityOccupancy {
     scheduledEndAt: Date | null;
 }
 
-type Evidence = "E1" | "E2" | "E3" | "E4";
+type Evidence = "E1" | "E2" | "E3" | "E4" | "E5";
 
 interface Candidate {
     continuityGroupId: string;
@@ -282,15 +285,30 @@ async function loadNucleoTransfers() {
     return movedFromNucleo;
 }
 
+/** Remanejo declarado no grupo ("Fulano na 1367 remanejado do NUCLEO") e aceito pelo bot: ocupações ligadas a ele. */
+const REMANEJADO_DO_NUCLEO = /remanej\w*\s+(do|de|d[oa])\s+n[uú]cleo/i;
+async function loadNucleoTelegramClaims() {
+    const db = getDb();
+    const rows = await db.query.telegramIngestedMessages.findMany({
+        columns: { relatedOccupancyId: true, rawText: true, status: true },
+    });
+    const ids = new Set<string>();
+    for (const row of rows) {
+        if (row.status === "accepted" && row.relatedOccupancyId && REMANEJADO_DO_NUCLEO.test(row.rawText)) ids.add(row.relatedOccupancyId);
+    }
+    return ids;
+}
+
 async function collectCandidates(): Promise<{ candidates: Candidate[]; brokenTurnos: number }> {
     const db = getDb();
     const since = parseSince();
     const only = parseOnly();
     const mergeGroups = hasFlag("--unir-grupos");
 
-    const [legs, movedFromNucleo, doctorRows, attestations, overrides, entries] = await Promise.all([
+    const [legs, movedFromNucleo, nucleoClaims, doctorRows, attestations, overrides, entries] = await Promise.all([
         loadLegs(),
         loadNucleoTransfers(),
+        loadNucleoTelegramClaims(),
         db.query.doctors.findMany({ columns: { id: true, fullName: true, displayName: true } }),
         db.query.paymentClosingAttestations.findMany(),
         db.query.bankHoursBalanceOverrides.findMany({ columns: { continuityGroupId: true, balanceMinutes: true } }),
@@ -350,6 +368,11 @@ async function collectCandidates(): Promise<{ candidates: Candidate[]; brokenTur
                     break;
                 }
             }
+        }
+
+        // E5: a chegada foi aceita pelo bot com "remanejado do NUCLEO" na própria mensagem (origem apagada, sem audit).
+        if (evidence.length === 0 && group.members.some((member) => nucleoClaims.has(member.occupancyId))) {
+            evidence.push("E5");
         }
 
         // E4: turno partido — NUCLEO SD do mesmo médico, mesmo turno, em OUTRO grupo, começado antes.
