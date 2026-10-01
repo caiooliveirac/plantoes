@@ -153,13 +153,17 @@ async function titularDoTurno(alvo: { domain: "regulation" | "intervention"; id:
     const { getDb, schema, boardRules } = await modulos();
     const janela = boardRules.resolveOperationalShiftWindow(new Date());
     const chegada = new Date(janela.startedAt.getTime() + 60_000);
+    // Nas 3h antes da virada quem chega já é do próximo turno e o titular do
+    // turno corrente vira rendição: a cobertura vai até o fim do turno de quem
+    // chega para o teste não depender da hora em que roda.
+    const fimDaCobertura = boardRules.resolveOperationalShiftWindow(boardRules.resolveArrivingShiftStartAt(new Date())).nextBoundaryAt;
     const comum = {
         doctorId,
         continuityGroupId: randomUUID(),
         startedAt: chegada,
         boardStartedAt: chegada,
         scheduledStartAt: janela.startedAt,
-        scheduledEndAt: janela.nextBoundaryAt,
+        scheduledEndAt: fimDaCobertura,
         shiftLabel: janela.shiftLabel,
         source: "manual" as const,
     };
