@@ -55,6 +55,7 @@ import {
     updateDoctorDirectoryEntry,
 } from "@/modules/doctors/service";
 import { isStoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
+import { findActiveOccupancyByDoctorId, resolveActiveOccupancyCoverageFloor } from "@/modules/operational/ocupacao-ativa";
 import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
 import { pickDeparturePosition, type DoctorPosition } from "@/modules/telegram/departure-position";
@@ -1952,23 +1953,11 @@ function isOperationalParsedEntry(entry: ParsedMessage): entry is ParsedMessage 
     return Boolean(entry.baseCode && entry.sector);
 }
 
-// Até onde a mensagem de HOJE pode enxergar um plantão aberto do médico. Uma
-// ocupação aberta antiga NÃO é "o plantão atual dele": é lixo que escapou do
-// reaper (P sem saída, janela não expirada ainda). Sem esta trava, uma chegada
-// digitada dias depois virava remanejamento retroativo — movia a ocupação
-// ANTIGA para o ramal novo, preservando o started_at original e reescrevendo o
-// passado (incidente 08/07/2026: "CAROLINA TANAJURA 2031 P" levou o plantão
-// dela de 01/07 do 1366 para o 2031 e derrubou a Bruna do SD da chefia).
-// O critério é a JANELA da ocupação, não a idade dela: vale enquanto o plantão
-// ainda cobre o agora (com 3h de folga para a mensagem que chega atrasada).
-// Continuidade declarada estende o scheduledEndAt e por isso continua alcançável
-// mesmo com started_at de dois dias atrás; plantão que passou da janela e ficou
-// aberto por silêncio, não.
-const ACTIVE_OCCUPANCY_GRACE_MS = 3 * 60 * 60 * 1000;
-
-export function resolveActiveOccupancyCoverageFloor(referenceAt: Date): Date {
-    return new Date(referenceAt.getTime() - ACTIVE_OCCUPANCY_GRACE_MS);
-}
+// Ocupação ativa do médico e o piso de cobertura ("até onde a mensagem de hoje
+// enxerga um plantão aberto") moraram aqui até 01/10/2026; agora vivem em
+// modules/operational/ocupacao-ativa.ts, compartilhados com a chegada/saída
+// pela web. Re-exportado para quem importa daqui (testes).
+export { resolveActiveOccupancyCoverageFloor };
 
 // Madrugada (docs/madrugada.md): a cobertura de quem avisa, se ainda vale ou
 // terminou há no máximo 1h — decide a chegada do SD (07:00) e o ramal de
@@ -1984,96 +1973,6 @@ async function findRecentMadrugadaCoverage(doctorId: string, eventAt: Date) {
         orderBy: [desc(regulationOccupancies.scheduledEndAt)],
         columns: { postId: true, scheduledEndAt: true, endedAt: true },
     });
-}
-
-async function findActiveOccupancyByDoctorId(doctorId: string, referenceAt = new Date(), options: {
-    /** Chegada: cobertura de madrugada não é plantão de origem (docs/madrugada.md). */
-    ignoreMadrugada?: boolean;
-} = {}): Promise<{
-    sector: "REGULATION" | "INTERVENTION";
-    baseCode: string;
-    occupancyId: string;
-    startedAt: Date;
-    shiftLabel: string | null;
-    continuityGroupId: string | null;
-    boardStartedAt: Date | null;
-    scheduledEndAt: Date | null;
-} | null> {
-    const db = getDb();
-    const coverageFloor = resolveActiveOccupancyCoverageFloor(referenceAt);
-
-    const regOcc = await db
-        .select({
-            id: regulationOccupancies.id,
-            postId: regulationOccupancies.postId,
-            startedAt: regulationOccupancies.startedAt,
-            shiftLabel: regulationOccupancies.shiftLabel,
-            continuityGroupId: regulationOccupancies.continuityGroupId,
-            boardStartedAt: regulationOccupancies.boardStartedAt,
-            scheduledEndAt: regulationOccupancies.scheduledEndAt,
-        })
-        .from(regulationOccupancies)
-        .where(and(
-            eq(regulationOccupancies.doctorId, doctorId),
-            isNull(regulationOccupancies.endedAt),
-            gte(regulationOccupancies.scheduledEndAt, coverageFloor),
-            options.ignoreMadrugada ? eq(regulationOccupancies.madrugadaCobertura, false) : undefined,
-        ))
-        .orderBy(desc(regulationOccupancies.startedAt))
-        .limit(1);
-
-    if (regOcc.length > 0) {
-        const post = await db.query.regulationPosts.findFirst({ where: eq(regulationPosts.id, regOcc[0].postId) });
-        if (post) {
-            return {
-                sector: "REGULATION",
-                baseCode: post.code,
-                occupancyId: regOcc[0].id,
-                startedAt: regOcc[0].startedAt,
-                shiftLabel: regOcc[0].shiftLabel,
-                continuityGroupId: regOcc[0].continuityGroupId,
-                boardStartedAt: regOcc[0].boardStartedAt,
-                scheduledEndAt: regOcc[0].scheduledEndAt,
-            };
-        }
-    }
-
-    const intOcc = await db
-        .select({
-            id: interventionOccupancies.id,
-            baseId: interventionOccupancies.baseId,
-            startedAt: interventionOccupancies.startedAt,
-            shiftLabel: interventionOccupancies.shiftLabel,
-            continuityGroupId: interventionOccupancies.continuityGroupId,
-            boardStartedAt: interventionOccupancies.boardStartedAt,
-            scheduledEndAt: interventionOccupancies.scheduledEndAt,
-        })
-        .from(interventionOccupancies)
-        .where(and(
-            eq(interventionOccupancies.doctorId, doctorId),
-            isNull(interventionOccupancies.endedAt),
-            gte(interventionOccupancies.scheduledEndAt, coverageFloor),
-        ))
-        .orderBy(desc(interventionOccupancies.startedAt))
-        .limit(1);
-
-    if (intOcc.length > 0) {
-        const base = await db.query.interventionBases.findFirst({ where: eq(interventionBases.id, intOcc[0].baseId) });
-        if (base) {
-            return {
-                sector: "INTERVENTION",
-                baseCode: base.code,
-                occupancyId: intOcc[0].id,
-                startedAt: intOcc[0].startedAt,
-                shiftLabel: intOcc[0].shiftLabel,
-                continuityGroupId: intOcc[0].continuityGroupId,
-                boardStartedAt: intOcc[0].boardStartedAt,
-                scheduledEndAt: intOcc[0].scheduledEndAt,
-            };
-        }
-    }
-
-    return null;
 }
 
 // Procura a ocupacao mais recentemente fechada do medico (regulation ou

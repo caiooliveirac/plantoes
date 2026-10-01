@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs } from "@/db/schema";
-import { AuthError, requireMesaSession } from "@/lib/auth/server";
+import { AuthError, requireMesaEscrita } from "@/lib/auth/server";
 import { updateDayMealBreakAssignment, updateDayMealBreakEligibility, updateNightMealBreakAssignment } from "@/modules/telegram/meal-breaks";
 
 const ALL_DAY_SLOTS = ["11:30", "12:30", "13:30", "14:30", "15:30", "16:30", "18:00"] as const;
@@ -25,7 +25,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/bo
 
     let session;
     try {
-        session = await requireMesaSession(["admin", "chief"]);
+        session = await requireMesaEscrita(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

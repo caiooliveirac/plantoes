@@ -1,9 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { fetchMesa } from "@/lib/board/fetch-mesa";
+import { useMemo, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
+import { EditorDeHorario } from "@/components/board/EditorDeHorario";
+import { MOTIVOS_HORARIO, MotivoChips, motivoValido } from "@/components/board/MotivoChips";
+import { BAHIA_OFFSET_MINUTES } from "@/lib/time";
 
 export type TimeEditorDomain = "regulation" | "intervention";
 export type TimeEditorField = "arrival" | "departure";
@@ -15,10 +19,15 @@ interface InlineTimeEditorProps {
     currentIso: string | null;
     doctorName: string;
     targetCode: string;
+    /** Janela prevista do turno (ISO). Sem ela, deduz SD/SN pela hora atual. */
+    janela?: { inicio: string | null; fim: string | null } | null;
     /** Renders the trigger. Receives the formatted display value (HH:mm) and a flag for "in aberto". */
     children: (display: { value: string; isPending: boolean }) => React.ReactNode;
     onSaved?: () => void;
 }
+
+const HORA_MS = 3_600_000;
+const OFFSET_MS = BAHIA_OFFSET_MINUTES * 60_000;
 
 function formatHourMinute(value: string | null | undefined) {
     if (!value) return "—";
@@ -30,16 +39,14 @@ function formatHourMinute(value: string | null | undefined) {
     });
 }
 
-function isoToLocalInputValue(iso: string | null): string {
-    if (!iso) return "";
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return "";
-    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-    return local.toISOString().slice(0, 16);
-}
-
-function localInputValueToIso(value: string): string {
-    return new Date(value).toISOString();
+/** Janela SD (07–19) ou SN (19–07) que contém o instante, no fuso operacional. */
+function janelaDoTurno(ms: number): { inicio: number; fim: number } {
+    const local = ms + OFFSET_MS;
+    const dia = Math.floor(local / (24 * HORA_MS)) * 24 * HORA_MS;
+    const hora = (local - dia) / HORA_MS;
+    if (hora >= 7 && hora < 19) return { inicio: dia + 7 * HORA_MS - OFFSET_MS, fim: dia + 19 * HORA_MS - OFFSET_MS };
+    if (hora >= 19) return { inicio: dia + 19 * HORA_MS - OFFSET_MS, fim: dia + 31 * HORA_MS - OFFSET_MS };
+    return { inicio: dia - 5 * HORA_MS - OFFSET_MS, fim: dia + 7 * HORA_MS - OFFSET_MS };
 }
 
 export function InlineTimeEditor({
@@ -49,12 +56,13 @@ export function InlineTimeEditor({
     currentIso,
     doctorName,
     targetCode,
+    janela,
     children,
     onSaved,
 }: InlineTimeEditorProps) {
     const router = useRouter();
     const [open, setOpen] = useState(false);
-    const [value, setValue] = useState(() => isoToLocalInputValue(currentIso));
+    const [valorMs, setValorMs] = useState<number>(() => (currentIso ? new Date(currentIso).getTime() : Date.now()));
     const [reason, setReason] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
@@ -64,24 +72,40 @@ export function InlineTimeEditor({
         isPending: !currentIso,
     };
 
+    const limites = useMemo(() => {
+        const referencia = currentIso ? new Date(currentIso).getTime() : Date.now();
+        const inicioJanela = janela?.inicio ? new Date(janela.inicio).getTime() : null;
+        const fimJanela = janela?.fim ? new Date(janela.fim).getTime() : null;
+        const deduzida = janelaDoTurno(inicioJanela ?? referencia);
+        const inicio = inicioJanela ?? deduzida.inicio;
+        const fim = fimJanela ?? deduzida.fim;
+        return {
+            janelaInicioMs: inicio,
+            janelaFimMs: fim,
+            // Chegada: de 6h antes da janela até o fim dela. Saída: do início da
+            // janela até 12h depois do fim (permanência longa).
+            minMs: field === "arrival" ? inicio - 6 * HORA_MS : inicio,
+            maxMs: field === "arrival" ? Math.min(fim, Date.now() + 60_000) : Math.min(fim + 12 * HORA_MS, Date.now() + 60_000),
+        };
+    }, [currentIso, janela, field]);
+
     const handleOpenChange = (next: boolean) => {
         if (next) {
-            setValue(isoToLocalInputValue(currentIso));
+            setValorMs(currentIso ? new Date(currentIso).getTime() : Math.min(Date.now(), limites.maxMs));
             setReason("");
         }
         setOpen(next);
     };
 
     const submit = async () => {
-        if (!value) {
-            toast.error("Informe o novo horário.");
+        const nextIso = new Date(valorMs).toISOString();
+        const changed = !currentIso || new Date(currentIso).toISOString() !== nextIso;
+        if (!changed) {
+            setOpen(false);
             return;
         }
-        const trimmedReason = reason.trim();
-        const nextIso = localInputValueToIso(value);
-        const changed = !currentIso || new Date(currentIso).toISOString() !== nextIso;
-        if (changed && trimmedReason.length < 8) {
-            toast.error("Motivo obrigatório (≥ 8 caracteres) para corrigir horário.");
+        if (!motivoValido(reason)) {
+            toast.error("Escolha um motivo (ou escreva um com 8+ caracteres).");
             return;
         }
         setSubmitting(true);
@@ -90,10 +114,7 @@ export function InlineTimeEditor({
                 ? `/api/regulation/occupancies/${occupancyId}`
                 : `/api/intervention/occupancies/${occupancyId}`;
 
-            const payload: Record<string, unknown> = {
-                notes: trimmedReason || undefined,
-            };
-
+            const payload: Record<string, unknown> = { notes: reason.trim() };
             if (field === "arrival") {
                 payload.startedAt = nextIso;
                 payload.boardStartedAt = nextIso;
@@ -101,7 +122,7 @@ export function InlineTimeEditor({
                 payload.actualEndedAt = nextIso;
             }
 
-            const response = await fetch(endpoint, {
+            const response = await fetchMesa(endpoint, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
@@ -123,6 +144,13 @@ export function InlineTimeEditor({
         }
     };
 
+    const deltaMin = Math.round((valorMs - limites.janelaInicioMs) / 60_000);
+    const consequencia = field === "arrival"
+        ? (deltaMin > 15
+            ? `Atraso de ${deltaMin} min contra a janela (${formatHourMinute(new Date(limites.janelaInicioMs).toISOString())}). Muda refeição e saída.`
+            : `Dentro da tolerância: conta como pontual. Muda refeição e saída.`)
+        : null;
+
     return (
         <Popover.Root open={open} onOpenChange={handleOpenChange}>
             <Popover.Trigger asChild>
@@ -140,31 +168,25 @@ export function InlineTimeEditor({
                 <Popover.Content
                     sideOffset={6}
                     collisionPadding={16}
-                    className="historico-list-popover"
+                    className="historico-list-popover historico-list-popover--largo"
                     onClick={(event) => event.stopPropagation()}
                 >
                     <header>
                         <strong>Corrigir {label.toLowerCase()}</strong>
                         <span>{doctorName} · {targetCode}</span>
                     </header>
-                    <label className="historico-list-popover__field">
-                        <span>Novo horário</span>
-                        <input
-                            type="datetime-local"
-                            value={value}
-                            onChange={(event) => setValue(event.target.value)}
-                            step={60}
-                        />
-                    </label>
-                    <label className="historico-list-popover__field">
-                        <span>Motivo (obrigatório)</span>
-                        <textarea
-                            value={reason}
-                            onChange={(event) => setReason(event.target.value)}
-                            rows={3}
-                            placeholder="Ex.: chegada confirmada por rádio às 07:08"
-                        />
-                    </label>
+                    <EditorDeHorario
+                        valorMs={valorMs}
+                        janelaInicioMs={limites.janelaInicioMs}
+                        janelaFimMs={limites.janelaFimMs}
+                        minMs={limites.minMs}
+                        maxMs={Math.max(limites.maxMs, limites.minMs + 60_000)}
+                        tipo={field === "arrival" ? "chegada" : "saida"}
+                        verbalizadoMs={currentIso ? new Date(currentIso).getTime() : null}
+                        onChange={setValorMs}
+                        consequencia={consequencia}
+                    />
+                    <MotivoChips opcoes={MOTIVOS_HORARIO} valor={reason} onChange={setReason} />
                     <div className="historico-list-popover__actions">
                         <button
                             type="button"

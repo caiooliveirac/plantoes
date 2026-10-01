@@ -68,6 +68,12 @@ export function esquecerCentralDoPortao() {
     central = null;
 }
 
+/** O médico acabou de declarar chegada/saída pela web: a resposta guardada
+    (60 s) ficaria errada justo no instante em que ele entra na Mesa. */
+export function esquecerTurnoDoPortao(userId: string) {
+    turnos.delete(userId);
+}
+
 export function limparMemoriaDoPortao() {
     turnos.clear();
     central = null;

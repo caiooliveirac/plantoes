@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Shield } from "lucide-react";
@@ -140,7 +141,7 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
 
     const loadSystem = useCallback(async () => {
         try {
-            const response = await fetch("/api/operational/auto-confirmed-departures");
+            const response = await fetchMesa("/api/operational/auto-confirmed-departures");
             if (response.ok) setSystem(await response.json());
         } catch {
             // Sem a lista o rail segue funcionando; só não mostra o Desfazer.
@@ -154,7 +155,7 @@ export function AuditRail({ pendingDepartures, onOpenVerifier }: AuditRailProps)
     const undoSystemConfirmation = useCallback(async (item: SystemConfirmedDeparture) => {
         setUndoingId(item.occupancyId);
         try {
-            const response = await fetch("/api/operational/auto-confirmed-departures", {
+            const response = await fetchMesa("/api/operational/auto-confirmed-departures", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ domain: item.domain, occupancyId: item.occupancyId }),

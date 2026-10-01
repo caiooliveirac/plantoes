@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -38,7 +39,7 @@ export function ChiefArrivalRequestsRail() {
 
     const load = useCallback(async () => {
         try {
-            const response = await fetch("/api/board/chief-arrival-requests");
+            const response = await fetchMesa("/api/board/chief-arrival-requests");
             if (!response.ok) return;
             const payload = await response.json() as { requests?: ChiefArrivalRequest[] };
             setRequests(payload.requests ?? []);
@@ -54,7 +55,7 @@ export function ChiefArrivalRequestsRail() {
     const decide = async (requestId: string, decision: "apply" | "dismiss") => {
         setBusyId(requestId);
         try {
-            const response = await fetch("/api/board/chief-arrival-requests", {
+            const response = await fetchMesa("/api/board/chief-arrival-requests", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ requestId, decision }),

@@ -58,6 +58,12 @@ import { useOccurrenceHandoff } from "@/components/board/useOccurrenceHandoff";
 import { AnimatePresence } from "framer-motion";
 import { useQuickConfirmDeparture } from "@/lib/board/use-quick-confirm-departure";
 import type { UserRole } from "@/modules/auth/contracts";
+import { fetchMesa } from "@/lib/board/fetch-mesa";
+import { ModalChefeOutro } from "@/components/board/ModalChefeOutro";
+import { PedidosDoMedicoRail } from "@/components/board/PedidosDoMedicoRail";
+import { ChipAtraso } from "@/components/board/ChipAtraso";
+import { SeletorDePosto, type PostoAzulejo } from "@/components/board/SeletorDePosto";
+import { MOTIVOS_REMANEJO, MotivoChips } from "@/components/board/MotivoChips";
 
 type ActionMode = "correct" | "end" | "start";
 type PriorityLevel = "critical" | "high" | "elevated" | "steady";
@@ -82,6 +88,10 @@ interface SessionSummary {
     canManage: boolean;
     /** Vínculo com o cadastro de médicos — habilita o link do painel individual. */
     doctorId: string | null;
+    /** Nome do médico da conta (display_name) — vai fixo na barra. */
+    nome?: string | null;
+    /** Admin, ou chief que está na 2031 agora (ou 2031 vazia). Ações rápidas de chegada. */
+    chefeDePlantao?: boolean;
 }
 
 interface RegulationCard extends RegulationBoardRow {
@@ -1274,6 +1284,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         setViewMode(vistaNaUrl);
     }, [vistaNaUrl]);
     const [authOpen, setAuthOpen] = useState(false);
+    const [sairArmado, setSairArmado] = useState(false);
     const authEmailRef = useRef<HTMLInputElement>(null);
     const [previousShiftOpen, setPreviousShiftOpen] = useState(false);
     const [verifierTarget, setVerifierTarget] = useState<PendingDepartureConfirmation | null>(null);
@@ -1506,7 +1517,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         try {
             const visivel = document.visibilityState === "visible" ? 1 : 0;
             const parado = Math.max(0, Math.round((Date.now() - lastInteractionAtRef.current) / 1000));
-            const response = await fetch("/api/board", {
+            const response = await fetchMesa("/api/board", {
                 cache: "no-store",
                 headers: { "Accept": "application/json", "x-mesa-uso": `v=${visivel};o=${parado}` },
             });
@@ -1627,7 +1638,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
 
     async function fetchLatestUndoableAction() {
         try {
-            const response = await fetch("/api/operational/undoable-actions");
+            const response = await fetchMesa("/api/operational/undoable-actions");
             if (!response.ok) return;
             const body = await response.json() as { actions?: Array<{ auditLogId: string; action: string }> };
             const latest = body.actions?.[0];
@@ -1656,7 +1667,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
         if (!undoBanner || !undoNotes.trim() || undoNotes.trim().length < 8) return;
         setIsUndoing(true);
         try {
-            const response = await fetch("/api/operational/undo", {
+            const response = await fetchMesa("/api/operational/undo", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ auditLogId: undoBanner.auditLogId, notes: undoNotes.trim() }),
@@ -1946,9 +1957,9 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     // Por que o botao "Confirmar remanejamento" esta bloqueado (null = liberado).
     // Surface o motivo no modal em vez de um botao mudo com cursor de proibido.
     const remanejarBlockReason: string | null = (!isTransferAction || !selectedTransferTarget)
-        ? "Selecione um posto/base diferente da lotacao atual para remanejar."
+        ? "Toque num posto ou base diferente da lotacao atual para remanejar."
         : !transferNotesValid
-            ? `Escreva o motivo com pelo menos 8 caracteres (faltam ${Math.max(0, 8 - transferNotesValue.length)}).`
+            ? "Escolha o motivo (ou escreva um com 8+ caracteres)."
             : (transferConflictStrategy === "move_destination" && !selectedRelocationTarget)
                 ? "Escolha para onde vai o profissional que ja ocupa o destino."
                 : (transferConflictStrategy === "move_destination" && Boolean(relocationTargetConflict))
@@ -2210,7 +2221,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setIsPriorityLoading(true);
             setPriorityErrorMessage(null);
 
-            const response = await fetch("/api/board/meal-breaks/priorities", {
+            const response = await fetchMesa("/api/board/meal-breaks/priorities", {
                 cache: "no-store",
                 headers: { "Accept": "application/json" },
             });
@@ -2260,7 +2271,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setPriorityErrorMessage(null);
             setPrioritySuccessMessage(null);
 
-            const response = await fetch("/api/board/meal-breaks/priorities", {
+            const response = await fetchMesa("/api/board/meal-breaks/priorities", {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2646,7 +2657,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     };
             }
 
-            let response = await fetch(endpoint, {
+            let response = await fetchMesa(endpoint, {
                 method,
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
@@ -2679,7 +2690,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     setErrorMessage("Horário de chegada inválido — nada foi lançado.");
                     return;
                 }
-                response = await fetch(endpoint, {
+                response = await fetchMesa(endpoint, {
                     method,
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -2703,7 +2714,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     setErrorMessage("Lançamento cancelado — o plantão que já existe foi mantido.");
                     return;
                 }
-                response = await fetch(endpoint, {
+                response = await fetchMesa(endpoint, {
                     method,
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ ...payload, confirmDuplicate: true }),
@@ -2775,7 +2786,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     ? `/api/intervention/occupancies/${card.occupancyId}/report-departure`
                     : `/api/intervention/occupancies/${card.occupancyId}/end`;
 
-            const response = await fetch(endpoint, {
+            const response = await fetchMesa(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2825,7 +2836,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                 ? `/api/regulation/posts/${card.postId}/state`
                 : `/api/intervention/bases/${card.baseId}/state`;
 
-            const response = await fetch(endpoint, {
+            const response = await fetchMesa(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2878,7 +2889,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setErrorMessage(null);
             setSuccessMessage(null);
 
-            const response = await fetch(`/api/intervention/occupancies/${card.occupancyId}/continue`, {
+            const response = await fetchMesa(`/api/intervention/occupancies/${card.occupancyId}/continue`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2912,7 +2923,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setErrorMessage(null);
             setSuccessMessage(null);
 
-            const response = await fetch(`/api/board/meal-breaks/regulation/${selectedCard.postCode}`, {
+            const response = await fetchMesa(`/api/board/meal-breaks/regulation/${selectedCard.postCode}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2948,7 +2959,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setErrorMessage(null);
             setSuccessMessage(null);
 
-            const response = await fetch(`/api/board/meal-breaks/regulation/${selectedCard.postCode}`, {
+            const response = await fetchMesa(`/api/board/meal-breaks/regulation/${selectedCard.postCode}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -2984,7 +2995,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
             setErrorMessage(null);
             setSuccessMessage(null);
 
-            const response = await fetch(`/api/board/meal-breaks/regulation/${selectedCard.postCode}`, {
+            const response = await fetchMesa(`/api/board/meal-breaks/regulation/${selectedCard.postCode}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -3176,6 +3187,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     ) : (
                         <span className={`ops-time-pill ${isDisabledRegulation ? "disabled" : ""}`.trim()}><strong>{isDisabledRegulation ? "--:--" : formatBoardTime(resolveOperationalArrival(card))}</strong></span>
                     )}
+                    {card.status === "active" && !isDisabledRegulation ? <ChipAtraso minutos={card.arrivalDelayMinutes ?? null} abonado={Boolean(card.arrivalDelayWaived)} /> : null}
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
@@ -3292,6 +3304,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         isDisabled={isDisabledRegulation}
                         onOpenAdvanced={() => { setExpandedCardKey(null); openProfessionalDrawer(card); }}
                         onRemanejar={() => { setExpandedCardKey(null); openRemanejarModal(card); }}
+                        atraso={card.status === "active" ? { minutos: card.arrivalDelayMinutes ?? null, abonado: Boolean(card.arrivalDelayWaived), scheduledStartAt: card.scheduledStartAt ?? null } : null}
                     />
                 )}
             </AnimatePresence>
@@ -3356,6 +3369,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             <strong>{isDisabledIntervention ? "--:--" : isWaitingIntervention ? "Livre" : formatBoardTime(resolveOperationalArrival(card))}</strong>
                         </span>
                     )}
+                    {card.status === "active" && !isDisabledIntervention ? <ChipAtraso minutos={card.arrivalDelayMinutes ?? null} abonado={Boolean(card.arrivalDelayWaived)} /> : null}
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
@@ -3423,6 +3437,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         isDisabled={isDisabledIntervention}
                         onOpenAdvanced={() => { setExpandedCardKey(null); openProfessionalDrawer(card); }}
                         onRemanejar={() => { setExpandedCardKey(null); openRemanejarModal(card); }}
+                        atraso={card.status === "active" ? { minutos: card.arrivalDelayMinutes ?? null, abonado: Boolean(card.arrivalDelayWaived), scheduledStartAt: card.scheduledStartAt ?? null } : null}
                     />
                 )}
             </AnimatePresence>
@@ -3814,6 +3829,29 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                         {session?.roles.includes("admin") && <CadastrarMedicoBotao />}
                         {/* Visitante: cadastro fica NA barra, fora do menu. */}
                         {!session && <a className="k-topo-acao" href="/cadastro-medico">Sou médico: criar conta</a>}
+                        {session && (
+                            <span className="mk-sessao" title={session.email}>
+                                <span className="mk-sessao-nome">{session.nome ?? session.email}</span>
+                                {session.chefeDePlantao && session.roles.includes("chief") && !session.roles.includes("admin") ? <span className="mk-sessao-papel">· CP 2031</span> : null}
+                                <button
+                                    type="button"
+                                    className={`k-topo-acao ${sairArmado ? "on" : ""}`.trim()}
+                                    disabled={isAuthSubmitting}
+                                    onClick={() => {
+                                        if (!sairArmado) {
+                                            setSairArmado(true);
+                                            window.setTimeout(() => setSairArmado(false), 4000);
+                                            return;
+                                        }
+                                        setSairArmado(false);
+                                        void handleLogout();
+                                    }}
+                                    aria-label={sairArmado ? "Toque de novo para sair" : "Sair da conta"}
+                                >
+                                    {sairArmado ? "Confirmar saída" : "Sair"}
+                                </button>
+                            </span>
+                        )}
                         {viewMode === "live" && (
                         <span className="ops-menu-ancora">
                             <button
@@ -3835,6 +3873,8 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     </>
                 }
             />
+            {session ? <ModalChefeOutro email={session.email} /> : null}
+            {viewMode === "live" && session?.canManage && <PedidosDoMedicoRail />}
             {viewMode === "live" && session?.roles.includes("admin") && (
                 <ChiefArrivalRequestsRail />
             )}
@@ -5111,45 +5151,39 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                 )}
 
                                 <p className="chief-transfer-copy">
-                                    Escolha o destino de {displayDoctorName(selectedCard)} (hoje em {cardCode(selectedCard)}). O remanejamento apaga o vinculo atual e recria o plantao no destino, preservando medico, chegada e a continuidade de pagamento e banco de horas.
+                                    Escolha o destino de {displayDoctorName(selectedCard)} (hoje em {cardCode(selectedCard)}). A chegada no novo posto e agora; a hora prevista continua a do posto onde chegou, e pagamento e banco de horas seguem na mesma continuidade.
                                 </p>
 
-                                <label className="chief-field full-width">
+                                <div className="chief-field full-width">
                                     <span>Destino operacional</span>
-                                    <select
-                                        className="chief-input chief-select"
-                                        value={formState.targetKey}
-                                        onChange={(event) => {
+                                    <SeletorDePosto
+                                        modo="remanejo"
+                                        dominioInicial={selectedCard.domain}
+                                        azulejos={transferTargetOptions.map((option): PostoAzulejo => ({
+                                            domain: option.domain,
+                                            targetId: option.key,
+                                            code: option.code,
+                                            nome: option.label,
+                                            status: option.key === selectedCardTargetKey
+                                                ? "origem"
+                                                : option.status === "disabled"
+                                                    ? "desativado"
+                                                    : option.status === "occupied" ? "ocupado" : "livre",
+                                            ocupante: option.occupantName,
+                                            onDemand: option.domain === "regulation" && onDemandRegulationPosts.some((p) => p.postId === option.targetId),
+                                        }))}
+                                        selecionado={formState.targetKey ? { domain: selectedTransferTarget?.domain ?? selectedCard.domain, targetId: formState.targetKey } : null}
+                                        onEscolher={(azulejo) => {
                                             setFixedRoleAck(false);
-                                            setFormState((current) => ({ ...current, targetKey: event.target.value }));
+                                            setFormState((current) => ({ ...current, targetKey: azulejo.targetId }));
                                         }}
-                                    >
-                                        <optgroup label="Regulacao">
-                                            {transferTargetOptions
-                                                .filter((option) => option.domain === "regulation")
-                                                .map((option) => (
-                                                    <option key={option.key} value={option.key}>
-                                                        {option.code} · {option.label}{option.key === selectedCardTargetKey ? " · lotacao atual" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
-                                                    </option>
-                                                ))}
-                                        </optgroup>
-                                        <optgroup label="Intervencao">
-                                            {transferTargetOptions
-                                                .filter((option) => option.domain === "intervention")
-                                                .map((option) => (
-                                                    <option key={option.key} value={option.key} disabled={option.status === "disabled"}>
-                                                        {option.code} · {option.label}
-                                                        {option.status === "disabled" ? " · indisponivel" : option.key === selectedCardTargetKey ? " · lotacao atual" : option.status === "occupied" ? ` · ocupado por ${option.occupantName}` : ""}
-                                                    </option>
-                                                ))}
-                                        </optgroup>
-                                    </select>
+                                    />
                                     <small className="chief-field-hint">
                                         {isTransferAction
                                             ? "Confira o destino e o motivo abaixo antes de confirmar."
-                                            : "Selecione um posto/base diferente da lotacao atual para habilitar o remanejamento."}
+                                            : "Toque no posto ou base de destino."}
                                     </small>
-                                </label>
+                                </div>
 
                                 {isTransferAction && selectedTransferTarget && (
                                     <label className="chief-field chief-shadow-toggle full-width">
@@ -5171,20 +5205,17 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                                     </label>
                                 )}
 
-                                <label className="chief-field full-width">
-                                    <span>Motivo do remanejamento</span>
-                                    <textarea
-                                        className="chief-input chief-textarea"
-                                        value={formState.notes}
-                                        onChange={(event) => setFormState((current) => ({ ...current, notes: event.target.value }))}
-                                        placeholder="Explique o motivo operacional do remanejamento e o que acontece com o destino atual"
+                                <div className="chief-field full-width">
+                                    <MotivoChips
+                                        rotulo="Motivo do remanejamento"
+                                        opcoes={MOTIVOS_REMANEJO}
+                                        valor={formState.notes}
+                                        onChange={(valor) => setFormState((current) => ({ ...current, notes: valor }))}
                                     />
                                     <small className={`chief-field-hint ${transferNotesTooShort ? "error" : ""}`.trim()}>
-                                        {transferNotesTooShort
-                                            ? `Faltam ${8 - transferNotesValue.length} caractere(s) para o minimo de 8.`
-                                            : "Minimo de 8 caracteres. Fica registrado na trilha interna do plantao."}
+                                        Fica registrado na trilha interna do plantao.
                                     </small>
-                                </label>
+                                </div>
 
                                 {isTransferAction && selectedTransferTarget && (
                                 <div className="chief-transfer-grid">

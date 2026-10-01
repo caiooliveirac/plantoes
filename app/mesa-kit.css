@@ -1,0 +1,534 @@
+/* ==========================================================================
+   Mesa kit — peças compartilhadas da Mesa (EditorDeHorario, MotivoChips,
+   SeletorDePosto). Só tokens de app/kairos.css: nenhuma cor literal, para o
+   tema escuro inverter sozinho. Raios do sistema: 5 etiqueta · 7 chip ·
+   10 botão · 14 cartão. Alvo de toque mínimo 44px. Funciona a 360px.
+   Importado pelos próprios componentes (como mesa-presenca.css).
+   ========================================================================== */
+
+/* ── Base compartilhada ─────────────────────────────────────── */
+.mk-editor,
+.mk-motivo,
+.mk-seletor {
+    font-family: var(--fonte-sans);
+    color: var(--texto);
+    font-size: 13.5px;
+    line-height: 1.35;
+    min-width: 0;
+}
+
+.mk-visualmente-oculto {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* Chip de escolha única (presets de horário, motivos) */
+.mk-chip {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--acao-neutra-borda);
+    border-radius: 7px;
+    background: var(--acao-neutra);
+    color: var(--texto);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+.mk-chip:hover { border-color: var(--borda-forte); background: var(--superficie-alt); }
+.mk-chip:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+.mk-chip[aria-pressed="true"] {
+    border-color: var(--acao-primaria);
+    background: var(--azul-50);
+    color: var(--texto-forte);
+    box-shadow: inset 0 0 0 1px var(--acao-primaria);
+}
+
+/* Campo de texto do kit */
+.mk-campo {
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--borda-forte);
+    border-radius: 10px;
+    background: var(--superficie);
+    color: var(--texto-forte);
+    font: inherit;
+}
+.mk-campo::placeholder { color: var(--texto-fraco); }
+.mk-campo:focus-visible { outline: 2px solid var(--foco); outline-offset: 1px; border-color: var(--foco); }
+
+/* ── A. EditorDeHorario ─────────────────────────────────────── */
+.mk-editor { display: grid; gap: 12px; }
+
+.mk-editor__chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Linha −30 −15 −5 [HH:MM] +5 +15 +30: grid para os passos não quebrarem
+   sozinhos a 360px (7 colunas, a do meio flexível). */
+.mk-editor__stepper {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(40px, 1fr)) minmax(96px, 1.6fr) repeat(3, minmax(40px, 1fr));
+    gap: 6px;
+    align-items: stretch;
+}
+
+.mk-passo {
+    appearance: none;
+    min-height: 44px;
+    min-width: 0;
+    padding: 0 4px;
+    border: 1px solid var(--acao-neutra-borda);
+    border-radius: 10px;
+    background: var(--acao-neutra);
+    color: var(--texto-forte);
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    cursor: pointer;
+}
+.mk-passo:hover:not(:disabled) { background: var(--superficie-alt); border-color: var(--borda-forte); }
+.mk-passo:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+.mk-passo:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.mk-editor__hora {
+    position: relative;
+    display: grid;
+    min-width: 0;
+}
+.mk-hora {
+    width: 100%;
+    min-height: 44px;
+    padding: 0 8px;
+    border: 1px solid var(--borda-forte);
+    border-radius: 10px;
+    background: var(--superficie);
+    color: var(--texto-forte);
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 22px;
+    font-weight: 500;
+    text-align: center;
+    letter-spacing: 0.02em;
+}
+.mk-hora:focus-visible { outline: 2px solid var(--foco); outline-offset: 1px; border-color: var(--foco); }
+.mk-hora[aria-invalid="true"] { border-color: var(--acao-critica); }
+
+/* Só aparece quando a faixa cruza a meia-noite */
+.mk-editor__dia {
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0 6px;
+    border-radius: 5px;
+    background: var(--superficie-alt);
+    color: var(--texto-medio);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.mk-editor__delta {
+    margin: -4px 0 0;
+    color: var(--texto-medio);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+}
+
+.mk-editor__consequencia {
+    padding: 10px 12px;
+    border: 1px solid var(--semaforo-amarelo-borda);
+    border-radius: 10px;
+    background: var(--semaforo-amarelo-fundo);
+    color: var(--texto-forte);
+    font-size: 13px;
+}
+
+/* ── Trilha (TimeScrubber com prefixoClasse="mk-scrubber") ──── */
+.mk-scrubber-shell { display: grid; gap: 4px; padding-top: 10px; }
+
+.mk-scrubber-trilha { position: relative; padding: 0 2px; }
+
+.mk-scrubber-slider {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: 44px;
+    touch-action: none;
+    user-select: none;
+}
+.mk-scrubber-slider__track {
+    position: relative;
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--borda);
+}
+.mk-scrubber-slider__range {
+    position: absolute;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--acao-primaria);
+}
+.mk-scrubber-slider[data-suspect="true"] .mk-scrubber-slider__range { background: var(--acao-atencao); }
+.mk-scrubber-slider__thumb {
+    display: block;
+    width: 28px;
+    height: 28px;
+    border: 2px solid var(--acao-primaria);
+    border-radius: 999px;
+    background: var(--superficie);
+    box-shadow: var(--sombra-painel);
+    cursor: grab;
+}
+.mk-scrubber-slider__thumb:focus-visible { outline: none; box-shadow: var(--anel-selecao); }
+.mk-scrubber-slider__thumb[data-grabbing="true"] { cursor: grabbing; }
+
+/* Marcadores sobre a trilha: verbalizado (âmbar) e janela (navy) */
+.mk-scrubber-marcador {
+    position: absolute;
+    top: 50%;
+    width: 2px;
+    height: 16px;
+    transform: translate(-50%, -50%);
+    border-radius: 999px;
+    pointer-events: none;
+    z-index: 1;
+}
+.mk-scrubber-marcador--verbalizado { background: var(--semaforo-amarelo-borda); }
+.mk-scrubber-marcador--janela { background: var(--texto-forte); opacity: 0.55; }
+
+.mk-scrubber-slider__ticks {
+    display: flex;
+    justify-content: space-between;
+    color: var(--texto-fraco);
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 10.5px;
+}
+
+/* ── B. MotivoChips ─────────────────────────────────────────── */
+.mk-motivo { display: grid; gap: 8px; }
+.mk-motivo__rotulo {
+    color: var(--texto-medio);
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.mk-motivo__chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.mk-motivo__outro { display: grid; gap: 4px; }
+.mk-motivo__ajuda { color: var(--texto-fraco); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* ── C. SeletorDePosto ──────────────────────────────────────── */
+.mk-seletor { display: grid; gap: 12px; }
+
+.mk-abas {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 4px;
+    border-radius: 10px;
+    background: var(--superficie-alt);
+}
+.mk-aba {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--texto-medio);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+.mk-aba:focus-visible { outline: 2px solid var(--foco); outline-offset: -2px; }
+.mk-aba[aria-selected="true"] {
+    background: var(--superficie);
+    color: var(--texto-forte);
+    box-shadow: var(--sombra-painel);
+}
+.mk-aba__contagem {
+    min-width: 22px;
+    padding: 1px 6px;
+    border-radius: 5px;
+    background: var(--semaforo-verde-fundo);
+    color: var(--semaforo-verde-texto);
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 11.5px;
+}
+
+.mk-seletor__painel { display: grid; gap: 14px; }
+
+.mk-grade {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+}
+@media (min-width: 720px) {
+    .mk-grade { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); }
+}
+
+.mk-azulejo {
+    appearance: none;
+    position: relative;
+    display: grid;
+    gap: 2px;
+    min-height: 64px;
+    padding: 8px 10px;
+    border: 1px solid var(--borda);
+    border-radius: 14px;
+    background: var(--superficie);
+    color: var(--texto);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+.mk-azulejo:hover:not(:disabled) { border-color: var(--borda-forte); box-shadow: var(--sombra-painel); }
+.mk-azulejo:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+
+.mk-azulejo__codigo {
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.1;
+    color: var(--texto-forte);
+}
+.mk-azulejo__legenda {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--texto-medio);
+    font-size: 12px;
+}
+.mk-azulejo__desde {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    color: var(--texto-fraco);
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+}
+
+/* Estados */
+.mk-azulejo[data-status="livre"] {
+    border-color: var(--semaforo-verde-borda);
+    background: var(--semaforo-verde-fundo);
+}
+.mk-azulejo[data-status="livre"] .mk-azulejo__legenda { color: var(--semaforo-verde-texto); }
+
+.mk-azulejo[data-status="ocupado"] {
+    border-color: var(--semaforo-neutro-borda);
+    background: var(--superficie);
+}
+.mk-azulejo[data-status="ocupado"] .mk-azulejo__legenda { color: var(--texto); font-weight: 500; }
+
+.mk-azulejo[data-status="desativado"] {
+    border-color: var(--borda);
+    background: var(--superficie-recuada);
+    color: var(--texto-fraco);
+    cursor: not-allowed;
+}
+.mk-azulejo[data-status="desativado"] .mk-azulejo__codigo {
+    color: var(--texto-fraco);
+    text-decoration: line-through;
+}
+
+.mk-azulejo[data-status="origem"] {
+    border-color: var(--acao-primaria);
+    border-color: var(--acao-primaria);
+    background: var(--azul-50);
+    cursor: default;
+}
+.mk-azulejo[data-status="origem"] .mk-azulejo__legenda { color: var(--texto-forte); }
+.mk-azulejo[data-status="origem"]::after {
+    content: "origem";
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    padding: 0 5px;
+    border-radius: 5px;
+    background: var(--acao-primaria);
+    color: var(--acao-primaria-texto);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.mk-azulejo[data-status="origem"] .mk-azulejo__desde { display: none; }
+
+.mk-azulejo[aria-pressed="true"] {
+    border-color: var(--acao-primaria);
+    box-shadow: var(--anel-selecao);
+}
+
+.mk-azulejo[data-eventual="true"] { border-style: dashed; }
+
+.mk-seletor__eventuais { display: grid; gap: 6px; }
+.mk-seletor__titulo {
+    color: var(--texto-medio);
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.mk-seletor__vazio { margin: 0; color: var(--texto-medio); }
+
+/* ---------- Folha de ações / modal mobile-friendly ---------- */
+.mk-veu {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    padding: 0;
+}
+.mk-folha {
+    width: 100%;
+    max-width: 520px;
+    max-height: 92vh;
+    overflow: auto;
+    background: var(--superficie-alt);
+    color: var(--texto);
+    border: 1px solid var(--borda-forte);
+    border-radius: 16px 16px 0 0;
+    padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
+    font-family: var(--fonte-sans);
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.25);
+}
+@media (min-width: 720px) {
+    .mk-veu { align-items: center; padding: 24px; }
+    .mk-folha { border-radius: 14px; padding: 24px; }
+}
+.mk-folha-titulo { margin: 0 0 8px; font-size: 1.15rem; line-height: 1.3; color: var(--texto-forte); }
+.mk-folha-texto { margin: 0 0 16px; font-size: 0.95rem; line-height: 1.45; }
+.mk-folha-sub { margin: -8px 0 14px; font-size: 0.85rem; color: var(--texto); opacity: 0.8; }
+.mk-folha-acoes { display: flex; flex-direction: column; gap: 10px; }
+.mk-botao {
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: 10px;
+    border: 1px solid var(--acao-neutra-borda);
+    background: var(--acao-neutra);
+    color: var(--acao-neutra-texto);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+}
+.mk-botao:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+.mk-botao:disabled { opacity: 0.55; cursor: default; }
+.mk-botao.primario { background: var(--acao-primaria); color: var(--acao-primaria-texto); border-color: var(--acao-primaria); }
+.mk-botao.critico { background: var(--acao-critica); color: var(--acao-critica-texto); border-color: var(--acao-critica); }
+.mk-botao.atencao { background: var(--acao-atencao); color: var(--acao-atencao-texto); border-color: var(--acao-atencao); }
+.mk-botao small { font-weight: 400; font-size: 0.8rem; opacity: 0.85; }
+
+/* ---------- Chip de atraso na coluna de horário ---------- */
+.mk-atraso {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-family: var(--fonte-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1.4;
+    border: 1px solid var(--semaforo-amarelo-borda);
+    background: var(--semaforo-amarelo-fundo);
+    color: var(--semaforo-amarelo-texto);
+    white-space: nowrap;
+}
+.mk-atraso.grave {
+    border-color: var(--semaforo-vermelho-borda);
+    background: var(--semaforo-vermelho-fundo);
+    color: var(--semaforo-vermelho-texto);
+}
+.mk-atraso.ok {
+    border-color: var(--semaforo-verde-borda);
+    background: var(--semaforo-verde-fundo);
+    color: var(--semaforo-verde-texto);
+    font-weight: 600;
+}
+
+/* ---------- Nome de quem está logado + Sair na barra ---------- */
+.mk-sessao {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 48vw;
+}
+.mk-sessao-nome {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 30vw;
+}
+.mk-sessao-papel { opacity: 0.75; font-size: 0.8em; white-space: nowrap; }
+@media (max-width: 640px) {
+    .mk-sessao-papel { display: none; }
+}
+
+/* Popover de horário mais largo para o editor (320px era do datetime-local). */
+.historico-list-popover.historico-list-popover--largo { width: min(380px, 94vw); }
+.historico-grid-ajustes { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.historico-grid-ajustes .row-action { min-height: 32px; }
+
+/* ---------- Painel do plantonista ---------- */
+.mk-painel {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 20px 16px 32px;
+    font-family: var(--fonte-sans);
+    color: var(--texto);
+}
+.mk-painel-titulo { margin: 0 0 6px; font-size: 1.5rem; color: var(--texto-forte); }
+.mk-painel-texto { margin: 0 0 16px; font-size: 1rem; line-height: 1.45; }
+.mk-painel-aviso { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--semaforo-verde-fundo); color: var(--semaforo-verde-texto); border: 1px solid var(--semaforo-verde-borda); }
+.mk-painel-erro { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--semaforo-vermelho-fundo); color: var(--semaforo-vermelho-texto); border: 1px solid var(--semaforo-vermelho-borda); }
+.mk-painel--turno {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--borda);
+    background: var(--superficie-alt);
+    max-width: none;
+}
+.mk-painel-cabeca { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.mk-painel-cabeca span { opacity: 0.8; }
+.mk-painel-acoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.mk-folha-lista { margin: 0 0 12px; padding-left: 18px; line-height: 1.5; }
+.mk-rail { display: grid; gap: 8px; padding: 8px 16px; font-family: var(--fonte-sans); }
+.mk-rail-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--semaforo-amarelo-borda); background: var(--semaforo-amarelo-fundo); color: var(--semaforo-amarelo-texto); }
+.mk-rail-acoes { display: flex; gap: 8px; }
+.mk-rail-acoes .mk-botao { min-height: 40px; }

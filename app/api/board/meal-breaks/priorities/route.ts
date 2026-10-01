@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs } from "@/db/schema";
-import { AuthError, requireMesaSession } from "@/lib/auth/server";
+import { AuthError, requireMesaEscrita, requireMesaSession } from "@/lib/auth/server";
 import { getCurrentMealBreakPriorityView, updateMealBreakPriorityOrder } from "@/modules/telegram/meal-breaks";
 
 const patchSchema = z.object({
@@ -12,8 +12,8 @@ const patchSchema = z.object({
     referenceAt: z.string().datetime().optional(),
 });
 
-async function requireChiefSession() {
-    return requireMesaSession(["admin", "chief"]);
+async function requireChiefSession(escrita = false) {
+    return escrita ? requireMesaEscrita(["admin", "chief"]) : requireMesaSession(["admin", "chief"]);
 }
 
 export async function GET(request: NextRequest) {
@@ -51,7 +51,7 @@ export async function PATCH(request: NextRequest) {
 
     let session;
     try {
-        session = await requireChiefSession();
+        session = await requireChiefSession(true);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 401;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

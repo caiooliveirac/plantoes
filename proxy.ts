@@ -48,10 +48,12 @@ export function proxy(request: NextRequest) {
     if (!secret || !raw) return res;
     const parsed = verifySessionToken(raw, secret);
     if (!parsed) return res;
-    const emitidoEm = parsed.exp - SESSION_TTL_MS;
+    const emitidoEm = parsed.iat ?? parsed.exp - SESSION_TTL_MS;
     if (Date.now() - emitidoEm < SESSION_RENEW_AFTER_MS) return res;
-    const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-    const token = createSessionToken({ sub: parsed.sub, exp: expiresAt.getTime(), sv: parsed.sv ?? 0, sid: sessionIdOf(parsed, raw) }, secret);
+    // Renovação nunca passa do corte da virada (lib/auth/corte-virada.ts).
+    const tetoRenovado = Date.now() + SESSION_TTL_MS;
+    const expiresAt = new Date(typeof parsed.cv === "number" ? Math.min(tetoRenovado, parsed.cv) : tetoRenovado);
+    const token = createSessionToken({ sub: parsed.sub, exp: expiresAt.getTime(), sv: parsed.sv ?? 0, sid: sessionIdOf(parsed, raw), iat: parsed.iat, ...(typeof parsed.cv === "number" ? { cv: parsed.cv } : {}) }, secret);
     res.cookies.set(SESSION_COOKIE_NAME, token, {
         httpOnly: true,
         sameSite: "lax",

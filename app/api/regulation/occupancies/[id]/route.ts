@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
-import { AuthError, requireMesaSession } from "@/lib/auth/server";
+import { AuthError, requireMesaEscrita } from "@/lib/auth/server";
 import { correctRegulationOccupancy, redirectTurnoArrivalEdit, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { avisarSecretario } from "@/lib/avisos/secretario";
 import {
@@ -76,7 +76,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
 
     let session;
     try {
-        session = await requireMesaSession(["admin", "chief"]);
+        session = await requireMesaEscrita(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });
@@ -298,7 +298,7 @@ export async function DELETE(request: NextRequest, context: RouteContext<"/api/r
 
     let session;
     try {
-        session = await requireMesaSession(["admin"]);
+        session = await requireMesaEscrita(["admin"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { hasDatabaseUrl, getDb } from "@/db";
 import { auditLogs, interventionBases, interventionOccupancies } from "@/db/schema";
-import { AuthError, requireMesaSession } from "@/lib/auth/server";
+import { AuthError, requireMesaEscrita } from "@/lib/auth/server";
 import { endInterventionOccupancy } from "@/modules/intervention/service";
 import { announceChiefKickDeparture } from "@/modules/telegram/chief-kick";
 
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
 
     let session;
     try {
-        session = await requireMesaSession(["admin", "chief"]);
+        session = await requireMesaEscrita(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

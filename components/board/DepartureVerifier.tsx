@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -223,7 +224,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
         if (!target) return;
         setSubmitting(true);
         try {
-            const response = await fetch(`/api/${target.domain}/occupancies/${target.occupancyId}/confirm-departure`, {
+            const response = await fetchMesa(`/api/${target.domain}/occupancies/${target.occupancyId}/confirm-departure`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),

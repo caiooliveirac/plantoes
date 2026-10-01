@@ -196,3 +196,32 @@ olhando `mesa_ocupada_negada_sombra` e `mesa_bloqueada_ociosa_sombra` por conta
 - **Bloqueio derrubar o login do portal** no navegador (porteiro, repo kairos).
 - **Origem só pelo Cloudflare** no nginx do magalu: hoje dá para forjar
   `cf-connecting-ip` batendo direto na origem e passar pelo portão como Central.
+
+## Corte da virada e trava da 2031 (01/10/2026)
+
+Duas regras irmãs, decididas pelo Caio em 01/10/2026
+([plano](plano-mesa-chefe-plantonista.md)):
+
+1. **Corte da virada.** Sessão não-admin aberta **antes** da virada (07:00 /
+   19:00, fuso operacional) cai às **07:15 / 19:15**. Quem entrou depois da
+   virada vive até o corte seguinte. Implementação: `lib/auth/corte-virada.ts`
+   (`proximoCorte`), o token ganha `iat` e `cv` (`lib/auth/token.ts`:
+   `verifySessionToken` recusa `cv` vencido), `writeSessionCookie` grava
+   `exp = min(30 d, corte)` e o `proxy.ts` nunca renova além do `cv`. O
+   porteiro do portal (`mnrs-portal`, `porteiro/virada.mjs`) aplica a mesma
+   regra ao `mnrs_sso`, o que cobre o painel de vagas e a triagem. Flag
+   `SESSAO_CORTE_VIRADA=0` desliga só aqui. Guarda: `tests/corte-virada.test.ts`.
+2. **Trava da 2031.** Chefe de plantão = quem está na 2031 agora
+   (`modules/operational/chefe-de-plantao.ts`, `services/chefe-de-plantao.service.ts`).
+   Chief logado que não é essa pessoa, enquanto outro médico está lá, vê o
+   quadro mas toda escrita (`requireMesaEscrita`, `lib/auth/server.ts`)
+   responde 409 "O chefe de plantão agora é Fulano…"; o cliente
+   (`lib/board/fetch-mesa.ts` + `components/board/ModalChefeOutro.tsx`) abre a
+   folha "Esqueceu de entrar com a sua conta?" com **Entrar com a minha conta**
+   (logout + login único) e **Continuar só olhando**. Sem botão de assumir.
+   Admin isento; 2031 vazia libera qualquer chief. `MESA_TRAVA_2031=0` desliga.
+   Rotas com GET e escrita no mesmo arquivo usam `requireMesaSession` no GET e
+   `requireMesaEscrita` na escrita.
+
+A barra da Mesa mostra sempre o nome de quem está logado (`display_name` do
+médico; sem médico, o e-mail) e o botão **Sair** (dois toques), fora do menu.

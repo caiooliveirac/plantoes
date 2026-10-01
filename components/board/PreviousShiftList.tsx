@@ -6,6 +6,9 @@ import { useRouter } from "next/navigation";
 import { fadeRise, staggerChild, staggerList } from "@/lib/board/motion";
 import { resolveEntryDeparture } from "@/lib/board/entry-departure";
 import { InlineTimeEditor } from "@/components/board/InlineTimeEditor";
+import { AcoesDeAtraso } from "@/components/board/AcoesDeAtraso";
+import { AjustesDoBanco } from "@/components/board/AjustesDoBanco";
+import { ChipAtraso } from "@/components/board/ChipAtraso";
 import type {
     PendingDepartureConfirmation,
     PreviousOperationalBucket,
@@ -189,9 +192,10 @@ export function PreviousShiftList({
                                                 currentIso={arrivalIso}
                                                 doctorName={entry.displayName ?? entry.doctorName}
                                                 targetCode={entry.targetCode}
+                                                janela={{ inicio: entry.scheduledStartAt, fim: entry.scheduledEndAt }}
                                                 onSaved={handleSaved}
                                             >
-                                                {({ value }) => value}
+                                                {({ value }) => <>{value}<ChipAtraso minutos={entry.arrivalDelayMinutes} abonado={Boolean(entry.arrivalDelayWaived)} /></>}
                                             </InlineTimeEditor>
                                         ) : (
                                             <span className="historico-grid-time historico-grid-time--readonly" title="Somente leitura — fora do escopo do turno corrente">
@@ -208,6 +212,7 @@ export function PreviousShiftList({
                                                 currentIso={departureIso}
                                                 doctorName={entry.displayName ?? entry.doctorName}
                                                 targetCode={entry.targetCode}
+                                                janela={{ inicio: entry.scheduledStartAt, fim: entry.scheduledEndAt }}
                                                 onSaved={handleSaved}
                                             >
                                                 {({ value }) => isHandoffOnly
@@ -229,6 +234,27 @@ export function PreviousShiftList({
                                         </span>
                                     </div>
                                     <div role="cell" className="col-extra">
+                                        {entry.editable && !entry.occupancyId.includes("+") && (
+                                            <span className="historico-grid-ajustes">
+                                                <AcoesDeAtraso
+                                                    domain={entry.domain}
+                                                    occupancyId={entry.occupancyId}
+                                                    doctorName={entry.displayName ?? entry.doctorName}
+                                                    arrivalDelayMinutes={entry.arrivalDelayMinutes}
+                                                    arrivalDelayWaived={Boolean(entry.arrivalDelayWaived)}
+                                                    scheduledStartAt={entry.scheduledStartAt}
+                                                />
+                                                {entry.status === "closed" && (
+                                                    <AjustesDoBanco
+                                                        domain={entry.domain}
+                                                        occupancyId={entry.occupancyId}
+                                                        doctorName={entry.displayName ?? entry.doctorName}
+                                                        saldoMinutos={entry.balanceMinutes}
+                                                        ruleCode={entry.ruleCode}
+                                                    />
+                                                )}
+                                            </span>
+                                        )}
                                         {pending && (
                                             <button
                                                 type="button"

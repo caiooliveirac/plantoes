@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { toast } from "sonner";
@@ -54,7 +55,7 @@ export function MealSlotPicker({ ramal, kind, currentSlot, doctorName, children 
         }
         setSubmitting(true);
         try {
-            const response = await fetch(`/api/board/meal-breaks/regulation/${encodeURIComponent(ramal)}`, {
+            const response = await fetchMesa(`/api/board/meal-breaks/regulation/${encodeURIComponent(ramal)}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ [payloadKey]: slot }),

@@ -28,6 +28,12 @@ import {
 } from "@/db/schema";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { syncBankHoursByContinuityGroup, syncInterventionBankHours, syncRegulationBankHours } from "@/modules/bank-hours/service";
+import {
+    ARRIVAL_DELAY_WAIVER_REMOVED_ACTION,
+    ARRIVAL_DELAY_WAIVER_SET_ACTION,
+    restoreArrivalDelayWaiver,
+    type ArrivalDelayWaiverSnapshot,
+} from "@/modules/operational/atraso-desconsiderado";
 
 export const UNDO_WINDOW_MS = 30 * 60 * 1000;
 
@@ -51,6 +57,10 @@ const UNDOABLE_ACTIONS = [
     "intervention_occupancy.corrected",
     "intervention_occupancy.deleted",
     "operational_occupancy.transferred",
+    // Atraso desconsiderado pela chefia (modules/operational/atraso-desconsiderado.ts):
+    // o undo repõe as três colunas do snapshot `previous` e ressincroniza o banco.
+    ARRIVAL_DELAY_WAIVER_SET_ACTION,
+    ARRIVAL_DELAY_WAIVER_REMOVED_ACTION,
 ] as const;
 
 type UndoableAction = typeof UNDOABLE_ACTIONS[number];
@@ -253,9 +263,74 @@ export async function undoAction(
             return undoInterventionDeletion(entry, userId, notes);
         case "operational_occupancy.transferred":
             return undoTransfer(entry, userId, notes);
+        case ARRIVAL_DELAY_WAIVER_SET_ACTION:
+        case ARRIVAL_DELAY_WAIVER_REMOVED_ACTION:
+            return undoArrivalDelayWaiver(entry, userId, notes);
         default:
             return { success: false, message: "Tipo de ação não suportado para undo.", undoneAuditLogId: auditLogId };
     }
+}
+
+// ─── Undo: Atraso desconsiderado ───────────────────────────────────────
+
+async function undoArrivalDelayWaiver(
+    entry: UndoableEntry,
+    userId: string,
+    notes: string,
+): Promise<UndoResult> {
+    const db = getDb();
+    const domain = entry.entityType === "regulation_occupancy"
+        ? "regulation"
+        : entry.entityType === "intervention_occupancy" ? "intervention" : null;
+    const previous = entry.details.previous as ArrivalDelayWaiverSnapshot | undefined;
+
+    if (!domain || !previous || typeof previous !== "object") {
+        return {
+            success: false,
+            message: "Dados insuficientes para desfazer esta marcação de atraso.",
+            undoneAuditLogId: entry.auditLogId,
+        };
+    }
+
+    await db.transaction(async (tx) => {
+        const occupancy = domain === "regulation"
+            ? await tx.query.regulationOccupancies.findFirst({ where: eq(regulationOccupancies.id, entry.entityId) })
+            : await tx.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, entry.entityId) });
+        if (!occupancy) {
+            throw new Error("Ocupação não encontrada — pode já ter sido removida.");
+        }
+
+        await restoreArrivalDelayWaiver(tx, {
+            domain,
+            occupancyId: entry.entityId,
+            previous: {
+                waivedAt: previous.waivedAt ?? null,
+                byUserId: previous.byUserId ?? null,
+                note: previous.note ?? null,
+            },
+            actorUserId: userId,
+        });
+    });
+
+    await db.insert(auditLogs).values({
+        actorUserId: userId,
+        action: `${entry.action}.undone`,
+        entityType: entry.entityType,
+        entityId: entry.entityId,
+        details: {
+            undoneAuditLogId: entry.auditLogId,
+            notes,
+        },
+    });
+
+    publishBoardUpdate("undo");
+    return {
+        success: true,
+        message: entry.action === ARRIVAL_DELAY_WAIVER_SET_ACTION
+            ? "Atraso volta a contar — marcação desfeita."
+            : "Atraso desconsiderado restaurado.",
+        undoneAuditLogId: entry.auditLogId,
+    };
 }
 
 // ─── Undo: Regulation Start ────────────────────────────────────────────
