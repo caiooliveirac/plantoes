@@ -162,7 +162,7 @@ export function MesaPresenca({ estadoInicial, modo, limiteOciosoSeg, tenteEmSeg,
 
     if (!valendo || estado === "isento") return <>{children}</>;
     if (estado === "bloqueada") return <TelaBloqueada email={email} nome={nome} />;
-    if (estado === "ocupada") return <TelaOcupada espera={espera} />;
+    if (estado === "ocupada") return <TelaOcupada espera={espera} nome={nome} />;
     if (!children) return <TelaAbrindo />;
     return (
         <>
@@ -199,16 +199,61 @@ function TelaAbrindo() {
     );
 }
 
-function TelaOcupada({ espera }: { espera: number }) {
+/** Manda a senha a uma rota da presença; ok recarrega a página. Devolve o erro a mostrar. */
+async function enviarSenha(rota: string, senha: string, falha: string): Promise<string | null> {
+    try {
+        const resposta = await fetch(rota, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ senha }),
+        });
+        if (resposta.ok) {
+            window.location.reload();
+            return null;
+        }
+        const corpo = await resposta.json().catch(() => ({})) as { error?: string };
+        if (resposta.status === 401 && corpo.error === "sem_sessao") {
+            window.location.href = "/entrar";
+            return null;
+        }
+        return corpo.error ?? falha;
+    } catch {
+        return falha;
+    }
+}
+
+function TelaOcupada({ espera, nome }: { espera: number; nome: string }) {
+    const [senha, setSenha] = useState("");
+    const [ocupado, setOcupado] = useState(false);
+    const [erro, setErro] = useState<string | null>(null);
+
+    async function usarAqui(evento: React.FormEvent) {
+        evento.preventDefault();
+        if (ocupado) return;
+        setOcupado(true);
+        setErro(null);
+        setErro(await enviarSenha("/api/mesa/assumir", senha, "Não foi possível usar a Mesa aqui agora."));
+        setOcupado(false);
+    }
+
     return (
         <Moldura titulo="Este painel está aberto em outro dispositivo">
-            <div className="et-form">
-                <p>A Mesa desta conta está à vista em outro aparelho. Ela abre aqui sozinha quando aquela tela for fechada ou ficar em segundo plano.</p>
+            <form className="et-form" onSubmit={usarAqui}>
+                <p>A Mesa de {nome} está à vista em outro aparelho. Ela abre aqui sozinha quando aquela tela for fechada ou ficar em segundo plano.</p>
                 <p className="mp-espera">
                     {espera > 0 ? <>Tentando de novo — a vez do outro aparelho vence em até <strong>{espera} s</strong>.</> : <>Tentando de novo…</>}
                 </p>
+                <p>Esqueceu a Mesa aberta em outro lugar? Digite a senha para usar aqui. O outro aparelho trava e só volta com a senha.</p>
+                <label>
+                    Senha
+                    <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} required autoComplete="current-password" />
+                </label>
+                {erro ? <div className="et-feedback err">{erro}</div> : null}
+                <button type="submit" className="et-btn primary" disabled={ocupado}>
+                    {ocupado ? "Conferindo…" : "Usar aqui"}
+                </button>
                 <p className="mp-nota">Se não é você usando a conta em outro lugar, troque a senha e avise a coordenação.</p>
-            </div>
+            </form>
         </Moldura>
     );
 }
@@ -223,27 +268,8 @@ function TelaBloqueada({ email, nome }: { email: string; nome: string }) {
         if (ocupado) return;
         setOcupado(true);
         setErro(null);
-        try {
-            const resposta = await fetch("/api/mesa/desbloquear", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ senha }),
-            });
-            if (resposta.ok) {
-                window.location.reload();
-                return;
-            }
-            if (resposta.status === 401 && (await resposta.clone().json().catch(() => ({})) as { error?: string }).error === "sem_sessao") {
-                window.location.href = "/entrar";
-                return;
-            }
-            const corpo = await resposta.json().catch(() => ({})) as { error?: string };
-            setErro(corpo.error ?? "Não foi possível desbloquear agora.");
-        } catch {
-            setErro("Não foi possível desbloquear agora.");
-        } finally {
-            setOcupado(false);
-        }
+        setErro(await enviarSenha("/api/mesa/desbloquear", senha, "Não foi possível desbloquear agora."));
+        setOcupado(false);
     }
 
     async function outraConta() {
@@ -255,7 +281,7 @@ function TelaBloqueada({ email, nome }: { email: string; nome: string }) {
     return (
         <Moldura titulo={`Ainda é ${nome}?`}>
             <form className="et-form" onSubmit={desbloquear}>
-                <p>A Mesa ficou parada e foi fechada neste aparelho: quem está aqui agora pode não ser {nome}. Para continuar, digite a senha desta conta.</p>
+                <p>A Mesa foi fechada neste aparelho — ficou parada ou foi aberta em outro. Quem está aqui agora pode não ser {nome}. Para continuar, digite a senha desta conta.</p>
                 <p>Conta: <strong>{email}</strong></p>
                 <label>
                     Senha

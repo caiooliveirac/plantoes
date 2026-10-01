@@ -22,7 +22,9 @@ import type { ContextoRequisicao } from "@/lib/acessos/contexto";
 import { PLANTONISTAS_REDE_DO_PLANTAO } from "@/modules/acessos/analise";
 import {
     FOLGA_ANTES_DO_TURNO_MS,
+    FOLGA_DEPOIS_DA_SAIDA_REGISTRADA_MS,
     FOLGA_DEPOIS_DO_TURNO_MS,
+    SAIU_VALE_MS,
     JANELA_DE_LUGARES_MS,
     LUGARES_TOLERADOS,
     contarLugares,
@@ -58,7 +60,7 @@ function logarErro(onde: string, erro: unknown) {
 }
 
 // ── Estado em memória (o web é um processo PM2 só) ───────────────────────────
-const turnos = new Map<string, { ate: number; emTurno: boolean }>();
+const turnos = new Map<string, { ate: number; emTurno: boolean; saiu: boolean }>();
 let central: { ate: number; faixas: Set<string> } | null = null;
 const barradoRegistradoEm = new Map<string, number>();
 const vistosPorConta = new Map<string, Visto[]>();
@@ -84,22 +86,31 @@ export function limparMemoriaDoPortao() {
     derrubadaEm.clear();
 }
 
-async function medicoEmTurno(doctorId: string, agora: Date): Promise<boolean> {
+/* Em turno: chegada até 30 min à frente; até 10 min depois da saída REGISTRADA,
+   ou 60 min depois da prevista (sair sem registrar é comum), ou 24 h da chegada.
+   Saiu: registrou saída nas últimas SAIU_VALE_MS e não está em outro turno —
+   a Central deixa de abrir para esta conta (docs/conta-emprestada.md). */
+async function turnoDoMedico(doctorId: string, agora: Date): Promise<{ emTurno: boolean; saiu: boolean }> {
     const antes = new Date(agora.getTime() + FOLGA_ANTES_DO_TURNO_MS).toISOString();
-    const depois = new Date(agora.getTime() - FOLGA_DEPOIS_DO_TURNO_MS).toISOString();
-    // Mesmo recorte do monitor (acessos-relatorio.service.ts, carregarPlantoes):
-    // saída real, senão prevista, senão no máximo 24 h depois da chegada.
+    const momento = agora.toISOString();
+    const desde = new Date(agora.getTime() - SAIU_VALE_MS).toISOString();
     const linhas = await getDb().execute(sql`
-        select 1 from ${regulationOccupancies}
-        where doctor_id = ${doctorId} and started_at <= ${antes}::timestamptz
-          and coalesce(actual_ended_at, ended_at, started_at + interval '24 hours') >= ${depois}::timestamptz
-        union all
-        select 1 from ${interventionOccupancies}
-        where doctor_id = ${doctorId} and started_at <= ${antes}::timestamptz
-          and coalesce(actual_ended_at, ended_at, started_at + interval '24 hours') >= ${depois}::timestamptz
-        limit 1
-    `) as unknown as unknown[];
-    return linhas.length > 0;
+        with o as (
+            select started_at, actual_ended_at, ended_at from ${regulationOccupancies} where doctor_id = ${doctorId}
+            union all
+            select started_at, actual_ended_at, ended_at from ${interventionOccupancies} where doctor_id = ${doctorId}
+        )
+        select
+            coalesce(bool_or(started_at <= ${antes}::timestamptz and coalesce(
+                actual_ended_at + make_interval(mins => ${FOLGA_DEPOIS_DA_SAIDA_REGISTRADA_MS / 60_000}),
+                coalesce(ended_at, started_at + interval '24 hours') + make_interval(mins => ${FOLGA_DEPOIS_DO_TURNO_MS / 60_000})
+            ) >= ${momento}::timestamptz), false) as em_turno,
+            coalesce(bool_or(actual_ended_at between ${desde}::timestamptz and ${momento}::timestamptz), false) as saiu
+        from o
+        where started_at >= ${momento}::timestamptz - interval '3 days'
+    `) as unknown as Array<{ em_turno: boolean; saiu: boolean }>;
+    const emTurno = Boolean(linhas[0]?.em_turno);
+    return { emTurno, saiu: !emTurno && Boolean(linhas[0]?.saiu) };
 }
 
 async function faixasDaCentral(agora: Date): Promise<Set<string>> {
@@ -160,13 +171,14 @@ export async function conferirPortaoDeTurno(
     if (enfermeiroAbre(conta.roles, sistema)) return { liberado: true, motivo: "enfermeiro" };
     try {
         let emTurno = false;
+        let saiu = false;
         if (conta.doctorId) {
             const guardado = turnos.get(conta.userId);
             if (guardado && guardado.ate > agora.getTime()) {
-                emTurno = guardado.emTurno;
+                ({ emTurno, saiu } = guardado);
             } else {
-                emTurno = await medicoEmTurno(conta.doctorId, agora);
-                turnos.set(conta.userId, { ate: agora.getTime() + TURNO_VALE_MS, emTurno });
+                ({ emTurno, saiu } = await turnoDoMedico(conta.doctorId, agora));
+                turnos.set(conta.userId, { ate: agora.getTime() + TURNO_VALE_MS, emTurno, saiu });
             }
         }
         const naCentral = !emTurno && contexto.ip ? (await faixasDaCentral(agora)).has(faixaDeRede(contexto.ip)) : false;
@@ -177,7 +189,7 @@ export async function conferirPortaoDeTurno(
                 return false;
             })
             : false;
-        const decisao = decidirPortao({ roles: conta.roles, emTurno, naCentral, enfermeiroDoTurno });
+        const decisao = decidirPortao({ roles: conta.roles, emTurno, naCentral, saiuDoPlantao: saiu, enfermeiroDoTurno });
         if (!decisao.liberado) {
             const chave = `${conta.userId}|${sistema}`;
             const ultimo = barradoRegistradoEm.get(chave);

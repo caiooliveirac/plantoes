@@ -108,8 +108,11 @@ test("presença (banco): fechar a aba solta a vez; o outro aparelho entra e vira
 
     await presenca.liberarLease(conta(userId, pc));
     assert.equal((await presenca.baterPresenca(conta(userId, celular), visivel, "valendo")).estado, "ok");
-    assert.equal((await presenca.conferirPresenca(conta(userId, pc), "valendo")).estado, "ocupada");
+    // Passou ao celular: o PC trava e só volta com a senha.
+    assert.equal((await presenca.conferirPresenca(conta(userId, pc), "valendo")).estado, "bloqueada");
+    assert.equal((await presenca.baterPresenca(conta(userId, pc), visivel, "valendo")).estado, "bloqueada");
     assert.equal((await eventos(userId, "mesa_troca_de_aparelho")).length, 1);
+    assert.equal((await eventos(userId, "mesa_aparelho_anterior_travado")).length, 1);
     const negacoes = await eventos(userId, "mesa_ocupada_negada");
     assert.ok(negacoes.length >= 1);
     assert.equal(negacoes[0].deviceId, celular);
@@ -178,4 +181,38 @@ test("presença (banco): em sombra nada bloqueia, mas o que teria acontecido é 
     const [linha] = await getDb().select().from(schema.viewPresence)
         .where(and(eq(schema.viewPresence.userId, userId), eq(schema.viewPresence.deviceId, pc)));
     assert.equal(linha.lockedAt, null, "sombra nunca grava bloqueio");
+});
+
+test("presença (banco): \"usar aqui\" com a senha tira a Mesa do aparelho esquecido, que trava", { skip }, async () => {
+    const { presenca } = await modulos();
+    presenca.limparMemoriaDaPresenca();
+    const userId = await criarConta();
+    const pcEsquecido = randomUUID();
+    const celular = randomUUID();
+    assert.equal((await presenca.baterPresenca(conta(userId, pcEsquecido), visivel, "valendo")).estado, "ok");
+    assert.equal((await presenca.baterPresenca(conta(userId, celular), visivel, "valendo")).estado, "ocupada");
+
+    await presenca.assumirMesa(conta(userId, celular), "valendo");
+    assert.equal((await presenca.conferirPresenca(conta(userId, celular), "valendo")).estado, "ok");
+    assert.equal((await presenca.conferirPresenca(conta(userId, pcEsquecido), "valendo")).estado, "bloqueada");
+    // O PC esquecido, mesmo à vista e com gente mexendo, não volta sem a senha.
+    assert.equal((await presenca.baterPresenca(conta(userId, pcEsquecido), { visivel: true, paradoSeg: 0, humanoAgora: true }, "valendo")).estado, "bloqueada");
+    assert.equal((await eventos(userId, "mesa_assumida")).length, 1);
+
+    // Senha no PC: desbloqueia, mas a vez continua no celular até ele largar.
+    await presenca.desbloquearAparelho(conta(userId, pcEsquecido));
+    assert.equal((await presenca.conferirPresenca(conta(userId, pcEsquecido), "valendo")).estado, "ocupada");
+});
+
+test("presença (banco): em sombra a troca só registra, sem travar o anterior", { skip }, async () => {
+    const { presenca } = await modulos();
+    presenca.limparMemoriaDaPresenca();
+    const userId = await criarConta();
+    const pc = randomUUID();
+    const celular = randomUUID();
+    await presenca.baterPresenca(conta(userId, pc), visivel, "sombra");
+    await presenca.liberarLease(conta(userId, pc));
+    await presenca.baterPresenca(conta(userId, celular), visivel, "sombra");
+    assert.equal((await presenca.conferirPresenca(conta(userId, pc), "sombra")).estado, "ok");
+    assert.equal((await eventos(userId, "mesa_aparelho_anterior_travado_sombra")).length, 1);
 });
