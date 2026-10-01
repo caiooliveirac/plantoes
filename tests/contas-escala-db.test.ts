@@ -93,6 +93,14 @@ test("contas-escala (banco): conta existente só ganha papel — senha intocada;
     assert.equal((await rota.POST(pedido({ email, nome: "Médico", senhaTemporaria: SENHA, papeis: ["admin"] }))).status, 400);
 });
 
+test("contas-escala (banco): enfermeiro(a) aprovado no Escalas ganha portal + enfermeiro", { skip }, async () => {
+    const { rota } = await modulos();
+    const email = `enf-${Date.now()}@contas-escala-teste.invalid`;
+    const r = await rota.POST(pedido({ email, nome: "Enfermeira", senhaTemporaria: SENHA, papeis: ["enfermeiro"] }));
+    assert.equal((await r.json()).situacao, "criada");
+    assert.deepEqual((await papeisDe(email)).papeis, ["enfermeiro", "portal"]);
+});
+
 test("contas-escala (banco): senha temporária fraca é recusada", { skip }, async () => {
     const { rota } = await modulos();
     const email = `fraca-${Date.now()}@contas-escala-teste.invalid`;

@@ -11,6 +11,7 @@ const PAPEL: Record<string, string> = {
     payment_closing_limited: "Fechamento (NF/processo)",
     radio_operador: "Rádio-operador",
     tarm: "TARM",
+    enfermeiro: "Enfermeiro(a)",
 };
 
 export function CascaDaSessao({

@@ -1,4 +1,4 @@
-export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm"] as const;
+export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -22,6 +22,19 @@ export const RADIO_OPERADOR_ROLE = "radio_operador" as const satisfies UserRole;
 export const TARM_ROLE = "tarm" as const satisfies UserRole;
 export const OPERADORES_DA_CENTRAL = [RADIO_OPERADOR_ROLE, TARM_ROLE] as const;
 export type OperadorDaCentral = (typeof OPERADORES_DA_CENTRAL)[number];
+
+/**
+ * Enfermeiro(a): conta criada quando o Escalas aprova um cadastro de
+ * ENFERMEIRO (POST /api/servicos/contas-escala). Sem médico vinculado. O
+ * portão abre o Quadro Informativo (editor) e a Mesa (só leitura: toda escrita
+ * exige admin/chief) de qualquer lugar e a qualquer hora; na Mesa é isento da
+ * presença — não escreve, não disputa a vez.
+ */
+export const ENFERMEIRO_ROLE = "enfermeiro" as const satisfies UserRole;
+
+/** Papéis que o Escalas pode dar ao aprovar um cadastro (contas-escala). */
+export const PAPEIS_DO_ESCALA = [...OPERADORES_DA_CENTRAL, ENFERMEIRO_ROLE] as const;
+export type PapelDoEscala = (typeof PAPEIS_DO_ESCALA)[number];
 
 export function ehOperadorDaCentral(roles: readonly string[]): boolean {
     return roles.some((role) => (OPERADORES_DA_CENTRAL as readonly string[]).includes(role));

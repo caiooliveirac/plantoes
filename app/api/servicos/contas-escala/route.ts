@@ -6,7 +6,7 @@
    navegador. Mesmo portão do verificar-escala: x-escala-token
    (ESCALA_SSO_TOKEN), tempo constante; sem a variável, 503.
 
-     body  { email, nome, senhaTemporaria, papeis: ("tarm" | "radio_operador")[] }
+     body  { email, nome, senhaTemporaria, papeis: ("tarm" | "radio_operador" | "enfermeiro")[] }
      200   { ok, situacao: "criada" | "existente", ... }
      400   pedido inválido ou senha temporária fraca · 401 token · 503 desligada
 
@@ -19,13 +19,14 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { hasDatabaseUrl } from "@/db";
+import { PAPEIS_DO_ESCALA } from "@/modules/auth/contracts";
 import { ContaDoEscalaError, provisionarContaDoEscala } from "@/services/portal-accounts.service";
 
 const schema = z.object({
     email: z.string().email().max(200),
     nome: z.string().trim().min(2).max(160),
     senhaTemporaria: z.string().min(10).max(128),
-    papeis: z.array(z.enum(["tarm", "radio_operador"])).min(1).max(2),
+    papeis: z.array(z.enum(PAPEIS_DO_ESCALA)).min(1).max(PAPEIS_DO_ESCALA.length),
 });
 
 function tokenConfere(recebido: string | null, esperado: string): boolean {

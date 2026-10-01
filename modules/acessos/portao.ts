@@ -15,6 +15,7 @@
    ========================================================================== */
 import { JANELA_MS } from "@/modules/acessos/analise";
 import { faixaDeRede } from "@/modules/acessos/rede";
+import { ENFERMEIRO_ROLE } from "@/modules/auth/contracts";
 
 /** Folga antes da chegada registrada e depois da saída: chegar cedo e sair sem registrar são comuns. */
 export const FOLGA_ANTES_DO_TURNO_MS = 30 * 60_000;
@@ -44,6 +45,13 @@ export function decidirPortao(entrada: EntradaDoPortao): { liberado: boolean; mo
     if (entrada.naCentral) return { liberado: true, motivo: "central" };
     if (entrada.enfermeiroDoTurno) return { liberado: true, motivo: "enfermeiro" };
     return { liberado: false, motivo: "fora_do_plantao" };
+}
+
+/** Conta com papel `enfermeiro` (aprovada no Escalas): quadro e Mesa sempre,
+    de qualquer lugar — a Mesa só para ler (escrita exige admin/chief). A
+    Tabela segue a regra comum. */
+export function enfermeiroAbre(roles: readonly string[], sistema: string): boolean {
+    return roles.includes(ENFERMEIRO_ROLE) && (sistema === "quadro" || sistema === "mesa");
 }
 
 export const MENSAGEM_FORA_DO_PLANTAO =

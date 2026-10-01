@@ -27,6 +27,7 @@ import {
     LUGARES_TOLERADOS,
     contarLugares,
     decidirPortao,
+    enfermeiroAbre,
     type MotivoDoPortao,
     type Visto,
 } from "@/modules/acessos/portao";
@@ -146,7 +147,8 @@ export interface RespostaDoPortao {
 
 /** Mesa, Tabela ou quadro: esta conta, deste IP, agora? Nunca lança.
     No quadro passa também o enfermeiro(a) do plantão registrado pela chefia
-    (services/enfermeiro-plantao.service.ts). */
+    (services/enfermeiro-plantao.service.ts). Conta com papel `enfermeiro`
+    abre quadro e Mesa sempre (a Mesa só para ler). */
 export async function conferirPortaoDeTurno(
     conta: ContaNoPortao,
     contexto: ContextoRequisicao,
@@ -155,6 +157,7 @@ export async function conferirPortaoDeTurno(
 ): Promise<RespostaDoPortao> {
     if (!ligado("ACESSOS_PORTAO_TURNO")) return { liberado: true, motivo: "desligado" };
     if (conta.roles.includes("admin")) return { liberado: true, motivo: "admin" };
+    if (enfermeiroAbre(conta.roles, sistema)) return { liberado: true, motivo: "enfermeiro" };
     try {
         let emTurno = false;
         if (conta.doctorId) {

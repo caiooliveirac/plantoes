@@ -21,7 +21,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, userRoles, users } from "@/db/schema";
 import { isEmailConfigured, sendEmail } from "@/lib/email";
-import { PORTAL_ROLE, type OperadorDaCentral } from "@/modules/auth/contracts";
+import { PORTAL_ROLE, type PapelDoEscala } from "@/modules/auth/contracts";
 import { createPasswordResetTokenForUser, hashPassword } from "@/services/auth.service";
 import { getPasswordPolicyError } from "@/modules/auth/password-policy";
 
@@ -166,11 +166,12 @@ export async function provisionarContaPortal(pedido: PedidoContaPortal): Promise
 
    Conta que já existe nunca tem a senha tocada: só ganha os papéis que
    faltam. Só dá papéis de operador da Central (Mesa só leitura, só na
-   Central) — nunca admin/chief/doctor. Tudo em audit_logs.
+   Central) e `enfermeiro` (Quadro e Mesa só leitura) — nunca
+   admin/chief/doctor. Tudo em audit_logs.
    ========================================================================== */
 export type SituacaoContaDoEscala =
-    | { situacao: "criada"; papeis: OperadorDaCentral[] }
-    | { situacao: "existente"; papeisNovos: OperadorDaCentral[]; ativa: boolean };
+    | { situacao: "criada"; papeis: PapelDoEscala[] }
+    | { situacao: "existente"; papeisNovos: PapelDoEscala[]; ativa: boolean };
 
 export class ContaDoEscalaError extends Error {}
 
@@ -178,7 +179,7 @@ export async function provisionarContaDoEscala(pedido: {
     email: string;
     nome: string;
     senhaTemporaria: string;
-    papeis: OperadorDaCentral[];
+    papeis: PapelDoEscala[];
 }): Promise<SituacaoContaDoEscala> {
     const email = pedido.email.trim().toLowerCase();
     const papeis = [...new Set(pedido.papeis)];
