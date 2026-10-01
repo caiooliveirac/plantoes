@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Enfermeiro(a) do plantão, no topo da Mesa (BoardHero). Chefia/admin abre o
- * seletor, digita (filtra na hora, sem acento, por nome ou matrícula) e
- * registra com Enter ou clique — otimista, com toast. Demais: só leitura.
+ * Enfermeiros(as) do plantão (vários por turno), no topo da Mesa (BoardHero).
+ * Chefia/admin abre o seletor, digita (filtra na hora, sem acento, por nome
+ * ou matrícula) e acrescenta com Enter ou clique; cada um tem seu "remover".
+ * Demais: só leitura.
  * Escala fora do ar: aceita o nome digitado. Regras e API em
  * app/api/mesa/enfermeiro-plantao/route.ts.
  */
@@ -16,12 +17,13 @@ import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { filtrarCandidatos, type CandidatoEnfermeiro } from "@/components/board/enfermeiro-busca";
 
 interface EnfermeiroPublico {
+    id: string;
     nome: string;
     profissionalId: string | null;
 }
 
 interface RespostaGet {
-    enfermeiro: EnfermeiroPublico | null;
+    enfermeiros: EnfermeiroPublico[];
     escalaDisponivel?: boolean;
     candidatos?: CandidatoEnfermeiro[];
 }
@@ -40,7 +42,7 @@ async function lerErro(resposta: Response, padrao: string) {
 }
 
 export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
-    const [enfermeiro, setEnfermeiro] = useState<EnfermeiroPublico | null>(null);
+    const [enfermeiros, setEnfermeiros] = useState<EnfermeiroPublico[]>([]);
     const [carregado, setCarregado] = useState(false);
     const [aberto, setAberto] = useState(false);
     const [termo, setTermo] = useState("");
@@ -57,7 +59,7 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
             if (!resposta.ok) return;
             const corpo = await resposta.json() as RespostaGet;
             // Um registro em andamento manda; a leitura chega depois.
-            if (!enviandoRef.current) setEnfermeiro(corpo.enfermeiro);
+            if (!enviandoRef.current) setEnfermeiros(corpo.enfermeiros ?? []);
             if (comCandidatos) {
                 setCandidatos(corpo.candidatos ?? []);
                 setEscalaDisponivel(corpo.escalaDisponivel !== false);
@@ -96,28 +98,25 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
         listaRef.current?.querySelector<HTMLElement>(`[data-indice="${destaque}"]`)?.scrollIntoView({ block: "nearest" });
     }, [destaque]);
 
-    const enviar = async (metodo: "POST" | "DELETE", opcao?: Opcao) => {
+    const enviar = async (metodo: "POST" | "DELETE", opcao?: Opcao, remover?: EnfermeiroPublico) => {
         if (enviandoRef.current) return;
-        const anterior = enfermeiro;
-        const otimista = opcao
-            ? { nome: opcao.tipo === "escala" ? opcao.candidato.nome : opcao.nome, profissionalId: opcao.tipo === "escala" ? opcao.candidato.id : null }
-            : null;
+        const anterior = enfermeiros;
         enviandoRef.current = true;
         setEnviando(true);
-        setEnfermeiro(otimista);
+        if (remover) setEnfermeiros((lista) => lista.filter((item) => item.id !== remover.id));
         setAberto(false);
         try {
-            const resposta = await fetchMesa("/api/mesa/enfermeiro-plantao", {
+            const resposta = await fetchMesa(`/api/mesa/enfermeiro-plantao${remover ? `?id=${encodeURIComponent(remover.id)}` : ""}`, {
                 method: metodo,
                 headers: { "Content-Type": "application/json" },
                 body: opcao ? JSON.stringify(opcao.tipo === "escala" ? { profissionalId: opcao.candidato.id } : { nome: opcao.nome }) : undefined,
             });
             if (!resposta.ok) throw new Error(await lerErro(resposta, "Não foi possível registrar o enfermeiro(a)."));
-            const corpo = await resposta.json() as { enfermeiro: EnfermeiroPublico | null };
-            setEnfermeiro(corpo.enfermeiro);
-            toast.success(corpo.enfermeiro ? `Enfermeiro(a) do plantão: ${corpo.enfermeiro.nome}.` : "Enfermeiro(a) do plantão removido(a).");
+            const corpo = await resposta.json() as { enfermeiros: EnfermeiroPublico[] };
+            setEnfermeiros(corpo.enfermeiros);
+            toast.success(remover ? `${remover.nome} removido(a) do plantão.` : "Enfermeiro(a) acrescentado(a) ao plantão.");
         } catch (erro) {
-            setEnfermeiro(anterior);
+            setEnfermeiros(anterior);
             toast.error(erro instanceof Error ? erro.message : "Não foi possível registrar o enfermeiro(a).");
         } finally {
             enviandoRef.current = false;
@@ -139,17 +138,18 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
         }
     };
 
-    const rotulo = enfermeiro
-        ? <><span className="enf-plantao__rotulo">Enfermeiro(a) do plantão:</span> <strong>{enfermeiro.nome}</strong></>
+    const nomes = enfermeiros.map((item) => item.nome).join(", ");
+    const rotulo = enfermeiros.length > 0
+        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <strong>{nomes}</strong></>
         : podeEditar
             ? <strong>Informar enfermeiro(a)</strong>
             : <span className="enf-plantao__rotulo">Enfermeiro(a) do plantão: não informado</span>;
 
-    if (!carregado && !enfermeiro) return null;
+    if (!carregado && enfermeiros.length === 0) return null;
 
     if (!podeEditar) {
         return (
-            <span className={`enf-plantao ${enfermeiro ? "" : "is-vazio"}`.trim()} aria-live="polite">
+            <span className={`enf-plantao ${enfermeiros.length > 0 ? "" : "is-vazio"}`.trim()} aria-live="polite">
                 <HeartPulse size={13} strokeWidth={2.2} aria-hidden />
                 {rotulo}
             </span>
@@ -162,8 +162,8 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
             <Popover.Trigger asChild>
                 <button
                     type="button"
-                    className={`enf-plantao is-editavel ${enfermeiro ? "" : "is-vazio"} ${enviando ? "is-enviando" : ""}`.trim()}
-                    aria-label={enfermeiro ? `Enfermeiro(a) do plantão: ${enfermeiro.nome}. Trocar` : "Informar enfermeiro(a) do plantão"}
+                    className={`enf-plantao is-editavel ${enfermeiros.length > 0 ? "" : "is-vazio"} ${enviando ? "is-enviando" : ""}`.trim()}
+                    aria-label={enfermeiros.length > 0 ? `Enfermeiro(a) do plantão: ${nomes}. Editar` : "Informar enfermeiro(a) do plantão"}
                 >
                     <HeartPulse size={13} strokeWidth={2.2} aria-hidden />
                     {rotulo}
@@ -173,7 +173,7 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
                 <Popover.Content sideOffset={6} collisionPadding={16} align="start" className="historico-list-popover enf-plantao__painel">
                     <header>
                         <strong>Enfermeiro(a) do plantão</strong>
-                        <span>{enfermeiro ? `Agora: ${enfermeiro.nome}` : "Ninguém registrado neste turno"}</span>
+                        <span>{enfermeiros.length > 0 ? "Escolha para acrescentar mais um" : "Ninguém registrado neste turno"}</span>
                     </header>
                     <label className="historico-list-popover__field">
                         <span>Buscar por nome ou matrícula</span>
@@ -205,7 +205,7 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
                         )}
                         {opcoes.map((opcao, indice) => {
                             const chave = opcao.tipo === "escala" ? opcao.candidato.id : `digitado:${opcao.nome}`;
-                            const atual = opcao.tipo === "escala" && enfermeiro?.profissionalId === opcao.candidato.id;
+                            const atual = opcao.tipo === "escala" && enfermeiros.some((item) => item.profissionalId === opcao.candidato.id);
                             return (
                                 <li
                                     key={chave}
@@ -233,12 +233,17 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
                             );
                         })}
                     </ul>
-                    {enfermeiro && (
-                        <div className="historico-list-popover__actions">
-                            <button type="button" className="historico-list-popover__cancel" onClick={() => void enviar("DELETE")} disabled={enviando}>
-                                Remover do turno
-                            </button>
-                        </div>
+                    {enfermeiros.length > 0 && (
+                        <ul className="enf-plantao__atuais" aria-label="Registrados neste turno">
+                            {enfermeiros.map((item) => (
+                                <li key={item.id}>
+                                    <span>{item.nome}</span>
+                                    <button type="button" onClick={() => void enviar("DELETE", undefined, item)} disabled={enviando} aria-label={`Remover ${item.nome} do plantão`}>
+                                        Remover
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
                     )}
                     <Popover.Arrow className="historico-list-popover__arrow" />
                 </Popover.Content>

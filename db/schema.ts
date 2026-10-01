@@ -1055,7 +1055,7 @@ export const enfermeirosPlantao = operationsV2.table(
         substituidoEm: timestamp("substituido_em", { withTimezone: true }),
     },
     (table) => [
-        uniqueIndex("enfermeiros_plantao_ativo_idx")
+        index("enfermeiros_plantao_ativo_idx")
             .on(table.turnoData, table.turno)
             .where(sql`substituido_em is null`),
         index("enfermeiros_plantao_turno_idx").on(table.turnoData, table.turno, table.registradoEm),

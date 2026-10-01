@@ -8,7 +8,8 @@
    Resposta:
      { ok: true,
        turno: { data: "YYYY-MM-DD", turno: "SD" | "SN" },
-       enfermeiro: { nome, telefone } | null,   // registrado pela chefia na Mesa
+       enfermeiros: [{ nome, telefone }],        // registrados pela chefia na Mesa
+       enfermeiro: { nome, telefone } | null,   // legado: o primeiro de `enfermeiros`
        chefe: { nome } | null,                   // quem ocupa a 2031 agora
        bases: [{ codigo, nome, ativa, medico }],
        ramais: [{ ramal, nome, ativa, medico }] }
@@ -28,7 +29,7 @@ import { hasDatabaseUrl } from "@/db";
 import { turnoDoMomento } from "@/modules/operational/enfermeiro-plantao";
 import { listInterventionBoard, listRegulationBoard, type InterventionBoardRow, type RegulationBoardRow } from "@/services/board.service";
 import { chefeDePlantaoAtual } from "@/services/chefe-de-plantao.service";
-import { enfermeiroDoTurno } from "@/services/enfermeiro-plantao.service";
+import { enfermeirosDoTurno } from "@/services/enfermeiro-plantao.service";
 
 function tokenConfere(recebido: string | null, esperado: string): boolean {
     if (!recebido) return false;
@@ -67,8 +68,8 @@ export async function GET(request: NextRequest) {
 
     const turno = turnoDoMomento();
     try {
-        const [enfermeiro, chefe, bases, ramais] = await Promise.all([
-            enfermeiroDoTurno(turno),
+        const [enfermeiros, chefe, bases, ramais] = await Promise.all([
+            enfermeirosDoTurno(turno),
             chefeDePlantaoAtual(),
             listInterventionBoard(),
             listRegulationBoard(),
@@ -76,7 +77,9 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
             ok: true,
             turno: { data: turno.data, turno: turno.turno },
-            enfermeiro: enfermeiro ? { nome: enfermeiro.nome, telefone: enfermeiro.telefone } : null,
+            enfermeiros: enfermeiros.map((item) => ({ nome: item.nome, telefone: item.telefone })),
+            // Legado (um só): o primeiro registrado.
+            enfermeiro: enfermeiros[0] ? { nome: enfermeiros[0].nome, telefone: enfermeiros[0].telefone } : null,
             chefe: chefe ? { nome: chefe.nome } : null,
             bases: bases.map((linha) => ({
                 codigo: linha.baseCode,

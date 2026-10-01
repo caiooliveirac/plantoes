@@ -90,7 +90,7 @@ after(async () => {
     await closeDb();
 });
 
-test("enfermeiro (banco): registrar outro substitui o anterior e guarda o histórico; limpar marca substituído", { skip }, async () => {
+test("enfermeiro (banco): registrar acrescenta (sem duplicar); remover um e limpar marcam substituído e guardam o histórico", { skip }, async () => {
     const { getDb, schema, servico, turno } = await modulos();
     await limparTurnoCorrente();
     const chefe = await criarConta(`chefe-${Date.now()}${DOMINIO}`, ["doctor"]);
@@ -100,14 +100,19 @@ test("enfermeiro (banco): registrar outro substitui o anterior e guarda o histó
     assert.equal(primeiro.nome, "Maria da Silva");
     assert.deepEqual(primeiro.emails, []);
     const segundo = await servico.registrarEnfermeiro({ turno: atual, nome: "João Souza", userId: chefe });
-    assert.equal((await servico.enfermeiroDoTurno(atual))?.id, segundo.id);
+    const repetido = await servico.registrarEnfermeiro({ turno: atual, nome: "joão  souza", userId: chefe });
+    assert.equal(repetido.id, segundo.id, "mesma pessoa não duplica");
+    assert.deepEqual((await servico.enfermeirosDoTurno(atual)).map((e) => e.id), [primeiro.id, segundo.id]);
 
+    assert.equal(await servico.limparEnfermeiro(atual, primeiro.id), true);
+    assert.deepEqual((await servico.enfermeirosDoTurno(atual)).map((e) => e.id), [segundo.id]);
     const linhas = await getDb().select().from(schema.enfermeirosPlantao).where(eq(schema.enfermeirosPlantao.turnoData, atual.data));
     assert.equal(linhas.length, 2);
-    assert.ok(linhas.find((l) => l.id === primeiro.id)?.substituidoEm, "o primeiro ficou como substituído");
+    assert.ok(linhas.find((l) => l.id === primeiro.id)?.substituidoEm, "o removido ficou como substituído");
 
+    await servico.registrarEnfermeiro({ turno: atual, nome: "Terceira Pessoa", userId: chefe });
     assert.equal(await servico.limparEnfermeiro(atual), true);
-    assert.equal(await servico.enfermeiroDoTurno(atual), null);
+    assert.deepEqual(await servico.enfermeirosDoTurno(atual), []);
     assert.equal(await servico.limparEnfermeiro(atual), false);
     await assert.rejects(servico.registrarEnfermeiro({ turno: atual, nome: "ab", userId: chefe }), /Informe o nome/);
 });
@@ -160,8 +165,13 @@ test("enfermeiro (banco): portão do quadro libera o e-mail do enfermeiro(a) do 
     assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "tabela", contexto })).motivo, "fora_do_plantao");
     assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "portal", contexto })).ok, true);
 
-    // Substituído: perde o acesso.
-    await servico.registrarEnfermeiro({ turno: atual, nome: "Outra Pessoa", userId: chefe });
+    // Acrescentar outro não tira o acesso do primeiro; removê-lo tira.
+    const outra = await servico.registrarEnfermeiro({ turno: atual, nome: "Outra Pessoa", userId: chefe });
+    portao.limparMemoriaDoPortao();
+    assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "quadro", contexto })).ok, true);
+    const primeira = (await servico.enfermeirosDoTurno(atual)).find((e) => e.id !== outra.id)!;
+    await servico.limparEnfermeiro(atual, primeira.id);
+    portao.limparMemoriaDoPortao();
     assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "quadro", contexto })).ok, false);
 });
 
@@ -202,6 +212,7 @@ test("enfermeiro (banco): /api/servicos/quadro/plantao exige token e devolve tur
     const chefe = await criarConta(`chefe4-${Date.now()}${DOMINIO}`, ["doctor"]);
     const atual = turno.turnoDoMomento();
     await servico.registrarEnfermeiro({ turno: atual, nome: "Carla Quadro", userId: chefe });
+    await servico.registrarEnfermeiro({ turno: atual, nome: "Dora Quadro", userId: chefe });
 
     const pedir = (token: string | null) => rota.GET(new NextRequest("http://localhost/api/servicos/quadro/plantao", {
         headers: token ? { "x-escala-token": token } : {},
@@ -213,12 +224,14 @@ test("enfermeiro (banco): /api/servicos/quadro/plantao exige token e devolve tur
     const corpo = await resposta.json() as {
         ok: boolean; turno: { data: string; turno: string };
         enfermeiro: { nome: string; telefone: string | null } | null;
+        enfermeiros: Array<{ nome: string; telefone: string | null }>;
         chefe: { nome: string } | null;
         bases: Array<{ codigo: string; nome: string; ativa: boolean; medico: string | null }>;
     };
     assert.equal(corpo.ok, true);
     assert.deepEqual(corpo.turno, { data: atual.data, turno: atual.turno });
     assert.deepEqual(corpo.enfermeiro, { nome: "Carla Quadro", telefone: null });
+    assert.deepEqual(corpo.enfermeiros.map((e) => e.nome), ["Carla Quadro", "Dora Quadro"]);
     assert.ok(corpo.chefe === null || typeof corpo.chefe.nome === "string");
     assert.deepEqual(corpo.bases.find((b) => b.codigo === codigo), { codigo, nome: "Base de teste do quadro", ativa: true, medico: null });
     assert.equal(JSON.stringify(corpo).includes("@"), false, "nenhum e-mail sai para o quadro");

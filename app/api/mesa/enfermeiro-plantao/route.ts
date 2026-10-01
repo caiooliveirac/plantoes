@@ -1,13 +1,13 @@
 /* ==========================================================================
    Enfermeiro(a) do plantão na Mesa (services/enfermeiro-plantao.service.ts).
 
-   GET    qualquer sessão da Mesa: turno corrente + quem está registrado. Para
+   GET    qualquer sessão da Mesa: turno corrente + quem está registrado (lista). Para
           chefia/admin com ?candidatos=1, também os candidatos da escala (id,
           nome, matrícula — nunca e-mail nem telefone no navegador).
    POST   { profissionalId } (da lista) ou { nome } (digitado): registra para
           o turno corrente, substituindo o anterior. Chefia (com a trava da
           2031) ou admin.
-   DELETE limpa o turno corrente. Mesma permissão.
+   DELETE ?id=<linha> remove um; sem id, limpa o turno corrente. Mesma permissão.
    ========================================================================== */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -17,7 +17,7 @@ import { publishBoardUpdate } from "@/lib/board-live";
 import { turnoDoMomento } from "@/modules/operational/enfermeiro-plantao";
 import {
     EnfermeiroError,
-    enfermeiroDoTurno,
+    enfermeirosDoTurno,
     limparEnfermeiro,
     listarEnfermeirosDaEscala,
     registrarEnfermeiro,
@@ -39,9 +39,8 @@ function semBanco() {
 }
 
 /** O que vai ao navegador: sem e-mail e sem telefone. */
-function publico(registro: EnfermeiroRegistrado | null) {
-    if (!registro) return null;
-    return { nome: registro.nome, profissionalId: registro.profissionalId, registradoEm: registro.registradoEm };
+function publico(registro: EnfermeiroRegistrado) {
+    return { id: registro.id, nome: registro.nome, profissionalId: registro.profissionalId, registradoEm: registro.registradoEm };
 }
 
 export async function GET(request: NextRequest) {
@@ -56,14 +55,14 @@ export async function GET(request: NextRequest) {
     const podeEditar = session.user.roles.some((role) => role === "admin" || role === "chief") && !session.user.mustChangePassword;
     // A lista só vai quando o seletor abre (?candidatos=1); o refresh do quadro pede só o nome.
     const querCandidatos = podeEditar && request.nextUrl.searchParams.get("candidatos") === "1";
-    const [enfermeiro, daEscala] = await Promise.all([
-        enfermeiroDoTurno(turno),
+    const [enfermeiros, daEscala] = await Promise.all([
+        enfermeirosDoTurno(turno),
         querCandidatos ? listarEnfermeirosDaEscala() : Promise.resolve(null),
     ]);
     return NextResponse.json({
         ok: true,
         turno: { data: turno.data, turno: turno.turno },
-        enfermeiro: publico(enfermeiro),
+        enfermeiros: enfermeiros.map(publico),
         podeEditar,
         ...(querCandidatos ? {
             escalaDisponivel: daEscala !== null,
@@ -93,7 +92,8 @@ export async function POST(request: NextRequest) {
             userId: session.user.id,
         });
         publishBoardUpdate("enfermeiro-plantao");
-        return NextResponse.json({ ok: true, turno: { data: turno.data, turno: turno.turno }, enfermeiro: publico(registro) });
+        const enfermeiros = await enfermeirosDoTurno(turno);
+        return NextResponse.json({ ok: true, turno: { data: turno.data, turno: turno.turno }, enfermeiro: publico(registro), enfermeiros: enfermeiros.map(publico) });
     } catch (error) {
         if (error instanceof EnfermeiroError) {
             return NextResponse.json({ error: error.message }, { status: error.status });
@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
     }
 }
 
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
     if (!hasDatabaseUrl()) return semBanco();
     try {
         await requireMesaEscrita(["admin", "chief"]);
@@ -111,7 +111,13 @@ export async function DELETE() {
         return erroDeAuth(error);
     }
     const turno = turnoDoMomento();
-    const havia = await limparEnfermeiro(turno);
+    const idBruto = request.nextUrl.searchParams.get("id")?.trim();
+    if (idBruto && !z.string().uuid().safeParse(idBruto).success) {
+        return NextResponse.json({ error: "Identificador inválido." }, { status: 400 });
+    }
+    const id = idBruto || undefined;
+    const havia = await limparEnfermeiro(turno, id);
     if (havia) publishBoardUpdate("enfermeiro-plantao");
-    return NextResponse.json({ ok: true, turno: { data: turno.data, turno: turno.turno }, enfermeiro: null });
+    const enfermeiros = await enfermeirosDoTurno(turno);
+    return NextResponse.json({ ok: true, turno: { data: turno.data, turno: turno.turno }, enfermeiros: enfermeiros.map(publico) });
 }
