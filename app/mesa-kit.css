@@ -267,7 +267,9 @@
     color: var(--texto-forte);
     box-shadow: var(--sombra-painel);
 }
-.mk-aba__contagem {
+.mk-seletor .mk-aba__contagem {
+    letter-spacing: normal;
+    font-weight: 500;
     min-width: 22px;
     padding: 1px 6px;
     border-radius: 5px;
@@ -308,7 +310,11 @@
 .mk-azulejo:hover:not(:disabled) { border-color: var(--borda-forte); box-shadow: var(--sombra-painel); }
 .mk-azulejo:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
 
-.mk-azulejo__codigo {
+/* Prefixo .mk-seletor: dentro de um .chief-field (modal de remanejamento), a
+   regra ".chief-field span" punha os textos em caixa alta, negrito e cinza. */
+.mk-seletor .mk-azulejo__codigo {
+    text-transform: none;
+    letter-spacing: normal;
     font-family: var(--fonte-mono);
     font-variant-numeric: tabular-nums;
     font-size: 20px;
@@ -316,14 +322,20 @@
     line-height: 1.1;
     color: var(--texto-forte);
 }
-.mk-azulejo__legenda {
+.mk-seletor .mk-azulejo__legenda {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--texto-medio);
     font-size: 12px;
 }
-.mk-azulejo__desde {
+.mk-seletor .mk-azulejo__desde {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
     position: absolute;
     top: 8px;
     right: 10px;
@@ -388,7 +400,7 @@
 .mk-azulejo[data-eventual="true"] { border-style: dashed; }
 
 .mk-seletor__eventuais { display: grid; gap: 6px; }
-.mk-seletor__titulo {
+.mk-seletor .mk-seletor__titulo {
     color: var(--texto-medio);
     font-size: 11.5px;
     font-weight: 600;
@@ -456,24 +468,24 @@
 .mk-atraso {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
+    gap: 2px;
     margin-left: 6px;
-    padding: 1px 6px;
+    padding: 0 5px;
     border-radius: 999px;
     font-family: var(--fonte-mono);
     font-variant-numeric: tabular-nums;
-    font-size: 0.72rem;
+    font-size: 0.64rem;
     font-weight: 700;
-    line-height: 1.4;
-    border: 1px solid var(--semaforo-amarelo-borda);
-    background: var(--semaforo-amarelo-fundo);
-    color: var(--semaforo-amarelo-texto);
+    line-height: 1.5;
+    border: 1px solid var(--vermelho-200);
+    background: var(--semaforo-vermelho-fundo);
+    color: var(--semaforo-vermelho-texto);
     white-space: nowrap;
+    flex: none;
 }
 .mk-atraso.grave {
     border-color: var(--semaforo-vermelho-borda);
-    background: var(--semaforo-vermelho-fundo);
-    color: var(--semaforo-vermelho-texto);
+    background: var(--vermelho-100);
 }
 .mk-atraso.ok {
     border-color: var(--semaforo-verde-borda);

@@ -3,8 +3,8 @@
 import "@/app/mesa-kit.css";
 
 /**
- * Chip ao lado da hora de chegada: "+22 min" (âmbar até 59, vermelho a partir
- * de 60), nada dentro da tolerância, e um "OK" pequeno quando a chefia
+ * Chip depois do nome (a hora de chegada fica visível na coluna própria):
+ * "⏳ +22 min" avermelhado, mais forte a partir de 60, nada dentro da tolerância, e um "OK" pequeno quando a chefia
  * desconsiderou o atraso (docs/plano-mesa-chefe-plantonista.md).
  */
 export function ChipAtraso({ minutos, abonado }: { minutos: number | null; abonado: boolean }) {
@@ -14,7 +14,7 @@ export function ChipAtraso({ minutos, abonado }: { minutos: number | null; abona
     if (minutos === null || minutos <= 0) return null;
     return (
         <span className={`mk-atraso ${minutos >= 60 ? "grave" : ""}`.trim()} title={`Chegou ${minutos} min depois do previsto`}>
-            +{minutos} min
+            <span aria-hidden="true">⏳</span>+{minutos} min
         </span>
     );
 }

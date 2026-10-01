@@ -88,7 +88,7 @@ export function SeletorDePosto({
                 ? a.ocupante ?? "ocupado"
                 : a.status === "desativado"
                   ? "desativado"
-                  : a.nome ?? "livre";
+                  : a.nome && !a.nome.includes(a.code) ? a.nome : "livre";
         const descricao = [
             `${a.domain === "regulation" ? "Ramal" : "Base"} ${a.code}`,
             a.nome ?? null,

@@ -648,7 +648,7 @@
 }
 
 .pagina-kairos .ops-history-backdrop, .pagina-kairos .ops-priority-backdrop, .pagina-kairos .chief-drawer-backdrop {
-    background: var(--superficie);
+    background: var(--veu-modal);
 }
 
 .pagina-kairos .ops-history-drawer, .pagina-kairos .ops-priority-drawer, .pagina-kairos .chief-drawer {
@@ -2451,7 +2451,7 @@
 }
 
 .pagina-kairos .chief-transfer-backdrop {
-    background: var(--superficie);
+    background: var(--veu-modal);
 }
 
 .pagina-kairos .chief-transfer-modal {
@@ -2657,11 +2657,13 @@
 }
 
 .pagina-kairos .departure-verifier-action.confirm {
-    color: var(--texto-medio);
+    background: var(--verde-700);
+    color: var(--superficie);
 }
 
 .pagina-kairos .departure-verifier-action.confirm:hover {
-    background: var(--verde-50);
+    background: var(--verde-700);
+    filter: brightness(1.08);
 }
 
 .pagina-kairos .board-audit-rail__confirm-all:hover {
@@ -2669,7 +2671,7 @@
 }
 
 .pagina-kairos .half-shift-decision-backdrop {
-    background: var(--superficie);
+    background: var(--veu-modal);
 }
 
 .pagina-kairos .half-shift-decision-actions button.primary {
@@ -4440,4 +4442,44 @@
     background: var(--superficie-alt);
     border-color: var(--texto-medio);
     color: var(--texto-forte);
+}
+
+/* Drawers ("Mais", histórico, prioridades) e modal de remanejamento: o
+   globals.css pinta fundo escuro por gradiente, que a baseline não traduziu —
+   no tema claro ficava texto escuro sobre painel escuro. O modal também não
+   tinha teto de altura: com a grade de ramais, passava da tela sem rolar. */
+.pagina-kairos .ops-history-drawer,
+.pagina-kairos .ops-priority-drawer,
+.pagina-kairos .chief-drawer,
+.pagina-kairos .chief-transfer-modal {
+    background: var(--superficie);
+    color: var(--texto);
+    box-shadow: var(--sombra-modal);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.pagina-kairos .chief-transfer-modal {
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.pagina-kairos .chief-departure-strip {
+    background: var(--vermelho-50);
+    border-color: var(--vermelho-200);
+    color: var(--texto-forte);
+}
+
+/* O rail "Saídas a confirmar" (z 40) vazava por cima do drawer aberto. */
+.pagina-kairos .ops-history-backdrop,
+.pagina-kairos .ops-priority-backdrop,
+.pagina-kairos .chief-drawer-backdrop {
+    z-index: 41;
+}
+
+.pagina-kairos .ops-history-drawer,
+.pagina-kairos .ops-priority-drawer,
+.pagina-kairos .chief-drawer {
+    z-index: 42;
 }

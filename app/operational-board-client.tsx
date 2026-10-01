@@ -3187,7 +3187,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                     ) : (
                         <span className={`ops-time-pill ${isDisabledRegulation ? "disabled" : ""}`.trim()}><strong>{isDisabledRegulation ? "--:--" : formatBoardTime(resolveOperationalArrival(card))}</strong></span>
                     )}
-                    {card.status === "active" && !isDisabledRegulation ? <ChipAtraso minutos={card.arrivalDelayMinutes ?? null} abonado={Boolean(card.arrivalDelayWaived)} /> : null}
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
@@ -3202,6 +3201,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             ) : (
                                 <>
                                     {renderPrimaryDoctorLabel(card)}
+                                    {card.status === "active" ? <ChipAtraso minutos={card.arrivalDelayMinutes ?? null} abonado={Boolean(card.arrivalDelayWaived)} /> : null}
                                     {renderCardIdentityTags(card)}
                                     {renderMadrugadaTag(card)}
                                     {breakTag ? (
@@ -3369,7 +3369,6 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             <strong>{isDisabledIntervention ? "--:--" : isWaitingIntervention ? "Livre" : formatBoardTime(resolveOperationalArrival(card))}</strong>
                         </span>
                     )}
-                    {card.status === "active" && !isDisabledIntervention ? <ChipAtraso minutos={card.arrivalDelayMinutes ?? null} abonado={Boolean(card.arrivalDelayWaived)} /> : null}
                 </div>
                 <div role="cell" className="ops-grid-cell column-code">
                     <div className="ops-code-stack rail">
@@ -3384,6 +3383,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             ) : (
                                 <>
                                     {renderPrimaryDoctorLabel(card)}
+                                    {card.status === "active" ? <ChipAtraso minutos={card.arrivalDelayMinutes ?? null} abonado={Boolean(card.arrivalDelayWaived)} /> : null}
                                     {renderCardIdentityTags(card)}
                                 </>
                             )}
