@@ -62,7 +62,7 @@ async function comoUsuario<T>(userId: string, fn: () => Promise<T>): Promise<T> 
         import("next/dist/server/app-render/work-async-storage.external.js"),
         import("next/dist/server/web/spec-extension/cookies.js"),
     ]);
-    const token = createSessionToken({ sub: userId, exp: Date.now() + 60_000, sv: 0 }, process.env.AUTH_SECRET!);
+    const token = createSessionToken({ sub: userId, exp: Date.now() + 60_000, sv: 0, iat: Date.now() }, process.env.AUTH_SECRET!);
     const headers = new Headers({ cookie: `operations_v2_session=${token}`, "x-forwarded-for": "203.0.113.10" });
     const unidade = {
         type: "request",

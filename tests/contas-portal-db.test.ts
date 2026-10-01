@@ -125,10 +125,10 @@ test("portal-only: login do app recusa com no_roles_assigned", { skip }, async (
 test("portal-only: carregador de sessão devolve null; com outro papel, portal some de roles", { skip }, async () => {
     const { server } = await modulos();
     const soPortal = await criarConta(emailNovo("so-portal-sessao"), SENHA, ["portal"]);
-    assert.equal(await server.loadUserSession({ sub: soPortal, exp: Date.now() + 60_000, sv: 0 }), null);
+    assert.equal(await server.loadUserSession({ sub: soPortal, exp: Date.now() + 60_000, sv: 0, iat: Date.now() }), null);
 
     const misto = await criarConta(emailNovo("medico-e-portal"), SENHA, ["portal", "doctor"]);
-    const sessao = await server.loadUserSession({ sub: misto, exp: Date.now() + 60_000, sv: 0 });
+    const sessao = await server.loadUserSession({ sub: misto, exp: Date.now() + 60_000, sv: 0, iat: Date.now() });
     assert.ok(sessao);
     assert.deepEqual(sessao.user.roles, ["doctor"]);
 });
