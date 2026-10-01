@@ -140,7 +140,7 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
 
     const nomes = enfermeiros.map((item) => item.nome).join(", ");
     const rotulo = enfermeiros.length > 0
-        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <strong>{nomes}</strong></>
+        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <span className="enf-plantao__nomes">{enfermeiros.map((item) => <strong key={item.id}>{item.nome}</strong>)}</span></>
         : podeEditar
             ? <strong>Informar enfermeiro(a)</strong>
             : <span className="enf-plantao__rotulo">Enfermeiro(a) do plantão: não informado</span>;
