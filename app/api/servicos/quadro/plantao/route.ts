@@ -12,7 +12,7 @@
        enfermeiro: { nome, telefone } | null,   // legado: o primeiro de `enfermeiros`
        chefe: { nome } | null,                   // quem ocupa a 2031 agora
        bases: [{ codigo, nome, ativa, medico }],
-       ramais: [{ ramal, nome, ativa, medico }] }
+       ramais: [{ ramal, nome, ativa, medico, funcao }] }
 
    Bases = o mesmo read model da Mesa (listInterventionBoard): só bases
    ativas no cadastro (a diurna some à noite), na ordem do quadro. `ativa`
@@ -22,6 +22,7 @@
 
    Ramais = o read model da regulação na Mesa (listRegulationBoard), mesma
    regra: `medico` só com ocupação ativa no quadro agora; null = vazio.
+   `funcao` = role_label da ocupação (RMT, MRV, PSIQ, RECIP…), null sem médico.
    ========================================================================== */
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
@@ -92,6 +93,7 @@ export async function GET(request: NextRequest) {
                 nome: linha.postLabel,
                 ativa: linha.status !== "disabled",
                 medico: medicoDaLinha(linha),
+                funcao: linha.status === "active" ? linha.roleLabel : null,
             })),
         }, { headers: { "cache-control": "no-store" } });
     } catch (error) {
