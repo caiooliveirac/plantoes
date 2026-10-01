@@ -27,7 +27,7 @@ import { getDb } from "@/db";
 import { bahiaClockHHMM } from "@/lib/time";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { CHIEF_REGULATION_POST_CODE, isRetiredRegulationRamal } from "@/modules/operational/roles";
-import { ARRIVAL_GRACE_MINUTES } from "@/modules/operational/early-departure";
+import { ARRIVAL_GRACE_MINUTES, DEPARTURE_GRACE_MINUTES } from "@/modules/operational/early-departure";
 import {
   resolveImplicitOccupancyExpiry,
   resolveOperationalShiftWindow,
@@ -3475,9 +3475,11 @@ function doesCandidateCoverPaymentSlot(candidate: LogicalShiftCandidate, slotSta
   // tem logicalSlotStart proprio e e avaliada como candidato separado.
   const logicalSpanEndMs = new Date(candidate.logicalSlotStart).getTime() + 86400000;
   const coverageEndMs = Math.min(new Date(coverageEndAt).getTime(), logicalSpanEndMs);
-  // Nao aceitar igualdade exata na fronteira do slot seguinte: para pagamento,
-  // a ocupacao precisa ter cobertura estritamente dentro do slot alvo.
-  return coverageEndMs > slotStart;
+  // Saída na folga da virada (até 15 min) é fim do turno anterior, não presença
+  // no seguinte. Sem isso, a perna de um P remanejado no SD (ancorada no SD, então
+  // com janela lógica SD+SN) que expira às 19:15 cobria o SN que ninguém fez
+  // (caso Gustavo, 2032, 28/09/2026).
+  return coverageEndMs - slotStart > DEPARTURE_GRACE_MINUTES * 60000;
 }
 
 function buildPaymentAllocationSlotWindow(params: {

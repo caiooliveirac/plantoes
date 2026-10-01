@@ -1613,3 +1613,80 @@ test("remanejo real no meio do turno (janelas sem sobreposicao) nao e tratado co
     });
     assert.ok(board.regulation.every((row) => !row.issues.some((issue) => issue.startsWith("Duplicado:"))));
 });
+
+// Caso Gustavo Fernandes Vieira, 27–28/09/2026: SN na 2035 (P com "continua SD"),
+// remanejado para a 2032 às 08:39 do dia 28 e expirado às 19:15 (fim da janela
+// de 24h). A perna remanejada começa no SD e, como P, se ancorava ali — a janela
+// lógica virava SD+SN do dia 28 e os 15 min de folga da saída (19:00–19:15)
+// faziam ela cobrir o SN 28 que ele não trabalhou.
+function gustavoRows(): PaymentAllocationRawRow[] {
+    const common = {
+        doctorId: "doc-gustavo",
+        doctorName: "Gustavo Fernandes Vieira",
+        displayName: "Gustavo",
+        continuityGroupId: "cg-gustavo",
+        shiftLabel: "P",
+        scheduledStartAt: "2026-09-27T22:00:00.000Z",
+        scheduledEndAt: "2026-09-28T22:15:00.000Z",
+    } as const;
+    return [
+        makeRegRow({
+            ...common,
+            occupancyId: "occ-2035",
+            targetCode: "2035", targetLabel: "2035", ramalLabel: "2035",
+            startedAt: "2026-09-27T21:55:28.000Z",
+            boardStartedAt: "2026-09-27T21:55:28.000Z",
+            endedAt: "2026-09-28T11:39:11.000Z",
+            actualEndedAt: null,
+            notes: "Gustavo Fernandes PA 2035 SN\nGustavo Fernandes continua PA 2035 SD",
+            createdAt: "2026-09-27T21:55:28.000Z",
+        }),
+        makeRegRow({
+            ...common,
+            occupancyId: "occ-2032",
+            targetCode: "2032", targetLabel: "2032", ramalLabel: "2032",
+            startedAt: "2026-09-28T11:39:11.000Z",
+            boardStartedAt: "2026-09-28T11:39:11.000Z",
+            endedAt: "2026-09-28T22:15:00.000Z",
+            actualEndedAt: "2026-09-28T22:15:00.000Z",
+            source: "admin_correction",
+            notes: "Gustavo Fernandes continua PA 2035 SD\n\nRemanejado de 2035 para 2032.",
+            createdAt: "2026-09-28T11:39:12.000Z",
+        }),
+    ];
+}
+
+const gustavoTargets = [
+    makeTarget({ domain: "regulation", targetCode: "2032", targetLabel: "2032", sortOrder: 32 }),
+    makeTarget({ domain: "regulation", targetCode: "2035", targetLabel: "2035", sortOrder: 35 }),
+];
+
+test("P remanejado no SD e expirado na folga das 19:15 não cobre o SN seguinte (caso Gustavo, 2032, 28/09/2026)", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: gustavoTargets,
+        rawRows: gustavoRows(),
+        operationalDate: "2026-09-29T03:00:00.000Z",
+        shiftLabel: "SN",
+        startedAt: "2026-09-28T22:00:00.000Z",
+        endedAt: "2026-09-29T10:00:00.000Z",
+        generatedAt: "2026-09-29T11:00:00.000Z",
+    });
+
+    const gustavo = [...board.regulation].filter((row) => row.doctorId === "doc-gustavo");
+    assert.equal(gustavo.length, 0, "SN 28 não foi trabalhado: a saída caiu na folga de 15 min da virada");
+});
+
+test("o mesmo P remanejado segue pagando o SD em que ele trabalhou (caso Gustavo, 28/09/2026)", () => {
+    const board = buildPaymentAllocationBoardModel({
+        targets: gustavoTargets,
+        rawRows: gustavoRows(),
+        operationalDate: "2026-09-28T15:00:00.000Z",
+        shiftLabel: "SD",
+        startedAt: "2026-09-28T10:00:00.000Z",
+        endedAt: "2026-09-28T22:00:00.000Z",
+        generatedAt: "2026-09-28T23:00:00.000Z",
+    });
+
+    const gustavo = board.regulation.filter((row) => row.doctorId === "doc-gustavo" && row.occupancyId);
+    assert.equal(gustavo.length, 1, "um SD pago, num ramal só");
+});

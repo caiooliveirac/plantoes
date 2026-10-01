@@ -2525,7 +2525,11 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                                     onClick={() => void submitShiftRemoval()}
                                     disabled={shiftActionBusy}
                                 >
-                                    {shiftActionBusy ? "Removendo..." : `Remover ${shiftActionDraft.doctorName} deste plantão`}
+                                    {shiftActionBusy
+                                        ? "Removendo..."
+                                        : shiftActionDraft.source === "admin_extra"
+                                            ? `Remover ${shiftActionDraft.doctorName} deste plantão`
+                                            : `Remover só o ${shiftActionDraft.shiftLabel} do dia ${shiftActionDraft.day}`}
                                 </button>
                             ) : null}
                             <button
@@ -2542,9 +2546,7 @@ export function ChiefPaymentViewClient({ board: baseBoard, financials: financial
                             {canManageClosing
                                 ? (shiftActionDraft.source === "admin_extra"
                                     ? "Remover apaga este plantão extra adicionado pelo admin (sai do quadro e do valor a pagar)."
-                                    : (shiftActionDraft.source === "admin_correction" || shiftActionDraft.source === "manual"
-                                        ? "Remover apaga a correção manual deste plantão."
-                                        : "Remover encerra o plantão no início deste turno (recalcula banco de horas). Use quando o médico não estava de fato no plantão."))
+                                    : `Sai do pagamento só esta célula: ${shiftActionDraft.targetCode} ${shiftActionDraft.shiftLabel} do dia ${shiftActionDraft.day}. Os outros turnos do mesmo plantão continuam pagos; o banco de horas é recalculado. Use quando o médico não estava de fato neste turno.`)
                                 : "Perfil somente leitura para plantões: remoções e correções manuais ficam bloqueadas."}
                         </p>
                     </section>
