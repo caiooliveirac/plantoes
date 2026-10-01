@@ -6,13 +6,14 @@
      header x-esperados-token = ESCALA_API_TOKEN, os mesmos do /api/esperados
      em modules/operational/expected-schedule.ts). Guardada 5 min em memória
      (falha, 1 min). Escala fora do ar: a Mesa ainda aceita nome digitado.
-   - Uma linha ativa por turno; registrar outro ou limpar marca a anterior
-     como substituída (o histórico é a auditoria).
-   - O e-mail da linha ativa libera o quadro.mnrs.com.br no porteiro
+   - Vários enfermeiros(as) ativos por turno (migration 0055): registrar
+     acrescenta (a mesma pessoa não duplica); remover marca só a escolhida como
+     substituída, limpar marca todas (o histórico é a auditoria).
+   - O e-mail de qualquer linha ativa libera o quadro.mnrs.com.br no porteiro
      (services/acessos-portao.service.ts). Nome digitado não tem e-mail: fica
      só na Mesa e no quadro, sem liberar acesso.
    ========================================================================== */
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { enfermeirosPlantao } from "@/db/schema";
 import {
@@ -110,8 +111,9 @@ function paraRegistrado(linha: typeof enfermeirosPlantao.$inferSelect): Enfermei
     };
 }
 
-export async function enfermeiroDoTurno(turno: Pick<TurnoDoEnfermeiro, "data" | "turno">): Promise<EnfermeiroRegistrado | null> {
-    const [linha] = await getDb()
+/** Enfermeiros(as) ativos do turno, na ordem em que foram registrados. */
+export async function enfermeirosDoTurno(turno: Pick<TurnoDoEnfermeiro, "data" | "turno">): Promise<EnfermeiroRegistrado[]> {
+    const linhas = await getDb()
         .select()
         .from(enfermeirosPlantao)
         .where(and(
@@ -119,9 +121,8 @@ export async function enfermeiroDoTurno(turno: Pick<TurnoDoEnfermeiro, "data" | 
             eq(enfermeirosPlantao.turno, turno.turno),
             isNull(enfermeirosPlantao.substituidoEm),
         ))
-        .orderBy(desc(enfermeirosPlantao.registradoEm))
-        .limit(1);
-    return linha ? paraRegistrado(linha) : null;
+        .orderBy(asc(enfermeirosPlantao.registradoEm));
+    return linhas.map(paraRegistrado);
 }
 
 export class EnfermeiroError extends Error {
@@ -130,7 +131,7 @@ export class EnfermeiroError extends Error {
     }
 }
 
-/** Registra para o turno: `profissionalId` (da lista da escala) ou `nome` digitado. Substitui o ativo. */
+/** Acrescenta ao turno: `profissionalId` (da lista da escala) ou `nome` digitado. Quem já está ativo (mesmo id ou mesmo nome) é devolvido sem duplicar. */
 export async function registrarEnfermeiro(params: {
     turno: Pick<TurnoDoEnfermeiro, "data" | "turno">;
     profissionalId?: string | null;
@@ -151,14 +152,21 @@ export async function registrarEnfermeiro(params: {
     }
 
     const linha = await getDb().transaction(async (tx) => {
-        await tx
-            .update(enfermeirosPlantao)
-            .set({ substituidoEm: sql`now()` })
+        // Serializa os registros do turno: dois cliques seguidos não duplicam.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`enfermeiros-plantao:${params.turno.data}:${params.turno.turno}`}))`);
+        const ativos = await tx
+            .select()
+            .from(enfermeirosPlantao)
             .where(and(
                 eq(enfermeirosPlantao.turnoData, params.turno.data),
                 eq(enfermeirosPlantao.turno, params.turno.turno),
                 isNull(enfermeirosPlantao.substituidoEm),
             ));
+        const chaveNome = dados.nome.toLocaleLowerCase("pt-BR");
+        const jaEsta = ativos.find((item) => dados.profissionalId
+            ? item.profissionalId === dados.profissionalId
+            : item.nome.toLocaleLowerCase("pt-BR") === chaveNome);
+        if (jaEsta) return jaEsta;
         const [nova] = await tx
             .insert(enfermeirosPlantao)
             .values({
@@ -173,8 +181,8 @@ export async function registrarEnfermeiro(params: {
     return paraRegistrado(linha);
 }
 
-/** Limpa o turno (marca o ativo como substituído). true se havia alguém. */
-export async function limparEnfermeiro(turno: Pick<TurnoDoEnfermeiro, "data" | "turno">): Promise<boolean> {
+/** Remove do turno (marca como substituído) um enfermeiro(a) pelo id da linha, ou todos sem `id`. true se removeu alguém. */
+export async function limparEnfermeiro(turno: Pick<TurnoDoEnfermeiro, "data" | "turno">, id?: string): Promise<boolean> {
     const linhas = await getDb()
         .update(enfermeirosPlantao)
         .set({ substituidoEm: sql`now()` })
@@ -182,6 +190,7 @@ export async function limparEnfermeiro(turno: Pick<TurnoDoEnfermeiro, "data" | "
             eq(enfermeirosPlantao.turnoData, turno.data),
             eq(enfermeirosPlantao.turno, turno.turno),
             isNull(enfermeirosPlantao.substituidoEm),
+            id ? eq(enfermeirosPlantao.id, id) : undefined,
         ))
         .returning({ id: enfermeirosPlantao.id });
     return linhas.length > 0;
