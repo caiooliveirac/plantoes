@@ -1051,6 +1051,31 @@ export async function applyManualDisableCorrection(params: {
     return updated;
 }
 
+/** Turno vizinho de (data, turno): SD d ↔ SN d-1 antes, SN d depois; SN d ↔ SD d antes, SD d+1 depois. */
+function resolveAdjacentPaymentSlot(date: string, shiftLabel: "SD" | "SN", direction: -1 | 1) {
+    const shiftDays = (days: number) => {
+        const [year, month, day] = date.split("-").map(Number);
+        return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+    };
+    if (shiftLabel === "SD") {
+        return direction === -1
+            ? { operationalDate: shiftDays(-1), shiftLabel: "SN" as const }
+            : { operationalDate: date, shiftLabel: "SN" as const };
+    }
+    return direction === -1
+        ? { operationalDate: date, shiftLabel: "SD" as const }
+        : { operationalDate: shiftDays(1), shiftLabel: "SD" as const };
+}
+
+/** Ocupações da mesma corrida (os dois domínios): o turno vizinho pode ser pago por outra perna. */
+async function loadContinuityGroupOccupancyIds(tx: any, continuityGroupId: string) {
+    const regulation: { id: string }[] = await tx.select({ id: regulationOccupancies.id }).from(regulationOccupancies)
+        .where(eq(regulationOccupancies.continuityGroupId, continuityGroupId));
+    const intervention: { id: string }[] = await tx.select({ id: interventionOccupancies.id }).from(interventionOccupancies)
+        .where(eq(interventionOccupancies.continuityGroupId, continuityGroupId));
+    return new Set([...regulation, ...intervention].map((row) => row.id));
+}
+
 export async function applyManualRemoveAssignment(params: {
     operationalDate: string;
     shiftLabel: "SD" | "SN";
@@ -1087,39 +1112,59 @@ export async function applyManualRemoveAssignment(params: {
     }
 
     const slotStart = new Date(board.startedAt);
+    const slotEnd = new Date(board.endedAt);
     const db = getDb();
 
     /**
-     * Remover UM slot não pode apagar os outros que a mesma ocupação cobre.
+     * Remover tira SÓ esta célula de pagamento (um turno, um alvo). Os outros turnos
+     * que a mesma ocupação cobre continuam pagos.
      *
-     * Antes, a remoção zerava a ocupação (endedAt = actualEndedAt = startedAt) para
-     * garantir que o plantão não fosse recapturado em outro turno. Numa ocupação de
-     * 24h que cobre SD e SN, remover o SN levava o SD junto — plantão real sumindo do
-     * pagamento (caso Uenderson 05/07/2026 1363: fez 07:03→19:13, e ao remover o SN
-     * fantasma perdeu o SD que trabalhou).
+     * Antes, a remoção zerava a ocupação — numa ocupação de 24h, remover o SN levava
+     * o SD junto (caso Uenderson 05/07/2026 1363). O recorte que veio depois só
+     * olhava o turno anterior e não valia para `admin_correction`, origem de toda
+     * perna de remanejo: remover o SN 28 do Gustavo (2032, 28/09/2026) apagou a
+     * perna e o SD trabalhado sumiu.
      *
-     * Quando o médico trabalhou ANTES do slot removido, a ocupação é recortada até o
-     * início desse slot: os turnos anteriores continuam pagos e o slot removido deixa
-     * de ser coberto. Só quando não sobra nada antes do slot é que a ocupação é zerada,
-     * como antes.
-     *
-     * Vale também para `admin_correction`: toda perna de remanejo nasce com essa
-     * origem (corrections.ts), e apagar a linha inteira levava o SD trabalhado junto
-     * com o SN removido (caso Gustavo, 2032, 28/09/2026). A linha só é apagada
-     * quando começou dentro do slot removido.
+     * Agora o turno vizinho decide, pelo próprio quadro de pagamento:
+     * - o turno anterior também é pago por este plantão → a ocupação termina no
+     *   início do turno removido;
+     * - o turno seguinte também é pago → a ocupação passa a começar no fim do turno
+     *   removido (com a janela e o rótulo do turno que fica);
+     * - os dois → recusa: partiria o plantão em dois;
+     * - nenhum → a ocupação era só esta célula e é zerada (apagada, se veio de
+     *   correção/admin).
      */
-    function resolveRemovalEnd(existing: { startedAt: Date; endedAt: Date | null; actualEndedAt: Date | null }) {
-        const workedBeforeSlot = existing.startedAt.getTime() < slotStart.getTime();
-        if (!workedBeforeSlot) {
-            return { endedAt: existing.startedAt, actualEndedAt: existing.startedAt, clearedWholeOccupancy: true };
-        }
+    const [previousBoard, nextBoard] = await Promise.all([
+        getPaymentAllocationBoard(resolveAdjacentPaymentSlot(date, params.shiftLabel, -1)),
+        getPaymentAllocationBoard(resolveAdjacentPaymentSlot(date, params.shiftLabel, 1)),
+    ]);
 
-        const effectiveEnd = existing.actualEndedAt ?? existing.endedAt;
-        const trimmedEnd = effectiveEnd && effectiveEnd.getTime() < slotStart.getTime()
-            ? effectiveEnd
-            : slotStart;
-        return { endedAt: trimmedEnd, actualEndedAt: trimmedEnd, clearedWholeOccupancy: false };
+    type RemovalTarget = {
+        doctorId: string;
+        continuityGroupId: string;
+        startedAt: Date;
+        endedAt: Date | null;
+        actualEndedAt: Date | null;
+        scheduledEndAt: Date | null;
+    };
+
+    function resolveRemoval(existing: RemovalTarget, groupOccupancyIds: Set<string>) {
+        const paidByThisRun = (other: PaymentAllocationBoard) => [...other.regulation, ...other.intervention]
+            .some((row) => row.doctorId === existing.doctorId && row.occupancyId !== null && groupOccupancyIds.has(row.occupancyId));
+        const coverageEnd = existing.actualEndedAt ?? existing.endedAt ?? existing.scheduledEndAt;
+        const keepsPrevious = existing.startedAt.getTime() < slotStart.getTime() && paidByThisRun(previousBoard);
+        const keepsNext = (!coverageEnd || coverageEnd.getTime() > slotEnd.getTime()) && paidByThisRun(nextBoard);
+
+        if (keepsPrevious && keepsNext) {
+            throw new Error("Este plantão também paga o turno anterior e o seguinte; remover só este turno o partiria em dois. Corrija os horários pela correção do plantão.");
+        }
+        if (keepsPrevious) return "trim_end" as const;
+        if (keepsNext) return "trim_start" as const;
+        return "clear" as const;
     }
+
+    const nextShiftLabel = params.shiftLabel === "SD" ? "SN" : "SD";
+    const removalNote = `[chefia] Removido só o ${params.shiftLabel} de ${date} via fechamento de pagamento`;
 
     await db.transaction(async (tx) => {
         if (params.domain === "regulation") {
@@ -1129,31 +1174,23 @@ export async function applyManualRemoveAssignment(params: {
             if (!existing) {
                 throw new Error("Ocupação não encontrada para remoção.");
             }
-            const removal = resolveRemovalEnd(existing);
-            if (removal.clearedWholeOccupancy && (existing.source === "admin_correction" || existing.source === "manual")) {
+            const removal = resolveRemoval(existing, await loadContinuityGroupOccupancyIds(tx, existing.continuityGroupId));
+            if (removal === "clear" && (existing.source === "admin_correction" || existing.source === "manual")) {
                 await tx.delete(bankHoursEntries)
                     .where(eq(bankHoursEntries.regulationOccupancyId, existing.id));
                 await tx.delete(regulationOccupancies)
                     .where(eq(regulationOccupancies.id, existing.id));
-            } else {
-                await tx.update(regulationOccupancies)
-                    .set({
-                        endedAt: removal.endedAt,
-                        actualEndedAt: removal.actualEndedAt,
-                        scheduledEndAt: removal.clearedWholeOccupancy ? existing.scheduledEndAt : slotStart,
-                        // O desfecho de saída antecipada pertencia ao slot removido;
-                        // recortada até o início dele, a ocupação termina no fim do
-                        // slot anterior — plantão cumprido, sem régua. Manter o
-                        // bank_only aqui zerava o SD trabalhado (Gabriel Divino,
-                        // 2033, 27/08/2026).
-                        earlyDepartureOutcome: removal.clearedWholeOccupancy ? existing.earlyDepartureOutcome : null,
-                        notes: `${existing.notes ?? ""}\n[chefia] Remocao via fechamento de pagamento (${slotStart.toISOString()})`.trim(),
-                        updatedByUserId: params.actorUserId,
-                        updatedAt: new Date(),
-                    })
-                    .where(eq(regulationOccupancies.id, existing.id));
-                await syncRegulationBankHours(tx, existing.id);
+                return;
             }
+            await tx.update(regulationOccupancies)
+                .set({
+                    ...resolveRemovalPatch(removal, existing),
+                    notes: `${existing.notes ?? ""}\n${removalNote}`.trim(),
+                    updatedByUserId: params.actorUserId,
+                    updatedAt: new Date(),
+                })
+                .where(eq(regulationOccupancies.id, existing.id));
+            await syncRegulationBankHours(tx, existing.id);
         } else {
             const [existing] = await tx.select().from(interventionOccupancies)
                 .where(eq(interventionOccupancies.id, occupancyIdToRemove))
@@ -1161,33 +1198,51 @@ export async function applyManualRemoveAssignment(params: {
             if (!existing) {
                 throw new Error("Ocupação não encontrada para remoção.");
             }
-            const removal = resolveRemovalEnd(existing);
-            if (removal.clearedWholeOccupancy && (existing.source === "admin_correction" || existing.source === "manual")) {
+            const removal = resolveRemoval(existing, await loadContinuityGroupOccupancyIds(tx, existing.continuityGroupId));
+            if (removal === "clear" && (existing.source === "admin_correction" || existing.source === "manual")) {
                 await tx.delete(bankHoursEntries)
                     .where(eq(bankHoursEntries.interventionOccupancyId, existing.id));
                 await tx.delete(interventionOccupancies)
                     .where(eq(interventionOccupancies.id, existing.id));
-            } else {
-                await tx.update(interventionOccupancies)
-                    .set({
-                        endedAt: removal.endedAt,
-                        actualEndedAt: removal.actualEndedAt,
-                        scheduledEndAt: removal.clearedWholeOccupancy ? existing.scheduledEndAt : slotStart,
-                        // O desfecho de saída antecipada pertencia ao slot removido;
-                        // recortada até o início dele, a ocupação termina no fim do
-                        // slot anterior — plantão cumprido, sem régua. Manter o
-                        // bank_only aqui zerava o SD trabalhado (Gabriel Divino,
-                        // 2033, 27/08/2026).
-                        earlyDepartureOutcome: removal.clearedWholeOccupancy ? existing.earlyDepartureOutcome : null,
-                        notes: `${existing.notes ?? ""}\n[chefia] Remocao via fechamento de pagamento (${slotStart.toISOString()})`.trim(),
-                        updatedByUserId: params.actorUserId,
-                        updatedAt: new Date(),
-                    })
-                    .where(eq(interventionOccupancies.id, existing.id));
-                await syncInterventionBankHours(tx, existing.id);
+                return;
             }
+            await tx.update(interventionOccupancies)
+                .set({
+                    ...resolveRemovalPatch(removal, existing),
+                    notes: `${existing.notes ?? ""}\n${removalNote}`.trim(),
+                    updatedByUserId: params.actorUserId,
+                    updatedAt: new Date(),
+                })
+                .where(eq(interventionOccupancies.id, existing.id));
+            await syncInterventionBankHours(tx, existing.id);
         }
     });
+
+    function resolveRemovalPatch(
+        removal: "trim_end" | "trim_start" | "clear",
+        existing: RemovalTarget & { boardStartedAt: Date | null; earlyDepartureOutcome: string | null },
+    ) {
+        if (removal === "trim_end") {
+            const effectiveEnd = existing.actualEndedAt ?? existing.endedAt;
+            const trimmedEnd = effectiveEnd && effectiveEnd.getTime() < slotStart.getTime() ? effectiveEnd : slotStart;
+            // O desfecho de saída antecipada pertencia ao slot removido; recortada até
+            // o início dele, a ocupação termina no fim do turno anterior — plantão
+            // cumprido, sem régua (Gabriel Divino, 2033, 27/08/2026).
+            return { endedAt: trimmedEnd, actualEndedAt: trimmedEnd, scheduledEndAt: slotStart, earlyDepartureOutcome: null };
+        }
+        if (removal === "trim_start") {
+            // A saída (e o desfecho dela) é do turno que fica; só a chegada anda.
+            return {
+                startedAt: slotEnd,
+                boardStartedAt: existing.boardStartedAt
+                    ? new Date(Math.max(existing.boardStartedAt.getTime(), slotEnd.getTime()))
+                    : null,
+                scheduledStartAt: slotEnd,
+                shiftLabel: nextShiftLabel,
+            };
+        }
+        return { endedAt: existing.startedAt, actualEndedAt: existing.startedAt };
+    }
 
     return {
         operationalDate: board.operationalDate,

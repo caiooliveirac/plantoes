@@ -6,11 +6,13 @@ import { eq, inArray } from "drizzle-orm";
 /**
  * Remover um slot no fechamento, contra um Postgres de verdade.
  *
+ * Regra: remover tira SÓ a célula clicada (um turno, um alvo).
+ *
  * Caso real (Gustavo, 2032, 28/09/2026): a perna de remanejo nasce com
  * `source = admin_correction` (corrections.ts). A remoção apagava a linha
- * inteira para essa origem — tirar o SN levava junto o SD trabalhado. Agora a
- * linha só é apagada quando começou dentro do slot removido; senão é recortada
- * até o início dele, como as linhas do Telegram.
+ * inteira para essa origem — tirar o SN levava junto o SD trabalhado. E quando
+ * o SN removido era o PRIMEIRO turno de um P (SN + SD seguinte), a ocupação era
+ * zerada e o SD do dia seguinte ia junto.
  *
  * SÓ roda quando DATABASE_URL aponta para um banco cujo nome termina em
  * `_test` (mesma trava de tests/madrugada-db.test.ts).
@@ -61,6 +63,23 @@ after(async () => {
     }
     await closeDb();
 });
+
+async function prepararMedico(rotulo: string) {
+    const { getDb, schema } = await modulos();
+    const db = getDb();
+    const s = sufixo();
+    const [doctor] = await db.insert(schema.doctors)
+        .values({ fullName: `${rotulo} ${s}`, normalizedName: `REMOVER SLOT TESTE ${rotulo} ${s}` })
+        .returning({ id: schema.doctors.id });
+    medicos.push(doctor.id);
+    const [user] = await db.insert(schema.users)
+        .values({ email: `remover-slot-${s.toLowerCase()}@teste.local`, passwordHash: "x" })
+        .returning({ id: schema.users.id });
+    usuarios.push(user.id);
+    const post = await db.query.regulationPosts.findFirst({ where: eq(schema.regulationPosts.code, "2034") });
+    assert.ok(post, "ramal 2034 existe");
+    return { doctorId: doctor.id, userId: user.id, postId: post.id };
+}
 
 test("remover o SN de uma perna de remanejo (admin_correction) mantém o SD trabalhado", { skip }, async () => {
     const { getDb, schema, attestation, payable } = await modulos();
@@ -114,4 +133,44 @@ test("remover o SN de uma perna de remanejo (admin_correction) mantém o SD trab
 
     const turnosDepois = await payable.getChiefPayableShiftsBoard("2026-03");
     assert.equal(doMedico(turnosDepois), 1, "o SD trabalhado continua pago");
+});
+
+test("remover o SN que abre um P (SN + SD seguinte) mantém o SD do dia seguinte", { skip }, async () => {
+    const { getDb, schema, attestation, payable } = await modulos();
+    const db = getDb();
+    const { doctorId, userId, postId } = await prepararMedico("NOITE-DIA");
+
+    const [plantao] = await db.insert(schema.regulationOccupancies).values({
+        doctorId,
+        continuityGroupId: randomUUID(),
+        postId,
+        scheduledStartAt: local("2026-03-14T19:00"),
+        scheduledEndAt: local("2026-03-15T19:15"),
+        startedAt: local("2026-03-14T18:55"),
+        boardStartedAt: local("2026-03-14T18:55"),
+        endedAt: local("2026-03-15T19:10"),
+        actualEndedAt: local("2026-03-15T19:10"),
+        shiftLabel: "P",
+        ramalLabel: "2034",
+        source: "telegram",
+        notes: "2034 SN\ncontinua 2034 SD",
+    }).returning();
+
+    const total = async () => (await payable.getChiefPayableShiftsBoard("2026-03")).doctors
+        .find((row) => row.doctorId === doctorId)?.total ?? 0;
+    assert.equal(await total(), 2, "antes: SN 14 e SD 15");
+
+    await attestation.applyManualRemoveAssignment({
+        operationalDate: "2026-03-14",
+        shiftLabel: "SN",
+        domain: "regulation",
+        targetCode: "2034",
+        occupancyId: plantao.id,
+        actorUserId: userId,
+    });
+
+    const depois = await db.query.regulationOccupancies.findFirst({ where: eq(schema.regulationOccupancies.id, plantao.id) });
+    assert.equal(depois?.startedAt.toISOString(), local("2026-03-15T07:00").toISOString(), "passa a começar no SD");
+    assert.equal(depois?.actualEndedAt?.toISOString(), local("2026-03-15T19:10").toISOString(), "a saída do SD não muda");
+    assert.equal(await total(), 1, "só o SN saiu; o SD 15 continua pago");
 });
