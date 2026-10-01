@@ -3150,7 +3150,7 @@ details.hours-events-panel[open] > summary .hours-proof-label small { opacity: 0
     min-width: 76px;
 }
 
-/* Grupo de mês no histórico completo (vida inteira, ordem crescente). */
+/* Grupo de mês no histórico completo (vida inteira, do mais recente ao mais antigo). */
 .hours-month-group {
     display: grid;
     gap: 14px;

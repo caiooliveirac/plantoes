@@ -4483,3 +4483,47 @@
 .pagina-kairos .chief-drawer {
     z-index: 42;
 }
+
+/* ── Plantões do médico em linhas (01/10/2026) ──────────────────────────────
+   Do mais recente ao mais antigo; fechado mostra só dia, turno, posto e saldo.
+   O cartão completo só monta ao abrir, e entram 20 linhas por vez. */
+.pagina-kairos .hours-shift-list { gap: 6px; }
+.pagina-kairos .hours-month-group { display: grid; gap: 6px; }
+.pagina-kairos .hours-shift-card.collapsed { padding: 0; gap: 0; box-shadow: none; }
+.pagina-kairos .hours-shift-card.open { padding: 0 18px 18px; }
+.pagina-kairos .hours-shift-card.open .hours-shift-row { margin: 0 -18px; border-bottom: 1px solid var(--borda); }
+.pagina-kairos .hours-shift-row {
+    display: grid;
+    grid-template-columns: minmax(96px, auto) minmax(64px, 1fr) minmax(48px, auto) auto 16px;
+    align-items: center;
+    gap: 12px;
+    width: auto;
+    padding: 10px 14px;
+    border: 0;
+    background: transparent;
+    color: var(--texto-forte);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    border-radius: inherit;
+}
+.pagina-kairos .hours-shift-row:hover,
+.pagina-kairos .hours-shift-row:focus-visible { background: var(--superficie-recuada); }
+.pagina-kairos .hours-shift-row:focus-visible { outline: 2px solid var(--ambar-600); outline-offset: -2px; }
+.pagina-kairos .hours-shift-row-date { font-variant-numeric: tabular-nums; text-transform: capitalize; }
+.pagina-kairos .hours-shift-row-turn { font-weight: 600; }
+.pagina-kairos .hours-shift-row-place { color: var(--texto-medio); font-variant-numeric: tabular-nums; }
+.pagina-kairos .hours-shift-row svg { color: var(--texto-medio); }
+.pagina-kairos .hours-shift-more {
+    padding: 10px 14px;
+    border: 1px dashed var(--borda);
+    border-radius: 14px;
+    background: var(--superficie);
+    color: var(--texto-forte);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.pagina-kairos .hours-shift-more:hover { background: var(--superficie-recuada); }
+.pagina-kairos .hours-shift-more small { color: var(--texto-medio); }

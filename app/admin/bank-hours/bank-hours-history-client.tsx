@@ -356,29 +356,54 @@ function compareShiftsAsc(left: BankHoursHistoryShift, right: BankHoursHistorySh
 interface MonthGroup {
     monthKey: string;
     shifts: BankHoursHistoryShift[];
+    /** Total do mês, mesmo quando só parte dos plantões está na tela. */
+    shiftCount: number;
     balanceMinutes: number;
     delayCount: number;
     bonusCount: number;
 }
 
-/** Plantões do médico agrupados por mês operacional, meses e plantões em ordem crescente. */
+/**
+ * Plantões do médico agrupados por mês operacional, do mais recente ao mais
+ * antigo: quem abre o médico vê primeiro os últimos plantões, onde costuma
+ * estar o que precisa de intervenção.
+ */
 function groupShiftsByMonth(shifts: BankHoursHistoryShift[]): MonthGroup[] {
     const groups = new Map<string, MonthGroup>();
-    for (const shift of shifts.slice().sort(compareShiftsAsc)) {
+    for (const shift of shifts.slice().sort((left, right) => compareShiftsAsc(right, left))) {
         const group = groups.get(shift.monthKey) ?? {
             monthKey: shift.monthKey,
             shifts: [],
+            shiftCount: 0,
             balanceMinutes: 0,
             delayCount: 0,
             bonusCount: 0,
         };
         group.shifts.push(shift);
+        group.shiftCount += 1;
         group.balanceMinutes += shift.balanceMinutes ?? 0;
         if ((shift.arrivalDelayMinutes ?? 0) > 0) group.delayCount += 1;
         if ((shift.creditedOvertimeMinutes ?? 0) > 0) group.bonusCount += 1;
         groups.set(shift.monthKey, group);
     }
-    return Array.from(groups.values()).sort((left, right) => left.monthKey.localeCompare(right.monthKey));
+    return Array.from(groups.values()).sort((left, right) => right.monthKey.localeCompare(left.monthKey));
+}
+
+/** Plantões renderizados de cada vez no detalhe; o resto vem em "mostrar mais". */
+const SHIFT_PAGE_SIZE = 20;
+
+/**
+ * "SD", "SN" ou "SD + SN": uma continuidade de 24h é um registro só no banco,
+ * com a janela cobrindo os dois turnos.
+ */
+function describeShiftTurns(shift: BankHoursHistoryShift) {
+    const label = shift.shiftLabel;
+    if ((label !== "SD" && label !== "SN") || !shift.bankScheduledStartAt || !shift.bankScheduledEndAt) {
+        return label ?? "—";
+    }
+    const hours = (new Date(shift.bankScheduledEndAt).getTime() - new Date(shift.bankScheduledStartAt).getTime()) / 3_600_000;
+    const turns = Math.max(1, Math.round(hours / 12));
+    return Array.from({ length: turns }, (_, index) => (index % 2 === 0 ? label : label === "SD" ? "SN" : "SD")).join(" + ");
 }
 
 type SaldoEventTone = "credit" | "debit" | "warn" | "neutral";
@@ -664,6 +689,18 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
     const [detailError, setDetailError] = useState<string | null>(null);
     // Plantão para rolar até assim que o detalhe do médico chegar.
     const pendingAnchorRef = useRef<string | null>(null);
+    // Detalhe leve: cada plantão é uma linha (dia, turno, saldo) e só monta o
+    // resto ao ser aberto; e só SHIFT_PAGE_SIZE linhas entram de cada vez.
+    const [openShiftKeys, setOpenShiftKeys] = useState<Set<string>>(() => new Set());
+    const [visibleShiftCount, setVisibleShiftCount] = useState(SHIFT_PAGE_SIZE);
+    function toggleShift(key: string) {
+        setOpenShiftKeys((current) => {
+            const next = new Set(current);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    }
     const [overrideMinutesByShift, setOverrideMinutesByShift] = useState<Record<string, string>>({});
     const [overrideNotesByShift, setOverrideNotesByShift] = useState<Record<string, string>>({});
     const [overrideErrorsByShift, setOverrideErrorsByShift] = useState<Record<string, string>>({});
@@ -741,17 +778,13 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
 
     /** Abre o médico direto num plantão da lista do mês (clique numa linha do card). */
     function openDoctorAtShift(doctorId: string, anchorId: string) {
-        if (doctorId !== selectedDoctorId) {
-            setSelectedDoctorId(doctorId);
-        }
-        if (!detailByDoctor[doctorId]) {
-            // Detalhe ainda não carregado: rola quando ele chegar (efeito abaixo).
-            pendingAnchorRef.current = anchorId;
+        if (doctorId === selectedDoctorId && detailByDoctor[doctorId]) {
+            revealAnchor(anchorId, "auto");
             return;
         }
-        window.setTimeout(() => {
-            document.getElementById(anchorId)?.scrollIntoView({ behavior: "auto", block: "start" });
-        }, 120);
+        // Outro médico (ou detalhe ainda não carregado): revela quando ele chegar (efeito abaixo).
+        setSelectedDoctorId(doctorId);
+        pendingAnchorRef.current = anchorId;
     }
 
     function closeDoctor() {
@@ -814,6 +847,12 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         };
     }, [selectedDoctorId, detailByDoctor]);
 
+    // Outro médico: volta às primeiras linhas, todas fechadas.
+    useEffect(() => {
+        setOpenShiftKeys(new Set());
+        setVisibleShiftCount(SHIFT_PAGE_SIZE);
+    }, [selectedDoctorId]);
+
     // Clique numa linha do card antes do detalhe existir: rola quando ele chega.
     useEffect(() => {
         const anchorId = pendingAnchorRef.current;
@@ -821,9 +860,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
             return;
         }
         pendingAnchorRef.current = null;
-        window.setTimeout(() => {
-            document.getElementById(anchorId)?.scrollIntoView({ behavior: "auto", block: "start" });
-        }, 120);
+        revealAnchor(anchorId, "auto");
     }, [selectedDoctor]);
 
     // Campos do ajuste manual só existem no detalhe aberto.
@@ -1017,18 +1054,60 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
         () => (selectedDoctor ? buildDoctorEventTotals(selectedDoctor) : null),
         [selectedDoctor],
     );
-    // A vida inteira do médico, mês a mês em ordem crescente.
+    // A vida inteira do médico, mês a mês do mais recente ao mais antigo.
     const selectedDoctorMonths = useMemo(
         () => (selectedDoctor ? groupShiftsByMonth(selectedDoctor.shifts) : []),
         [selectedDoctor],
     );
+
+    // Posição de cada âncora (plantão ou mês) na lista: abrir um plantão lá do
+    // fundo precisa estender as linhas visíveis até ele.
+    const anchorIndex = useMemo(() => {
+        const map = new Map<string, number>();
+        let index = 0;
+        for (const group of selectedDoctorMonths) {
+            if (group.shifts.length > 0) map.set(monthAnchorId(group.shifts[0]!.doctorId, group.monthKey), index);
+            for (const shift of group.shifts) {
+                map.set(shiftAnchorId(shift), index);
+                index += 1;
+            }
+        }
+        return { map, total: index };
+    }, [selectedDoctorMonths]);
+
+    // Só os primeiros visibleShiftCount plantões, cortando no meio do mês se preciso.
+    const visibleDoctorMonths = useMemo(() => {
+        let budget = visibleShiftCount;
+        const visible: MonthGroup[] = [];
+        for (const group of selectedDoctorMonths) {
+            if (budget <= 0) break;
+            visible.push({ ...group, shifts: group.shifts.slice(0, budget) });
+            budget -= group.shifts.length;
+        }
+        return visible;
+    }, [selectedDoctorMonths, visibleShiftCount]);
+
+    /** Garante a linha renderizada (e aberta, se for plantão) e rola até ela. */
+    function revealAnchor(anchorId: string, behavior: ScrollBehavior) {
+        const index = anchorIndex.map.get(anchorId);
+        if (index !== undefined) {
+            setVisibleShiftCount((current) => Math.max(current, index + 1));
+        }
+        const shift = selectedDoctor?.shifts.find((row) => shiftAnchorId(row) === anchorId);
+        if (shift) {
+            setOpenShiftKeys((current) => (current.has(shiftKey(shift)) ? current : new Set(current).add(shiftKey(shift))));
+        }
+        window.setTimeout(() => {
+            document.getElementById(anchorId)?.scrollIntoView({ behavior, block: "start" });
+        }, 120);
+    }
 
     function scrollToShift(anchorId: string | null) {
         if (!anchorId) {
             return;
         }
 
-        document.getElementById(anchorId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        revealAnchor(anchorId, "smooth");
     }
 
     async function submitManualOverride(shift: BankHoursHistoryShift) {
@@ -1761,7 +1840,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                 </section>
                             ) : null}
 
-                            {/* A vida inteira, mês a mês, do mais antigo ao mais recente. */}
+                            {/* A vida inteira, mês a mês, do mais recente ao mais antigo. */}
                             <div className="hours-shift-list">
                                 {selectedDoctorMonths.length === 0 ? (
                                     <article className="hours-empty-state">
@@ -1769,7 +1848,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                         <span>O saldo deste médico vem só de planilha e acertos.</span>
                                     </article>
                                 ) : null}
-                                {selectedDoctorMonths.map((group) => (
+                                {visibleDoctorMonths.map((group) => (
                                     <section
                                         key={group.monthKey}
                                         id={monthAnchorId(selectedDoctor.doctorId, group.monthKey)}
@@ -1779,7 +1858,7 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                             <div>
                                                 <h3>{formatMonthLabel(group.monthKey)}</h3>
                                                 <span>
-                                                    {group.shifts.length} {group.shifts.length === 1 ? "plantão" : "plantões"}
+                                                    {group.shiftCount} {group.shiftCount === 1 ? "plantão" : "plantões"}
                                                     {group.delayCount > 0 ? ` · ${group.delayCount} ${group.delayCount === 1 ? "atraso" : "atrasos"}` : ""}
                                                     {group.bonusCount > 0 ? ` · ${group.bonusCount} bônus` : ""}
                                                 </span>
@@ -1803,8 +1882,23 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                     const overtime = shift.overtimeMinutes ?? 0;
                                     const credited = shift.creditedOvertimeMinutes ?? 0;
                                     const doubled = credited > overtime && overtime > 0;
+                                    const open = openShiftKeys.has(shiftKey(shift));
                                     return (
-                                        <article key={`${shift.domain}-${shift.occupancyId}`} id={shiftAnchorId(shift)} className="hours-shift-card">
+                                        <article key={`${shift.domain}-${shift.occupancyId}`} id={shiftAnchorId(shift)} className={`hours-shift-card ${open ? "open" : "collapsed"}`}>
+                                            {/* Fechado: só dia, turno e saldo. O resto só monta ao abrir. */}
+                                            <button
+                                                type="button"
+                                                className="hours-shift-row"
+                                                aria-expanded={open}
+                                                onClick={() => toggleShift(shiftKey(shift))}
+                                            >
+                                                <span className="hours-shift-row-date">{formatShortDate(shift.startedAt)}</span>
+                                                <span className="hours-shift-row-turn">{describeShiftTurns(shift)}</span>
+                                                <span className="hours-shift-row-place">{shift.targetCode}</span>
+                                                <span className={`hours-balance-pill ${shiftBalanceClass(shift.balanceMinutes)}`}>{formatMinutesForHumans(shift.balanceMinutes)}</span>
+                                                {open ? <ChevronUp size={16} aria-hidden /> : <ChevronDown size={16} aria-hidden />}
+                                            </button>
+                                            {open ? (<>
                                             <header className="hours-shift-header">
                                                 <div>
                                                     <div className="hours-shift-title">
@@ -1813,7 +1907,6 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                     </div>
                                                     <span className="hours-shift-subtitle">{formatDateTime(shift.startedAt)} · {formatSource(shift.source)} · {shift.shiftLabel ?? "sem turno"}</span>
                                                 </div>
-                                                <span className={`hours-balance-pill ${shiftBalanceClass(shift.balanceMinutes)}`}>{formatMinutesForHumans(shift.balanceMinutes)}</span>
                                             </header>
 
                                             <div className="hours-metric-strip">
@@ -2016,11 +2109,22 @@ export function BankHoursHistoryClient({ history, canManageOverrides, settlement
                                                     </div>
                                                 </section>
                                             )}
+                                            </>) : null}
                                         </article>
                                     );
                                         })}
                                     </section>
                                 ))}
+                                {visibleShiftCount < anchorIndex.total ? (
+                                    <button
+                                        type="button"
+                                        className="hours-shift-more"
+                                        onClick={() => setVisibleShiftCount((current) => current + SHIFT_PAGE_SIZE)}
+                                    >
+                                        Mostrar mais {Math.min(SHIFT_PAGE_SIZE, anchorIndex.total - visibleShiftCount)} plantões mais antigos
+                                        <small> · {anchorIndex.total - visibleShiftCount} ainda ocultos</small>
+                                    </button>
+                                ) : null}
                             </div>
 
                             <button type="button" className="hours-close-footer" onClick={closeDoctor}>
