@@ -24,7 +24,7 @@ export const LUGARES_TOLERADOS = 3;
 /** "Ao mesmo tempo" = visto nos últimos 5 minutos (a janela do monitor). */
 export const JANELA_DE_LUGARES_MS = JANELA_MS;
 
-export type MotivoDoPortao = "admin" | "plantao" | "central" | "fora_do_plantao";
+export type MotivoDoPortao = "admin" | "plantao" | "central" | "enfermeiro" | "fora_do_plantao";
 
 export interface EntradaDoPortao {
     roles: readonly string[];
@@ -32,12 +32,17 @@ export interface EntradaDoPortao {
     emTurno: boolean;
     /** O IP está numa faixa da rede do plantão. */
     naCentral: boolean;
+    /** Só no quadro.mnrs.com.br: o e-mail da conta é do enfermeiro(a) que a
+        chefia registrou para o turno (com as mesmas folgas). Mesa e Tabela
+        nunca passam isto. */
+    enfermeiroDoTurno?: boolean;
 }
 
 export function decidirPortao(entrada: EntradaDoPortao): { liberado: boolean; motivo: MotivoDoPortao } {
     if (entrada.roles.includes("admin")) return { liberado: true, motivo: "admin" };
     if (entrada.emTurno) return { liberado: true, motivo: "plantao" };
     if (entrada.naCentral) return { liberado: true, motivo: "central" };
+    if (entrada.enfermeiroDoTurno) return { liberado: true, motivo: "enfermeiro" };
     return { liberado: false, motivo: "fora_do_plantao" };
 }
 

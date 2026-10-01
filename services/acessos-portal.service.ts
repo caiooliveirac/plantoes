@@ -9,12 +9,18 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { userRoles, users } from "@/db/schema";
 import type { ContextoRequisicao } from "@/lib/acessos/contexto";
-import { conferirPortaoDeTurno } from "@/services/acessos-portao.service";
+import { conferirPortaoDeTurno, type SistemaDoPortao } from "@/services/acessos-portao.service";
 
 export type MotivoRecusaDoPortal = "sem_conta" | "inativa" | "sem_papel" | "versao" | "fora_do_plantao";
 
-/** Sistemas atrás do porteiro que só abrem de plantão: a Tabela (abas Tabela, Casos, Destino, UPAs). */
-const SISTEMAS_DE_PLANTAO = new Set(["tabela"]);
+/** Sistemas atrás do porteiro que só abrem de plantão: a Tabela (abas Tabela,
+    Casos, Destino, UPAs) e o quadro informativo da Central (quadro.mnrs.com.br),
+    que libera também o enfermeiro(a) do plantão registrado na Mesa. */
+const SISTEMAS_DE_PLANTAO = new Set<SistemaDoPortao>(["tabela", "quadro"]);
+
+function sistemaDePlantao(sistema: string | undefined): sistema is "tabela" | "quadro" {
+    return Boolean(sistema) && SISTEMAS_DE_PLANTAO.has(sistema as SistemaDoPortao);
+}
 
 export interface ConferenciaDoPortal {
     ok: boolean;
@@ -40,11 +46,11 @@ export async function conferirSessaoDoPortal(
     const papeis = await db.select({ role: userRoles.role }).from(userRoles).where(eq(userRoles.userId, conta.id));
     if (papeis.length === 0) return { ok: false, motivo: "sem_papel", userId: conta.id };
     if ((sv ?? 0) !== conta.sessionVersion) return { ok: false, motivo: "versao", userId: conta.id };
-    if (pedido?.sistema && SISTEMAS_DE_PLANTAO.has(pedido.sistema)) {
+    if (pedido && sistemaDePlantao(pedido.sistema)) {
         const portao = await conferirPortaoDeTurno(
-            { userId: conta.id, doctorId: conta.doctorId, roles: papeis.map((p) => p.role) },
+            { userId: conta.id, doctorId: conta.doctorId, roles: papeis.map((p) => p.role), email: email.trim().toLowerCase() },
             pedido.contexto,
-            "tabela",
+            pedido.sistema,
         );
         if (!portao.liberado) return { ok: false, motivo: "fora_do_plantao", userId: conta.id };
     }

@@ -35,6 +35,7 @@ import { derrubarPorLugaresDemais } from "@/services/acessos-acoes.service";
 import { registrarEvento } from "@/services/acessos.service";
 import { listarRotulosDeRede } from "@/services/acessos-redes.service";
 import { carregarPlantoes } from "@/services/acessos-relatorio.service";
+import { emailDeEnfermeiroDoTurno } from "@/services/enfermeiro-plantao.service";
 
 const TURNO_VALE_MS = 60_000;
 const CENTRAL_VALE_MS = 15 * 60_000;
@@ -132,18 +133,24 @@ export interface ContaNoPortao {
     userId: string;
     doctorId: string | null;
     roles: readonly string[];
+    /** Só o quadro usa (enfermeiro(a) do plantão é achado pelo e-mail). */
+    email?: string;
 }
+
+export type SistemaDoPortao = "mesa" | "tabela" | "quadro";
 
 export interface RespostaDoPortao {
     liberado: boolean;
     motivo: MotivoDoPortao | "desligado" | "falha";
 }
 
-/** Mesa ou Tabela: esta conta, deste IP, agora? Nunca lança. */
+/** Mesa, Tabela ou quadro: esta conta, deste IP, agora? Nunca lança.
+    No quadro passa também o enfermeiro(a) do plantão registrado pela chefia
+    (services/enfermeiro-plantao.service.ts). */
 export async function conferirPortaoDeTurno(
     conta: ContaNoPortao,
     contexto: ContextoRequisicao,
-    sistema: "mesa" | "tabela",
+    sistema: SistemaDoPortao,
     agora = new Date(),
 ): Promise<RespostaDoPortao> {
     if (!ligado("ACESSOS_PORTAO_TURNO")) return { liberado: true, motivo: "desligado" };
@@ -160,7 +167,14 @@ export async function conferirPortaoDeTurno(
             }
         }
         const naCentral = !emTurno && contexto.ip ? (await faixasDaCentral(agora)).has(faixaDeRede(contexto.ip)) : false;
-        const decisao = decidirPortao({ roles: conta.roles, emTurno, naCentral });
+        const enfermeiroDoTurno = sistema === "quadro" && !emTurno && !naCentral && conta.email
+            ? await emailDeEnfermeiroDoTurno(conta.email, agora).catch((erro: unknown) => {
+                // Falha aqui fecha (só esta via): sem a tabela, ninguém ganha o quadro às cegas.
+                logarErro("enfermeiro do plantão", erro);
+                return false;
+            })
+            : false;
+        const decisao = decidirPortao({ roles: conta.roles, emTurno, naCentral, enfermeiroDoTurno });
         if (!decisao.liberado) {
             const chave = `${conta.userId}|${sistema}`;
             const ultimo = barradoRegistradoEm.get(chave);
