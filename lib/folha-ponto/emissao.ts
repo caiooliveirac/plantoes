@@ -1,4 +1,4 @@
-import { SAMU_HOLIDAYS } from "@/modules/operational/holidays";
+import { isSamuHolidayDate } from "@/modules/operational/holidays";
 
 /**
  * Data de emissão da folha de ponto / relatório de atividades.
@@ -28,27 +28,12 @@ const MESES_PT_MINUSCULO = [
     "dezembro",
 ];
 
-// Feriados de data fixa que caem cedo o bastante no mês para empurrar o
-// primeiro dia útil (nacionais + Bahia/Salvador). Feriados móveis (carnaval,
-// Corpus Christi) e feriados SAMU vêm de SAMU_HOLIDAYS, que é datado.
-const FERIADOS_FIXOS_MM_DD: ReadonlySet<string> = new Set([
-    "01-01", // Confraternização Universal
-    "05-01", // Dia do Trabalho
-    "07-02", // Independência da Bahia
-    "09-07", // Independência do Brasil
-    "10-12", // Nossa Senhora Aparecida
-    "11-02", // Finados
-    "11-15", // Proclamação da República
-    "11-20", // Consciência Negra
-    "12-25", // Natal
-]);
-
 function isoDate(ano: number, mes: number, dia: number): string {
     return `${String(ano).padStart(4, "0")}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
 }
 
 function isFeriado(iso: string): boolean {
-    return FERIADOS_FIXOS_MM_DD.has(iso.slice(5)) || SAMU_HOLIDAYS.has(iso);
+    return isSamuHolidayDate(iso);
 }
 
 function isFimDeSemana(iso: string): boolean {
