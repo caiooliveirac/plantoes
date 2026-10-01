@@ -38,6 +38,8 @@ export type ArrivalParsedEntry = {
     isReassignment: boolean;
     /** Turno escolhido pelo médico no botão/resposta da pendência (D7). */
     shiftLabelConfirmed?: boolean;
+    /** Ramal digitado antes da troca do parser (4091 → 4092); vai no aviso da confirmação. */
+    ramalAliasFrom?: string | null;
 };
 
 type OperationalParsedEntry = ArrivalParsedEntry;

@@ -151,7 +151,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         // Nomes previstos da escala externa seguem a mesma regra das faltas
         // nominais: leitura da chefia — anônimo continua vendo o quadro puro.
         canManage ? getExpectedSchedule() : Promise.resolve(null),
-        // Ramais eventuais (4091): fora do quadro quando vazios; a chefia ainda
+        // Ramais eventuais (4092, 2266–2270): fora do quadro quando vazios; a chefia ainda
         // precisa vê-los nos seletores de chegada manual e remanejamento.
         canManage ? listOnDemandRegulationPostOptions() : Promise.resolve([]),
         nomeDoMedicoDaSessao(session.user.doctorId),

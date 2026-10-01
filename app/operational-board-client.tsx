@@ -118,7 +118,7 @@ interface OperationalBoardClientProps {
     shiftLabel: string;
     regulation: RegulationBoardRow[];
     intervention: InterventionBoardRow[];
-    /** Ramais eventuais (ex.: 4091): fora do quadro quando vazios, mas
+    /** Ramais eventuais (ex.: 4092): fora do quadro quando vazios, mas
         oferecidos nos seletores de chegada manual e remanejamento. */
     onDemandRegulationPosts?: OnDemandRegulationPostOption[];
     mealBreakSession: MealBreakSession | null;

@@ -1024,7 +1024,7 @@ function resolveMealBreakDoctorShiftLabel(params: {
 }
 
 /** Por que um ramal ativo do quadro fica fora da divisão. `fixed_post` (PIAM/
- *  NUCLEO), `disp_role` (função DISP, ex.: ramal eventual 4091) e `half_shift` (MEIO
+ *  NUCLEO), `disp_role` (função DISP, ex.: ramal eventual 4092) e `half_shift` (MEIO
  *  plantão) são regra fixa: nem participam nem interferem no cálculo das vagas. */
 export type MealBreakOutOfDivisionReason = "inactive" | "fixed_post" | "disp_role" | "other_shift" | "half_shift";
 
@@ -1072,7 +1072,7 @@ function mapRegulationBoardEntry(row: OperationalBoard["regulation"][number], mo
         defaultRole: row.defaultRole,
     }));
 
-    // DISP (reforço, ex.: ramal eventual 4091) fica fora da divisão, mesma regra
+    // DISP (reforço, ex.: ramal eventual 4092) fica fora da divisão, mesma regra
     // de PIAM/NUCLEO. A exclusão é pela FUNÇÃO, não por o ramal ser eventual
     // (on_demand): remoto nos ramais eventuais 2266–2270 participa normalmente.
     // A chefia ainda pode incluir à mão pelo painel (forceMealBreakDoctorIntoSession).

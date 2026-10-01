@@ -26,7 +26,7 @@ import { resolveDepartureOrigin, shouldQueueDepartureForChief, type DepartureOri
 import { getDb } from "@/db";
 import { bahiaClockHHMM } from "@/lib/time";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
-import { CHIEF_REGULATION_POST_CODE } from "@/modules/operational/roles";
+import { CHIEF_REGULATION_POST_CODE, isRetiredRegulationRamal } from "@/modules/operational/roles";
 import { ARRIVAL_GRACE_MINUTES } from "@/modules/operational/early-departure";
 import {
   resolveImplicitOccupancyExpiry,
@@ -83,7 +83,7 @@ export interface RegulationBoardRow {
   postLabel: string;
   defaultRole: string | null;
   /**
-   * Ramal eventual (ex.: 4091): a linha só existe no quadro enquanto há médico
+   * Ramal eventual (ex.: 4092): a linha só existe no quadro enquanto há médico
    * ativo nele — nunca aparece como "aguardando" nem conta como vaga. Fica fora
    * da divisão de almoço/jantar por regra fixa. Opcional para não obrigar os
    * fixtures de teste a preencher; ausente = ramal fixo.
@@ -2110,11 +2110,14 @@ export async function listOnDemandRegulationPostOptions(): Promise<OnDemandRegul
       and rp.on_demand = true
     order by rp.sort_order asc, rp.code asc
   `);
-  return (result as unknown as Record<string, unknown>[]).map((row) => ({
-    postId: Number(row.postId),
-    postCode: String(row.postCode ?? ""),
-    postLabel: String(row.postLabel ?? ""),
-  }));
+  return (result as unknown as Record<string, unknown>[])
+    .map((row) => ({
+      postId: Number(row.postId),
+      postCode: String(row.postCode ?? ""),
+      postLabel: String(row.postLabel ?? ""),
+    }))
+    // 4091 é da ADM: o posto fica no banco pelo histórico, mas não se oferece mais.
+    .filter((option) => !isRetiredRegulationRamal(option.postCode));
 }
 
 export async function listInterventionBoard() {

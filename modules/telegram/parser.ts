@@ -1,5 +1,5 @@
 import { HALF_SHIFT_ROLE_LABEL } from "@/modules/operational/half-shift";
-import { STANDARD_OPERATIONAL_ROLE_CODES } from "@/modules/operational/roles";
+import { resolveRegulationRamalAlias, STANDARD_OPERATIONAL_ROLE_CODES } from "@/modules/operational/roles";
 import { computeLevenshteinDistance } from "@/modules/telegram/departure-flow";
 
 const RAMAIS_REGULACAO = new Set([
@@ -12,7 +12,11 @@ const RAMAIS_REGULACAO = new Set([
     // Ramais eventuais da madrugada (migration 0051, docs/madrugada.md).
     "2266", "2267", "2268", "2269", "2270",
     "2376", "2377",
-    // Ramal eventual (on_demand, migration 0043): só aparece no quadro com médico.
+    // Ramal eventual do reforço DISP (on_demand, migration 0056): só aparece no
+    // quadro com médico.
+    "4092",
+    // 4091 é da ADM: continua reconhecido só para virar 4092 (ver
+    // resolveRegulationRamalAlias) — o médico que digita por hábito não é recusado.
     "4091",
 ]);
 
@@ -259,6 +263,8 @@ export interface ParsedMessage {
      * (auditoria comunicação §3.1#9). Campo aditivo: ausente = sem candidato.
      */
     unknownTargetToken?: string | null;
+    /** Ramal digitado quando o parser trocou o destino (4091 → 4092). Ausente = sem troca. */
+    ramalAliasFrom?: string | null;
 }
 
 export interface ParsedBatchMessageLine {
@@ -354,6 +360,7 @@ export function parseMessage(text: string): ParsedMessage {
     let shiftType: ParsedMessage["shiftType"] = null;
     let roleFunction: string | null = null;
     let confidence: ParsedMessage["confidence"] = "LOW";
+    let ramalAliasFrom: string | null = null;
 
     // Detect reassignment early so we can extract the TARGET base from after "para"
     const isReassignment = REASSIGNMENT_SIGNALS.some((re) => re.test(normalized));
@@ -390,7 +397,11 @@ export function parseMessage(text: string): ParsedMessage {
         const ramalMatch = baseExtractionSource.match(/(?:RAMAL|PA|POSICAO|REG)?\s*[:\-]?\s*(\d{4})\b/);
         if (ramalMatch && RAMAIS_REGULACAO.has(ramalMatch[1])) {
             sector = "REGULATION";
-            baseCode = ramalMatch[1];
+            baseCode = resolveRegulationRamalAlias(ramalMatch[1]);
+            if (baseCode !== ramalMatch[1]) {
+                // A função DISP vem do próprio ramal (DISP_REGULATION_CODES).
+                ramalAliasFrom = ramalMatch[1];
+            }
         }
     }
 
@@ -488,6 +499,7 @@ export function parseMessage(text: string): ParsedMessage {
         isReassignment,
         extractedNames,
         unknownTargetToken,
+        ...(ramalAliasFrom ? { ramalAliasFrom } : {}),
     };
 }
 

@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+    buildRegulationRamalAliasNotice,
+    isRetiredRegulationRamal,
+    resolveOperationalRoleLabel,
+    resolveRegulationRamalAlias,
+} from "@/modules/operational/roles";
 import { buildMealBreakRoster } from "@/modules/telegram/meal-breaks";
 import { parseMessage } from "@/modules/telegram/parser";
 import { compareTelegramRegulationCodes } from "@/modules/telegram/presentation-order";
@@ -11,7 +17,8 @@ import {
     type PaymentAllocationTargetDefinition,
 } from "@/services/board.service";
 
-// Ramal eventual (regulation_posts.on_demand, migration 0043 — 4091): não é uma
+// Ramal eventual (regulation_posts.on_demand, migration 0043 — 4091, hoje 4092
+// pela 0056; o 4091 é da ADM e o parser o troca por 4092): não é uma
 // posição fixa. Só existe enquanto alguém está nele; vazio, não é vaga em lugar
 // nenhum (pagamento, presença por slot, histórico) e fica fora da divisão de
 // almoço/jantar por regra fixa, como PIAM/NUCLEO — mas por ser DISP, não por
@@ -72,11 +79,44 @@ function row(overrides: Partial<PaymentAllocationRawRow> = {}): PaymentAllocatio
     };
 }
 
-test("parser reconhece 4091 como ramal de regulação", () => {
-    const parsed = parseMessage("Ana Souza 4091 SD 07:00");
+test("parser reconhece 4092 como ramal de regulação", () => {
+    const parsed = parseMessage("Ana Souza 4092 SD 07:00");
     assert.equal(parsed.sector, "REGULATION");
-    assert.equal(parsed.baseCode, "4091");
+    assert.equal(parsed.baseCode, "4092");
     assert.equal(parsed.unknownTargetToken ?? null, null);
+    assert.equal("ramalAliasFrom" in parsed, false, "sem troca, o campo nem aparece");
+});
+
+test("4091 é da ADM: o parser registra no 4092 (DISP) e guarda o ramal digitado", () => {
+    for (const text of ["Ana Souza 4091 SD 07:00", "cheguei 4091 Ana Souza", "Ana Souza ramal 4091 SN"]) {
+        const parsed = parseMessage(text);
+        assert.equal(parsed.sector, "REGULATION", text);
+        assert.equal(parsed.baseCode, "4092", text);
+        assert.equal(parsed.ramalAliasFrom, "4091", text);
+        assert.equal(parsed.unknownTargetToken ?? null, null, text);
+        assert.equal(
+            resolveOperationalRoleLabel({ domain: "regulation", code: parsed.baseCode!, shiftLabel: parsed.shiftType, roleLabel: parsed.roleFunction }),
+            "DISP",
+            text,
+        );
+    }
+});
+
+test("aviso do 4091 → 4092 e aposentadoria do 4091 na Mesa", () => {
+    assert.equal(resolveRegulationRamalAlias("4091"), "4092");
+    assert.equal(resolveRegulationRamalAlias(" 4091 "), "4092");
+    assert.equal(resolveRegulationRamalAlias("4092"), "4092");
+    assert.equal(resolveRegulationRamalAlias("2266"), "2266");
+    assert.equal(isRetiredRegulationRamal("4091"), true);
+    assert.equal(isRetiredRegulationRamal("4092"), false);
+    assert.equal(isRetiredRegulationRamal("2266"), false);
+    assert.equal(isRetiredRegulationRamal(null), false);
+    assert.equal(
+        buildRegulationRamalAliasNotice("4091", "4092"),
+        "O 4091 é da ADM. Registrei você no 4092 como DISP (reforço).",
+    );
+    assert.equal(buildRegulationRamalAliasNotice(null, "4092"), "");
+    assert.equal(buildRegulationRamalAliasNotice("4092", "4092"), "");
 });
 
 test("pagamento: ramal eventual vazio não vira linha (nem 'Sem ocupacao identificada')", () => {
