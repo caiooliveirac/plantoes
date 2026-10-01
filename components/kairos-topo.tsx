@@ -23,6 +23,7 @@ export const ABAS_ADMIN: KairosAba[] = [
     { href: "/", nome: "Mesa" },
     { href: "/admin/payment-closing", nome: "Fechamento" },
     { href: "/admin/bank-hours", nome: "Banco de horas" },
+    { href: "/admin/lancar-plantao", nome: "Lançar plantão" },
     { href: "/admin/acessos", nome: "Acessos" },
     { href: "/admin/extrator-caso", nome: "Extrator" },
 ];
