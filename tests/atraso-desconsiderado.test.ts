@@ -115,3 +115,24 @@ test("span de continuidade carrega a marca se qualquer membro a tiver", () => {
     ]);
     assert.equal(comMarca.arrivalDelayWaived, true);
 });
+
+test("aviso ao secretário: desconsiderar e voltar a contar, com atraso e motivo", async () => {
+    const { buildArrivalDelayWaiverNotice } = await import("@/lib/avisos/abono-atraso");
+    const texto = buildArrivalDelayWaiverNotice({
+        waived: true,
+        doctorName: "Dr. Bruno",
+        targetCode: "1362",
+        actorLabel: "chefe@samu.local",
+        startedAt: new Date("2026-10-01T10:22:00Z"),
+        scheduledStartAt: new Date("2026-10-01T10:00:00Z"),
+        note: "Avisou antes da chegada",
+    });
+    assert.match(texto, /chefe@samu.local desconsiderou o atraso de Dr\. Bruno \(1362\)/);
+    assert.match(texto, /atraso de 22 min \(previsto 07:00, chegou 07:22\)/);
+    assert.match(texto, /Motivo: Avisou antes da chegada\./);
+    const volta = buildArrivalDelayWaiverNotice({
+        waived: false, doctorName: null, targetCode: "CB02", actorLabel: null,
+        startedAt: new Date("2026-10-01T10:05:00Z"), scheduledStartAt: new Date("2026-10-01T10:00:00Z"), note: null,
+    });
+    assert.match(volta, /chefia de plantão voltou a contar o atraso de ocupante \(CB02\): chegada 07:05, dentro da tolerância/);
+});

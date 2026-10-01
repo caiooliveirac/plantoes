@@ -7,6 +7,7 @@ import { AuthError, requireMesaEscrita } from "@/lib/auth/server";
 import { avisarSecretario } from "@/lib/avisos/secretario";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { setArrivalDelayWaiver } from "@/modules/operational/atraso-desconsiderado";
+import { avisarAbonoDeAtraso } from "@/lib/avisos/abono-atraso";
 import {
     buildChiefArrivalBlockNotice,
     CHIEF_ARRIVAL_ADMIN_ONLY_CODE,
@@ -109,6 +110,8 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/reg
             actorUserId: session.user.id,
         });
         publishBoardUpdate("arrival-delay-waiver");
+        // Secretário Tom (WhatsApp da coordenação): abono mexe em banco e pagamento sem admin.
+        await avisarAbonoDeAtraso({ domain: "regulation", occupancyId: id, waived: parsed.data.waived, note: parsed.data.note ?? null, actorLabel: session.user.email });
         return NextResponse.json({
             ok: true,
             occupancy: {

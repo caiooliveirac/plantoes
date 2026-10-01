@@ -4,6 +4,7 @@ import { getDb, hasDatabaseUrl } from "@/db";
 import { AuthError, requireMesaEscrita } from "@/lib/auth/server";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { setArrivalDelayWaiver } from "@/modules/operational/atraso-desconsiderado";
+import { avisarAbonoDeAtraso } from "@/lib/avisos/abono-atraso";
 
 // Atraso desconsiderado pela chefia: marcar exige motivo (os chips da Mesa,
 // como "Avisou antes da chegada", já cumprem o mínimo); desmarcar não.
@@ -44,6 +45,8 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/int
             actorUserId: session.user.id,
         });
         publishBoardUpdate("arrival-delay-waiver");
+        // Secretário Tom (WhatsApp da coordenação): abono mexe em banco e pagamento sem admin.
+        await avisarAbonoDeAtraso({ domain: "intervention", occupancyId: id, waived: parsed.data.waived, note: parsed.data.note ?? null, actorLabel: session.user.email });
         return NextResponse.json({
             ok: true,
             occupancy: {
