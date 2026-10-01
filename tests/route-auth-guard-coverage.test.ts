@@ -39,6 +39,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "app/api/servicos/portal/acesso/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o porteiro confere a sessão do portal e reporta o uso (monitor de acessos).",
     "app/api/servicos/quadro/plantao/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o quadro da Central lê turno, enfermeiro(a), chefe e bases (só nomes, sem e-mail).",
     "app/api/servicos/relatorio/turno/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o relatório da chefia lê as ocupações do turno (nomes e horários, sem e-mail).",
+    "app/api/servicos/relatorio/rendicao/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o relatório da chefia lê a rendição das bases USA (nomes e horários, sem e-mail).",
     "app/api/servicos/relatorio/conta/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o relatório da chefia confere papéis e passagens pela 2031 de quem o porteiro já autenticou.",
     // Sonda de saúde: não lê dado de ninguém.
     "app/api/health/route.ts": "health check (identidade do runtime).",
