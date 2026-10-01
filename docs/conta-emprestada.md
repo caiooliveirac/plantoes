@@ -17,6 +17,10 @@ por quê. Detalhes de cada regra moram nos documentos apontados.
 | 01/10/2026 | Trava da 2031: chief que não é o chefe de plantão só olha | conta de chefia emprestada | idem |
 | 01/10/2026 | **Vez única valendo**: uma tela da Mesa por conta; o 2º aparelho espera | compartilhamento | [presenca-mesa.md](presenca-mesa.md) |
 | 01/10/2026 | **Ociosidade 30 min**: tela parada pede a senha com "Ainda é Fulano?" | esquecimento | idem |
+| 01/10/2026 | **Trocar de aparelho trava o anterior**: a Mesa passou do PC ao celular, o PC só volta com a senha | os dois | [presenca-mesa.md](presenca-mesa.md) |
+| 01/10/2026 | **"Usar aqui" com senha** na tela "aberto em outro dispositivo": tira a Mesa do aparelho esquecido, que trava | esquecimento | `POST /api/mesa/assumir` |
+| 01/10/2026 | **Saída registrada fecha a Mesa em 10 min** (era 60) e tira a conta da exceção da Central por 6 h (chefia isenta) | esquecimento no PC da Central | `modules/acessos/portao.ts` |
+| 01/10/2026 | Cloudflare: rate limit de senha — 8 POSTs por IP em 10 s no `/_auth/entrar`, `/api/auth/login` e `/api/mesa/desbloquear` (bloqueio de 10 s) | força bruta | regra `login_forca_bruta`, fase `http_ratelimit` |
 | 01/10/2026 | Falsos positivos da derrubada automática: "lugar" junta faixa /24, aparelho, celular trocando de IP, Retransmissão Privada do iCloud; loopback ignorado; conta compartilhada de propósito (`interno.samu`) isenta | — (precisão) | [monitor-acessos.md](monitor-acessos.md) |
 
 ### Por que o corte da virada não é "conectado há mais de 1 h"
@@ -29,27 +33,23 @@ regra dura é quem chegou entre 06:00 e 07:00 digitar a senha de novo às 07:15.
 
 ## Cloudflare (MCP) — tentativa de 01/10/2026
 
-O MCP do Cloudflare (`cloudflare-api`) **lê** a zona `mnrs.com.br` (plano Free:
-DNS e configurações), mas o token **não tem permissão** para Transform Rules
-(`/managed_headers`), Rulesets (WAF, rate limit) nem Firewall/IP Access Rules —
-todas respondem `10000: Authentication error`. Para o MCP aplicar as medidas
-abaixo, o token precisa de **Zone → Transform Rules: Edit**, **Zone → Zone
-WAF: Edit** e **Zone → Firewall Services: Edit**; ou alguém liga no painel.
+Primeira tentativa: o token do MCP (`cloudflare-api`) só lia a zona. O Caio
+acrescentou **Transform Rules, Zone WAF e Firewall Services (Edit)** e o rate
+limit foi criado pelo MCP. Managed Transforms (`/managed_headers`) ainda
+recusa: pede a permissão **Managed headers**, ou o interruptor no painel
+(Rules → Settings → Managed Transforms).
 
 | Medida no Cloudflare | Ganho | Estado |
 |---|---|---|
-| Managed Transform "Add visitor location headers" | cidade e coordenadas no monitor: ativa o critério de distância (50+ km) e o deslocamento impossível | pendente (permissão) |
+| Managed Transform "Add visitor location headers" | cidade e coordenadas no monitor: ativa o critério de distância (50+ km) e o deslocamento impossível | pendente (interruptor no painel) |
 | Origem só aceita o Cloudflare (Authenticated Origin Pulls + `allow` das faixas do Cloudflare no nginx) | ninguém forja `cf-connecting-ip` batendo direto no magalu para parecer estar na Central | pendente (nginx do magalu + certificado) |
-| Rate limit em `/_auth/*` e `/api/auth/login` (regra grátis: 1 por zona) | força bruta de senha barrada na borda, antes do app | pendente (permissão) |
+| Rate limit em `/_auth/entrar`, `/api/auth/login`, `/api/mesa/desbloquear` (regra grátis: 1 por zona) | força bruta de senha barrada na borda, antes do app | **no ar 01/10/2026** |
 | Turnstile no login do portal | robô não testa senha vazada | ideia |
 | Regra WAF: login de fora do Brasil vira desafio | senha vazada usada de VPN estrangeira | ideia — atrapalha viagem e Retransmissão Privada |
 
 ## Ideias ainda não feitas (em ordem de ganho)
 
-1. **Saída registrada derruba as sessões do dono.** Quando a saída do médico é
-   gravada (`actual_ended_at`), as sessões não-admin dele caem em 15 min. É a
-   resposta direta ao "foi embora e deixou logado": não depende da virada nem
-   da ociosidade.
+1. ~~Saída registrada derruba as sessões do dono~~ — feito pelo portão (10 min, Central inclusa).
 2. **Escrita sensível pede a senha de novo** (confirmar saída, remanejar,
    abonar atraso) se a última senha digitada tiver mais de 30 min. Quem pegou
    a tela aberta consegue olhar, mas não age em nome do dono.

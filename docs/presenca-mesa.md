@@ -15,7 +15,10 @@ Duas regras fecham isso:
 1. **Uma tela da Mesa por conta.** O primeiro aparelho a abrir fica com a
    vez (*lease*) enquanto a tela estiver à vista. Outro aparelho da mesma conta
    vê "Este painel está aberto em outro dispositivo" e tenta de novo sozinho.
-   **Não existe botão de assumir**: com um, duas pessoas revezariam no clique.
+   Quando a vez passa a outro aparelho, **o anterior trava** e só volta com a
+   senha (01/10/2026). Assumir com a tela do outro à vista só **com a senha**
+   ("Usar aqui", `POST /api/mesa/assumir`), e o outro trava: revezar custa a
+   senha a cada troca e fica na linha do tempo.
 2. **Tela parada expira.** Sem mexer o mouse, rolar, tocar ou teclar por
    `MESA_OCIOSO_MIN` (padrão 30 min), a Mesa fecha **naquele aparelho** e
    pede a senha ("Ainda é Fulano?", com o nome do médico da conta). Aviso 60 s antes.
