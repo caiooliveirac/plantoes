@@ -48,7 +48,8 @@ PP20  IT30  PM40  CZ50  BR60  CC70
 ```
 1321–1329   1361–1368   1476
 2031–2035   2151–2154   2262   2263   2377   (e NUCLEO / PIAM pelo nome)
-4091 (ramal eventual: só aparece no quadro quando alguém avisa chegada nele)
+4092 (ramal eventual do reforço DISP: só aparece no quadro quando alguém avisa chegada nele)
+4091 é da ADM, não é posto de médico: quem avisar nele fica registrado no 4092
 ```
 
 > ⚠️ Nos exemplos do `/ajuda` aparece "USB-01" — isso é **só um modelo de

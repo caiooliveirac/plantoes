@@ -21,7 +21,7 @@ export type PostoAzulejo = {
     ocupante?: string | null;
     /** ISO da chegada do ocupante. */
     ocupanteDesde?: string | null;
-    /** Ramal eventual (2266–2270, 4091). */
+    /** Ramal eventual (2266–2270, 4092). */
     onDemand?: boolean;
 };
 

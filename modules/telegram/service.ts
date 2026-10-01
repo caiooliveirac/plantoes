@@ -87,7 +87,7 @@ import {
     CHIEF_ARRIVAL_ADMIN_ONLY_CODE,
     CHIEF_ARRIVAL_ADMIN_ONLY_MESSAGE,
 } from "@/modules/operational/chief-arrival-guard";
-import { isChiefRegulationPostCode } from "@/modules/operational/roles";
+import { buildRegulationRamalAliasNotice, isChiefRegulationPostCode } from "@/modules/operational/roles";
 
 /** Comandos do bot que movem a CHEGADA de uma ocupação já registrada. */
 const ARRIVAL_EDIT_COMMANDS = new Set(["corrigir", "hoje", "ontem"]);
@@ -6361,10 +6361,11 @@ async function handleTelegramCommand(update: TelegramUpdate, logId: string) {
             "▸ Ramais de regulação:",
             "  1321–1329 · 1361–1368 · 1476",
             "  2031–2035 · 2151–2154 · 2262 · 2263 · 2377 · NUCLEO · PIAM",
-            "  4091 (eventual: só entra no quadro quando alguém avisa chegada nele)",
+            "  4092 (eventual, reforço DISP: só entra no quadro quando alguém avisa chegada nele)",
+            "  4091 é da ADM: chegada nele é registrada no 4092",
             "  2266–2270 (eventuais, madrugada: \"Nome 2266 madrugada\")",
             "",
-            "ℹ️ 2031 entra como CP; 2262/2263 entram como COI (função automática).",
+            "ℹ️ 2031 entra como CP; 2262/2263 entram como COI; 4092 entra como DISP (função automática).",
         );
 
         sections.push(
@@ -10539,9 +10540,14 @@ async function sendSuccessReply(
     // ramal de regulação — é quem decide para onde o paciente vai. Fail-soft.
     const upaRestrictionsHint = await upaRestrictionsHintForConfirmation(parsed, replyKind);
     const sharedBaseHint = successKind === "standard" ? await sharedBaseHintForConfirmation(parsed) : "";
+    // 4091 é da ADM: quem avisou nele foi registrado no 4092 — diz isso antes de tudo.
+    const ramalAliasNotice = parsed.isDeparture
+        ? ""
+        : buildRegulationRamalAliasNotice(parsed.ramalAliasFrom, parsed.baseCode);
+    const ramalAliasPrefix = ramalAliasNotice ? `ℹ️ ${escapeTelegramMarkdown(ramalAliasNotice)}\n` : "";
     await sendMessage(
         chatId,
-        `${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${sharedBaseHint}${piamHint}${longShiftHint}${arrivalHint}${checklistKeyHint}${upaRestrictionsHint}`,
+        `${ramalAliasPrefix}${text}${approximateMatchHint}${shiftHint}${halfShiftHint}${reactivationHint}${reassignmentHint}${forcedTakeoverHint}${continuationTargetHint}${timeContextHint}${shadowHint}${sharedBaseHint}${piamHint}${longShiftHint}${arrivalHint}${checklistKeyHint}${upaRestrictionsHint}`,
         replyToMessageId,
         undefined,
         { parseMode: "Markdown" },

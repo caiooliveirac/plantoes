@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, doctors, regulationOccupancies, regulationPosts } from "@/db/schema";
 import { AuthError, requireMesaEscrita } from "@/lib/auth/server";
+import { resolveRegulationRamalAlias } from "@/modules/operational/roles";
 import { correctRegulationOccupancy, redirectTurnoArrivalEdit, removeRegulationOccupancyRecord, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { avisarSecretario } from "@/lib/avisos/secretario";
 import {
@@ -108,7 +109,9 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
         }
 
         let requestedPostId = parsed.data.postId ?? null;
-        const requestedRamalLabel = parsed.data.ramalLabel?.trim() ?? null;
+        // 4091 digitado vira 4092 (ramal da ADM, ver resolveRegulationRamalAlias).
+        const typedRamalLabel = parsed.data.ramalLabel?.trim() ?? null;
+        const requestedRamalLabel = typedRamalLabel ? resolveRegulationRamalAlias(typedRamalLabel) : null;
         if (!requestedPostId && requestedRamalLabel && requestedRamalLabel !== currentPost.code) {
             const requestedPost = await getDb().query.regulationPosts.findFirst({
                 where: eq(regulationPosts.code, requestedRamalLabel),
@@ -275,7 +278,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/re
                 : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "shiftLabel") ? { shiftLabel: parsed.data.shiftLabel ?? null } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "roleLabel") ? { roleLabel: parsed.data.roleLabel ?? null } : {}),
-            ...(Object.prototype.hasOwnProperty.call(parsed.data, "ramalLabel") ? { ramalLabel: parsed.data.ramalLabel ?? null } : {}),
+            ...(Object.prototype.hasOwnProperty.call(parsed.data, "ramalLabel") ? { ramalLabel: requestedRamalLabel ?? parsed.data.ramalLabel ?? null } : {}),
             ...(Object.prototype.hasOwnProperty.call(parsed.data, "notes") ? { notes: parsed.data.notes ?? null } : {}),
             chiefConfirmed: true,
             auditSource: "correcao pela tela de admin",

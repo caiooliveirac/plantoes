@@ -4,8 +4,37 @@ export const OPERATIONAL_ROLE_REMOVED_SENTINEL = "SEM_FUNCAO";
 export type StandardOperationalRoleCode = (typeof STANDARD_OPERATIONAL_ROLE_CODES)[number];
 
 const COI_REGULATION_CODES = new Set(["2262", "2263"]);
-// Ramal eventual (on_demand, migration 0043): quem está nele está sempre DISP.
-const DISP_REGULATION_CODES = new Set(["4091"]);
+// Ramal eventual do reforço (on_demand): quem está nele está sempre DISP. O
+// reforço senta no 4092 (migration 0056); o 4091 (migration 0043) fica na lista
+// só para o histórico gravado nele continuar inferindo DISP.
+const DISP_REGULATION_CODES = new Set(["4092", "4091"]);
+
+/**
+ * Ramais que não são posto de médico mas que o médico/chefia ainda digita por
+ * hábito. 4091 é da ADM (01/10/2026): quem avisa chegada nele é registrado no
+ * 4092 como DISP. O posto 4091 continua no banco (ativo, eventual e vazio, logo
+ * invisível no quadro e fora de vaga) porque o histórico e o fechamento de
+ * setembro apontam para ele — ver migration 0056.
+ */
+const REGULATION_RAMAL_ALIASES: Record<string, string> = { "4091": "4092" };
+
+/** Destino real de um ramal digitado (4091 → 4092); demais códigos voltam iguais. */
+export function resolveRegulationRamalAlias(code: string) {
+    return REGULATION_RAMAL_ALIASES[code.trim().toUpperCase()] ?? code;
+}
+
+/** Ramal aposentado como posto de médico: não é oferecido para chegada/remanejo. */
+export function isRetiredRegulationRamal(code: string | null | undefined) {
+    return Object.hasOwn(REGULATION_RAMAL_ALIASES, (code ?? "").trim().toUpperCase());
+}
+
+/** Aviso ao médico que digitou um ramal redirecionado (vazio quando não houve troca). */
+export function buildRegulationRamalAliasNotice(aliasFrom: string | null | undefined, target: string | null | undefined) {
+    if (!aliasFrom || !target || aliasFrom === target) {
+        return "";
+    }
+    return `O ${aliasFrom} é da ADM. Registrei você no ${target} como DISP (reforço).`;
+}
 const RMT_DEFAULT_REGULATION_CODES = new Set(["1366"]);
 const DAY_MRV_BASAL_REGULATION_CODES = new Set(["2032", "2151"]);
 const REMOTE_PRIORITY_REGULATION_CODES = new Set(["1321", "1322", "1323", "1325", "1361", "1362", "1363", "1364", "1365"]);

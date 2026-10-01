@@ -58,11 +58,13 @@ test("resolveRoleLabelForTargetChange: remanejo 1367 -> 2263 sem papel carimba C
     }), "COI");
 });
 
-test("ramal eventual 4091 carimba DISP em qualquer turno", () => {
-    for (const shiftLabel of ["SD", "SN", "P"] as const) {
-        assert.equal(resolveOperationalRoleLabel({ domain: "regulation", code: "4091", shiftLabel, roleLabel: null }), "DISP");
+test("ramal eventual 4092 carimba DISP em qualquer turno; 4091 antigo segue DISP no histórico", () => {
+    for (const code of ["4092", "4091"]) {
+        for (const shiftLabel of ["SD", "SN", "P"] as const) {
+            assert.equal(resolveOperationalRoleLabel({ domain: "regulation", code, shiftLabel, roleLabel: null }), "DISP", `${code} ${shiftLabel}`);
+        }
+        assert.equal(resolveOperationalRoleLabel({ domain: "regulation", code, shiftLabel: "SD", roleLabel: "MRV" }), "DISP", code);
     }
-    assert.equal(resolveOperationalRoleLabel({ domain: "regulation", code: "4091", shiftLabel: "SD", roleLabel: "MRV" }), "DISP");
 });
 
 test("resolveRoleLabelForTargetChange: destino fixo vence papel carregado, exceto meio plantao e excecao manual", () => {
@@ -1045,11 +1047,12 @@ test("parses regulation arrival on ramal 1476 in Telegram arrival", () => {
     assert.equal(parsed.isDeparture, false);
 });
 
-test("parses regulation arrival on eventual ramal 4091 in Telegram arrival", () => {
-    const parsed = parseMessage("Karen Seifarth 4091 07:00 SD");
+test("parses regulation arrival on eventual ramal 4092 in Telegram arrival", () => {
+    const parsed = parseMessage("Karen Seifarth 4092 07:00 SD");
 
     assert.equal(parsed.sector, "REGULATION");
-    assert.equal(parsed.baseCode, "4091");
+    assert.equal(parsed.baseCode, "4092");
+    assert.equal(parsed.ramalAliasFrom ?? null, null);
     assert.equal(parsed.arrivalTime, "07:00");
     assert.equal(parsed.shiftType, "SD");
     assert.equal(parsed.unknownTargetToken ?? null, null);

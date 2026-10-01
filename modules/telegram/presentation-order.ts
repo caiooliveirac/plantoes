@@ -64,7 +64,7 @@ function resolveRegulationOrderBucket(value: string) {
     if (normalized.startsWith("1")) {
         return 2;
     }
-    // Demais ramais numéricos (ex.: 4091 eventual) vêm depois dos fixos e antes
+    // Demais ramais numéricos (ex.: 4092 eventual) vêm depois dos fixos e antes
     // dos postos nomeados.
     if (/^\d+$/.test(normalized)) {
         return 3;

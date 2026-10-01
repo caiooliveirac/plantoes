@@ -12,7 +12,7 @@ export interface SeletorDePostoProps {
     /** "remanejo" (chefia move alguém) ou "chegada" (médico escolhe onde chegou). */
     modo: "remanejo" | "chegada";
     dominioInicial?: "regulation" | "intervention";
-    /** Mostra a fileira "Eventuais" (2266–2270, 4091). Padrão: só no remanejo. */
+    /** Mostra a fileira "Eventuais" (2266–2270, 4092). Padrão: só no remanejo. */
     mostrarEventuais?: boolean;
     /** Azulejo ocupado aceita clique (quem chama confirma). Padrão true. */
     ocupadoClicavel?: boolean;
