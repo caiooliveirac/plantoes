@@ -14,7 +14,8 @@ import {
 // Ramal eventual (regulation_posts.on_demand, migration 0043 — 4091): não é uma
 // posição fixa. Só existe enquanto alguém está nele; vazio, não é vaga em lugar
 // nenhum (pagamento, presença por slot, histórico) e fica fora da divisão de
-// almoço/jantar por regra fixa, como PIAM/NUCLEO.
+// almoço/jantar por regra fixa, como PIAM/NUCLEO — mas por ser DISP, não por
+// ser eventual: remoto (RMT) nos eventuais 2266–2270 participa normalmente.
 
 const SLOT = {
     operationalDate: "2026-09-20T15:00:00.000Z",
@@ -146,7 +147,7 @@ test("presença por slot e histórico: ramal eventual vazio não conta como furo
 
 type Board = Parameters<typeof buildMealBreakRoster>[0];
 
-function regulationRow(params: { postId: number; postCode: string; name: string; onDemand?: boolean }): Board["regulation"][number] {
+function regulationRow(params: { postId: number; postCode: string; name: string; onDemand?: boolean; roleLabel?: string | null }): Board["regulation"][number] {
     return {
         postId: params.postId,
         occupancyId: `reg-${params.postCode}`,
@@ -161,7 +162,7 @@ function regulationRow(params: { postId: number; postCode: string; name: string;
         boardStartedAt: "2026-09-21T10:00:00.000Z",
         scheduledEndAt: "2026-09-21T22:00:00.000Z",
         shiftLabel: "SD",
-        roleLabel: null,
+        roleLabel: params.roleLabel ?? null,
         ramalLabel: params.postCode,
         status: "active",
         liveSource: "operations_v2",
@@ -169,7 +170,7 @@ function regulationRow(params: { postId: number; postCode: string; name: string;
     };
 }
 
-test("divisão de almoço: ramal eventual fica fora do roster, como PIAM/NUCLEO", () => {
+test("divisão de almoço: DISP (4091) fica fora do roster, como PIAM/NUCLEO", () => {
     const board: Board = {
         generatedAt: "2026-09-21T12:00:00.000Z",
         regulation: [
@@ -183,6 +184,21 @@ test("divisão de almoço: ramal eventual fica fora do roster, como PIAM/NUCLEO"
     // Segunda-feira 21/09/2026, 09:00 SP — turno SD, modo dia.
     const built = buildMealBreakRoster(board, new Date("2026-09-21T09:00:00-03:00"), "day");
     assert.deepEqual(built.roster.map((doctor) => doctor.ramal).sort(), ["2033", "2035"]);
+});
+
+test("divisão de almoço: remoto em ramal eventual (2266) participa; DISP não", () => {
+    const board: Board = {
+        generatedAt: "2026-09-21T12:00:00.000Z",
+        regulation: [
+            regulationRow({ postId: 1, postCode: "2035", name: "Renata Lima" }),
+            regulationRow({ postId: 2, postCode: "2266", name: "Remoto Novo", onDemand: true, roleLabel: "RMT" }),
+            regulationRow({ postId: 3, postCode: "2270", name: "Remoto Sem Funcao", onDemand: true }),
+            regulationRow({ postId: 99, postCode: "4091", name: "Reforco Eventual", onDemand: true }),
+        ],
+        intervention: [],
+    };
+    const built = buildMealBreakRoster(board, new Date("2026-09-21T09:00:00-03:00"), "day");
+    assert.deepEqual(built.roster.map((doctor) => doctor.ramal).sort(), ["2035", "2266", "2270"]);
 });
 
 test("ordem de apresentação no Telegram: 4091 vem depois dos ramais fixos e antes de PIAM/NUCLEO", () => {

@@ -1024,9 +1024,9 @@ function resolveMealBreakDoctorShiftLabel(params: {
 }
 
 /** Por que um ramal ativo do quadro fica fora da divisão. `fixed_post` (PIAM/
- *  NUCLEO), `on_demand_post` (ramal eventual, ex.: 4091) e `half_shift` (MEIO
+ *  NUCLEO), `disp_role` (função DISP, ex.: ramal eventual 4091) e `half_shift` (MEIO
  *  plantão) são regra fixa: nem participam nem interferem no cálculo das vagas. */
-export type MealBreakOutOfDivisionReason = "inactive" | "fixed_post" | "on_demand_post" | "other_shift" | "half_shift";
+export type MealBreakOutOfDivisionReason = "inactive" | "fixed_post" | "disp_role" | "other_shift" | "half_shift";
 
 type MealBreakBoardEntry =
     | { kind: "doctor"; doctor: MealBreakRosterDoctor }
@@ -1050,14 +1050,6 @@ function mapRegulationBoardEntry(row: OperationalBoard["regulation"][number], mo
         return { kind: "excluded", reason: "fixed_post", ramal, name };
     }
 
-    // Ramal eventual (on_demand, ex.: 4091): quem está nele é reforço fora do
-    // quadro fixo e não entra na divisão de almoço/jantar/descanso/trabalho —
-    // mesma regra de PIAM/NUCLEO (decisão do usuário, 20/09/2026). A chefia ainda
-    // pode incluir à mão pelo painel (forceMealBreakDoctorIntoSession).
-    if (row.onDemand) {
-        return { kind: "excluded", reason: "on_demand_post", ramal, name };
-    }
-
     const effectiveShiftLabel = resolveMealBreakDoctorShiftLabel({
         startedAt: row.startedAt,
         shiftLabel: row.shiftLabel,
@@ -1079,6 +1071,14 @@ function mapRegulationBoardEntry(row: OperationalBoard["regulation"][number], mo
         roleLabel: row.roleLabel,
         defaultRole: row.defaultRole,
     }));
+
+    // DISP (reforço, ex.: ramal eventual 4091) fica fora da divisão, mesma regra
+    // de PIAM/NUCLEO. A exclusão é pela FUNÇÃO, não por o ramal ser eventual
+    // (on_demand): remoto nos ramais eventuais 2266–2270 participa normalmente.
+    // A chefia ainda pode incluir à mão pelo painel (forceMealBreakDoctorIntoSession).
+    if (normalizeOperationalRoleLabel(roleLabel) === "DISP") {
+        return { kind: "excluded", reason: "disp_role", ramal, name };
+    }
 
     // MEIO plantão (janela 11:30–17:00) segue a mesma regra fixa de PIAM/NUCLEO:
     // não participa nem interfere na divisão — não entra na fila, não consome
@@ -6869,8 +6869,8 @@ function resolveMealBreakOutOfDivisionMessage(ramal: string, reason: MealBreakOu
     if (reason === "fixed_post" || isPiamRegulationPost(ramal) || isNucleoRegulationPost(ramal)) {
         return `O posto ${ramal} (PIAM/NUCLEO) não entra na divisão de almoço/jantar por regra fixa.`;
     }
-    if (reason === "on_demand_post") {
-        return `O ramal ${ramal} é eventual e não entra na divisão de almoço/jantar por regra fixa (igual a PIAM/NÚCLEO). Se precisar, inclua à mão pelo ${resolveMealBreakPanelLabel()}.`;
+    if (reason === "disp_role") {
+        return `O ramal ${ramal} está com função DISP (reforço) e não entra na divisão de almoço/jantar por regra fixa (igual a PIAM/NÚCLEO). Se precisar, inclua à mão pelo ${resolveMealBreakPanelLabel()}.`;
     }
     if (reason === "other_shift") {
         return `O ramal ${ramal} está no outro turno, então não entra nesta divisão.`;
