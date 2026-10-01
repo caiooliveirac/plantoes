@@ -6,7 +6,9 @@
    1. Mesa operacional e Tabela só abrem para quem está de plantão. Admin
       sempre. Na rede do plantão (a faixa da Central) abre para qualquer conta:
       quem acabou de chegar e ainda não declarou a chegada no bot não pode
-      ficar sem a Mesa. Fora da Central, só dentro do próprio turno.
+      ficar sem a Mesa — menos quem registrou a saída há pouco (a conta
+      esquecida aberta no PC da Central fecha 10 min depois da saída).
+      Fora da Central, só dentro do próprio turno.
    2. A mesma conta em mais de LUGARES_TOLERADOS lugares ao mesmo tempo:
       todas as sessões caem e a senha é trocada (link de redefinição no
       e-mail). Lugar = faixa de rede (/24 IPv4, /64 IPv6); faixas usadas pela
@@ -20,6 +22,10 @@ import { ENFERMEIRO_ROLE } from "@/modules/auth/contracts";
 /** Folga antes da chegada registrada e depois da saída: chegar cedo e sair sem registrar são comuns. */
 export const FOLGA_ANTES_DO_TURNO_MS = 30 * 60_000;
 export const FOLGA_DEPOIS_DO_TURNO_MS = 60 * 60_000;
+/** Saída registrada (bot, web ou chefia) é sinal firme: 10 min e a Mesa fecha. */
+export const FOLGA_DEPOIS_DA_SAIDA_REGISTRADA_MS = 10 * 60_000;
+/** Por quanto tempo uma saída registrada tira a conta da exceção da Central. */
+export const SAIU_VALE_MS = 6 * 60 * 60_000;
 /** Até 3 lugares ao mesmo tempo (Central, celular, casa); o 4º derruba tudo. */
 export const LUGARES_TOLERADOS = 3;
 /** "Ao mesmo tempo" = visto nos últimos 5 minutos (a janela do monitor). */
@@ -33,6 +39,9 @@ export interface EntradaDoPortao {
     emTurno: boolean;
     /** O IP está numa faixa da rede do plantão. */
     naCentral: boolean;
+    /** O médico da conta registrou saída há pouco e não está em outro turno:
+        quem usa a conta dele na Central agora não é ele (esqueceu logado). */
+    saiuDoPlantao?: boolean;
     /** Só no quadro.mnrs.com.br: o e-mail da conta é do enfermeiro(a) que a
         chefia registrou para o turno (com as mesmas folgas). Mesa e Tabela
         nunca passam isto. */
@@ -42,7 +51,9 @@ export interface EntradaDoPortao {
 export function decidirPortao(entrada: EntradaDoPortao): { liberado: boolean; motivo: MotivoDoPortao } {
     if (entrada.roles.includes("admin")) return { liberado: true, motivo: "admin" };
     if (entrada.emTurno) return { liberado: true, motivo: "plantao" };
-    if (entrada.naCentral) return { liberado: true, motivo: "central" };
+    // Chefia trabalha na Central fora da escala (a trava da 2031 limita a escrita).
+    const saiu = entrada.saiuDoPlantao && !entrada.roles.includes("chief");
+    if (entrada.naCentral && !saiu) return { liberado: true, motivo: "central" };
     if (entrada.enfermeiroDoTurno) return { liberado: true, motivo: "enfermeiro" };
     return { liberado: false, motivo: "fora_do_plantao" };
 }

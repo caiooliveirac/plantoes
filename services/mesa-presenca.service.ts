@@ -91,6 +91,8 @@ async function ligarSessaoAoAparelho(conta: ContaNaMesa) {
 interface Tentativa {
     ganhou: boolean;
     trocou: boolean;
+    /** Aparelho que estava com a vez antes desta troca (só quando trocou). */
+    anterior?: string | null;
     tenteEmSeg: number;
     humanoLaSeg?: number | null;
 }
@@ -99,6 +101,9 @@ interface Tentativa {
 async function tentarLease(conta: ContaNaMesa): Promise<Tentativa> {
     const db = getDb();
     const ganhou = await db.execute(sql`
+        with antes as (
+            select device_id from ${viewLeases} where user_id = ${conta.userId} and resource = ${RECURSO_MESA}
+        )
         insert into ${viewLeases} as l (user_id, resource, device_id, session_id, epoch, acquired_at, heartbeat_at, expires_at)
         values (${conta.userId}, ${RECURSO_MESA}, ${conta.aparelhoId}, ${conta.sessaoId || null}, 1, now(), now(),
                 now() + make_interval(secs => ${LEASE_TTL_S}))
@@ -110,10 +115,11 @@ async function tentarLease(conta: ContaNaMesa): Promise<Tentativa> {
             heartbeat_at = now(),
             expires_at   = excluded.expires_at
         where l.device_id = excluded.device_id or l.expires_at < now()
-        returning epoch, (acquired_at = heartbeat_at) as recem
-    `) as unknown as Array<{ epoch: number | string; recem: boolean }>;
+        returning epoch, (acquired_at = heartbeat_at) as recem, (select device_id from antes) as anterior
+    `) as unknown as Array<{ epoch: number | string; recem: boolean; anterior: string | null }>;
     if (ganhou.length > 0) {
-        return { ganhou: true, trocou: Boolean(ganhou[0].recem) && Number(ganhou[0].epoch) > 1, tenteEmSeg: 0 };
+        const trocou = Boolean(ganhou[0].recem) && Number(ganhou[0].epoch) > 1;
+        return { ganhou: true, trocou, anterior: trocou ? ganhou[0].anterior : null, tenteEmSeg: 0 };
     }
     // Negado: quanto falta para a vez vencer e há quanto tempo alguém mexeu
     // no aparelho que está com ela (gente dos dois lados = forte no monitor).
@@ -151,6 +157,24 @@ async function soltarVez(conta: ContaNaMesa) {
             eq(viewLeases.resource, RECURSO_MESA),
             eq(viewLeases.deviceId, conta.aparelhoId),
         ));
+}
+
+/* A Mesa mudou de aparelho: o anterior trava e só volta com a senha ("Ainda
+   é Fulano?"). Sem isso, quem via no PC passava ao celular e o PC ficava
+   aberto para o próximo que sentasse (pedido do Caio, 01/10/2026). */
+async function travarAparelhoAnterior(conta: ContaNaMesa, anterior: string, modo: ModoPresenca, motivo: "troca" | "assumida") {
+    if (anterior === conta.aparelhoId) return;
+    if (modo !== "valendo") {
+        evento(conta, "mesa_aparelho_anterior_travado_sombra", { anterior, motivo });
+        return;
+    }
+    await getDb().insert(viewPresence)
+        .values({ userId: conta.userId, deviceId: anterior, lockedAt: sql`now()`, lockReason: "outro_aparelho", lastHeartbeatAt: sql`now()`, updatedAt: sql`now()` })
+        .onConflictDoUpdate({
+            target: [viewPresence.userId, viewPresence.deviceId],
+            set: { lockedAt: sql`now()`, lockReason: "outro_aparelho", updatedAt: sql`now()` },
+        });
+    evento(conta, "mesa_aparelho_anterior_travado", { anterior, motivo });
 }
 
 async function bloquearPorOcio(conta: ContaNaMesa, ultima: Date | null) {
@@ -222,7 +246,10 @@ export async function baterPresenca(
 
         const tentativa = await tentarLease(conta);
         if (tentativa.ganhou) {
-            if (tentativa.trocou) evento(conta, "mesa_troca_de_aparelho");
+            if (tentativa.trocou) {
+                evento(conta, "mesa_troca_de_aparelho");
+                if (tentativa.anterior) await travarAparelhoAnterior(conta, tentativa.anterior, modo, "troca");
+            }
             return resposta("ok");
         }
         if (eventoLiberado(`negado|${conta.userId}|${conta.aparelhoId}`, agora.getTime())) {
@@ -282,6 +309,34 @@ export async function desbloquearAparelho(conta: ContaNaMesa) {
     } catch (erro) {
         logarErro("desbloqueio", erro);
     }
+}
+
+/** "Usar aqui" com a senha certa (POST /api/mesa/assumir): este aparelho pega a
+    vez na hora, mesmo com o outro à vista, e o outro trava até alguém digitar
+    a senha nele. Quem esqueceu a Mesa aberta em outro lugar tira de lá. Lança
+    em erro de banco (a rota responde 503; nada de assumir pela metade). */
+export async function assumirMesa(conta: ContaNaMesa, modo: ModoPresenca) {
+    if (!conta.aparelhoId) return;
+    const linhas = await getDb().execute(sql`
+        with antes as (
+            select device_id from ${viewLeases} where user_id = ${conta.userId} and resource = ${RECURSO_MESA}
+        )
+        insert into ${viewLeases} as l (user_id, resource, device_id, session_id, epoch, acquired_at, heartbeat_at, expires_at)
+        values (${conta.userId}, ${RECURSO_MESA}, ${conta.aparelhoId}, ${conta.sessaoId || null}, 1, now(), now(),
+                now() + make_interval(secs => ${LEASE_TTL_S}))
+        on conflict (user_id, resource) do update set
+            epoch        = l.epoch + case when l.device_id = excluded.device_id then 0 else 1 end,
+            acquired_at  = case when l.device_id = excluded.device_id then l.acquired_at else now() end,
+            device_id    = excluded.device_id,
+            session_id   = excluded.session_id,
+            heartbeat_at = now(),
+            expires_at   = excluded.expires_at
+        returning (select device_id from antes) as anterior
+    `) as unknown as Array<{ anterior: string | null }>;
+    await desbloquearAparelho(conta);
+    const anterior = linhas[0]?.anterior ?? null;
+    evento(conta, "mesa_assumida", { anterior });
+    if (anterior && anterior !== conta.aparelhoId) await travarAparelhoAnterior(conta, anterior, modo, "assumida");
 }
 
 /** Aba fechada (sendBeacon no pagehide): solta a vez na hora. Outra aba do

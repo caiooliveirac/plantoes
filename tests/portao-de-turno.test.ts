@@ -21,6 +21,23 @@ test("portão: na Central passa mesmo sem chegada registrada", () => {
     assert.deepEqual(decidirPortao({ roles: ["doctor"], emTurno: false, naCentral: true }), { liberado: true, motivo: "central" });
 });
 
+test("portão: saída registrada há pouco tira a conta da exceção da Central (esqueceu logado no PC)", () => {
+    assert.deepEqual(
+        decidirPortao({ roles: ["doctor"], emTurno: false, naCentral: true, saiuDoPlantao: true }),
+        { liberado: false, motivo: "fora_do_plantao" },
+    );
+    // Chefia trabalha na Central fora da escala: segue passando.
+    assert.deepEqual(
+        decidirPortao({ roles: ["doctor", "chief"], emTurno: false, naCentral: true, saiuDoPlantao: true }),
+        { liberado: true, motivo: "central" },
+    );
+    // Em outro turno (remanejado, continuação) não importa a saída anterior.
+    assert.deepEqual(
+        decidirPortao({ roles: ["doctor"], emTurno: true, naCentral: true, saiuDoPlantao: false }),
+        { liberado: true, motivo: "plantao" },
+    );
+});
+
 test("portão: conta só de portal fora do turno é barrada (Tabela)", () => {
     assert.equal(decidirPortao({ roles: ["portal"], emTurno: false, naCentral: false }).liberado, false);
 });
