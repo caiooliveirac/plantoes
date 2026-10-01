@@ -27,6 +27,7 @@ import { getDb } from "@/db";
 import { bahiaClockHHMM } from "@/lib/time";
 import { resolveBankHoursScheduledWindow } from "@/modules/bank-hours/window";
 import { CHIEF_REGULATION_POST_CODE } from "@/modules/operational/roles";
+import { ARRIVAL_GRACE_MINUTES } from "@/modules/operational/early-departure";
 import {
   resolveImplicitOccupancyExpiry,
   resolveOperationalShiftWindow,
@@ -93,7 +94,16 @@ export interface RegulationBoardRow {
   displayName: string | null;
   startedAt: string | null;
   boardStartedAt: string | null;
+  scheduledStartAt?: string | null;
   scheduledEndAt: string | null;
+  /**
+   * Atraso previsto da chegada (min) contra a janela já gravada, com a mesma
+   * tolerância do banco de horas (≤ 15 min = 0). null sem janela. Só para o
+   * chip do quadro — o número que vale é o do bank_hours_entries ao fechar.
+   */
+  arrivalDelayMinutes?: number | null;
+  /** Atraso desconsiderado pela chefia (docs/plano-mesa-chefe-plantonista.md). */
+  arrivalDelayWaived?: boolean;
   shiftLabel: "SD" | "SN" | "P" | null;
   roleLabel: string | null;
   ramalLabel: string | null;
@@ -138,6 +148,14 @@ export interface InterventionBoardRow {
   startedAt: string | null;
   boardStartedAt: string | null;
   scheduledEndAt: string | null;
+  /**
+   * Atraso previsto da chegada (min) contra a janela já gravada, com a mesma
+   * tolerância do banco de horas (≤ 15 min = 0). null sem janela. Só para o
+   * chip do quadro — o número que vale é o do bank_hours_entries ao fechar.
+   */
+  arrivalDelayMinutes?: number | null;
+  /** Atraso desconsiderado pela chefia (docs/plano-mesa-chefe-plantonista.md). */
+  arrivalDelayWaived?: boolean;
   shiftLabel: "SD" | "SN" | "P" | null;
   roleLabel: string | null;
   status: "active" | "waiting" | "disabled";
@@ -174,6 +192,8 @@ export interface PreviousOperationalEntry {
   roleLabel: string | null;
   ramalLabel: string | null;
   arrivalDelayMinutes: number | null;
+  /** Atraso desconsiderado pela chefia (coluna arrival_delay_waived_at). */
+  arrivalDelayWaived?: boolean;
   overtimeMinutes: number | null;
   creditedOvertimeMinutes: number | null;
   balanceMinutes: number | null;
@@ -245,6 +265,8 @@ export interface PaymentAllocationRawRow {
   ramalLabel: string | null;
   earlyDepartureOutcome: string | null;
   arrivalDelayMinutes: number | null;
+  /** Atraso desconsiderado pela chefia (coluna arrival_delay_waived_at). */
+  arrivalDelayWaived?: boolean;
   overtimeMinutes: number | null;
   creditedOvertimeMinutes: number | null;
   balanceMinutes: number | null;
@@ -291,6 +313,8 @@ export interface PaymentAllocationRow {
   paymentStatus: PaymentAllocationStatus;
   issues: string[];
   arrivalDelayMinutes: number | null;
+  /** Atraso desconsiderado pela chefia (coluna arrival_delay_waived_at). */
+  arrivalDelayWaived?: boolean;
   overtimeMinutes: number | null;
   creditedOvertimeMinutes: number | null;
   balanceMinutes: number | null;
@@ -536,6 +560,8 @@ const MAX_IMPLICIT_HANDOFF_EXTENSION_MINUTES = 180;
 
 interface SyntheticBankHoursSummary {
   arrivalDelayMinutes: number | null;
+  /** Atraso desconsiderado pela chefia (coluna arrival_delay_waived_at). */
+  arrivalDelayWaived?: boolean;
   overtimeMinutes: number | null;
   creditedOvertimeMinutes: number | null;
   balanceMinutes: number | null;
@@ -799,6 +825,18 @@ function resolveEditableScope(mode: PreviousOperationalMode, bucket: PreviousOpe
   return true;
 }
 
+/** Atraso do chip do quadro: chegada do turno contra a janela gravada, com a
+    tolerância do banco. Não é o número do fechamento (continuidade, anomalia e
+    abono entram lá) — é o aviso visual para a chefia agir no turno. */
+function previewArrivalDelayMinutes(startedAt: unknown, scheduledStartAt: unknown): number | null {
+  if (!startedAt || !scheduledStartAt) return null;
+  const started = new Date(String(startedAt)).getTime();
+  const scheduled = new Date(String(scheduledStartAt)).getTime();
+  if (Number.isNaN(started) || Number.isNaN(scheduled)) return null;
+  const raw = Math.max(0, Math.trunc((started - scheduled) / 60000));
+  return raw <= ARRIVAL_GRACE_MINUTES ? 0 : raw;
+}
+
 function mapRegulationRow(row: Record<string, unknown>): RegulationBoardRow {
   const rawStatus = String(row.status ?? "waiting");
 
@@ -814,7 +852,10 @@ function mapRegulationRow(row: Record<string, unknown>): RegulationBoardRow {
     displayName: (row.displayName ?? row.display_name ?? null) as string | null,
     startedAt: (row.startedAt ?? row.started_at ?? null) as string | null,
     boardStartedAt: (row.boardStartedAt ?? row.board_started_at ?? null) as string | null,
+    scheduledStartAt: (row.scheduledStartAt ?? row.scheduled_start_at ?? null) as string | null,
     scheduledEndAt: (row.scheduledEndAt ?? row.scheduled_end_at ?? null) as string | null,
+    arrivalDelayMinutes: previewArrivalDelayMinutes(row.startedAt ?? row.started_at, row.scheduledStartAt ?? row.scheduled_start_at),
+    arrivalDelayWaived: Boolean(row.arrivalDelayWaivedAt ?? row.arrival_delay_waived_at ?? false),
     shiftLabel: (row.shiftLabel ?? row.shift_label ?? null) as RegulationBoardRow["shiftLabel"],
     roleLabel: (row.roleLabel ?? row.role_label ?? null) as string | null,
     ramalLabel: (row.ramalLabel ?? row.ramal_label ?? null) as string | null,
@@ -843,6 +884,8 @@ function mapInterventionRow(row: Record<string, unknown>): InterventionBoardRow 
     boardStartedAt: (row.boardStartedAt ?? row.board_started_at ?? null) as string | null,
     scheduledStartAt: (row.scheduledStartAt ?? row.scheduled_start_at ?? null) as string | null,
     scheduledEndAt: (row.scheduledEndAt ?? row.scheduled_end_at ?? null) as string | null,
+    arrivalDelayMinutes: previewArrivalDelayMinutes(row.startedAt ?? row.started_at, row.scheduledStartAt ?? row.scheduled_start_at),
+    arrivalDelayWaived: Boolean(row.arrivalDelayWaivedAt ?? row.arrival_delay_waived_at ?? false),
     shiftLabel: (row.shiftLabel ?? row.shift_label ?? null) as InterventionBoardRow["shiftLabel"],
     roleLabel: (row.roleLabel ?? row.role_label ?? null) as string | null,
     status: rawStatus === "disabled" ? "disabled" : rawStatus === "active" ? "active" : "waiting",
@@ -1042,6 +1085,7 @@ function mapPreviousOperationalRow(row: Record<string, unknown>): PreviousOperat
     ramalLabel: (row.ramalLabel ?? null) as string | null,
     earlyDepartureOutcome: (row.earlyDepartureOutcome ?? null) as string | null,
     arrivalDelayMinutes: row.arrivalDelayMinutes === null ? null : Number(row.arrivalDelayMinutes),
+    arrivalDelayWaived: Boolean(row.arrivalDelayWaivedAt ?? false),
     overtimeMinutes: row.overtimeMinutes === null ? null : Number(row.overtimeMinutes),
     creditedOvertimeMinutes: row.creditedOvertimeMinutes === null ? null : Number(row.creditedOvertimeMinutes),
     balanceMinutes: row.balanceMinutes === null ? null : Number(row.balanceMinutes),
@@ -1456,6 +1500,7 @@ function calculateSyntheticBankHours(params: {
   scheduledEndAt: string | null;
   actualStartAt: string;
   actualEndAt: string | null;
+  arrivalDelayWaived?: boolean;
 }): SyntheticBankHoursSummary {
   if (!params.scheduledStartAt || !params.scheduledEndAt || !params.actualEndAt) {
     return {
@@ -1473,6 +1518,7 @@ function calculateSyntheticBankHours(params: {
     scheduledEndAt: params.scheduledEndAt,
     actualStartAt: params.actualStartAt,
     actualEndAt: params.actualEndAt,
+    arrivalDelayWaived: params.arrivalDelayWaived,
   });
 
   return {
@@ -1674,10 +1720,12 @@ function buildStandalonePreviousEntry(candidate: LogicalShiftCandidate): Previou
     scheduledEndAt: scheduledWindow.scheduledEndAt,
     actualStartAt: candidate.startedAt,
     actualEndAt: candidate.effectiveEndedAt,
+    arrivalDelayWaived: Boolean(candidate.arrivalDelayWaived),
   });
   return {
     occupancyId: candidate.occupancyId,
     domain: candidate.domain,
+    arrivalDelayWaived: Boolean(candidate.arrivalDelayWaived),
     targetCode: candidate.targetCode,
     targetLabel: candidate.targetLabel,
     doctorId: candidate.doctorId,
@@ -1720,11 +1768,13 @@ function buildCombinedPreviousEntry(bucket: PreviousOperationalBucket, first: Lo
     scheduledEndAt,
     actualStartAt: first.startedAt,
     actualEndAt: second.effectiveEndedAt,
+    arrivalDelayWaived: Boolean(first.arrivalDelayWaived || second.arrivalDelayWaived),
   });
 
   return {
     occupancyId: `${first.occupancyId}+${second.occupancyId}`,
     domain: first.domain,
+    arrivalDelayWaived: Boolean(first.arrivalDelayWaived || second.arrivalDelayWaived),
     targetCode: combinedTargetCode,
     targetLabel: combinedTargetLabel,
     doctorId: first.doctorId,
@@ -1914,6 +1964,8 @@ export async function listRegulationBoard() {
       case when ro.id is not null or lr.post_code is not null then coalesce(${turnoArrivalSql("ro")}, ro.started_at, lr.started_at) else null end as "startedAt",
       case when ro.id is not null or lr.post_code is not null then coalesce(case when ro.board_started_at is null then (case when ro.madrugada_cobertura then ro.started_at end) else least(ro.board_started_at, ${turnoArrivalSql("ro", true)}) end, lr.board_started_at) else null end as "boardStartedAt",
       case when ro.id is not null or lr.post_code is not null then coalesce(ro.scheduled_end_at, lr.scheduled_end_at) else null end as "scheduledEndAt",
+      case when ro.id is not null then ro.scheduled_start_at else null end as "scheduledStartAt",
+      case when ro.id is not null then ro.arrival_delay_waived_at else null end as "arrivalDelayWaivedAt",
       case when ro.id is not null or lr.post_code is not null then ro.shift_label else null end as "shiftLabel",
       case
         when ro.id is not null then ro.role_label
@@ -2124,6 +2176,7 @@ export async function listInterventionBoard() {
       case when io.id is not null or li.base_code is not null then io.scheduled_start_at else null end as "scheduledStartAt",
       case when io.id is not null or li.base_code is not null then coalesce(case when io.board_started_at is null then null else least(io.board_started_at, ${turnoArrivalSql("io", true)}) end, li.board_started_at) else null end as "boardStartedAt",
       case when io.id is not null or li.base_code is not null then coalesce(io.scheduled_end_at, li.scheduled_end_at) else null end as "scheduledEndAt",
+      case when io.id is not null then io.arrival_delay_waived_at else null end as "arrivalDelayWaivedAt",
       case when io.id is not null or li.base_code is not null then io.shift_label else null end as "shiftLabel",
       case
         when io.id is not null then io.role_label
@@ -3081,6 +3134,7 @@ export async function getPreviousOperationalBoard(
         ro.source as source,
         ro.notes as notes,
         ro.created_at as "createdAt",
+        ro.arrival_delay_waived_at as "arrivalDelayWaivedAt",
         bhe.arrival_delay_minutes as "arrivalDelayMinutes",
         bhe.overtime_minutes as "overtimeMinutes",
         bhe.credited_overtime_minutes as "creditedOvertimeMinutes",
@@ -3115,6 +3169,7 @@ export async function getPreviousOperationalBoard(
         io.source as source,
         io.notes as notes,
         io.created_at as "createdAt",
+        io.arrival_delay_waived_at as "arrivalDelayWaivedAt",
         bhe.arrival_delay_minutes as "arrivalDelayMinutes",
         bhe.overtime_minutes as "overtimeMinutes",
         bhe.credited_overtime_minutes as "creditedOvertimeMinutes",

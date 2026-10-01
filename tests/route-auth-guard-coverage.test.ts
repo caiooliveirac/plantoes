@@ -16,7 +16,7 @@ import { join, relative } from "node:path";
 const root = process.cwd();
 
 // Guards de sessão (lib/auth/server.ts; autorizarPainelDoMedico em lib/medico/painel-acesso.ts).
-const GUARD = /\b(requireAuthenticatedSession|requireSessionForRead|requireMesaSession|requireMesaSessionForRead|abrirVigiaDaMesa|readAuthenticatedSession|autorizarPainelDoMedico)\s*\(/;
+const GUARD = /\b(requireAuthenticatedSession|requireSessionForRead|requireMesaSession|requireMesaEscrita|requireMesaSessionForRead|abrirVigiaDaMesa|readAuthenticatedSession|autorizarPainelDoMedico)\s*\(/;
 
 /** Rotas sem sessão de propósito. Cada uma tem outro portão (ou não expõe nada). */
 const PUBLIC_ROUTES: Record<string, string> = {
@@ -77,4 +77,27 @@ for (const rel of routes) {
 test("rotas: /api/doctors/import é só de admin", () => {
     const source = readFileSync(join(root, "app/api/doctors/import/route.ts"), "utf8");
     assert.match(source, /requireAuthenticatedSession\(\s*\[\s*"admin"\s*\]\s*\)/);
+});
+
+// Área do médico: sessão de qualquer papel entra no guard, mas a rota só age
+// pelo PRÓPRIO médico (medicoDaSessao exige papel doctor + ficha vinculada).
+for (const rel of [
+    "app/api/medico/chegada/route.ts",
+    "app/api/medico/saida/route.ts",
+    "app/api/medico/estado/route.ts",
+    "app/api/medico/continuar/route.ts",
+    "app/api/medico/remanejar/route.ts",
+]) {
+    test(`rotas: ${rel} exige sessão e identifica o médico da sessão`, () => {
+        const source = readFileSync(join(root, rel), "utf8");
+        assert.match(source, /requireAuthenticatedSession\(\s*\)/);
+        assert.match(source, /medicoDaSessao\(/);
+    });
+}
+
+test("rotas: pedidos do médico na Mesa são de admin/chief (leitura na Mesa, decisão com escrita)", () => {
+    const lista = readFileSync(join(root, "app/api/mesa/pedidos-do-medico/route.ts"), "utf8");
+    assert.match(lista, /requireMesaSession\(\s*\[\s*"admin",\s*"chief"\s*\]\s*\)/);
+    const decide = readFileSync(join(root, "app/api/mesa/pedidos-do-medico/[id]/decidir/route.ts"), "utf8");
+    assert.match(decide, /requireMesaEscrita\(\s*\[\s*"admin",\s*"chief"\s*\]\s*\)/);
 });

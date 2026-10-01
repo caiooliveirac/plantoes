@@ -6,6 +6,7 @@ import { ArrowLeftRight, ChevronRight, LogOut, Power, Repeat2, UserCog } from "l
 import { DeactivateDialog } from "@/components/board/DeactivateDialog";
 import { DepartureDialog } from "@/components/board/DepartureDialog";
 import { RolePicker } from "@/components/board/RolePicker";
+import { AcoesDeAtraso } from "@/components/board/AcoesDeAtraso";
 
 interface RowActionsProps {
     domain: "regulation" | "intervention";
@@ -18,6 +19,8 @@ interface RowActionsProps {
     isDisabled: boolean;
     onOpenAdvanced?: () => void;
     onRemanejar?: () => void;
+    /** Atraso da chegada (chip do quadro) — habilita "Chegou às HH:MM" e "Desconsiderar atraso". */
+    atraso?: { minutos: number | null; abonado: boolean; scheduledStartAt: string | null } | null;
 }
 
 export function RowActions({
@@ -31,6 +34,7 @@ export function RowActions({
     isDisabled,
     onOpenAdvanced,
     onRemanejar,
+    atraso,
 }: RowActionsProps) {
     const [deactivateOpen, setDeactivateOpen] = useState(false);
     const [departureOpen, setDepartureOpen] = useState(false);
@@ -56,6 +60,17 @@ export function RowActions({
                         <UserCog size={13} strokeWidth={2.2} />
                         <span>{currentRole ?? "Função"}</span>
                     </RolePicker>
+                )}
+
+                {occupancyId && !isDisabled && atraso && (
+                    <AcoesDeAtraso
+                        domain={domain}
+                        occupancyId={occupancyId}
+                        doctorName={doctorName}
+                        arrivalDelayMinutes={atraso.minutos}
+                        arrivalDelayWaived={atraso.abonado}
+                        scheduledStartAt={atraso.scheduledStartAt}
+                    />
                 )}
 
                 {occupancyId && !isDisabled && (

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { hasDatabaseUrl } from "@/db";
-import { AuthError, requireMesaSession } from "@/lib/auth/server";
+import { AuthError, requireMesaEscrita } from "@/lib/auth/server";
 import { undoAction } from "@/modules/operational/undo";
 
 const schema = z.object({
@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
 
     let session;
     try {
-        session = await requireMesaSession(["admin", "chief"]);
+        session = await requireMesaEscrita(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

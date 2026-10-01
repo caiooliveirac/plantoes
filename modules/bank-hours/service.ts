@@ -114,6 +114,7 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
             shiftLabel: occupancy.shiftLabel,
             roleLabel: occupancy.roleLabel,
             earlyDepartureOutcome: occupancy.earlyDepartureOutcome,
+            arrivalDelayWaivedAt: occupancy.arrivalDelayWaivedAt,
         })),
         ...intervention.map((occupancy: typeof interventionOccupancies.$inferSelect) => ({
             occupancyId: occupancy.id,
@@ -129,6 +130,7 @@ async function listContinuityGroupOccupancies(db: Executor, continuityGroupId: s
             shiftLabel: occupancy.shiftLabel,
             roleLabel: occupancy.roleLabel,
             earlyDepartureOutcome: occupancy.earlyDepartureOutcome,
+            arrivalDelayWaivedAt: occupancy.arrivalDelayWaivedAt,
         })),
     ];
 }
@@ -205,6 +207,9 @@ export async function syncBankHoursByContinuityGroup(db: Executor, continuityGro
         scheduledEndAt: span.scheduledEndAt,
         actualStartAt: span.actualStartAt,
         actualEndAt: span.actualEndAt,
+        // Atraso desconsiderado pela chefia: a crua já sai com atraso 0, e é
+        // esse 0 que a régua de saída antecipada recebe logo abaixo.
+        arrivalDelayWaived: span.arrivalDelayWaived,
     });
 
     // Retirada/saída antecipada decidida pela chefia: o desfecho gravado no

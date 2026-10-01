@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { toast } from "sonner";
@@ -30,7 +31,7 @@ export function RolePicker({ domain, occupancyId, currentRole, doctorName, targe
             const endpoint = domain === "regulation"
                 ? `/api/regulation/occupancies/${occupancyId}`
                 : `/api/intervention/occupancies/${occupancyId}`;
-            const response = await fetch(endpoint, {
+            const response = await fetchMesa(endpoint, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ roleLabel: resolveRoleLabelForExplicitRemoval(next) }),

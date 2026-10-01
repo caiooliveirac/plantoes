@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion } from "framer-motion";
@@ -106,7 +107,7 @@ export function DeactivateDialog({
             const endpoint = domain === "regulation"
                 ? `/api/regulation/posts/${targetId}/state`
                 : `/api/intervention/bases/${targetId}/state`;
-            const response = await fetch(endpoint, {
+            const response = await fetchMesa(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({

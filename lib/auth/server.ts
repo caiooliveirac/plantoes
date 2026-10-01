@@ -9,7 +9,10 @@ import { ehOperadorDaCentral, rolesDoPlantoes, type UserRole } from "@/modules/a
 import { createSessionToken, isSessionVersionCurrent, sessionIdOf, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
 import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
 import { MENSAGEM_BLOQUEADA, MENSAGEM_OCUPADA, modoPresenca } from "@/modules/acessos/presenca";
+import { deveBarrarEscritaDaMesa, mensagemChefeDePlantaoOutro, travaChefeDePlantaoLigada } from "@/modules/operational/chefe-de-plantao";
+import { chefeDePlantaoAtual } from "@/services/chefe-de-plantao.service";
 import { lerCookieAparelho, nomeCookieAparelho } from "@/lib/auth/aparelho";
+import { corteLigado, proximoCorte } from "@/lib/auth/corte-virada";
 import { baterPresenca, conferirPresenca, desbloquearAparelho, type ContaNaMesa, type RespostaPresenca } from "@/services/mesa-presenca.service";
 import { conferirPortaoDeTurno, naRedeDaCentral, vigiarLugares } from "@/services/acessos-portao.service";
 import {
@@ -77,12 +80,20 @@ export async function writeSessionCookie(userId: string, sessao: SessaoDoCookie,
         .limit(1);
     const versao = row?.sessionVersion ?? 0;
     const sessionId = "continuarSessao" in sessao ? sessao.continuarSessao : randomUUID();
+    // Corte da virada (lib/auth/corte-virada.ts): não-admin cai em 07:15/19:15.
+    const agora = new Date();
+    const papeis = await getDb().select({ role: userRoles.role }).from(userRoles).where(eq(userRoles.userId, userId));
+    const isAdmin = papeis.some((p) => p.role === "admin");
+    const corte = !isAdmin && corteLigado() ? proximoCorte(agora) : null;
+    if (corte && corte < expiresAt) expiresAt = corte;
     const token = createSessionToken(
         {
             sub: userId,
             exp: expiresAt.getTime(),
             sv: versao,
             sid: sessionId,
+            iat: agora.getTime(),
+            ...(corte ? { cv: corte.getTime() } : {}),
         },
         getAuthSecret(),
     );
@@ -297,6 +308,26 @@ export async function requireMesaSession(requiredRoles?: UserRole[], options?: {
     if (!(await mesaLiberadaPara(session))) throw new AuthError(403, MENSAGEM_FORA_DO_PLANTAO);
     await exigirPresenca(session);
     return session;
+}
+
+/** Escrita na Mesa: além da sessão, o chief precisa ser quem está na 2031
+    (modules/operational/chefe-de-plantao.ts). 409 com o nome de quem está lá;
+    o cliente abre o modal "esqueceu de entrar com a sua conta?". */
+export async function requireMesaEscrita(requiredRoles?: UserRole[], options?: { allowPasswordChange?: boolean }) {
+    const session = await requireMesaSession(requiredRoles, options);
+    await exigirChefeDePlantao(session);
+    return session;
+}
+
+export async function exigirChefeDePlantao(session: AuthenticatedSession) {
+    if (!travaChefeDePlantaoLigada()) return;
+    const isAdmin = session.user.roles.includes("admin");
+    const isChief = session.user.roles.includes("chief");
+    if (isAdmin || !isChief) return;
+    const chefe = await chefeDePlantaoAtual();
+    if (deveBarrarEscritaDaMesa({ isAdmin, isChief, sessionDoctorId: session.user.doctorId, chefe })) {
+        throw new AuthError(409, mensagemChefeDePlantaoOutro(chefe!));
+    }
 }
 
 export async function requireMesaSessionForRead() {

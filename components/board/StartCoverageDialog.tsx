@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion } from "framer-motion";
@@ -134,7 +135,7 @@ export function StartCoverageDialog({
                     source: "admin_correction" as const,
                     notes: null,
                 };
-            const response = await fetch(endpoint, {
+            const response = await fetchMesa(endpoint, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),

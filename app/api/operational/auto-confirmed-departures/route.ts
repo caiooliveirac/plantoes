@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { hasDatabaseUrl } from "@/db";
-import { AuthError, requireMesaSession } from "@/lib/auth/server";
+import { AuthError, requireMesaEscrita, requireMesaSession } from "@/lib/auth/server";
 import { resolveSaidasAutonomasMode } from "@/modules/telegram/saidas-autonomas-cycle";
 import { listSystemConfirmedDepartures, undoSystemDepartureConfirmation } from "@/services/departure-autonomy.service";
 
@@ -11,8 +11,8 @@ import { listSystemConfirmedDepartures, undoSystemDepartureConfirmation } from "
  * "confirma sozinho" quando está). POST: Desfazer — volta para a fila da chefia.
  */
 
-async function session() {
-    return requireMesaSession(["admin", "chief"]);
+async function session(escrita = false) {
+    return escrita ? requireMesaEscrita(["admin", "chief"]) : requireMesaSession(["admin", "chief"]);
 }
 
 function authError(error: unknown) {
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     }
     let user;
     try {
-        user = (await session()).user;
+        user = (await session(true)).user;
     } catch (error) {
         return authError(error);
     }

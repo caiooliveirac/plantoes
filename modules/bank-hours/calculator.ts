@@ -27,6 +27,13 @@ export interface BankHoursCalculationInput {
     scheduledEndAt: Date | string;
     actualStartAt: Date | string;
     actualEndAt: Date | string;
+    /**
+     * Atraso desconsiderado pela chefia (coluna arrival_delay_waived_at): o
+     * cálculo trata a chegada como pontual — atraso 0, excedente em dobro,
+     * ruleCode de pontual — e a explicação registra o atraso bruto perdoado.
+     * startedAt não muda; só o banco (e, por ele, o pagamento) enxerga isto.
+     */
+    arrivalDelayWaived?: boolean;
 }
 
 export interface BankHoursCalculationResult {
@@ -61,7 +68,9 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
 
     const rawArrivalDelay = Math.max(0, diffMinutes(scheduledStartAt, actualStartAt));
     const rawOvertime = Math.max(0, diffMinutes(scheduledEndAt, actualEndAt));
-    const arrivalDelayMinutes = rawArrivalDelay <= ARRIVAL_GRACE_MINUTES ? 0 : rawArrivalDelay;
+    const measuredArrivalDelay = rawArrivalDelay <= ARRIVAL_GRACE_MINUTES ? 0 : rawArrivalDelay;
+    const waivedDelay = input.arrivalDelayWaived === true && measuredArrivalDelay > 0;
+    const arrivalDelayMinutes = waivedDelay ? 0 : measuredArrivalDelay;
     const overtimeMinutes = rawOvertime <= DEPARTURE_GRACE_MINUTES ? 0 : rawOvertime;
 
     const overtimeMultiplier: 1 | 2 = arrivalDelayMinutes === 0 ? 2 : 1;
@@ -72,7 +81,8 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
         ? (overtimeMinutes > 0 ? "ON_TIME_DOUBLE_OVERTIME" : "ON_TIME_NO_OVERTIME")
         : (overtimeMinutes > 0 ? "LATE_SIMPLE_OVERTIME" : "LATE_NO_OVERTIME");
 
-    const explanation = arrivalDelayMinutes === 0
+    const waiverPrefix = waivedDelay ? `Atraso de ${rawArrivalDelay} min desconsiderado pela chefia. ` : "";
+    const explanation = waiverPrefix + (arrivalDelayMinutes === 0
         ? (overtimeMinutes > 0
             ? `Chegou com ate ${ARRIVAL_GRACE_MINUTES} min de atraso e o excedente acima de ${DEPARTURE_GRACE_MINUTES} min entrou em dobro.`
             : (rawOvertime > 0
@@ -82,7 +92,7 @@ export function calculateBankHours(input: BankHoursCalculationInput): BankHoursC
             ? `Chegou com ${arrivalDelayMinutes} min de atraso e o excedente acima de ${DEPARTURE_GRACE_MINUTES} min ficou simples.`
             : (rawOvertime > 0
                 ? `Chegou com ${arrivalDelayMinutes} min de atraso e a saida ficou com ate ${DEPARTURE_GRACE_MINUTES} min alem da janela prevista, sem credito compensatorio.`
-                : `Chegou com ${arrivalDelayMinutes} min de atraso e nao gerou credito adicional.`));
+                : `Chegou com ${arrivalDelayMinutes} min de atraso e nao gerou credito adicional.`)));
 
     return {
         arrivalDelayMinutes,

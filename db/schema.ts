@@ -277,6 +277,12 @@ export const regulationOccupancies = operationsV2.table(
         // quadro enquanto a cobertura está aberta (pagamento dela não muda).
         madrugadaCobertura: boolean("madrugada_cobertura").notNull().default(false),
         madrugadaCobreOcupacaoId: uuid("madrugada_cobre_ocupacao_id"),
+        // Atraso desconsiderado pela chefia (migration 0052): banco e pagamento
+        // tratam como pontual; startedAt não muda, prioridades de refeição/saída
+        // não mudam. Não reaproveita late_arrival_acknowledged_* (outra regra).
+        arrivalDelayWaivedAt: timestamp("arrival_delay_waived_at", { withTimezone: true }),
+        arrivalDelayWaivedByUserId: uuid("arrival_delay_waived_by_user_id").references(() => users.id),
+        arrivalDelayWaiverNote: text("arrival_delay_waiver_note"),
     },
     (table) => [
         index("regulation_occupancies_doctor_idx").on(table.doctorId),
@@ -322,6 +328,12 @@ export const interventionOccupancies = operationsV2.table(
         departureConfirmedNote: text("departure_confirmed_note"),
         // Mesmo contrato da coluna homônima em regulation_occupancies — ver lá.
         earlyDepartureOutcome: varchar("early_departure_outcome", { length: 10 }),
+        // Atraso desconsiderado pela chefia (migration 0052): banco e pagamento
+        // tratam como pontual; startedAt não muda, prioridades de refeição/saída
+        // não mudam. Não reaproveita late_arrival_acknowledged_* (outra regra).
+        arrivalDelayWaivedAt: timestamp("arrival_delay_waived_at", { withTimezone: true }),
+        arrivalDelayWaivedByUserId: uuid("arrival_delay_waived_by_user_id").references(() => users.id),
+        arrivalDelayWaiverNote: text("arrival_delay_waiver_note"),
     },
     (table) => [
         index("intervention_occupancies_doctor_idx").on(table.doctorId),
@@ -991,5 +1003,32 @@ export const contractLedger = operationsV2.table(
         uniqueIndex("contract_ledger_source_revision_idx")
             .on(table.sourceType, table.sourceKey, table.sourceRevision)
             .where(sql`source_key is not null`),
+    ],
+);
+
+// Pedidos que o PRÓPRIO médico faz pela web e a chefia decide (migration 0053).
+// Hoje só `continuar` (prolongar para o turno seguinte): o pedido fica pendente
+// até admin/chief aceitar — aí a continuação é criada pelo mesmo caminho do bot
+// (continue*Occupancy) — ou recusar. Um pendente por ocupação.
+export const pedidosDoMedico = operationsV2.table(
+    "pedidos_do_medico",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        doctorId: uuid("doctor_id").notNull().references(() => doctors.id),
+        kind: varchar("kind", { length: 32 }).notNull(),
+        domain: varchar("domain", { length: 16 }).notNull(),
+        occupancyId: uuid("occupancy_id").notNull(),
+        status: varchar("status", { length: 16 }).notNull().default("pendente"),
+        payload: jsonb("payload").notNull().default({}),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        decidedAt: timestamp("decided_at", { withTimezone: true }),
+        decidedByUserId: uuid("decided_by_user_id").references(() => users.id),
+        decisionNote: text("decision_note"),
+    },
+    (table) => [
+        index("pedidos_do_medico_status_idx").on(table.status, table.createdAt),
+        uniqueIndex("pedidos_do_medico_pendente_idx")
+            .on(table.occupancyId, table.kind)
+            .where(sql`status = 'pendente'`),
     ],
 );

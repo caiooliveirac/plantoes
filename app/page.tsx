@@ -16,6 +16,10 @@ import { getExpectedSchedule } from "@/modules/operational/expected-schedule";
 import { evaluateMealBreakSessionAgainstBoard, getCurrentOperationalMealBreakSession, getCurrentMealBreakEligibilityOverrides } from "@/modules/telegram/meal-breaks";
 import { getOperationalBoard, getPreviousOperationalBoard, listOnDemandRegulationPostOptions } from "@/services/board.service";
 import { listDoctorsForChiefInvite } from "@/services/chief-access.service";
+import { nomeDoMedicoDaSessao } from "@/services/chefe-de-plantao.service";
+import { CHIEF_REGULATION_POST_CODE } from "@/modules/operational/roles";
+import { PainelDoPlantonista } from "@/components/medico/PainelDoPlantonista";
+import { azulejosDoSnapshot } from "@/components/board/azulejos-do-quadro";
 
 export const dynamic = "force-dynamic";
 
@@ -99,7 +103,23 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         if (sso) return <SsoFalhou motivo={sso} />;
         redirect(destinoSemSessao());
     }
+    // Plantonista (papel doctor + médico vinculado): fora do turno, em vez da
+    // Mesa fechada, a tela de chegada — toca no posto e entra agora
+    // (docs/plano-mesa-chefe-plantonista.md §5). Em turno, o painel próprio
+    // (sair, continuar, mudar de posto) fica acima do quadro só leitura.
+    const ehPlantonista = Boolean(session.user.doctorId)
+        && session.user.roles.includes("doctor")
+        && !session.user.roles.some((role) => role === "admin" || role === "chief");
     if (!(await mesaLiberadaPara(session))) {
+        if (ehPlantonista && session.user.doctorId) {
+            const [quadro, nome] = await Promise.all([getOperationalBoard(), nomeDoMedicoDaSessao(session.user.doctorId)]);
+            return (
+                <div className="pagina-kairos">
+                    <KairosTopo titulo="Mesa operacional" />
+                    <PainelDoPlantonista nome={nome ?? session.user.email} azulejos={azulejosDoSnapshot(quadro, {})} emTurnoInicial={false} />
+                </div>
+            );
+        }
         return <ForaDoPlantao medico={Boolean(session.user.doctorId)} />;
     }
     // Presença (docs/presenca-mesa.md): outro aparelho com a vez, ou este
@@ -119,7 +139,7 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         session.user.roles.some((role) => role === "admin" || role === "chief")
         && !session.user.mustChangePassword,
     );
-    const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility, expectedSchedule, onDemandRegulationPosts] = await Promise.all([
+    const [board, previousShift, doctors, mealBreakSession, mealBreakEligibility, expectedSchedule, onDemandRegulationPosts, nomeDaSessao] = await Promise.all([
         getOperationalBoard(),
         // Dashboard mantem a visao legada (dia operacional anterior completo,
         // tudo editavel) independente do turno corrente. A pivotagem shift-aware
@@ -134,10 +154,18 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
         // Ramais eventuais (4091): fora do quadro quando vazios; a chefia ainda
         // precisa vê-los nos seletores de chegada manual e remanejamento.
         canManage ? listOnDemandRegulationPostOptions() : Promise.resolve([]),
+        nomeDoMedicoDaSessao(session.user.doctorId),
     ]);
+    // Chefe de plantão = quem está na 2031 agora (modules/operational/chefe-de-plantao.ts).
+    const linha2031 = board.regulation.find((row) => row.postCode === CHIEF_REGULATION_POST_CODE && row.status === "active" && row.doctorId);
+    const chefeDePlantao = session.user.roles.includes("admin")
+        || (canManage && Boolean(session.user.doctorId) && (!linha2031 || linha2031.doctorId === session.user.doctorId));
 
     const mesa = (
         <MesaPresenca {...propsPresenca}>
+        {ehPlantonista && (
+            <PainelDoPlantonista nome={nomeDaSessao ?? session.user.email} azulejos={azulejosDoSnapshot(board, {})} emTurnoInicial />
+        )}
         <OperationalBoardClient
             generatedAt={board.generatedAt}
             shiftLabel={resolveOperationalShiftLabel(new Date())}
@@ -169,6 +197,8 @@ export default async function HomePage({ searchParams }: { searchParams?: Promis
                 mustChangePassword: session.user.mustChangePassword,
                 canManage,
                 doctorId: session.user.doctorId,
+                nome: nomeDaSessao,
+                chefeDePlantao,
             }}
         />
         </MesaPresenca>

@@ -23,6 +23,8 @@ export interface ContinuityOccupancy extends ContinuityRecord {
     scheduledStartAt: string | Date | null;
     scheduledEndAt: string | Date | null;
     shiftLabel: string | null;
+    /** Atraso desconsiderado pela chefia nesta ocupação (arrival_delay_waived_at). */
+    arrivalDelayWaivedAt?: string | Date | null;
 }
 
 export interface ContinuityGroup<T extends ContinuityRecord> {
@@ -50,6 +52,8 @@ export interface ContinuityBankHoursSpan {
     actualStartAt: Date;
     actualEndAt: Date | null;
     isClosed: boolean;
+    /** Algum membro do grupo tem o atraso desconsiderado pela chefia. */
+    arrivalDelayWaived: boolean;
 }
 
 function asDate(value: string | Date | null | undefined) {
@@ -174,6 +178,9 @@ export function buildContinuityBankHoursSpan(records: ContinuityOccupancy[]) {
         actualStartAt: asDate(group.carrier.startedAt)!,
         actualEndAt: tailEndedAt,
         isClosed: group.members.every((member) => isDepartureClosureAuthoritative(member)),
+        // O atraso é medido na chegada do portador; a marca pode ter sido posta
+        // em qualquer membro da cadeia (ex.: depois de um remanejo).
+        arrivalDelayWaived: group.members.some((member) => Boolean((member as ContinuityOccupancy).arrivalDelayWaivedAt)),
     } satisfies ContinuityBankHoursSpan;
 }
 

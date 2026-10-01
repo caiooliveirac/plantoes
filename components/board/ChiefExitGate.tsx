@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -103,7 +104,7 @@ export function ChiefExitGate({ pendingChiefExits }: ChiefExitGateProps) {
         }
         setSubmitting(true);
         try {
-            const response = await fetch(`/api/regulation/occupancies/${target.occupancyId}/confirm-departure`, {
+            const response = await fetchMesa(`/api/regulation/occupancies/${target.occupancyId}/confirm-departure`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ actualEndedAt: preview.end.toISOString() }),
@@ -125,7 +126,7 @@ export function ChiefExitGate({ pendingChiefExits }: ChiefExitGateProps) {
         if (!target) return;
         setSubmitting(true);
         try {
-            const response = await fetch(`/api/regulation/occupancies/${target.occupancyId}/chief-exit-unknown`, {
+            const response = await fetchMesa(`/api/regulation/occupancies/${target.occupancyId}/chief-exit-unknown`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({}),

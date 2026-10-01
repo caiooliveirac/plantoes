@@ -17,6 +17,10 @@ export interface SessionTokenPayload {
     exp: number;
     sv?: number;
     sid?: string;
+    /** Emissão (ms). Sem ele, o proxy estima por exp − TTL. */
+    iat?: number;
+    /** Corte da virada (ms): a sessão cai aqui mesmo com exp maior. Admin não tem. */
+    cv?: number;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -91,6 +95,9 @@ export function verifySessionToken(token: string, secret: string, now = Date.now
             return null;
         }
 
+        if (typeof parsed.cv === "number" && parsed.cv <= now) {
+            return null;
+        }
         if (parsed.exp <= now) {
             return null;
         }

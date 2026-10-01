@@ -3,7 +3,7 @@ import { z } from "zod";
 import { inArray } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { auditLogs, doctors } from "@/db/schema";
-import { AuthError, requireMesaSession } from "@/lib/auth/server";
+import { AuthError, requireMesaEscrita } from "@/lib/auth/server";
 import { describeOperationalError, transferOperationalOccupancy } from "@/modules/operational/corrections";
 import { avisarDeslocamento } from "@/modules/operational/displacement-alert";
 import { avisarRemanejamentoQuadro } from "@/modules/operational/reassignment-alert";
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
 
     let session;
     try {
-        session = await requireMesaSession(["admin", "chief"]);
+        session = await requireMesaEscrita(["admin", "chief"]);
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 500;
         return NextResponse.json({ error: error instanceof Error ? error.message : "Unauthorized." }, { status });

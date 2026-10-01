@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -26,7 +27,7 @@ export function MealBreakSessionBar({ session, evaluation, generatedAt }: MealBr
     const run = async (path: "restart" | "reconcile") => {
         setBusy(path);
         try {
-            const response = await fetch(`/api/board/meal-breaks/${path}`, {
+            const response = await fetchMesa(`/api/board/meal-breaks/${path}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ referenceAt: generatedAt }),
