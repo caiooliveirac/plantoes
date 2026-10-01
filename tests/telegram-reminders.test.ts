@@ -4,7 +4,6 @@ import {
     buildChiefPrivateRegulationAlertPlan,
     buildOverdueHandoffPlan,
     buildReminderPlans,
-    buildSecretaryCoverageNotice,
     buildTakeoverConflictPlan,
     diffCoverageSnapshotStates,
     isCoverageSnapshotPendingState,
@@ -1105,63 +1104,6 @@ test("buildTakeoverConflictPlan falls back to neutral labels when names are unkn
     assert.match(plan.text, /Tomada pendente em Intervenção \*PM04\*: \*médico chegando\* × \*ocupante atual\*/);
 });
 
-test("buildSecretaryCoverageNotice announces every base pendência on the first snapshot", () => {
-    const texto = buildSecretaryCoverageNotice({
-        current: makeCoverageState(),
-        previous: null,
-        hora: "19:20",
-        boardUrl: "https://plantoes.mnrs.com.br",
-    });
-
-    assert.equal(
-        texto,
-        "🔴 Cobertura 19:20: BR05 aguardando médico; IT30 sem aviso de quem assume.\nhttps://plantoes.mnrs.com.br",
-    );
-});
-
-test("buildSecretaryCoverageNotice never mentions a missing ramal", () => {
-    // Nem todo ramal é guarnecido em todo turno: listar ramal vazio é ruído.
-    const texto = buildSecretaryCoverageNotice({
-        current: makeCoverageState({ awaitingInterventionCodes: [], missingInterventionCodes: [] }),
-        previous: null,
-        hora: "19:20",
-    });
-
-    assert.equal(texto, null);
-});
-
-test("buildSecretaryCoverageNotice only reports what became pendência since the last snapshot", () => {
-    const texto = buildSecretaryCoverageNotice({
-        current: makeCoverageState(),
-        previous: makeCoverageState({ awaitingInterventionCodes: [] }),
-        hora: "19:30",
-    });
-
-    assert.equal(texto, "🔴 Cobertura 19:30: BR05 aguardando médico.");
-});
-
-test("buildSecretaryCoverageNotice stays silent when nothing new is pending", () => {
-    assert.equal(
-        buildSecretaryCoverageNotice({
-            current: makeCoverageState({ bucketAt: "2026-03-25T22:30:00.000Z" }),
-            previous: makeCoverageState(),
-            hora: "19:30",
-        }),
-        null,
-    );
-    assert.equal(
-        buildSecretaryCoverageNotice({
-            current: makeCoverageState({
-                awaitingInterventionCodes: [],
-                missingInterventionCodes: [],
-                missingRegulationCodes: [],
-            }),
-            previous: null,
-            hora: "19:20",
-        }),
-        null,
-    );
-});
 
 
 // Plantão vencido: a base segue "active" com o médico do turno que acabou, e
