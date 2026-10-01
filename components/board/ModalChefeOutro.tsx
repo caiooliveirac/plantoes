@@ -13,6 +13,7 @@ import "@/app/mesa-kit.css";
 export function ModalChefeOutro({ email, mensagemInicial = null }: { email: string | null; mensagemInicial?: string | null }) {
     const [mensagem, setMensagem] = useState<string | null>(mensagemInicial);
     const [saindo, setSaindo] = useState(false);
+    const [armado, setArmado] = useState(false);
 
     useEffect(() => {
         function abrir(evento: Event) {
@@ -25,7 +26,7 @@ export function ModalChefeOutro({ email, mensagemInicial = null }: { email: stri
 
     if (!mensagem) return null;
 
-    const [quem, pergunta] = dividir(mensagem);
+    const quem = nomeDoChefe(mensagem);
 
     async function entrarComMinhaConta() {
         setSaindo(true);
@@ -46,17 +47,30 @@ export function ModalChefeOutro({ email, mensagemInicial = null }: { email: stri
                 aria-labelledby="mk-chefe-outro-titulo"
                 onClick={(evento) => evento.stopPropagation()}
             >
-                <h2 id="mk-chefe-outro-titulo" className="mk-folha-titulo">{quem}</h2>
+                <h2 id="mk-chefe-outro-titulo" className="mk-folha-titulo">A Mesa é de {quem} agora</h2>
                 <p className="mk-folha-texto">
-                    {email ? <>Você está entrando como <strong>{email}</strong>. </> : null}
-                    {pergunta}
+                    Se você clicar para logar na Mesa, vai derrubar o chefe de plantão{quem ? ` (${quem})` : ""}.
+                    {email ? <> Você está como <strong>{email}</strong>.</> : null}
                 </p>
                 <div className="mk-folha-acoes">
-                    <button type="button" className="mk-botao primario" onClick={entrarComMinhaConta} disabled={saindo}>
-                        {saindo ? "Saindo…" : "Entrar com a minha conta"}
-                    </button>
-                    <button type="button" className="mk-botao" onClick={() => setMensagem(null)} disabled={saindo}>
+                    <button type="button" className="mk-botao primario" onClick={() => setMensagem(null)} disabled={saindo}>
                         Continuar só olhando
+                    </button>
+                    <button
+                        type="button"
+                        className="mk-botao"
+                        disabled={saindo}
+                        onClick={() => {
+                            if (!armado) {
+                                setArmado(true);
+                                window.setTimeout(() => setArmado(false), 5000);
+                                return;
+                            }
+                            void entrarComMinhaConta();
+                        }}
+                    >
+                        {saindo ? "Saindo…" : armado ? `Confirmar: derrubar ${quem || "o chefe"} e logar` : "Sou o chefe de plantão e quero logar"}
+                        {!armado ? <small>dois toques; só se você assumiu a 2031</small> : null}
                     </button>
                 </div>
             </div>
@@ -64,10 +78,8 @@ export function ModalChefeOutro({ email, mensagemInicial = null }: { email: stri
     );
 }
 
-function dividir(mensagem: string): [string, string] {
-    // "O chefe de plantão agora é Dr. Paulo (…). Esqueceu de entrar…": o nome
-    // pode ter ponto ("Dr."), então o corte é antes da pergunta, não no 1º ponto.
-    const corte = mensagem.indexOf(" Esqueceu");
-    if (corte < 0) return [mensagem, ""];
-    return [mensagem.slice(0, corte), mensagem.slice(corte + 1)];
+/** Nome entre "agora é " e " (" ou ".". */
+function nomeDoChefe(mensagem: string): string {
+    const m = /agora é (.+?)(?: \(|\. Esqueceu|$)/.exec(mensagem);
+    return m?.[1]?.trim() ?? "";
 }
