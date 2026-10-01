@@ -17,7 +17,6 @@
    ========================================================================== */
 import { JANELA_MS } from "@/modules/acessos/analise";
 import { faixaDeRede } from "@/modules/acessos/rede";
-import { ENFERMEIRO_ROLE } from "@/modules/auth/contracts";
 
 /** Folga antes da chegada registrada e depois da saída: chegar cedo e sair sem registrar são comuns. */
 export const FOLGA_ANTES_DO_TURNO_MS = 30 * 60_000;
@@ -42,9 +41,10 @@ export interface EntradaDoPortao {
     /** O médico da conta registrou saída há pouco e não está em outro turno:
         quem usa a conta dele na Central agora não é ele (esqueceu logado). */
     saiuDoPlantao?: boolean;
-    /** Só no quadro.mnrs.com.br: o e-mail da conta é do enfermeiro(a) que a
-        chefia registrou para o turno (com as mesmas folgas). Mesa e Tabela
-        nunca passam isto. */
+    /** Só no quadro.mnrs.com.br e na Mesa: o e-mail da conta é do
+        enfermeiro(a) que a chefia registrou para o turno na Mesa (com as
+        mesmas folgas). Na Mesa ele só lê (escrita exige admin/chief). A
+        Tabela nunca passa isto. */
     enfermeiroDoTurno?: boolean;
 }
 
@@ -58,15 +58,8 @@ export function decidirPortao(entrada: EntradaDoPortao): { liberado: boolean; mo
     return { liberado: false, motivo: "fora_do_plantao" };
 }
 
-/** Conta com papel `enfermeiro` (aprovada no Escalas): quadro e Mesa sempre,
-    de qualquer lugar — a Mesa só para ler (escrita exige admin/chief). A
-    Tabela segue a regra comum. */
-export function enfermeiroAbre(roles: readonly string[], sistema: string): boolean {
-    return roles.includes(ENFERMEIRO_ROLE) && (sistema === "quadro" || sistema === "mesa");
-}
-
 export const MENSAGEM_FORA_DO_PLANTAO =
-    "Fora do seu plantão. A Mesa operacional e a Tabela abrem quando a sua chegada estiver registrada no bot, ou num computador da Central.";
+    "Fora do seu plantão. A Mesa operacional e a Tabela abrem quando a sua chegada estiver registrada no bot, ou num computador da Central. Enfermeiro(a): quando a chefia de plantão declarar você na Mesa.";
 
 // ── Lugares ao mesmo tempo ───────────────────────────────────────────────────
 export interface Visto {

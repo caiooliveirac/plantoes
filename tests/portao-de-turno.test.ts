@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { LUGARES_TOLERADOS, contarLugares, decidirPortao, enfermeiroAbre } from "@/modules/acessos/portao";
+import { LUGARES_TOLERADOS, contarLugares, decidirPortao } from "@/modules/acessos/portao";
 
 // ── Portão de turno (docs/monitor-acessos.md) ────────────────────────────────
 test("portão: admin passa sempre, mesmo fora do turno e da Central", () => {
@@ -97,10 +97,15 @@ test("portão: operadores da Central (rádio, TARM — sem escala aqui) só abre
     }
 });
 
-test("portão: papel enfermeiro abre quadro e Mesa de qualquer lugar; Tabela segue a regra comum", () => {
-    assert.equal(enfermeiroAbre(["portal", "enfermeiro"], "quadro"), true);
-    assert.equal(enfermeiroAbre(["portal", "enfermeiro"], "mesa"), true);
-    assert.equal(enfermeiroAbre(["portal", "enfermeiro"], "tabela"), false);
-    assert.equal(enfermeiroAbre(["portal", "tarm"], "mesa"), false);
-    assert.equal(enfermeiroAbre(["doctor"], "quadro"), false);
+test("portão: enfermeiro(a) declarado para o turno passa; papel sozinho não abre nada", () => {
+    assert.deepEqual(decidirPortao({ roles: ["portal", "enfermeiro"], emTurno: false, naCentral: false, enfermeiroDoTurno: true }), { liberado: true, motivo: "enfermeiro" });
+    assert.deepEqual(decidirPortao({ roles: ["portal", "enfermeiro"], emTurno: false, naCentral: false }), { liberado: false, motivo: "fora_do_plantao" });
+});
+
+test("portão: Mesa e quadro procuram o enfermeiro(a) do turno pelo e-mail da sessão", () => {
+    const servico = readFileSync("services/acessos-portao.service.ts", "utf8");
+    assert.match(servico, /sistema === "quadro" \|\| sistema === "mesa"/);
+    const servidor = readFileSync("lib/auth/server.ts", "utf8");
+    assert.equal(servidor.match(/"mesa",/g)?.length, 2);
+    assert.equal(servidor.match(/email: (session|atual)\.user\.email \}/g)?.length, 2);
 });

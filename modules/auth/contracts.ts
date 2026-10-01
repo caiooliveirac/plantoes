@@ -25,10 +25,11 @@ export type OperadorDaCentral = (typeof OPERADORES_DA_CENTRAL)[number];
 
 /**
  * Enfermeiro(a): conta criada quando o Escalas aprova um cadastro de
- * ENFERMEIRO (POST /api/servicos/contas-escala). Sem médico vinculado. O
- * portão abre o Quadro Informativo (editor) e a Mesa (só leitura: toda escrita
- * exige admin/chief) de qualquer lugar e a qualquer hora; na Mesa é isento da
- * presença — não escreve, não disputa a vez.
+ * ENFERMEIRO (POST /api/servicos/contas-escala). Sem médico vinculado. Abre
+ * o Quadro Informativo (editor) e a Mesa (só leitura: toda escrita exige
+ * admin/chief) só no turno em que a chefia o declarou enfermeiro(a) regulador
+ * na Mesa (portão de turno, pelo e-mail); na Mesa é isento da presença — não
+ * escreve, não disputa a vez.
  */
 export const ENFERMEIRO_ROLE = "enfermeiro" as const satisfies UserRole;
 

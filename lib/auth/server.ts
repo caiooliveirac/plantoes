@@ -240,11 +240,12 @@ export async function requireSessionForRead() {
 }
 
 /* Mesa operacional (quadro, ações do quadro, histórico): só de plantão, na
-   Central ou admin — portão de turno, docs/monitor-acessos.md. Folha de
+   Central, enfermeiro(a) declarado pela chefia para o turno (só leitura) ou
+   admin — portão de turno, docs/monitor-acessos.md. Folha de
    ponto, banco de horas, dados do médico e senha seguem abertos. */
 export async function mesaLiberadaPara(session: AuthenticatedSession) {
     const portao = await conferirPortaoDeTurno(
-        { userId: session.user.id, doctorId: session.user.doctorId, roles: session.user.roles },
+        { userId: session.user.id, doctorId: session.user.doctorId, roles: session.user.roles, email: session.user.email },
         lerContextoRequisicao(await headers()),
         "mesa",
     );
@@ -353,7 +354,7 @@ export async function abrirVigiaDaMesa(): Promise<() => Promise<boolean>> {
             const atual = await loadUserSession(parsed, session.sessionId);
             if (!atual) return false;
             const portao = await conferirPortaoDeTurno(
-                { userId: atual.user.id, doctorId: atual.user.doctorId, roles: atual.user.roles },
+                { userId: atual.user.id, doctorId: atual.user.doctorId, roles: atual.user.roles, email: atual.user.email },
                 contexto,
                 "mesa",
             );
