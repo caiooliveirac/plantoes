@@ -153,6 +153,7 @@ async function enviarAvisos(referenceDate: Date, admins: string[], dia: string, 
         if (atitudeDeRiscoLigada()) {
             const bruto = dados.brutos.get(analise.conta.userId);
             const atitude = decidirAtitude({
+                email: analise.conta.email,
                 papeis: analise.conta.papeis,
                 nivel: analise.nivel,
                 episodios: analise.episodios,

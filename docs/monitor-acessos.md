@@ -15,7 +15,8 @@ imprimir.
 **Heurística de risco alto age; admin não** (decisão do Caio, 28/09/2026).
 Episódio forte derruba as sessões e avisa. Se a conta voltar a aparecer em
 lugares diferentes dentro de 24 h, a senha é trocada. Papel `admin` não recebe
-nenhuma das duas. Atenção só documenta. Além disso, duas regras objetivas agem
+nenhuma das duas, nem conta compartilhada de propósito (`CONTAS_COMPARTILHADAS`
+em `modules/acessos/atitude.ts`: hoje só `interno.samu`). Atenção só documenta. Além disso, duas regras objetivas agem
 sozinhas — ver [Portão de turno e limite de lugares](#portão-de-turno-e-limite-de-lugares).
 
 ## O que é registrado
@@ -70,7 +71,17 @@ linha de log `[acessos]`; nunca derruba login nem quadro.
 público cada), IPv6 por prefixo /64. Rede usada por **3+ contas** no período é
 **coletiva** (Central, hospital, base).
 
-**Janela simultânea**: janela de 5 min com duas sessões diferentes em redes
+**Lugar** (01/10/2026, `marcarLugares`) é onde UMA pessoa pode estar numa
+janela. Viram um lugar só: a mesma sessão em duas redes; o mesmo aparelho
+(cookie `plantoes_aparelho`); a mesma faixa (/24, /64 — o pool da Central); a
+Retransmissão Privada do iCloud/WARP; e o mesmo celular (user-agent idêntico)
+pulando de IP dentro da operadora (/16, /32). Pedido do próprio servidor
+(127.0.0.1, `::1`) não é lugar. Antes disso, um celular trocando de 4G contava
+"3 redes ao mesmo tempo" e a conta caía sozinha (6 falsos positivos em
+28–30/09/2026). Dois PCs da mesma faixa deixaram de ser episódio: quem pega
+duas Mesas abertas é a vez única ([presenca-mesa.md](presenca-mesa.md)).
+
+**Janela simultânea**: janela de 5 min com duas sessões em lugares
 diferentes. Janelas simultâneas seguidas (até uma vazia no meio) formam um
 **episódio**. O trecho mostrado vai de quando a 2ª rede apareceu até a
 penúltima sair.
@@ -79,7 +90,7 @@ penúltima sair.
 
 | Força | Quando | Por quê |
 |---|---|---|
-| **Forte** | 3+ redes ao mesmo tempo (não todas coletivas) | Uma pessoa não está em três lugares. |
+| **Forte** | 3+ lugares ao mesmo tempo (não todas coletivas) | Uma pessoa não está em três lugares. |
 | **Forte** | uso ativo nos dois lados em **2+ janelas**, com dois computadores (ou dois celulares) | Ninguém opera dois computadores em dois lugares. |
 | **Forte** | uso ativo nos dois lados em **4+ janelas** com celular + computador | Uma pessoa alterna entre celular e PC por alguns minutos; 20 min em paralelo, não. |
 | **Forte** | cidades a **50+ km** e tela à vista nos dois lados em 2+ janelas | Distância com tela aberta dos dois lados. |

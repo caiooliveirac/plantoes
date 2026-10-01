@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { nomeDoMedicoDaSessao } from "@/services/chefe-de-plantao.service";
 import { hasDatabaseUrl } from "@/db";
 import { mesaLiberadaPara, presencaDaPagina, readAuthenticatedSession } from "@/lib/auth/server";
 import { MesaPresenca } from "@/components/board/MesaPresenca";
@@ -36,6 +37,7 @@ export default async function HistoricoTurnoAnteriorPage({
         limiteOciosoSeg: limiteOciosoSeg(),
         tenteEmSeg: "tenteEmSeg" in presenca ? presenca.tenteEmSeg : undefined,
         email: session!.user.email,
+        nome: (await nomeDoMedicoDaSessao(session!.user.doctorId)) ?? session!.user.email,
     };
     if (presenca.estado === "ocupada" || presenca.estado === "bloqueada") {
         return <MesaPresenca {...propsPresenca} />;

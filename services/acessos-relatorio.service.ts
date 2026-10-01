@@ -245,6 +245,7 @@ export async function carregarMonitor(opcoes: { desde: Date; ate?: Date; userId?
             ultimoIp: s.lastIp,
             encerradaEm: s.revokedAt,
             motivoEncerramento: s.revokedReason,
+            aparelhoId: s.deviceId,
         });
     }
     for (const j of linhasJanelas) {
@@ -297,6 +298,7 @@ export async function carregarMonitor(opcoes: { desde: Date; ate?: Date; userId?
                 ultimoIp: s.lastIp,
                 encerradaEm: s.revokedAt,
                 motivoEncerramento: s.revokedReason,
+            aparelhoId: s.deviceId,
             });
         }
     }

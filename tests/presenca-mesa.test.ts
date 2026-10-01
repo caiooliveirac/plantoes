@@ -32,19 +32,20 @@ test("aparelho: em produção o cookie é __Host- (subdomínio irmão não plant
     assert.equal(nomeCookieAparelho({ NODE_ENV: "development" }), "plantoes_aparelho");
 });
 
-test("modo: vazio é sombra (registra sem bloquear); 1 vale; 0 desliga", () => {
-    assert.equal(modoPresenca({}), "sombra");
+test("modo: vazio vale; sombra registra sem bloquear; 0 desliga", () => {
+    assert.equal(modoPresenca({}), "valendo");
+    assert.equal(modoPresenca({ MESA_PRESENCA: "sombra" }), "sombra");
     assert.equal(modoPresenca({ MESA_PRESENCA: "1" }), "valendo");
     assert.equal(modoPresenca({ MESA_PRESENCA: "valendo" }), "valendo");
     assert.equal(modoPresenca({ MESA_PRESENCA: "0" }), "desligado");
-    assert.equal(modoPresenca({ MESA_PRESENCA: "talvez" }), "sombra");
+    assert.equal(modoPresenca({ MESA_PRESENCA: "talvez" }), "valendo");
 });
 
-test("ociosidade: 15 min por padrão; fora de 5–240 min volta ao padrão", () => {
-    assert.equal(limiteOciosoSeg({}), 900);
+test("ociosidade: 30 min por padrão; fora de 5–240 min volta ao padrão", () => {
+    assert.equal(limiteOciosoSeg({}), 1800);
     assert.equal(limiteOciosoSeg({ MESA_OCIOSO_MIN: "20" }), 1200);
-    assert.equal(limiteOciosoSeg({ MESA_OCIOSO_MIN: "1" }), 900);
-    assert.equal(limiteOciosoSeg({ MESA_OCIOSO_MIN: "abc" }), 900);
+    assert.equal(limiteOciosoSeg({ MESA_OCIOSO_MIN: "1" }), 1800);
+    assert.equal(limiteOciosoSeg({ MESA_OCIOSO_MIN: "abc" }), 1800);
 });
 
 test("ociosidade: última interação nunca volta no tempo e nunca passa de agora", () => {

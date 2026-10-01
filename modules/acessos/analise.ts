@@ -18,7 +18,7 @@
    ========================================================================== */
 import type { GeoAcesso } from "@/lib/acessos/contexto";
 import { descreverAparelho, type Aparelho, type TipoAparelho } from "@/modules/acessos/aparelho";
-import { chaveDeRede, descreverLocal, distanciaKm, familiaDoIp, temPosicaoDeCidade, type Provedor } from "@/modules/acessos/rede";
+import { chaveDeRede, descreverLocal, distanciaKm, faixaDeRede, familiaDoIp, temPosicaoDeCidade, type Provedor } from "@/modules/acessos/rede";
 import { duracao, intervalo, lista, plural, quando } from "@/modules/acessos/texto";
 import { ehOperadorDaCentral } from "@/modules/auth/contracts";
 
@@ -81,6 +81,8 @@ export interface SessaoMonitorada {
     ultimoIp: string | null;
     encerradaEm: Date | null;
     motivoEncerramento: string | null;
+    /** Cookie de aparelho (auth_sessions.device_id), quando a sessão o recebeu. */
+    aparelhoId?: string | null;
 }
 
 export interface JanelaDeAtividade {
@@ -300,6 +302,8 @@ function inicioDaJanela(data: Date) {
 interface Presenca {
     sessaoId: string;
     rede: string;
+    /** Onde UMA pessoa pode estar nesta janela (marcarLugares). Vazio até marcar. */
+    lugar: string;
     pedidos: number;
     visiveis: number;
     emUso: number;
@@ -323,7 +327,7 @@ function presencasPorJanela(janelas: JanelaDeAtividade[], eventos: EventoDeSessa
         const chave = `${sessaoId}|${rede}`;
         let presenca = mapa.get(chave);
         if (!presenca) {
-            presenca = { sessaoId, rede, pedidos: 0, visiveis: 0, emUso: 0, interacoes: 0, primeira, ultima };
+            presenca = { sessaoId, rede, lugar: "", pedidos: 0, visiveis: 0, emUso: 0, interacoes: 0, primeira, ultima };
             mapa.set(chave, presenca);
         }
         if (primeira < presenca.primeira) presenca.primeira = primeira;
@@ -331,26 +335,76 @@ function presencasPorJanela(janelas: JanelaDeAtividade[], eventos: EventoDeSessa
         return presenca;
     };
     for (const janela of janelas) {
+        if (ehLoopback(janela.ip)) continue;
         const presenca = pegar(inicioDaJanela(janela.inicio), janela.sessaoId, chaveDeRede(janela.ip), janela.primeira, janela.ultima);
         presenca.pedidos += janela.pedidos;
         presenca.visiveis += janela.visiveis;
         presenca.emUso += janela.emUso;
     }
     for (const evento of eventos) {
-        if (!evento.sessaoId || !evento.ip || !INTERACOES.has(evento.tipo)) continue;
+        if (!evento.sessaoId || !evento.ip || !INTERACOES.has(evento.tipo) || ehLoopback(evento.ip)) continue;
         pegar(inicioDaJanela(evento.em), evento.sessaoId, chaveDeRede(evento.ip), evento.em, evento.em).interacoes += 1;
     }
     return porJanela;
 }
 
-/** Pares (a, b) de sessões diferentes em redes diferentes dentro de uma janela. */
+/** Pedido do próprio servidor (porteiro, serviços internos): não é lugar de ninguém. */
+function ehLoopback(ip: string) {
+    return ip.startsWith("127.") || ip === "::1";
+}
+
+/* Retransmissão Privada do iCloud (e WARP): cada pedido sai por um IP de
+   Akamai/Cloudflare/Fastly, então um iPhone parece estar em várias redes. */
+const RETRANSMISSAO_PRIVADA = /^(2a02:26f7:|2a09:bac[0-6]:|2606:54c[0-3]:|172\.(22[4-9]|23\d)\.|104\.28\.)/;
+
+/** Como a sessão se identifica além do IP: cookie de aparelho e user-agent. */
+export type IdentidadeDaSessao = (sessaoId: string) => { aparelhoId: string | null; userAgent: string | null };
+
+/** Bloco da operadora (IPv4 /16, IPv6 /32): celular pulando de IP no 4G fica dentro dele. */
+function blocoDaOperadora(rede: string) {
+    return familiaDoIp(rede) === 4 ? rede.split(".").slice(0, 2).join(".") : rede.split(":").slice(0, 2).join(":");
+}
+
+/* Lugar = onde UMA pessoa pode estar num instante. Na mesma janela viram um
+   lugar só: a mesma sessão em duas redes; o mesmo aparelho (cookie); a mesma
+   faixa (/24, /64 — a Central sai por um pool de IPs); a Retransmissão Privada;
+   e o mesmo celular (user-agent idêntico) pulando de IP dentro da operadora.
+   Sem isso, um celular trocando de 4G contava "3 redes ao mesmo tempo" e a
+   conta caía sozinha (falsos positivos de 28–30/09/2026). */
+function marcarLugares(presencas: Presenca[], aparelhoDe: (sessaoId: string) => Aparelho, identidade: IdentidadeDaSessao) {
+    const pai = new Map<string, string>();
+    const raiz = (no: string): string => {
+        const acima = pai.get(no) ?? no;
+        if (acima === no) return no;
+        const topo = raiz(acima);
+        pai.set(no, topo);
+        return topo;
+    };
+    const unir = (a: string, b: string) => {
+        const ra = raiz(a);
+        const rb = raiz(b);
+        if (ra !== rb) pai.set(ra > rb ? ra : rb, ra > rb ? rb : ra);
+    };
+    const faixaDe = (p: Presenca) => `f:${RETRANSMISSAO_PRIVADA.test(p.rede) ? "retransmissao-privada" : faixaDeRede(p.rede)}`;
+    for (const p of presencas) {
+        const faixa = faixaDe(p);
+        unir(faixa, `s:${p.sessaoId}`);
+        const { aparelhoId, userAgent } = identidade(p.sessaoId);
+        if (aparelhoId) unir(faixa, `a:${aparelhoId}`);
+        const tipo = aparelhoDe(p.sessaoId).tipo;
+        if (userAgent && (tipo === "celular" || tipo === "tablet")) unir(faixa, `m:${userAgent}|${blocoDaOperadora(p.rede)}`);
+    }
+    for (const p of presencas) p.lugar = raiz(faixaDe(p));
+}
+
+/** Pares (a, b) em lugares diferentes dentro de uma janela. */
 function paresCruzados(presencas: Presenca[]) {
     const pares: Array<[Presenca, Presenca]> = [];
     for (let i = 0; i < presencas.length; i += 1) {
         for (let j = i + 1; j < presencas.length; j += 1) {
             const a = presencas[i];
             const b = presencas[j];
-            if (a.sessaoId !== b.sessaoId && a.rede !== b.rede) pares.push([a, b]);
+            if (a.lugar !== b.lugar) pares.push([a, b]);
         }
     }
     return pares;
@@ -384,6 +438,8 @@ interface JanelaSimultanea {
     visivelNosDois: boolean;
     tiposEmUso: Set<TipoAparelho>;
     trecho: { inicio: number; fim: number };
+    /** Lugares diferentes nesta janela (marcarLugares). */
+    lugares: number;
 }
 
 function classificarEpisodio(
@@ -448,9 +504,10 @@ function classificarEpisodio(
     const ressalvas: string[] = [];
     let forca: ForcaEpisodio = "fraco";
 
-    if (nomesDeRede.length >= 3 && !todasColetivas) {
+    const lugares = Math.max(...janelas.map((j) => j.lugares));
+    if (lugares >= 3 && !todasColetivas) {
         forca = "forte";
-        motivos.push(`${nomesDeRede.length} redes diferentes ao mesmo tempo.`);
+        motivos.push(`${lugares} lugares diferentes ao mesmo tempo.`);
     }
     const janelasParaForte = umaPessoaPlausivel ? LIMITES.janelasUsoCelularComputador : LIMITES.janelasUsoMesmoTipo;
     if (janelasComUsoNosDois >= janelasParaForte) {
@@ -527,6 +584,7 @@ export function detectarEpisodios(
     eventos: EventoDeSessao[],
     aparelhoDe: (sessaoId: string) => Aparelho,
     redes: Map<string, InfoDeRede>,
+    identidade: IdentidadeDaSessao = () => ({ aparelhoId: null, userAgent: null }),
 ): { episodios: EpisodioSimultaneo[]; janelasMesmaSessaoDuasRedes: number } {
     const porJanela = presencasPorJanela(janelas, eventos);
     const simultaneas: JanelaSimultanea[] = [];
@@ -548,6 +606,7 @@ export function detectarEpisodios(
             }
         }
 
+        marcarLugares(presencas, aparelhoDe, identidade);
         const pares = paresCruzados(presencas);
         if (pares.length === 0) continue;
         const participantes = new Set<Presenca>(pares.flat());
@@ -563,7 +622,8 @@ export function detectarEpisodios(
             if (visivel(a) && visivel(b)) visivelNosDois = true;
         }
         const envolvidas = [...participantes];
-        simultaneas.push({ inicio, presencas: envolvidas, usoNosDois, visivelNosDois, tiposEmUso, trecho: trechoSobreposto(envolvidas) });
+        const lugares = new Set(envolvidas.map((p) => p.lugar)).size;
+        simultaneas.push({ inicio, presencas: envolvidas, usoNosDois, visivelNosDois, tiposEmUso, trecho: trechoSobreposto(envolvidas), lugares });
     }
 
     const episodios: EpisodioSimultaneo[] = [];
@@ -758,7 +818,11 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
         return aparelho;
     };
 
-    const detectados = detectarEpisodios(janelas, eventos, aparelhoDe, redes);
+    const identidade: IdentidadeDaSessao = (sessaoId) => {
+        const sessao = sessaoPorId.get(sessaoId);
+        return { aparelhoId: sessao?.aparelhoId ?? null, userAgent: sessao?.userAgent ?? null };
+    };
+    const detectados = detectarEpisodios(janelas, eventos, aparelhoDe, redes, identidade);
     // Chefia, coordenação e operadores da Central (rádio, TARM) passam na Central fora de qualquer escala.
     const papeisDeGestao = conta.papeis.some((papel) => papel === "chief" || papel === "admin") || ehOperadorDaCentral(conta.papeis);
     const episodios = detectados.episodios.map((episodio) => aplicarPlantao(episodio, entrada.plantoes, redes, papeisDeGestao));
@@ -771,7 +835,7 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
     const porSessao = new Map<string, { redes: Set<string>; pedidos: number; ultima: Date | null }>();
     let ultimaAtividade: Date | null = null;
     const abertasAgora = new Set<string>();
-    const redesAgora = new Set<string>();
+    const presencasAgora = new Map<string, Presenca>();
     for (const janela of janelas) {
         const rede = chaveDeRede(janela.ip);
         const info = infoDe(redes, rede);
@@ -806,9 +870,16 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
         if (!ultimaAtividade || janela.ultima > ultimaAtividade) ultimaAtividade = janela.ultima;
         if (agora.getTime() - janela.ultima.getTime() <= ABERTA_AGORA_MS) {
             abertasAgora.add(janela.sessaoId);
-            redesAgora.add(rede);
+            if (!ehLoopback(janela.ip)) {
+                presencasAgora.set(`${janela.sessaoId}|${rede}`, {
+                    sessaoId: janela.sessaoId, rede, lugar: "", pedidos: 0, visiveis: 0, emUso: 0, interacoes: 0, primeira: janela.primeira, ultima: janela.ultima,
+                });
+            }
         }
     }
+    const listaAgora = [...presencasAgora.values()];
+    marcarLugares(listaAgora, aparelhoDe, identidade);
+    const lugaresAgora = new Set(listaAgora.map((p) => p.lugar)).size;
     for (const evento of eventos) {
         if (evento.sessaoId && INTERACOES.has(evento.tipo) && (!ultimaAtividade || evento.em > ultimaAtividade)) {
             ultimaAtividade = evento.em;
@@ -1106,7 +1177,7 @@ export function analisarConta(entrada: EntradaAnalise): AnaliseDaConta {
         lugares: resumoLugares,
         sessoes: resumoSessoes,
         entradasComSenha: senhas,
-        abertaAgora: { sessoes: abertasAgora.size, redes: redesAgora.size },
+        abertaAgora: { sessoes: abertasAgora.size, redes: lugaresAgora },
         ultimaAtividade,
         plantao: turnos
             ? { turnos: turnos.length, agora: plantaoEm(turnos, agora, 0), minutosNaRedeForaDoTurno }

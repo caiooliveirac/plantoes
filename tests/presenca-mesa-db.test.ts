@@ -115,7 +115,7 @@ test("presença (banco): fechar a aba solta a vez; o outro aparelho entra e vira
     assert.equal(negacoes[0].deviceId, celular);
 });
 
-test("presença (banco): tela parada 20 min bloqueia; F5 não desbloqueia; senha sim", { skip }, async () => {
+test("presença (banco): tela parada 35 min bloqueia; F5 não desbloqueia; senha sim", { skip }, async () => {
     const { presenca, getDb, schema } = await modulos();
     presenca.limparMemoriaDaPresenca();
     const userId = await criarConta();
@@ -123,11 +123,11 @@ test("presença (banco): tela parada 20 min bloqueia; F5 não desbloqueia; senha
     const celular = randomUUID();
     assert.equal((await presenca.baterPresenca(conta(userId, pc), visivel, "valendo")).estado, "ok");
 
-    // Ninguém mexe há 20 min; a batida diz o mesmo.
+    // Ninguém mexe há 35 min; a batida diz o mesmo.
     await getDb().update(schema.viewPresence)
-        .set({ lastHumanAt: new Date(Date.now() - 20 * 60_000) })
+        .set({ lastHumanAt: new Date(Date.now() - 35 * 60_000) })
         .where(eq(schema.viewPresence.userId, userId));
-    const parado = await presenca.baterPresenca(conta(userId, pc), { visivel: true, paradoSeg: 1_200, humanoAgora: false }, "valendo");
+    const parado = await presenca.baterPresenca(conta(userId, pc), { visivel: true, paradoSeg: 2_100, humanoAgora: false }, "valendo");
     assert.equal(parado.estado, "bloqueada");
     assert.equal((await presenca.conferirPresenca(conta(userId, pc), "valendo")).estado, "bloqueada");
     // A vez ficou livre na hora: o dono abre no celular sem esperar.
@@ -169,9 +169,9 @@ test("presença (banco): em sombra nada bloqueia, mas o que teria acontecido é 
     assert.equal((await presenca.conferirPresenca(conta(userId, celular), "sombra")).estado, "ok");
 
     await getDb().update(schema.viewPresence)
-        .set({ lastHumanAt: new Date(Date.now() - 20 * 60_000) })
+        .set({ lastHumanAt: new Date(Date.now() - 35 * 60_000) })
         .where(and(eq(schema.viewPresence.userId, userId), eq(schema.viewPresence.deviceId, pc)));
-    const parado = await presenca.baterPresenca(conta(userId, pc), { visivel: true, paradoSeg: 1_200, humanoAgora: false }, "sombra");
+    const parado = await presenca.baterPresenca(conta(userId, pc), { visivel: true, paradoSeg: 2_100, humanoAgora: false }, "sombra");
     assert.equal(parado.estado, "ok");
     assert.equal((await eventos(userId, "mesa_ocupada_negada_sombra")).length, 1);
     assert.equal((await eventos(userId, "mesa_bloqueada_ociosa_sombra")).length, 1);
