@@ -210,6 +210,14 @@ do Caio). Desligar em emergência: `ACESSOS_PORTAO_TURNO=0` /
   portal. **Deploy do porteiro antes do plantões.**
 - WebSocket da Tabela já aberto não é reconferido até reconectar (limitação do
   `auth_request`, igual à revogação).
+- **Quadro da Central** (`quadro.mnrs.com.br`, `sistema = "quadro"`): mesma
+  regra da Tabela e, além dela, motivo `enfermeiro` — o e-mail da conta está
+  nos `emails` do enfermeiro(a) que a chefia registrou na Mesa para o turno
+  (tabela `enfermeiros_plantao`, migration 0054), com as mesmas folgas (30 min
+  antes do início, 60 min depois do fim). Nome digitado à mão (escala fora do
+  ar) não tem e-mail: não libera. Erro de banco nessa consulta fecha (só ela).
+  O quadro lê turno, enfermeiro(a), chefe (2031) e bases em
+  `GET /api/servicos/quadro/plantao` (x-escala-token).
 
 ### Mais de 3 lugares ao mesmo tempo: derruba tudo
 

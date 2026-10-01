@@ -49,6 +49,7 @@ import { ChiefExitGate } from "@/components/board/ChiefExitGate";
 import { ChiefArrivalRequestsRail } from "@/components/board/ChiefArrivalRequestsRail";
 import { CommandPalette } from "@/components/board/CommandPalette";
 import { BoardHero } from "@/components/board/BoardHero";
+import { EnfermeiroDoPlantao } from "@/components/board/EnfermeiroDoPlantao";
 import { BoardQuickFilters, type BoardRoleFilter, type BoardStatusFilter } from "@/components/board/BoardQuickFilters";
 import { InlineTimeEditor } from "@/components/board/InlineTimeEditor";
 import { RowActions } from "@/components/board/RowActions";
@@ -4042,6 +4043,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             criticalCount={criticalCards.length}
                             canManage={Boolean(session?.canManage)}
                             onOpenCriticalQueue={session?.canManage ? () => openDrawer() : undefined}
+                            enfermeiro={session ? <EnfermeiroDoPlantao podeEditar={Boolean(session.canManage)} atualizadoEm={generatedAt} /> : null}
                         />
 
                         {session?.canManage && (

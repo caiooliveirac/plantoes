@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { Flame, History, Stethoscope, Truck } from "lucide-react";
@@ -16,6 +16,8 @@ interface BoardHeroProps {
     criticalCount: number;
     canManage: boolean;
     onOpenCriticalQueue?: () => void;
+    /** Enfermeiro(a) do plantão (EnfermeiroDoPlantao), ao lado do turno. */
+    enfermeiro?: ReactNode;
 }
 
 function formatDateLabel(iso: string) {
@@ -37,6 +39,7 @@ export function BoardHero({
     criticalCount,
     canManage,
     onOpenCriticalQueue,
+    enfermeiro,
 }: BoardHeroProps) {
     const dateLabel = useMemo(() => formatDateLabel(generatedAt), [generatedAt]);
 
@@ -57,6 +60,7 @@ export function BoardHero({
                     <h1>{shiftLong} em curso</h1>
                     <p>{dateLabel}</p>
                 </div>
+                {enfermeiro}
             </div>
 
             <div className="board-hero__stats">

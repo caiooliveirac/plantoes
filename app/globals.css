@@ -11333,8 +11333,9 @@ button.chief-payable-tag:focus-visible {
 
 .board-hero__shift {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 14px;
+    gap: 8px 14px;
 }
 
 .board-hero__chip {
@@ -11450,6 +11451,80 @@ button.chief-payable-tag:focus-visible {
     color: var(--accent-fraud, var(--accent-warn));
 }
 .board-hero__action.critical:hover { background: color-mix(in oklab, var(--accent-fraud, var(--accent-warn)) 30%, transparent); }
+
+/* Enfermeiro(a) do plantão (components/board/EnfermeiroDoPlantao.tsx) */
+.enf-plantao {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 340px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--surface-elevated-border);
+    color: var(--muted-strong);
+    font: inherit;
+    font-size: 0.74rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.enf-plantao strong {
+    color: var(--text);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.enf-plantao svg { flex: none; color: var(--accent-confirm); }
+.enf-plantao.is-vazio svg { color: var(--muted); }
+.enf-plantao__rotulo { color: var(--muted); }
+.enf-plantao.is-editavel {
+    appearance: none;
+    cursor: pointer;
+    transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.enf-plantao.is-editavel:hover,
+.enf-plantao.is-editavel[data-state="open"] {
+    border-color: var(--accent-confirm);
+}
+.enf-plantao.is-editavel.is-vazio {
+    border-style: dashed;
+    border-color: color-mix(in oklab, var(--accent-warn) 60%, var(--surface-elevated-border));
+}
+.enf-plantao.is-editavel.is-vazio strong { color: var(--accent-warn); }
+.enf-plantao.is-enviando { opacity: 0.7; }
+
+.enf-plantao__painel { width: 340px; }
+.enf-plantao__aviso {
+    margin: 0;
+    color: var(--accent-warn);
+    font-size: 0.74rem;
+}
+.enf-plantao__lista {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 260px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.enf-plantao__opcao {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    font-size: 0.86rem;
+    cursor: pointer;
+}
+.enf-plantao__opcao small { color: var(--muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.enf-plantao__opcao.is-destaque { background: var(--accent-confirm-soft); }
+.enf-plantao__opcao.is-atual span { color: var(--accent-confirm); font-weight: 600; }
+.enf-plantao__vazio { padding: 6px 10px; color: var(--muted); font-size: 0.8rem; }
 
 @media (max-width: 1080px) {
     .board-hero {

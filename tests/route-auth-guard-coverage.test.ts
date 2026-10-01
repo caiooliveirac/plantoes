@@ -37,6 +37,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "app/api/servicos/contas-portal/route.ts": "x-portal-token (PORTAL_CONTAS_TOKEN); cria só conta com papel portal, nunca altera conta existente.",
     "app/api/servicos/contas-escala/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); só dá papéis de operador da Central (tarm, radio_operador), nunca troca senha de conta existente.",
     "app/api/servicos/portal/acesso/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o porteiro confere a sessão do portal e reporta o uso (monitor de acessos).",
+    "app/api/servicos/quadro/plantao/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o quadro da Central lê turno, enfermeiro(a), chefe e bases (só nomes, sem e-mail).",
     // Sonda de saúde: não lê dado de ninguém.
     "app/api/health/route.ts": "health check (identidade do runtime).",
     "app/healthz/route.ts": "health check.",

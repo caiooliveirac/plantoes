@@ -1032,3 +1032,32 @@ export const pedidosDoMedico = operationsV2.table(
             .where(sql`status = 'pendente'`),
     ],
 );
+
+/**
+ * Enfermeiro(a) do plantão (migration 0054), registrado pela chefia na Mesa.
+ * Uma linha ativa (`substituidoEm` null) por turno; registrar outro ou limpar
+ * só marca `substituidoEm` — o histórico é a auditoria. `profissionalId` é o
+ * id do profissional na escala (null quando digitado à mão). `emails` libera
+ * o quadro.mnrs.com.br pelo porteiro (services/acessos-portao.service.ts).
+ */
+export const enfermeirosPlantao = operationsV2.table(
+    "enfermeiros_plantao",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        turnoData: date("turno_data").notNull(),
+        turno: varchar("turno", { length: 2 }).notNull(),
+        profissionalId: text("profissional_id"),
+        nome: text("nome").notNull(),
+        emails: text("emails").array().notNull().default(sql`'{}'::text[]`),
+        telefone: text("telefone"),
+        registradoPor: uuid("registrado_por").references(() => users.id),
+        registradoEm: timestamp("registrado_em", { withTimezone: true }).notNull().defaultNow(),
+        substituidoEm: timestamp("substituido_em", { withTimezone: true }),
+    },
+    (table) => [
+        uniqueIndex("enfermeiros_plantao_ativo_idx")
+            .on(table.turnoData, table.turno)
+            .where(sql`substituido_em is null`),
+        index("enfermeiros_plantao_turno_idx").on(table.turnoData, table.turno, table.registradoEm),
+    ],
+);
