@@ -10,19 +10,23 @@
        turno: { data: "YYYY-MM-DD", turno: "SD" | "SN" },
        enfermeiro: { nome, telefone } | null,   // registrado pela chefia na Mesa
        chefe: { nome } | null,                   // quem ocupa a 2031 agora
-       bases: [{ codigo, nome, ativa, medico }] }
+       bases: [{ codigo, nome, ativa, medico }],
+       ramais: [{ ramal, nome, ativa, medico }] }
 
    Bases = o mesmo read model da Mesa (listInterventionBoard): só bases
    ativas no cadastro (a diurna some à noite), na ordem do quadro. `ativa`
    false = desativada neste turno pela chefia. `medico` = titular no quadro
    agora (ocupação com chegada no quadro e sem handoff), com a dupla como
    "Fulano + Beltrano"; null = sem cobertura.
+
+   Ramais = o read model da regulação na Mesa (listRegulationBoard), mesma
+   regra: `medico` só com ocupação ativa no quadro agora; null = vazio.
    ========================================================================== */
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { hasDatabaseUrl } from "@/db";
 import { turnoDoMomento } from "@/modules/operational/enfermeiro-plantao";
-import { listInterventionBoard, type InterventionBoardRow } from "@/services/board.service";
+import { listInterventionBoard, listRegulationBoard, type InterventionBoardRow, type RegulationBoardRow } from "@/services/board.service";
 import { chefeDePlantaoAtual } from "@/services/chefe-de-plantao.service";
 import { enfermeiroDoTurno } from "@/services/enfermeiro-plantao.service";
 
@@ -38,11 +42,12 @@ function nomeCurto(nome: string | null, exibicao: string | null) {
     return escolhido || null;
 }
 
-function medicoDaBase(linha: InterventionBoardRow) {
+function medicoDaLinha(linha: InterventionBoardRow | RegulationBoardRow) {
     if (linha.status !== "active") return null;
     const titular = nomeCurto(linha.doctorName, linha.displayName);
     if (!titular) return null;
-    const dupla = (linha.companionOccupants ?? [])
+    // dupla na mesma base só existe na intervenção
+    const dupla = ("companionOccupants" in linha ? linha.companionOccupants ?? [] : [])
         .map((outro) => nomeCurto(outro.doctorName, outro.displayName))
         .filter((nome): nome is string => Boolean(nome));
     return [titular, ...dupla].join(" + ");
@@ -62,10 +67,11 @@ export async function GET(request: NextRequest) {
 
     const turno = turnoDoMomento();
     try {
-        const [enfermeiro, chefe, bases] = await Promise.all([
+        const [enfermeiro, chefe, bases, ramais] = await Promise.all([
             enfermeiroDoTurno(turno),
             chefeDePlantaoAtual(),
             listInterventionBoard(),
+            listRegulationBoard(),
         ]);
         return NextResponse.json({
             ok: true,
@@ -76,7 +82,13 @@ export async function GET(request: NextRequest) {
                 codigo: linha.baseCode,
                 nome: linha.baseLabel,
                 ativa: linha.status !== "disabled",
-                medico: medicoDaBase(linha),
+                medico: medicoDaLinha(linha),
+            })),
+            ramais: ramais.map((linha) => ({
+                ramal: linha.postCode,
+                nome: linha.postLabel,
+                ativa: linha.status !== "disabled",
+                medico: medicoDaLinha(linha),
             })),
         }, { headers: { "cache-control": "no-store" } });
     } catch (error) {
