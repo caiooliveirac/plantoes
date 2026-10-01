@@ -29,9 +29,9 @@ interface Pedido {
  * próximo turno" = dobra). Ciente cria a continuação; recusar só marca.
  * Rotas: GET /api/mesa/pedidos-do-medico, POST .../[id]/decidir.
  */
-export function PedidosDoMedicoRail() {
+export function PedidosDoMedicoRail({ pedidosIniciais = [] }: { pedidosIniciais?: Pedido[] } = {}) {
     const router = useRouter();
-    const [pedidos, setPedidos] = useState<Pedido[]>([]);
+    const [pedidos, setPedidos] = useState<Pedido[]>(pedidosIniciais);
     const [decidindo, setDecidindo] = useState<string | null>(null);
 
     const carregar = useCallback(async () => {

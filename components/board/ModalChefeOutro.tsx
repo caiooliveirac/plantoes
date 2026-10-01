@@ -10,8 +10,8 @@ import "@/app/mesa-kit.css";
  * (lib/auth/server.ts requireMesaEscrita). Folha no celular, diálogo no
  * desktop. Nunca oferece "assumir": a Mesa não tem botão de assumir.
  */
-export function ModalChefeOutro({ email }: { email: string | null }) {
-    const [mensagem, setMensagem] = useState<string | null>(null);
+export function ModalChefeOutro({ email, mensagemInicial = null }: { email: string | null; mensagemInicial?: string | null }) {
+    const [mensagem, setMensagem] = useState<string | null>(mensagemInicial);
     const [saindo, setSaindo] = useState(false);
 
     useEffect(() => {
@@ -65,7 +65,9 @@ export function ModalChefeOutro({ email }: { email: string | null }) {
 }
 
 function dividir(mensagem: string): [string, string] {
-    const corte = mensagem.indexOf(". ");
+    // "O chefe de plantão agora é Dr. Paulo (…). Esqueceu de entrar…": o nome
+    // pode ter ponto ("Dr."), então o corte é antes da pergunta, não no 1º ponto.
+    const corte = mensagem.indexOf(" Esqueceu");
     if (corte < 0) return [mensagem, ""];
-    return [mensagem.slice(0, corte + 1), mensagem.slice(corte + 2)];
+    return [mensagem.slice(0, corte), mensagem.slice(corte + 1)];
 }

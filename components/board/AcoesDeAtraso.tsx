@@ -18,6 +18,8 @@ interface AcoesDeAtrasoProps {
     arrivalDelayWaived: boolean;
     /** Início da janela prevista (ISO) — vira a hora do botão "Chegou no horário". */
     scheduledStartAt: string | null;
+    /** Só para render estático/teste: abre a folha do abono já aberta. */
+    folhaInicial?: "abonar" | null;
 }
 
 /**
@@ -26,9 +28,9 @@ interface AcoesDeAtrasoProps {
  *  - "Desconsiderar atraso": abono (banco e pagamento como pontual), hora intacta.
  * Já abonado: botão pequeno para reverter. docs/plano-mesa-chefe-plantonista.md.
  */
-export function AcoesDeAtraso({ domain, occupancyId, doctorName, arrivalDelayMinutes, arrivalDelayWaived, scheduledStartAt }: AcoesDeAtrasoProps) {
+export function AcoesDeAtraso({ domain, occupancyId, doctorName, arrivalDelayMinutes, arrivalDelayWaived, scheduledStartAt, folhaInicial = null }: AcoesDeAtrasoProps) {
     const router = useRouter();
-    const [folha, setFolha] = useState<"abonar" | null>(null);
+    const [folha, setFolha] = useState<"abonar" | null>(folhaInicial);
     const [motivo, setMotivo] = useState("");
     const [enviando, setEnviando] = useState(false);
     const base = domain === "regulation" ? `/api/regulation/occupancies/${occupancyId}` : `/api/intervention/occupancies/${occupancyId}`;

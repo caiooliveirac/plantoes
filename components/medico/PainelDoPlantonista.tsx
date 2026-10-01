@@ -27,7 +27,7 @@ interface EmTurno {
     saidaDeclaradaAt?: string | null;
     pedidoContinuar?: { status: "pendente" | "aceito" | "recusado" } | null;
 }
-interface Estado {
+export interface EstadoDoPainel {
     medico: { id: string; nome: string };
     emTurno: EmTurno | null;
     previa?: Previa | null;
@@ -38,6 +38,7 @@ interface ErroPostoOcupado {
     efeito: "deslocar" | "dupla";
 }
 
+export type PassoDoPainel = Passo;
 type Passo =
     | { tipo: "nenhum" }
     | { tipo: "escolher"; acao: "chegada" | "remanejar" }
@@ -73,14 +74,17 @@ function textoPrevia(p: Previa): string[] {
  * continuar no turno seguinte e remanejar-se. Hora sempre do servidor.
  * docs/plano-mesa-chefe-plantonista.md §5.
  */
-export function PainelDoPlantonista({ nome, azulejos, emTurnoInicial }: {
+export function PainelDoPlantonista({ nome, azulejos, emTurnoInicial, estadoInicial = null, passoInicial = null }: {
     nome: string;
     azulejos: PostoAzulejo[];
     emTurnoInicial: boolean;
+    /** Render estático/teste: estado antes do primeiro fetch. */
+    estadoInicial?: EstadoDoPainel | null;
+    passoInicial?: Passo | null;
 }) {
     const router = useRouter();
-    const [estado, setEstado] = useState<Estado | null>(null);
-    const [passo, setPasso] = useState<Passo>({ tipo: "nenhum" });
+    const [estado, setEstado] = useState<EstadoDoPainel | null>(estadoInicial);
+    const [passo, setPasso] = useState<Passo>(passoInicial ?? { tipo: "nenhum" });
     const [enviando, setEnviando] = useState(false);
     const [erro, setErro] = useState<string | null>(null);
     const [aviso, setAviso] = useState<string | null>(null);
@@ -89,7 +93,7 @@ export function PainelDoPlantonista({ nome, azulejos, emTurnoInicial }: {
     const carregar = useCallback(async () => {
         try {
             const r = await fetch("/api/medico/estado", { cache: "no-store" });
-            if (r.ok) setEstado(await r.json() as Estado);
+            if (r.ok) setEstado(await r.json() as EstadoDoPainel);
         } catch {
             // sem estado: mostra só a chegada
         }
@@ -204,7 +208,7 @@ export function PainelDoPlantonista({ nome, azulejos, emTurnoInicial }: {
                     {emTurno.pedidoContinuar?.status === "pendente" ? <span> · dobra aguardando ciente</span> : null}
                     {emTurno.pedidoContinuar?.status === "aceito" ? <span> · dobra aceita</span> : null}
                 </div>
-                <button type="button" className="k-topo-acao" onClick={() => setRecolhido((v) => !v)} aria-expanded={!recolhido}>
+                <button type="button" className="mk-botao mk-botao--compacto" onClick={() => setRecolhido((v) => !v)} aria-expanded={!recolhido}>
                     {recolhido ? "Minhas ações ▾" : "Recolher ▴"}
                 </button>
             </div>

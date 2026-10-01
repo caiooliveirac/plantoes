@@ -78,7 +78,7 @@
    sozinhos a 360px (7 colunas, a do meio flexível). */
 .mk-editor__stepper {
     display: grid;
-    grid-template-columns: repeat(3, minmax(40px, 1fr)) minmax(96px, 1.6fr) repeat(3, minmax(40px, 1fr));
+    grid-template-columns: repeat(3, minmax(34px, 1fr)) minmax(84px, 1.6fr) repeat(3, minmax(34px, 1fr));
     gap: 6px;
     align-items: stretch;
 }
@@ -502,7 +502,7 @@
 }
 
 /* Popover de horário mais largo para o editor (320px era do datetime-local). */
-.historico-list-popover.historico-list-popover--largo { width: min(380px, 94vw); }
+.historico-list-popover.historico-list-popover--largo { width: min(380px, calc(100vw - 32px)); box-sizing: border-box; }
 .historico-grid-ajustes { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .historico-grid-ajustes .row-action { min-height: 32px; }
 
@@ -532,3 +532,4 @@
 .mk-rail-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--semaforo-amarelo-borda); background: var(--semaforo-amarelo-fundo); color: var(--semaforo-amarelo-texto); }
 .mk-rail-acoes { display: flex; gap: 8px; }
 .mk-rail-acoes .mk-botao { min-height: 40px; }
+.mk-botao--compacto { min-height: 36px; padding: 0 12px; font-size: 0.85rem; }
