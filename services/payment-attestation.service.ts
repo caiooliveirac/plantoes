@@ -1102,6 +1102,11 @@ export async function applyManualRemoveAssignment(params: {
      * início desse slot: os turnos anteriores continuam pagos e o slot removido deixa
      * de ser coberto. Só quando não sobra nada antes do slot é que a ocupação é zerada,
      * como antes.
+     *
+     * Vale também para `admin_correction`: toda perna de remanejo nasce com essa
+     * origem (corrections.ts), e apagar a linha inteira levava o SD trabalhado junto
+     * com o SN removido (caso Gustavo, 2032, 28/09/2026). A linha só é apagada
+     * quando começou dentro do slot removido.
      */
     function resolveRemovalEnd(existing: { startedAt: Date; endedAt: Date | null; actualEndedAt: Date | null }) {
         const workedBeforeSlot = existing.startedAt.getTime() < slotStart.getTime();
@@ -1124,13 +1129,13 @@ export async function applyManualRemoveAssignment(params: {
             if (!existing) {
                 throw new Error("Ocupação não encontrada para remoção.");
             }
-            if (existing.source === "admin_correction" || existing.source === "manual") {
+            const removal = resolveRemovalEnd(existing);
+            if (removal.clearedWholeOccupancy && (existing.source === "admin_correction" || existing.source === "manual")) {
                 await tx.delete(bankHoursEntries)
                     .where(eq(bankHoursEntries.regulationOccupancyId, existing.id));
                 await tx.delete(regulationOccupancies)
                     .where(eq(regulationOccupancies.id, existing.id));
             } else {
-                const removal = resolveRemovalEnd(existing);
                 await tx.update(regulationOccupancies)
                     .set({
                         endedAt: removal.endedAt,
@@ -1156,13 +1161,13 @@ export async function applyManualRemoveAssignment(params: {
             if (!existing) {
                 throw new Error("Ocupação não encontrada para remoção.");
             }
-            if (existing.source === "admin_correction" || existing.source === "manual") {
+            const removal = resolveRemovalEnd(existing);
+            if (removal.clearedWholeOccupancy && (existing.source === "admin_correction" || existing.source === "manual")) {
                 await tx.delete(bankHoursEntries)
                     .where(eq(bankHoursEntries.interventionOccupancyId, existing.id));
                 await tx.delete(interventionOccupancies)
                     .where(eq(interventionOccupancies.id, existing.id));
             } else {
-                const removal = resolveRemovalEnd(existing);
                 await tx.update(interventionOccupancies)
                     .set({
                         endedAt: removal.endedAt,
