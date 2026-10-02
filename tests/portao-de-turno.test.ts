@@ -102,9 +102,9 @@ test("portão: enfermeiro(a) declarado para o turno passa; papel sozinho não ab
     assert.deepEqual(decidirPortao({ roles: ["portal", "enfermeiro"], emTurno: false, naCentral: false }), { liberado: false, motivo: "fora_do_plantao" });
 });
 
-test("portão: Mesa e quadro procuram o enfermeiro(a) do turno pelo e-mail da sessão", () => {
+test("portão: Mesa, quadro e Tabela procuram o enfermeiro(a) do turno pelo e-mail da sessão", () => {
     const servico = readFileSync("services/acessos-portao.service.ts", "utf8");
-    assert.match(servico, /sistema === "quadro" \|\| sistema === "mesa"/);
+    assert.match(servico, /const enfermeiroDoTurno = !emTurno && !naCentral && conta\.email/);
     const servidor = readFileSync("lib/auth/server.ts", "utf8");
     assert.equal(servidor.match(/"mesa",/g)?.length, 2);
     assert.equal(servidor.match(/email: (session|atual)\.user\.email \}/g)?.length, 2);
