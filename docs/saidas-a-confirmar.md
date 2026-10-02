@@ -9,10 +9,23 @@ mudou algo em 4,8%, confirmava 87% em rajadas de segundos.
 |---|---|---|---|---|
 | **Rotina** (`auto`) | rotina avisada pelo médico ou explicada pela chegada de quem assumiu | 64% | 3,4% | confirma na **virada seguinte** (pelo menos 1h de fila) |
 | **Confira a sugestão** (`glance`) | janela vencida sem aviso; crédito tardio acima de 1h; saída faltando ≤2h | 32% | 6,9% | aplica a sugestão após **24h** |
-| **Precisa de você** (`decide`) | anomalia, P emendado (6h+), saída antes de 6h ou na faixa de meio, ocorrência sem número, padrão, fechamento sem origem conhecida | 4,6% | 45% | **nunca** decide; após 24h avisa os admins no privado, uma vez |
+| **Precisa de você** (`decide`) | anomalia, P emendado (6h+), saída antes de 6h ou na faixa de meio, ocorrência sem número, motivo livre, padrão, fechamento sem origem conhecida | 4,6% | 45% | **nunca** decide; após 24h avisa os admins no privado, uma vez |
 
 Crédito tardio de até 1h já é rotina pela triagem
 (`LATE_CREDIT_ATTENTION_THRESHOLD_MINUTES`).
+
+## Motivo livre (a chefia valida)
+
+Saída tardia cobra motivo no bot. Ocorrência com número e higienização creditam
+sozinhas. Qualquer outro motivo por extenso (≥8 caracteres, mesma régua da nota
+da chefia) — caso Sadja 29/09, "após finalização da comitiva do presidente" —
+não é mais recusado: o bot grava a hora alegada sem crédito, com a linha
+`[telegram justificativa livre - revisar chefia] <motivo>` nas notas, e a
+correção tira a confirmação anterior. A fila mostra o motivo citado (triagem
+`justification_review`, classe `decide`): Confirmar credita, "Recusar o crédito"
+paga até o fim da janela. Ocorrência sem número e motivo livre vêm antes do
+crédito tardio na triagem — senão a classe `glance` aplicaria o crédito sozinha
+em 24h. Resposta curta (<8) continua pedindo de novo; na segunda vira só nota.
 
 ## Sugestão
 

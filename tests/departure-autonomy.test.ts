@@ -77,6 +77,18 @@ test("crédito tardio acima de 1h: sugestão creditar, com o número que o banco
     assert.equal(result.suggestion?.outcome, null);
 });
 
+test("motivo livre nunca é aplicado sozinho: a chefia decide", () => {
+    const result = resolveDepartureAutonomy(sd({
+        actualEndedAt: sp("2026-09-29T21:45"),
+        recordedAt: sp("2026-09-29T21:46"),
+        delayMinutes: 165,
+        freeJustificationText: "após finalização da comitiva do presidente",
+    }));
+    assert.equal(result.triage.kind, "justification_review");
+    assert.equal(result.autonomy, "decide");
+    assert.equal(result.suggestion, null);
+});
+
 test("saída faltando ≤2h: sugestão plantão inteiro, gravado como desfecho", () => {
     const result = resolveDepartureAutonomy(sd({
         actualEndedAt: sp("2026-09-29T17:30"),

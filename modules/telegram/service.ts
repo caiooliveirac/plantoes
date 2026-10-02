@@ -55,6 +55,7 @@ import {
     updateDoctorDirectoryEntry,
 } from "@/modules/doctors/service";
 import { isStoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
+import { FREE_JUSTIFICATION_NOTE_MARKER, isValidOverrideNote } from "@/modules/operational/departure-triage";
 import { findActiveOccupancyByDoctorId, resolveActiveOccupancyCoverageFloor } from "@/modules/operational/ocupacao-ativa";
 import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
@@ -10924,8 +10925,14 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
     // Credit-eligible only when a reason matched AND (if occurrence) the number is present.
     const eligibleReason = claim && !claim.missingOccurrenceNumber ? claim : null;
 
+    // Motivo por extenso que não é ocorrência nem higienização ("após finalização
+    // da comitiva do presidente", Sadja 29/09): não pede de novo nem descarta —
+    // grava a hora alegada sem crédito e a fila "Saídas a confirmar" pede à
+    // chefia que valide (triagem justification_review, classe decide).
+    const freeJustification = !eligibleReason && !needsOccurrenceNumber && isValidOverrideNote(message.text);
+
     if (!eligibleReason) {
-        if (pendingAttemptCount < 1) {
+        if (pendingAttemptCount < 1 && !freeJustification) {
             await markTelegramProcessed(pending.id, {
                 resolutionData: buildResolutionData(pending.resolutionData, {
                     invalidJustificationAttempts: pendingAttemptCount + 1,
@@ -10966,8 +10973,13 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
         // keeps the legacy note-only behavior (no window extension).
         const noteMarker = needsOccurrenceNumber
             ? "telegram ocorrencia sem numero - revisar chefia"
-            : "telegram saida sem credito automatico";
-        const exhaustionCorrection = needsOccurrenceNumber ? { actualEndedAt: eventAt } : {};
+            : freeJustification
+                ? FREE_JUSTIFICATION_NOTE_MARKER
+                : "telegram saida sem credito automatico";
+        const exhaustionCorrection = needsOccurrenceNumber || freeJustification ? { actualEndedAt: eventAt } : {};
+        // O motivo livre vai sozinho na nota: é a frase que a fila mostra à chefia.
+        const noteText = freeJustification ? message.text.trim() : mergedText;
+        const reviewAction = freeJustification ? "departure_justif_chief_review" : "departure_justif_manual_review";
 
         try {
             let relatedOccupancyId: string;
@@ -10990,7 +11002,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
 
                 relatedOccupancyId = (await correctRegulationOccupancy(recentClosed.id, {
                     ...exhaustionCorrection,
-                    notes: appendTelegramOperationalNote(recentClosed.notes, noteMarker, mergedText),
+                    notes: appendTelegramOperationalNote(recentClosed.notes, noteMarker, noteText),
                 }, null)).id;
             } else {
                 const base = await getDb().query.interventionBases.findFirst({
@@ -11011,7 +11023,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
 
                 relatedOccupancyId = (await correctInterventionOccupancy(recentClosed.id, {
                     ...exhaustionCorrection,
-                    notes: appendTelegramOperationalNote(recentClosed.notes, noteMarker, mergedText),
+                    notes: appendTelegramOperationalNote(recentClosed.notes, noteMarker, noteText),
                 }, null)).id;
             }
 
@@ -11025,13 +11037,14 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                     automaticCreditGranted: false,
                     manualReviewOnly: true,
                     occurrenceNumberMissing: needsOccurrenceNumber,
+                    freeJustificationReview: freeJustification,
                 }),
             });
             await markTelegramProcessed(logId, {
                 status: "accepted",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justif_manual_review",
+                parsedAction: reviewAction,
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 relatedOccupancyId,
                 errorMessage: null,
@@ -11044,7 +11057,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
             });
             await sendMessage(
                 message.chat.id,
-                pickTelegramReply("departure_justification_manual_review", message.message_id, {
+                pickTelegramReply(freeJustification ? "departure_justification_chief_review" : "departure_justification_manual_review", message.message_id, {
                     name: pending.resolutionData.resolvedDoctor.fullName,
                     target: pending.resolutionData.parsed.baseCode,
                     time: formatTelegramReplyTime(eventAt),
@@ -11062,7 +11075,7 @@ async function tryHandlePendingDepartureJustification(update: TelegramUpdate, lo
                 status: "error",
                 parsedDomain: pending.resolutionData.parsed.sector,
                 parsedTargetCode: pending.resolutionData.parsed.baseCode,
-                parsedAction: "departure_justif_manual_review",
+                parsedAction: reviewAction,
                 parsedDoctorName: pending.resolutionData.resolvedDoctor.fullName,
                 errorMessage,
                 resolutionData: {

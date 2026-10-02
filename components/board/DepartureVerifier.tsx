@@ -143,6 +143,7 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                 delayMinutes: target.delayMinutes,
                 reasonCode: target.reasonCode,
                 occurrenceNumberMissing: target.occurrenceNumberMissing,
+                freeJustificationText: target.freeJustificationText,
                 reasonOccurrenceCount30d: target.reasonOccurrenceCount30d,
             })
             : null),
@@ -331,7 +332,10 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                 ],
             };
         }
-        if (triage.kind === "late_credit") {
+        // Motivo livre e ocorrência sem número: a hora alegada está gravada, o
+        // crédito depende da chefia aceitar o motivo — mesma escolha do crédito tardio.
+        if (triage.kind === "late_credit"
+            || ((triage.kind === "justification_review" || triage.kind === "occurrence_missing") && (balance ?? 0) > 0)) {
             return {
                 action: { kind: "confirm" },
                 consequence: balance !== null && balance > 0
@@ -465,6 +469,9 @@ export function DepartureVerifier({ target, onClose }: DepartureVerifierProps) {
                                                 )}
                                             </div>
                                             <p className="departure-verifier-headline">{originLine}</p>
+                                            {triage.kind === "justification_review" && (
+                                                <p className="departure-verifier-headline">{triage.headline}</p>
+                                            )}
 
                                             {view === "decide" && (
                                                 <div className="departure-verifier-decisions">

@@ -17,8 +17,9 @@ import { triagePendingDeparture, type DepartureTriageInput, type DepartureTriage
  *     1h, saída faltando ≤2h. A sugestão vem pronta e é um toque; parada 24h, o
  *     sistema aplica a sugestão.
  *   - "decide" (4,6%, 45%): dinheiro ou contradição — anomalia, P emendado,
- *     saída antes de 6h ou na faixa de meio, ocorrência sem número, padrão, e o
- *     que o sistema fechou sem origem conhecida. Nunca automático: parada 24h,
+ *     saída antes de 6h ou na faixa de meio, ocorrência sem número, motivo
+ *     livre (fora de ocorrência/higienização), padrão, e o que o sistema fechou
+ *     sem origem conhecida. Nunca automático: parada 24h,
  *     escala para os admins.
  *
  * Puro: recebe fatos, devolve classe, sugestão e prazo. Quem age é o ciclo do
@@ -83,6 +84,7 @@ const DECIDE_KINDS = new Set<DepartureTriageResult["kind"]>([
     "early_bank_only",
     "early_half",
     "occurrence_missing",
+    "justification_review",
     "pattern",
 ]);
 

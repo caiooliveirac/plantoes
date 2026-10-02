@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    extractFreeDepartureJustification,
+    FREE_JUSTIFICATION_NOTE_MARKER,
     isValidOverrideNote,
     triagePendingDeparture,
 } from "@/modules/operational/departure-triage";
@@ -265,4 +267,42 @@ test("permanência longa sobrevive à rendição — quem ficou o turno prestou 
     });
     assert.equal(result.kind, "extended_stay");
     assert.equal(result.attention, true);
+});
+
+test("motivo livre pede validação da chefia antes do crédito tardio (justification_review)", () => {
+    // Sadja 29/09: saiu 21:45 de um SD, "após finalização da comitiva do presidente".
+    const result = triagePendingDeparture({
+        ...SD,
+        startedAt: iso("2026-08-03T07:05:00-03:00"),
+        actualEndedAt: iso("2026-08-03T21:45:00-03:00"),
+        delayMinutes: 165,
+        freeJustificationText: "após finalização da comitiva do presidente",
+    });
+    assert.equal(result.kind, "justification_review");
+    assert.equal(result.attention, true);
+    assert.match(result.headline, /2h45/);
+    assert.match(result.headline, /comitiva do presidente/);
+});
+
+test("ocorrência sem número com mais de 1h além da janela não vira crédito tardio", () => {
+    const result = triagePendingDeparture({
+        ...SD,
+        startedAt: iso("2026-08-03T07:00:00-03:00"),
+        actualEndedAt: iso("2026-08-03T20:30:00-03:00"),
+        delayMinutes: 90,
+        occurrenceNumberMissing: true,
+    });
+    assert.equal(result.kind, "occurrence_missing");
+});
+
+test("extractFreeDepartureJustification lê a linha marcada mais recente", () => {
+    const notes = [
+        "Sadja Costa IT30 SD",
+        `[${FREE_JUSTIFICATION_NOTE_MARKER}] primeiro motivo`,
+        "[telegram saida sem credito automatico] outra coisa",
+        `[${FREE_JUSTIFICATION_NOTE_MARKER}] após finalização da comitiva`,
+    ].join("\n");
+    assert.equal(extractFreeDepartureJustification(notes), "após finalização da comitiva");
+    assert.equal(extractFreeDepartureJustification("Sadja Costa IT30 SD"), null);
+    assert.equal(extractFreeDepartureJustification(null), null);
 });

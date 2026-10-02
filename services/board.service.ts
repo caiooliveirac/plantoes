@@ -48,6 +48,7 @@ import {
   type BankHoursBalanceOverrideSummary,
 } from "@/modules/bank-hours/service";
 import { extractTelegramOccurrenceNumber } from "@/modules/telegram/departure-flow";
+import { extractFreeDepartureJustification } from "@/modules/operational/departure-triage";
 import { expireStaleShadowInterventionOccupancies } from "@/modules/intervention/service";
 import { expireStaleRegulationOccupancies } from "@/modules/regulation/service";
 
@@ -2442,6 +2443,11 @@ export interface PendingDepartureConfirmation {
    * must scrutinize this before confirming (the bot did not vouch for it).
    */
   occurrenceNumberMissing: boolean;
+  /**
+   * Motivo por extenso (não é ocorrência nem higienização) que o bot gravou com a
+   * hora alegada, sem crédito automático: a chefia valida. Null quando não há.
+   */
+  freeJustificationText: string | null;
   /** Minutes between scheduledEndAt and actualEndedAt; positive = ran long. */
   delayMinutes: number | null;
   /** Last messages from the bot ingestion referencing this occupancy. */
@@ -2992,6 +2998,7 @@ export async function listPendingDepartureConfirmations(
       reasonCode,
       occurrenceNumber,
       occurrenceNumberMissing,
+      freeJustificationText: extractFreeDepartureJustification(row.notes),
       delayMinutes,
       recentMessages,
       sourceMessage,
