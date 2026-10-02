@@ -9,6 +9,9 @@
    - Vários enfermeiros(as) ativos por turno (migration 0055): registrar
      acrescenta (a mesma pessoa não duplica); remover marca só a escolhida como
      substituída, limpar marca todas (o histórico é a auditoria).
+   - Posição (migration 0058): cada um é ADM (4091), DISP (4092) ou FLUXO
+     (3005), uma pessoa por posição. Registrar numa posição ocupada substitui
+     quem estava nela; registrar quem já está ativo só muda a posição dele.
    - O e-mail de qualquer linha ativa libera o quadro.mnrs.com.br no porteiro
      (services/acessos-portao.service.ts). Nome digitado não tem e-mail: fica
      só na Mesa e no quadro, sem liberar acesso.
@@ -23,6 +26,7 @@ import {
     turnosDoPortao,
     type TurnoDoEnfermeiro,
 } from "@/modules/operational/enfermeiro-plantao";
+import type { PosicaoEnfermeiro } from "@/modules/operational/posicao-enfermeiro";
 
 export interface EnfermeiroDaEscala {
     id: string;
@@ -40,6 +44,7 @@ export interface EnfermeiroRegistrado {
     nome: string;
     emails: string[];
     telefone: string | null;
+    posicao: PosicaoEnfermeiro | null;
     registradoEm: string;
 }
 
@@ -109,6 +114,7 @@ function paraRegistrado(linha: typeof enfermeirosPlantao.$inferSelect): Enfermei
         nome: nomeDeExibicao(linha.nome),
         emails: linha.emails,
         telefone: linha.telefone,
+        posicao: (linha.posicao as PosicaoEnfermeiro | null) ?? null,
         registradoEm: linha.registradoEm.toISOString(),
     };
 }
@@ -133,11 +139,12 @@ export class EnfermeiroError extends Error {
     }
 }
 
-/** Acrescenta ao turno: `profissionalId` (da lista da escala) ou `nome` digitado. Quem já está ativo (mesmo id ou mesmo nome) é devolvido sem duplicar. */
+/** Põe no turno, na `posicao`: `profissionalId` (da lista da escala) ou `nome` digitado. Quem já está ativo (mesmo id ou mesmo nome) não duplica: só passa para a posição; quem ocupava a posição sai (substituído). */
 export async function registrarEnfermeiro(params: {
     turno: Pick<TurnoDoEnfermeiro, "data" | "turno">;
     profissionalId?: string | null;
     nome?: string | null;
+    posicao: PosicaoEnfermeiro;
     userId: string;
 }): Promise<EnfermeiroRegistrado> {
     let dados: { profissionalId: string | null; nome: string; emails: string[]; telefone: string | null };
@@ -168,13 +175,26 @@ export async function registrarEnfermeiro(params: {
         const jaEsta = ativos.find((item) => dados.profissionalId
             ? item.profissionalId === dados.profissionalId
             : nomeDeExibicao(item.nome).toLocaleLowerCase("pt-BR") === chaveNome);
-        if (jaEsta) return jaEsta;
+        if (jaEsta?.posicao === params.posicao) return jaEsta;
+        const ocupante = ativos.find((item) => item.posicao === params.posicao && item.id !== jaEsta?.id);
+        if (ocupante) {
+            await tx.update(enfermeirosPlantao).set({ substituidoEm: sql`now()` }).where(eq(enfermeirosPlantao.id, ocupante.id));
+        }
+        if (jaEsta) {
+            const [movido] = await tx
+                .update(enfermeirosPlantao)
+                .set({ posicao: params.posicao })
+                .where(eq(enfermeirosPlantao.id, jaEsta.id))
+                .returning();
+            return movido;
+        }
         const [nova] = await tx
             .insert(enfermeirosPlantao)
             .values({
                 turnoData: params.turno.data,
                 turno: params.turno.turno,
                 ...dados,
+                posicao: params.posicao,
                 registradoPor: params.userId,
             })
             .returning();
