@@ -96,11 +96,11 @@ test("enfermeiro (banco): registrar acrescenta (sem duplicar); remover um e limp
     const chefe = await criarConta(`chefe-${Date.now()}${DOMINIO}`, ["doctor"]);
     const atual = turno.turnoDoMomento();
 
-    const primeiro = await servico.registrarEnfermeiro({ turno: atual, nome: "  Maria   da Silva ", userId: chefe });
+    const primeiro = await servico.registrarEnfermeiro({ turno: atual, nome: "  Maria   da Silva ", posicao: "ADM", userId: chefe });
     assert.equal(primeiro.nome, "Maria da Silva");
     assert.deepEqual(primeiro.emails, []);
-    const segundo = await servico.registrarEnfermeiro({ turno: atual, nome: "João Souza", userId: chefe });
-    const repetido = await servico.registrarEnfermeiro({ turno: atual, nome: "joão  souza", userId: chefe });
+    const segundo = await servico.registrarEnfermeiro({ turno: atual, nome: "João Souza", posicao: "DISP", userId: chefe });
+    const repetido = await servico.registrarEnfermeiro({ turno: atual, nome: "joão  souza", posicao: "DISP", userId: chefe });
     assert.equal(repetido.id, segundo.id, "mesma pessoa não duplica");
     assert.deepEqual((await servico.enfermeirosDoTurno(atual)).map((e) => e.id), [primeiro.id, segundo.id]);
 
@@ -110,11 +110,28 @@ test("enfermeiro (banco): registrar acrescenta (sem duplicar); remover um e limp
     assert.equal(linhas.length, 2);
     assert.ok(linhas.find((l) => l.id === primeiro.id)?.substituidoEm, "o removido ficou como substituído");
 
-    await servico.registrarEnfermeiro({ turno: atual, nome: "Terceira Pessoa", userId: chefe });
+    await servico.registrarEnfermeiro({ turno: atual, nome: "Terceira Pessoa", posicao: "FLUXO", userId: chefe });
     assert.equal(await servico.limparEnfermeiro(atual), true);
     assert.deepEqual(await servico.enfermeirosDoTurno(atual), []);
     assert.equal(await servico.limparEnfermeiro(atual), false);
-    await assert.rejects(servico.registrarEnfermeiro({ turno: atual, nome: "ab", userId: chefe }), /Informe o nome/);
+    await assert.rejects(servico.registrarEnfermeiro({ turno: atual, nome: "ab", posicao: "ADM", userId: chefe }), /Informe o nome/);
+});
+
+test("enfermeiro (banco): uma pessoa por posição — a nova substitui; quem já está só troca de posição", { skip }, async () => {
+    const { servico, turno } = await modulos();
+    await limparTurnoCorrente();
+    const chefe = await criarConta(`chefe4-${Date.now()}${DOMINIO}`, ["doctor"]);
+    const atual = turno.turnoDoMomento();
+
+    const adm = await servico.registrarEnfermeiro({ turno: atual, nome: "Ana Adm", posicao: "ADM", userId: chefe });
+    const disp = await servico.registrarEnfermeiro({ turno: atual, nome: "Bia Disp", posicao: "DISP", userId: chefe });
+    assert.equal(adm.posicao, "ADM");
+    const novaAdm = await servico.registrarEnfermeiro({ turno: atual, nome: "Cris Adm", posicao: "ADM", userId: chefe });
+    assert.deepEqual((await servico.enfermeirosDoTurno(atual)).map((e) => [e.nome, e.posicao]), [["Bia Disp", "DISP"], ["Cris Adm", "ADM"]]);
+
+    const movida = await servico.registrarEnfermeiro({ turno: atual, nome: "bia disp", posicao: "FLUXO", userId: chefe });
+    assert.equal(movida.id, disp.id, "mesma linha, só muda a posição");
+    assert.deepEqual((await servico.enfermeirosDoTurno(atual)).map((e) => [e.id, e.posicao]), [[disp.id, "FLUXO"], [novaAdm.id, "ADM"]]);
 });
 
 test("enfermeiro (banco): da lista da escala grava e-mails (minúsculos) e telefone; id desconhecido e escala fora recusam", { skip }, async () => {
@@ -130,15 +147,15 @@ test("enfermeiro (banco): da lista da escala grava e-mails (minúsculos) e telef
     ]);
     const lista = await servico.listarEnfermeirosDaEscala();
     assert.equal(lista?.length, 1);
-    const registro = await servico.registrarEnfermeiro({ turno: atual, profissionalId: "p-1", userId: chefe });
+    const registro = await servico.registrarEnfermeiro({ turno: atual, profissionalId: "p-1", posicao: "ADM", userId: chefe });
     assert.deepEqual(registro.emails, [`ana${DOMINIO}`]);
     assert.equal(registro.telefone, "71999990000");
-    await assert.rejects(servico.registrarEnfermeiro({ turno: atual, profissionalId: "nao-existe", userId: chefe }), /não encontrad/);
+    await assert.rejects(servico.registrarEnfermeiro({ turno: atual, profissionalId: "nao-existe", posicao: "ADM", userId: chefe }), /não encontrad/);
 
     servico.esquecerListaDeEnfermeiros();
     simularEscala(null);
     assert.equal(await servico.listarEnfermeirosDaEscala(), null);
-    await assert.rejects(servico.registrarEnfermeiro({ turno: atual, profissionalId: "p-1", userId: chefe }), /escala não respondeu/);
+    await assert.rejects(servico.registrarEnfermeiro({ turno: atual, profissionalId: "p-1", posicao: "ADM", userId: chefe }), /escala não respondeu/);
     globalThis.fetch = fetchOriginal;
 });
 
@@ -156,7 +173,7 @@ test("enfermeiro (banco): portão do quadro libera o e-mail do enfermeiro(a) do 
 
     servico.esquecerListaDeEnfermeiros();
     simularEscala([{ id: "p-9", nome: "Enf Teste", matricula: "9", emails: [email.toUpperCase()], telefone: null }]);
-    await servico.registrarEnfermeiro({ turno: atual, profissionalId: "p-9", userId: chefe });
+    await servico.registrarEnfermeiro({ turno: atual, profissionalId: "p-9", posicao: "ADM", userId: chefe });
     globalThis.fetch = fetchOriginal;
 
     assert.equal(await servico.emailDeEnfermeiroDoTurno(email), true);
@@ -166,7 +183,7 @@ test("enfermeiro (banco): portão do quadro libera o e-mail do enfermeiro(a) do 
     assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "portal", contexto })).ok, true);
 
     // Acrescentar outro não tira o acesso do primeiro; removê-lo tira.
-    const outra = await servico.registrarEnfermeiro({ turno: atual, nome: "Outra Pessoa", userId: chefe });
+    const outra = await servico.registrarEnfermeiro({ turno: atual, nome: "Outra Pessoa", posicao: "DISP", userId: chefe });
     portao.limparMemoriaDoPortao();
     assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "quadro", contexto })).ok, true);
     const primeira = (await servico.enfermeirosDoTurno(atual)).find((e) => e.id !== outra.id)!;
@@ -211,8 +228,8 @@ test("enfermeiro (banco): /api/servicos/quadro/plantao exige token e devolve tur
     basesCriadas.push(base.id);
     const chefe = await criarConta(`chefe4-${Date.now()}${DOMINIO}`, ["doctor"]);
     const atual = turno.turnoDoMomento();
-    await servico.registrarEnfermeiro({ turno: atual, nome: "Carla Quadro", userId: chefe });
-    await servico.registrarEnfermeiro({ turno: atual, nome: "Dora Quadro", userId: chefe });
+    await servico.registrarEnfermeiro({ turno: atual, nome: "Carla Quadro", posicao: "ADM", userId: chefe });
+    await servico.registrarEnfermeiro({ turno: atual, nome: "Dora Quadro", posicao: "FLUXO", userId: chefe });
 
     const pedir = (token: string | null) => rota.GET(new NextRequest("http://localhost/api/servicos/quadro/plantao", {
         headers: token ? { "x-escala-token": token } : {},
@@ -224,14 +241,14 @@ test("enfermeiro (banco): /api/servicos/quadro/plantao exige token e devolve tur
     const corpo = await resposta.json() as {
         ok: boolean; turno: { data: string; turno: string };
         enfermeiro: { nome: string; telefone: string | null } | null;
-        enfermeiros: Array<{ nome: string; telefone: string | null }>;
+        enfermeiros: Array<{ nome: string; telefone: string | null; posicao: string | null }>;
         chefe: { nome: string } | null;
         bases: Array<{ codigo: string; nome: string; ativa: boolean; medico: string | null }>;
     };
     assert.equal(corpo.ok, true);
     assert.deepEqual(corpo.turno, { data: atual.data, turno: atual.turno });
     assert.deepEqual(corpo.enfermeiro, { nome: "Carla Quadro", telefone: null });
-    assert.deepEqual(corpo.enfermeiros.map((e) => e.nome), ["Carla Quadro", "Dora Quadro"]);
+    assert.deepEqual(corpo.enfermeiros, [{ nome: "Carla Quadro", telefone: null, posicao: "ADM" }, { nome: "Dora Quadro", telefone: null, posicao: "FLUXO" }]);
     assert.ok(corpo.chefe === null || typeof corpo.chefe.nome === "string");
     assert.deepEqual(corpo.bases.find((b) => b.codigo === codigo), { codigo, nome: "Base de teste do quadro", ativa: true, medico: null });
     assert.equal(JSON.stringify(corpo).includes("@"), false, "nenhum e-mail sai para o quadro");

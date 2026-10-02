@@ -8,7 +8,7 @@
    Resposta:
      { ok: true,
        turno: { data: "YYYY-MM-DD", turno: "SD" | "SN" },
-       enfermeiros: [{ nome, telefone }],        // registrados pela chefia na Mesa
+       enfermeiros: [{ nome, telefone, posicao }], // registrados pela chefia na Mesa; posicao ADM|DISP|FLUXO|null
        enfermeiro: { nome, telefone } | null,   // legado: o primeiro de `enfermeiros`
        chefe: { nome } | null,                   // quem ocupa a 2031 agora
        bases: [{ codigo, nome, ativa, medico }],
@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
             ok: true,
             turno: { data: turno.data, turno: turno.turno },
-            enfermeiros: enfermeiros.map((item) => ({ nome: item.nome, telefone: item.telefone })),
+            enfermeiros: enfermeiros.map((item) => ({ nome: item.nome, telefone: item.telefone, posicao: item.posicao })),
             // Legado (um só): o primeiro registrado.
             enfermeiro: enfermeiros[0] ? { nome: enfermeiros[0].nome, telefone: enfermeiros[0].telefone } : null,
             chefe: chefe ? { nome: chefe.nome } : null,

@@ -1,9 +1,11 @@
 "use client";
 
 /**
- * Enfermeiros(as) do plantão (vários por turno), no topo da Mesa (BoardHero).
- * Chefia/admin abre o seletor, digita (filtra na hora, sem acento, por nome
- * ou matrícula) e acrescenta com Enter ou clique; cada um tem seu "remover".
+ * Enfermeiros(as) do plantão (ERS), no topo da Mesa (BoardHero). Cada um numa
+ * posição: ADM (4091), DISP (4092) ou Fluxo (3005). Chefia/admin abre o
+ * seletor, escolhe a posição, digita (filtra na hora, sem acento, por nome
+ * ou matrícula) e registra com Enter ou clique — quem estava na posição sai;
+ * cada um tem seu "remover".
  * Demais: só leitura.
  * Escala fora do ar: aceita o nome digitado. Regras e API em
  * app/api/mesa/enfermeiro-plantao/route.ts.
@@ -15,12 +17,18 @@ import { HeartPulse } from "lucide-react";
 import { toast } from "sonner";
 import { fetchMesa } from "@/lib/board/fetch-mesa";
 import { filtrarCandidatos, type CandidatoEnfermeiro } from "@/components/board/enfermeiro-busca";
+import { POSICOES_ENFERMEIRO, ROTULO_POSICAO, type PosicaoEnfermeiro } from "@/modules/operational/posicao-enfermeiro";
 
 interface EnfermeiroPublico {
     id: string;
     nome: string;
     profissionalId: string | null;
+    posicao: PosicaoEnfermeiro | null;
 }
+
+/** Na ordem ADM, DISP, Fluxo; sem posição (registro antigo) no fim. */
+const ordemPosicao = (item: EnfermeiroPublico) => (item.posicao ? POSICOES_ENFERMEIRO.indexOf(item.posicao) : POSICOES_ENFERMEIRO.length);
+const rotuloCurto = (item: EnfermeiroPublico) => (item.posicao ? ROTULO_POSICAO[item.posicao] : "sem posição");
 
 interface RespostaGet {
     enfermeiros: EnfermeiroPublico[];
@@ -49,8 +57,11 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
     const [candidatos, setCandidatos] = useState<CandidatoEnfermeiro[] | null>(null);
     const [escalaDisponivel, setEscalaDisponivel] = useState(true);
     const [destaque, setDestaque] = useState(0);
+    const [posicao, setPosicao] = useState<PosicaoEnfermeiro>("ADM");
     const [enviando, setEnviando] = useState(false);
     const listaRef = useRef<HTMLUListElement>(null);
+    const enfermeirosRef = useRef(enfermeiros);
+    enfermeirosRef.current = enfermeiros;
     const enviandoRef = useRef(false);
 
     const recarregar = useCallback(async (comCandidatos: boolean) => {
@@ -79,6 +90,8 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
         if (!aberto) return;
         setTermo("");
         setDestaque(0);
+        // abre na primeira posição vaga
+        setPosicao(POSICOES_ENFERMEIRO.find((p) => !enfermeirosRef.current.some((item) => item.posicao === p)) ?? "ADM");
         void recarregar(true);
     }, [aberto, recarregar]);
 
@@ -109,12 +122,12 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
             const resposta = await fetchMesa(`/api/mesa/enfermeiro-plantao${remover ? `?id=${encodeURIComponent(remover.id)}` : ""}`, {
                 method: metodo,
                 headers: { "Content-Type": "application/json" },
-                body: opcao ? JSON.stringify(opcao.tipo === "escala" ? { profissionalId: opcao.candidato.id } : { nome: opcao.nome }) : undefined,
+                body: opcao ? JSON.stringify(opcao.tipo === "escala" ? { posicao, profissionalId: opcao.candidato.id } : { posicao, nome: opcao.nome }) : undefined,
             });
             if (!resposta.ok) throw new Error(await lerErro(resposta, "Não foi possível registrar o enfermeiro(a)."));
             const corpo = await resposta.json() as { enfermeiros: EnfermeiroPublico[] };
             setEnfermeiros(corpo.enfermeiros);
-            toast.success(remover ? `${remover.nome} removido(a) do plantão.` : "Enfermeiro(a) acrescentado(a) ao plantão.");
+            toast.success(remover ? `${remover.nome} removido(a) do plantão.` : `Enfermeiro(a) registrado(a) em ${ROTULO_POSICAO[posicao]}.`);
         } catch (erro) {
             setEnfermeiros(anterior);
             toast.error(erro instanceof Error ? erro.message : "Não foi possível registrar o enfermeiro(a).");
@@ -138,9 +151,10 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
         }
     };
 
-    const nomes = enfermeiros.map((item) => item.nome).join(", ");
+    const ordenados = [...enfermeiros].sort((a, b) => ordemPosicao(a) - ordemPosicao(b));
+    const nomes = ordenados.map((item) => `${rotuloCurto(item)}: ${item.nome}`).join(", ");
     const rotulo = enfermeiros.length > 0
-        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <span className="enf-plantao__nomes">{enfermeiros.map((item) => <strong key={item.id}>{item.nome}</strong>)}</span></>
+        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <span className="enf-plantao__nomes">{ordenados.map((item) => <strong key={item.id}><small className="enf-plantao__posicao">{rotuloCurto(item)}</small> {item.nome}</strong>)}</span></>
         : podeEditar
             ? <strong>Informar enfermeiro(a)</strong>
             : <span className="enf-plantao__rotulo">Enfermeiro(a) do plantão: não informado</span>;
@@ -173,8 +187,26 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
                 <Popover.Content sideOffset={6} collisionPadding={16} align="start" className="historico-list-popover enf-plantao__painel">
                     <header>
                         <strong>Enfermeiro(a) do plantão</strong>
-                        <span>{enfermeiros.length > 0 ? "Escolha para acrescentar mais um" : "Ninguém registrado neste turno"}</span>
+                        <span>Escolha a posição e depois o nome. Quem estava na posição sai.</span>
                     </header>
+                    <div className="enf-plantao__posicoes" role="radiogroup" aria-label="Posição">
+                        {POSICOES_ENFERMEIRO.map((p) => {
+                            const atual = enfermeiros.find((item) => item.posicao === p);
+                            return (
+                                <button
+                                    key={p}
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={posicao === p}
+                                    className={posicao === p ? "is-ativa" : ""}
+                                    onClick={() => setPosicao(p)}
+                                >
+                                    <span>{ROTULO_POSICAO[p]}</span>
+                                    <small>{atual ? atual.nome : "vaga"}</small>
+                                </button>
+                            );
+                        })}
+                    </div>
                     <label className="historico-list-popover__field">
                         <span>Buscar por nome ou matrícula</span>
                         <input
@@ -235,9 +267,9 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
                     </ul>
                     {enfermeiros.length > 0 && (
                         <ul className="enf-plantao__atuais" aria-label="Registrados neste turno">
-                            {enfermeiros.map((item) => (
+                            {ordenados.map((item) => (
                                 <li key={item.id}>
-                                    <span>{item.nome}</span>
+                                    <span><small className="enf-plantao__posicao">{rotuloCurto(item)}</small> {item.nome}</span>
                                     <button type="button" onClick={() => void enviar("DELETE", undefined, item)} disabled={enviando} aria-label={`Remover ${item.nome} do plantão`}>
                                         Remover
                                     </button>

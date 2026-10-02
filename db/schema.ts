@@ -1050,6 +1050,8 @@ export const enfermeirosPlantao = operationsV2.table(
         nome: text("nome").notNull(),
         emails: text("emails").array().notNull().default(sql`'{}'::text[]`),
         telefone: text("telefone"),
+        /** ADM (4091) | DISP (4092) | FLUXO (3005); null = registrado antes da 0058 */
+        posicao: text("posicao"),
         registradoPor: uuid("registrado_por").references(() => users.id),
         registradoEm: timestamp("registrado_em", { withTimezone: true }).notNull().defaultNow(),
         substituidoEm: timestamp("substituido_em", { withTimezone: true }),

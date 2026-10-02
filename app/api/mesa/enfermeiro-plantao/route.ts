@@ -4,9 +4,9 @@
    GET    qualquer sessão da Mesa: turno corrente + quem está registrado (lista). Para
           chefia/admin com ?candidatos=1, também os candidatos da escala (id,
           nome, matrícula — nunca e-mail nem telefone no navegador).
-   POST   { profissionalId } (da lista) ou { nome } (digitado): registra para
-          o turno corrente, substituindo o anterior. Chefia (com a trava da
-          2031) ou admin.
+   POST   { posicao, profissionalId } (da lista) ou { posicao, nome } (digitado):
+          põe na posição (ADM 4091, DISP 4092, FLUXO 3005) do turno corrente,
+          substituindo quem a ocupava. Chefia (com a trava da 2031) ou admin.
    DELETE ?id=<linha> remove um; sem id, limpa o turno corrente. Mesma permissão.
    ========================================================================== */
 import { NextRequest, NextResponse } from "next/server";
@@ -15,6 +15,7 @@ import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireMesaEscrita, requireMesaSessionForRead } from "@/lib/auth/server";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { turnoDoMomento } from "@/modules/operational/enfermeiro-plantao";
+import { POSICOES_ENFERMEIRO } from "@/modules/operational/posicao-enfermeiro";
 import {
     EnfermeiroError,
     enfermeirosDoTurno,
@@ -24,9 +25,10 @@ import {
     type EnfermeiroRegistrado,
 } from "@/services/enfermeiro-plantao.service";
 
+const posicao = z.enum(POSICOES_ENFERMEIRO);
 const schema = z.union([
-    z.object({ profissionalId: z.string().trim().min(1).max(100) }),
-    z.object({ nome: z.string().trim().min(3).max(120) }),
+    z.object({ posicao, profissionalId: z.string().trim().min(1).max(100) }),
+    z.object({ posicao, nome: z.string().trim().min(3).max(120) }),
 ]);
 
 function erroDeAuth(error: unknown) {
@@ -40,7 +42,7 @@ function semBanco() {
 
 /** O que vai ao navegador: sem e-mail e sem telefone. */
 function publico(registro: EnfermeiroRegistrado) {
-    return { id: registro.id, nome: registro.nome, profissionalId: registro.profissionalId, registradoEm: registro.registradoEm };
+    return { id: registro.id, nome: registro.nome, profissionalId: registro.profissionalId, posicao: registro.posicao, registradoEm: registro.registradoEm };
 }
 
 export async function GET(request: NextRequest) {
@@ -81,7 +83,7 @@ export async function POST(request: NextRequest) {
     }
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-        return NextResponse.json({ error: "Escolha um enfermeiro(a) da lista ou digite o nome." }, { status: 400 });
+        return NextResponse.json({ error: "Escolha a posição (ADM, DISP ou Fluxo) e o enfermeiro(a) da lista, ou digite o nome." }, { status: 400 });
     }
     const turno = turnoDoMomento();
     try {
@@ -89,6 +91,7 @@ export async function POST(request: NextRequest) {
             turno,
             profissionalId: "profissionalId" in parsed.data ? parsed.data.profissionalId : null,
             nome: "nome" in parsed.data ? parsed.data.nome : null,
+            posicao: parsed.data.posicao,
             userId: session.user.id,
         });
         publishBoardUpdate("enfermeiro-plantao");

@@ -11511,6 +11511,48 @@ button.chief-payable-tag:focus-visible {
 .enf-plantao.is-enviando { opacity: 0.7; }
 
 .enf-plantao__painel { width: 340px; }
+.enf-plantao__posicao {
+    margin-right: 4px;
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+.enf-plantao__posicoes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+}
+.enf-plantao__posicoes button {
+    appearance: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--surface-elevated-border);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+.enf-plantao__posicoes button small {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.enf-plantao__posicoes button.is-ativa {
+    border-color: var(--accent-confirm);
+    background: var(--accent-confirm-soft);
+}
 .enf-plantao__aviso {
     margin: 0;
     color: var(--accent-warn);
