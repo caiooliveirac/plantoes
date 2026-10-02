@@ -64,3 +64,9 @@ export function normalizarEmails(emails: readonly unknown[]): string[] {
     }
     return [...vistos];
 }
+
+/** Nome para a Mesa e o quadro: sem a anotação "(RESTRIÇÃO TEMPORÁRIA …)"
+    que a escala carrega no cadastro (ex.: "FULANA (RESTRIÇÃO TEMPORÁRIA - CR)"). */
+export function nomeDeExibicao(nome: string) {
+    return nome.replace(/\s*\(\s*restri[çc][ãa]o\s+tempor[áa]ria[^)]*\)/giu, "").replace(/\s+/g, " ").trim();
+}

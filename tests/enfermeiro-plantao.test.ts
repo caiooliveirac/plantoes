@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { decidirPortao } from "@/modules/acessos/portao";
-import { normalizarEmails, turnoDoMomento, turnosDoPortao } from "@/modules/operational/enfermeiro-plantao";
+import { nomeDeExibicao, normalizarEmails, turnoDoMomento, turnosDoPortao } from "@/modules/operational/enfermeiro-plantao";
 import { filtrarCandidatos } from "@/components/board/enfermeiro-busca";
 
 // Salvador = UTC-3 (sem horário de verão).
@@ -90,4 +90,12 @@ test("busca: por matrícula e com várias palavras (todas têm de aparecer)", ()
 test("busca: termo vazio devolve a lista (até o limite)", () => {
     assert.equal(filtrarCandidatos(candidatos, "  ").length, 3);
     assert.equal(filtrarCandidatos(candidatos, "", 2).length, 2);
+});
+
+// ── Nome de exibição ─────────────────────────────────────────────────────────
+test("nome: some a anotação de restrição temporária da escala", () => {
+    assert.equal(nomeDeExibicao("FULANA DE TAL (RESTRIÇÃO TEMPORÁRIA - CR)"), "FULANA DE TAL");
+    assert.equal(nomeDeExibicao("FULANA DE TAL (RESTRIÇÃO TEMPORÁRIA)"), "FULANA DE TAL");
+    assert.equal(nomeDeExibicao("Fulana (restricao temporaria - TARM/RO) "), "Fulana");
+    assert.equal(nomeDeExibicao("FULANA DE TAL (CR)"), "FULANA DE TAL (CR)");
 });

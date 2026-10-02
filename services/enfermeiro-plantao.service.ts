@@ -17,6 +17,7 @@ import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { enfermeirosPlantao } from "@/db/schema";
 import {
+    nomeDeExibicao,
     normalizarEmail,
     normalizarEmails,
     turnosDoPortao,
@@ -82,7 +83,7 @@ export async function listarEnfermeirosDaEscala(agora = Date.now()): Promise<Enf
                     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
                     .map((item) => ({
                         id: textoOuNull(item.id) ?? "",
-                        nome: textoOuNull(item.nome) ?? "",
+                        nome: nomeDeExibicao(textoOuNull(item.nome) ?? ""),
                         matricula: textoOuNull(item.matricula),
                         emails: normalizarEmails(Array.isArray(item.emails) ? item.emails : []),
                         telefone: textoOuNull(item.telefone),
@@ -104,7 +105,8 @@ function paraRegistrado(linha: typeof enfermeirosPlantao.$inferSelect): Enfermei
         turnoData: linha.turnoData,
         turno: linha.turno,
         profissionalId: linha.profissionalId,
-        nome: linha.nome,
+        // linhas gravadas antes da limpeza ainda trazem a anotação da escala
+        nome: nomeDeExibicao(linha.nome),
         emails: linha.emails,
         telefone: linha.telefone,
         registradoEm: linha.registradoEm.toISOString(),
@@ -165,7 +167,7 @@ export async function registrarEnfermeiro(params: {
         const chaveNome = dados.nome.toLocaleLowerCase("pt-BR");
         const jaEsta = ativos.find((item) => dados.profissionalId
             ? item.profissionalId === dados.profissionalId
-            : item.nome.toLocaleLowerCase("pt-BR") === chaveNome);
+            : nomeDeExibicao(item.nome).toLocaleLowerCase("pt-BR") === chaveNome);
         if (jaEsta) return jaEsta;
         const [nova] = await tx
             .insert(enfermeirosPlantao)
