@@ -156,8 +156,8 @@ export interface RespostaDoPortao {
 }
 
 /** Mesa, Tabela ou quadro: esta conta, deste IP, agora? Nunca lança.
-    No quadro passa também o enfermeiro(a) do plantão registrado pela chefia
-    (services/enfermeiro-plantao.service.ts); na Mesa também, só para ler. */
+    Nos três passa também o enfermeiro(a) do plantão registrado pela chefia
+    (services/enfermeiro-plantao.service.ts); na Mesa, só para ler. */
 export async function conferirPortaoDeTurno(
     conta: ContaNoPortao,
     contexto: ContextoRequisicao,
@@ -179,9 +179,9 @@ export async function conferirPortaoDeTurno(
             }
         }
         const naCentral = !emTurno && contexto.ip ? (await faixasDaCentral(agora)).has(faixaDeRede(contexto.ip)) : false;
-        const enfermeiroDoTurno = (sistema === "quadro" || sistema === "mesa") && !emTurno && !naCentral && conta.email
+        const enfermeiroDoTurno = !emTurno && !naCentral && conta.email
             ? await emailDeEnfermeiroDoTurno(conta.email, agora).catch((erro: unknown) => {
-                // Falha aqui fecha (só esta via): sem a tabela, ninguém ganha o quadro às cegas.
+                // Falha aqui fecha (só esta via): sem a tabela, ninguém passa às cegas.
                 logarErro("enfermeiro do plantão", erro);
                 return false;
             })

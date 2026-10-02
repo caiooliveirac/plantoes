@@ -159,7 +159,7 @@ test("enfermeiro (banco): da lista da escala grava e-mails (minúsculos) e telef
     globalThis.fetch = fetchOriginal;
 });
 
-test("enfermeiro (banco): portão do quadro libera o e-mail do enfermeiro(a) do turno; Tabela continua barrada", { skip }, async () => {
+test("enfermeiro (banco): portão libera o e-mail do enfermeiro(a) do turno no quadro e na Tabela", { skip }, async () => {
     const { servico, turno, portal, portao } = await modulos();
     await limparTurnoCorrente();
     portao.limparMemoriaDoPortao();
@@ -179,7 +179,7 @@ test("enfermeiro (banco): portão do quadro libera o e-mail do enfermeiro(a) do 
     assert.equal(await servico.emailDeEnfermeiroDoTurno(email), true);
     assert.equal(await servico.emailDeEnfermeiroDoTurno(`outra${DOMINIO}`), false);
     assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "quadro", contexto })).ok, true);
-    assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "tabela", contexto })).motivo, "fora_do_plantao");
+    assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "tabela", contexto })).ok, true);
     assert.equal((await portal.conferirSessaoDoPortal(email, 0, { sistema: "portal", contexto })).ok, true);
 
     // Acrescentar outro não tira o acesso do primeiro; removê-lo tira.

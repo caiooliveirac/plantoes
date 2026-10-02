@@ -229,6 +229,9 @@ do Caio). Desligar em emergência: `ACESSOS_PORTAO_TURNO=0` /
   ar) não tem e-mail: não libera. Erro de banco nessa consulta fecha (só ela).
   O quadro lê turno, enfermeiro(a), chefe (2031) e bases em
   `GET /api/servicos/quadro/plantao` (x-escala-token).
+- **Enfermeiro(a) do plantão vale nos três**: Mesa (só leitura), quadro e
+  Tabela (painel de vagas). Só quem a chefia escolheu da lista da escala
+  (tem e-mail); a posição (ADM 4091, DISP 4092, Fluxo 3005) não muda o acesso.
 
 ### Mais de 3 lugares ao mesmo tempo: derruba tudo
 
