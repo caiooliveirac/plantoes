@@ -12,7 +12,7 @@
             motivo?, confirmar? }
      confirmar ausente/false → só a prévia, nada é gravado.
      confirmar true          → grava e devolve o saldo já recalculado.
-   200 { ok, gravado, medico, antes: { saida, saldoMin }, depois: { saida, saldoMin } }
+   200 { ok, gravado, medico, antes: { saida, saldoMin }, depois: { saida, saldoMin, explicacao? } }
    saldoMin = saldo do banco de horas do plantão (contínuo) em minutos.
    ========================================================================== */
 import { timingSafeEqual } from "node:crypto";
@@ -20,7 +20,7 @@ import { sql } from "drizzle-orm";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb, hasDatabaseUrl } from "@/db";
-import { calculateBankHours } from "@/modules/bank-hours/calculator";
+import { calculateGuardedBankHours } from "@/modules/bank-hours/calculator";
 import { correctInterventionOccupancy } from "@/modules/operational/corrections";
 
 function tokenConfere(recebido: string | null, esperado: string): boolean {
@@ -111,10 +111,10 @@ export async function POST(request: NextRequest) {
                 actualStartAt: (bancoAntes?.actual_start_at ?? occ.started_at) as string,
             };
             const previa = janela.scheduledStartAt && janela.scheduledEndAt
-                ? calculateBankHours({ ...janela, actualEndAt: saida, arrivalDelayWaived: !!occ.arrival_delay_waived_at })
+                ? calculateGuardedBankHours({ ...janela, actualEndAt: saida, arrivalDelayWaived: !!occ.arrival_delay_waived_at })
                 : null;
             return NextResponse.json(
-                { ok: true, gravado: false, medico: String(occ.nome), antes, depois: { saida: saida.toISOString(), saldoMin: previa?.balanceMinutes ?? null } },
+                { ok: true, gravado: false, medico: String(occ.nome), antes, depois: { saida: saida.toISOString(), saldoMin: previa?.balanceMinutes ?? null, explicacao: previa?.explanation ?? null } },
                 { headers: { "cache-control": "no-store" } },
             );
         }
