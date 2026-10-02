@@ -50,6 +50,7 @@ import { ChiefArrivalRequestsRail } from "@/components/board/ChiefArrivalRequest
 import { CommandPalette } from "@/components/board/CommandPalette";
 import { BoardHero } from "@/components/board/BoardHero";
 import { EnfermeiroDoPlantao } from "@/components/board/EnfermeiroDoPlantao";
+import { medicoDisp } from "@/modules/operational/posicao-enfermeiro";
 import { BoardQuickFilters, type BoardRoleFilter, type BoardStatusFilter } from "@/components/board/BoardQuickFilters";
 import { InlineTimeEditor } from "@/components/board/InlineTimeEditor";
 import { RowActions } from "@/components/board/RowActions";
@@ -1744,6 +1745,12 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
     const regulationCardsForHeader = visibleRegulationCards.filter((card) => !shouldExcludeFromRegulationHeaderCounter(card));
     const regulationOccupiedCount = regulationCardsForHeader.filter((card) => card.status === "active" && Boolean(card.occupancyId)).length;
     const regulationFreeCount = regulationCardsForHeader.filter((card) => card.status === "waiting").length;
+    const medicoDispDaMesa = medicoDisp(regulationCards.map((card) => ({
+        ramal: card.postCode,
+        ativo: card.status === "active",
+        funcao: card.roleLabel,
+        medico: (card.displayName ?? "").trim() || (card.doctorName ?? "").trim() || null,
+    })));
 
     const deferredBoardSearch = useDeferredValue(boardSearch);
     const cardMatchesFilters = (card: BoardCard): boolean => {
@@ -4043,7 +4050,7 @@ export function OperationalBoardClient(props: OperationalBoardClientProps) {
                             criticalCount={criticalCards.length}
                             canManage={Boolean(session?.canManage)}
                             onOpenCriticalQueue={session?.canManage ? () => openDrawer() : undefined}
-                            enfermeiro={session ? <EnfermeiroDoPlantao podeEditar={Boolean(session.canManage)} atualizadoEm={generatedAt} /> : null}
+                            enfermeiro={session ? <EnfermeiroDoPlantao podeEditar={Boolean(session.canManage)} atualizadoEm={generatedAt} medicoDisp={medicoDispDaMesa} /> : null}
                         />
 
                         {session?.canManage && (

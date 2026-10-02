@@ -99,3 +99,14 @@ test("nome: some a anotação de restrição temporária da escala", () => {
     assert.equal(nomeDeExibicao("Fulana (restricao temporaria - TARM/RO) "), "Fulana");
     assert.equal(nomeDeExibicao("FULANA DE TAL (CR)"), "FULANA DE TAL (CR)");
 });
+
+// ── DISP basal ───────────────────────────────────────────────────────────────
+test("DISP basal: médico(a) ativo no 4092; legado, o 4091 com função DISP; senão ninguém", async () => {
+    const { medicoDisp } = await import("@/modules/operational/posicao-enfermeiro");
+    const r = (ramal: string, ativo: boolean, funcao: string | null, medico: string | null) => ({ ramal, ativo, funcao, medico });
+    assert.equal(medicoDisp([r("4092", true, "DISP", "Luiz"), r("4091", true, "ADM", "Ana")]), "Luiz");
+    assert.equal(medicoDisp([r("4091", true, "disp", "Bia")]), "Bia");
+    assert.equal(medicoDisp([r("4091", true, "ADM", "Ana")]), null);
+    assert.equal(medicoDisp([r("4092", false, null, null)]), null);
+    assert.equal(medicoDisp([]), null);
+});

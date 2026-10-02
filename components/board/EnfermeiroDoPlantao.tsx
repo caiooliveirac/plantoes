@@ -5,7 +5,8 @@
  * posição: ADM (4091), DISP (4092) ou Fluxo (3005). Chefia/admin abre o
  * seletor, escolhe a posição, digita (filtra na hora, sem acento, por nome
  * ou matrícula) e registra com Enter ou clique — quem estava na posição sai;
- * cada um tem seu "remover".
+ * cada um tem seu "remover". O DISP basal é o médico(a) DISP do 4092: vale
+ * enquanto nenhum enfermeiro(a) for declarado no DISP.
  * Demais: só leitura.
  * Escala fora do ar: aceita o nome digitado. Regras e API em
  * app/api/mesa/enfermeiro-plantao/route.ts.
@@ -40,6 +41,8 @@ interface Props {
     podeEditar: boolean;
     /** Muda a cada refresh do quadro (SSE): relê quem está registrado. */
     atualizadoEm: string;
+    /** Médico(a) DISP na Mesa agora (medicoDisp): ocupa o DISP sem enfermeiro(a) declarado. */
+    medicoDisp?: string | null;
 }
 
 type Opcao = { tipo: "escala"; candidato: CandidatoEnfermeiro } | { tipo: "digitado"; nome: string };
@@ -49,7 +52,7 @@ async function lerErro(resposta: Response, padrao: string) {
     return corpo.error || padrao;
 }
 
-export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
+export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm, medicoDisp = null }: Props) {
     const [enfermeiros, setEnfermeiros] = useState<EnfermeiroPublico[]>([]);
     const [carregado, setCarregado] = useState(false);
     const [aberto, setAberto] = useState(false);
@@ -62,6 +65,8 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
     const listaRef = useRef<HTMLUListElement>(null);
     const enfermeirosRef = useRef(enfermeiros);
     enfermeirosRef.current = enfermeiros;
+    const medicoDispRef = useRef(medicoDisp);
+    medicoDispRef.current = medicoDisp;
     const enviandoRef = useRef(false);
 
     const recarregar = useCallback(async (comCandidatos: boolean) => {
@@ -91,7 +96,7 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
         setTermo("");
         setDestaque(0);
         // abre na primeira posição vaga
-        setPosicao(POSICOES_ENFERMEIRO.find((p) => !enfermeirosRef.current.some((item) => item.posicao === p)) ?? "ADM");
+        setPosicao(POSICOES_ENFERMEIRO.find((p) => !enfermeirosRef.current.some((item) => item.posicao === p) && !(p === "DISP" && medicoDispRef.current)) ?? "ADM");
         void recarregar(true);
     }, [aberto, recarregar]);
 
@@ -152,9 +157,15 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
     };
 
     const ordenados = [...enfermeiros].sort((a, b) => ordemPosicao(a) - ordemPosicao(b));
-    const nomes = ordenados.map((item) => `${rotuloCurto(item)}: ${item.nome}`).join(", ");
+    // DISP sem enfermeiro(a) declarado: fica o médico(a) DISP da Mesa
+    const dispMedico = medicoDisp && !enfermeiros.some((item) => item.posicao === "DISP") ? medicoDisp : null;
+    const linhas = [
+        ...ordenados.map((item) => ({ chave: item.id, ordem: ordemPosicao(item), posicao: rotuloCurto(item), nome: item.nome })),
+        ...(dispMedico ? [{ chave: "disp-medico", ordem: POSICOES_ENFERMEIRO.indexOf("DISP"), posicao: ROTULO_POSICAO.DISP, nome: `${dispMedico} (médico)` }] : []),
+    ].sort((a, b) => a.ordem - b.ordem);
+    const nomes = linhas.map((item) => `${item.posicao}: ${item.nome}`).join(", ");
     const rotulo = enfermeiros.length > 0
-        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <span className="enf-plantao__nomes">{ordenados.map((item) => <strong key={item.id}><small className="enf-plantao__posicao">{rotuloCurto(item)}</small> {item.nome}</strong>)}</span></>
+        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <span className="enf-plantao__nomes">{linhas.map((item) => <strong key={item.chave}><small className="enf-plantao__posicao">{item.posicao}</small> {item.nome}</strong>)}</span></>
         : podeEditar
             ? <strong>Informar enfermeiro(a)</strong>
             : <span className="enf-plantao__rotulo">Enfermeiro(a) do plantão: não informado</span>;
@@ -202,7 +213,7 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm }: Props) {
                                     onClick={() => setPosicao(p)}
                                 >
                                     <span>{ROTULO_POSICAO[p]}</span>
-                                    <small>{atual ? atual.nome : "vaga"}</small>
+                                    <small>{atual ? atual.nome : p === "DISP" && medicoDisp ? `${medicoDisp} (médico)` : "vaga"}</small>
                                 </button>
                             );
                         })}
