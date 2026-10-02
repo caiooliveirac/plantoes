@@ -1,4 +1,4 @@
-export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro"] as const;
+export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro", "observador"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -32,6 +32,14 @@ export type OperadorDaCentral = (typeof OPERADORES_DA_CENTRAL)[number];
  * escreve, não disputa a vez.
  */
 export const ENFERMEIRO_ROLE = "enfermeiro" as const satisfies UserRole;
+
+/**
+ * Observador: vê tudo o que o admin vê (Mesa, Tabela, Quadro, telas /admin),
+ * de qualquer lugar e fora do plantão, mas nunca escreve. Passa onde se exige
+ * admin/chief só em GET/HEAD (requireAuthenticatedSession); escrita segue 403.
+ * Isento da presença na Mesa, como o enfermeiro. Dado em /admin/acessos ou por SQL.
+ */
+export const OBSERVADOR_ROLE = "observador" as const satisfies UserRole;
 
 /** Papéis que o Escalas pode dar ao aprovar um cadastro (contas-escala). */
 export const PAPEIS_DO_ESCALA = [...OPERADORES_DA_CENTRAL, ENFERMEIRO_ROLE] as const;

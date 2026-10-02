@@ -46,7 +46,7 @@ const operationsV2 = pgSchema("operations_v2");
 
 // `portal`: só login no portal mnrs.com.br (verificar-escala); nenhum acesso ao app Plantões
 // (modules/auth/contracts.ts, temAcessoAoPlantoes).
-export const userRoleEnum = operationsV2.enum("user_role", ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro"]);
+export const userRoleEnum = operationsV2.enum("user_role", ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro", "observador"]);
 export const inviteModeEnum = operationsV2.enum("invite_mode", ["email", "bearer"]);
 export const chiefRequestStatusEnum = operationsV2.enum("chief_request_status", ["pending", "approved", "rejected"]);
 export const occupancySourceEnum = operationsV2.enum("occupancy_source", ["manual", "telegram", "import", "admin_correction"]);

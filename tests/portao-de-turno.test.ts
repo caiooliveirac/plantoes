@@ -109,3 +109,7 @@ test("portão: Mesa, quadro e Tabela procuram o enfermeiro(a) do turno pelo e-ma
     assert.equal(servidor.match(/"mesa",/g)?.length, 2);
     assert.equal(servidor.match(/email: (session|atual)\.user\.email \}/g)?.length, 2);
 });
+
+test("observador entra fora do plantão e de qualquer lugar", () => {
+    assert.deepEqual(decidirPortao({ roles: ["doctor", "observador"], emTurno: false, naCentral: false }), { liberado: true, motivo: "observador" });
+});

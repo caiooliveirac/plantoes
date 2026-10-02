@@ -3,9 +3,9 @@ import { cookies, headers } from "next/headers";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { userRoles, users } from "@/db/schema";
-import { lerContextoRequisicao } from "@/lib/acessos/contexto";
+import { CABECALHO_ROTA, lerContextoRequisicao, lerRota } from "@/lib/acessos/contexto";
 import { depoisDaResposta } from "@/lib/acessos/depois";
-import { ehOperadorDaCentral, ENFERMEIRO_ROLE, rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
+import { ehOperadorDaCentral, ENFERMEIRO_ROLE, OBSERVADOR_ROLE, rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
 import { createSessionToken, isSessionVersionCurrent, sessionIdOf, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
 import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
 import { MENSAGEM_BLOQUEADA, MENSAGEM_OCUPADA, modoPresenca } from "@/modules/acessos/presenca";
@@ -233,12 +233,21 @@ export async function requireAuthenticatedSession(requiredRoles?: UserRole[], op
         throw new AuthError(403, "Password change required before accessing protected operations.");
     }
 
-    if (requiredRoles && !requiredRoles.some((role) => session.user.roles.includes(role))) {
+    if (requiredRoles && !requiredRoles.some((role) => session.user.roles.includes(role)) && !(await observadorLendo(session, requiredRoles))) {
         throw new AuthError(403, "You do not have permission to perform this action.");
     }
 
     return session;
 }
+/** Observador vê o que admin/chief veem, mas só em GET/HEAD — o método vem do
+    proxy (x-plantoes-rota, sempre sobrescrito lá); sem ele, nega. */
+async function observadorLendo(session: AuthenticatedSession, requiredRoles: UserRole[]) {
+    if (!session.user.roles.includes(OBSERVADOR_ROLE)) return false;
+    if (!requiredRoles.some((role) => role === "admin" || role === "chief")) return false;
+    const { metodo } = lerRota((await headers()).get(CABECALHO_ROTA));
+    return metodo === "GET" || metodo === "HEAD";
+}
+
 /** Leitura do quadro: qualquer papel, inclusive com senha provisória — a pessoa
     precisa ver a tela para trocar a senha no popover. */
 export async function requireSessionForRead() {
@@ -265,7 +274,7 @@ export async function mesaLiberadaPara(session: AuthenticatedSession) {
    aparelho vem do cookie assinado (proxy.ts) — nunca do corpo do pedido. */
 export async function contaNaMesa(session: AuthenticatedSession): Promise<ContaNaMesa | null> {
     if (session.user.roles.includes("admin")) return null;
-    if (session.user.roles.includes(ENFERMEIRO_ROLE)) return null;
+    if (session.user.roles.includes(ENFERMEIRO_ROLE) || session.user.roles.includes(OBSERVADOR_ROLE)) return null;
     const contexto = lerContextoRequisicao(await headers());
     if (ehOperadorDaCentral(session.user.roles) && await naRedeDaCentral(contexto.ip)) return null;
     const cookieStore = await cookies();

@@ -30,7 +30,7 @@ export const LUGARES_TOLERADOS = 3;
 /** "Ao mesmo tempo" = visto nos últimos 5 minutos (a janela do monitor). */
 export const JANELA_DE_LUGARES_MS = JANELA_MS;
 
-export type MotivoDoPortao = "admin" | "plantao" | "central" | "enfermeiro" | "fora_do_plantao";
+export type MotivoDoPortao = "admin" | "plantao" | "central" | "enfermeiro" | "observador" | "fora_do_plantao";
 
 export interface EntradaDoPortao {
     roles: readonly string[];
@@ -50,6 +50,8 @@ export interface EntradaDoPortao {
 
 export function decidirPortao(entrada: EntradaDoPortao): { liberado: boolean; motivo: MotivoDoPortao } {
     if (entrada.roles.includes("admin")) return { liberado: true, motivo: "admin" };
+    // Só lê (escrita exige admin/chief e ele não passa em POST): fora do plantão e de qualquer lugar.
+    if (entrada.roles.includes("observador")) return { liberado: true, motivo: "observador" };
     if (entrada.emTurno) return { liberado: true, motivo: "plantao" };
     // Chefia trabalha na Central fora da escala (a trava da 2031 limita a escrita).
     const saiu = entrada.saiuDoPlantao && !entrada.roles.includes("chief");
