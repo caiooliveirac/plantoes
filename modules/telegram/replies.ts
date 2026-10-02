@@ -1,4 +1,4 @@
-type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "half_shift_assumed" | "continuation_recorded" | "reassignment_recorded" | "departure_recorded" | "departure_adjusted" | "half_shift_already_closed" | "departure_justification_required" | "departure_justification_retry" | "departure_justification_recorded" | "departure_justification_manual_review" | "departure_occurrence_number_required" | "departure_occurrence_number_retry" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
+type ReplyKind = "arrival_recorded" | "arrival_p_recorded" | "half_shift_assumed" | "continuation_recorded" | "reassignment_recorded" | "departure_recorded" | "departure_adjusted" | "half_shift_already_closed" | "departure_justification_required" | "departure_justification_retry" | "departure_justification_recorded" | "departure_justification_manual_review" | "departure_justification_chief_review" | "departure_occurrence_number_required" | "departure_occurrence_number_retry" | "departure_not_found" | "departure_time_conflict" | "departure_missing_context" | "no_operational_match" | "candidate_prompt" | "name_unresolved" | "command_forbidden" | "command_usage" | "command_corrected" | "command_removed" | "command_deleted" | "casual_smalltalk";
 
 interface NamedCandidate {
     fullName: string;
@@ -49,10 +49,10 @@ const REPLIES: Record<ReplyKind, string[]> = {
         "{name} já tinha saído do painel às 17:00 em {target} — meio plantão fecha automático e já está registrado como MEIO para pagamento (sem banco de horas: a saída prevista era 17:00).",
     ],
     departure_justification_required: [
-        "Saída tardia de {name} em {target} anotada. Como já havia rendição, o extra só entra no pagamento e banco de horas com motivo por escrito — responda só o motivo: _estava em ocorrência 0729_ ou _estava higienizando a viatura_.\nSe o horário mudou, reenvie: {example}",
+        "Saída tardia de {name} em {target} anotada. Como já havia rendição, o extra só entra no pagamento e banco de horas com motivo por escrito — responda só o motivo: _estava em ocorrência 0729_ ou _estava higienizando a viatura_. Outro motivo: escreva por extenso que a chefia valida.\nSe o horário mudou, reenvie: {example}",
     ],
     departure_justification_retry: [
-        "Não reconheci o motivo. Vale: _em ocorrência NNNN_ ou _higienizando a viatura_ — pode tentar de novo.\nSem isso, guardo a justificativa para a coordenação e o extra fica sem crédito automático (só a chefia lança).",
+        "Não reconheci o motivo. Vale: _em ocorrência NNNN_, _higienizando a viatura_ ou o motivo por extenso (a chefia valida) — pode tentar de novo.\nSem isso, guardo a justificativa para a coordenação e o extra fica sem crédito automático (só a chefia lança).",
     ],
     departure_occurrence_number_required: [
         "Entendi que {name} saiu tarde de {target} por ocorrência. Para creditar esses minutos no banco de horas eu preciso saber QUAL ocorrência — me responda só com o número dela (4 dígitos).\n\nEx.: ocorrência 4521\n\nSe o horário {time} mudou, reenvie a saída completa assim: {example}",
@@ -65,6 +65,9 @@ const REPLIES: Record<ReplyKind, string[]> = {
     ],
     departure_justification_manual_review: [
         "Justificativa de {name} ({target}, {time}) guardada para a coordenação. Não validei ocorrência/higienização, então o extra ficou sem crédito automático — a chefia pode lançar se couber.",
+    ],
+    departure_justification_chief_review: [
+        "Motivo de {name} ({target}, saída {time}) enviado para a chefia validar. Se aceitar, o extra entra no banco de horas.",
     ],
     departure_not_found: [
         "Entendi a saída de {name} em {target}, mas não achei ocupação compatível para fechar por aqui. Se a saída real foi diferente da rendição, reenvie assim: {example}",
@@ -123,6 +126,7 @@ const REPLY_PREFIX: Record<ReplyKind, string> = {
     departure_occurrence_number_retry: "⚠️",
     departure_justification_recorded: "✅",
     departure_justification_manual_review: "🔎",
+    departure_justification_chief_review: "🔎",
     departure_not_found: "⛔",
     departure_time_conflict: "⛔",
     departure_missing_context: "⛔",

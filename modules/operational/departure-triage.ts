@@ -41,6 +41,8 @@ export type DepartureTriageKind =
     | "late_credit"
     /** Alegou ocorrência sem o número de 4 dígitos. */
     | "occurrence_missing"
+    /** Motivo por extenso que não é ocorrência nem higienização: a chefia valida. */
+    | "justification_review"
     /** Mesma justificativa repetida ≥3x em 30 dias. */
     | "pattern"
     /** Saída dentro do previsto — nada muda em pagamento nem banco. */
@@ -61,6 +63,8 @@ export interface DepartureTriageInput {
      */
     reasonCode?: string | null;
     occurrenceNumberMissing?: boolean;
+    /** Motivo livre que o bot mandou para a chefia validar (ver FREE_JUSTIFICATION_NOTE_MARKER). */
+    freeJustificationText?: string | null;
     reasonOccurrenceCount30d?: number;
 }
 
@@ -105,6 +109,23 @@ export const OVERRIDE_NOTE_MIN_LENGTH = 8;
 
 export function isValidOverrideNote(note: string | null | undefined): boolean {
     return typeof note === "string" && note.trim().length >= OVERRIDE_NOTE_MIN_LENGTH;
+}
+
+/**
+ * Marca da nota da ocupação quando o médico explicou a saída tardia com um
+ * motivo que não é ocorrência nem higienização ("comitiva do presidente"). O
+ * bot grava a hora alegada sem crédito automático e a fila pede à chefia que
+ * valide. Mesmo tamanho mínimo da nota da chefia (OVERRIDE_NOTE_MIN_LENGTH).
+ */
+export const FREE_JUSTIFICATION_NOTE_MARKER = "telegram justificativa livre - revisar chefia";
+
+/** O motivo livre mais recente gravado nas notas, ou null. */
+export function extractFreeDepartureJustification(notes: string | null | undefined): string | null {
+    if (!notes) return null;
+    const prefix = `[${FREE_JUSTIFICATION_NOTE_MARKER}]`;
+    const line = notes.split("\n").reverse().find((entry) => entry.trim().startsWith(prefix));
+    const text = line?.trim().slice(prefix.length).trim();
+    return text ? text : null;
 }
 
 /**
@@ -243,13 +264,22 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
         };
     }
 
-    if ((input.delayMinutes ?? 0) > LATE_CREDIT_ATTENTION_THRESHOLD_MINUTES) {
+    // Motivo livre e ocorrência sem número vêm ANTES do crédito tardio: os dois
+    // gravam a hora alegada (quase sempre >1h além da janela), e late_credit é
+    // classe "glance" — o sistema aplicaria o crédito sozinho em 24h, sem que a
+    // chefia tivesse validado o motivo.
+    const freeJustification = input.freeJustificationText?.trim();
+    if (freeJustification) {
+        const quoted = freeJustification.length > 140 ? `${freeJustification.slice(0, 139)}…` : freeJustification;
+        const late = (input.delayMinutes ?? 0) > 0
+            ? `Ficou ${formatHoursShort(input.delayMinutes!)} além da janela. `
+            : "";
         return {
-            kind: "late_credit",
+            kind: "justification_review",
             attention: true,
             classification,
             extendedStay: null,
-            headline: `Ficou ${formatHoursShort(input.delayMinutes!)} além da janela — gera crédito no banco de horas.`,
+            headline: `${late}Motivo fora das regras, a chefia valida: “${quoted}”`,
         };
     }
 
@@ -260,6 +290,16 @@ export function triagePendingDeparture(input: DepartureTriageInput): DepartureTr
             classification,
             extendedStay: null,
             headline: "Alegou ocorrência sem informar o número de 4 dígitos.",
+        };
+    }
+
+    if ((input.delayMinutes ?? 0) > LATE_CREDIT_ATTENTION_THRESHOLD_MINUTES) {
+        return {
+            kind: "late_credit",
+            attention: true,
+            classification,
+            extendedStay: null,
+            headline: `Ficou ${formatHoursShort(input.delayMinutes!)} além da janela — gera crédito no banco de horas.`,
         };
     }
 

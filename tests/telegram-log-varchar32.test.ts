@@ -6,6 +6,7 @@ import { after, before, test } from "node:test";
 import { eq, inArray } from "drizzle-orm";
 import { closeDb, getDb, hasDatabaseUrl } from "@/db";
 import { bankHoursEntries, doctors, interventionBases, interventionOccupancies, telegramIngestedMessages } from "@/db/schema";
+import { extractFreeDepartureJustification } from "@/modules/operational/departure-triage";
 import { clampTelegramLogColumns, processTelegramUpdate } from "@/modules/telegram/service";
 
 /**
@@ -83,13 +84,50 @@ test("Ananda: saída tardia com justificativa inválida duas vezes vai para revi
     assert.equal(departure.status, "pending_departure_justification");
     assert.equal(departure.parsedTargetCode, "PM04");
 
-    const firstRetry = await send("Remanejada para PM40 formação de SuperUS", "2026-09-21T19:32:00-03:00");
+    // Respostas curtas (<8 caracteres): o motivo livre só vale por extenso.
+    const firstRetry = await send("SuperUS", "2026-09-21T19:32:00-03:00");
     assert.equal(firstRetry.errorMessage, "departure_justification_invalid_retry");
 
-    const manualReview = await send("Remanejada para PM40 formação de SuperUS, sem ocorrência", "2026-09-21T19:34:00-03:00");
+    const manualReview = await send("SuperUS", "2026-09-21T19:34:00-03:00");
     assert.equal(manualReview.status, "accepted", `${manualReview.status} ${manualReview.errorMessage}`);
     assert.equal(manualReview.parsedAction, "departure_justif_manual_review");
     assert.equal(manualReview.parsedTargetCode, "PM04");
+});
+
+test("Sadja 29/09: motivo por extenso fora das regras vai para a chefia validar com a hora alegada", { skip }, async () => {
+    const db = getDb();
+    const base = await db.query.interventionBases.findFirst({ where: eq(interventionBases.code, "IT30") });
+    assert.ok(base);
+    const [sadja] = await db.insert(doctors).values({ fullName: "Sadja Teste Costa", normalizedName: "sadja teste costa" }).returning();
+    const [sucessor] = await db.insert(doctors).values({ fullName: "Zuleide Sucessora", normalizedName: "zuleide sucessora" }).returning();
+    doctorIds.push(sadja.id, sucessor.id);
+    const common = { baseId: base.id, source: "telegram" as const };
+    // Fechada no fim da janela e já confirmada pela chefia, como no LIVE.
+    const [ocupacao] = await db.insert(interventionOccupancies).values({
+        ...common, doctorId: sadja.id, continuityGroupId: randomUUID(), shiftLabel: "SD",
+        startedAt: new Date("2026-09-22T07:05:00-03:00"), boardStartedAt: new Date("2026-09-22T07:05:00-03:00"),
+        scheduledStartAt: new Date("2026-09-22T07:00:00-03:00"), scheduledEndAt: new Date("2026-09-22T19:00:00-03:00"),
+        endedAt: new Date("2026-09-22T19:00:00-03:00"), actualEndedAt: new Date("2026-09-22T19:00:00-03:00"),
+        departureConfirmedAt: new Date("2026-09-22T19:42:00-03:00"),
+    }).returning();
+    await db.insert(interventionOccupancies).values({
+        ...common, doctorId: sucessor.id, continuityGroupId: randomUUID(), shiftLabel: "SN",
+        startedAt: new Date("2026-09-22T19:00:00-03:00"), boardStartedAt: new Date("2026-09-22T19:00:00-03:00"),
+        scheduledStartAt: new Date("2026-09-22T19:00:00-03:00"), scheduledEndAt: new Date("2026-09-23T07:00:00-03:00"),
+    });
+
+    const departure = await send("Sadja Teste Costa saindo IT30 21:45", "2026-09-22T21:45:00-03:00");
+    assert.equal(departure.status, "pending_departure_justification", `${departure.status} ${departure.errorMessage}`);
+
+    const motivo = await send("após finalização da comitiva do presidente", "2026-09-22T21:46:00-03:00");
+    assert.equal(motivo.status, "accepted", `${motivo.status} ${motivo.errorMessage}`);
+    assert.equal(motivo.parsedAction, "departure_justif_chief_review");
+
+    const depois = await db.query.interventionOccupancies.findFirst({ where: eq(interventionOccupancies.id, ocupacao.id) });
+    assert.equal(depois?.actualEndedAt?.toISOString(), new Date("2026-09-22T21:45:00-03:00").toISOString());
+    // Hora nova tira a confirmação: a saída volta à fila para a chefia.
+    assert.equal(depois?.departureConfirmedAt, null);
+    assert.equal(extractFreeDepartureJustification(depois?.notes), "após finalização da comitiva do presidente");
 });
 
 test("clampTelegramLogColumns corta só o que não cabe na coluna", () => {
