@@ -5,8 +5,8 @@
  * posição: ADM (4091), DISP (4092) ou Fluxo (3005). Chefia/admin abre o
  * seletor, escolhe a posição, digita (filtra na hora, sem acento, por nome
  * ou matrícula) e registra com Enter ou clique — quem estava na posição sai;
- * cada um tem seu "remover". O DISP basal é o médico(a) DISP do 4092: vale
- * enquanto nenhum enfermeiro(a) for declarado no DISP.
+ * cada um tem seu "remover". DISP sem enfermeiro(a) e com médico(a) DISP no
+ * 4092: não entra na lista de enfermeiros — vira o aviso de contingência.
  * Demais: só leitura.
  * Escala fora do ar: aceita o nome digitado. Regras e API em
  * app/api/mesa/enfermeiro-plantao/route.ts.
@@ -41,7 +41,7 @@ interface Props {
     podeEditar: boolean;
     /** Muda a cada refresh do quadro (SSE): relê quem está registrado. */
     atualizadoEm: string;
-    /** Médico(a) DISP na Mesa agora (medicoDisp): ocupa o DISP sem enfermeiro(a) declarado. */
+    /** Médico(a) DISP na Mesa agora (medicoDisp): cobre os disparos da 4092 sem enfermeiro(a) no DISP. */
     medicoDisp?: string | null;
 }
 
@@ -157,15 +157,14 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm, medicoDisp = nul
     };
 
     const ordenados = [...enfermeiros].sort((a, b) => ordemPosicao(a) - ordemPosicao(b));
-    // DISP sem enfermeiro(a) declarado: fica o médico(a) DISP da Mesa
+    // DISP sem enfermeiro(a) declarado e médico(a) DISP na Mesa: contingência
     const dispMedico = medicoDisp && !enfermeiros.some((item) => item.posicao === "DISP") ? medicoDisp : null;
-    const linhas = [
-        ...ordenados.map((item) => ({ chave: item.id, ordem: ordemPosicao(item), posicao: rotuloCurto(item), nome: item.nome })),
-        ...(dispMedico ? [{ chave: "disp-medico", ordem: POSICOES_ENFERMEIRO.indexOf("DISP"), posicao: ROTULO_POSICAO.DISP, nome: `${dispMedico} (médico)` }] : []),
-    ].sort((a, b) => a.ordem - b.ordem);
-    const nomes = linhas.map((item) => `${item.posicao}: ${item.nome}`).join(", ");
+    const alertaDisp = dispMedico
+        ? <span className="enf-plantao__alerta" role="status"><strong>ENFERMEIRO FALTOU</strong> — Disparos da 4092 cobertos em contingência por {dispMedico}</span>
+        : null;
+    const nomes = ordenados.map((item) => `${rotuloCurto(item)}: ${item.nome}`).join(", ");
     const rotulo = enfermeiros.length > 0
-        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <span className="enf-plantao__nomes">{linhas.map((item) => <strong key={item.chave}><small className="enf-plantao__posicao">{item.posicao}</small> {item.nome}</strong>)}</span></>
+        ? <><span className="enf-plantao__rotulo">{enfermeiros.length > 1 ? "Enfermeiros(as) do plantão:" : "Enfermeiro(a) do plantão:"}</span> <span className="enf-plantao__nomes">{ordenados.map((item) => <strong key={item.id}><small className="enf-plantao__posicao">{rotuloCurto(item)}</small> {item.nome}</strong>)}</span></>
         : podeEditar
             ? <strong>Informar enfermeiro(a)</strong>
             : <span className="enf-plantao__rotulo">Enfermeiro(a) do plantão: não informado</span>;
@@ -174,15 +173,19 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm, medicoDisp = nul
 
     if (!podeEditar) {
         return (
-            <span className={`enf-plantao ${enfermeiros.length > 0 ? "" : "is-vazio"}`.trim()} aria-live="polite">
-                <HeartPulse size={13} strokeWidth={2.2} aria-hidden />
-                {rotulo}
-            </span>
+            <>
+                <span className={`enf-plantao ${enfermeiros.length > 0 ? "" : "is-vazio"}`.trim()} aria-live="polite">
+                    <HeartPulse size={13} strokeWidth={2.2} aria-hidden />
+                    {rotulo}
+                </span>
+                {alertaDisp}
+            </>
         );
     }
 
     const idLista = "enf-plantao-lista";
     return (
+        <>
         <Popover.Root open={aberto} onOpenChange={setAberto}>
             <Popover.Trigger asChild>
                 <button
@@ -213,7 +216,7 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm, medicoDisp = nul
                                     onClick={() => setPosicao(p)}
                                 >
                                     <span>{ROTULO_POSICAO[p]}</span>
-                                    <small>{atual ? atual.nome : p === "DISP" && medicoDisp ? `${medicoDisp} (médico)` : "vaga"}</small>
+                                    <small>{atual ? atual.nome : p === "DISP" && medicoDisp ? `faltou · ${medicoDisp} cobre` : "vaga"}</small>
                                 </button>
                             );
                         })}
@@ -292,5 +295,7 @@ export function EnfermeiroDoPlantao({ podeEditar, atualizadoEm, medicoDisp = nul
                 </Popover.Content>
             </Popover.Portal>
         </Popover.Root>
+        {alertaDisp}
+        </>
     );
 }
