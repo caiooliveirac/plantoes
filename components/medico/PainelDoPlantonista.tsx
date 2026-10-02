@@ -192,6 +192,8 @@ export function PainelDoPlantonista({ nome, azulejos, emTurnoInicial, estadoInic
                     mostrarEventuais={false}
                     onEscolher={(alvo) => setPasso({ tipo: "confirmar", acao: "chegada", alvo })}
                 />
+                <h2 className="mk-painel-subtitulo">Não está chegando?</h2>
+                <div className="mk-painel-acoes">{atalhosDoMedico()}</div>
                 {renderFolhas()}
             </section>
         );
@@ -229,12 +231,31 @@ export function PainelDoPlantonista({ nome, azulejos, emTurnoInicial, estadoInic
                             Mudar de posto
                             <small>toque no destino</small>
                         </button>
+                        {atalhosDoMedico()}
                     </div>
                 </>
             ) : null}
             {renderFolhas()}
         </section>
     );
+
+    /* Pagamento, folha e banco de horas abrem a qualquer hora (o portão de
+       turno só fecha a Mesa). /medico e /banco-de-horas resolvem o mês no
+       servidor; <a> e não <Link>, porque são redirects. */
+    function atalhosDoMedico() {
+        return (
+            <>
+                <a className="mk-botao" href="/medico">
+                    Pagamento e folha de ponto
+                    <small>plantões do mês, valor e a folha para gerar</small>
+                </a>
+                <a className="mk-botao" href="/banco-de-horas">
+                    Meu banco de horas
+                    <small>saldo, atrasos e horas extras</small>
+                </a>
+            </>
+        );
+    }
 
     function renderFolhas() {
         if (passo.tipo === "nenhum") return null;

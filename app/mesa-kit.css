@@ -463,6 +463,7 @@
 .mk-botao.critico { background: var(--acao-critica); color: var(--acao-critica-texto); border-color: var(--acao-critica); }
 .mk-botao.atencao { background: var(--acao-atencao); color: var(--acao-atencao-texto); border-color: var(--acao-atencao); }
 .mk-botao small { font-weight: 400; font-size: 0.8rem; opacity: 0.85; }
+a.mk-botao { text-decoration: none; }
 
 /* ---------- Chip de atraso na coluna de horário ---------- */
 .mk-atraso {
@@ -528,6 +529,7 @@
 }
 .mk-painel-titulo { margin: 0 0 6px; font-size: 1.5rem; color: var(--texto-forte); }
 .mk-painel-texto { margin: 0 0 16px; font-size: 1rem; line-height: 1.45; }
+.mk-painel-subtitulo { margin: 24px 0 0; font-size: 1rem; color: var(--texto-forte); }
 .mk-painel-aviso { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--semaforo-verde-fundo); color: var(--semaforo-verde-texto); border: 1px solid var(--semaforo-verde-borda); }
 .mk-painel-erro { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--semaforo-vermelho-fundo); color: var(--semaforo-vermelho-texto); border: 1px solid var(--semaforo-vermelho-borda); }
 .mk-painel--turno {
