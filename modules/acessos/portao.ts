@@ -41,10 +41,10 @@ export interface EntradaDoPortao {
     /** O médico da conta registrou saída há pouco e não está em outro turno:
         quem usa a conta dele na Central agora não é ele (esqueceu logado). */
     saiuDoPlantao?: boolean;
-    /** Só no quadro.mnrs.com.br e na Mesa: o e-mail da conta é do
-        enfermeiro(a) que a chefia registrou para o turno na Mesa (com as
-        mesmas folgas). Na Mesa ele só lê (escrita exige admin/chief). A
-        Tabela nunca passa isto. */
+    /** Mesa, quadro.mnrs.com.br e Tabela (painel de vagas): o e-mail da conta
+        é do enfermeiro(a) que a chefia registrou para o turno na Mesa, da
+        lista da escala (com as mesmas folgas). Nome digitado não tem e-mail:
+        não libera. Na Mesa ele só lê (escrita exige admin/chief). */
     enfermeiroDoTurno?: boolean;
 }
 

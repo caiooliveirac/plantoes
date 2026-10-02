@@ -14,8 +14,8 @@ import { conferirPortaoDeTurno, type SistemaDoPortao } from "@/services/acessos-
 export type MotivoRecusaDoPortal = "sem_conta" | "inativa" | "sem_papel" | "versao" | "fora_do_plantao";
 
 /** Sistemas atrás do porteiro que só abrem de plantão: a Tabela (abas Tabela,
-    Casos, Destino, UPAs) e o quadro informativo da Central (quadro.mnrs.com.br),
-    que libera também o enfermeiro(a) do plantão registrado na Mesa. */
+    Casos, Destino, UPAs) e o quadro informativo da Central (quadro.mnrs.com.br).
+    Os dois liberam também o enfermeiro(a) do plantão registrado na Mesa. */
 const SISTEMAS_DE_PLANTAO = new Set<SistemaDoPortao>(["tabela", "quadro"]);
 
 function sistemaDePlantao(sistema: string | undefined): sistema is "tabela" | "quadro" {
