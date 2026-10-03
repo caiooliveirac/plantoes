@@ -123,3 +123,56 @@ export async function findActiveOccupancyByDoctorId(doctorId: string, referenceA
 
     return null;
 }
+
+export interface UltimoPlantaoDoMedico {
+    targetCode: string;
+    shiftLabel: string | null;
+    startedAt: Date;
+    /** Saída real quando houve; senão o fim de quadro (rendição). Nulo = aberto. */
+    endedAt: Date | null;
+}
+
+/**
+ * Último plantão registrado do médico, aberto ou fechado, em qualquer setor.
+ * Serve para o bot DIZER o que tem no registro quando uma saída não acha o que
+ * fechar ("pode ser esse que você acha que precisa avisar, e já está fechado").
+ */
+export async function findLastOccupancyByDoctorId(doctorId: string): Promise<UltimoPlantaoDoMedico | null> {
+    const db = getDb();
+    const [reg, int] = await Promise.all([
+        db.select({
+            targetCode: regulationPosts.code,
+            shiftLabel: regulationOccupancies.shiftLabel,
+            startedAt: regulationOccupancies.startedAt,
+            endedAt: regulationOccupancies.endedAt,
+            actualEndedAt: regulationOccupancies.actualEndedAt,
+        })
+            .from(regulationOccupancies)
+            .innerJoin(regulationPosts, eq(regulationPosts.id, regulationOccupancies.postId))
+            .where(eq(regulationOccupancies.doctorId, doctorId))
+            .orderBy(desc(regulationOccupancies.startedAt))
+            .limit(1),
+        db.select({
+            targetCode: interventionBases.code,
+            shiftLabel: interventionOccupancies.shiftLabel,
+            startedAt: interventionOccupancies.startedAt,
+            endedAt: interventionOccupancies.endedAt,
+            actualEndedAt: interventionOccupancies.actualEndedAt,
+        })
+            .from(interventionOccupancies)
+            .innerJoin(interventionBases, eq(interventionBases.id, interventionOccupancies.baseId))
+            .where(eq(interventionOccupancies.doctorId, doctorId))
+            .orderBy(desc(interventionOccupancies.startedAt))
+            .limit(1),
+    ]);
+    const last = [...reg, ...int].sort((left, right) => right.startedAt.getTime() - left.startedAt.getTime())[0];
+    if (!last) {
+        return null;
+    }
+    return {
+        targetCode: last.targetCode,
+        shiftLabel: last.shiftLabel,
+        startedAt: last.startedAt,
+        endedAt: last.actualEndedAt ?? last.endedAt,
+    };
+}

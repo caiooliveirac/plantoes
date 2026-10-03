@@ -56,7 +56,14 @@ import {
 } from "@/modules/doctors/service";
 import { isStoredEarlyDepartureOutcome } from "@/modules/operational/early-departure";
 import { FREE_JUSTIFICATION_NOTE_MARKER, isValidOverrideNote } from "@/modules/operational/departure-triage";
-import { findActiveOccupancyByDoctorId, resolveActiveOccupancyCoverageFloor } from "@/modules/operational/ocupacao-ativa";
+import { findActiveOccupancyByDoctorId, findLastOccupancyByDoctorId, resolveActiveOccupancyCoverageFloor } from "@/modules/operational/ocupacao-ativa";
+import {
+    buildDepartureNotFoundReply,
+    buildLooseComplementReply,
+    buildUncertainArrivalReply,
+    findUncertainArrivalWords,
+    isLooseOperationalComplement,
+} from "@/modules/telegram/arrival-certainty";
 import { buildEarlyDepartureSummary } from "@/modules/operational/early-departure-copy";
 import { announceDeactivationDepartures } from "@/modules/telegram/chief-kick";
 import { pickDeparturePosition, type DoctorPosition } from "@/modules/telegram/departure-position";
@@ -556,6 +563,8 @@ type TelegramReviewReason =
     | "arrival_shift_label_mismatch"
     | "late_arrival_acknowledgement_required"
     | "no_operational_match"
+    | "loose_complement"
+    | "arrival_not_certain"
     | "unknown_destination"
     | "pending_name_selection";
 
@@ -1064,6 +1073,10 @@ function resolveTelegramReviewSummary(reason: TelegramReviewReason) {
             return "mensagem com CRU/COI mas sem ramal específico";
         case "no_operational_match":
             return "mensagem operacional não bateu no parser atual";
+        case "loose_complement":
+            return "complemento solto depois de um aviso já aceito";
+        case "arrival_not_certain":
+            return "chegada com palavra que o bot não reconhece — não gravada";
         case "pending_name_selection":
             return "mensagem operacional precisou confirmação manual do nome";
         case "meal_break_outside_flow":
@@ -1712,6 +1725,14 @@ async function sendTelegramDepartureFailureReply(params: {
         return;
     }
 
+    if (kind === "departure_not_found") {
+        const registryReply = await buildDepartureNotFoundRegistryReply(params.doctorName, params.parsed.baseCode);
+        if (registryReply) {
+            await sendMessage(params.chatId, registryReply, params.replyToMessageId);
+            return;
+        }
+    }
+
     await sendMessage(
         params.chatId,
         pickTelegramReply(kind, params.seed, {
@@ -1722,6 +1743,38 @@ async function sendTelegramDepartureFailureReply(params: {
         }),
         params.replyToMessageId,
     );
+}
+
+function formatSaoPauloDayClock(value: Date) {
+    const day = value.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "America/Sao_Paulo" });
+    return `${day} ${formatSaoPauloClock(value)}`;
+}
+
+// Saída que não achou o que fechar: em vez de "confira e reenvie", mostra onde o
+// registro tem o médico agora e qual foi o último plantão dele. Nulo = médico não
+// localizado pelo nome (cai na resposta genérica).
+async function buildDepartureNotFoundRegistryReply(doctorFullName: string, declaredTarget: string | null) {
+    const doctor = await getDb().query.doctors.findFirst({ where: eq(doctors.fullName, doctorFullName) });
+    if (!doctor) {
+        return null;
+    }
+    const [active, last] = await Promise.all([
+        findActiveOccupancyByDoctorId(doctor.id),
+        findLastOccupancyByDoctorId(doctor.id),
+    ]);
+    return buildDepartureNotFoundReply({
+        doctorName: doctor.displayName?.trim() || doctor.fullName,
+        declaredTarget,
+        active: active ? { targetCode: active.baseCode, sinceTime: formatSaoPauloClock(active.startedAt) } : null,
+        last: last
+            ? {
+                targetCode: last.targetCode,
+                shiftLabel: last.shiftLabel,
+                startedLabel: formatSaoPauloDayClock(last.startedAt),
+                endedLabel: last.endedAt ? formatSaoPauloDayClock(last.endedAt) : null,
+            }
+            : null,
+    });
 }
 
 // Ocupante ativo com titularidade de quadro num ramal/base — usado só para
@@ -4095,6 +4148,9 @@ export function suggestTelegramCommandForTypo(rawText: string): string | null {
     return best ? `/${best.command}` : null;
 }
 
+// Complemento solto só conta colado no aviso: depois disso "12:30" é conversa de almoço.
+const LOOSE_COMPLEMENT_WINDOW_MS = 20 * 60 * 1000;
+
 async function listRecentTelegramSenderMessages(params: {
     chatId: string;
     senderTelegramId?: string | null;
@@ -4120,6 +4176,7 @@ async function listRecentTelegramSenderMessages(params: {
         parsedDoctorName: telegramIngestedMessages.parsedDoctorName,
         status: telegramIngestedMessages.status,
         errorMessage: telegramIngestedMessages.errorMessage,
+        sentAt: sql<Date | null>`coalesce(${telegramIngestedMessages.messageSentAt}, ${telegramIngestedMessages.createdAt})`.mapWith(telegramIngestedMessages.createdAt),
     })
         .from(telegramIngestedMessages)
         .where(and(
@@ -14081,6 +14138,37 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
                     senderName: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ") || null,
                     currentLogId: log.id,
                 });
+                // Complemento solto ("SD", "Desde 07:12", "Cancela") logo depois de um
+                // aviso aceito do mesmo remetente: o bot olha uma mensagem por vez e
+                // jogava fora em silêncio (65 casos em 60 dias). Agora diz que não mudou
+                // nada e mostra a frase inteira, com o nome e o alvo do aviso anterior.
+                const previousAccepted = recentMessages[0];
+                if (
+                    message.chat.type !== "private"
+                    && previousAccepted?.status === "accepted"
+                    && previousAccepted.sentAt
+                    && (message.date * 1000) - previousAccepted.sentAt.getTime() <= LOOSE_COMPLEMENT_WINDOW_MS
+                    && previousAccepted.parsedDoctorName
+                    && previousAccepted.parsedTargetCode
+                    && ["arrival", "continuation", "departure"].includes(previousAccepted.parsedAction ?? "")
+                    && isLooseOperationalComplement(message.text)
+                ) {
+                    await markTelegramProcessed(log.id, {
+                        status: "ignored",
+                        errorMessage: "loose_complement",
+                        resolutionData: buildTelegramReviewLogData({ reason: "loose_complement", trainingCandidate: true }),
+                    });
+                    await sendMessage(
+                        message.chat.id,
+                        buildLooseComplementReply({
+                            doctorName: previousAccepted.parsedDoctorName,
+                            targetCode: previousAccepted.parsedTargetCode,
+                            previousText: previousAccepted.rawText,
+                        }),
+                        message.message_id,
+                    );
+                    return { ok: true, ignored: true };
+                }
                 const suggestion = suggestTelegramCommandHelp({
                     text: message.text,
                     recentMessages,
@@ -14369,6 +14457,55 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
             }
 
             const messageReferenceAt = new Date(message.date * 1000);
+
+            // Régua de certeza: palavra que sobrou como "nome" e não é do médico
+            // resolvido (ou uma pergunta) → não grava. A recusa fica como `error` com
+            // médico e alvo, então a frase redigitada herda a hora DESTE aviso
+            // (resolveFirstArrivalAttemptAt). Privado é lote da chefia: fora da régua.
+            if (message.chat.type !== "private" && parsedEntries.length === 1 && !firstParsed.isDeparture) {
+                const uncertainWords = findUncertainArrivalWords({
+                    doctorQuery,
+                    doctorNames: [
+                        resolvedDoctor.fullName,
+                        resolvedDoctor.displayName,
+                        ...extractDoctorAliases(resolvedDoctor.metadata),
+                    ],
+                });
+                const hasQuestionMark = message.text.includes("?");
+                if (uncertainWords.length > 0 || hasQuestionMark) {
+                    const activeNow = await findActiveOccupancyByDoctorId(resolvedDoctor.id, messageReferenceAt, { ignoreMadrugada: true });
+                    await markTelegramProcessed(log.id, {
+                        status: "error",
+                        parsedDomain: firstParsed.sector,
+                        parsedTargetCode: firstParsed.baseCode,
+                        parsedAction: "arrival",
+                        parsedDoctorName: resolvedDoctor.fullName,
+                        errorMessage: "arrival_not_certain",
+                        resolutionData: {
+                            ...buildTelegramReviewLogData({ reason: "arrival_not_certain", parsed: firstParsed, trainingCandidate: true }),
+                            uncertainWords,
+                        },
+                    });
+                    await sendMessage(
+                        message.chat.id,
+                        buildUncertainArrivalReply({
+                            doctorName: resolvedDoctor.displayName?.trim() || resolvedDoctor.fullName,
+                            targetCode: firstParsed.baseCode,
+                            shiftLabel: firstParsed.shiftType,
+                            isContinuation: firstParsed.isContinuation,
+                            uncertainWords,
+                            hasQuestionMark,
+                            noticeTime: formatSaoPauloClock(messageReferenceAt),
+                            activeElsewhere: activeNow && activeNow.baseCode !== firstParsed.baseCode
+                                ? { targetCode: activeNow.baseCode, sinceTime: formatSaoPauloClock(activeNow.startedAt) }
+                                : null,
+                        }),
+                        message.message_id,
+                    );
+                    return { ok: true, ignored: true };
+                }
+            }
+
             const isGenuineArrival = !firstParsed.isDeparture && !firstParsed.isContinuation && !firstParsed.isReassignment;
             const messageEventAt = resolveArrivalEventTimeForPhase(messageReferenceAt, firstParsed.arrivalTime, isGenuineArrival);
             // HH:mm escrito só impede a busca na fase 1, onde ele vale; na fase 2 é

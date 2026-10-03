@@ -1,6 +1,8 @@
 import { looksLikeDepartureMessage, MEAL_BREAK_KEYWORDS, parseMessage } from "@/modules/telegram/parser";
 
 export interface TelegramRecentSenderMessage {
+    /** Hora da mensagem (message_sent_at, ou o recebimento quando não há). */
+    sentAt?: Date | null;
     rawText: string;
     parsedAction?: string | null;
     parsedTargetCode?: string | null;
