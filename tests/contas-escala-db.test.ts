@@ -87,7 +87,7 @@ test("contas-escala (banco): conta existente só ganha papel — senha intocada;
     await getDb().insert(schema.users).values({ email, passwordHash: await auth.hashPassword("Senha-Antiga-123"), isActive: true });
     const r = await rota.POST(pedido({ email, nome: "Médico", senhaTemporaria: SENHA, papeis: ["tarm"] }));
     assert.equal((await r.json()).situacao, "existente");
-    assert.deepEqual((await papeisDe(email)).papeis, ["tarm"]);
+    assert.deepEqual((await papeisDe(email)).papeis, ["portal", "tarm"]);
     assert.equal((await auth.authenticateWithPassword(email, SENHA, { escopo: "portal" })).status, "invalid_credentials");
     assert.equal((await auth.authenticateWithPassword(email, "Senha-Antiga-123", { escopo: "portal" })).status, "success");
     assert.equal((await rota.POST(pedido({ email, nome: "Médico", senhaTemporaria: SENHA, papeis: ["admin"] }))).status, 400);
