@@ -1,4 +1,4 @@
-export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro", "observador"] as const;
+export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro", "observador", "interno"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -41,6 +41,21 @@ export const ENFERMEIRO_ROLE = "enfermeiro" as const satisfies UserRole;
  */
 export const OBSERVADOR_ROLE = "observador" as const satisfies UserRole;
 
+/**
+ * Interno(a) de medicina do GOA: conta nominal que nasce e só entra pelo
+ * SkyRescue (goa.mnrs.com.br → porteiro do mnrs.com.br), nunca por senha —
+ * ver docs/internos-goa.md. Sem médico vinculado. Como o `portal`, NÃO abre
+ * o app Plantões (nem a Mesa): só o Painel do portal (Tabela, Destino, Giro,
+ * Quadro) em leitura, onde o portão de turno o deixa passar de qualquer lugar.
+ */
+export const INTERNO_ROLE = "interno" as const satisfies UserRole;
+
+/** Só papéis de interno (`portal` não conta): conta de leitura que só entra pelo GOA. */
+export function ehSoInterno(roles: readonly string[]): boolean {
+    const papeis = roles.filter((role) => role !== PORTAL_ROLE);
+    return papeis.length > 0 && papeis.every((role) => role === INTERNO_ROLE);
+}
+
 /** Papéis que o Escalas pode dar ao aprovar um cadastro (contas-escala). */
 export const PAPEIS_DO_ESCALA = [...OPERADORES_DA_CENTRAL, ENFERMEIRO_ROLE] as const;
 export type PapelDoEscala = (typeof PAPEIS_DO_ESCALA)[number];
@@ -49,10 +64,10 @@ export function ehOperadorDaCentral(roles: readonly string[]): boolean {
     return roles.some((role) => (OPERADORES_DA_CENTRAL as readonly string[]).includes(role));
 }
 
-/** Papéis que abrem alguma coisa no app Plantões (tudo menos `portal`). */
-export type PlantoesRole = Exclude<UserRole, typeof PORTAL_ROLE>;
+/** Papéis que abrem alguma coisa no app Plantões (tudo menos `portal` e `interno`, que só valem no portal). */
+export type PlantoesRole = Exclude<UserRole, typeof PORTAL_ROLE | typeof INTERNO_ROLE>;
 
-export const PLANTOES_ROLES = USER_ROLES.filter((role): role is PlantoesRole => role !== PORTAL_ROLE);
+export const PLANTOES_ROLES = USER_ROLES.filter((role): role is PlantoesRole => role !== PORTAL_ROLE && role !== INTERNO_ROLE);
 
 export function isUserRole(value: string): value is UserRole {
     return USER_ROLES.includes(value as UserRole);
@@ -67,7 +82,7 @@ export function rolesDoPlantoes(roles: readonly string[]): PlantoesRole[] {
     return roles.filter(isPlantoesRole);
 }
 
-/** Algum papel que abre o app Plantões? `portal` sozinho não abre. */
+/** Algum papel que abre o app Plantões? `portal` e `interno` sozinhos não abrem. */
 export function temAcessoAoPlantoes(roles: readonly string[]): boolean {
     return rolesDoPlantoes(roles).length > 0;
 }

@@ -260,11 +260,15 @@ Autenticação **customizada**, não usa NextAuth apesar da dependência estar i
   role atribuída, e o fluxo de `chiefAccessRequests` pendente/rejeitado.
 - **Papéis**: `admin`, `chief`, `doctor`, `payment_closing_limited`, `portal`,
   `radio_operador` e `tarm` (operadores da Central: Mesa só leitura, só na
-  Central, isentos da presença — ver docs/presenca-mesa.md) (enum
+  Central, isentos da presença — ver docs/presenca-mesa.md), `enfermeiro`,
+  `observador` e `interno` (interno de medicina do GOA: conta nominal que só
+  entra pelo SkyRescue → porteiro; como o `portal`, não abre o app nem a Mesa —
+  só o Painel em leitura, de qualquer lugar — ver
+  [docs/internos-goa.md](docs/internos-goa.md)) (enum
   `userRoleEnum`, tabela `userRoles`, many-to-many; lista em
   [modules/auth/contracts.ts](modules/auth/contracts.ts)). `portal` só vale no
   `POST /api/auth/verificar-escala` (login do mnrs.com.br): no app, conta só com
-  ele é tratada como sem papel (`rolesDoPlantoes`/`temAcessoAoPlantoes`). Nasce
+  ele (ou só com `interno`) é tratada como sem papel (`rolesDoPlantoes`/`temAcessoAoPlantoes`). Nasce
   por `POST /api/servicos/contas-portal` (x-portal-token = `PORTAL_CONTAS_TOKEN`). Controle mais granular é
   feito por checagem manual em cada rota, não por um role dedicado.
 - **Controle de acesso**: **não há `middleware.ts`**. Cada Server Component/Route

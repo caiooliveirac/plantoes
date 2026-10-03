@@ -46,7 +46,7 @@ const operationsV2 = pgSchema("operations_v2");
 
 // `portal`: só login no portal mnrs.com.br (verificar-escala); nenhum acesso ao app Plantões
 // (modules/auth/contracts.ts, temAcessoAoPlantoes).
-export const userRoleEnum = operationsV2.enum("user_role", ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro", "observador"]);
+export const userRoleEnum = operationsV2.enum("user_role", ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro", "observador", "interno"]);
 export const inviteModeEnum = operationsV2.enum("invite_mode", ["email", "bearer"]);
 export const chiefRequestStatusEnum = operationsV2.enum("chief_request_status", ["pending", "approved", "rejected"]);
 export const occupancySourceEnum = operationsV2.enum("occupancy_source", ["manual", "telegram", "import", "admin_correction"]);
@@ -107,6 +107,29 @@ export const userRoles = operationsV2.table(
         createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },
     (table) => [primaryKey({ columns: [table.userId, table.role] })],
+);
+
+/* Conta daqui que nasce e entra por outro sistema (docs/internos-goa.md).
+   Hoje só `goa`: o usuário do SkyRescue (`sujeito` = users.id de lá) vira uma
+   conta `interno` daqui. O vínculo é pelo id de lá — o login de lá pode mudar,
+   o e-mail daqui (goa.<login>@samu.local) fica o da criação. Suspender a conta
+   daqui (is_active) corta; o vínculo continua, e o GOA não recria outra. */
+export const identidadesFederadas = operationsV2.table(
+    "identidades_federadas",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        provedor: varchar("provedor", { length: 32 }).notNull(),
+        sujeito: varchar("sujeito", { length: 128 }).notNull(),
+        userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+        login: varchar("login", { length: 64 }),
+        nome: varchar("nome", { length: 160 }),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        ultimoUsoEm: timestamp("ultimo_uso_em", { withTimezone: true }),
+    },
+    (table) => [
+        uniqueIndex("identidades_federadas_provedor_sujeito_idx").on(table.provedor, table.sujeito),
+        index("identidades_federadas_user_idx").on(table.userId),
+    ],
 );
 
 export const passwordResetTokens = operationsV2.table(
