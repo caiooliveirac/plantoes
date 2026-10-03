@@ -107,3 +107,22 @@ test("contas-escala (banco): senha temporária fraca é recusada", { skip }, asy
     assert.equal((await rota.POST(pedido({ email, nome: "X Y", senhaTemporaria: "123456", papeis: ["tarm"] }))).status, 400);
     assert.equal((await rota.POST(pedido({ email, nome: "X Y", senhaTemporaria: "aaaaaaaaaaaa", papeis: ["tarm"] }))).status, 400);
 });
+
+test("portal/trocar-senha (banco): conta só do portal troca a temporária pela definitiva", { skip }, async () => {
+    const { rota, auth } = await modulos();
+    const troca = await import("@/app/api/servicos/portal/trocar-senha/route");
+    const email = `troca-${Date.now()}@contas-escala-teste.invalid`;
+    await rota.POST(pedido({ email, nome: "Condutor", senhaTemporaria: "abcd2345ef", papeis: [] }));
+    const pedir = (corpo: unknown, token: string | null = TOKEN) => troca.POST(new NextRequest("http://localhost/api/servicos/portal/trocar-senha", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(token ? { "x-escala-token": token } : {}) },
+        body: JSON.stringify(corpo),
+    }));
+    assert.equal((await pedir({ email, currentPassword: "abcd2345ef", nextPassword: "Definitiva123" }, "errado")).status, 401);
+    assert.equal((await pedir({ email, currentPassword: "errada12345", nextPassword: "Definitiva123" })).status, 401);
+    assert.equal((await pedir({ email, currentPassword: "abcd2345ef", nextPassword: "fracafraca" })).status, 400);
+    assert.equal((await pedir({ email, currentPassword: "abcd2345ef", nextPassword: "Definitiva123" })).status, 200);
+    const login = await auth.authenticateWithPassword(email, "Definitiva123", { escopo: "portal" });
+    assert.equal(login.status, "success");
+    assert.equal(login.status === "success" && login.user.mustChangePassword, false);
+});
