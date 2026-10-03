@@ -56,7 +56,7 @@ const ABBREVIATION_MAP: Record<string, string> = {
 };
 
 const ARRIVAL_SIGNALS = [
-    /\b(?:CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMINDO|ASSUMI|RENDENDO)\b/i,
+    /\b(?:CHEGUEI|CHEGANDO|CHEGADA|PRESENTE|ASSUMINDO|ASSUMI|RENDENDO|ENTRANDO|ENTREI|ENTRADA|CHEGOU)\b/i,
     /\b(?:TO\s+AQUI|TÔ\s+AQUI|ESTOU\s+AQUI|JA\s+AQUI|JÁ\s+AQUI)\b/i,
     /\b(?:CONTINUO|CONTINUA|SEGUINDO|SIGO)\b/i,
     /\b(?:DESLOCANDO\s+PARA|INDO\s+PARA|RUMO\s+A)\b/i,
@@ -108,10 +108,14 @@ const DEPARTURE_FUZZY_KEYWORDS = [
     "DESCENDO", "DESCI", "BAIXANDO", "BAIXEI", "TERMINEI", "TERMINOU",
 ];
 
+// "ENTRANDO" fica a 3 letras de "ENCERRANDO": a chegada "Fulano entrando PM04 SN"
+// era lida como SAÍDA e recusada por falta de plantão ativo (3 casos em set/2026).
+const ARRIVAL_WORDS_NEVER_DEPARTURE = new Set(["ENTRANDO", "ENTRADA", "ENTREI", "ENTROU"]);
+
 function hasFuzzyDepartureSignal(normalized: string): boolean {
     const tokens = normalized.split(/\s+/).filter(Boolean);
     return tokens.some((token) =>
-        token.length >= 4 && DEPARTURE_FUZZY_KEYWORDS.some((keyword) => {
+        token.length >= 4 && !ARRIVAL_WORDS_NEVER_DEPARTURE.has(token) && DEPARTURE_FUZZY_KEYWORDS.some((keyword) => {
             if (token === keyword) return false; // Already caught by regex
             const threshold = keyword.length >= 10 ? 3 : keyword.length >= 7 ? 2 : 1;
             return computeLevenshteinDistance(token, keyword) <= threshold;
@@ -120,7 +124,7 @@ function hasFuzzyDepartureSignal(normalized: string): boolean {
 }
 
 const REASSIGNMENT_SIGNALS = [
-    /\b(?:TROCANDO|TROCOU|TROQUEI|MUDANDO|MUDOU|MUDEI)\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\b/i,
+    /\b(?:TROCANDO|TROCOU|TROQUEI|MUDANDO|MUDOU|MUDEI|MUDA)\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\b/i,
     /\b(?:REMANEJAD[OA]|TRANSFERID[OA])\s+(?:PARA|P\/|PRO|PRA)\b/i,
 ];
 
@@ -161,6 +165,12 @@ const NAME_NOISE_TOKENS = new Set([
     // "Bom dia informo\nSaida da BR60" extraia "informo" como nome.
     "INFORMO", "AVISO", "INFORMA", "AVISA", "PESSOAL", "GALERA", "GENTE",
     "BOM", "BOA", "OLA", "OI", "DIA", "TARDE", "NOITE",
+    // Formas que o médico usa e o bot entende com certeza (levantamento de
+    // 60 dias, out/2026): não são nome. Ver modules/telegram/arrival-certainty.ts.
+    "PSIQUIATRIA", "PSIQUIATRA", "PERIODO", "PERÍODO", "INVERTIDO", "INVERTIDA", "INTERNO", "INTERNA",
+    "TROCA", "MUDANCA", "MUDANÇA", "MUDAR", "ALTERAR", "MODIFICO", "MODIFICOU", "REMANEJAMENTO",
+    "ENTRANDO", "ENTREI", "ENTROU", "CHEGOU", "TODOS", "TODAS", "PRA", "PRO", "SE", "MIN",
+    "RAMAL", "BASE", "HORAS", "MUDA", "REMANEJA", "LEITOS", "REFORCO", "REFORÇO",
     ...STANDARD_OPERATIONAL_ROLE_CODES,
 ]);
 
@@ -225,7 +235,7 @@ function extractUnknownTargetToken(source: string, arrivalTime: string | null): 
     const timeDigits = arrivalTime ? arrivalTime.replace(":", "") : null;
     const timeDigitsUnpadded = arrivalTime ? arrivalTime.replace(/^0/, "").replace(":", "") : null;
 
-    for (const match of source.matchAll(/(?<![\d:.,/-])(\d{4})(?![\d:.,/hH])/g)) {
+    for (const match of source.matchAll(/(?<![\d:.,/-])(\d{4,5})(?![\d:.,/hH])/g)) {
         const token = match[1];
         if (token === timeDigits || token === timeDigitsUnpadded) {
             continue;
@@ -352,7 +362,20 @@ export function parseMessageMulti(text: string): ParsedMessage[] {
     return results.length > 0 ? results : [parseMessage(text)];
 }
 
-export function parseMessage(text: string): ParsedMessage {
+/**
+ * Separa letra colada em ramal e turno colado em código: "PA2035" → "PA 2035",
+ * "zolaina2154 sd" → "zolaina 2154 sd", "2154SD" → "2154 SD", "PM 40SN" → "PM 40 SN".
+ * Só 4 dígitos depois de letra (ramal) — base XX99 ("PM40") fica como está.
+ */
+export function separateGluedTelegramTokens(text: string) {
+    return text
+        .replace(/([A-Za-zÀ-ÿ])(\d{4})(?!\d)/g, "$1 $2")
+        .replace(/(?<!\d)(\d{2}|\d{4})(SD|SN)\b/gi, "$1 $2")
+        .replace(/(?<!\d)(\d{4})(P)\b/gi, "$1 $2");
+}
+
+export function parseMessage(rawText: string): ParsedMessage {
+    const text = separateGluedTelegramTokens(rawText);
     const normalized = normalizeTelegramText(text);
     let sector: ParsedMessage["sector"] = null;
     let baseCode: string | null = null;
@@ -366,7 +389,7 @@ export function parseMessage(text: string): ParsedMessage {
     const isReassignment = REASSIGNMENT_SIGNALS.some((re) => re.test(normalized));
     let baseExtractionSource = normalized;
     if (isReassignment) {
-        const paraPattern = /\b(?:TROCANDO|TROCOU|TROQUEI|MUDANDO|MUDOU|MUDEI|REMANEJAD[OA]|TRANSFERID[OA])\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\s+/i;
+        const paraPattern = /\b(?:TROCANDO|TROCOU|TROQUEI|MUDANDO|MUDOU|MUDEI|MUDA|REMANEJAD[OA]|TRANSFERID[OA])\s+(?:DE\s+\S+\s+)?(?:PARA|P\/|PRO|PRA)\s+/i;
         const paraMatch = normalized.match(paraPattern);
         if (paraMatch && paraMatch.index !== undefined) {
             baseExtractionSource = normalized.slice(paraMatch.index + paraMatch[0].length);
@@ -451,7 +474,7 @@ export function parseMessage(text: string): ParsedMessage {
 
     // "RECIPIENDARIO" / "RECIPIENDARIA" are the written-out forms of "RECIP".
     // Replace them before applying the word-boundary role regex (which only matches the short code).
-    const normalizedForRole = normalized.replace(/\bRECIPIENDARI[OA]\b/g, "RECIP");
+    const normalizedForRole = normalized.replace(/\bRECIPIENDARI[OA]\b/g, "RECIP").replace(/\bPSIQUIATR(?:IA|A)\b/g, "PSIQ");
     const roleMatch = normalizedForRole.match(new RegExp(`\\b(${STANDARD_OPERATIONAL_ROLE_CODES.join("|")})\\b`));
     if (roleMatch?.[1]) {
         roleFunction = roleMatch[1];
@@ -471,6 +494,10 @@ export function parseMessage(text: string): ParsedMessage {
         DEPARTURE_SIGNALS.some((re) => re.test(normalized))
         || hasFuzzyDepartureSignal(normalized)
     );
+    // "PIAM SE": erro de dedo recorrente para SD. Só em chegada e só sem outro turno.
+    if (!shiftType && !isDeparture && /\bSE\b/.test(normalized)) {
+        shiftType = "SD";
+    }
     const extractedNames = extractNames(text, { departureSplit: isDeparture, reassignmentSplit: isReassignment });
     const isContinuation = !isReassignment && CONTINUATION_SIGNALS.some((re) => re.test(normalized));
     const hasArrivalSignal = ARRIVAL_SIGNALS.some((re) => re.test(normalized));
@@ -618,7 +645,7 @@ function extractNames(text: string, options?: { departureSplit?: boolean; reassi
 
     // For reassignment messages, extract the doctor name from BEFORE the reassignment signal
     if (options?.reassignmentSplit) {
-        const reassignmentMatch = text.match(/\b(?:trocando|trocou|mudando|mudou|remanejad[oa]|transferid[oa])\s+(?:para|p\/|pro|pra)\b/i);
+        const reassignmentMatch = text.match(/\b(?:trocando|trocou|mudando|mudou|muda|remanejad[oa]|transferid[oa])\s+(?:para|p\/|pro|pra)\b/i);
         if (reassignmentMatch && reassignmentMatch.index !== undefined) {
             nameSource = text.slice(0, reassignmentMatch.index);
         }
@@ -627,6 +654,7 @@ function extractNames(text: string, options?: { departureSplit?: boolean; reassi
     const cleaned = nameSource
         .replace(/[_*~`]/g, "")  // Strip Telegram markdown
         .replace(/@\w+/g, " ")
+        .replace(/\b\d{1,2}\s*h\s*\d{1,2}\s*min\w*/gi, " ")  // "6h25min"
         .replace(/\b\d{1,2}[:.h]\d{0,2}\s*(?:hrs?|hs|horas?)?\b/gi, " ")  // times + hrs/hs suffix
         .replace(/\b[A-Z]{2}[\s\-]?\d{2}\b/gi, " ")
         .replace(/\b\d{4}\b/g, " ")
@@ -635,7 +663,7 @@ function extractNames(text: string, options?: { departureSplit?: boolean; reassi
         .replace(/\bP\/\b/gi, " ")
         .replace(/\b(?:NUCLEO|PIAM)\b/gi, " ")  // Named regulation positions
         .replace(new RegExp(`\\b(?:${BASES_INTERVENCAO_NOMEADAS.join("|")})\\b`, "gi"), " ")  // Named intervention bases (GOA)
-        .replace(/[+\-:;!?.,()\[\]{}]/g, " ")
+        .replace(/[+\-:;!?.,()\[\]{}"“”·•/]/g, " ")
         .replace(/\bDr[a]?\.?\b/gi, " ")
         .trim();
 

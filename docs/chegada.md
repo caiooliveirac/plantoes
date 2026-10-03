@@ -65,6 +65,7 @@ webhook → pendências abertas (tomada, nome, turno, PIAM…) → filtro almoç
 → parse (alvo, nome, SD/SN/P, sombra, continuação, remanejo)
 → portão F6: chegada precisa de nome E turno (senão pergunta com botões)
 → resolve médico (fuzzy por nome; sem vínculo telegram_id↔médico)
+→ régua de certeza: palavra que sobrou e não é do médico → não grava (seção 9)
 → hora do evento (fase 2 + primeira tentativa)
 → portão de tomada (só regulação) → retroativa desloca ocupante anterior
 → applyParsedEntry: PIAM | remanejo implícito | cross-turno | continuação | chegada nova
@@ -196,6 +197,49 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
 
 ---
 
+## 9. Régua de certeza — o bot não supõe (03/10/2026)
+
+Levantamento de 60 dias (4.860 mensagens): onde o médico precisou repetir, o bot
+quase sempre tinha **suposto** em vez de perguntar. O parser monta o "nome" com toda
+palavra que não conhece; o casamento de nome é tolerante; então texto estranho virava
+chegada — inclusive no médico errado (primeiro nome igual, sobrenome de outro). Avaliou-se
+trocar o parser por LLM: descartado, os erros eram de regra e de suposição, não de leitura.
+
+Regra: chegada, continuação e remanejo em grupo só gravam se **toda palavra que sobrou
+como nome pertence ao médico resolvido** (nome, nome de exibição, apelidos; tolera erro de
+dedo) e a mensagem não tem `?`. Senão o bot responde o que entendeu, o que não reconheceu
+e a frase exata a digitar — e grava a recusa como `error` / `arrival_not_certain` com
+médico e alvo, para a frase redigitada herdar a hora deste aviso (princípio 2).
+Saída fica fora: motivo livre é esperado nela. Privado (lote da chefia) também.
+
+- Decisão e textos, puros: `modules/telegram/arrival-certainty.ts`
+  (`findUncertainArrivalWords`, `buildUncertainArrivalReply`). Testes em
+  `tests/arrival-certainty.test.ts`.
+- **Para o bot passar a entender uma forma nova, não afrouxe a régua**: ensine a palavra
+  ao parser (`NAME_NOISE_TOKENS` e, se muda o sentido, o sinal correspondente em
+  `modules/telegram/parser.ts`) e acrescente o caso ao teste. Formas ensinadas em
+  03/10/2026: `psiquiatria` (função PSIQ), `SE` como SD em chegada, `chegou`/`entrando`,
+  `muda para`, `meio período`, `P invertido` (19h→19h), `interno`, `ramal`, `núcleo de
+  leitos`, saudação "bom plantão pra todos", letra ou turno colado no código (`PA2035`,
+  `2154SD`, `PM 40SN`), hora colada (`6h25min`, reconhecida e **ignorada**: vale a hora
+  do aviso).
+- Replay de 60 dias na entrada em produção: 1,1% das chegadas então aceitas seriam
+  recusadas (32 de 2.877), três delas gravadas no médico errado.
+
+Respostas que dizem o que o registro mostra, no mesmo módulo:
+
+| Situação | Resposta |
+|---|---|
+| Saída sem plantão ativo no alvo citado, médico aberto em outro | "você escreveu X, no meu registro está em Y desde HH:mm" + frase de saída de Y; se esteve mesmo em X, chefe de plantão (`buildDepartureNotFoundReply`) |
+| Saída sem plantão aberto nenhum | último plantão registrado (alvo, chegada, saída); se é esse, já está fechado; senão chefe de plantão ou desenvolvedor para lançar |
+| Complemento solto (`SD`, `Desde 07:12`, `Cancela`) até 20 min depois de aviso aceito do mesmo remetente | não muda nada; mostra o aviso gravado e três frases completas com o nome e o alvo (`isLooseOperationalComplement`, motivo `loose_complement`) |
+| Ramal de 5 dígitos (`21524`) | entra no fluxo de destino desconhecido, com os ramais parecidos |
+
+Pendente de decisão do dono: outro alvo minutos depois sem dizer que mudou
+(`2034 SN` → `2035 SN`) ainda vira remanejo implícito.
+
+---
+
 ## 8. Antes de mexer
 
 1. Qual princípio da seção 1 a mudança toca? Se viola algum, pare e pergunte ao dono.
@@ -206,6 +250,7 @@ código. Ao corrigir um, mude o status aqui e cite o PR.
    `telegram-displaced`, `operational-shadow-marker`, `regulation-stale-occupancy`,
    `occupancy-identity`, `turno`, `telegram-reassignment-conflict`,
    `telegram-half-shift-no-time`, `undeclared-continuation`, `arrival-classification`,
+   `arrival-certainty`,
    `telegram-arrival-characterization` (ponta a ponta, precisa de banco de teste).
 5. Para investigar um caso real: `telegram_ingested_messages` (texto, status,
    `resolution_data`) + ocupações do médico no dia + `audit_logs` da ocupação.
