@@ -7,6 +7,9 @@
 export const LEGACY_BANK_HOURS_SOURCE = "Planilha Banco de Horas 2026 — coordenação, importada em jul/2026";
 
 export const LEGACY_BANK_HOURS_EXPECTED_ROW_COUNT = 149;
+// Total auditado na importação original. Ajustes pós-importação vivem em
+// migrations (0043: +2880 min p/ LUCAS ALBUQUERQUE) e NÃO entram aqui — este
+// valor confere o CSV original, não o estado atual do banco.
 export const LEGACY_BANK_HOURS_EXPECTED_NET_TOTAL_MINUTES = -36946;
 
 // A planilha trabalha em passos de 5 minutos. Valores fora dessa granularidade
