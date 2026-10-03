@@ -43,11 +43,10 @@ export const OBSERVADOR_ROLE = "observador" as const satisfies UserRole;
 
 /**
  * Interno(a) de medicina do GOA: conta nominal que nasce e só entra pelo
- * SkyRescue (goa.mnrs.com.br → porteiro → /api/auth/sso), nunca por senha —
- * ver docs/internos-goa.md. Sem médico vinculado. Lê a Mesa (toda escrita
- * exige admin/chief; a passagem de ocorrências também barra) de qualquer
- * lugar e fora do plantão, isento da presença. No portal, só o Painel
- * (Tabela, Destino, Giro, Quadro) em leitura e o Plantões.
+ * SkyRescue (goa.mnrs.com.br → porteiro do mnrs.com.br), nunca por senha —
+ * ver docs/internos-goa.md. Sem médico vinculado. Como o `portal`, NÃO abre
+ * o app Plantões (nem a Mesa): só o Painel do portal (Tabela, Destino, Giro,
+ * Quadro) em leitura, onde o portão de turno o deixa passar de qualquer lugar.
  */
 export const INTERNO_ROLE = "interno" as const satisfies UserRole;
 
@@ -65,10 +64,10 @@ export function ehOperadorDaCentral(roles: readonly string[]): boolean {
     return roles.some((role) => (OPERADORES_DA_CENTRAL as readonly string[]).includes(role));
 }
 
-/** Papéis que abrem alguma coisa no app Plantões (tudo menos `portal`). */
-export type PlantoesRole = Exclude<UserRole, typeof PORTAL_ROLE>;
+/** Papéis que abrem alguma coisa no app Plantões (tudo menos `portal` e `interno`, que só valem no portal). */
+export type PlantoesRole = Exclude<UserRole, typeof PORTAL_ROLE | typeof INTERNO_ROLE>;
 
-export const PLANTOES_ROLES = USER_ROLES.filter((role): role is PlantoesRole => role !== PORTAL_ROLE);
+export const PLANTOES_ROLES = USER_ROLES.filter((role): role is PlantoesRole => role !== PORTAL_ROLE && role !== INTERNO_ROLE);
 
 export function isUserRole(value: string): value is UserRole {
     return USER_ROLES.includes(value as UserRole);
@@ -83,7 +82,7 @@ export function rolesDoPlantoes(roles: readonly string[]): PlantoesRole[] {
     return roles.filter(isPlantoesRole);
 }
 
-/** Algum papel que abre o app Plantões? `portal` sozinho não abre. */
+/** Algum papel que abre o app Plantões? `portal` e `interno` sozinhos não abrem. */
 export function temAcessoAoPlantoes(roles: readonly string[]): boolean {
     return rolesDoPlantoes(roles).length > 0;
 }

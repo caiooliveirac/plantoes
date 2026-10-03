@@ -83,9 +83,9 @@ export async function authenticateWithPassword(
                 .filter((role): role is UserRole => USER_ROLES.includes(role));
             const roles: UserRole[] = escopo === "portal" ? todos : rolesDoPlantoes(todos);
 
-            // Interno(a) do GOA nunca entra por senha, nem no portal: só pelo
-            // SkyRescue (docs/internos-goa.md). A senha dele é aleatória; isto
-            // vale também se alguém definir uma à mão.
+            // Interno(a) do GOA nunca entra por senha no portal: só pelo SkyRescue
+            // (docs/internos-goa.md). No app ele já não tem papel (rolesDoPlantoes).
+            // A senha é aleatória; isto vale também se alguém definir uma à mão.
             if (roles.length === 0 || ehSoInterno(todos)) {
                 return { status: "no_roles_assigned" };
             }

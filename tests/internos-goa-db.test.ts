@@ -124,3 +124,12 @@ test("federado: conta de interno não entra por senha, nem no portal", { skip },
     assert.equal((await auth.authenticateWithPassword(d.email, senha)).status, "no_roles_assigned");
     assert.equal((await auth.authenticateWithPassword(d.email, senha, { escopo: "portal" })).status, "no_roles_assigned");
 });
+
+test("federado: conta de interno não ganha sessão no app Plantões (sem Mesa)", { skip }, async () => {
+    const { rota } = await modulos();
+    const { loadUserSession } = await import("@/lib/auth/server");
+    const d = await (await rota.POST(pedido({ provedor: "goa", sujeito: String(sujeitoBase + 6), login: "teste-federado-eva" }))).json();
+    assert.equal(d.ok, true);
+    const sessao = await loadUserSession({ sub: d.userId, exp: Date.now() + 60_000, sv: d.sessionVersion } as Parameters<typeof loadUserSession>[0]);
+    assert.equal(sessao, null);
+});

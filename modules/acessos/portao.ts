@@ -53,8 +53,9 @@ export function decidirPortao(entrada: EntradaDoPortao): { liberado: boolean; mo
     if (entrada.roles.includes("admin")) return { liberado: true, motivo: "admin" };
     // Só lê (escrita exige admin/chief e ele não passa em POST): fora do plantão e de qualquer lugar.
     if (entrada.roles.includes("observador")) return { liberado: true, motivo: "observador" };
-    // Interno(a) do GOA (docs/internos-goa.md): só entra pelo SkyRescue e só lê — de qualquer lugar.
-    // Só a conta que é SÓ interno: o papel somado a médico/chefia não fura o portão.
+    // Interno(a) do GOA (docs/internos-goa.md): só entra pelo SkyRescue e só chega à Tabela e ao
+    // Quadro, em leitura (a Mesa ele nem abre) — de qualquer lugar. Só a conta que é SÓ interno:
+    // o papel somado a médico/chefia não fura o portão.
     if (ehSoInterno(entrada.roles)) return { liberado: true, motivo: "interno" };
     if (entrada.emTurno) return { liberado: true, motivo: "plantao" };
     // Chefia trabalha na Central fora da escala (a trava da 2031 limita a escrita).

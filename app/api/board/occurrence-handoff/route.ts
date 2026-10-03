@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { hasDatabaseUrl } from "@/db";
 import { AuthError, requireMesaSessionForRead } from "@/lib/auth/server";
-import { ehSoInterno } from "@/modules/auth/contracts";
 import { publishBoardUpdate } from "@/lib/board-live";
 import { getLoginClientIp } from "@/modules/auth/login-rate-limit";
 import {
@@ -17,13 +16,9 @@ import {
 // da janela, números 0–99) e de volume (limite por IP), e toda gravação
 // recalcula a divisão no servidor.
 
-async function sessionError(escrita = false) {
+async function sessionError() {
     try {
-        const session = await requireMesaSessionForRead();
-        // Interno(a) do GOA só lê a Mesa (docs/internos-goa.md).
-        if (escrita && ehSoInterno(session.user.roles)) {
-            return NextResponse.json({ error: "Conta de leitura: a passagem é de quem está no ramal." }, { status: 403 });
-        }
+        await requireMesaSessionForRead();
         return null;
     } catch (error) {
         const status = error instanceof AuthError ? error.status : 401;
@@ -61,7 +56,7 @@ export async function POST(request: NextRequest) {
     if (!hasDatabaseUrl()) {
         return NextResponse.json({ error: "DATABASE_URL is not configured for operations-v2." }, { status: 503 });
     }
-    const denied = await sessionError(true);
+    const denied = await sessionError();
     if (denied) return denied;
     // Mesma extração do login: cf-connecting-ip → x-real-ip, nunca x-forwarded-for.
     const ip = getLoginClientIp(request.headers) || "local";

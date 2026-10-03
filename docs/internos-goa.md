@@ -1,46 +1,48 @@
-# Internos do GOA — do SkyRescue à Mesa sem segunda senha
+# Internos do GOA — do SkyRescue ao Painel sem segunda senha
 
 Desde 03/10/2026. Internos de medicina que usam o SkyRescue (goa.mnrs.com.br)
-com usuário nominal abrem a **Mesa operacional** daqui e o **Painel** do
-portal (Tabela, Destino, Giro, Quadro informativo), **só leitura**, **de
-qualquer lugar**, sem digitar outra senha. Substitui, para eles, a conta
-compartilhada `interno.samu@samu.local` (que continua existindo, só Painel e
-só da Central).
+com usuário nominal abrem o **Painel** do portal mnrs.com.br (Tabela, Destino,
+Giro, Quadro informativo), **só leitura**, **de qualquer lugar**, sem digitar
+outra senha. **A Mesa operacional fica de fora** (decisão de 03/10/2026: mais
+fácil de explicar à coordenação e ao admin) — a conta não abre o app Plantões.
+Substitui, para eles, a conta compartilhada `interno.samu@samu.local` (que
+continua existindo, só Painel e só da Central).
 
 ## O caminho
 
 ```
 SkyRescue (logado)          porteiro (mnrs.com.br/_auth)             plantões
 ──────────────────          ────────────────────────────             ────────
-botão "Mesa"
+botão "Painel"
 GET /api/auth/portal
-  assina handoff 60 s ───►  GET /de/goa?token=…&proximo=plantoes
+  assina handoff 60 s ───►  GET /de/goa?token=…&proximo=tabela
   (GOA_FEDERACAO_SECRET)      confere assinatura, aud, prazo, jti
                               (uso único)
                               POST /api/servicos/portal/federado ──►  acha/cria a conta `interno`
                                 (x-escala-token)               ◄──  vinculada ao id do GOA
                               emite mnrs_sso (corte da virada)
-                              302 /_auth/ir/plantoes
-                              assina o handoff de sempre (sv) ───►  GET /api/auth/sso → cookie daqui
-                                                                     → `/` (Mesa, só leitura)
+                              302 /tabela/ (ou o portal)
+                              a cada pedido da Tabela/Quadro:
+                              POST /api/servicos/portal/acesso ──►  conta ativa? portão de turno
+                                                                     (interno passa de qualquer lugar)
 ```
 
-Daí em diante a sessão do portal é como qualquer outra: conferida no
-plantões a cada pedido (`/api/servicos/portal/acesso`), cai no corte da
-virada (07:15/19:15), suspender ou "encerrar sessões" derruba.
+A sessão do portal é como qualquer outra: conferida no plantões a cada
+pedido, cai no corte da virada (07:15/19:15), suspender ou "encerrar sessões"
+derruba.
 
 ## O papel `interno`
 
-`modules/auth/contracts.ts` (`INTERNO_ROLE`, `ehSoInterno`). Vale só para conta
-que é **só** interno — somado a médico/chefia não muda nada:
+`modules/auth/contracts.ts` (`INTERNO_ROLE`, `ehSoInterno`). Fora de
+`PLANTOES_ROLES`, como o `portal`: no app Plantões a conta é tratada como sem
+papel — `/api/auth/sso` responde `sem-acesso`, sem sessão, sem Mesa.
 
 | Onde | O que faz |
 |---|---|
-| Portão de turno (`modules/acessos/portao.ts`) | libera Mesa, Tabela e Quadro de qualquer lugar e fora do plantão (motivo `interno`) |
-| Presença na Mesa (`contaNaMesa`) | isento: só lê, não disputa a vez |
-| Escrita na Mesa | toda escrita exige admin/chief; a passagem de ocorrências (que aceitava qualquer sessão) barra o interno com 403 |
-| Login por senha (`authenticateWithPassword`) | recusado, aqui e no portal (`no_roles_assigned`): entra **só** pelo GOA |
-| Porteiro (`internoDoGoa` em mnrs-portal) | vê Tabela, Destino, Giro, Quadro (leitura, regra do Painel) e o Plantões |
+| App Plantões (`rolesDoPlantoes`) | não conta: sem sessão, sem Mesa, sem `/medico` |
+| Portão de turno (`modules/acessos/portao.ts`) | libera Tabela e Quadro de qualquer lugar e fora do plantão (motivo `interno`), só para conta que é SÓ interno |
+| Login por senha no portal (`authenticateWithPassword`, escopo `portal`) | recusado (`no_roles_assigned`): entra **só** pelo GOA |
+| Porteiro (`internoDoGoa` em mnrs-portal) | vê Tabela, Destino, Giro e Quadro, só leitura (regra do Painel) |
 
 ## Conta e vínculo
 
@@ -66,8 +68,13 @@ Tabela `identidades_federadas` (migrations `0060`/`0061`): `provedor = 'goa'`,
   rota de lá responde 403.
 
 Monitor de acessos: cada passagem vira evento `goa_entrou` (ou `goa_recusado`)
-na conta, com IP/aparelho repassados pelo porteiro; o uso segue como sessão
-`portal` e `portal_cookie`, igual ao login do portal.
+na conta, com IP/aparelho repassados pelo porteiro; o uso da Tabela e do
+Quadro segue como sessão `portal_cookie`, igual ao login do portal.
+
+Para dar a Mesa um dia: tirar `interno` da exclusão em `PLANTOES_ROLES`, isentar
+da presença (`contaNaMesa`), barrar a escrita da passagem de ocorrências e pôr
+`plantoes` em `sistemasDaConta` do porteiro — foi assim na primeira versão do
+PR #416.
 
 ## Contrato (para quem mexer nos outros repos)
 
@@ -94,7 +101,8 @@ login, nome? }`. Resposta 200 no formato do `verificar-escala` (`email`,
    responde 404.
 3. **SkyRescue**: o mesmo valor em `GOA_FEDERACAO_SECRET` no `server/.env`,
    deploy (o `migrate.js` cria `users.acesso_portal`), restart, e marcar os
-   internos. Sem a chave, o botão não aparece.
+   internos (`node scripts/acesso-portal.js <usuário> on`). Sem a chave, o
+   botão não aparece.
 
 Desligar em emergência: tirar `GOA_FEDERACAO_SECRET` do porteiro (ou do GOA)
 e reiniciar — quem já tem sessão segue até o corte da virada; para cortar na
