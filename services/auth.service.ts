@@ -2,7 +2,7 @@ import { compare, hash } from "bcryptjs";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, passwordResetTokens, chiefAccessRequests, userRoles, users } from "@/db/schema";
-import { USER_ROLES, rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
+import { USER_ROLES, ehSoInterno, rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
 import { getPasswordPolicyError } from "@/modules/auth/password-policy";
 
 export type CredentialsStatus =
@@ -83,7 +83,10 @@ export async function authenticateWithPassword(
                 .filter((role): role is UserRole => USER_ROLES.includes(role));
             const roles: UserRole[] = escopo === "portal" ? todos : rolesDoPlantoes(todos);
 
-            if (roles.length === 0) {
+            // Interno(a) do GOA nunca entra por senha, nem no portal: só pelo
+            // SkyRescue (docs/internos-goa.md). A senha dele é aleatória; isto
+            // vale também se alguém definir uma à mão.
+            if (roles.length === 0 || ehSoInterno(todos)) {
                 return { status: "no_roles_assigned" };
             }
 

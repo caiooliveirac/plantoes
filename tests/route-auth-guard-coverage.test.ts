@@ -36,6 +36,7 @@ const PUBLIC_ROUTES: Record<string, string> = {
     "app/api/telegram/webhook/route.ts": "x-telegram-bot-api-secret-token (TELEGRAM_WEBHOOK_SECRET).",
     "app/api/servicos/contas-portal/route.ts": "x-portal-token (PORTAL_CONTAS_TOKEN); cria só conta com papel portal, nunca altera conta existente.",
     "app/api/servicos/contas-escala/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); só dá papéis de operador da Central (tarm, radio_operador) e enfermeiro; redefinirSenha nunca toca admin/chief.",
+    "app/api/servicos/portal/federado/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o porteiro, depois de conferir o handoff do GOA, pede a conta do interno — só sai conta que é SÓ interno.",
     "app/api/servicos/portal/acesso/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o porteiro confere a sessão do portal e reporta o uso (monitor de acessos).",
     "app/api/servicos/portal/trocar-senha/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o porteiro troca a senha com a senha atual que a pessoa digitou no portal.",
     "app/api/servicos/quadro/plantao/route.ts": "x-escala-token (ESCALA_SSO_TOKEN); o quadro da Central lê turno, enfermeiro(a), chefe e bases (só nomes, sem e-mail).",

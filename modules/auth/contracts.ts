@@ -1,4 +1,4 @@
-export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro", "observador"] as const;
+export const USER_ROLES = ["admin", "chief", "doctor", "payment_closing_limited", "portal", "radio_operador", "tarm", "enfermeiro", "observador", "interno"] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
 
@@ -40,6 +40,22 @@ export const ENFERMEIRO_ROLE = "enfermeiro" as const satisfies UserRole;
  * Isento da presença na Mesa, como o enfermeiro. Dado em /admin/acessos ou por SQL.
  */
 export const OBSERVADOR_ROLE = "observador" as const satisfies UserRole;
+
+/**
+ * Interno(a) de medicina do GOA: conta nominal que nasce e só entra pelo
+ * SkyRescue (goa.mnrs.com.br → porteiro → /api/auth/sso), nunca por senha —
+ * ver docs/internos-goa.md. Sem médico vinculado. Lê a Mesa (toda escrita
+ * exige admin/chief; a passagem de ocorrências também barra) de qualquer
+ * lugar e fora do plantão, isento da presença. No portal, só o Painel
+ * (Tabela, Destino, Giro, Quadro) em leitura e o Plantões.
+ */
+export const INTERNO_ROLE = "interno" as const satisfies UserRole;
+
+/** Só papéis de interno (`portal` não conta): conta de leitura que só entra pelo GOA. */
+export function ehSoInterno(roles: readonly string[]): boolean {
+    const papeis = roles.filter((role) => role !== PORTAL_ROLE);
+    return papeis.length > 0 && papeis.every((role) => role === INTERNO_ROLE);
+}
 
 /** Papéis que o Escalas pode dar ao aprovar um cadastro (contas-escala). */
 export const PAPEIS_DO_ESCALA = [...OPERADORES_DA_CENTRAL, ENFERMEIRO_ROLE] as const;

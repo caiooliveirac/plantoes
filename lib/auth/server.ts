@@ -5,7 +5,7 @@ import { getDb } from "@/db";
 import { userRoles, users } from "@/db/schema";
 import { CABECALHO_ROTA, lerContextoRequisicao, lerRota } from "@/lib/acessos/contexto";
 import { depoisDaResposta } from "@/lib/acessos/depois";
-import { ehOperadorDaCentral, ENFERMEIRO_ROLE, OBSERVADOR_ROLE, rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
+import { ehOperadorDaCentral, ehSoInterno, ENFERMEIRO_ROLE, OBSERVADOR_ROLE, rolesDoPlantoes, type UserRole } from "@/modules/auth/contracts";
 import { createSessionToken, isSessionVersionCurrent, sessionIdOf, verifySessionToken, type SessionTokenPayload } from "@/lib/auth/token";
 import { MENSAGEM_FORA_DO_PLANTAO } from "@/modules/acessos/portao";
 import { MENSAGEM_BLOQUEADA, MENSAGEM_OCUPADA, modoPresenca } from "@/modules/acessos/presenca";
@@ -270,11 +270,11 @@ export async function mesaLiberadaPara(session: AuthenticatedSession) {
 /* Presença na Mesa (docs/presenca-mesa.md): uma tela por conta e bloqueio por
    ociosidade. Isentos: admin, e operador da Central (rádio, TARM) na rede da
    Central (console aberto o turno todo; fora da Central o portão já barra), e
-   enfermeiro(a), que só lê a Mesa e não disputa a vez. O
+   enfermeiro(a), observador e interno(a), que só leem a Mesa e não disputam a vez. O
    aparelho vem do cookie assinado (proxy.ts) — nunca do corpo do pedido. */
 export async function contaNaMesa(session: AuthenticatedSession): Promise<ContaNaMesa | null> {
     if (session.user.roles.includes("admin")) return null;
-    if (session.user.roles.includes(ENFERMEIRO_ROLE) || session.user.roles.includes(OBSERVADOR_ROLE)) return null;
+    if (session.user.roles.includes(ENFERMEIRO_ROLE) || session.user.roles.includes(OBSERVADOR_ROLE) || ehSoInterno(session.user.roles)) return null;
     const contexto = lerContextoRequisicao(await headers());
     if (ehOperadorDaCentral(session.user.roles) && await naRedeDaCentral(contexto.ip)) return null;
     const cookieStore = await cookies();
