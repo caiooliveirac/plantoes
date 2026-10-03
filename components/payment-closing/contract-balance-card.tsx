@@ -28,6 +28,7 @@ import {
     type CycleMetricsInput,
 } from "@/lib/contracts/balance-metrics";
 import { isMonthWithinCycle } from "@/lib/contracts/statement";
+import { bahiaDateIso } from "@/lib/time";
 import type { ContractBalanceSummary } from "@/modules/reporting/payable-shifts";
 
 const RISK_LABEL: Record<CycleMetrics["riskLevel"], { text: string; icon: string }> = {
@@ -163,7 +164,7 @@ export function ContractBalanceCard({
 
     // Ciclo vencido = renovação pendente: o contrato novo ainda não existe no
     // sistema e a coordenação precisa confirmar o saldo do novo ciclo.
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIso = bahiaDateIso();
     const cycleEnded = selected ? selected.cycleEnd.slice(0, 10) <= todayIso : false;
 
     // Contrato ainda sem saldo informado não estoura coisa nenhuma: o saldo é
@@ -446,7 +447,7 @@ export function ContractBalanceCard({
                             setAnchorRequestId(crypto.randomUUID());
                             // Default: mês em edição — o caso típico é
                             // "o saldo no início de maio era X".
-                            if (!anchorMonth) setAnchorMonth(monthKey ?? new Date().toISOString().slice(0, 7));
+                            if (!anchorMonth) setAnchorMonth(monthKey ?? bahiaDateIso().slice(0, 7));
                         }}
                     >
                         {anchorOpen ? "Cancelar correção de saldo" : "Corrigir saldo em uma data"}
