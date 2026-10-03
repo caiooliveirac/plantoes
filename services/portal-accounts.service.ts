@@ -17,13 +17,12 @@
    ========================================================================== */
 
 import { randomBytes } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { auditLogs, userRoles, users } from "@/db/schema";
 import { isEmailConfigured, sendEmail } from "@/lib/email";
 import { PORTAL_ROLE, type PapelDoEscala } from "@/modules/auth/contracts";
 import { createPasswordResetTokenForUser, hashPassword } from "@/services/auth.service";
-import { getPasswordPolicyError } from "@/modules/auth/password-policy";
 
 /** Prazo do link de boas-vindas (o "esqueci a senha" vale 2 h). */
 export const PORTAL_WELCOME_TTL_MS = 1000 * 60 * 60 * 24 * 7;
@@ -164,34 +163,70 @@ export async function provisionarContaPortal(pedido: PedidoContaPortal): Promise
    `mustChangePassword`: no primeiro acesso o portal pede a senha definitiva
    (porteiro, fluxo de "nova senha"), que passa a valer nos dois sistemas.
 
-   Conta que já existe nunca tem a senha tocada: só ganha os papéis que
-   faltam. Só dá papéis de operador da Central (Mesa só leitura, só na
-   Central) e `enfermeiro` (Quadro e Mesa só leitura) — nunca
-   admin/chief/doctor. Tudo em audit_logs.
+   Conta que já existe só ganha os papéis que faltam (e `portal`). Só dá
+   papéis de operador da Central (Mesa só leitura, só na Central) e
+   `enfermeiro` (Quadro e Mesa só leitura) — nunca admin/chief/doctor. Sem
+   papel nenhum (médico, técnico, condutor aprovados no Escalas) a conta fica
+   só com `portal`: entra no mnrs.com.br, não no app Plantões. Tudo em
+   audit_logs.
+
+   `redefinirSenha` (03/10/2026): o cadastro de profissionais é do Escalas, e a
+   senha temporária do e-mail de lá tem de valer no portal. Quando o Escalas
+   já conferiu essa senha (ou a coordenação a reemitiu), a conta existente
+   passa a usá-la, com troca obrigatória e as sessões antigas derrubadas —
+   menos conta de admin/chief ou desativada, que nunca é tocada por aqui.
+
+   A senha temporária não passa pela política da definitiva: o Escalas sorteia
+   10 minúsculas e números (fácil de ditar), e o portal exige a definitiva no
+   primeiro acesso.
    ========================================================================== */
 export type SituacaoContaDoEscala =
     | { situacao: "criada"; papeis: PapelDoEscala[] }
-    | { situacao: "existente"; papeisNovos: PapelDoEscala[]; ativa: boolean };
+    | { situacao: "existente" | "redefinida"; papeisNovos: PapelDoEscala[]; ativa: boolean };
 
 export class ContaDoEscalaError extends Error {}
+
+const PAPEIS_QUE_O_ESCALA_NAO_REDEFINE = ["admin", "chief"] as const;
+
+function senhaTemporariaFraca(senha: string): boolean {
+    return senha.length < 10 || !/[A-Za-z]/.test(senha) || !/\d/.test(senha) || /^(.)\1+$/.test(senha);
+}
 
 export async function provisionarContaDoEscala(pedido: {
     email: string;
     nome: string;
     senhaTemporaria: string;
     papeis: PapelDoEscala[];
+    redefinirSenha?: boolean;
 }): Promise<SituacaoContaDoEscala> {
     const email = pedido.email.trim().toLowerCase();
     const papeis = [...new Set(pedido.papeis)];
-    if (papeis.length === 0) throw new ContaDoEscalaError("Informe ao menos um papel.");
-    const politica = getPasswordPolicyError(pedido.senhaTemporaria);
-    if (politica) throw new ContaDoEscalaError(`Senha temporária fraca: ${politica}`);
+    if (senhaTemporariaFraca(pedido.senhaTemporaria)) {
+        throw new ContaDoEscalaError("Senha temporária fraca: 10 ou mais caracteres, com letra e número.");
+    }
 
     const acrescentarPapeis = async (userId: string, ativa: boolean): Promise<SituacaoContaDoEscala> => {
         const db = getDb();
-        const atuais = await db.select({ role: userRoles.role }).from(userRoles)
-            .where(and(eq(userRoles.userId, userId), inArray(userRoles.role, papeis)));
-        const novos = papeis.filter((p) => !atuais.some((a) => a.role === p));
+        const atuais = (await db.select({ role: userRoles.role }).from(userRoles).where(eq(userRoles.userId, userId))).map((a) => a.role);
+        const novos = [PORTAL_ROLE, ...papeis].filter((p) => !atuais.includes(p));
+        const redefinir = pedido.redefinirSenha === true && ativa
+            && !atuais.some((r) => (PAPEIS_QUE_O_ESCALA_NAO_REDEFINE as readonly string[]).includes(r));
+        if (redefinir) {
+            const passwordHash = await hashPassword(pedido.senhaTemporaria);
+            await db.transaction(async (tx) => {
+                await tx.update(users)
+                    .set({ passwordHash, mustChangePassword: true, sessionVersion: sql`${users.sessionVersion} + 1`, updatedAt: new Date() })
+                    .where(eq(users.id, userId));
+                await tx.insert(auditLogs).values({
+                    actorUserId: null,
+                    action: "escala_account.password_reset",
+                    entityType: "user",
+                    entityId: userId,
+                    details: { email, origem: "escala" },
+                });
+            });
+        }
+        const papeisNovos = papeis.filter((p) => novos.includes(p));
         if (novos.length > 0) {
             await db.transaction(async (tx) => {
                 await tx.insert(userRoles).values(novos.map((role) => ({ userId, role }))).onConflictDoNothing();
@@ -204,7 +239,7 @@ export async function provisionarContaDoEscala(pedido: {
                 });
             });
         }
-        return { situacao: "existente", papeisNovos: novos, ativa };
+        return { situacao: redefinir ? "redefinida" : "existente", papeisNovos, ativa };
     };
 
     const [existente] = await getDb().select({ id: users.id, isActive: users.isActive }).from(users).where(eq(users.email, email)).limit(1);
