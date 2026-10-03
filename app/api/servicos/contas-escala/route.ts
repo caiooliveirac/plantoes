@@ -1,18 +1,20 @@
 /* ==========================================================================
-   POST /api/servicos/contas-escala — conta de operador da Central aprovada no
-   Escalas (TARM, rádio-operador e quem coordena essas categorias).
+   POST /api/servicos/contas-escala — conta de quem foi aprovado no Escalas
+   (o cadastro de profissionais é de lá): operador da Central, enfermeiro(a) e,
+   com `papeis: []`, qualquer outro — conta só do portal.
 
    Quem chama é o servidor do Escalas, na aprovação do cadastro, nunca o
    navegador. Mesmo portão do verificar-escala: x-escala-token
    (ESCALA_SSO_TOKEN), tempo constante; sem a variável, 503.
 
-     body  { email, nome, senhaTemporaria, papeis: ("tarm" | "radio_operador" | "enfermeiro")[] }
-     200   { ok, situacao: "criada" | "existente", ... }
+     body  { email, nome, senhaTemporaria, papeis: ("tarm" | "radio_operador" | "enfermeiro")[], redefinirSenha? }
+     200   { ok, situacao: "criada" | "existente" | "redefinida", ... }
      400   pedido inválido ou senha temporária fraca · 401 token · 503 desligada
 
    Conta nova: papel `portal` + os papéis, senha temporária, troca obrigatória
-   (o portal pede a definitiva no primeiro acesso). Conta existente: só ganha
-   os papéis que faltam — a senha nunca é tocada. Regras em
+   (o portal pede a definitiva no primeiro acesso). Conta existente: ganha os
+   papéis que faltam; a senha só muda com `redefinirSenha` (nunca a de
+   admin/chief). Regras em
    services/portal-accounts.service.ts (provisionarContaDoEscala).
    ========================================================================== */
 import { timingSafeEqual } from "node:crypto";
@@ -26,7 +28,8 @@ const schema = z.object({
     email: z.string().email().max(200),
     nome: z.string().trim().min(2).max(160),
     senhaTemporaria: z.string().min(10).max(128),
-    papeis: z.array(z.enum(PAPEIS_DO_ESCALA)).min(1).max(PAPEIS_DO_ESCALA.length),
+    papeis: z.array(z.enum(PAPEIS_DO_ESCALA)).max(PAPEIS_DO_ESCALA.length),
+    redefinirSenha: z.boolean().optional(),
 });
 
 function tokenConfere(recebido: string | null, esperado: string): boolean {
